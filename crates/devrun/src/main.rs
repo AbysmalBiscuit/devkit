@@ -95,10 +95,11 @@ fn slug(holder: &str) -> String {
 }
 
 /// Pick known apps whose files appear in a `git diff --stat` against the baseline.
-pub fn apps_from_diff(diff_stat: &str, known: &[String]) -> Vec<String> {
+pub fn apps_from_diff(diff_stat: &str, known: &[String], apps_dir: &str) -> Vec<String> {
+    let prefix = format!("{apps_dir}/");
     let mut found = Vec::new();
     for line in diff_stat.lines() {
-        if let Some(rest) = line.trim().strip_prefix("apps/")
+        if let Some(rest) = line.trim().strip_prefix(&prefix)
             && let Some(name) = rest.split('/').next()
                 && known.iter().any(|k| k == name) && !found.contains(&name.to_string()) {
                     found.push(name.to_string());
@@ -178,7 +179,7 @@ fn cmd_up(
     } else {
         let diff = git(&["diff", &format!("{}...HEAD", cfg.defaults.baseline_ref), "--stat"], cwd)
             .unwrap_or_default();
-        apps_from_diff(&diff, &known)
+        apps_from_diff(&diff, &known, &cfg.defaults.apps_dir)
     };
     for a in &apps { anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`"); }
     anyhow::ensure!(
@@ -186,10 +187,12 @@ fn cmd_up(
         "no apps to run (none given and none detected in diff vs {})",
         cfg.defaults.baseline_ref
     );
-    // Ensure api is present whenever a webapp consumer is selected, so it can be wired.
-    let needs_api = apps.iter().any(|a| catalog[a].url_env.is_some() && a != "api");
-    if needs_api && catalog.contains_key("api") && !apps.iter().any(|a| a == "api") {
-        apps.insert(0, "api".to_string());
+    // Ensure the URL-providing app (the API) is present whenever a consumer is
+    // selected, so it can be wired. The provider is identified by config, not by name.
+    let provider = catalog.iter().find(|(_, a)| a.provides_url).map(|(n, _)| n.clone());
+    let needs_provider = apps.iter().any(|a| catalog[a].url_env.is_some() && !catalog[a].provides_url);
+    if needs_provider && let Some(p) = &provider && !apps.contains(p) {
+        apps.insert(0, p.clone());
     }
 
     let user = parse_user_env(env_pairs, env_file)?;
@@ -220,7 +223,7 @@ fn cmd_up(
             apps.iter().map(|a| (a.clone(), catalog[a].base_port)).collect();
         let ports: BTreeMap<String, u16> =
             registry::alloc(holder, &reqs, *grp_role)?.into_iter().collect();
-        let api_port = ports.get("api").copied();
+        let provider_port = provider.as_ref().and_then(|p| ports.get(p).copied());
 
         // Build each app's launch plan up front so dry-run and real spawns share it.
         let mut plans = Vec::with_capacity(apps.len());
@@ -230,7 +233,7 @@ fn cmd_up(
             let mut argv = env::doppler_prefix(app, &cfg.defaults.doppler_config);
             argv.extend(env::launch_argv(app, port));
             let app_cwd = base_dir.join(&app.path);
-            let envmap = env::env_for(app, api_port, &user);
+            let envmap = env::env_for(app, provider_port, &user);
             let log = paths::logs_dir()
                 .join(slug(holder))
                 .join(format!("{}-{}.log", grp_role.as_str(), a));
@@ -348,6 +351,6 @@ mod tests {
     fn picks_known_apps_from_diff() {
         let diff = " apps/api/server/x.ts | 2 +-\n apps/lab-os/page.tsx | 1 +\n packages/z/y.ts | 1 +\n";
         let known = vec!["api".to_string(), "lab-os".to_string(), "foundry-portal".to_string()];
-        assert_eq!(apps_from_diff(diff, &known), vec!["api", "lab-os"]);
+        assert_eq!(apps_from_diff(diff, &known, "apps"), vec!["api", "lab-os"]);
     }
 }

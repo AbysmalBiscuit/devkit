@@ -17,25 +17,23 @@ pub fn launch_argv(app: &App, port: u16) -> Vec<String> {
 }
 
 /// Env layering (low→high): static_env → url-wiring → user overrides.
-/// `api_port` is this role's api port, if api is in the same run.
+/// `provider_port` is the port of the URL-providing app (the API), if it shares the run.
 pub fn env_for(
-    app: &App, api_port: Option<u16>, user: &BTreeMap<String, String>,
+    app: &App, provider_port: Option<u16>, user: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     for (k, v) in &app.static_env { env.insert(k.clone(), v.clone()); }
-    if let (Some(var), Some(p)) = (api_url_consumer(app), api_port) {
+    if let (Some(var), Some(p)) = (url_consumer_var(app), provider_port) {
         env.insert(var, format!("http://localhost:{p}"));
     }
     for (k, v) in user { env.insert(k.clone(), v.clone()); }
     env
 }
 
-/// The env var THIS app reads to reach the api (its own url_env is for OTHERS;
-/// a consumer's wiring var is configured the same — we set it when api shares the run).
-fn api_url_consumer(app: &App) -> Option<String> {
-    // Convention: a webapp's url_env names the var it *also consumes* to reach the api.
-    // For api itself url_env is set but it doesn't consume itself, so skip name == api.
-    if app.name == "api" { None } else { app.url_env.clone() }
+/// The env var a consumer reads to reach the URL-providing app. The provider's own
+/// `url_env` names the same var but it doesn't consume itself, so skip the provider.
+fn url_consumer_var(app: &App) -> Option<String> {
+    if app.provides_url { None } else { app.url_env.clone() }
 }
 
 #[cfg(test)]
@@ -45,7 +43,16 @@ mod tests {
     fn app(name: &str, url_env: Option<&str>) -> App {
         App { name: name.into(), base_port: 1, doppler_project: Some("proj".into()),
             path: "apps/x".into(), launch: vec!["next".into(),"dev".into(),"-p".into(),"{port}".into()],
-            url_env: url_env.map(Into::into), preserve_env: vec![], static_env: HashMap::new() }
+            url_env: url_env.map(Into::into), provides_url: false,
+            preserve_env: vec![], static_env: HashMap::new(), prep_env: HashMap::new() }
+    }
+
+    #[test]
+    fn provider_does_not_wire_its_own_url() {
+        let mut api = app("api", Some("FOUNDRY_API_BASE_URL"));
+        api.provides_url = true;
+        let e = env_for(&api, Some(9100), &BTreeMap::new());
+        assert!(!e.contains_key("FOUNDRY_API_BASE_URL"));
     }
     #[test]
     fn wires_api_url_for_consumer() {

@@ -17,6 +17,14 @@ pub struct Defaults {
     pub baseline_path: String,
     pub doppler_config: String,
     pub doppler_yaml: String,
+    /// Repo-relative directory apps live under (e.g. "apps"). Used to infer app
+    /// paths from doppler.yaml and to detect changed apps in a diff.
+    #[serde(default = "default_apps_dir")]
+    pub apps_dir: String,
+}
+
+fn default_apps_dir() -> String {
+    "apps".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,10 +33,18 @@ pub struct AppConfig {
     pub launch: Vec<String>,
     #[serde(default)]
     pub url_env: Option<String>,
+    /// This app serves the URL that consumer apps wire to via their `url_env`.
+    /// Exactly one app (the API) is normally marked; consumers reference it by role,
+    /// not by a hardcoded name.
+    #[serde(default)]
+    pub provides_url: bool,
     #[serde(default)]
     pub preserve_env: Vec<String>,
     #[serde(default)]
     pub static_env: HashMap<String, String>,
+    /// Env written to `<app>/.env.local` during `issue-prep` (e.g. dummy workflow ids).
+    #[serde(default)]
+    pub prep_env: HashMap<String, String>,
     /// Optional overrides; normally derived from doppler.yaml.
     #[serde(default)]
     pub doppler_project: Option<String>,

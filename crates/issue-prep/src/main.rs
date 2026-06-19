@@ -79,20 +79,22 @@ fn main() -> Result<()> {
         monorepo_s,
     )?;
 
-    // env symlinks (skip if present); lab-os gets its dummy workflow id.
+    // env symlinks (skip if present); apps with configured prep_env get a .env.local.
     let env_local = wt_root.join(".env.local");
     for a in &cli.apps {
-        let app_dir = worktree.join(&catalog[a].path);
+        let app = &catalog[a];
+        let app_dir = worktree.join(&app.path);
         std::fs::create_dir_all(&app_dir).ok();
         let dotenv = app_dir.join(".env");
         if !dotenv.exists() {
             std::os::unix::fs::symlink(&env_local, &dotenv)
                 .with_context(|| format!("symlinking {} -> {}", dotenv.display(), env_local.display()))?;
         }
-        if a == "lab-os" {
+        if !app.prep_env.is_empty() {
             let f = app_dir.join(".env.local");
             if !f.exists() {
-                std::fs::write(&f, "WORKCELL_BLI_RUN_WORKFLOW_ID=dummy\n")?;
+                let body: String = app.prep_env.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+                std::fs::write(&f, body)?;
             }
         }
     }

@@ -1,4 +1,4 @@
-use crate::config::{AppConfig, Config};
+use crate::config::Config;
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -10,8 +10,10 @@ pub struct App {
     pub path: String,
     pub launch: Vec<String>,
     pub url_env: Option<String>,
+    pub provides_url: bool,
     pub preserve_env: Vec<String>,
     pub static_env: HashMap<String, String>,
+    pub prep_env: HashMap<String, String>,
 }
 
 /// Build the catalog: project+path come from doppler.yaml unless the app overrides them.
@@ -23,7 +25,7 @@ pub struct App {
 pub fn catalog(cfg: &Config, path_to_project: &HashMap<String, String>) -> Result<HashMap<String, App>> {
     let mut out = HashMap::new();
     for (name, a) in &cfg.apps {
-        let Some(path) = a.path.clone().or_else(|| guess_path(name, path_to_project)) else {
+        let Some(path) = a.path.clone().or_else(|| guess_path(&cfg.defaults.apps_dir, name, path_to_project)) else {
             eprintln!("note: skipping app `{name}` — no path in config and none inferrable from doppler.yaml");
             continue;
         };
@@ -35,20 +37,19 @@ pub fn catalog(cfg: &Config, path_to_project: &HashMap<String, String>) -> Resul
             path,
             launch: a.launch.clone(),
             url_env: a.url_env.clone(),
+            provides_url: a.provides_url,
             preserve_env: a.preserve_env.clone(),
             static_env: a.static_env.clone(),
+            prep_env: a.prep_env.clone(),
         });
     }
     Ok(out)
 }
 
-fn guess_path(name: &str, p2p: &HashMap<String, String>) -> Option<String> {
-    let cand = format!("apps/{name}");
+fn guess_path(apps_dir: &str, name: &str, p2p: &HashMap<String, String>) -> Option<String> {
+    let cand = format!("{apps_dir}/{name}");
     p2p.contains_key(&cand).then_some(cand)
 }
-
-#[allow(dead_code)]
-fn _use(_: &AppConfig) {}
 
 #[cfg(test)]
 mod tests {
