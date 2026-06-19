@@ -42,11 +42,18 @@ cargo test -p devkit-ports --test registry   # multiprocess flock race test
 ## Conventions
 
 - TDD: write the failing test first; `cargo test --workspace` is the merge gate.
-- `anyhow` for application errors, `thiserror` for library error types.
-- Example-specific values (`baseline_ref`, `FOUNDRY_API_BASE_URL`, app names) belong in
-  `devkit.toml` / `configs/example.toml`, never hardcoded in the engine.
+- `anyhow` everywhere — its `.context()` chain and backtrace are the error-reporting
+  mechanism. Each binary installs `report::install_panic_hook` for crash diagnostics;
+  `RUST_BACKTRACE=1` adds a backtrace to both errors and panics.
+- App conventions are config-driven, never hardcoded: the URL-providing app is marked
+  `provides_url`; per-app prep files come from `prep_env`; the apps directory is
+  `defaults.apps_dir`. Example-specific values live in `configs/example.toml`.
+- `Role` (Issue/Baseline) is defined once in `devkit-ports::registry` with `ValueEnum` +
+  `Display`; `devrun`'s CLI uses a separate `RoleSelector` (adds `Both`). No `_ => Issue`
+  catch-alls — map roles exhaustively.
 
-## Known warts
+## Registry facade
 
-- `pr-status` hardcodes the `SWE-` issue prefix in `issue_of` — make it config-driven before
-  reusing `pr-status` outside example.
+Go through `registry::{alloc, record_pid, release, snapshot, prune, status_table}` — they
+keep liveness syscalls (bind/stat/kill) out of the exclusive lock. Don't reintroduce
+probing inside `with_lock`. This facade is also the seam a future port daemon plugs into.

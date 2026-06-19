@@ -63,6 +63,12 @@ Config discovery order (first match wins):
 
 App `path` and `doppler_project` are normally inferred from the monorepo's `doppler.yaml`; individual `[apps.<name>]` sections may override them. The `doppler_config` value must not be `prd` — devkit guards against accidentally running against production secrets.
 
+App conventions are config-driven, not hardcoded:
+
+- `provides_url = true` marks the app that serves the URL other apps consume (the API). Consumer apps name that variable in their own `url_env`; `devrun` wires it to the provider's local port and auto-includes the provider when a consumer is run.
+- `prep_env = { KEY = "value" }` is written to `<app>/.env.local` during `issue-prep`.
+- `defaults.apps_dir` (default `apps`) is the repo-relative directory apps live under; it drives path inference and diff-based app detection.
+
 ### Example setup
 
 ```sh
@@ -109,3 +115,9 @@ cargo install --path crates/pr-status
 
 - `$LINEAR_API_KEY` — enables the Linear issue-Done gate in `issue-end`
 - `$LINEAR_WORKSPACE` — enables clickable Linear issue links in `issue-end status`
+
+## Troubleshooting
+
+Recoverable failures print the full error context chain. On a panic, the binary
+prints a bug report with the location and a backtrace. For a backtrace on either,
+set `RUST_BACKTRACE=1`.
