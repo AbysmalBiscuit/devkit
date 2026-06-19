@@ -105,15 +105,10 @@ fn main() -> Result<()> {
     }
 
     // reserve ports
-    let mut ports = BTreeMap::new();
-    registry::with_lock(|d| {
-        d.prune();
-        for a in &cli.apps {
-            let base = catalog[a].base_port;
-            ports.insert(a.clone(), d.alloc_one(&holder, a, base, Role::Issue));
-        }
-        Ok(())
-    })?;
+    let reqs: Vec<(String, u16)> =
+        cli.apps.iter().map(|a| (a.clone(), catalog[a].base_port)).collect();
+    let ports: BTreeMap<String, u16> =
+        registry::alloc(&holder, &reqs, Role::Issue)?.into_iter().collect();
 
     let out = Prepared { issue: cli.issue.clone(), worktree: holder, branch, ports };
     println!("{}", serde_json::to_string_pretty(&out)?);

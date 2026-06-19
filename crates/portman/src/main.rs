@@ -15,41 +15,32 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     Status,
-    Alloc { #[arg(long)] holder: String, #[arg(long, value_enum, default_value = "issue")] role: RoleArg, apps: Vec<String> },
-    Release { #[arg(long)] holder: String, #[arg(long, value_enum)] role: Option<RoleArg> },
+    Alloc { #[arg(long)] holder: String, #[arg(long, value_enum, default_value = "issue")] role: Role, apps: Vec<String> },
+    Release { #[arg(long)] holder: String, #[arg(long, value_enum)] role: Option<Role> },
     Prune,
-}
-
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum RoleArg { Issue, Baseline }
-impl From<RoleArg> for Role {
-    fn from(r: RoleArg) -> Self { match r { RoleArg::Issue => Role::Issue, RoleArg::Baseline => Role::Baseline } }
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Cmd::Status) {
         Cmd::Status => status()?,
-        Cmd::Prune => { registry::with_lock(|d| { d.prune(); Ok(()) })?; println!("pruned"); }
+        Cmd::Prune => { let freed = registry::prune()?; println!("pruned: {freed:?}"); }
         Cmd::Release { holder, role } => {
-            let freed = registry::with_lock(|d| Ok(d.release(&holder, role.map(Into::into))))?;
+            let freed = registry::release(&holder, role)?;
             println!("released: {freed:?}");
         }
         Cmd::Alloc { holder, role, apps } => {
             let start = cli.dir.clone().unwrap_or_else(|| ".".into());
             let loaded = devkit_ports::load::load(None, std::path::Path::new(&start))?;
-            let role: Role = role.into();
-            let mut out = Vec::new();
-            registry::with_lock(|d| {
-                d.prune();
-                for app in &apps {
-                    let base = loaded.catalog.get(app)
-                        .ok_or_else(|| anyhow::anyhow!("unknown app `{app}`"))?.base_port;
-                    out.push((app.clone(), d.alloc_one(&holder, app, base, role)));
-                }
-                Ok(())
-            })?;
-            for (app, port) in out { println!("{app}={port}"); }
+            let mut reqs = Vec::with_capacity(apps.len());
+            for app in &apps {
+                let base = loaded.catalog.get(app)
+                    .ok_or_else(|| anyhow::anyhow!("unknown app `{app}`"))?.base_port;
+                reqs.push((app.clone(), base));
+            }
+            for (app, port) in registry::alloc(&holder, &reqs, role)? {
+                println!("{app}={port}");
+            }
         }
     }
     Ok(())
@@ -62,7 +53,7 @@ fn status() -> Result<()> {
         let id = holder_label(&e.holder);
         t.add_row(vec![
             port.to_string(), e.app.clone(),
-            format!("{:?}", e.role).to_lowercase(), id,
+            e.role.to_string(), id,
             e.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             if registry::listening(*port) { "yes".into() } else { "no".into() },
             format!("{}s", registry::now().saturating_sub(e.ts)),

@@ -29,7 +29,7 @@ enum Cmd {
     Up {
         apps: Vec<String>,
         #[arg(long, value_enum, default_value = "issue")]
-        role: RoleArg,
+        role: RoleSelector,
         #[arg(long = "env", value_name = "K=V")]
         env: Vec<String>,
         #[arg(long = "env-file")]
@@ -40,7 +40,7 @@ enum Cmd {
     /// Stop servers and release ports for this worktree.
     Down {
         #[arg(long, value_enum)]
-        role: Option<RoleArg>,
+        role: Option<RoleSelector>,
     },
     /// Show tracked servers (this worktree, or --all).
     Status {
@@ -51,21 +51,35 @@ enum Cmd {
     Logs {
         app: String,
         #[arg(long, value_enum)]
-        role: Option<RoleArg>,
+        role: Option<RoleSelector>,
         #[arg(short = 'f', long)]
         follow: bool,
     },
 }
 
+/// CLI selector over registry roles. `Both` runs/affects the issue branch and a
+/// fresh baseline side-by-side; it is not itself a registry `Role`.
 #[derive(Clone, Copy, ValueEnum, PartialEq)]
-enum RoleArg { Issue, Baseline, Both }
+enum RoleSelector { Issue, Baseline, Both }
 
-fn to_role(r: RoleArg) -> Role {
-    match r { RoleArg::Baseline => Role::Baseline, _ => Role::Issue }
-}
+impl RoleSelector {
+    /// Registry roles this selector expands to (for `up`).
+    fn roles(self) -> &'static [Role] {
+        match self {
+            RoleSelector::Issue => &[Role::Issue],
+            RoleSelector::Baseline => &[Role::Baseline],
+            RoleSelector::Both => &[Role::Issue, Role::Baseline],
+        }
+    }
 
-fn role_str(r: Role) -> &'static str {
-    match r { Role::Issue => "issue", Role::Baseline => "baseline" }
+    /// Registry-role filter for `down`/`logs`: `None` means "all roles".
+    fn filter(self) -> Option<Role> {
+        match self {
+            RoleSelector::Issue => Some(Role::Issue),
+            RoleSelector::Baseline => Some(Role::Baseline),
+            RoleSelector::Both => None,
+        }
+    }
 }
 
 fn cwd_of(cli: &Cli) -> String {
@@ -126,7 +140,7 @@ fn print_summary(rows: &[Row]) {
     for r in rows {
         let url = format!("http://localhost:{}", r.port);
         t.add_row(vec![
-            role_str(r.role).to_string(),
+            r.role.to_string(),
             r.app.clone(),
             r.port.to_string(),
             ui::link(&url, &url),
@@ -144,14 +158,14 @@ fn main() -> Result<()> {
     match &cli.cmd {
         Cmd::Up { apps, role, env, env_file, dry_run } =>
             cmd_up(&cli, &cwd, apps, *role, env, env_file.as_deref(), *dry_run),
-        Cmd::Down { role } => cmd_down(&cwd, role.map(to_role)),
+        Cmd::Down { role } => cmd_down(&cwd, role.and_then(RoleSelector::filter)),
         Cmd::Status { all } => cmd_status(&cwd, *all),
-        Cmd::Logs { app, role, follow } => cmd_logs(&cwd, app, role.map(to_role), *follow),
+        Cmd::Logs { app, role, follow } => cmd_logs(&cwd, app, role.and_then(RoleSelector::filter), *follow),
     }
 }
 
 fn cmd_up(
-    cli: &Cli, cwd: &str, apps_arg: &[String], role: RoleArg,
+    cli: &Cli, cwd: &str, apps_arg: &[String], role: RoleSelector,
     env_pairs: &[String], env_file: Option<&str>, dry_run: bool,
 ) -> Result<()> {
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
@@ -185,30 +199,31 @@ fn cmd_up(
     let groups: Vec<(Role, String, PathBuf)> = {
         let baseline_path = expand_tilde(&cfg.defaults.baseline_path);
         let mut g = Vec::new();
-        if matches!(role, RoleArg::Issue | RoleArg::Both) {
-            g.push((Role::Issue, issue_holder.clone(), PathBuf::from(&issue_holder)));
-        }
-        if matches!(role, RoleArg::Baseline | RoleArg::Both) {
-            let bp = baseline_path.to_str().context("baseline_path not UTF-8")?.to_string();
-            baseline::ensure_fresh(&issue_holder, &bp, &cfg.defaults.baseline_ref)?;
-            g.push((Role::Baseline, bp.clone(), baseline_path));
+        for r in role.roles() {
+            match r {
+                Role::Issue => {
+                    g.push((Role::Issue, issue_holder.clone(), PathBuf::from(&issue_holder)));
+                }
+                Role::Baseline => {
+                    let bp = baseline_path.to_str().context("baseline_path not UTF-8")?.to_string();
+                    baseline::ensure_fresh(&issue_holder, &bp, &cfg.defaults.baseline_ref)?;
+                    g.push((Role::Baseline, bp.clone(), baseline_path.clone()));
+                }
+            }
         }
         g
     };
 
     let mut rows: Vec<Row> = Vec::new();
     for (grp_role, holder, base_dir) in &groups {
-        let mut ports: BTreeMap<String, u16> = BTreeMap::new();
-        registry::with_lock(|d| {
-            d.prune();
-            for a in &apps {
-                let base = catalog[a].base_port;
-                ports.insert(a.clone(), d.alloc_one(holder, a, base, *grp_role));
-            }
-            Ok(())
-        })?;
+        let reqs: Vec<(String, u16)> =
+            apps.iter().map(|a| (a.clone(), catalog[a].base_port)).collect();
+        let ports: BTreeMap<String, u16> =
+            registry::alloc(holder, &reqs, *grp_role)?.into_iter().collect();
         let api_port = ports.get("api").copied();
 
+        // Build each app's launch plan up front so dry-run and real spawns share it.
+        let mut plans = Vec::with_capacity(apps.len());
         for a in &apps {
             let app = &catalog[a];
             let port = ports[a];
@@ -218,27 +233,50 @@ fn cmd_up(
             let envmap = env::env_for(app, api_port, &user);
             let log = paths::logs_dir()
                 .join(slug(holder))
-                .join(format!("{}-{}.log", role_str(*grp_role), a));
+                .join(format!("{}-{}.log", grp_role.as_str(), a));
+            plans.push((a.clone(), port, argv, app_cwd, envmap, log));
+        }
 
-            if dry_run {
-                println!("[{}] {a} :{port}", role_str(*grp_role));
+        if dry_run {
+            for (a, port, argv, app_cwd, envmap, log) in &plans {
+                println!("[{}] {a} :{port}", grp_role.as_str());
                 println!("  cwd:  {}", app_cwd.display());
                 println!("  argv: {}", argv.join(" "));
                 let envs: Vec<String> = envmap.iter().map(|(k, v)| format!("{k}={v}")).collect();
                 println!("  env:  {}", envs.join(" "));
                 println!("  log:  {}", log.display());
-                rows.push(Row { role: *grp_role, app: a.clone(), port, pid: None, log, ready: None });
-                continue;
+                rows.push(Row { role: *grp_role, app: a.clone(), port: *port, pid: None, log: log.clone(), ready: None });
             }
+            continue;
+        }
 
-            let pid = supervise::spawn_detached(&argv, app_cwd.to_str().context("app cwd not UTF-8")?, &envmap, &log)?;
-            registry::with_lock(|d| { d.record_pid(port, a, holder, *grp_role, pid, log.clone()); Ok(()) })?;
-            let ready = supervise::wait_ready(port, Duration::from_secs(120));
-            if !ready {
-                eprintln!("--- {a} ({}) did not become ready; last 30 log lines: ---", role_str(*grp_role));
+        // Spawn every app in the group, then poll all their ports concurrently so
+        // readiness waits overlap instead of summing one 120s timeout per app.
+        let mut spawned = Vec::with_capacity(plans.len());
+        for (a, port, argv, app_cwd, envmap, log) in &plans {
+            let pid = supervise::spawn_detached(argv, app_cwd.to_str().context("app cwd not UTF-8")?, envmap, log)?;
+            registry::record_pid(*port, a, holder, *grp_role, pid, log.clone())?;
+            spawned.push((a.clone(), *port, log.clone(), pid));
+        }
+
+        let ready: BTreeMap<String, bool> = std::thread::scope(|s| {
+            let handles: Vec<_> = spawned
+                .iter()
+                .map(|(a, port, _, _)| {
+                    let (a, port) = (a.clone(), *port);
+                    s.spawn(move || (a, supervise::wait_ready(port, Duration::from_secs(120))))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        for (a, port, log, pid) in spawned {
+            let is_ready = ready[&a];
+            if !is_ready {
+                eprintln!("--- {a} ({}) did not become ready; last 30 log lines: ---", grp_role.as_str());
                 eprintln!("{}", supervise::tail(&log, 30));
             }
-            rows.push(Row { role: *grp_role, app: a.clone(), port, pid: Some(pid), log, ready: Some(ready) });
+            rows.push(Row { role: *grp_role, app: a, port, pid: Some(pid), log, ready: Some(is_ready) });
         }
     }
 
@@ -276,7 +314,7 @@ fn cmd_status(cwd: &str, all: bool) -> Result<()> {
         t.add_row(vec![
             port.to_string(),
             e.app.clone(),
-            role_str(e.role).to_string(),
+            e.role.to_string(),
             slug(&e.holder),
             e.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             if registry::listening(*port) { "yes".into() } else { "no".into() },

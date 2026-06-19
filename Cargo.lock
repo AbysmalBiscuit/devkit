@@ -207,13 +207,13 @@ name = "devkit-ports"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "devkit-common",
  "fd-lock",
  "nix",
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror",
  "toml",
 ]
 
