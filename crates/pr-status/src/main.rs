@@ -77,25 +77,14 @@ fn is_bot(login: &str) -> bool {
     BOTS.contains(&login) || login.ends_with("[bot]")
 }
 
-/// First `SWE-<digits>` (case-insensitive) in title+head, uppercased; else "-".
+/// First `<letters>-<digits>` id in title then head, uppercased; else "-".
 fn issue_of(title: &str, head: &str) -> String {
-    let hay = format!("{title} {head}");
-    let lower = hay.to_lowercase();
-    let bytes = lower.as_bytes();
-    let mut i = 0;
-    while let Some(pos) = lower[i..].find("swe-") {
-        let start = i + pos;
-        let ds = start + 4;
-        let mut j = ds;
-        while j < bytes.len() && bytes[j].is_ascii_digit() {
-            j += 1;
-        }
-        if j > ds {
-            return format!("SWE-{}", &hay[ds..j]);
-        }
-        i = start + 4;
+    let id = devkit_common::worktree::issue_id_of(title, Path::new(head));
+    if id == "UNKNOWN" {
+        "-".to_string()
+    } else {
+        id
     }
-    "-".to_string()
 }
 
 fn checks_of(rollup: &[Check]) -> &'static str {
@@ -572,6 +561,11 @@ mod tests {
     fn issue_of_finds_swe() {
         assert_eq!(issue_of("Fix thing", "lev/swe-123-fix"), "SWE-123");
         assert_eq!(issue_of("no issue here", "main"), "-");
+    }
+    #[test]
+    fn issue_of_finds_non_swe_prefix() {
+        assert_eq!(issue_of("Fix thing", "lev/eng-1234-fix"), "ENG-1234");
+        assert_eq!(issue_of("ABC-9 in title", "main"), "ABC-9");
     }
     #[test]
     fn diff_cell_shows_change() {
