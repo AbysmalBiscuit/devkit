@@ -75,3 +75,35 @@ mod tests {
         assert_eq!(back.entries[&9100].app, "api");
     }
 }
+
+use std::net::TcpListener;
+
+/// True if something is bound to localhost:port (we could NOT bind it).
+pub fn listening(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_err()
+}
+pub fn pid_alive(pid: u32) -> bool {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    kill(Pid::from_raw(pid as i32), None).is_ok()
+}
+pub fn holder_alive(holder: &str) -> bool {
+    std::path::Path::new(holder).exists()
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use super::*;
+    #[test]
+    fn detects_bound_port() {
+        let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(listening(port));   // l holds it
+        drop(l);
+        assert!(!listening(port));  // freed
+    }
+    #[test]
+    fn current_pid_alive() {
+        assert!(pid_alive(std::process::id()));
+    }
+}
