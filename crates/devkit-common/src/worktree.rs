@@ -13,7 +13,7 @@ pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
     let mut all = Vec::new();
     let mut path: Option<String> = None;
     let mut branch: Option<String> = None;
-    let mut flush = |p: &mut Option<String>, b: &mut Option<String>, v: &mut Vec<Worktree>| {
+    let flush = |p: &mut Option<String>, b: &mut Option<String>, v: &mut Vec<Worktree>| {
         if let Some(pp) = p.take() {
             v.push(Worktree { path: PathBuf::from(pp), branch: b.take().unwrap_or_else(|| "DETACHED".into()) });
         }
