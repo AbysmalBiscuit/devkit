@@ -159,6 +159,10 @@ impl Data {
     }
 }
 
+pub fn snapshot() -> Result<Data> {
+    with_lock(|d| { d.prune(); Ok(d.clone()) })
+}
+
 #[cfg(test)]
 mod ops_tests {
     use super::*;
