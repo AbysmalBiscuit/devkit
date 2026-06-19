@@ -225,6 +225,7 @@ dependencies = [
  "clap",
  "devkit-common",
  "devkit-ports",
+ "nix",
 ]
 
 [[package]]
@@ -448,7 +449,8 @@ dependencies = [
  "anyhow",
  "clap",
  "devkit-common",
- "devkit-ports",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -459,6 +461,8 @@ dependencies = [
  "clap",
  "devkit-common",
  "devkit-ports",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -601,6 +605,8 @@ dependencies = [
  "anyhow",
  "clap",
  "devkit-common",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
