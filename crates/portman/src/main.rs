@@ -36,8 +36,20 @@ fn main() -> Result<()> {
             println!("released: {freed:?}");
         }
         Cmd::Alloc { holder, role, apps } => {
-            // Wired in Task 12. Reference cli.dir so the field isn't dead.
-            anyhow::bail!("`portman alloc` is wired in Task 12 (dir={:?}): {holder} {:?} {apps:?}", cli.dir, Role::from(role));
+            let start = cli.dir.clone().unwrap_or_else(|| ".".into());
+            let loaded = devkit_ports::load::load(None, std::path::Path::new(&start))?;
+            let role: Role = role.into();
+            let mut out = Vec::new();
+            registry::with_lock(|d| {
+                d.prune();
+                for app in &apps {
+                    let base = loaded.catalog.get(app)
+                        .ok_or_else(|| anyhow::anyhow!("unknown app `{app}`"))?.base_port;
+                    out.push((app.clone(), d.alloc_one(&holder, app, base, role)));
+                }
+                Ok(())
+            })?;
+            for (app, port) in out { println!("{app}={port}"); }
         }
     }
     Ok(())
