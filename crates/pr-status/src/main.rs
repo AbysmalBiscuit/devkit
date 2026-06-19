@@ -103,14 +103,14 @@ fn checks_of(rollup: &[Check]) -> &'static str {
         return "-";
     }
     let fail = rollup.iter().any(|c| {
-        c.conclusion.as_deref().map_or(false, |x| FAIL.contains(&x))
+        c.conclusion.as_deref().is_some_and(|x| FAIL.contains(&x))
             || matches!(c.state.as_deref(), Some("FAILURE") | Some("ERROR"))
     });
     if fail {
         return "fail";
     }
     let run = rollup.iter().any(|c| {
-        c.status.as_deref().map_or(false, |x| RUNNING.contains(&x))
+        c.status.as_deref().is_some_and(|x| RUNNING.contains(&x))
             || c.state.as_deref() == Some("PENDING")
     });
     if run {
@@ -190,7 +190,7 @@ fn reviewer_state(pr: &ReviewPr, me: &str) -> (String, String) {
         .iter()
         .filter(|r| r.author.login == me)
         .map(|r| r.state.clone())
-        .last()
+        .next_back()
         .unwrap_or_default();
     let requested = pr.review_requests.iter().any(|req| req.login == me);
     let vote_label = match vote.as_str() {

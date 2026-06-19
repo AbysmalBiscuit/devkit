@@ -63,11 +63,10 @@ pub fn locate(explicit: Option<&Path>, start: &Path) -> Option<PathBuf> {
 }
 
 pub fn expand_tilde(p: &str) -> PathBuf {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Some(h) = std::env::var_os("HOME") {
+    if let Some(rest) = p.strip_prefix("~/")
+        && let Some(h) = std::env::var_os("HOME") {
             return PathBuf::from(h).join(rest);
         }
-    }
     PathBuf::from(p)
 }
 

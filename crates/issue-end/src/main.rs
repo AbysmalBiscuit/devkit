@@ -123,7 +123,11 @@ fn reason_not_finished(row: &Row, linear: Option<&LinearState>, has_key: bool, p
     if bits.is_empty() { None } else { Some(bits.join(", ")) }
 }
 
-fn gather(start: &str, ids: &[String]) -> Result<(Vec<Row>, HashMap<String, LinearState>, bool, Option<String>)> {
+/// Rows, the Linear state per issue id, whether a Linear key is set, and the Linear
+/// workspace slug (for issue links).
+type Gathered = (Vec<Row>, HashMap<String, LinearState>, bool, Option<String>);
+
+fn gather(start: &str, ids: &[String]) -> Result<Gathered> {
     let mut rows = build_rows(start)?;
     if !ids.is_empty() {
         let wanted: Vec<String> = ids.iter().map(|s| s.to_uppercase()).collect();

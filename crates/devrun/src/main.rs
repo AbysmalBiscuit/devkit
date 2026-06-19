@@ -84,13 +84,11 @@ fn slug(holder: &str) -> String {
 pub fn apps_from_diff(diff_stat: &str, known: &[String]) -> Vec<String> {
     let mut found = Vec::new();
     for line in diff_stat.lines() {
-        if let Some(rest) = line.trim().strip_prefix("apps/") {
-            if let Some(name) = rest.split('/').next() {
-                if known.iter().any(|k| k == name) && !found.contains(&name.to_string()) {
+        if let Some(rest) = line.trim().strip_prefix("apps/")
+            && let Some(name) = rest.split('/').next()
+                && known.iter().any(|k| k == name) && !found.contains(&name.to_string()) {
                     found.push(name.to_string());
                 }
-            }
-        }
     }
     found
 }
@@ -253,9 +251,8 @@ fn cmd_down(cwd: &str, role: Option<Role>) -> Result<()> {
     let data = registry::snapshot()?;
     let mut stopped = 0;
     for e in data.entries.values() {
-        if e.holder == holder && role.map_or(true, |r| e.role == r) {
-            if let Some(pid) = e.pid { supervise::stop(pid); stopped += 1; }
-        }
+        if e.holder == holder && role.is_none_or(|r| e.role == r)
+            && let Some(pid) = e.pid { supervise::stop(pid); stopped += 1; }
     }
     let freed = registry::with_lock(|d| Ok(d.release(&holder, role)))?;
     println!("stopped {stopped} process(es); released ports {freed:?}");
@@ -291,7 +288,7 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
     let holder = toplevel(cwd)?;
     let data = registry::snapshot()?;
     let log = data.entries.values()
-        .find(|e| e.holder == holder && e.app == app && role.map_or(true, |r| e.role == r))
+        .find(|e| e.holder == holder && e.app == app && role.is_none_or(|r| e.role == r))
         .and_then(|e| e.logfile.clone())
         .ok_or_else(|| anyhow::anyhow!("no tracked log for app `{app}` in this worktree"))?;
     if follow {

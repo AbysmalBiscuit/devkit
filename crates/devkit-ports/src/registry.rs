@@ -53,7 +53,7 @@ fn write(path: &std::path::Path, data: &Data) -> Result<()> {
 pub fn with_lock<T>(f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
     fs::create_dir_all(paths::state_dir())?;
     let lock_path = paths::lock_file();
-    let _ = OpenOptions::new().create(true).write(true).open(&lock_path)?;
+    let _ = OpenOptions::new().create(true).write(true).truncate(false).open(&lock_path)?;
     let mut lock = RwLock::new(File::open(&lock_path)?);
     let _guard = lock.write()?; // blocks until exclusive
     let reg = paths::registry_file();
@@ -152,7 +152,7 @@ impl Data {
     /// Release all entries for a holder (optionally one role). Returns freed ports.
     pub fn release(&mut self, holder: &str, role: Option<Role>) -> Vec<u16> {
         let freed: Vec<u16> = self.entries.iter()
-            .filter(|(_, e)| e.holder == holder && role.map_or(true, |r| e.role == r))
+            .filter(|(_, e)| e.holder == holder && role.is_none_or(|r| e.role == r))
             .map(|(p, _)| *p).collect();
         for p in &freed { self.entries.remove(p); }
         freed
