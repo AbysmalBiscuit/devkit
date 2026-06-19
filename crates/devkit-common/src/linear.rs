@@ -1,1 +1,75 @@
-// implemented in a later task
+use anyhow::Result;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinearState {
+    pub kind: String, // completed | started | unstarted | backlog | triage | canceled
+    pub name: String, // "Done"
+}
+
+/// Build the batched GraphQL query for the given `ENG-1234` ids. Pure → testable.
+pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> {
+    let mut aliases = HashMap::new();
+    let mut parts = Vec::new();
+    for (idx, id) in ids.iter().enumerate() {
+        let (team, num) = id.split_once('-')?;
+        let alias = format!("i{idx}");
+        aliases.insert(alias.clone(), id.clone());
+        parts.push(format!(
+            "{alias}: issues(filter: {{ team: {{ key: {{ eq: \"{}\" }} }}, number: {{ eq: {} }} }}) {{ nodes {{ identifier state {{ type name }} }} }}",
+            team.to_uppercase(), num
+        ));
+    }
+    if parts.is_empty() { return None; }
+    Some((format!("query {{ {} }}", parts.join(" ")), aliases))
+}
+
+/// Query Linear; returns id → state. Empty map if no key/ids or on network error.
+pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, LinearState> {
+    let (Some(key), Some((query, aliases))) = (key, build_query(ids)) else {
+        return HashMap::new();
+    };
+    match fetch(&query, &aliases, key) {
+        Ok(m) => m,
+        Err(e) => { eprintln!("Linear lookup failed: {e}"); HashMap::new() }
+    }
+}
+
+fn fetch(query: &str, aliases: &HashMap<String, String>, key: &str) -> Result<HashMap<String, LinearState>> {
+    let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
+        .set("Authorization", key)
+        .send_json(ureq::json!({ "query": query }))?
+        .into_json()?;
+    let mut out = HashMap::new();
+    if let Some(data) = resp.get("data").and_then(|d| d.as_object()) {
+        for (alias, block) in data {
+            if let (Some(id), Some(node)) = (
+                aliases.get(alias),
+                block.get("nodes").and_then(|n| n.get(0)),
+            ) {
+                let st = &node["state"];
+                out.insert(id.clone(), LinearState {
+                    kind: st["type"].as_str().unwrap_or("").to_string(),
+                    name: st["name"].as_str().unwrap_or("").to_string(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn query_aliases_each_id() {
+        let (q, a) = build_query(&["ENG-1".into(), "ABC-22".into()]).unwrap();
+        assert!(q.contains("number: { eq: 1 }"));
+        assert!(q.contains("number: { eq: 22 }"));
+        assert_eq!(a.len(), 2);
+    }
+    #[test]
+    fn empty_ids_no_query() {
+        assert!(build_query(&[]).is_none());
+    }
+}
