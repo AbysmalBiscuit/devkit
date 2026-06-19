@@ -1,9 +1,11 @@
 mod env;
 mod supervise;
+mod baseline;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use devkit_common::{cmd::git, paths, ui};
+use devkit_ports::config::expand_tilde;
 use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
 use std::collections::BTreeMap;
@@ -56,10 +58,10 @@ enum Cmd {
 }
 
 #[derive(Clone, Copy, ValueEnum, PartialEq)]
-enum RoleArg { Issue }
+enum RoleArg { Issue, Baseline, Both }
 
 fn to_role(r: RoleArg) -> Role {
-    match r { RoleArg::Issue => Role::Issue }
+    match r { RoleArg::Baseline => Role::Baseline, _ => Role::Issue }
 }
 
 fn role_str(r: Role) -> &'static str {
@@ -182,8 +184,18 @@ fn cmd_up(
     let issue_holder = toplevel(cwd)?;
 
     // (role, holder, base_dir) — base_dir is where <app.path> is rooted.
-    let groups: Vec<(Role, String, PathBuf)> = match role {
-        RoleArg::Issue => vec![(Role::Issue, issue_holder.clone(), PathBuf::from(&issue_holder))],
+    let groups: Vec<(Role, String, PathBuf)> = {
+        let baseline_path = expand_tilde(&cfg.defaults.baseline_path);
+        let mut g = Vec::new();
+        if matches!(role, RoleArg::Issue | RoleArg::Both) {
+            g.push((Role::Issue, issue_holder.clone(), PathBuf::from(&issue_holder)));
+        }
+        if matches!(role, RoleArg::Baseline | RoleArg::Both) {
+            let bp = baseline_path.to_str().context("baseline_path not UTF-8")?.to_string();
+            baseline::ensure_fresh(&issue_holder, &bp, &cfg.defaults.baseline_ref)?;
+            g.push((Role::Baseline, bp.clone(), baseline_path));
+        }
+        g
     };
 
     let mut rows: Vec<Row> = Vec::new();
