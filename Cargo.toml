@@ -22,3 +22,10 @@ supports-hyperlinks = "3"
 ureq = { version = "2", features = ["json"] }
 devkit-common = { path = "crates/devkit-common" }
 devkit-ports = { path = "crates/devkit-ports" }
+
+[profile.release]
+opt-level = 3        # tools do little compute; keep the registry/diff hot paths fast
+lto = "thin"         # cross-crate inlining across the workspace libs
+codegen-units = 1    # better optimization at the cost of compile time
+panic = "abort"      # no bin catches panics; drops unwind tables, shrinks the binary
+strip = true
