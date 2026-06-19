@@ -77,25 +77,14 @@ fn is_bot(login: &str) -> bool {
     BOTS.contains(&login) || login.ends_with("[bot]")
 }
 
-/// First `SWE-<digits>` (case-insensitive) in title+head, uppercased; else "-".
+/// First `<letters>-<digits>` id in title then head, uppercased; else "-".
 fn issue_of(title: &str, head: &str) -> String {
-    let hay = format!("{title} {head}");
-    let lower = hay.to_lowercase();
-    let bytes = lower.as_bytes();
-    let mut i = 0;
-    while let Some(pos) = lower[i..].find("swe-") {
-        let start = i + pos;
-        let ds = start + 4;
-        let mut j = ds;
-        while j < bytes.len() && bytes[j].is_ascii_digit() {
-            j += 1;
-        }
-        if j > ds {
-            return format!("SWE-{}", &hay[ds..j]);
-        }
-        i = start + 4;
+    let id = devkit_common::worktree::issue_id_of(title, Path::new(head));
+    if id == "UNKNOWN" {
+        "-".to_string()
+    } else {
+        id
     }
-    "-".to_string()
 }
 
 fn checks_of(rollup: &[Check]) -> &'static str {
@@ -425,26 +414,45 @@ fn main() -> Result<()> {
     let want_mine = cli.mine || !cli.reviews;
     let want_reviews = cli.reviews || !cli.mine;
 
-    let me: Me = gh_json(&["api", "user"])?;
-    let me = me.login;
-
-    let repo_key = if cli.no_cache {
-        None
-    } else {
-        Some(resolve_repo(cli.repo.as_deref())?)
-    };
     let url_key = std::env::var("LINEAR_WORKSPACE").ok();
 
-    let mine_prs = if want_mine {
-        fetch_mine(cli.repo.as_deref())?
-    } else {
-        vec![]
-    };
-    let review_rows = if want_reviews {
-        fetch_reviews(cli.repo.as_deref(), &me)?
-    } else {
-        vec![]
-    };
+    // These gh round-trips are independent network calls, so run them
+    // concurrently. The reviews fetch is the only one that needs the current
+    // user (to drop self-authored PRs), so it shares a thread with the user
+    // lookup and runs after it; repo resolution and the "mine" fetch have no
+    // such dependency and run in parallel.
+    let repo_arg = cli.repo.as_deref();
+    let (me, mine_prs, review_rows, repo_key) = std::thread::scope(|s| {
+        let user_reviews = s.spawn(|| -> Result<(String, Vec<ReviewPr>)> {
+            let me: Me = gh_json(&["api", "user"])?;
+            let me = me.login;
+            let rows = if want_reviews {
+                fetch_reviews(repo_arg, &me)?
+            } else {
+                vec![]
+            };
+            Ok((me, rows))
+        });
+        let mine = s.spawn(|| -> Result<Vec<MinePr>> {
+            if want_mine {
+                fetch_mine(repo_arg)
+            } else {
+                Ok(vec![])
+            }
+        });
+        let repo = s.spawn(|| -> Result<Option<String>> {
+            if cli.no_cache {
+                Ok(None)
+            } else {
+                Ok(Some(resolve_repo(repo_arg)?))
+            }
+        });
+
+        let (me, review_rows) = user_reviews.join().expect("user/reviews thread panicked")?;
+        let mine_prs = mine.join().expect("mine thread panicked")?;
+        let repo_key = repo.join().expect("repo thread panicked")?;
+        Ok::<_, anyhow::Error>((me, mine_prs, review_rows, repo_key))
+    })?;
 
     let path = repo_key.as_ref().map(|r| cache_path(r));
     let mut cache: Snap = path.as_deref().map(load_cache).unwrap_or_default();
@@ -572,6 +580,11 @@ mod tests {
     fn issue_of_finds_swe() {
         assert_eq!(issue_of("Fix thing", "lev/swe-123-fix"), "SWE-123");
         assert_eq!(issue_of("no issue here", "main"), "-");
+    }
+    #[test]
+    fn issue_of_finds_non_swe_prefix() {
+        assert_eq!(issue_of("Fix thing", "lev/eng-1234-fix"), "ENG-1234");
+        assert_eq!(issue_of("ABC-9 in title", "main"), "ABC-9");
     }
     #[test]
     fn diff_cell_shows_change() {
