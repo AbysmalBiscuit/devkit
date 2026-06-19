@@ -107,3 +107,90 @@ mod liveness_tests {
         assert!(pid_alive(std::process::id()));
     }
 }
+
+pub const RESERVATION_GRACE_SECS: u64 = 120;
+
+impl Data {
+    /// Drop entries whose holder is gone, pid is dead, or are stale unbacked reservations.
+    pub fn prune(&mut self) {
+        let now = now();
+        self.entries.retain(|port, e| {
+            if !holder_alive(&e.holder) { return false; }
+            match e.pid {
+                Some(pid) => pid_alive(pid),
+                None => listening(*port) || now.saturating_sub(e.ts) < RESERVATION_GRACE_SECS,
+            }
+        });
+    }
+
+    fn holds(&self, holder: &str, app: &str, role: Role) -> Option<u16> {
+        self.entries.iter()
+            .find(|(_, e)| e.holder == holder && e.app == app && e.role == role)
+            .map(|(p, _)| *p)
+    }
+
+    /// Reserve a port for one app (idempotent per holder+app+role). pid stays None.
+    pub fn alloc_one(&mut self, holder: &str, app: &str, base: u16, role: Role) -> u16 {
+        if let Some(p) = self.holds(holder, app, role) { return p; }
+        let mut port = base;
+        while self.entries.contains_key(&port) || listening(port) {
+            port += 1;
+        }
+        self.entries.insert(port, Entry {
+            app: app.into(), holder: holder.into(), role, pid: None, logfile: None, ts: now(),
+        });
+        port
+    }
+
+    pub fn record_pid(&mut self, port: u16, pid: u32, logfile: PathBuf) {
+        if let Some(e) = self.entries.get_mut(&port) {
+            e.pid = Some(pid);
+            e.logfile = Some(logfile);
+        }
+    }
+
+    /// Release all entries for a holder (optionally one role). Returns freed ports.
+    pub fn release(&mut self, holder: &str, role: Option<Role>) -> Vec<u16> {
+        let freed: Vec<u16> = self.entries.iter()
+            .filter(|(_, e)| e.holder == holder && role.map_or(true, |r| e.role == r))
+            .map(|(p, _)| *p).collect();
+        for p in &freed { self.entries.remove(p); }
+        freed
+    }
+}
+
+#[cfg(test)]
+mod ops_tests {
+    use super::*;
+    #[test]
+    fn alloc_is_idempotent_per_holder() {
+        let mut d = Data::default();
+        let a = d.alloc_one("/w", "api", 9100, Role::Issue);
+        let b = d.alloc_one("/w", "api", 9100, Role::Issue);
+        assert_eq!(a, b);
+        assert_eq!(d.entries.len(), 1);
+    }
+    #[test]
+    fn alloc_skips_claimed_ports() {
+        let mut d = Data::default();
+        let a = d.alloc_one("/w1", "api", 9100, Role::Issue);
+        let b = d.alloc_one("/w2", "api", 9100, Role::Issue);
+        assert_ne!(a, b);
+    }
+    #[test]
+    fn prune_drops_dead_holder() {
+        let mut d = Data::default();
+        d.entries.insert(9100, Entry { app:"api".into(), holder:"/definitely/not/here".into(), role:Role::Issue, pid:None, logfile:None, ts: now() });
+        d.prune();
+        assert!(d.entries.is_empty());
+    }
+    #[test]
+    fn release_frees_by_holder() {
+        let mut d = Data::default();
+        let cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        d.alloc_one(&cwd, "api", 9100, Role::Issue);
+        let freed = d.release(&cwd, None);
+        assert_eq!(freed.len(), 1);
+        assert!(d.entries.is_empty());
+    }
+}
