@@ -154,6 +154,7 @@ fn print_summary(rows: &[Row]) {
 }
 
 fn main() -> Result<()> {
+    devkit_common::report::install_panic_hook("devrun");
     let cli = Cli::parse();
     let cwd = cwd_of(&cli);
     match &cli.cmd {
@@ -304,27 +305,16 @@ fn cmd_down(cwd: &str, role: Option<Role>) -> Result<()> {
 }
 
 fn cmd_status(cwd: &str, all: bool) -> Result<()> {
-    let holder = toplevel(cwd).ok();
     let data = registry::snapshot()?;
-    let mut t = ui::table(&["PORT", "APP", "ROLE", "HOLDER", "PID", "LISTENING", "AGE"]);
-    for (port, e) in &data.entries {
-        if !all {
-            match &holder {
-                Some(h) if &e.holder == h => {}
-                _ => continue,
-            }
+    if all {
+        println!("{}", registry::status_table(&data, None));
+    } else {
+        // Outside a git repo there's no worktree to scope to; show nothing.
+        match toplevel(cwd).ok() {
+            Some(h) => println!("{}", registry::status_table(&data, Some(&h))),
+            None => println!("{}", registry::status_table(&registry::Data::default(), None)),
         }
-        t.add_row(vec![
-            port.to_string(),
-            e.app.clone(),
-            e.role.to_string(),
-            slug(&e.holder),
-            e.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-            if registry::listening(*port) { "yes".into() } else { "no".into() },
-            format!("{}s", registry::now().saturating_sub(e.ts)),
-        ]);
     }
-    println!("{t}");
     Ok(())
 }
 

@@ -41,7 +41,8 @@ pub fn issue_id_of(branch: &str, path: &std::path::Path) -> String {
     "UNKNOWN".into()
 }
 
-fn find_id(s: &str) -> Option<String> {
+/// The first letters-dash-digits run in `s` (e.g. `eng-1234`), if any.
+pub fn find_id(s: &str) -> Option<String> {
     // first run of letters-dash-digits, e.g. eng-1234
     let bytes = s.as_bytes();
     let mut i = 0;

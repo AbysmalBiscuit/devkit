@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use devkit_common::ui;
 use devkit_ports::registry::{self, Data, Role};
 
 #[derive(Parser)]
@@ -21,6 +20,7 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
+    devkit_common::report::install_panic_hook("portman");
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Cmd::Status) {
         Cmd::Status => status()?,
@@ -48,21 +48,6 @@ fn main() -> Result<()> {
 
 fn status() -> Result<()> {
     let data: Data = registry::snapshot()?;
-    let mut t = ui::table(&["PORT", "APP", "ROLE", "HOLDER", "PID", "LISTENING", "AGE"]);
-    for (port, e) in &data.entries {
-        let id = holder_label(&e.holder);
-        t.add_row(vec![
-            port.to_string(), e.app.clone(),
-            e.role.to_string(), id,
-            e.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-            if registry::listening(*port) { "yes".into() } else { "no".into() },
-            format!("{}s", registry::now().saturating_sub(e.ts)),
-        ]);
-    }
-    println!("{t}");
+    println!("{}", registry::status_table(&data, None));
     Ok(())
-}
-
-fn holder_label(h: &str) -> String {
-    std::path::Path::new(h).file_name().and_then(|s| s.to_str()).unwrap_or(h).to_string()
 }

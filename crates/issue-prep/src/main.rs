@@ -38,6 +38,7 @@ fn branch_name(prefix: &str, slug: &str) -> String {
 }
 
 fn main() -> Result<()> {
+    devkit_common::report::install_panic_hook("issue-prep");
     let cli = Cli::parse();
     let start = cli.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(&start))?;

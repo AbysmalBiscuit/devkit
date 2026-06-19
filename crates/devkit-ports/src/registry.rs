@@ -341,6 +341,31 @@ pub fn release(holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
     with_lock(|d| Ok(d.release(holder, role)))
 }
 
+/// Render the port-status table shared by `portman status` and `devrun status`.
+/// `only_holder = Some(h)` limits rows to that holder; `None` shows every port.
+pub fn status_table(data: &Data, only_holder: Option<&str>) -> String {
+    let mut t = devkit_common::ui::table(&["PORT", "APP", "ROLE", "HOLDER", "PID", "LISTENING", "AGE"]);
+    let now = now();
+    for (port, e) in &data.entries {
+        if let Some(h) = only_holder
+            && e.holder != h
+        {
+            continue;
+        }
+        let label = devkit_common::paths::leaf(&e.holder).unwrap_or(&e.holder);
+        t.add_row(vec![
+            port.to_string(),
+            e.app.clone(),
+            e.role.to_string(),
+            label.to_string(),
+            e.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            if listening(*port) { "yes".into() } else { "no".into() },
+            format!("{}s", now.saturating_sub(e.ts)),
+        ]);
+    }
+    format!("{t}")
+}
+
 #[cfg(test)]
 mod ops_tests {
     use super::*;

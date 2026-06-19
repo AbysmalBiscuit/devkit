@@ -40,8 +40,6 @@ struct ReviewRequest {
 struct MinePr {
     number: u64,
     url: String,
-    #[serde(default)]
-    title: String,
     #[serde(rename = "headRefName", default)]
     head_ref_name: String,
     #[serde(rename = "isDraft", default)]
@@ -77,14 +75,11 @@ fn is_bot(login: &str) -> bool {
     BOTS.contains(&login) || login.ends_with("[bot]")
 }
 
-/// First `<letters>-<digits>` id in title then head, uppercased; else "-".
-fn issue_of(title: &str, head: &str) -> String {
-    let id = devkit_common::worktree::issue_id_of(title, Path::new(head));
-    if id == "UNKNOWN" {
-        "-".to_string()
-    } else {
-        id
-    }
+/// The issue id a PR addresses, taken from its branch (head) ref and uppercased.
+fn issue_of(head: &str) -> String {
+    devkit_common::worktree::find_id(head)
+        .map(|s| s.to_uppercase())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn checks_of(rollup: &[Check]) -> &'static str {
@@ -271,7 +266,7 @@ fn fetch_mine(repo: Option<&str>) -> Result<Vec<MinePr>> {
         "--limit",
         "100",
         "--json",
-        "number,url,title,headRefName,isDraft,reviewDecision,mergeable,statusCheckRollup,reviews",
+        "number,url,headRefName,isDraft,reviewDecision,mergeable,statusCheckRollup,reviews",
     ] {
         args.push(a.into());
     }
@@ -280,7 +275,7 @@ fn fetch_mine(repo: Option<&str>) -> Result<Vec<MinePr>> {
 }
 
 fn fetch_reviews(repo: Option<&str>, me: &str) -> Result<Vec<ReviewPr>> {
-    let fields = "number,url,title,headRefName,author,latestReviews,reviewRequests";
+    let fields = "number,url,headRefName,author,latestReviews,reviewRequests";
     let mut seen: BTreeMap<u64, ReviewPr> = BTreeMap::new();
     for search in ["review-requested:@me", "reviewed-by:@me"] {
         let mut args: Vec<String> = vec!["pr".into(), "list".into()];
@@ -336,7 +331,7 @@ fn mine_table(
         let g = |k: &str| was.and_then(|m| m.get(k)).map(|s| s.as_str());
         t.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
-            issue_cell(&issue_of(&pr.title, &pr.head_ref_name), url_key),
+            issue_cell(&issue_of(&pr.head_ref_name), url_key),
             diff_cell(g("review"), &review),
             diff_cell(g("check"), &check),
             diff_cell(g("action"), &action),
@@ -410,6 +405,7 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    devkit_common::report::install_panic_hook("pr-status");
     let cli = Cli::parse();
     let want_mine = cli.mine || !cli.reviews;
     let want_reviews = cli.reviews || !cli.mine;
@@ -486,7 +482,6 @@ mod tests {
         MinePr {
             number: 1,
             url: "u".into(),
-            title: "t".into(),
             head_ref_name: "h".into(),
             is_draft: draft,
             review_decision: decision.map(String::from),
@@ -578,13 +573,14 @@ mod tests {
     }
     #[test]
     fn issue_of_finds_swe() {
-        assert_eq!(issue_of("Fix thing", "lev/swe-123-fix"), "SWE-123");
-        assert_eq!(issue_of("no issue here", "main"), "-");
+        assert_eq!(issue_of("lev/swe-123-fix"), "SWE-123");
+        assert_eq!(issue_of("main"), "-");
     }
     #[test]
     fn issue_of_finds_non_swe_prefix() {
-        assert_eq!(issue_of("Fix thing", "lev/eng-1234-fix"), "ENG-1234");
-        assert_eq!(issue_of("ABC-9 in title", "main"), "ABC-9");
+        // Any letters-dash-digits branch id is extracted, not just SWE-.
+        assert_eq!(issue_of("lev/eng-1234-fix"), "ENG-1234");
+        assert_eq!(issue_of("feature/abc-9-thing"), "ABC-9");
     }
     #[test]
     fn diff_cell_shows_change() {

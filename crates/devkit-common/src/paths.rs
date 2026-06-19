@@ -20,6 +20,11 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").expect("HOME must be set"))
 }
 
+/// The final path component (basename) of `path`, if any.
+pub fn leaf(path: &str) -> Option<&str> {
+    std::path::Path::new(path).file_name().and_then(|s| s.to_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -27,5 +32,10 @@ mod tests {
     fn registry_under_state() {
         assert!(registry_file().ends_with(".claude/state/devkit/ports.json"));
         assert!(logs_dir().ends_with(".claude/state/devkit/logs"));
+    }
+    #[test]
+    fn leaf_is_basename() {
+        assert_eq!(leaf("/a/b/eng-1234"), Some("eng-1234"));
+        assert_eq!(leaf("solo"), Some("solo"));
     }
 }

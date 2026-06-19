@@ -68,6 +68,7 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
+    devkit_common::report::install_panic_hook("issue-end");
     let cli = Cli::parse();
     let start = cli.dir.clone().unwrap_or_else(|| ".".to_string());
     match cli.cmd.unwrap_or(Cmd::Status { ids: vec![] }) {
