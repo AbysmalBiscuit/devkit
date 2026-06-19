@@ -232,7 +232,7 @@ fn cmd_up(
             }
 
             let pid = supervise::spawn_detached(&argv, app_cwd.to_str().context("app cwd not UTF-8")?, &envmap, &log)?;
-            registry::with_lock(|d| { d.record_pid(port, pid, log.clone()); Ok(()) })?;
+            registry::with_lock(|d| { d.record_pid(port, a, holder, *grp_role, pid, log.clone()); Ok(()) })?;
             let ready = supervise::wait_ready(port, Duration::from_secs(120));
             if !ready {
                 eprintln!("--- {a} ({}) did not become ready; last 30 log lines: ---", role_str(*grp_role));
@@ -248,13 +248,16 @@ fn cmd_up(
 
 fn cmd_down(cwd: &str, role: Option<Role>) -> Result<()> {
     let holder = toplevel(cwd)?;
-    let data = registry::snapshot()?;
+    // Stop and release under one lock, without pruning first: a still-running server
+    // whose reservation looks stale must still receive SIGTERM and be released.
     let mut stopped = 0;
-    for e in data.entries.values() {
-        if e.holder == holder && role.is_none_or(|r| e.role == r)
-            && let Some(pid) = e.pid { supervise::stop(pid); stopped += 1; }
-    }
-    let freed = registry::with_lock(|d| Ok(d.release(&holder, role)))?;
+    let freed = registry::with_lock(|d| {
+        for e in d.entries.values() {
+            if e.holder == holder && role.is_none_or(|r| e.role == r)
+                && let Some(pid) = e.pid { supervise::stop(pid); stopped += 1; }
+        }
+        Ok(d.release(&holder, role))
+    })?;
     println!("stopped {stopped} process(es); released ports {freed:?}");
     Ok(())
 }

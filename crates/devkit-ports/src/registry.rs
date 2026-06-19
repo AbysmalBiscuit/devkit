@@ -108,7 +108,10 @@ mod liveness_tests {
     }
 }
 
-pub const RESERVATION_GRACE_SECS: u64 = 120;
+/// How long a pid-less reservation survives without something listening on its port.
+/// Must exceed `devrun`'s readiness timeout (120s) so a reservation cannot expire
+/// while its server is still being brought up in the same run.
+pub const RESERVATION_GRACE_SECS: u64 = 300;
 
 impl Data {
     /// Drop entries whose holder is gone, pid is dead, or are stale unbacked reservations.
@@ -134,7 +137,8 @@ impl Data {
         if let Some(p) = self.holds(holder, app, role) { return p; }
         let mut port = base;
         while self.entries.contains_key(&port) || listening(port) {
-            port += 1;
+            port = port.checked_add(1)
+                .unwrap_or_else(|| panic!("no free port available at or above {base}"));
         }
         self.entries.insert(port, Entry {
             app: app.into(), holder: holder.into(), role, pid: None, logfile: None, ts: now(),
@@ -142,11 +146,18 @@ impl Data {
         port
     }
 
-    pub fn record_pid(&mut self, port: u16, pid: u32, logfile: PathBuf) {
-        if let Some(e) = self.entries.get_mut(&port) {
-            e.pid = Some(pid);
-            e.logfile = Some(logfile);
-        }
+    /// Attach a pid + logfile to a port's reservation, re-establishing the row if it
+    /// was pruned in the gap between reserving and spawning — so a live process is
+    /// never left untracked (which would make `devrun down` unable to stop it).
+    pub fn record_pid(&mut self, port: u16, app: &str, holder: &str, role: Role, pid: u32, logfile: PathBuf) {
+        let e = self.entries.entry(port).or_insert_with(|| Entry {
+            app: app.into(), holder: holder.into(), role, pid: None, logfile: None, ts: now(),
+        });
+        e.app = app.into();
+        e.holder = holder.into();
+        e.role = role;
+        e.pid = Some(pid);
+        e.logfile = Some(logfile);
     }
 
     /// Release all entries for a holder (optionally one role). Returns freed ports.
@@ -196,5 +207,23 @@ mod ops_tests {
         let freed = d.release(&cwd, None);
         assert_eq!(freed.len(), 1);
         assert!(d.entries.is_empty());
+    }
+    #[test]
+    fn record_pid_reestablishes_pruned_reservation() {
+        // A pruned reservation must not leave a spawned process untracked: record_pid
+        // re-inserts the row so `down` can still find and stop it.
+        let mut d = Data::default();
+        d.record_pid(9100, "api", "/w", Role::Issue, 4321, PathBuf::from("/log"));
+        assert_eq!(d.entries[&9100].pid, Some(4321));
+        assert_eq!(d.entries[&9100].app, "api");
+        assert_eq!(d.entries[&9100].holder, "/w");
+    }
+    #[test]
+    fn record_pid_updates_existing_reservation() {
+        let mut d = Data::default();
+        let port = d.alloc_one("/w", "api", 9100, Role::Issue);
+        d.record_pid(port, "api", "/w", Role::Issue, 99, PathBuf::from("/log"));
+        assert_eq!(d.entries.len(), 1);
+        assert_eq!(d.entries[&port].pid, Some(99));
     }
 }
