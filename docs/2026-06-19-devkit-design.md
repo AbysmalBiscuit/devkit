@@ -1,11 +1,12 @@
-# devkit — local dev orchestration package
+# devkit — local dev orchestration (Rust)
 
 **Status:** design approved, pending spec review
 **Date:** 2026-06-19
+**Repo:** `~/Git/lev/devkit`
 
 ## Problem
 
-Three pain points in the example local-dev loop, plus consolidation of existing tooling:
+Four pain points in the example local-dev loop:
 
 1. **Port collisions.** Multiple Claude instances each run "find first free port via `ss`"
    independently. Two see the same port free, both bind it (a TOCTOU race). The current
@@ -17,76 +18,93 @@ Three pain points in the example local-dev loop, plus consolidation of existing 
    error-prone.
 4. **Loose tooling.** `issue-end.py` and `pr-status.py` live as standalone
    `~/.local/bin/*.py` uv-scripts and re-implement the same helpers (gh/git wrappers,
-   worktree discovery, id parsing, rich tables) the new tools need.
+   worktree discovery, id parsing, tables) the new tools need.
 
 ## Solution overview
 
-One installable Python package, `devkit`, with a **generic, config-driven engine** and an
-**example config** shipped as the working default. It exposes five console commands and
-replaces the per-script port logic with a single flock'd registry.
+A **Rust workspace**, `devkit`, with a **generic, config-driven engine** and an **example
+config** shipped as the working default. Two library crates hold the shared engine; five
+binary crates are the commands. Single-language, fast-starting static binaries.
 
-| Command | Purpose |
+| Binary | Purpose |
 |---|---|
 | `portman` | port registry — `status` / `alloc` / `release` / `prune` |
 | `devrun` | runner — `up` / `down` / `status` / `logs` |
 | `issue-prep` | mechanical slice of `/issue-setup` (worktree + env + reserve ports) |
-| `issue-end` | migrated from `~/.local/bin/issue-end.py` |
-| `pr-status` | migrated from `~/.local/bin/pr-status.py` |
+| `issue-end` | rewritten from `~/.local/bin/issue-end.py` |
+| `pr-status` | rewritten from `~/.local/bin/pr-status.py` |
 
 ### Key decisions (resolved during brainstorming)
 
 1. **Port coordination: flock'd JSON registry, no daemon.** A single registry file guarded
-   by an `flock`; allocate/release/prune are atomic under the lock. The recorded
+   by an advisory file lock; allocate/release/prune are atomic under the lock. The recorded
    reservation row — not a long-held lock — is what prevents collisions, so the lock is
-   held only for fast registry mutations, never across spawn or readiness polling.
-   Liveness is lazy-pruned (dead holder / dead pid / expired reservation). A daemon was
-   rejected as more machinery than the race requires.
+   held only for fast registry mutations, never across spawn or readiness polling. Liveness
+   is lazy-pruned (dead holder / dead pid / expired reservation). A daemon was rejected as
+   more machinery than the race requires.
 2. **Baseline = a local `origin/staging` worktree, run side-by-side.** A dedicated
    throwaway worktree (default `~/Git/example/_baseline`) brings up the same in-scope apps
    on a second port set for faithful local-vs-local A/B.
 3. **Supervised processes.** The runner spawns servers detached, records pid + logfile +
    port in the registry, and supports `up`/`down`/`status`/`logs`. `down` is the
-   deterministic deallocation path (kill tracked pids → release ports). This is a
-   per-machine process manager, **not** a resident daemon.
-4. **One uv package, generic + config-driven.** The engine is project-agnostic; all
-   example specifics live in `devkit.toml`, with app project+path auto-pulled from the
-   monorepo's `doppler.yaml`. `devrun` imports the registry (rather than shelling out to
-   `portman`) so it shares the readiness/liveness helpers and keeps registry mutations in
-   one place.
+   deterministic deallocation path (kill tracked pids → release ports). A per-machine
+   process manager, **not** a resident daemon.
+4. **Language: Rust.** Correctness-sensitive, frequently run, and the config-driven catalog
+   keeps the volatile data in `devkit.toml` so recompiles are only for engine changes.
+   `issue-end`/`pr-status` are rewritten in Rust too for a coherent single-language toolchain
+   (accepting the rewrite of ~800 lines of working Python).
+5. **Modest workspace: two lib crates + thin bin crates.** The two real domains — the
+   port engine (`fd-lock`+`nix`) and the GitHub/Linear tooling (`ureq`) — get dependency
+   isolation over a shared `devkit-common`. Bins link the libs directly, so `devrun` calling
+   the registry is an in-process function call, not a subprocess. Avoids both the
+   shared-everything dependency set of a single crate and the over-plumbing of a
+   crate-per-module split.
 
 ## Repository & install
 
-- **Home:** `~/Git/devkit`, its own git repo, private GitHub remote (`gh repo create`).
-- **Install:** `uv tool install --editable .` from the clone → puts the five commands on
-  `PATH` and tracks edits live.
-- This design doc is authored in `~/.claude/docs/...` (the devkit repo does not exist
-  until implementation); it moves into the repo as part of the build.
+- **Home:** `~/Git/lev/devkit`, its own git repo, private GitHub remote (`gh repo create`).
+- **Install:** `cargo install --path crates/<bin>` per tool, or all at once from the
+  workspace. Binaries land on `~/.cargo/bin` (on `PATH`). For live iteration, `cargo build`
+  + run from `target/`.
+- **Shell completion:** generated via `clap_complete` (replaces the Python click
+  completion-var pin).
 
-## Package layout
+## Workspace layout
 
 ```
-~/Git/devkit/
-├── pyproject.toml              # [project.scripts]: portman, devrun, issue-prep, issue-end, pr-status
-├── devkit/
-│   ├── common.py               # Console/err, gh(), git(), scan_progress(), worktree discover(),
-│   │                           #   issue_id_of(), Linear GraphQL client, XDG state/cache paths
-│   ├── config.py               # devkit.toml loader + doppler.yaml merge (~60 lines)
-│   ├── apps.py                  # App catalog assembled from config
-│   ├── registry.py             # flock'd port registry — the shared core (~100 lines)
-│   ├── portman.py              # CLI over the registry
-│   ├── devrun.py               # runner CLI
-│   ├── issue_prep.py           # mechanical issue-setup
-│   ├── issue_end.py            # migrated (repoint cleanup-script path to importlib.resources)
-│   ├── pr_status.py            # migrated
-│   └── data/issue-end-cleanup.sh   # battle-tested; shipped as package data
-├── configs/example.toml        # working default config
-├── tests/test_registry.py      # race-correctness tests
+~/Git/lev/devkit/
+├── Cargo.toml                      # [workspace] members + shared [workspace.dependencies]
+├── crates/
+│   ├── devkit-common/              # lib: gh/git/doppler wrappers, worktree discovery,
+│   │                               #      issue-id parse, Linear GraphQL client, XDG paths,
+│   │                               #      table/style/OSC8 helpers
+│   ├── devkit-ports/               # lib: registry, config, apps   (deps: common, fd-lock, nix)
+│   ├── portman/                    # bin → ports
+│   ├── devrun/                     # bin → ports (+ nix for setsid/signals)
+│   ├── issue-prep/                 # bin → ports
+│   ├── issue-end/                  # bin → common (+ ureq for Linear)
+│   └── pr-status/                  # bin → common
+├── configs/example.toml            # working default config
 └── README.md
 ```
 
+Crate-level tests live with each crate; the registry race test is
+`crates/devkit-ports/tests/registry.rs`.
+
+### Dependencies (mature, minimal; pinned in `[workspace.dependencies]`)
+
+`clap` (derive) · `serde` + `serde_json` (registry) · `toml` (config) · `serde_yaml`
+(doppler.yaml) · `fd-lock` (advisory flock) · `comfy-table` + `anstyle` + `supports-hyperlinks`
+(tables, color, OSC8 clickable links — parity with the current tools) · `ureq` (blocking
+HTTP for the Linear GraphQL query) · `nix` (`setsid` to detach, `kill(pid,0)` liveness,
+signals for `down`) · `anyhow` (binary error context) + `thiserror` (library error types).
+Port-listening checks and readiness polling use `std::net`; timestamps/age use
+`std::time::SystemTime`. Each bin pulls only its domain lib's closure, so `portman` never
+links `ureq` and `pr-status` never links `fd-lock`/`nix`.
+
 ## Components
 
-### `config.py` — config loader
+### `devkit-ports::config` — config loader
 
 Discovery order: `--config` flag → `$DEVKIT_CONFIG` → `./devkit.toml` (walking up) →
 `~/.config/devkit/config.toml`. Schema:
@@ -117,80 +135,89 @@ base_port = 4200
 launch    = ["next", "dev", "-p", "{port}"]
 ```
 
-`doppler_project` and `path` per app come from `doppler.yaml` (matched by app name → path
-→ project). The config only carries what doppler.yaml lacks.
+`doppler_project` and `path` per app come from `doppler.yaml` (matched by app name → path →
+project). The config only carries what `doppler.yaml` lacks. Deserialized into typed structs
+via serde.
 
-### `apps.py` — catalog
+### `devkit-ports::apps` — catalog
 
-Merges config + doppler.yaml into frozen `App` records: `name, base_port, doppler_project,
-path, launch, url_env, static_env, preserve_env`. Single source of truth, replacing the
-tables currently duplicated across `validate-webapp.md`, `issue-setup.md`, and CLAUDE.md.
+Merges config + `doppler.yaml` into an `App` struct: `name, base_port, doppler_project, path,
+launch, url_env, static_env, preserve_env`. Single source of truth, replacing the tables
+currently duplicated across `validate-webapp.md`, `issue-setup.md`, and CLAUDE.md.
 
-### `registry.py` — the shared core
+### `devkit-ports::registry` — the shared core
 
-State: `~/.claude/state/devkit/ports.json` + `ports.lock`. Entry:
-`{ "<port>": {app, holder, role, pid, logfile, ts} }` where `holder` = canonical worktree
-path (or scratch label), `role` ∈ `issue|baseline`.
+State: `~/.claude/state/devkit/ports.json` + `ports.lock`. Entry struct:
+`{ port, app, holder, role, pid: Option<u32>, logfile: Option<PathBuf>, ts }` where `holder`
+= canonical worktree path (or scratch label), `role` ∈ `Issue | Baseline`.
 
-- **`alloc(holder, apps, role)`** — under lock: prune; per app pick `base`, increment past
-  any port that is registry-claimed *or* OS-listening; bind-test; write entry with
-  `pid=null`. Idempotent: existing holder+app+role returns its current port (re-running
-  `up` reuses).
+- **`alloc(holder, apps, role) -> Vec<(App, port)>`** — under lock: prune; per app pick
+  `base`, increment past any port that is registry-claimed *or* OS-listening; bind-test;
+  write entry with `pid = None`. Idempotent: existing holder+app+role returns its current
+  port (re-running `up` reuses).
 - **`record_pid(holder, app, role, pid, logfile)`** — fill in pid/logfile after spawn.
-- **`release(holder, role=?)`** — drop matching entries, return freed ports. Does not kill
-  processes.
-- **`prune()`** — drop an entry when its holder path is gone, its pid is dead, or it has
-  `pid=null` + nothing listening + age > 120 s (reservation grace).
+- **`release(holder, role: Option<Role>) -> Vec<port>`** — drop matching entries. Does not
+  kill processes.
+- **`prune()`** — drop an entry when its holder path is gone, its pid is dead
+  (`kill(pid,0)` → ESRCH), or it has `pid = None` + nothing listening + age > 120 s
+  (reservation grace).
 - helpers: `listening(port)`, `pid_alive(pid)`, `holder_alive(path)`.
 
-### `portman` CLI
+The lock is an RAII guard (`fd-lock`) dropped at end of scope; mutation = read JSON → modify
+→ write under the held guard.
 
-`portman [status]` → rich table (PORT, APP, ROLE, HOLDER/issue-id, PID, LISTENING, AGE)
+### `portman` binary
+
+`portman [status]` → `comfy-table` (PORT, APP, ROLE, HOLDER/issue-id, PID, LISTENING, AGE)
 across all holders · `portman alloc --holder P --role issue api lab-os` ·
 `portman release --holder P [--role]` · `portman prune` · `-C/--dir` derives holder from cwd.
 
-### `devrun` CLI — the runner
+### `devrun` binary — the runner
 
-Resolves worktree (holder + issue id) from cwd via `common.discover`.
+Resolves worktree (holder + issue id) from cwd via `devkit_common::discover`.
 
 - **`devrun up [apps…] [--role issue|baseline|both] [--env K=V]… [--env-file F] [-- extra args] [--dry-run]`**
   - resolve apps: args → `git diff origin/staging...HEAD --stat` app paths → ask; auto-add
     api if a webapp needs it.
-  - `registry.alloc` ports → assemble env per app, precedence low→high:
-    **doppler `dev_local`** → app `static_env` → **computed url-wiring** (set each
-    consumer's `url_env` to this role's local api port — the false-negative trap from
-    validate-webapp, handled automatically) → user `--env`/`--env-file`.
-  - spawn detached (`setsid`; output → `~/.claude/state/devkit/logs/<holder>/<role>-<app>.log`),
-    `record_pid`, poll readiness, report per-app PASS/FAIL (FAIL dumps last log lines;
+  - `registry::alloc` ports → assemble env per app, precedence low→high: **doppler
+    `dev_local`** → app `static_env` → **computed url-wiring** (set each consumer's `url_env`
+    to this role's local api port — the false-negative trap from validate-webapp, handled
+    automatically) → user `--env`/`--env-file`.
+  - spawn detached (`setsid` via `nix`; stdout/stderr → `~/.claude/state/devkit/logs/<holder>/<role>-<app>.log`),
+    `record_pid`, poll readiness (`std::net`), report per-app PASS/FAIL (FAIL tails the log;
     process left running for inspection).
   - `--role both`: bring up issue + baseline on two port sets; baseline first ensures the
     baseline worktree exists and is `fetch`ed + `reset --hard origin/staging` (loud about
     what it did).
   - `--dry-run`: print the resolved plan (argv + env + ports), spawn nothing.
-- **`devrun down [--role|--all]`** — kill tracked pids, then `registry.release`.
+- **`devrun down [--role|--all]`** — signal tracked pids (`nix::kill`), then `registry::release`.
 - **`devrun status`** — registry view, optionally filtered to this holder.
 - **`devrun logs <app> [--role] [-f]`** — tail the logfile.
 
-### `issue-prep` CLI
+### `issue-prep` binary
 
 `issue-prep --issue ENG-1234 --slug eng-1234-… [--apps api,lab-os]`: `git fetch` +
 `worktree add -b lev/<slug> origin/staging`, symlink `.env.local` per app, write lab-os
 dummy env, one `bun install`, **reserve ports via the registry**, print JSON
-(worktree, branch, ports) for the `/issue-setup` command to fold into its summary.
-Supports `--dry-run`.
+(worktree, branch, ports) for the `/issue-setup` command to fold into its summary. Supports
+`--dry-run`.
 
-This **replaces the `Port slot:` file-scanning** in `issue-setup.md`: the registry is now
-the port source of truth. Old `ISSUE_SUMMARY_*.md` files remain readable; new ones just
-list reserved ports. The `/issue-setup` command keeps the MCP/judgment work (Linear,
-Sentry, summary prose) and calls `issue-prep` for the deterministic steps.
+Replaces the `Port slot:` file-scanning in `issue-setup.md`: the registry is now the port
+source of truth. Old `ISSUE_SUMMARY_*.md` files remain readable; new ones list reserved
+ports. The `/issue-setup` command keeps the MCP/judgment work (Linear, Sentry, summary
+prose) and calls `issue-prep` for the deterministic steps.
 
-### Migrated tools
+### `issue-end` / `pr-status` binaries (rewritten in Rust)
 
-`issue_end.py` and `pr_status.py` move in largely as-is, refactored to import shared
-helpers from `common.py`. `issue_end.py`'s hardcoded `~/.claude/scripts/issue-end-cleanup.sh`
-path repoints to `importlib.resources` (the script ships in `devkit/data/`). The
-shell-completion env-var pin (`_ISSUE_END_COMPLETE`, `_PR_STATUS_COMPLETE`) carries over per
-command.
+Port the existing Python behavior onto `devkit-common`:
+
+- **`issue-end`** — worktree discovery, one bulk `gh pr list --state all --json …` matched by
+  head branch, batched Linear GraphQL "Done" gate via `ureq`, `comfy-table` status table,
+  and `status`/`clean`/`--clean-worktree` subcommands. The `issue-end-cleanup.sh` logic
+  (`git worktree remove`, branch delete, `rm ISSUE_*.md`, refuse-from-inside guard) is
+  **reimplemented in Rust** — no shell asset to ship.
+- **`pr-status`** — authored + review-requested PR tables via `gh`, the before→after diff
+  cache under `$XDG_CACHE_HOME/devkit/pr-status/`, OSC8 links, `comfy-table` rendering.
 
 ## Error handling
 
@@ -198,28 +225,35 @@ command.
   half-start the stack.
 - corrupt registry JSON → back up + reinit with a warning.
 - lock contention → block with ~10 s timeout, then error.
-- readiness timeout → mark FAIL, dump last N log lines, leave the process running.
+- readiness timeout → mark FAIL, tail the log, leave the process running.
 - **Never** run `doppler … -c prd`. doppler config comes from `defaults.doppler_config`,
   validated against a `prd` denylist.
+- Binaries use `anyhow` for context-rich top-level errors; the libs use `thiserror` enums so
+  callers can match.
 
 ## Testing
 
-- `tests/test_registry.py` is the real one: spawn concurrent allocs (multiprocessing)
-  against a temp registry and assert no port is ever double-assigned; assert prune drops
-  dead-holder / dead-pid / expired rows; assert release frees; assert alloc idempotency.
-  Simulate "listening" by binding real sockets on ephemeral ports.
-- `--dry-run` gives `devrun`/`issue-prep` a no-spawn path that tests assert against
-  (resolved argv + env).
+- `crates/devkit-ports/tests/registry.rs` is the real one: spawn concurrent allocs (threads
+  and/or forked child processes) against a temp registry and assert no port is ever
+  double-assigned; assert prune drops dead-holder / dead-pid / expired rows; assert release
+  frees; assert alloc idempotency. Simulate "listening" by binding real `TcpListener`s on
+  ephemeral ports.
+- `--dry-run` gives `devrun`/`issue-prep` a no-spawn path that integration tests assert
+  against (resolved argv + env).
+- Pure functions (config merge, env layering, id parsing) get unit tests next to their
+  modules.
 
 ## Build order
 
-1. `common.py` + `config.py` + `apps.py` (with `tests` for config/doppler merge).
-2. `registry.py` + `portman` + `tests/test_registry.py`.
-3. `devrun` (verify api-URL env var + launch argv against the live repo here).
+1. Scaffold the workspace (`Cargo.toml`, `devkit-common` + `devkit-ports` skeletons,
+   `[workspace.dependencies]`); implement `devkit-common`; `config` + `apps` in
+   `devkit-ports` (with unit tests for config/doppler merge).
+2. `registry` + `portman` + `crates/devkit-ports/tests/registry.rs`.
+3. `devrun` — verify the api-URL env var name + launch argv against the live repo here.
 4. `issue-prep`.
-5. Migrate `issue-end` + `pr-status` onto `common.py`; retire the `.sh` duplicates and the
-   old `~/.local/bin` copies.
-6. Rewrite `/validate-webapp` and `/issue-setup` commands to call these tools instead of
+5. Rewrite `issue-end` + `pr-status` onto `devkit-common`; reimplement cleanup logic in Rust;
+   retire the old `~/.local/bin/*.py` and `~/.claude/scripts/*.sh`.
+6. Rewrite `/validate-webapp` and `/issue-setup` commands to call these binaries instead of
    inlining port logic.
 
 ## Open questions (for spec review)
@@ -229,8 +263,8 @@ command.
 2. **plate-api / website** — not fully specced in the docs (`plate-api` launch likely
    `PORT={port} bun dev`; `website` base 4300). Defer their catalog entries to build-time
    verification, or out of scope?
-3. **Migration of old scripts** — OK to delete `~/.local/bin/{issue-end,pr-status}.py`,
-   `~/.claude/scripts/{issue-end-scan,pr-status}.sh`, and `~/.local/bin/pr-status.sh` once
-   the uv tool provides replacements? (`issue-end-cleanup.sh` is kept as package data.)
+3. **Old-script retirement** — OK to delete `~/.local/bin/{issue-end,pr-status}.py`,
+   `~/.local/bin/pr-status.sh`, and `~/.claude/scripts/{issue-end-cleanup,issue-end-scan}.sh`
+   once the Rust binaries replace them?
 4. **Baseline reset** — confirmed default is auto `reset --hard origin/staging` on the
-   throwaway `_baseline` tree each `--role both` run, printing what it did (no prompt).
+   throwaway `_baseline` tree each `--role both` run, printed loudly, no prompt.
