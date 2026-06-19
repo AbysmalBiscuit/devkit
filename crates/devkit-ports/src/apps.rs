@@ -15,11 +15,18 @@ pub struct App {
 }
 
 /// Build the catalog: project+path come from doppler.yaml unless the app overrides them.
+///
+/// An app whose path can be resolved neither from config nor from doppler.yaml is
+/// skipped with a warning rather than failing the whole catalog — a config may list
+/// apps that aren't present in every checkout. Requesting such an app surfaces a
+/// plain "unknown app" error at the call site.
 pub fn catalog(cfg: &Config, path_to_project: &HashMap<String, String>) -> Result<HashMap<String, App>> {
     let mut out = HashMap::new();
     for (name, a) in &cfg.apps {
-        let path = a.path.clone().or_else(|| guess_path(name, path_to_project))
-            .ok_or_else(|| anyhow::anyhow!("app `{name}`: no path in config and none inferrable from doppler.yaml"))?;
+        let Some(path) = a.path.clone().or_else(|| guess_path(name, path_to_project)) else {
+            eprintln!("note: skipping app `{name}` — no path in config and none inferrable from doppler.yaml");
+            continue;
+        };
         let project = a.doppler_project.clone().or_else(|| path_to_project.get(&path).cloned());
         out.insert(name.clone(), App {
             name: name.clone(),
@@ -55,5 +62,14 @@ mod tests {
         let cat = catalog(&cfg, &p2p).unwrap();
         assert_eq!(cat["api"].doppler_project.as_deref(), Some("api-foundry"));
         assert_eq!(cat["api"].path, "apps/api");
+    }
+
+    #[test]
+    fn skips_apps_with_unresolvable_path() {
+        // `api` has no `path` in the sample; without a doppler entry for it, it is
+        // skipped rather than erroring the whole catalog.
+        let cfg = Config::parse(crate::config::tests_sample()).unwrap();
+        let cat = catalog(&cfg, &HashMap::new()).unwrap();
+        assert!(cat.is_empty());
     }
 }
