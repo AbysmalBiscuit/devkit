@@ -1,0 +1,15 @@
+[package]
+name = "devkit-ports"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+toml.workspace = true
+serde_yaml.workspace = true
+fd-lock.workspace = true
+nix.workspace = true
+devkit-common.workspace = true

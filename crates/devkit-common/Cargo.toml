@@ -1,0 +1,15 @@
+[package]
+name = "devkit-common"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+comfy-table.workspace = true
+anstyle.workspace = true
+supports-hyperlinks.workspace = true
+ureq.workspace = true
+nix.workspace = true

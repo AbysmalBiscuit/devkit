@@ -1,0 +1,9 @@
+[package]
+name = "pr-status"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+devkit-common.workspace = true
