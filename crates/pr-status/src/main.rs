@@ -414,26 +414,45 @@ fn main() -> Result<()> {
     let want_mine = cli.mine || !cli.reviews;
     let want_reviews = cli.reviews || !cli.mine;
 
-    let me: Me = gh_json(&["api", "user"])?;
-    let me = me.login;
-
-    let repo_key = if cli.no_cache {
-        None
-    } else {
-        Some(resolve_repo(cli.repo.as_deref())?)
-    };
     let url_key = std::env::var("LINEAR_WORKSPACE").ok();
 
-    let mine_prs = if want_mine {
-        fetch_mine(cli.repo.as_deref())?
-    } else {
-        vec![]
-    };
-    let review_rows = if want_reviews {
-        fetch_reviews(cli.repo.as_deref(), &me)?
-    } else {
-        vec![]
-    };
+    // These gh round-trips are independent network calls, so run them
+    // concurrently. The reviews fetch is the only one that needs the current
+    // user (to drop self-authored PRs), so it shares a thread with the user
+    // lookup and runs after it; repo resolution and the "mine" fetch have no
+    // such dependency and run in parallel.
+    let repo_arg = cli.repo.as_deref();
+    let (me, mine_prs, review_rows, repo_key) = std::thread::scope(|s| {
+        let user_reviews = s.spawn(|| -> Result<(String, Vec<ReviewPr>)> {
+            let me: Me = gh_json(&["api", "user"])?;
+            let me = me.login;
+            let rows = if want_reviews {
+                fetch_reviews(repo_arg, &me)?
+            } else {
+                vec![]
+            };
+            Ok((me, rows))
+        });
+        let mine = s.spawn(|| -> Result<Vec<MinePr>> {
+            if want_mine {
+                fetch_mine(repo_arg)
+            } else {
+                Ok(vec![])
+            }
+        });
+        let repo = s.spawn(|| -> Result<Option<String>> {
+            if cli.no_cache {
+                Ok(None)
+            } else {
+                Ok(Some(resolve_repo(repo_arg)?))
+            }
+        });
+
+        let (me, review_rows) = user_reviews.join().expect("user/reviews thread panicked")?;
+        let mine_prs = mine.join().expect("mine thread panicked")?;
+        let repo_key = repo.join().expect("repo thread panicked")?;
+        Ok::<_, anyhow::Error>((me, mine_prs, review_rows, repo_key))
+    })?;
 
     let path = repo_key.as_ref().map(|r| cache_path(r));
     let mut cache: Snap = path.as_deref().map(load_cache).unwrap_or_default();
