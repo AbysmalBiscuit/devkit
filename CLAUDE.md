@@ -1,27 +1,36 @@
 # devkit
 
-A Rust workspace (edition 2024) of two library crates and three binaries that coordinate
-local development for a monorepo. The engine is project-agnostic; every project-specific
-detail lives in `devkit.toml`. See `README.md` for user-facing CLI docs.
+A Rust workspace (edition 2024): a root `devkit` binary package whose four CLIs live
+in `src/bin/`, plus two library crates, coordinating local development for a monorepo.
+The engine is project-agnostic; every project-specific detail lives in `devkit.toml`.
+See `README.md` for user-facing CLI docs.
 
 ## Commands
 
 ```sh
-cargo build --release                       # all three binaries → target/release
-cargo test --workspace                       # full gate — 56 tests, must stay green
+cargo build --release                       # all four binaries → target/release
+cargo install --path .                       # install all four into ~/.cargo/bin
+cargo test --workspace                       # full gate — 92 tests, must stay green
 cargo clippy --workspace --all-targets -- -D warnings   # zero-warning policy
 cargo test -p devkit-ports --test registry   # multiprocess flock race test
 ```
 
 ## Layout
 
-| Crate | Role |
+The workspace root is the `devkit` binary package; its CLIs live in `src/bin/` and
+install together via `cargo install --path .`. Two library crates are members.
+
+| Unit | Role |
 |---|---|
-| `devkit-common` | shared: `paths`, `cmd` (git/gh wrappers), `worktree`, `ui` (tables/links), `linear` |
-| `devkit-ports` | `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load` |
-| `portman` | CLI over the port registry |
-| `devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
-| `issue` | issue lifecycle: `setup`, `status`, `end`, `prs`, `dashboard`, `review` |
+| `crates/devkit-common` | shared lib: `paths`, `cmd` (git/gh wrappers), `worktree`, `ui` (tables/links), `linear`, `slack`, `supervise` |
+| `crates/devkit-ports` | lib: `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load`, `daemon` |
+| `src/bin/portman` | CLI over the port registry |
+| `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
+| `src/bin/issue` | issue lifecycle: `setup`, `status`, `end`, `prs`, `dashboard`, `review` |
+| `src/bin/devkit-portd` | port-registry supervisor daemon; bin gated by the `daemon` feature (on by default) |
+
+The three user-facing CLIs (`portman`, `devrun`, `issue`) each expose a
+`completions <shell>` subcommand via `clap_complete`.
 
 ## Invariants (do not break)
 

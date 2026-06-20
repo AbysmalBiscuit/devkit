@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use devkit_ports::registry::{self, Data, Role};
 
 #[derive(Parser)]
@@ -17,12 +18,17 @@ enum Cmd {
     Alloc { #[arg(long)] holder: String, #[arg(long, value_enum, default_value = "issue")] role: Role, apps: Vec<String> },
     Release { #[arg(long)] holder: String, #[arg(long, value_enum)] role: Option<Role> },
     Prune,
+    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    Completions { shell: Shell },
 }
 
 fn main() -> Result<()> {
     devkit_common::report::install_panic_hook("portman");
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Cmd::Status) {
+        Cmd::Completions { shell } => {
+            clap_complete::generate(shell, &mut Cli::command(), "portman", &mut std::io::stdout());
+        }
         Cmd::Status => status()?,
         Cmd::Prune => { let freed = registry::prune()?; println!("pruned: {freed:?}"); }
         Cmd::Release { holder, role } => {

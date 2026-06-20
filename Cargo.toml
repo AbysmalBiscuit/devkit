@@ -1,6 +1,37 @@
+[package]
+name = "devkit"
+description = "Local development coordination tools: portman, devrun, issue, devkit-portd"
+edition.workspace = true
+version.workspace = true
+
+# The supervisor daemon needs the port-registry daemon backend; gate its bin on
+# the feature so `--no-default-features` builds still produce the other tools.
+[[bin]]
+name = "devkit-portd"
+path = "src/bin/devkit-portd/main.rs"
+required-features = ["daemon"]
+
+[features]
+default = ["daemon"]
+daemon = ["devkit-ports/daemon"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+nix.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+fd-lock.workspace = true
+chrono.workspace = true
+textplots.workspace = true
+rgb.workspace = true
+devkit-common.workspace = true
+devkit-ports.workspace = true
+
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/devkit-common", "crates/devkit-ports"]
 
 [workspace.package]
 edition = "2024"
@@ -9,6 +40,7 @@ version = "0.1.0"
 [workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+clap_complete = "4"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

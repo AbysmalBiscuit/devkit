@@ -1,6 +1,6 @@
 # devkit
 
-A Rust workspace of three binaries that coordinate local development for a monorepo. Devkit provides a flock'd port registry (no daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
+A Rust workspace of four binaries that coordinate local development for a monorepo. Devkit provides a flock'd port registry (with an optional supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
 
 ## Binaries
 
@@ -77,18 +77,35 @@ $EDITOR ~/.config/devkit/config.toml   # paste & adapt the example from docs/con
 
 ## Install
 
-Build all three binaries:
+Install all four binaries (`portman`, `devrun`, `issue`, `devkit-portd`) into
+`~/.cargo/bin` with one command:
 
 ```sh
-cargo build --release            # all three binaries into target/release
+cargo install --path .
 ```
 
-Or install them into `~/.cargo/bin`:
+This builds with default features, which include the supervisor daemon
+(`devkit-portd`) used by `devrun up --supervise`. To skip the daemon, build a
+lean set with `cargo install --path . --no-default-features` (omits
+`devkit-portd` and `devrun`'s `--supervise` support).
+
+Or just build into `target/release` without installing:
 
 ```sh
-cargo install --path crates/portman
-cargo install --path crates/devrun
-cargo install --path crates/issue
+cargo build --release
+```
+
+## Shell completions
+
+The CLIs generate their own completion scripts via a `completions <shell>`
+subcommand (bash, zsh, fish, elvish, powershell). For example:
+
+```sh
+issue completions zsh   > ~/.zfunc/_issue
+devrun completions zsh  > ~/.zfunc/_devrun
+portman completions zsh > ~/.zfunc/_portman
+# bash:
+issue completions bash > ~/.local/share/bash-completion/completions/issue
 ```
 
 ## State & Cache Locations

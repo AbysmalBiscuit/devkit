@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 
 mod dashboard;
 mod end;
@@ -90,6 +91,8 @@ enum Cmd {
         #[arg(long = "no-push")]
         no_push: bool,
     },
+    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    Completions { shell: Shell },
 }
 
 fn start(dir: &Option<String>) -> String {
@@ -117,6 +120,10 @@ fn main() -> Result<()> {
                 body, to, reviewer, base, pr_title, pr_body, no_push,
                 dir: cli.dir, config: cli.config,
             }),
+        Some(Cmd::Completions { shell }) => {
+            clap_complete::generate(shell, &mut Cli::command(), "issue", &mut std::io::stdout());
+            Ok(())
+        }
         None => status::run(&start(&cli.dir), &[]),
     }
 }

@@ -2,7 +2,8 @@ mod env;
 mod baseline;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 use devkit_common::{cmd::git, paths, ui};
 use devkit_common::supervise;
 use devkit_ports::config::expand_tilde;
@@ -58,6 +59,8 @@ enum Cmd {
         #[arg(short = 'f', long)]
         follow: bool,
     },
+    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    Completions { shell: Shell },
 }
 
 /// CLI selector over registry roles. `Both` runs/affects the issue branch and a
@@ -173,6 +176,10 @@ fn main() -> Result<()> {
         Cmd::Down { role } => cmd_down(&cwd, role.and_then(RoleSelector::filter)),
         Cmd::Status { all } => cmd_status(&cwd, *all),
         Cmd::Logs { app, role, follow } => cmd_logs(&cwd, app, role.and_then(RoleSelector::filter), *follow),
+        Cmd::Completions { shell } => {
+            clap_complete::generate(*shell, &mut Cli::command(), "devrun", &mut std::io::stdout());
+            Ok(())
+        }
     }
 }
 
