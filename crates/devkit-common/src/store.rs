@@ -63,6 +63,20 @@ pub fn salvage_map<K: Ord, V: DeserializeOwned>(
     Some(out)
 }
 
+/// Load a document, salvaging on schema drift exactly as `with_lock` does on read.
+/// A missing or empty file yields the default. Never takes a lock — intended for a
+/// one-shot read by an owner that has its own exclusion (e.g. the daemon at startup).
+pub fn load<D: Document>(path: &Path) -> D {
+    read(path)
+}
+
+/// Persist a document with a crash-safe atomic rename. Takes no lock and does not
+/// stamp the version — a caller that mutated the document should call
+/// `Document::stamp_version` first (as `with_lock` does).
+pub fn save<D: Document>(path: &Path, data: &D) -> Result<()> {
+    write(path, data)
+}
+
 /// Load a document, salvaging on schema drift and backing up on true corruption.
 /// A missing or empty file yields the default. Never fails: an unreadable file
 /// is renamed to `*.json.bak` and replaced by a fresh default.
@@ -213,5 +227,17 @@ mod tests {
     #[test]
     fn salvage_none_without_target_field() {
         assert!(Doc::salvage(r#"{"something":"else"}"#).is_none());
+    }
+
+    #[test]
+    fn load_save_roundtrip_and_missing_default() {
+        let p = scratch("loadsave.json");
+        let _ = fs::remove_file(&p);
+        assert!(load::<Doc>(&p).is_empty(), "missing file loads as default");
+        let mut d = Doc::default();
+        d.items.insert(8080, "api".into());
+        save(&p, &d).unwrap();
+        assert_eq!(load::<Doc>(&p).items[&8080], "api");
+        let _ = fs::remove_file(&p);
     }
 }
