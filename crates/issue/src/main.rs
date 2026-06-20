@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod end;
+mod prs;
 mod setup;
 mod status;
 mod triage;
@@ -44,6 +45,17 @@ enum Cmd {
         #[arg(long = "clean-worktree")]
         clean_worktree: bool,
     },
+    /// At-a-glance triage of your GitHub PRs via gh.
+    Prs {
+        #[arg(short = 'm', long)]
+        mine: bool,
+        #[arg(short = 'r', long)]
+        reviews: bool,
+        #[arg(short = 'R', long)]
+        repo: Option<String>,
+        #[arg(long = "no-cache")]
+        no_cache: bool,
+    },
 }
 
 fn start(dir: &Option<String>) -> String {
@@ -60,6 +72,7 @@ fn main() -> Result<()> {
         Some(Cmd::Status { ids }) => status::run(&start(&cli.dir), &ids),
         Some(Cmd::End { ids, yes, force, pr_only, clean_worktree }) =>
             end::run(&start(&cli.dir), &ids, yes, force, pr_only, clean_worktree),
+        Some(Cmd::Prs { mine, reviews, repo, no_cache }) => prs::run(mine, reviews, repo, no_cache),
         None => status::run(&start(&cli.dir), &[]),
     }
 }
