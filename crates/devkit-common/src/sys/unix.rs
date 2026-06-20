@@ -70,6 +70,20 @@ pub(super) fn tree_rss_bytes(root: u32) -> u64 {
     total
 }
 
+pub(super) fn parent_pid() -> Option<u32> {
+    Some(nix::unistd::getppid().as_raw() as u32)
+}
+
+pub(super) fn controlling_tty() -> Option<String> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+    nix::unistd::ttyname(std::io::stdin())
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 fn read_ppid(pid: u32) -> Option<u32> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rest = stat.rsplit_once(')')?.1;

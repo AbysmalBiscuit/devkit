@@ -14,20 +14,10 @@ impl Env {
         Env {
             devkit_session: nonempty("DEVKIT_SESSION"),
             tmux_pane: nonempty("TMUX_PANE"),
-            tty: ttyname(),
-            ppid: Some(nix::unistd::getppid().as_raw().to_string()),
+            tty: devkit_common::sys::controlling_tty(),
+            ppid: devkit_common::sys::parent_pid().map(|p| p.to_string()),
         }
     }
-}
-
-fn ttyname() -> Option<String> {
-    use std::io::IsTerminal;
-    if !std::io::stdin().is_terminal() {
-        return None;
-    }
-    nix::unistd::ttyname(std::io::stdin())
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Resolve the holder identity by precedence:
@@ -64,7 +54,7 @@ pub fn anchor_pid() -> Option<u32> {
     decide_anchor_pid(
         tmux_pane_pid(),
         std::io::stdin().is_terminal(),
-        nix::unistd::getppid().as_raw() as u32,
+        devkit_common::sys::parent_pid().unwrap_or(0),
     )
 }
 

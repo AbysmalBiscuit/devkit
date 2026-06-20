@@ -11,8 +11,8 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
-    PROCESS_VM_READ, TerminateProcess,
+    GetCurrentProcessId, GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_TERMINATE, PROCESS_VM_READ, TerminateProcess,
 };
 
 /// `GetExitCodeProcess` reports this code while a process is still running.
@@ -91,6 +91,17 @@ pub(super) fn tree_rss_bytes(root: u32) -> u64 {
         }
     }
     total
+}
+
+pub(super) fn parent_pid() -> Option<u32> {
+    // SAFETY: GetCurrentProcessId takes no arguments and cannot fail.
+    let me = unsafe { GetCurrentProcessId() };
+    snapshot_parents()?.get(&me).copied()
+}
+
+pub(super) fn controlling_tty() -> Option<String> {
+    // Windows consoles have no controlling-tty device name to report.
+    None
 }
 
 /// Map every running process id to its parent's id via a Toolhelp snapshot.

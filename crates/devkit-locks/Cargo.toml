@@ -8,5 +8,4 @@ anyhow.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 fd-lock.workspace = true
-nix.workspace = true
 devkit-common.workspace = true

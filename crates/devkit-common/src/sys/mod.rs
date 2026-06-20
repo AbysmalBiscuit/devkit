@@ -38,6 +38,16 @@ pub fn tree_rss_bytes(root: u32) -> u64 {
     imp::tree_rss_bytes(root)
 }
 
+/// Parent process id, on platforms that expose one.
+pub fn parent_pid() -> Option<u32> {
+    imp::parent_pid()
+}
+
+/// The controlling terminal's name, when stdin is attached to one.
+pub fn controlling_tty() -> Option<String> {
+    imp::controlling_tty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +65,10 @@ mod tests {
     #[test]
     fn tree_rss_of_self_is_nonzero() {
         assert!(tree_rss_bytes(std::process::id()) > 0);
+    }
+
+    #[test]
+    fn parent_pid_is_present() {
+        assert!(parent_pid().is_some());
     }
 }
