@@ -159,6 +159,33 @@ Liveness stays pid-based: supervised children are recorded with their real pid
 (`record_pid`), so a daemon-unaware `snapshot`/`prune` in another terminal sees
 them correctly and leaves live pids alone.
 
+## 6a. Memory tracking & soft warn cap
+
+Supervised dev servers (Next/Turbopack especially) can balloon to 8–20 GB. The
+daemon already owns the process and runs a supervision loop, so memory is its job
+to watch.
+
+- **Tracking (always on).** On each supervision tick the daemon sums RSS across
+  each server's **process tree** — the recorded child plus every descendant —
+  because the dev server forks worker processes and the direct child's RSS
+  undercounts. RSS is read from `/proc/<pid>` (no privilege needed). The total is
+  surfaced as a `MEM` column in `status` output and logged periodically to
+  `portd.log`.
+- **Soft cap (warn).** Two thresholds, both off when `0`:
+  - past `memory_warn_mb`, the daemon logs a loud line naming the server and its
+    current tree RSS;
+  - past `memory_limit_mb`, it takes `memory_action`. For v1 the only action is
+    `"warn"` (a louder, rate-limited log line). `"restart"` is specified but
+    **deferred** — see `docs/next-features.md`.
+- **Shared restart budget (when `restart` lands).** A memory-triggered restart
+  must count against the same crash-loop guard as a crash restart
+  (`max_restarts` / `restart_window_secs`); a server that re-balloons immediately
+  must not be restart-looped forever — exhaust the budget and fall back to warn.
+
+Hard enforcement (a per-server cgroup-v2 memory cap at spawn) is **out of scope
+for v1** and tracked as a delegated feature in `docs/next-features.md`. The
+poll-based warn here works everywhere, including WSL2 without cgroup delegation.
+
 ## 7. Health probing (optional, phase 2)
 
 Core supervision is **exit-based** (waitpid). A follow-on can add a periodic
@@ -211,6 +238,9 @@ enabled            = false   # run gate; autostart only when true (or --supervis
 idle_timeout_secs  = 1800    # exit when idle AND supervising nothing
 max_restarts       = 5       # crash-loop guard: restarts allowed within the window
 restart_window_secs = 60
+memory_warn_mb     = 6000    # log a loud line past this tree-RSS (0 = off)
+memory_limit_mb    = 12000   # take memory_action past this tree-RSS (0 = off)
+memory_action      = "warn"  # "warn" only in v1; "restart" deferred (next-features.md)
 ```
 
 All fields `#[serde(default)]` so existing configs keep working untouched.
@@ -234,21 +264,26 @@ All fields `#[serde(default)]` so existing configs keep working untouched.
   (test-shortened) timeout; suppressed while a child is supervised.
 - **Handshake/version skew.** `Ping` proto mismatch → client decides to
   `Shutdown` + respawn (unit-testable decision).
+- **Memory tracking.** Supervise a child that forks a worker; assert the reported
+  tree-RSS includes the worker (sum over the process tree, not just the child),
+  and that crossing `memory_warn_mb` emits exactly one warn line per breach.
 
-## 13. Out of scope (YAGNI)
+## 13. Out of scope (YAGNI) — see `docs/next-features.md` for deferred features
 
 - Cross-machine / TCP transport — unix socket only.
 - Multi-user / shared-daemon — one daemon per `HOME`/state dir.
 - A registry-only daemon with no supervision — rejected in §1.
 - Health-probe restarts — deferred to phase 2 (§7).
+- `memory_action = "restart"` — v1 warns only (§6a).
+- Hard cgroup-v2 memory cap at spawn — delegated (§6a, `next-features.md`).
 
-## 14. Open questions
+## 14. Resolved decisions
 
-1. **Idle timeout default** — 1800s (30 min) chosen; reasonable, or prefer
-   shorter/longer?
-2. **`down` ordering for the legacy race** — accept the documented debounce, or
-   also flip flock `down` to release-before-SIGTERM? (The latter touches the
-   "stops then releases" invariant in CLAUDE.md and risks leaking a process if
-   SIGTERM fails, so the debounce is the safer default.)
-3. **Does plain `devrun status` autostart a daemon?** Proposed: no — status uses
-   a daemon if up, else flock; it never spins one up. Confirm.
+1. **Idle timeout** — 1800s (30 min), counted only with zero callers AND zero
+   supervised children. Suppressed while supervising.
+2. **Legacy `down` race** — Option A (in-daemon debounce re-check, §6). The
+   `down` "stops then releases" invariant in CLAUDE.md is left untouched.
+3. **Plain `devrun status`** — never autostarts a daemon; uses one if already up,
+   else flock.
+4. **Memory** — track tree-RSS always; soft `warn` cap in v1; hard cgroup cap
+   delegated to `next-features.md`.
