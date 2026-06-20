@@ -63,6 +63,9 @@ impl Daemon {
 
 fn main() -> Result<()> {
     devkit_common::report::install_panic_hook("devkit-portd");
+    // The daemon's own handlers must use flock, never route back into a daemon
+    // (which would be this process connecting to itself).
+    unsafe { std::env::set_var("DEVKIT_PORTD_SELF", "1") };
     std::fs::create_dir_all(paths::state_dir())?;
     std::fs::create_dir_all(paths::logs_dir())?;
 

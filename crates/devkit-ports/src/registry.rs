@@ -240,9 +240,40 @@ impl Data {
     }
 }
 
+/// Try a running daemon first; `None` means "no daemon — use flock". Any daemon
+/// error is logged and also yields `None` so the caller falls back safely. Returns
+/// `None` immediately inside the daemon itself (DEVKIT_PORTD_SELF set) so the
+/// daemon's own handlers use flock and never connect to themselves.
+#[cfg(feature = "daemon")]
+fn via_daemon(req: crate::daemon::proto::Request) -> Option<crate::daemon::proto::Response> {
+    if std::env::var_os("DEVKIT_PORTD_SELF").is_some() {
+        return None;
+    }
+    let mut c = crate::daemon::client::try_existing()?;
+    match c.request(&req) {
+        Ok(resp) => Some(resp),
+        Err(e) => {
+            eprintln!("warning: daemon request failed ({e:#}); using flock");
+            None
+        }
+    }
+}
+
 /// Read the registry, pruning dead entries. Probes liveness *outside* the lock:
 /// take a short read-lock, probe the snapshot unlocked, then commit any removals.
 pub fn snapshot() -> Result<Data> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = via_daemon(crate::daemon::proto::Request::Snapshot) {
+        return match resp {
+            crate::daemon::proto::Response::Snapshot(d) => Ok(d),
+            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    snapshot_flock()
+}
+
+fn snapshot_flock() -> Result<Data> {
     let data = with_lock(|d| Ok(d.clone()))?;
     let dead = data.dead_ports();
     if dead.is_empty() {
@@ -258,6 +289,18 @@ pub fn snapshot() -> Result<Data> {
 
 /// Prune dead entries; returns the ports removed. Probes outside the lock.
 pub fn prune() -> Result<Vec<u16>> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = via_daemon(crate::daemon::proto::Request::Prune) {
+        return match resp {
+            crate::daemon::proto::Response::Freed(v) => Ok(v),
+            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    prune_flock()
+}
+
+fn prune_flock() -> Result<Vec<u16>> {
     let data = with_lock(|d| Ok(d.clone()))?;
     let dead = data.dead_ports();
     if dead.is_empty() {
@@ -279,7 +322,23 @@ pub fn prune() -> Result<Vec<u16>> {
 /// gap, that one app falls back to an in-lock probe (`alloc_one`) — rare, so the
 /// common path keeps the exclusive lock free of blocking syscalls.
 pub fn alloc(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(String, u16)>> {
-    let mut data = snapshot()?;
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = via_daemon(crate::daemon::proto::Request::Alloc {
+        holder: holder.to_string(),
+        reqs: reqs.to_vec(),
+        role,
+    }) {
+        return match resp {
+            crate::daemon::proto::Response::Ports(v) => Ok(v),
+            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    alloc_flock(holder, reqs, role)
+}
+
+fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(String, u16)>> {
+    let mut data = snapshot_flock()?;
     let mut chosen: Vec<(String, u16)> = Vec::with_capacity(reqs.len());
     for (app, base) in reqs {
         if let Some(p) = data.holds(holder, app, role) {
@@ -330,6 +389,27 @@ pub fn alloc(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(St
 pub fn record_pid(
     port: u16, app: &str, holder: &str, role: Role, pid: u32, logfile: PathBuf,
 ) -> Result<()> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = via_daemon(crate::daemon::proto::Request::RecordPid {
+        port,
+        app: app.to_string(),
+        holder: holder.to_string(),
+        role,
+        pid,
+        logfile: logfile.clone(),
+    }) {
+        return match resp {
+            crate::daemon::proto::Response::Ok => Ok(()),
+            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    record_pid_flock(port, app, holder, role, pid, logfile)
+}
+
+fn record_pid_flock(
+    port: u16, app: &str, holder: &str, role: Role, pid: u32, logfile: PathBuf,
+) -> Result<()> {
     with_lock(|d| {
         d.record_pid(port, app, holder, role, pid, logfile);
         Ok(())
@@ -338,6 +418,21 @@ pub fn record_pid(
 
 /// Release all entries for `holder` (optionally one role); returns freed ports.
 pub fn release(holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = via_daemon(crate::daemon::proto::Request::Release {
+        holder: holder.to_string(),
+        role,
+    }) {
+        return match resp {
+            crate::daemon::proto::Response::Freed(v) => Ok(v),
+            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    release_flock(holder, role)
+}
+
+fn release_flock(holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
     with_lock(|d| Ok(d.release(holder, role)))
 }
 
