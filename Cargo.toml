@@ -36,7 +36,7 @@ members = ["crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks"]
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "0.1.0" # x-release-please-version
 
 [workspace.dependencies]
 anyhow = "1"
