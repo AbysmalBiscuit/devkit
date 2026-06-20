@@ -26,8 +26,22 @@ fn pick_state_dir(new: PathBuf, legacy: PathBuf, new_exists: bool, legacy_exists
 fn xdg_state_home() -> PathBuf {
     match std::env::var_os("XDG_STATE_HOME") {
         Some(x) if !x.is_empty() => PathBuf::from(x),
-        _ => home().join(".local/state"),
+        _ => default_state_home(),
     }
+}
+
+/// Platform default for the state home when `XDG_STATE_HOME` is unset.
+#[cfg(windows)]
+fn default_state_home() -> PathBuf {
+    match std::env::var_os("LOCALAPPDATA") {
+        Some(x) if !x.is_empty() => PathBuf::from(x),
+        _ => home().join("AppData/Local"),
+    }
+}
+
+#[cfg(not(windows))]
+fn default_state_home() -> PathBuf {
+    home().join(".local/state")
 }
 
 /// One-time best-effort migration of the legacy `~/.claude/state/devkit` home to the
@@ -69,7 +83,15 @@ pub fn cache_dir() -> PathBuf {
 }
 
 fn home() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").expect("HOME must be set"))
+    if let Some(h) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
+        return PathBuf::from(h);
+    }
+    // Windows has no HOME; the user profile is the home equivalent.
+    #[cfg(windows)]
+    if let Some(p) = std::env::var_os("USERPROFILE").filter(|s| !s.is_empty()) {
+        return PathBuf::from(p);
+    }
+    panic!("HOME must be set");
 }
 
 /// The final path component (basename) of `path`, if any.

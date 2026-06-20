@@ -51,19 +51,40 @@ pub fn tail(logfile: &PathBuf, lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// First python interpreter that actually launches, if any. Returns the program
+    /// name to invoke. `None` when no interpreter can be spawned — e.g. a host where
+    /// `python3` exists only as a shell shim the OS cannot exec directly — in which
+    /// case the dependent test skips rather than failing on a missing tool.
+    fn python_cmd() -> Option<&'static str> {
+        ["python3", "python", "py"].into_iter().find(|cand| {
+            Command::new(cand)
+                .arg("--version")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok()
+        })
+    }
+
     #[test]
     fn spawn_and_ready_on_python_http() {
+        let Some(py) = python_cmd() else {
+            eprintln!("skipping spawn_and_ready_on_python_http: no launchable python interpreter");
+            return;
+        };
         let tmp = std::env::temp_dir().join(format!("devrun-{}.log", std::process::id()));
         // pick a free port
         let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = l.local_addr().unwrap().port();
         drop(l);
-        let argv: Vec<String> = ["python3","-m","http.server",&port.to_string()].iter().map(|s| s.to_string()).collect();
+        let argv: Vec<String> =
+            [py, "-m", "http.server", &port.to_string()].iter().map(|s| s.to_string()).collect();
         let env = BTreeMap::new();
         let pid = spawn_detached(&argv, ".", &env, &tmp).unwrap();
         assert!(wait_ready(port, Duration::from_secs(10)), "server never came up");
         stop(pid);
         let _ = fs::remove_file(&tmp);
     }
-
 }

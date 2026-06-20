@@ -30,12 +30,15 @@ fn alloc_through_daemon_writes_registry() {
         "alloc did not return an 'api' port: {ports:?}"
     );
 
-    // The daemon must have flushed the row to disk.
+    // The daemon must have flushed the row to disk. Compare the holder against its
+    // JSON-encoded form so the check survives path separators that JSON escapes
+    // (e.g. backslashes in a Windows holder path).
     let json = h.ports_json();
     assert!(json.contains("\"api\""), "ports.json missing 'api': {json}");
+    let holder_json = serde_json::to_string(&holder).unwrap();
     assert!(
-        json.contains(holder.as_str()),
-        "ports.json missing holder '{holder}': {json}"
+        json.contains(&holder_json),
+        "ports.json missing holder {holder_json}: {json}"
     );
 
     let resp2 = h.request(&Request::Release {

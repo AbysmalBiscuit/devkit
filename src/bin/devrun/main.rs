@@ -386,9 +386,12 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
         .and_then(|e| e.logfile.clone())
         .ok_or_else(|| anyhow::anyhow!("no tracked log for app `{app}` in this worktree"))?;
     if follow {
-        use std::os::unix::process::CommandExt;
-        let err = std::process::Command::new("tail").arg("-f").arg(&log).exec();
-        anyhow::bail!("failed to exec `tail -f`: {err}");
+        let status = std::process::Command::new("tail")
+            .arg("-f")
+            .arg(&log)
+            .status()
+            .with_context(|| "running `tail -f`")?;
+        std::process::exit(status.code().unwrap_or(1));
     }
     println!("{}", supervise::tail(&log, 200));
     Ok(())

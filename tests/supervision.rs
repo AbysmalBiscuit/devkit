@@ -1,3 +1,7 @@
+// These tests drive the supervisor with POSIX signals (nix) and a `python3`
+// http server; both are Unix-only here. Windows supervision coverage is separate.
+#![cfg(unix)]
+
 mod common;
 
 use common::{pid_in_ports_json, Harness};

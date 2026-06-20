@@ -73,6 +73,7 @@ pub fn term_width() -> usize {
     100
 }
 
+#[cfg(unix)]
 #[repr(C)]
 struct libc_winsize {
     ws_row: u16,
