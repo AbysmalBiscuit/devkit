@@ -1,14 +1,14 @@
 # devkit
 
-A Rust workspace (edition 2024) of two library crates and five binaries that coordinate
+A Rust workspace (edition 2024) of two library crates and three binaries that coordinate
 local development for a monorepo. The engine is project-agnostic; every project-specific
 detail lives in `devkit.toml`. See `README.md` for user-facing CLI docs.
 
 ## Commands
 
 ```sh
-cargo build --release                       # all five binaries → target/release
-cargo test --workspace                       # full gate — 46 tests, must stay green
+cargo build --release                       # all three binaries → target/release
+cargo test --workspace                       # full gate — 56 tests, must stay green
 cargo clippy --workspace --all-targets -- -D warnings   # zero-warning policy
 cargo test -p devkit-ports --test registry   # multiprocess flock race test
 ```
@@ -21,8 +21,7 @@ cargo test -p devkit-ports --test registry   # multiprocess flock race test
 | `devkit-ports` | `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load` |
 | `portman` | CLI over the port registry |
 | `devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
-| `issue-prep` / `issue-end` | worktree setup / triage + cleanup |
-| `pr-status` | GitHub PR triage with a per-repo diff cache |
+| `issue` | issue lifecycle: `setup`, `status`, `end`, `prs`, `dashboard`, `review` |
 
 ## Invariants (do not break)
 

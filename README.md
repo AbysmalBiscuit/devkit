@@ -1,6 +1,6 @@
 # devkit
 
-A Rust workspace of five binaries that coordinate local development for a monorepo. Devkit provides a flock'd port registry (no daemon), a supervised dev-app runner with baseline A/B comparison, mechanical issue setup, and worktree/PR triage. All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
+A Rust workspace of three binaries that coordinate local development for a monorepo. Devkit provides a flock'd port registry (no daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
 
 ## Binaries
 
@@ -26,31 +26,25 @@ devrun status [--all]
 devrun logs <app> [-f]
 ```
 
-### `issue-prep` — Issue Setup
+### `issue` — Issue Lifecycle
 
-Performs the mechanical steps required to start work on a Linear issue: creates a worktree off `origin/staging`, symlinks env files, runs `bun install`, reserves ports via `portman`, and prints a JSON summary of the resulting setup.
-
-```
-issue-prep --issue <ID> --slug <slug> --apps <a,b> [--dry-run]
-```
-
-### `issue-end` — Worktree Triage
-
-Identifies and cleans up finished issue worktrees. A worktree is considered FINISHED only when its PR is MERGED, its Linear issue is Done, and the working tree is clean.
+One command covering the whole issue lifecycle. Global `-C/--dir` and `--config` flags sit on `issue` itself, before the subcommand (e.g. `issue -C ~/Git/acme/monorepo status`).
 
 ```
-issue-end status                              # default: show triage table
-issue-end clean [ids…] [-y] [--force] [--pr-only]
-issue-end clean --clean-worktree <sel…>
+issue setup --issue <ID> --slug <slug> --apps <a,b> [--dry-run]
+issue status [ids…]                           # read-only triage table (also the bare `issue`)
+issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
+issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache]
+issue dashboard [--bucket auto|day|week|month] [--chart bar|line] [--mode absolute|proportional] [--all-roles] [--author <email>] [--no-plots]
+issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push]
 ```
 
-### `pr-status` — PR Triage
-
-Renders an at-a-glance GitHub PR triage view with two tables: your open PRs and PRs currently awaiting your review. A per-repo diff cache tracks values between runs and renders `old → new` for anything that changed since the last invocation.
-
-```
-pr-status [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache]
-```
+- **`setup`** — mechanical start of a Linear issue: creates a worktree off the baseline ref, symlinks env files, runs `bun install`, reserves ports via the registry, and prints a JSON summary.
+- **`status`** (the default when you run bare `issue`) — triage table of every issue worktree. A worktree is FINISHED only when its PR is MERGED, its Linear issue is Done, and the working tree is clean.
+- **`end`** — removes FINISHED worktrees. `--pr-only` ignores the Linear gate; `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation.
+- **`prs`** — at-a-glance GitHub PR triage: your open PRs and PRs awaiting your review, with a per-repo diff cache that renders `old → new` for anything changed since the last run.
+- **`dashboard`** — the at-a-glance triage + PR tables, plus terminal timelines of your Linear issues by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). `--no-plots` shows only the tables.
+- **`review`** — pushes the current branch, opens or reuses its PR, adds a reviewer, and sends the reviewer a Slack message with the PR link. Never force-pushes. With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON object for an agent to forward. `--to` names a `[people]` alias from the config.
 
 ## Configuration
 
@@ -66,22 +60,27 @@ App `path` and `doppler_project` are normally inferred from the monorepo's `dopp
 App conventions are config-driven, not hardcoded:
 
 - `provides_url = true` marks the app that serves the URL other apps consume (the API). Consumer apps name that variable in their own `url_env`; `devrun` wires it to the provider's local port and auto-includes the provider when a consumer is run.
-- `prep_env = { KEY = "value" }` is written to `<app>/.env.local` during `issue-prep`.
+- `prep_env = { KEY = "value" }` is written to `<app>/.env.local` during `issue setup`.
 - `defaults.apps_dir` (default `apps`) is the repo-relative directory apps live under; it drives path inference and diff-based app detection.
 
-### Example setup
+### Setting up your config
+
+The config is personal (worktree paths, app catalog, teammate handles, local
+secrets) and is **not** distributed — keep it out of version control. See
+[`docs/configuration.md`](docs/configuration.md) for the full config reference
+and a sanitized example. Copy that example to your config location and edit it:
 
 ```sh
 mkdir -p ~/.config/devkit
-cp configs/example.toml ~/.config/devkit/config.toml
+$EDITOR ~/.config/devkit/config.toml   # paste & adapt the example from docs/configuration.md
 ```
 
 ## Install
 
-Build all five binaries:
+Build all three binaries:
 
 ```sh
-cargo build --release            # all five binaries into target/release
+cargo build --release            # all three binaries into target/release
 ```
 
 Or install them into `~/.cargo/bin`:
@@ -89,9 +88,7 @@ Or install them into `~/.cargo/bin`:
 ```sh
 cargo install --path crates/portman
 cargo install --path crates/devrun
-cargo install --path crates/issue-prep
-cargo install --path crates/issue-end
-cargo install --path crates/pr-status
+cargo install --path crates/issue
 ```
 
 ## State & Cache Locations
@@ -100,7 +97,7 @@ cargo install --path crates/pr-status
 |---|---|
 | Port registry | `~/.claude/state/devkit/ports.json` |
 | Server logs | `~/.claude/state/devkit/logs/` |
-| PR status cache | `$XDG_CACHE_HOME/devkit/` (or `~/.cache/devkit/`) |
+| PR diff cache (`issue prs`) | `$XDG_CACHE_HOME/devkit/pr-status/` (or `~/.cache/devkit/pr-status/`) |
 
 ## Requirements
 
@@ -113,8 +110,9 @@ cargo install --path crates/pr-status
 
 **Optional:**
 
-- `$LINEAR_API_KEY` — enables the Linear issue-Done gate in `issue-end`
-- `$LINEAR_WORKSPACE` — enables clickable Linear issue links in `issue-end status`
+- `$LINEAR_API_KEY` — enables the Linear issue-Done gate in `issue status`/`issue end` and the issue timeline in `issue dashboard`
+- `$LINEAR_WORKSPACE` — enables clickable Linear issue links in `issue status`
+- `$SLACK_TOKEN` — lets `issue review` post the reviewer message directly (otherwise it emits a `SlackIntent` JSON object)
 
 ## Troubleshooting
 

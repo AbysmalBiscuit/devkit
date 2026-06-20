@@ -59,7 +59,7 @@ pub struct AppConfig {
     pub preserve_env: Vec<String>,
     #[serde(default)]
     pub static_env: HashMap<String, String>,
-    /// Env written to `<app>/.env.local` during `issue-prep` (e.g. dummy workflow ids).
+    /// Env written to `<app>/.env.local` during `issue setup` (e.g. dummy workflow ids).
     #[serde(default)]
     pub prep_env: HashMap<String, String>,
     /// Optional overrides; normally derived from doppler.yaml.
