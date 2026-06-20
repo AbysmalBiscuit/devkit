@@ -12,6 +12,16 @@ pub(crate) struct Key {
     pub(crate) role: Role,
 }
 
+/// Everything needed to respawn a process after a crash. Owned children store
+/// this; adopted survivors carry `None` and are dropped when they exit, since the
+/// daemon never captured how to launch them.
+#[derive(Clone)]
+pub(crate) struct Launch {
+    pub(crate) argv: Vec<String>,
+    pub(crate) cwd: String,
+    pub(crate) env: std::collections::BTreeMap<String, String>,
+}
+
 /// How the daemon watches a process: `Owned` children are reaped with `waitpid`;
 /// `Adopted` survivors (from a previous daemon) are polled with `pid_alive`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -27,6 +37,7 @@ struct Child {
     watch: Watch,
     restarts: Vec<Instant>,
     warned_mem: bool,
+    launch: Option<Launch>,
 }
 
 pub(crate) struct Supervisor {
@@ -46,15 +57,17 @@ impl Supervisor {
         !self.children.is_empty()
     }
 
-    pub(crate) fn insert_owned(&mut self, key: Key, pid: u32, port: u16, logfile: PathBuf) {
+    pub(crate) fn insert_owned(&mut self, key: Key, pid: u32, port: u16, logfile: PathBuf, launch: Launch) {
         self.children.insert(key, Child {
             pid, port, logfile, watch: Watch::Owned, restarts: Vec::new(), warned_mem: false,
+            launch: Some(launch),
         });
     }
 
     pub(crate) fn insert_adopted(&mut self, key: Key, pid: u32, port: u16, logfile: PathBuf) {
         self.children.insert(key, Child {
             pid, port, logfile, watch: Watch::Adopted, restarts: Vec::new(), warned_mem: false,
+            launch: None,
         });
     }
 
@@ -64,6 +77,21 @@ impl Supervisor {
 
     pub(crate) fn logfile_of(&self, key: &Key) -> Option<PathBuf> {
         self.children.get(key).map(|c| c.logfile.clone())
+    }
+
+    /// Launch spec, logfile, and port for respawning a key. Only owned children
+    /// (those with a stored launch spec) can be respawned.
+    pub(crate) fn launch_of(&self, key: &Key) -> Option<(Launch, PathBuf, u16)> {
+        let c = self.children.get(key)?;
+        Some((c.launch.clone()?, c.logfile.clone(), c.port))
+    }
+
+    /// Update a key's pid after a successful respawn; marks the child as owned.
+    pub(crate) fn set_pid(&mut self, key: &Key, pid: u32) {
+        if let Some(c) = self.children.get_mut(key) {
+            c.pid = pid;
+            c.watch = Watch::Owned;
+        }
     }
 
     /// Record a restart attempt against the crash-loop budget; returns whether one
@@ -152,7 +180,8 @@ mod tests {
 
     fn live(s: &mut Supervisor, app: &str, pid: u32, port: u16) {
         let key = Key { holder: "/w".into(), app: app.into(), role: Role::Issue };
-        s.insert_owned(key, pid, port, PathBuf::new());
+        s.insert_owned(key, pid, port, PathBuf::new(),
+            Launch { argv: vec!["true".into()], cwd: ".".into(), env: std::collections::BTreeMap::new() });
     }
 
     #[test]
@@ -190,7 +219,10 @@ mod tests {
             &argv, ".", &std::collections::BTreeMap::new(),
             &std::env::temp_dir().join("portd-test.log"),
         ).unwrap();
-        s.insert_owned(key.clone(), pid, 9100, std::env::temp_dir().join("portd-test.log"));
+        s.insert_owned(
+            key.clone(), pid, 9100, std::env::temp_dir().join("portd-test.log"),
+            Launch { argv: argv.clone(), cwd: ".".into(), env: std::collections::BTreeMap::new() },
+        );
         // Give `true` a moment to exit, then reap.
         std::thread::sleep(Duration::from_millis(200));
         let exited = s.reap_once();

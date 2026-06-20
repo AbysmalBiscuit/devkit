@@ -5,7 +5,8 @@
 
 use anyhow::{Context, Result};
 use devkit_common::paths;
-use devkit_ports::daemon::proto::{self, Request, Response, PROTO};
+use devkit_ports::daemon::proto::{self, Request};
+use devkit_ports::registry;
 use fd_lock::RwLock;
 use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter};
@@ -14,9 +15,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-// Supervisor API is consumed by request dispatch and the supervision loop.
+// A few supervisor accessors back deferred features (memory-limit action, log serving)
+// and have no caller yet.
 #[allow(dead_code)]
 mod supervisor;
+mod server;
 
 /// Shared daemon state, accessed from the connection threads and the idle watcher.
 pub(crate) struct Daemon {
@@ -41,6 +44,20 @@ impl Daemon {
     /// Whether the daemon currently owns live supervised child processes.
     fn supervising(&self) -> bool {
         self.sup.lock().unwrap().any_live()
+    }
+
+    fn respawn(self: &Arc<Self>, key: &supervisor::Key) {
+        let Some((launch, log, port)) = self.sup.lock().unwrap().launch_of(key) else {
+            log_line(&format!("cannot respawn {}/{} — no launch spec", key.holder, key.app));
+            return;
+        };
+        match devkit_common::supervise::spawn_detached(&launch.argv, &launch.cwd, &launch.env, &log) {
+            Ok(pid) => {
+                let _ = registry::record_pid(port, &key.app, &key.holder, key.role, pid, log);
+                self.sup.lock().unwrap().set_pid(key, pid);
+            }
+            Err(e) => log_line(&format!("respawn failed for {}/{}: {e:#}", key.holder, key.app)),
+        }
     }
 }
 
@@ -83,15 +100,53 @@ fn main() -> Result<()> {
         sup: Mutex::new(supervisor::Supervisor::new(max_restarts, restart_window, mem_warn, mem_limit)),
     });
 
-    // Idle-exit watcher: unblock the accept loop by connecting to ourselves.
+    // Adopt servers a previous daemon left running: monitor by poll, not waitpid.
+    if let Ok(data) = registry::snapshot() {
+        let mut sup = daemon.sup.lock().unwrap();
+        for (port, e) in &data.entries {
+            if let (Some(pid), Some(log)) = (e.pid, e.logfile.clone())
+                && registry::pid_alive(pid)
+            {
+                sup.insert_adopted(
+                    supervisor::Key { holder: e.holder.clone(), app: e.app.clone(), role: e.role },
+                    pid, *port, log,
+                );
+            }
+        }
+    }
+
+    // Combined supervision thread: reaps exited children, restarts crashed ones,
+    // warns on memory breaches, and triggers idle-exit.
     {
         let d = Arc::clone(&daemon);
         std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_secs(1));
+            std::thread::sleep(Duration::from_millis(500));
             if d.shutdown.load(Ordering::SeqCst) || d.is_idle() {
                 d.shutdown.store(true, Ordering::SeqCst);
-                let _ = UnixStream::connect(paths::socket_file()); // wake accept()
+                let _ = UnixStream::connect(paths::socket_file());
                 break;
+            }
+            // Reap exited children; restart only those whose ports.json row survives
+            // (the cross-tool stop signal). Debounce the read so a concurrent legacy
+            // `down` that removes the row just before the exit isn't misread as a crash.
+            let dead = d.sup.lock().unwrap().reap_once();
+            if !dead.is_empty() {
+                std::thread::sleep(Duration::from_millis(200)); // debounce
+                let snap = registry::snapshot().unwrap_or_default();
+                for key in dead {
+                    let row = snap.entries.values().find(|e|
+                        e.holder == key.holder && e.app == key.app && e.role == key.role);
+                    match row {
+                        Some(_) => restart(&d, &key),
+                        None => { d.sup.lock().unwrap().remove(&key); } // intentional stop
+                    }
+                }
+            }
+            // Memory: warn once per breach (the implemented action is warn-only).
+            for (key, rss) in d.sup.lock().unwrap().memory_breaches() {
+                log_line(&format!(
+                    "memory: {}/{} ({:?}) tree-RSS {} MB exceeds warn threshold",
+                    key.holder, key.app, key.role, rss / 1024 / 1024));
             }
         });
     }
@@ -122,13 +177,12 @@ fn main() -> Result<()> {
 }
 
 /// Serve requests on one connection until EOF or a close-signalling response.
-/// Only Ping and Shutdown are answered; other requests return a not-implemented error.
 fn handle_conn(daemon: &Arc<Daemon>, stream: UnixStream) -> Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = BufWriter::new(stream);
     while let Some(req) = proto::recv::<_, Request>(&mut reader)? {
         daemon.touch();
-        let (resp, close) = dispatch(daemon, req);
+        let (resp, close) = server::dispatch(daemon, req);
         proto::send(&mut writer, &resp)?;
         if close {
             break;
@@ -137,18 +191,29 @@ fn handle_conn(daemon: &Arc<Daemon>, stream: UnixStream) -> Result<()> {
     Ok(())
 }
 
-/// Map a request to `(response, should_close)`. Only Ping and Shutdown are
-/// handled; all other variants return `Response::Err`.
-fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
-    match req {
-        Request::Ping { .. } => (Response::Pong { proto: PROTO, pid: std::process::id() }, false),
-        Request::Shutdown => {
-            daemon.shutdown.store(true, Ordering::SeqCst);
-            let _ = UnixStream::connect(paths::socket_file());
-            (Response::Ok, true)
-        }
-        _ => (Response::Err("not implemented".into()), false),
+/// Respawn a crashed child if its crash-loop budget allows; otherwise drop it and log.
+fn restart(daemon: &Arc<Daemon>, key: &supervisor::Key) {
+    let mut sup = daemon.sup.lock().unwrap();
+    // An adopted survivor has no stored launch spec, so it can't be respawned —
+    // drop it on exit rather than charging the crash-loop budget for a spawn that
+    // can never happen.
+    if sup.launch_of(key).is_none() {
+        sup.remove(key);
+        drop(sup);
+        log_line(&format!("dropping {}/{} ({:?}) — no launch spec to respawn",
+            key.holder, key.app, key.role));
+        return;
     }
+    if !sup.may_restart(&key.holder, &key.app, key.role) {
+        sup.remove(key);
+        drop(sup);
+        log_line(&format!("giving up on {}/{} ({:?}) — crash-loop budget exhausted",
+            key.holder, key.app, key.role));
+        return;
+    }
+    drop(sup);
+    log_line(&format!("restart: {}/{} ({:?})", key.holder, key.app, key.role));
+    daemon.respawn(key);
 }
 
 fn log_line(msg: &str) {

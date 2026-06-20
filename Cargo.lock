@@ -181,6 +181,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "devkit-portd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "devkit-common",
+ "devkit-ports",
+ "fd-lock",
+ "nix",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "devkit-ports"
 version = "0.1.0"
 dependencies = [
