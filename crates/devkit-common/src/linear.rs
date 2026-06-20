@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +58,89 @@ fn fetch(query: &str, aliases: &HashMap<String, String>, key: &str) -> Result<Ha
     Ok(out)
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct StateRef {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub color: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AssignedIssue {
+    pub identifier: String,
+    pub created_at: String,
+    pub state: StateRef,
+    /// (createdAt, fromState, toState) for each recorded transition, unsorted.
+    pub history: Vec<(String, Option<StateRef>, Option<StateRef>)>,
+}
+
+/// GraphQL for one page of issues assigned to me, with state + transition history.
+fn assigned_query(after: Option<&str>) -> String {
+    let cursor = match after {
+        Some(c) => format!(", after: \"{c}\""),
+        None => String::new(),
+    };
+    format!(
+        "query {{ issues(first: 50{cursor}, filter: {{ assignee: {{ isMe: {{ eq: true }} }} }}) \
+         {{ nodes {{ identifier createdAt \
+         state {{ name type color }} \
+         history(first: 50) {{ nodes {{ createdAt \
+         fromState {{ name type color }} toState {{ name type color }} }} }} }} \
+         pageInfo {{ hasNextPage endCursor }} }} }}"
+    )
+}
+
+/// Every issue assigned to me, paginated. Empty on no key / network error.
+pub fn assigned_issue_history(key: &str) -> Result<Vec<AssignedIssue>> {
+    let mut out = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
+            .set("Authorization", key)
+            .send_json(ureq::json!({ "query": assigned_query(after.as_deref()) }))?
+            .into_json()?;
+        let block = &resp["data"]["issues"];
+        if let Some(nodes) = block["nodes"].as_array() {
+            for n in nodes {
+                let state: StateRef = serde_json::from_value(n["state"].clone())?;
+                let mut history = Vec::new();
+                if let Some(hn) = n["history"]["nodes"].as_array() {
+                    for h in hn {
+                        let from = serde_json::from_value(h["fromState"].clone()).ok();
+                        let to = serde_json::from_value(h["toState"].clone()).ok();
+                        let when = h["createdAt"].as_str().unwrap_or("").to_string();
+                        history.push((when, from, to));
+                    }
+                }
+                out.push(AssignedIssue {
+                    identifier: n["identifier"].as_str().unwrap_or("").to_string(),
+                    created_at: n["createdAt"].as_str().unwrap_or("").to_string(),
+                    state,
+                    history,
+                });
+            }
+        }
+        if block["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
+            after = block["pageInfo"]["endCursor"].as_str().map(String::from);
+        } else {
+            return Ok(out);
+        }
+    }
+}
+
+/// createdAt of my Linear account — the timeline origin.
+pub fn viewer_created_at(key: &str) -> Result<String> {
+    let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
+        .set("Authorization", key)
+        .send_json(ureq::json!({ "query": "query { viewer { createdAt } }" }))?
+        .into_json()?;
+    resp["data"]["viewer"]["createdAt"]
+        .as_str()
+        .map(String::from)
+        .context("viewer.createdAt missing from Linear response")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +154,11 @@ mod tests {
     #[test]
     fn empty_ids_no_query() {
         assert!(build_query(&[]).is_none());
+    }
+    #[test]
+    fn assigned_query_paginates() {
+        assert!(assigned_query(None).contains("issues(first: 50"));
+        assert!(assigned_query(None).contains("assignee: { isMe: { eq: true } }"));
+        assert!(assigned_query(Some("CUR")).contains("after: \"CUR\""));
     }
 }
