@@ -9,6 +9,41 @@ pub struct Config {
     pub apps: HashMap<String, AppConfig>,
     #[serde(default)]
     pub people: HashMap<String, Person>,
+    #[serde(default)]
+    pub daemon: DaemonConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct DaemonConfig {
+    /// Run gate: autostart the daemon only when true (or via DEVKIT_DAEMON=1 / --supervise).
+    pub enabled: bool,
+    /// Exit after this many idle seconds with zero clients AND zero supervised children.
+    pub idle_timeout_secs: u64,
+    /// Crash-loop guard: restarts allowed within `restart_window_secs`.
+    pub max_restarts: u32,
+    pub restart_window_secs: u64,
+    /// Log a loud line past this supervised tree-RSS in MB (0 = off).
+    pub memory_warn_mb: u64,
+    /// Take `memory_action` past this tree-RSS in MB (0 = off).
+    pub memory_limit_mb: u64,
+    /// Action when tree-RSS crosses `memory_limit_mb`. Only "warn" (log a line) is
+    /// honored; other values currently fall back to warn behavior.
+    pub memory_action: String,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        DaemonConfig {
+            enabled: false,
+            idle_timeout_secs: 1800,
+            max_restarts: 5,
+            restart_window_secs: 60,
+            memory_warn_mb: 0,
+            memory_limit_mb: 0,
+            memory_action: "warn".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,5 +193,25 @@ github = "exampleuser"
         let igor = c.people.get("igor").unwrap();
         assert_eq!(igor.slack, "U0XXXXXXXXX");
         assert_eq!(igor.github.as_deref(), Some("exampleuser"));
+    }
+    #[test]
+    fn daemon_defaults_when_absent() {
+        let c = Config::parse(SAMPLE).unwrap();
+        assert!(!c.daemon.enabled);
+        assert_eq!(c.daemon.idle_timeout_secs, 1800);
+        assert_eq!(c.daemon.max_restarts, 5);
+        assert_eq!(c.daemon.restart_window_secs, 60);
+        assert_eq!(c.daemon.memory_warn_mb, 0);
+        assert_eq!(c.daemon.memory_limit_mb, 0);
+        assert_eq!(c.daemon.memory_action, "warn");
+    }
+    #[test]
+    fn parses_explicit_daemon_block() {
+        let src = format!("{SAMPLE}\n[daemon]\nenabled = true\nidle_timeout_secs = 600\nmemory_warn_mb = 6000\n");
+        let c = Config::parse(&src).unwrap();
+        assert!(c.daemon.enabled);
+        assert_eq!(c.daemon.idle_timeout_secs, 600);
+        assert_eq!(c.daemon.memory_warn_mb, 6000);
+        assert_eq!(c.daemon.max_restarts, 5); // untouched field keeps its default
     }
 }
