@@ -1,1 +1,7 @@
 /target
+
+# Personal/local devkit configs. The config that drives the engine is
+# machine- and person-specific (paths, app catalog, Slack/GitHub handles,
+# local secrets) and must never be distributed. Document the config *shape*
+# in docs/ instead — see docs/configuration.md.
+/configs/*.toml
