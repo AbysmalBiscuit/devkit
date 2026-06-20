@@ -49,7 +49,7 @@ textplots = { version = "0.8", default-features = false }
 rgb = "0.8"
 serde_yaml_ng = "0.10"
 fd-lock = "4"
-nix = { version = "0.29", features = ["signal", "process"] }
+nix = { version = "0.29", features = ["signal", "process", "term"] }
 comfy-table = "7"
 anstyle = "1"
 supports-hyperlinks = "3"
