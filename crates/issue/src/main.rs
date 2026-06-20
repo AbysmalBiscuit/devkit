@@ -2,6 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod setup;
+// status, end, and dashboard subcommands (later tasks) consume triage items
+#[allow(dead_code)]
+mod triage;
 
 #[derive(Parser)]
 #[command(name = "issue", about = "Issue lifecycle: setup, status, end, prs, dashboard, review")]
