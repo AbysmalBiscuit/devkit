@@ -21,7 +21,12 @@ fn concurrent_alloc_never_collides() {
         let holder = tmp.join(format!("w{i}")); // distinct, existing holder dirs
         std::fs::create_dir_all(&holder).unwrap();
         kids.push(Command::new(&exe)
-            .env("HOME", &tmp)               // registry under tmp/.claude/state/devkit
+            // Pin both state-home inputs into tmp so the worker's registry is
+            // isolated: state_dir() prefers $XDG_STATE_HOME, then falls back to
+            // $HOME. Setting only one leaks to the developer's real registry when
+            // the other is present in the environment.
+            .env("HOME", &tmp)
+            .env("XDG_STATE_HOME", &tmp)     // registry under tmp/devkit
             .env("DEVKIT_TEST_ALLOC", &holder)
             .args(["--exact", "concurrent_alloc_never_collides", "--nocapture"])
             .output().unwrap());
