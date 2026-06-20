@@ -4,8 +4,7 @@
   "packages": {
     ".": {
       "release-type": "rust",
-      "package-name": "devkit",
-      "extra-files": ["Cargo.toml"]
+      "package-name": "devkit"
     }
   }
 }

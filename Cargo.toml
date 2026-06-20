@@ -2,7 +2,7 @@
 name = "devkit"
 description = "Local development coordination tools: portman, devrun, issue, devkit-portd"
 edition.workspace = true
-version.workspace = true
+version = "0.1.0" # x-release-please-version
 
 # The supervisor daemon needs the port-registry daemon backend; gate its bin on
 # the feature so `--no-default-features` builds still produce the other tools.
