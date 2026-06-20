@@ -93,8 +93,11 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(paths::state_dir())?;
     std::fs::create_dir_all(paths::logs_dir())?;
 
-    // Single-instance: hold portd.lock for the daemon's whole life. If another
-    // daemon holds it, exit 0 — autostart races resolve to exactly one winner.
+    // Single-instance: hold portd.lock for the daemon's whole life. A peer daemon
+    // holds it exclusive for its entire lifetime, so all retry attempts fail →
+    // exit 0 (exactly one autostart winner). A transient shared hold by a direct
+    // writer (portman/devrun taking the gate during a registry RMW) clears within
+    // ~1ms, so a brief retry distinguishes that from a live peer without blocking.
     let lock_path = paths::daemon_lock_file();
     let lock_file = OpenOptions::new()
         .create(true)
@@ -102,9 +105,22 @@ fn main() -> Result<()> {
         .truncate(false)
         .open(&lock_path)?;
     let mut lock = RwLock::new(lock_file);
-    let guard = match lock.try_write() {
-        Ok(g) => g,
-        Err(_) => return Ok(()), // another daemon already running
+    // Retry up to 5 times with 20ms gaps. A peer daemon holds portd.lock exclusive
+    // for its whole life, so all attempts fail → exit 0 (one autostart winner). A
+    // transient shared hold by a direct registry writer clears within ~1ms, so a
+    // retry succeeds without blocking indefinitely.
+    let guard = 'acquire: {
+        let mut attempts = 0u8;
+        loop {
+            match lock.try_write() {
+                Ok(g) => break 'acquire g,
+                Err(_) if attempts < 4 => {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => return Ok(()), // a live peer daemon holds the lock
+            }
+        }
     };
 
     // Load the registry into memory while holding portd.lock and before binding the

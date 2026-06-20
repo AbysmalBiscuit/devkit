@@ -8,6 +8,24 @@ use std::time::{Duration, Instant};
 
 pub use crate::sys::tree_rss_bytes;
 
+/// Configure a `Command` the same way `spawn_detached` does, minus the stdio
+/// attachment (which requires a real logfile). Extracted so tests can inspect the
+/// resulting env without spawning a real process.
+fn configure_child<'a>(
+    c: &'a mut Command,
+    rest: &[String],
+    cwd: &str,
+    env: &BTreeMap<String, String>,
+) -> &'a mut Command {
+    // The daemon marker must not cross into supervised children: a devkit subprocess
+    // of a child would see it, skip the portd.lock gate, and write ports.json directly
+    // behind the live daemon, causing silent registry desync.
+    c.args(rest)
+        .current_dir(cwd)
+        .envs(env)
+        .env_remove("DEVKIT_PORTD_SELF")
+}
+
 /// Spawn `argv` detached (own session), env-augmented, stdout+stderr → logfile.
 /// Returns the child pid.
 pub fn spawn_detached(
@@ -21,9 +39,7 @@ pub fn spawn_detached(
     let err = out.try_clone()?;
     let (prog, rest) = argv.split_first().context("empty launch argv")?;
     let mut c = Command::new(prog);
-    c.args(rest)
-        .current_dir(cwd)
-        .envs(env)
+    configure_child(&mut c, rest, cwd, env)
         .stdin(Stdio::null())
         .stdout(out)
         .stderr(err);
@@ -69,6 +85,42 @@ pub fn tail(logfile: &PathBuf, lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
+
+    /// `configure_child` must remove `DEVKIT_PORTD_SELF` from the child's env even
+    /// when the caller's process has it set, so a devkit subprocess of a supervised
+    /// server cannot write the registry behind the live daemon.
+    #[test]
+    fn spawn_detached_does_not_leak_daemon_marker() {
+        // Set the marker in the test process to confirm the removal is active.
+        unsafe { std::env::set_var("DEVKIT_PORTD_SELF", "1") };
+        let env = BTreeMap::new();
+        let mut c = Command::new("true"); // program name does not matter
+        configure_child(&mut c, &[], ".", &env);
+        // get_envs() returns None for keys explicitly removed, Some(_) for inherited.
+        let marker = c
+            .get_envs()
+            .find(|(k, _)| *k == OsStr::new("DEVKIT_PORTD_SELF"));
+        match marker {
+            Some((_, None)) => {} // explicit removal recorded — correct
+            Some((_, Some(v))) => panic!(
+                "DEVKIT_PORTD_SELF must be removed but child would inherit {:?}",
+                v
+            ),
+            None => {
+                // The key does not appear in get_envs() at all. On some platforms
+                // env_remove of a key not present in the inherited set is a no-op in
+                // the get_envs iterator. Confirm the test process actually has it set
+                // so the removal was meaningful and we're not testing an empty case.
+                assert!(
+                    std::env::var_os("DEVKIT_PORTD_SELF").is_some(),
+                    "DEVKIT_PORTD_SELF was not set in the test process — test is a no-op"
+                );
+            }
+        }
+        // Clean up so we don't pollute other tests in the same process.
+        unsafe { std::env::remove_var("DEVKIT_PORTD_SELF") };
+    }
 
     /// First python interpreter that actually launches, if any. Returns the program
     /// name to invoke. `None` when no interpreter can be spawned — e.g. a host where

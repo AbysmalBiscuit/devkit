@@ -146,26 +146,24 @@ impl Store for FlockStore {
         Ok(store::load(&self.data_path))
     }
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
-        // A process that already holds portd.lock exclusive (devkit-portd, which
-        // sets DEVKIT_PORTD_SELF) must not re-acquire it shared: depending on the OS
-        // lock backend that would deadlock or spuriously refuse. Every other caller
-        // holds the shared gate for the whole RMW; when a daemon holds the lock
-        // exclusive, try_read fails and surfaces as the typed refusal.
-        if std::env::var_os("DEVKIT_PORTD_SELF").is_none() {
-            if let Some(parent) = self.gate_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(false)
-                .open(&self.gate_path)?;
-            let gate = RwLock::new(file);
-            // `anyhow::Error::new` (not `anyhow!`) so the type survives for `downcast_ref`.
-            let _shared = gate
-                .try_read()
-                .map_err(|_| anyhow::Error::new(DaemonHoldsLock))?;
+        // Every direct writer holds the shared gate for its entire RMW. The daemon
+        // holds portd.lock exclusive for its whole life (via MemoryStore, never
+        // FlockStore), so a concurrent try_read failure here means a live daemon
+        // owns the registry — surface that as the typed refusal rather than writing
+        // ports.json behind it.
+        if let Some(parent) = self.gate_path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&self.gate_path)?;
+        let gate = RwLock::new(file);
+        // `anyhow::Error::new` (not `anyhow!`) so the type survives for `downcast_ref`.
+        let _shared = gate
+            .try_read()
+            .map_err(|_| anyhow::Error::new(DaemonHoldsLock))?;
         store::with_lock(&self.lock_path, &self.data_path, f)
     }
 }
