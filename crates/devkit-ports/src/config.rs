@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     pub defaults: Defaults,
     pub apps: HashMap<String, AppConfig>,
+    #[serde(default)]
+    pub people: HashMap<String, Person>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -21,10 +23,25 @@ pub struct Defaults {
     /// paths from doppler.yaml and to detect changed apps in a diff.
     #[serde(default = "default_apps_dir")]
     pub apps_dir: String,
+    /// Base branch used when opening PRs (e.g. "staging", "main").
+    #[serde(default = "default_pr_base")]
+    pub pr_base: String,
 }
 
 fn default_apps_dir() -> String {
     "apps".to_string()
+}
+
+fn default_pr_base() -> String {
+    "staging".to_string()
+}
+
+/// A team member's handle mapping (Slack user-id, GitHub login, etc.).
+#[derive(Debug, Deserialize)]
+pub struct Person {
+    pub slack: String,
+    #[serde(default)]
+    pub github: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,5 +134,29 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
     fn rejects_prd() {
         let bad = SAMPLE.replace("dev_local", "prd");
         assert!(Config::parse(&bad).is_err());
+    }
+    #[test]
+    fn parses_people_and_pr_base() {
+        let src = r#"
+[defaults]
+worktree_root = "~/Git/example"
+branch_prefix = "lev/"
+baseline_ref = "origin/staging"
+baseline_path = "~/Git/example/_baseline"
+doppler_config = "dev_local"
+doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
+pr_base = "staging"
+[apps.api]
+base_port = 9100
+launch = ["nitro", "dev", "--port", "{port}"]
+[people.igor]
+slack = "U0XXXXXXXXX"
+github = "exampleuser"
+"#;
+        let c = Config::parse(src).unwrap();
+        assert_eq!(c.defaults.pr_base, "staging");
+        let igor = c.people.get("igor").unwrap();
+        assert_eq!(igor.slack, "U0XXXXXXXXX");
+        assert_eq!(igor.github.as_deref(), Some("exampleuser"));
     }
 }
