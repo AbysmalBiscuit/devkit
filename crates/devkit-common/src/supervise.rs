@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 pub fn spawn_detached(
     argv: &[String], cwd: &str, env: &BTreeMap<String, String>, logfile: &PathBuf,
 ) -> Result<u32> {
-    use std::os::unix::process::CommandExt;
     fs::create_dir_all(logfile.parent().unwrap())?;
     let out = File::create(logfile)?;
     let err = out.try_clone()?;
@@ -19,7 +18,7 @@ pub fn spawn_detached(
     let mut c = Command::new(prog);
     c.args(rest).current_dir(cwd).envs(env)
         .stdin(Stdio::null()).stdout(out).stderr(err);
-    unsafe { c.pre_exec(|| { nix::unistd::setsid().map(|_| ()).map_err(|e| e.into()) }); }
+    crate::sys::detach(&mut c);
     let child = c.spawn().with_context(|| format!("spawning {prog}"))?;
     Ok(child.id())
 }
@@ -38,9 +37,7 @@ pub fn wait_ready(port: u16, timeout: Duration) -> bool {
 
 /// SIGTERM a pid (ignore if already gone).
 pub fn stop(pid: u32) {
-    use nix::sys::signal::{kill, Signal};
-    use nix::unistd::Pid;
-    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+    crate::sys::terminate(pid);
 }
 
 pub fn tail(logfile: &PathBuf, lines: usize) -> String {

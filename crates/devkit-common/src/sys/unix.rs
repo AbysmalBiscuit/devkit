@@ -12,3 +12,19 @@ pub(super) fn process_alive(pid: u32) -> bool {
     }
     kill(Pid::from_raw(signed), None).is_ok()
 }
+
+pub(super) fn terminate(pid: u32) {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+    let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+}
+
+pub(super) fn detach(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // Start a new session so the child outlives the launching shell and is
+    // insulated from its controlling terminal's signals.
+    // SAFETY: setsid only mutates the child after fork; it is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(|| nix::unistd::setsid().map(|_| ()).map_err(|e| e.into()));
+    }
+}

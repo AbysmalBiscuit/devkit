@@ -11,6 +11,17 @@ pub fn process_alive(pid: u32) -> bool {
     imp::process_alive(pid)
 }
 
+/// Ask `pid` to terminate, gracefully where the platform supports it.
+pub fn terminate(pid: u32) {
+    imp::terminate(pid)
+}
+
+/// Configure `cmd` to start detached from the caller's session/process group.
+/// Must be called before `spawn`.
+pub fn detach(cmd: &mut std::process::Command) {
+    imp::detach(cmd)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
