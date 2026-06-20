@@ -44,7 +44,8 @@ mod tests {
         App { name: name.into(), base_port: 1, doppler_project: Some("proj".into()),
             path: "apps/x".into(), launch: vec!["next".into(),"dev".into(),"-p".into(),"{port}".into()],
             url_env: url_env.map(Into::into), provides_url: false,
-            preserve_env: vec![], static_env: HashMap::new(), prep_env: HashMap::new() }
+            preserve_env: vec![], static_env: HashMap::new(), prep_env: HashMap::new(),
+            setup: vec![] }
     }
 
     #[test]

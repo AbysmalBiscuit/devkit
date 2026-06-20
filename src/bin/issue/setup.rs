@@ -68,17 +68,14 @@ pub fn run(args: SetupArgs) -> Result<()> {
         monorepo_s,
     )?;
 
-    // env symlinks (skip if present); apps with configured prep_env get a .env.local.
-    let env_local = wt_root.join(".env.local");
+    // Per-app bootstrap: write prep_env to <app>/.env.local (frameworks auto-load
+    // it), then run the app's configured setup commands in its directory. Anything
+    // project-specific — installs, doppler wiring — lives in config, not here.
     for a in &args.apps {
         let app = &catalog[a];
         let app_dir = worktree.join(&app.path);
         std::fs::create_dir_all(&app_dir).ok();
-        let dotenv = app_dir.join(".env");
-        if !dotenv.exists() {
-            std::os::unix::fs::symlink(&env_local, &dotenv)
-                .with_context(|| format!("symlinking {} -> {}", dotenv.display(), env_local.display()))?;
-        }
+
         if !app.prep_env.is_empty() {
             let f = app_dir.join(".env.local");
             if !f.exists() {
@@ -86,13 +83,12 @@ pub fn run(args: SetupArgs) -> Result<()> {
                 std::fs::write(&f, body)?;
             }
         }
-    }
 
-    // bun install once, in the first app's dir.
-    if let Some(first) = args.apps.first() {
-        let app_dir = worktree.join(&catalog[first].path);
-        capture("bun", &["install"], Some(app_dir.to_str().unwrap()))
-            .with_context(|| "running `bun install`")?;
+        for cmd in &app.setup {
+            let (prog, rest) = cmd.split_first().context("empty setup command")?;
+            capture(prog, &rest.iter().map(String::as_str).collect::<Vec<_>>(), app_dir.to_str())
+                .with_context(|| format!("running setup `{}` for app `{a}`", cmd.join(" ")))?;
+        }
     }
 
     // reserve ports

@@ -14,6 +14,7 @@ pub struct App {
     pub preserve_env: Vec<String>,
     pub static_env: HashMap<String, String>,
     pub prep_env: HashMap<String, String>,
+    pub setup: Vec<Vec<String>>,
 }
 
 /// Build the catalog: project+path come from doppler.yaml unless the app overrides them.
@@ -41,6 +42,7 @@ pub fn catalog(cfg: &Config, path_to_project: &HashMap<String, String>) -> Resul
             preserve_env: a.preserve_env.clone(),
             static_env: a.static_env.clone(),
             prep_env: a.prep_env.clone(),
+            setup: a.setup.clone(),
         });
     }
     Ok(out)

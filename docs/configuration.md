@@ -49,6 +49,7 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 | `preserve_env` | no | Env vars copied through from the ambient environment. |
 | `static_env` | no | Inline env vars always set for this app. |
 | `prep_env` | no | Env vars written into the per-app prep file during `issue setup`. |
+| `setup` | no | Commands run in the app's directory during `issue setup`, in order. Each entry is one argv array (program + args), e.g. `[["doppler", "run", "-c", "local_config", "--", "bun", "install"]]`. Use this for installs and any doppler wiring; nothing project-specific is hardcoded in the tool. |
 
 ### `[people.<alias>]`
 
@@ -86,6 +87,7 @@ base_port  = 4100
 launch     = ["next", "dev", "-p", "{port}"]
 url_env    = "API_BASE_URL"
 prep_env   = { SOME_FEATURE_FLAG = "dummy" }
+setup      = [["doppler", "run", "-c", "local_config", "--", "bun", "install"]]
 
 [apps.worker]
 base_port = 8080

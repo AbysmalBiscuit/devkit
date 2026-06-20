@@ -97,6 +97,11 @@ pub struct AppConfig {
     /// Env written to `<app>/.env.local` during `issue setup` (e.g. dummy workflow ids).
     #[serde(default)]
     pub prep_env: HashMap<String, String>,
+    /// Commands run in the app's directory during `issue setup`, in order. Each
+    /// inner array is one argv (program + args), e.g.
+    /// `[["doppler","run","-c","local","--","bun","install"]]`.
+    #[serde(default)]
+    pub setup: Vec<Vec<String>>,
     /// Optional overrides; normally derived from doppler.yaml.
     #[serde(default)]
     pub doppler_project: Option<String>,
@@ -169,6 +174,30 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
     fn rejects_prd() {
         let bad = SAMPLE.replace("dev_local", "prd");
         assert!(Config::parse(&bad).is_err());
+    }
+    #[test]
+    fn parses_app_setup_commands() {
+        let src = format!(
+            "{SAMPLE}setup = [[\"doppler\", \"run\", \"-c\", \"local\", \"--\", \"bun\", \"install\"]]\n"
+        );
+        let c = Config::parse(&src).unwrap();
+        assert_eq!(
+            c.apps["api"].setup,
+            vec![vec![
+                "doppler".to_string(),
+                "run".to_string(),
+                "-c".to_string(),
+                "local".to_string(),
+                "--".to_string(),
+                "bun".to_string(),
+                "install".to_string(),
+            ]]
+        );
+    }
+    #[test]
+    fn setup_defaults_empty() {
+        let c = Config::parse(SAMPLE).unwrap();
+        assert!(c.apps["api"].setup.is_empty());
     }
     #[test]
     fn parses_people_and_pr_base() {
