@@ -146,6 +146,10 @@ fn working_set_bytes(pid: u32) -> u64 {
         let cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
         let ok = GetProcessMemoryInfo(handle, &mut counters, cb) != 0;
         CloseHandle(handle);
-        if ok { counters.WorkingSetSize as u64 } else { 0 }
+        if ok {
+            counters.WorkingSetSize as u64
+        } else {
+            0
+        }
     }
 }

@@ -14,7 +14,9 @@ pub fn ensure_fresh(main_repo: &str, path: &str, git_ref: &str) -> Result<()> {
     }
     let dirty = !git(&["status", "--porcelain"], path)?.trim().is_empty();
     if dirty {
-        bail!("baseline worktree {path} is dirty — refusing to reset --hard. Clean it or remove it.");
+        bail!(
+            "baseline worktree {path} is dirty — refusing to reset --hard. Clean it or remove it."
+        );
     }
     git(&["fetch", remote], path)?;
     git(&["reset", "--hard", git_ref], path)?;

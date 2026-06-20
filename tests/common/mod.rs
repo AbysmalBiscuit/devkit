@@ -6,8 +6,8 @@
 
 use devkit_ports::daemon::proto::{self, Request, Response};
 use devkit_ports::daemon::transport;
-use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::Stream;
+use interprocess::local_socket::traits::Stream as _;
 use std::io::{BufReader, BufWriter};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -77,8 +77,7 @@ impl Harness {
         // to a path inside the throwaway temp dir, even when the real user's
         // XDG_STATE_HOME env var is set in the surrounding shell.
         let xdg_state = home.join("state");
-        std::fs::create_dir_all(xdg_state.join("devkit/logs"))
-            .expect("create test HOME dirs");
+        std::fs::create_dir_all(xdg_state.join("devkit/logs")).expect("create test HOME dirs");
 
         let bin = env!("CARGO_BIN_EXE_devkit-portd");
         let child = Command::new(bin)
@@ -90,7 +89,11 @@ impl Harness {
             .spawn()
             .expect("spawn devkit-portd");
 
-        let h = Harness { home, xdg_state, child };
+        let h = Harness {
+            home,
+            xdg_state,
+            child,
+        };
         h.wait_for_socket(Duration::from_secs(5));
         h
     }

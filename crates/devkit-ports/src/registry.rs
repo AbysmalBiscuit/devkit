@@ -9,7 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
-pub enum Role { Issue, Baseline }
+pub enum Role {
+    Issue,
+    Baseline,
+}
 
 impl Role {
     pub fn as_str(self) -> &'static str {
@@ -50,7 +53,10 @@ pub struct Data {
 }
 
 pub fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 fn read(path: &std::path::Path) -> Data {
@@ -64,8 +70,11 @@ fn read(path: &std::path::Path) -> Data {
         // entry we can still understand rather than discarding live reservations.
         Err(_) => match salvage(&s) {
             Some(d) => {
-                eprintln!("warning: registry schema differs; salvaged {} entr{}",
-                    d.entries.len(), if d.entries.len() == 1 { "y" } else { "ies" });
+                eprintln!(
+                    "warning: registry schema differs; salvaged {} entr{}",
+                    d.entries.len(),
+                    if d.entries.len() == 1 { "y" } else { "ies" }
+                );
                 d
             }
             None => {
@@ -85,13 +94,17 @@ fn salvage(s: &str) -> Option<Data> {
     let obj = v.get("entries")?.as_object()?;
     let mut entries = BTreeMap::new();
     for (k, val) in obj {
-        if let (Ok(port), Ok(entry)) =
-            (k.parse::<u16>(), serde_json::from_value::<Entry>(val.clone()))
-        {
+        if let (Ok(port), Ok(entry)) = (
+            k.parse::<u16>(),
+            serde_json::from_value::<Entry>(val.clone()),
+        ) {
             entries.insert(port, entry);
         }
     }
-    Some(Data { version: 0, entries })
+    Some(Data {
+        version: 0,
+        entries,
+    })
 }
 
 fn write(path: &std::path::Path, data: &Data) -> Result<()> {
@@ -105,7 +118,11 @@ fn write(path: &std::path::Path, data: &Data) -> Result<()> {
 pub fn with_lock<T>(f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
     fs::create_dir_all(paths::state_dir())?;
     let lock_path = paths::lock_file();
-    let _ = OpenOptions::new().create(true).write(true).truncate(false).open(&lock_path)?;
+    let _ = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
     let mut lock = RwLock::new(File::open(&lock_path)?);
     let _guard = lock.write()?; // blocks until exclusive
     let reg = paths::registry_file();
@@ -122,7 +139,17 @@ mod tests {
     #[test]
     fn roundtrip_serde() {
         let mut d = Data::default();
-        d.entries.insert(9100, Entry { app: "api".into(), holder: "/w".into(), role: Role::Issue, pid: None, logfile: None, ts: 1 });
+        d.entries.insert(
+            9100,
+            Entry {
+                app: "api".into(),
+                holder: "/w".into(),
+                role: Role::Issue,
+                pid: None,
+                logfile: None,
+                ts: 1,
+            },
+        );
         let s = serde_json::to_string(&d).unwrap();
         let back: Data = serde_json::from_str(&s).unwrap();
         assert_eq!(back.entries[&9100].app, "api");
@@ -149,9 +176,9 @@ mod liveness_tests {
     fn detects_bound_port() {
         let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = l.local_addr().unwrap().port();
-        assert!(listening(port));   // l holds it
+        assert!(listening(port)); // l holds it
         drop(l);
-        assert!(!listening(port));  // freed
+        assert!(!listening(port)); // freed
     }
     #[test]
     fn current_pid_alive() {
@@ -195,31 +222,56 @@ impl Data {
     }
 
     fn holds(&self, holder: &str, app: &str, role: Role) -> Option<u16> {
-        self.entries.iter()
+        self.entries
+            .iter()
             .find(|(_, e)| e.holder == holder && e.app == app && e.role == role)
             .map(|(p, _)| *p)
     }
 
     /// Reserve a port for one app (idempotent per holder+app+role). pid stays None.
     pub fn alloc_one(&mut self, holder: &str, app: &str, base: u16, role: Role) -> u16 {
-        if let Some(p) = self.holds(holder, app, role) { return p; }
+        if let Some(p) = self.holds(holder, app, role) {
+            return p;
+        }
         let mut port = base;
         while self.entries.contains_key(&port) || listening(port) {
-            port = port.checked_add(1)
+            port = port
+                .checked_add(1)
                 .unwrap_or_else(|| panic!("no free port available at or above {base}"));
         }
-        self.entries.insert(port, Entry {
-            app: app.into(), holder: holder.into(), role, pid: None, logfile: None, ts: now(),
-        });
+        self.entries.insert(
+            port,
+            Entry {
+                app: app.into(),
+                holder: holder.into(),
+                role,
+                pid: None,
+                logfile: None,
+                ts: now(),
+            },
+        );
         port
     }
 
     /// Attach a pid + logfile to a port's reservation, re-establishing the row if it
     /// was pruned in the gap between reserving and spawning — so a live process is
     /// never left untracked (which would make `devrun down` unable to stop it).
-    pub fn record_pid(&mut self, port: u16, app: &str, holder: &str, role: Role, pid: u32, logfile: PathBuf) {
+    pub fn record_pid(
+        &mut self,
+        port: u16,
+        app: &str,
+        holder: &str,
+        role: Role,
+        pid: u32,
+        logfile: PathBuf,
+    ) {
         let e = self.entries.entry(port).or_insert_with(|| Entry {
-            app: app.into(), holder: holder.into(), role, pid: None, logfile: None, ts: now(),
+            app: app.into(),
+            holder: holder.into(),
+            role,
+            pid: None,
+            logfile: None,
+            ts: now(),
         });
         e.app = app.into();
         e.holder = holder.into();
@@ -230,10 +282,15 @@ impl Data {
 
     /// Release all entries for a holder (optionally one role). Returns freed ports.
     pub fn release(&mut self, holder: &str, role: Option<Role>) -> Vec<u16> {
-        let freed: Vec<u16> = self.entries.iter()
+        let freed: Vec<u16> = self
+            .entries
+            .iter()
             .filter(|(_, e)| e.holder == holder && role.is_none_or(|r| e.role == r))
-            .map(|(p, _)| *p).collect();
-        for p in &freed { self.entries.remove(p); }
+            .map(|(p, _)| *p)
+            .collect();
+        for p in &freed {
+            self.entries.remove(p);
+        }
         freed
     }
 }
@@ -345,8 +402,7 @@ fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(
         }
         let mut port = *base;
         loop {
-            let taken =
-                data.entries.contains_key(&port) || chosen.iter().any(|(_, p)| *p == port);
+            let taken = data.entries.contains_key(&port) || chosen.iter().any(|(_, p)| *p == port);
             if !taken && !listening(port) {
                 break;
             }
@@ -357,7 +413,14 @@ fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(
         // Tentatively reserve locally so later requests in this call don't collide.
         data.entries.insert(
             port,
-            Entry { app: app.clone(), holder: holder.into(), role, pid: None, logfile: None, ts: now() },
+            Entry {
+                app: app.clone(),
+                holder: holder.into(),
+                role,
+                pid: None,
+                logfile: None,
+                ts: now(),
+            },
         );
         chosen.push((app.clone(), port));
     }
@@ -368,13 +431,24 @@ fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(
             if let Some(p) = d.holds(holder, app, role) {
                 out.push((app.clone(), p));
             } else if d.entries.contains_key(port) {
-                let base = reqs.iter().find(|(a, _)| a == app).map(|(_, b)| *b).unwrap_or(*port);
+                let base = reqs
+                    .iter()
+                    .find(|(a, _)| a == app)
+                    .map(|(_, b)| *b)
+                    .unwrap_or(*port);
                 let p = d.alloc_one(holder, app, base, role);
                 out.push((app.clone(), p));
             } else {
                 d.entries.insert(
                     *port,
-                    Entry { app: app.clone(), holder: holder.into(), role, pid: None, logfile: None, ts: now() },
+                    Entry {
+                        app: app.clone(),
+                        holder: holder.into(),
+                        role,
+                        pid: None,
+                        logfile: None,
+                        ts: now(),
+                    },
                 );
                 out.push((app.clone(), *port));
             }
@@ -385,7 +459,12 @@ fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(
 
 /// Attach a pid + logfile to a reservation (re-establishing it if pruned).
 pub fn record_pid(
-    port: u16, app: &str, holder: &str, role: Role, pid: u32, logfile: PathBuf,
+    port: u16,
+    app: &str,
+    holder: &str,
+    role: Role,
+    pid: u32,
+    logfile: PathBuf,
 ) -> Result<()> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = via_daemon(crate::daemon::proto::Request::RecordPid {
@@ -406,7 +485,12 @@ pub fn record_pid(
 }
 
 fn record_pid_flock(
-    port: u16, app: &str, holder: &str, role: Role, pid: u32, logfile: PathBuf,
+    port: u16,
+    app: &str,
+    holder: &str,
+    role: Role,
+    pid: u32,
+    logfile: PathBuf,
 ) -> Result<()> {
     with_lock(|d| {
         d.record_pid(port, app, holder, role, pid, logfile);
@@ -437,7 +521,8 @@ fn release_flock(holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
 /// Render the port-status table shared by `portman status` and `devrun status`.
 /// `only_holder = Some(h)` limits rows to that holder; `None` shows every port.
 pub fn status_table(data: &Data, only_holder: Option<&str>) -> String {
-    let mut t = devkit_common::ui::table(&["PORT", "APP", "ROLE", "HOLDER", "PID", "LISTENING", "AGE"]);
+    let mut t =
+        devkit_common::ui::table(&["PORT", "APP", "ROLE", "HOLDER", "PID", "LISTENING", "AGE"]);
     let now = now();
     for (port, e) in &data.entries {
         if let Some(h) = only_holder
@@ -452,7 +537,11 @@ pub fn status_table(data: &Data, only_holder: Option<&str>) -> String {
             e.role.to_string(),
             label.to_string(),
             e.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-            if listening(*port) { "yes".into() } else { "no".into() },
+            if listening(*port) {
+                "yes".into()
+            } else {
+                "no".into()
+            },
             format!("{}s", now.saturating_sub(e.ts)),
         ]);
     }
@@ -480,14 +569,27 @@ mod ops_tests {
     #[test]
     fn prune_drops_dead_holder() {
         let mut d = Data::default();
-        d.entries.insert(9100, Entry { app:"api".into(), holder:"/definitely/not/here".into(), role:Role::Issue, pid:None, logfile:None, ts: now() });
+        d.entries.insert(
+            9100,
+            Entry {
+                app: "api".into(),
+                holder: "/definitely/not/here".into(),
+                role: Role::Issue,
+                pid: None,
+                logfile: None,
+                ts: now(),
+            },
+        );
         d.prune();
         assert!(d.entries.is_empty());
     }
     #[test]
     fn release_frees_by_holder() {
         let mut d = Data::default();
-        let cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        let cwd = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         d.alloc_one(&cwd, "api", 9100, Role::Issue);
         let freed = d.release(&cwd, None);
         assert_eq!(freed.len(), 1);
@@ -531,7 +633,17 @@ mod ops_tests {
     #[test]
     fn dead_ports_flags_dead_holder() {
         let mut d = Data::default();
-        d.entries.insert(9100, Entry { app: "api".into(), holder: "/definitely/not/here".into(), role: Role::Issue, pid: None, logfile: None, ts: now() });
+        d.entries.insert(
+            9100,
+            Entry {
+                app: "api".into(),
+                holder: "/definitely/not/here".into(),
+                role: Role::Issue,
+                pid: None,
+                logfile: None,
+                ts: now(),
+            },
+        );
         assert_eq!(d.dead_ports(), vec![9100]);
     }
 }

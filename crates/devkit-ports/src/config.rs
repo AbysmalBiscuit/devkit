@@ -122,12 +122,18 @@ impl Config {
 
 /// `--config` → `$DEVKIT_CONFIG` → `./devkit.toml` walking up → `~/.config/devkit/config.toml`.
 pub fn locate(explicit: Option<&Path>, start: &Path) -> Option<PathBuf> {
-    if let Some(p) = explicit { return Some(p.to_path_buf()); }
-    if let Some(p) = std::env::var_os("DEVKIT_CONFIG") { return Some(PathBuf::from(p)); }
+    if let Some(p) = explicit {
+        return Some(p.to_path_buf());
+    }
+    if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
+        return Some(PathBuf::from(p));
+    }
     let mut dir = Some(start);
     while let Some(d) = dir {
         let c = d.join("devkit.toml");
-        if c.is_file() { return Some(c); }
+        if c.is_file() {
+            return Some(c);
+        }
         dir = d.parent();
     }
     let home = std::env::var_os("HOME")?;
@@ -137,14 +143,17 @@ pub fn locate(explicit: Option<&Path>, start: &Path) -> Option<PathBuf> {
 
 pub fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/")
-        && let Some(h) = std::env::var_os("HOME") {
-            return PathBuf::from(h).join(rest);
-        }
+        && let Some(h) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(h).join(rest);
+    }
     PathBuf::from(p)
 }
 
 #[cfg(test)]
-pub fn tests_sample() -> &'static str { tests::SAMPLE }
+pub fn tests_sample() -> &'static str {
+    tests::SAMPLE
+}
 
 #[cfg(test)]
 mod tests {
@@ -168,7 +177,10 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
     fn parses_sample() {
         let c = Config::parse(SAMPLE).unwrap();
         assert_eq!(c.apps["api"].base_port, 9100);
-        assert_eq!(c.apps["api"].url_env.as_deref(), Some("FOUNDRY_API_BASE_URL"));
+        assert_eq!(
+            c.apps["api"].url_env.as_deref(),
+            Some("FOUNDRY_API_BASE_URL")
+        );
     }
     #[test]
     fn rejects_prd() {
@@ -236,7 +248,9 @@ github = "exampleuser"
     }
     #[test]
     fn parses_explicit_daemon_block() {
-        let src = format!("{SAMPLE}\n[daemon]\nenabled = true\nidle_timeout_secs = 600\nmemory_warn_mb = 6000\n");
+        let src = format!(
+            "{SAMPLE}\n[daemon]\nenabled = true\nidle_timeout_secs = 600\nmemory_warn_mb = 6000\n"
+        );
         let c = Config::parse(&src).unwrap();
         assert!(c.daemon.enabled);
         assert_eq!(c.daemon.idle_timeout_secs, 600);

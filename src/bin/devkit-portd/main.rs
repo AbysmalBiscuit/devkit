@@ -6,12 +6,12 @@
 use anyhow::{Context, Result};
 use devkit_common::paths;
 use devkit_ports::daemon::proto::{self, Request};
+use devkit_ports::daemon::transport;
 use devkit_ports::registry;
 use fd_lock::RwLock;
-use std::fs::OpenOptions;
-use devkit_ports::daemon::transport;
 use interprocess::local_socket::traits::{ListenerExt as _, Stream as _};
 use interprocess::local_socket::{ListenerOptions, Stream};
+use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 
 // A few supervisor accessors back deferred features (memory-limit action, log serving)
 // and have no caller yet.
+mod server;
 #[allow(dead_code)]
 mod supervisor;
-mod server;
 
 /// Shared daemon state, accessed from the connection threads and the idle watcher.
 pub(crate) struct Daemon {
@@ -50,15 +50,22 @@ impl Daemon {
 
     fn respawn(self: &Arc<Self>, key: &supervisor::Key) {
         let Some((launch, log, port)) = self.sup.lock().unwrap().launch_of(key) else {
-            log_line(&format!("cannot respawn {}/{} — no launch spec", key.holder, key.app));
+            log_line(&format!(
+                "cannot respawn {}/{} — no launch spec",
+                key.holder, key.app
+            ));
             return;
         };
-        match devkit_common::supervise::spawn_detached(&launch.argv, &launch.cwd, &launch.env, &log) {
+        match devkit_common::supervise::spawn_detached(&launch.argv, &launch.cwd, &launch.env, &log)
+        {
             Ok(pid) => {
                 let _ = registry::record_pid(port, &key.app, &key.holder, key.role, pid, log);
                 self.sup.lock().unwrap().set_pid(key, pid);
             }
-            Err(e) => log_line(&format!("respawn failed for {}/{}: {e:#}", key.holder, key.app)),
+            Err(e) => log_line(&format!(
+                "respawn failed for {}/{}: {e:#}",
+                key.holder, key.app
+            )),
         }
     }
 }
@@ -74,7 +81,11 @@ fn main() -> Result<()> {
     // Single-instance: hold portd.lock for the daemon's whole life. If another
     // daemon holds it, exit 0 — autostart races resolve to exactly one winner.
     let lock_path = paths::daemon_lock_file();
-    let lock_file = OpenOptions::new().create(true).write(true).truncate(false).open(&lock_path)?;
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
     let mut lock = RwLock::new(lock_file);
     let guard = match lock.try_write() {
         Ok(g) => g,
@@ -106,7 +117,12 @@ fn main() -> Result<()> {
         active_conns: AtomicUsize::new(0),
         shutdown: AtomicBool::new(false),
         idle_timeout,
-        sup: Mutex::new(supervisor::Supervisor::new(max_restarts, restart_window, mem_warn, mem_limit)),
+        sup: Mutex::new(supervisor::Supervisor::new(
+            max_restarts,
+            restart_window,
+            mem_warn,
+            mem_limit,
+        )),
     });
 
     // Adopt servers a previous daemon left running: monitor by poll, not waitpid.
@@ -117,8 +133,14 @@ fn main() -> Result<()> {
                 && registry::pid_alive(pid)
             {
                 sup.insert_adopted(
-                    supervisor::Key { holder: e.holder.clone(), app: e.app.clone(), role: e.role },
-                    pid, *port, log,
+                    supervisor::Key {
+                        holder: e.holder.clone(),
+                        app: e.app.clone(),
+                        role: e.role,
+                    },
+                    pid,
+                    *port,
+                    log,
                 );
             }
         }
@@ -128,39 +150,48 @@ fn main() -> Result<()> {
     // warns on memory breaches, and triggers idle-exit.
     {
         let d = Arc::clone(&daemon);
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(500));
-            if d.shutdown.load(Ordering::SeqCst) || d.is_idle() {
-                d.shutdown.store(true, Ordering::SeqCst);
-                if let Ok(name) = transport::socket_name(&paths::socket_file()) {
-                    let _ = Stream::connect(name);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(500));
+                if d.shutdown.load(Ordering::SeqCst) || d.is_idle() {
+                    d.shutdown.store(true, Ordering::SeqCst);
+                    if let Ok(name) = transport::socket_name(&paths::socket_file()) {
+                        let _ = Stream::connect(name);
+                    }
+                    break;
                 }
-                break;
-            }
-            // Reap exited children; restart only those whose ports.json row survives
-            // (the cross-tool stop signal). Debounce the read so a concurrent legacy
-            // `down` that removes the row just before the exit isn't misread as a crash.
-            // Use a raw read (no liveness prune) so a row with a now-dead pid is still
-            // visible here — it's the daemon's signal that the exit was a crash, not an
-            // intentional stop. `snapshot()` prunes dead-pid rows before we can see them.
-            let dead = d.sup.lock().unwrap().reap_once();
-            if !dead.is_empty() {
-                std::thread::sleep(Duration::from_millis(200)); // debounce
-                let snap = registry::with_lock(|d| Ok(d.clone())).unwrap_or_default();
-                for key in dead {
-                    let row = snap.entries.values().find(|e|
-                        e.holder == key.holder && e.app == key.app && e.role == key.role);
-                    match row {
-                        Some(_) => restart(&d, &key),
-                        None => { d.sup.lock().unwrap().remove(&key); } // intentional stop
+                // Reap exited children; restart only those whose ports.json row survives
+                // (the cross-tool stop signal). Debounce the read so a concurrent legacy
+                // `down` that removes the row just before the exit isn't misread as a crash.
+                // Use a raw read (no liveness prune) so a row with a now-dead pid is still
+                // visible here — it's the daemon's signal that the exit was a crash, not an
+                // intentional stop. `snapshot()` prunes dead-pid rows before we can see them.
+                let dead = d.sup.lock().unwrap().reap_once();
+                if !dead.is_empty() {
+                    std::thread::sleep(Duration::from_millis(200)); // debounce
+                    let snap = registry::with_lock(|d| Ok(d.clone())).unwrap_or_default();
+                    for key in dead {
+                        let row = snap.entries.values().find(|e| {
+                            e.holder == key.holder && e.app == key.app && e.role == key.role
+                        });
+                        match row {
+                            Some(_) => restart(&d, &key),
+                            None => {
+                                d.sup.lock().unwrap().remove(&key);
+                            } // intentional stop
+                        }
                     }
                 }
-            }
-            // Memory: warn once per breach (the implemented action is warn-only).
-            for (key, rss) in d.sup.lock().unwrap().memory_breaches() {
-                log_line(&format!(
-                    "memory: {}/{} ({:?}) tree-RSS {} MB exceeds warn threshold",
-                    key.holder, key.app, key.role, rss / 1024 / 1024));
+                // Memory: warn once per breach (the implemented action is warn-only).
+                for (key, rss) in d.sup.lock().unwrap().memory_breaches() {
+                    log_line(&format!(
+                        "memory: {}/{} ({:?}) tree-RSS {} MB exceeds warn threshold",
+                        key.holder,
+                        key.app,
+                        key.role,
+                        rss / 1024 / 1024
+                    ));
+                }
             }
         });
     }
@@ -215,33 +246,50 @@ fn restart(daemon: &Arc<Daemon>, key: &supervisor::Key) {
     if sup.launch_of(key).is_none() {
         sup.remove(key);
         drop(sup);
-        log_line(&format!("dropping {}/{} ({:?}) — no launch spec to respawn",
-            key.holder, key.app, key.role));
+        log_line(&format!(
+            "dropping {}/{} ({:?}) — no launch spec to respawn",
+            key.holder, key.app, key.role
+        ));
         return;
     }
     if !sup.may_restart(&key.holder, &key.app, key.role) {
         sup.remove(key);
         drop(sup);
-        log_line(&format!("giving up on {}/{} ({:?}) — crash-loop budget exhausted",
-            key.holder, key.app, key.role));
+        log_line(&format!(
+            "giving up on {}/{} ({:?}) — crash-loop budget exhausted",
+            key.holder, key.app, key.role
+        ));
         return;
     }
     drop(sup);
-    log_line(&format!("restart: {}/{} ({:?})", key.holder, key.app, key.role));
+    log_line(&format!(
+        "restart: {}/{} ({:?})",
+        key.holder, key.app, key.role
+    ));
     daemon.respawn(key);
 }
 
 fn log_line(msg: &str) {
     use std::io::Write;
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(paths::daemon_log()) {
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(paths::daemon_log())
+    {
         let _ = writeln!(f, "{msg}");
     }
 }
 
 fn env_u64(k: &str, d: u64) -> u64 {
-    std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d)
+    std::env::var(k)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(d)
 }
 
 fn env_u32(k: &str, d: u32) -> u32 {
-    std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d)
+    std::env::var(k)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(d)
 }

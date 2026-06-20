@@ -15,11 +15,24 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     Status,
-    Alloc { #[arg(long)] holder: String, #[arg(long, value_enum, default_value = "issue")] role: Role, apps: Vec<String> },
-    Release { #[arg(long)] holder: String, #[arg(long, value_enum)] role: Option<Role> },
+    Alloc {
+        #[arg(long)]
+        holder: String,
+        #[arg(long, value_enum, default_value = "issue")]
+        role: Role,
+        apps: Vec<String>,
+    },
+    Release {
+        #[arg(long)]
+        holder: String,
+        #[arg(long, value_enum)]
+        role: Option<Role>,
+    },
     Prune,
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
-    Completions { shell: Shell },
+    Completions {
+        shell: Shell,
+    },
 }
 
 fn main() -> Result<()> {
@@ -28,10 +41,18 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Cmd::Status) {
         Cmd::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "portman", &mut std::io::stdout());
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "portman",
+                &mut std::io::stdout(),
+            );
         }
         Cmd::Status => status()?,
-        Cmd::Prune => { let freed = registry::prune()?; println!("pruned: {freed:?}"); }
+        Cmd::Prune => {
+            let freed = registry::prune()?;
+            println!("pruned: {freed:?}");
+        }
         Cmd::Release { holder, role } => {
             let freed = registry::release(&holder, role)?;
             println!("released: {freed:?}");
@@ -41,8 +62,11 @@ fn main() -> Result<()> {
             let loaded = devkit_ports::load::load(None, std::path::Path::new(&start))?;
             let mut reqs = Vec::with_capacity(apps.len());
             for app in &apps {
-                let base = loaded.catalog.get(app)
-                    .ok_or_else(|| anyhow::anyhow!("unknown app `{app}`"))?.base_port;
+                let base = loaded
+                    .catalog
+                    .get(app)
+                    .ok_or_else(|| anyhow::anyhow!("unknown app `{app}`"))?
+                    .base_port;
                 reqs.push((app.clone(), base));
             }
             for (app, port) in registry::alloc(&holder, &reqs, role)? {

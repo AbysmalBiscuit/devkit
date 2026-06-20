@@ -15,7 +15,10 @@ pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
     let mut branch: Option<String> = None;
     let flush = |p: &mut Option<String>, b: &mut Option<String>, v: &mut Vec<Worktree>| {
         if let Some(pp) = p.take() {
-            v.push(Worktree { path: PathBuf::from(pp), branch: b.take().unwrap_or_else(|| "DETACHED".into()) });
+            v.push(Worktree {
+                path: PathBuf::from(pp),
+                branch: b.take().unwrap_or_else(|| "DETACHED".into()),
+            });
         }
     };
     for line in out.lines() {
@@ -49,12 +52,16 @@ pub fn find_id(s: &str) -> Option<String> {
     while i < bytes.len() {
         if bytes[i].is_ascii_alphabetic() {
             let start = i;
-            while i < bytes.len() && bytes[i].is_ascii_alphabetic() { i += 1; }
+            while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
             if i < bytes.len() && bytes[i] == b'-' {
                 let dash = i;
                 i += 1;
                 let ds = i;
-                while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
                 if i > ds {
                     return Some(format!("{}-{}", &s[start..dash], &s[ds..i]));
                 }

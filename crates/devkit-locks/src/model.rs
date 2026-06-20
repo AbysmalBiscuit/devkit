@@ -44,7 +44,8 @@ pub fn paths_overlap(a: &str, b: &str) -> bool {
         return true;
     }
     let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-    long.strip_prefix(short).is_some_and(|rest| rest.starts_with('/'))
+    long.strip_prefix(short)
+        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,31 +119,55 @@ impl Data {
     /// return the conflicts. Otherwise insert (or renew, for the same holder+path).
     #[allow(clippy::too_many_arguments)]
     pub fn try_acquire(
-        &mut self, root: &str, paths: &[String], holder: &str,
-        pid: Option<u32>, note: Option<&str>, ttl: u64, now: u64,
+        &mut self,
+        root: &str,
+        paths: &[String],
+        holder: &str,
+        pid: Option<u32>,
+        note: Option<&str>,
+        ttl: u64,
+        now: u64,
     ) -> AcquireOutcome {
         let conflicts = self.check(root, paths, holder, now);
         if !conflicts.is_empty() {
-            return AcquireOutcome { acquired: Vec::new(), conflicts };
+            return AcquireOutcome {
+                acquired: Vec::new(),
+                conflicts,
+            };
         }
         let mut acquired = Vec::with_capacity(paths.len());
         for req in paths {
             self.locks.insert(
                 key_for(root, req),
                 LockEntry {
-                    path: req.clone(), root: root.into(), holder: holder.into(),
-                    pid, note: note.map(str::to_string), ts: now, ttl,
+                    path: req.clone(),
+                    root: root.into(),
+                    holder: holder.into(),
+                    pid,
+                    note: note.map(str::to_string),
+                    ts: now,
+                    ttl,
                 },
             );
-            acquired.push(Acquired { path: req.clone(), ttl_secs: ttl });
+            acquired.push(Acquired {
+                path: req.clone(),
+                ttl_secs: ttl,
+            });
         }
-        AcquireOutcome { acquired, conflicts: Vec::new() }
+        AcquireOutcome {
+            acquired,
+            conflicts: Vec::new(),
+        }
     }
 
     /// Release named paths held by `holder` in `root`. Without `force`, a path held
     /// by another holder is refused (not freed). Returns (released, refused).
     pub fn do_release(
-        &mut self, root: &str, paths: &[String], holder: &str, force: bool,
+        &mut self,
+        root: &str,
+        paths: &[String],
+        holder: &str,
+        force: bool,
     ) -> (Vec<String>, Vec<String>) {
         let mut released = Vec::new();
         let mut refused = Vec::new();
@@ -162,7 +187,9 @@ impl Data {
 
     /// Release every lock held by `holder` in `root`; returns the freed paths.
     pub fn release_all(&mut self, root: &str, holder: &str) -> Vec<String> {
-        let freed: Vec<String> = self.locks.values()
+        let freed: Vec<String> = self
+            .locks
+            .values()
             .filter(|e| e.root == root && e.holder == holder)
             .map(|e| e.path.clone())
             .collect();
@@ -206,18 +233,41 @@ mod tests {
         let mut d = Data::default();
         d.locks.insert(
             key_for("/repo", "scenes"),
-            LockEntry { path: "scenes".into(), root: "/repo".into(), holder: "alice".into(),
-                        pid: None, note: Some("refactor".into()), ts: 5, ttl: 1800 },
+            LockEntry {
+                path: "scenes".into(),
+                root: "/repo".into(),
+                holder: "alice".into(),
+                pid: None,
+                note: Some("refactor".into()),
+                ts: 5,
+                ttl: 1800,
+            },
         );
         let s = serde_json::to_string(&d).unwrap();
         let back: Data = serde_json::from_str(&s).unwrap();
         assert_eq!(back.locks[&key_for("/repo", "scenes")].holder, "alice");
     }
 
-    fn entry(root: &str, path: &str, holder: &str, ts: u64, ttl: u64, pid: Option<u32>) -> (String, LockEntry) {
-        (key_for(root, path),
-         LockEntry { path: path.into(), root: root.into(), holder: holder.into(),
-                     pid, note: None, ts, ttl })
+    fn entry(
+        root: &str,
+        path: &str,
+        holder: &str,
+        ts: u64,
+        ttl: u64,
+        pid: Option<u32>,
+    ) -> (String, LockEntry) {
+        (
+            key_for(root, path),
+            LockEntry {
+                path: path.into(),
+                root: root.into(),
+                holder: holder.into(),
+                pid,
+                note: None,
+                ts,
+                ttl,
+            },
+        )
     }
 
     #[test]
@@ -237,7 +287,15 @@ mod tests {
         let mut d = Data::default();
         let (k, e) = entry("/repo", "scenes", "alice", 100, 1800, None);
         d.locks.insert(k, e);
-        let r = d.try_acquire("/repo", &["scenes/player.tscn".into()], "bob", None, None, 1800, 140);
+        let r = d.try_acquire(
+            "/repo",
+            &["scenes/player.tscn".into()],
+            "bob",
+            None,
+            None,
+            1800,
+            140,
+        );
         assert_eq!(r.acquired.len(), 0);
         assert_eq!(r.conflicts.len(), 1);
         assert_eq!(r.conflicts[0].held_by, "alice");
@@ -249,7 +307,15 @@ mod tests {
         let mut d = Data::default();
         let (k, e) = entry("/repo", "scenes", "alice", 100, 1800, None);
         d.locks.insert(k, e);
-        let r = d.try_acquire("/repo", &["art".into(), "scenes/x".into()], "bob", None, None, 1800, 120);
+        let r = d.try_acquire(
+            "/repo",
+            &["art".into(), "scenes/x".into()],
+            "bob",
+            None,
+            None,
+            1800,
+            120,
+        );
         assert!(r.acquired.is_empty(), "no path acquired when any conflicts");
         assert_eq!(r.conflicts.len(), 1);
         assert_eq!(d.locks.len(), 1, "nothing new inserted");
@@ -282,7 +348,8 @@ mod tests {
     #[test]
     fn prune_drops_dead_pid() {
         let mut d = Data::default();
-        d.locks.extend([entry("/repo", "p", "alice", 1, 0, Some(u32::MAX))]);
+        d.locks
+            .extend([entry("/repo", "p", "alice", 1, 0, Some(u32::MAX))]);
         assert_eq!(d.prune_dead(2), 1);
     }
 

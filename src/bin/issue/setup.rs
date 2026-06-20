@@ -51,20 +51,41 @@ pub fn run(args: SetupArgs) -> Result<()> {
             let base = catalog[a].base_port;
             ports.insert(a.clone(), data.alloc_one(&holder, a, base, Role::Issue));
         }
-        let out = Prepared { issue: args.issue.clone(), worktree: holder, branch, ports };
+        let out = Prepared {
+            issue: args.issue.clone(),
+            worktree: holder,
+            branch,
+            ports,
+        };
         println!("{}", serde_json::to_string_pretty(&out)?);
         eprintln!("(dry-run: no worktree created, no ports reserved)");
         return Ok(());
     }
 
-    anyhow::ensure!(!worktree.exists(), "worktree path already exists: {}", worktree.display());
+    anyhow::ensure!(
+        !worktree.exists(),
+        "worktree path already exists: {}",
+        worktree.display()
+    );
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
     git(&["fetch", "origin"], monorepo_s)?;
-    if git(&["rev-parse", "--verify", &format!("refs/heads/{branch}")], monorepo_s).is_ok() {
+    if git(
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+        monorepo_s,
+    )
+    .is_ok()
+    {
         anyhow::bail!("branch {branch} already exists — let /issue-setup decide how to proceed");
     }
     git(
-        &["worktree", "add", "-b", &branch, worktree.to_str().unwrap(), &cfg.defaults.baseline_ref],
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            worktree.to_str().unwrap(),
+            &cfg.defaults.baseline_ref,
+        ],
         monorepo_s,
     )?;
 
@@ -79,25 +100,42 @@ pub fn run(args: SetupArgs) -> Result<()> {
         if !app.prep_env.is_empty() {
             let f = app_dir.join(".env.local");
             if !f.exists() {
-                let body: String = app.prep_env.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+                let body: String = app
+                    .prep_env
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}\n"))
+                    .collect();
                 std::fs::write(&f, body)?;
             }
         }
 
         for cmd in &app.setup {
             let (prog, rest) = cmd.split_first().context("empty setup command")?;
-            capture(prog, &rest.iter().map(String::as_str).collect::<Vec<_>>(), app_dir.to_str())
-                .with_context(|| format!("running setup `{}` for app `{a}`", cmd.join(" ")))?;
+            capture(
+                prog,
+                &rest.iter().map(String::as_str).collect::<Vec<_>>(),
+                app_dir.to_str(),
+            )
+            .with_context(|| format!("running setup `{}` for app `{a}`", cmd.join(" ")))?;
         }
     }
 
     // reserve ports
-    let reqs: Vec<(String, u16)> =
-        args.apps.iter().map(|a| (a.clone(), catalog[a].base_port)).collect();
-    let ports: BTreeMap<String, u16> =
-        registry::alloc(&holder, &reqs, Role::Issue)?.into_iter().collect();
+    let reqs: Vec<(String, u16)> = args
+        .apps
+        .iter()
+        .map(|a| (a.clone(), catalog[a].base_port))
+        .collect();
+    let ports: BTreeMap<String, u16> = registry::alloc(&holder, &reqs, Role::Issue)?
+        .into_iter()
+        .collect();
 
-    let out = Prepared { issue: args.issue.clone(), worktree: holder, branch, ports };
+    let out = Prepared {
+        issue: args.issue.clone(),
+        worktree: holder,
+        branch,
+        ports,
+    };
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }

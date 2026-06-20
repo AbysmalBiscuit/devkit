@@ -49,7 +49,10 @@ fn default_state_home() -> PathBuf {
 /// On rename failure (cross-device, permissions) the legacy dir is left in place and
 /// `state_dir()` keeps resolving to it.
 pub fn migrate_legacy_state() {
-    migrate_state_between(&xdg_state_home().join("devkit"), &home().join(".claude/state/devkit"));
+    migrate_state_between(
+        &xdg_state_home().join("devkit"),
+        &home().join(".claude/state/devkit"),
+    );
 }
 
 fn migrate_state_between(new: &Path, legacy: &Path) {
@@ -62,17 +65,33 @@ fn migrate_state_between(new: &Path, legacy: &Path) {
     let _ = std::fs::rename(legacy, new);
 }
 
-pub fn registry_file() -> PathBuf { state_dir().join("ports.json") }
-pub fn lock_file() -> PathBuf { state_dir().join("ports.lock") }
-pub fn locks_file() -> PathBuf { state_dir().join("locks.json") }
-pub fn locks_lock() -> PathBuf { state_dir().join("locks.lock") }
-pub fn logs_dir() -> PathBuf { state_dir().join("logs") }
+pub fn registry_file() -> PathBuf {
+    state_dir().join("ports.json")
+}
+pub fn lock_file() -> PathBuf {
+    state_dir().join("ports.lock")
+}
+pub fn locks_file() -> PathBuf {
+    state_dir().join("locks.json")
+}
+pub fn locks_lock() -> PathBuf {
+    state_dir().join("locks.lock")
+}
+pub fn logs_dir() -> PathBuf {
+    state_dir().join("logs")
+}
 /// Unix socket the daemon binds; clients connect here.
-pub fn socket_file() -> PathBuf { state_dir().join("portd.sock") }
+pub fn socket_file() -> PathBuf {
+    state_dir().join("portd.sock")
+}
 /// Single-instance lock for the daemon — separate from the registry's `ports.lock`.
-pub fn daemon_lock_file() -> PathBuf { state_dir().join("portd.lock") }
+pub fn daemon_lock_file() -> PathBuf {
+    state_dir().join("portd.lock")
+}
 /// Daemon log file.
-pub fn daemon_log() -> PathBuf { logs_dir().join("portd.log") }
+pub fn daemon_log() -> PathBuf {
+    logs_dir().join("portd.log")
+}
 
 /// `$XDG_CACHE_HOME/devkit` or `~/.cache/devkit`.
 pub fn cache_dir() -> PathBuf {
@@ -96,7 +115,9 @@ fn home() -> PathBuf {
 
 /// The final path component (basename) of `path`, if any.
 pub fn leaf(path: &str) -> Option<&str> {
-    std::path::Path::new(path).file_name().and_then(|s| s.to_str())
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
 }
 
 #[cfg(test)]

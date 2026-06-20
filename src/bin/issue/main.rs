@@ -11,7 +11,10 @@ mod status;
 mod triage;
 
 #[derive(Parser)]
-#[command(name = "issue", about = "Issue lifecycle: setup, status, end, prs, dashboard, review")]
+#[command(
+    name = "issue",
+    about = "Issue lifecycle: setup, status, end, prs, dashboard, review"
+)]
 struct Cli {
     #[arg(short = 'C', long = "dir", global = true)]
     dir: Option<String>,
@@ -104,23 +107,69 @@ fn main() -> Result<()> {
     devkit_common::paths::migrate_legacy_state();
     let cli = Cli::parse();
     match cli.cmd {
-        Some(Cmd::Setup { issue, slug, apps, dry_run }) => setup::run(setup::SetupArgs {
-            issue, slug, apps, dry_run, dir: cli.dir, config: cli.config,
+        Some(Cmd::Setup {
+            issue,
+            slug,
+            apps,
+            dry_run,
+        }) => setup::run(setup::SetupArgs {
+            issue,
+            slug,
+            apps,
+            dry_run,
+            dir: cli.dir,
+            config: cli.config,
         }),
         Some(Cmd::Status { ids }) => status::run(&start(&cli.dir), &ids),
-        Some(Cmd::End { ids, yes, force, pr_only, clean_worktree }) =>
-            end::run(&start(&cli.dir), &ids, yes, force, pr_only, clean_worktree),
-        Some(Cmd::Prs { mine, reviews, repo, no_cache }) => prs::run(mine, reviews, repo, no_cache),
-        Some(Cmd::Dashboard { bucket, chart, mode, all_roles, author, no_plots }) =>
-            dashboard::run(dashboard::DashboardArgs {
-                bucket, chart, mode, all_roles, author, no_plots,
-                dir: cli.dir, config: cli.config,
-            }),
-        Some(Cmd::Review { body, to, reviewer, base, pr_title, pr_body, no_push }) =>
-            review::run(review::ReviewArgs {
-                body, to, reviewer, base, pr_title, pr_body, no_push,
-                dir: cli.dir, config: cli.config,
-            }),
+        Some(Cmd::End {
+            ids,
+            yes,
+            force,
+            pr_only,
+            clean_worktree,
+        }) => end::run(&start(&cli.dir), &ids, yes, force, pr_only, clean_worktree),
+        Some(Cmd::Prs {
+            mine,
+            reviews,
+            repo,
+            no_cache,
+        }) => prs::run(mine, reviews, repo, no_cache),
+        Some(Cmd::Dashboard {
+            bucket,
+            chart,
+            mode,
+            all_roles,
+            author,
+            no_plots,
+        }) => dashboard::run(dashboard::DashboardArgs {
+            bucket,
+            chart,
+            mode,
+            all_roles,
+            author,
+            no_plots,
+            dir: cli.dir,
+            config: cli.config,
+        }),
+        Some(Cmd::Review {
+            body,
+            to,
+            reviewer,
+            base,
+            pr_title,
+            pr_body,
+            no_push,
+        }) => review::run(review::ReviewArgs {
+            body,
+            to,
+            reviewer,
+            base,
+            pr_title,
+            pr_body,
+            no_push,
+            dir: cli.dir,
+            config: cli.config,
+        }),
         Some(Cmd::Completions { shell }) => {
             clap_complete::generate(shell, &mut Cli::command(), "issue", &mut std::io::stdout());
             Ok(())

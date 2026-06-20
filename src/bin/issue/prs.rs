@@ -159,10 +159,7 @@ fn mine_action(pr: &MinePr, me: &str) -> String {
                 "MERGE".into()
             }
         }
-        _ => format!(
-            "awaiting review{}",
-            if conflict { "; rebase" } else { "" }
-        ),
+        _ => format!("awaiting review{}", if conflict { "; rebase" } else { "" }),
     }
 }
 
@@ -282,7 +279,9 @@ pub(crate) fn fetch_reviews(repo: Option<&str>, me: &str) -> Result<Vec<ReviewPr
             args.push("--repo".into());
             args.push(r.into());
         }
-        for a in ["--state", "open", "--limit", "100", "--search", search, "--json", fields] {
+        for a in [
+            "--state", "open", "--limit", "100", "--search", search, "--json", fields,
+        ] {
             args.push(a.into());
         }
         let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -304,7 +303,10 @@ fn issue_cell(issue_id: &str, url_key: Option<&str>) -> String {
         return "-".to_string();
     }
     match url_key {
-        Some(k) => ui::link(issue_id, &format!("https://linear.app/{k}/issue/{issue_id}")),
+        Some(k) => ui::link(
+            issue_id,
+            &format!("https://linear.app/{k}/issue/{issue_id}"),
+        ),
         None => issue_id.to_string(),
     }
 }
@@ -374,10 +376,7 @@ pub(crate) fn reviews_table(
         ]);
         cur.insert(
             pr.number.to_string(),
-            BTreeMap::from([
-                ("vote".to_string(), vote),
-                ("action".to_string(), action),
-            ]),
+            BTreeMap::from([("vote".to_string(), vote), ("action".to_string(), action)]),
         );
     }
     println!("{t}");
@@ -445,7 +444,9 @@ pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> R
     }
 
     if (want_mine && !mine_prs.is_empty()) || (want_reviews && !review_rows.is_empty()) {
-        println!("\nACTION colour key: needs you (REVIEW NEEDED · address changes · fix CI) · ready to land (MERGE · done) · waiting on author · passive (awaiting review · draft)");
+        println!(
+            "\nACTION colour key: needs you (REVIEW NEEDED · address changes · fix CI) · ready to land (MERGE · done) · waiting on author · passive (awaiting review · draft)"
+        );
         println!("old → new in a cell = value changed since the last run.");
     }
 
@@ -480,15 +481,26 @@ mod tests {
     #[test]
     fn checks_fail_run_ok_empty() {
         assert_eq!(checks_of(&[]), "-");
-        assert_eq!(checks_of(&[check(Some("SUCCESS"), Some("COMPLETED"))]), "ok");
-        assert_eq!(checks_of(&[check(Some("FAILURE"), Some("COMPLETED"))]), "fail");
+        assert_eq!(
+            checks_of(&[check(Some("SUCCESS"), Some("COMPLETED"))]),
+            "ok"
+        );
+        assert_eq!(
+            checks_of(&[check(Some("FAILURE"), Some("COMPLETED"))]),
+            "fail"
+        );
         assert_eq!(checks_of(&[check(None, Some("IN_PROGRESS"))]), "run");
     }
     #[test]
     fn approved_green_merges() {
         assert_eq!(
             mine_action(
-                &mine(Some("APPROVED"), "MERGEABLE", false, vec![check(Some("SUCCESS"), None)]),
+                &mine(
+                    Some("APPROVED"),
+                    "MERGEABLE",
+                    false,
+                    vec![check(Some("SUCCESS"), None)]
+                ),
                 "me"
             ),
             "MERGE"
@@ -498,7 +510,12 @@ mod tests {
     fn approved_with_failing_ci() {
         assert_eq!(
             mine_action(
-                &mine(Some("APPROVED"), "MERGEABLE", false, vec![check(Some("FAILURE"), None)]),
+                &mine(
+                    Some("APPROVED"),
+                    "MERGEABLE",
+                    false,
+                    vec![check(Some("FAILURE"), None)]
+                ),
                 "me"
             ),
             "fix CI -> merge"
@@ -507,18 +524,30 @@ mod tests {
     #[test]
     fn changes_requested_action() {
         assert_eq!(
-            mine_action(&mine(Some("CHANGES_REQUESTED"), "MERGEABLE", false, vec![]), "me"),
+            mine_action(
+                &mine(Some("CHANGES_REQUESTED"), "MERGEABLE", false, vec![]),
+                "me"
+            ),
             "address changes"
         );
     }
     #[test]
     fn draft_action() {
-        assert_eq!(mine_action(&mine(None, "MERGEABLE", true, vec![]), "me"), "draft");
+        assert_eq!(
+            mine_action(&mine(None, "MERGEABLE", true, vec![]), "me"),
+            "draft"
+        );
     }
     #[test]
     fn review_text_variants() {
-        assert_eq!(review_text(&mine(Some("APPROVED"), "x", false, vec![])), "approved");
-        assert_eq!(review_text(&mine(Some("CHANGES_REQUESTED"), "x", false, vec![])), "changes");
+        assert_eq!(
+            review_text(&mine(Some("APPROVED"), "x", false, vec![])),
+            "approved"
+        );
+        assert_eq!(
+            review_text(&mine(Some("CHANGES_REQUESTED"), "x", false, vec![])),
+            "changes"
+        );
         assert_eq!(review_text(&mine(None, "x", false, vec![])), "awaiting");
     }
     #[test]
@@ -526,7 +555,9 @@ mod tests {
         let pr = ReviewPr {
             number: 1,
             url: "u".into(),
-            author: Author { login: "other".into() },
+            author: Author {
+                login: "other".into(),
+            },
             latest_reviews: vec![],
             review_requests: vec![ReviewRequest { login: "me".into() }],
         };
@@ -539,7 +570,9 @@ mod tests {
         let pr = ReviewPr {
             number: 1,
             url: "u".into(),
-            author: Author { login: "other".into() },
+            author: Author {
+                login: "other".into(),
+            },
             latest_reviews: vec![Review {
                 author: Author { login: "me".into() },
                 state: "APPROVED".into(),

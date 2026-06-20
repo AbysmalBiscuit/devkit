@@ -1,7 +1,7 @@
 mod common;
 
 use common::Harness;
-use devkit_ports::daemon::proto::{Request, Response, PROTO};
+use devkit_ports::daemon::proto::{PROTO, Request, Response};
 use std::process::Command;
 use std::time::Duration;
 

@@ -50,25 +50,54 @@ pub(crate) struct Supervisor {
 
 impl Supervisor {
     pub(crate) fn new(max_restarts: u32, window: Duration, mem_warn: u64, mem_limit: u64) -> Self {
-        Supervisor { children: HashMap::new(), max_restarts, window, mem_warn, mem_limit }
+        Supervisor {
+            children: HashMap::new(),
+            max_restarts,
+            window,
+            mem_warn,
+            mem_limit,
+        }
     }
 
     pub(crate) fn any_live(&self) -> bool {
         !self.children.is_empty()
     }
 
-    pub(crate) fn insert_owned(&mut self, key: Key, pid: u32, port: u16, logfile: PathBuf, launch: Launch) {
-        self.children.insert(key, Child {
-            pid, port, logfile, watch: Watch::Owned, restarts: Vec::new(), warned_mem: false,
-            launch: Some(launch),
-        });
+    pub(crate) fn insert_owned(
+        &mut self,
+        key: Key,
+        pid: u32,
+        port: u16,
+        logfile: PathBuf,
+        launch: Launch,
+    ) {
+        self.children.insert(
+            key,
+            Child {
+                pid,
+                port,
+                logfile,
+                watch: Watch::Owned,
+                restarts: Vec::new(),
+                warned_mem: false,
+                launch: Some(launch),
+            },
+        );
     }
 
     pub(crate) fn insert_adopted(&mut self, key: Key, pid: u32, port: u16, logfile: PathBuf) {
-        self.children.insert(key, Child {
-            pid, port, logfile, watch: Watch::Adopted, restarts: Vec::new(), warned_mem: false,
-            launch: None,
-        });
+        self.children.insert(
+            key,
+            Child {
+                pid,
+                port,
+                logfile,
+                watch: Watch::Adopted,
+                restarts: Vec::new(),
+                warned_mem: false,
+                launch: None,
+            },
+        );
     }
 
     pub(crate) fn remove(&mut self, key: &Key) -> Option<u32> {
@@ -99,10 +128,16 @@ impl Supervisor {
     /// restarts so a server can't be restart-looped forever. Only a supervised child
     /// has a budget — an unknown key returns `false` rather than creating phantom state.
     pub(crate) fn may_restart(&mut self, holder: &str, app: &str, role: Role) -> bool {
-        let key = Key { holder: holder.into(), app: app.into(), role };
+        let key = Key {
+            holder: holder.into(),
+            app: app.into(),
+            role,
+        };
         let now = Instant::now();
         let window = self.window;
-        let Some(entry) = self.children.get_mut(&key) else { return false };
+        let Some(entry) = self.children.get_mut(&key) else {
+            return false;
+        };
         entry.restarts.retain(|t| now.duration_since(*t) < window);
         if (entry.restarts.len() as u32) < self.max_restarts {
             entry.restarts.push(now);
@@ -172,9 +207,22 @@ mod tests {
     }
 
     fn live(s: &mut Supervisor, app: &str, pid: u32, port: u16) {
-        let key = Key { holder: "/w".into(), app: app.into(), role: Role::Issue };
-        s.insert_owned(key, pid, port, PathBuf::new(),
-            Launch { argv: vec!["true".into()], cwd: ".".into(), env: std::collections::BTreeMap::new() });
+        let key = Key {
+            holder: "/w".into(),
+            app: app.into(),
+            role: Role::Issue,
+        };
+        s.insert_owned(
+            key,
+            pid,
+            port,
+            PathBuf::new(),
+            Launch {
+                argv: vec!["true".into()],
+                cwd: ".".into(),
+                env: std::collections::BTreeMap::new(),
+            },
+        );
     }
 
     #[test]
@@ -207,14 +255,28 @@ mod tests {
         let mut s = sup();
         // A child that exits immediately.
         let argv: Vec<String> = ["true"].iter().map(|x| x.to_string()).collect();
-        let key = Key { holder: "/w".into(), app: "api".into(), role: Role::Issue };
+        let key = Key {
+            holder: "/w".into(),
+            app: "api".into(),
+            role: Role::Issue,
+        };
         let pid = devkit_common::supervise::spawn_detached(
-            &argv, ".", &std::collections::BTreeMap::new(),
+            &argv,
+            ".",
+            &std::collections::BTreeMap::new(),
             &std::env::temp_dir().join("portd-test.log"),
-        ).unwrap();
+        )
+        .unwrap();
         s.insert_owned(
-            key.clone(), pid, 9100, std::env::temp_dir().join("portd-test.log"),
-            Launch { argv: argv.clone(), cwd: ".".into(), env: std::collections::BTreeMap::new() },
+            key.clone(),
+            pid,
+            9100,
+            std::env::temp_dir().join("portd-test.log"),
+            Launch {
+                argv: argv.clone(),
+                cwd: ".".into(),
+                env: std::collections::BTreeMap::new(),
+            },
         );
         // Give `true` a moment to exit, then reap.
         std::thread::sleep(Duration::from_millis(200));

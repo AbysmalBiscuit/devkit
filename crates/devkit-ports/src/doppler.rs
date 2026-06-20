@@ -3,9 +3,14 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 #[derive(Deserialize)]
-struct DopplerFile { setup: Vec<Entry> }
+struct DopplerFile {
+    setup: Vec<Entry>,
+}
 #[derive(Deserialize)]
-struct Entry { project: String, path: String }
+struct Entry {
+    project: String,
+    path: String,
+}
 
 /// Map repo-relative app path (e.g. "apps/api") → doppler project.
 pub fn path_to_project(yaml: &str) -> Result<HashMap<String, String>> {

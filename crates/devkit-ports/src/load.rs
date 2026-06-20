@@ -1,4 +1,8 @@
-use crate::{apps::{self, App}, config::{self, Config}, doppler};
+use crate::{
+    apps::{self, App},
+    config::{self, Config},
+    doppler,
+};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -18,5 +22,8 @@ pub fn load(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
         Err(_) => HashMap::new(), // doppler.yaml optional; apps then need explicit path/project
     };
     let catalog = apps::catalog(&cfg, &p2p)?;
-    Ok(Loaded { config: cfg, catalog })
+    Ok(Loaded {
+        config: cfg,
+        catalog,
+    })
 }

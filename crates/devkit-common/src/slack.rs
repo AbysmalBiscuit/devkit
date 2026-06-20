@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Post a message to a Slack channel/user id via chat.postMessage.
 pub fn post_message(token: &str, channel: &str, text: &str) -> Result<()> {
@@ -14,7 +14,10 @@ fn check_response(resp: &serde_json::Value) -> Result<()> {
     if resp.get("ok").and_then(|v| v.as_bool()) == Some(true) {
         return Ok(());
     }
-    let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+    let err = resp
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown error");
     bail!("Slack chat.postMessage failed: {err}");
 }
 

@@ -9,7 +9,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 fn scratch(tag: &str) -> PathBuf {
     static N: AtomicU32 = AtomicU32::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!("devkit-lock-it-{}-{}-{}", std::process::id(), tag, n));
+    let p = std::env::temp_dir().join(format!(
+        "devkit-lock-it-{}-{}-{}",
+        std::process::id(),
+        tag,
+        n
+    ));
     std::fs::create_dir_all(&p).unwrap();
     p
 }
@@ -42,8 +47,16 @@ fn second_holder_conflicts_with_overlap() {
     let a = run(&proj, &state, &["acquire", "scenes", "--as", "alice"]);
     assert!(a.status.success(), "alice should acquire");
 
-    let b = run(&proj, &state, &["acquire", "scenes/player.tscn", "--as", "bob"]);
-    assert_eq!(b.status.code(), Some(1), "bob conflicts on an overlapping path");
+    let b = run(
+        &proj,
+        &state,
+        &["acquire", "scenes/player.tscn", "--as", "bob"],
+    );
+    assert_eq!(
+        b.status.code(),
+        Some(1),
+        "bob conflicts on an overlapping path"
+    );
     let text = String::from_utf8_lossy(&b.stderr);
     assert!(text.contains("alice"), "conflict names the holder: {text}");
 }
@@ -54,7 +67,11 @@ fn json_conflict_shape() {
     let state = scratch("state");
     run(&proj, &state, &["acquire", "scenes", "--as", "alice"]);
 
-    let b = run(&proj, &state, &["check", "scenes/x", "--as", "bob", "--json"]);
+    let b = run(
+        &proj,
+        &state,
+        &["check", "scenes/x", "--as", "bob", "--json"],
+    );
     assert_eq!(b.status.code(), Some(1));
     let v: serde_json::Value = serde_json::from_slice(&b.stdout).expect("json on stdout");
     assert_eq!(v["ok"], serde_json::json!(false));
@@ -77,6 +94,14 @@ fn release_frees_for_other_holder() {
 fn same_holder_reacquire_is_ok() {
     let proj = project();
     let state = scratch("state");
-    assert!(run(&proj, &state, &["acquire", "scenes", "--as", "alice"]).status.success());
-    assert!(run(&proj, &state, &["acquire", "scenes", "--as", "alice"]).status.success());
+    assert!(
+        run(&proj, &state, &["acquire", "scenes", "--as", "alice"])
+            .status
+            .success()
+    );
+    assert!(
+        run(&proj, &state, &["acquire", "scenes", "--as", "alice"])
+            .status
+            .success()
+    );
 }

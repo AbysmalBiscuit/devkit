@@ -4,10 +4,10 @@
 
 mod common;
 
-use common::{pid_in_ports_json, Harness};
+use common::{Harness, pid_in_ports_json};
 use devkit_ports::daemon::proto::{Request, Response};
 use devkit_ports::registry::Role;
-use nix::sys::signal::{kill, Signal};
+use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -86,8 +86,8 @@ fn restart_after_kill() {
     );
 
     // Capture the pid the daemon recorded for `api`.
-    let pid1 = pid_in_ports_json(&h.ports_json(), "api")
-        .expect("no pid in ports.json after supervise");
+    let pid1 =
+        pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
 
     // SIGKILL the child to simulate a crash.
     kill(Pid::from_raw(pid1 as i32), Signal::SIGKILL).expect("SIGKILL failed");
@@ -154,7 +154,10 @@ fn down_does_not_restart() {
         "supervise did not become ready: {resp:?}"
     );
 
-    let down = h.request(&Request::Down { holder: holder.clone(), role: None });
+    let down = h.request(&Request::Down {
+        holder: holder.clone(),
+        role: None,
+    });
     assert!(
         matches!(down, Response::Freed(_)),
         "expected Freed from Down, got {down:?}"

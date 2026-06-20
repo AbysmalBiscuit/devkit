@@ -1,30 +1,41 @@
 //! Request handlers. Registry ops call the same flock facade the no-daemon path
 //! uses (the daemon is a flock participant). Supervision ops own processes.
 
-use crate::supervisor::{Key, Launch};
 use crate::Daemon;
+use crate::supervisor::{Key, Launch};
 use devkit_common::supervise;
-use devkit_ports::daemon::proto::{Request, Response, PROTO};
+use devkit_ports::daemon::proto::{PROTO, Request, Response};
 use devkit_ports::registry::{self, Role};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 /// Map a request to `(response, should_close)`.
 pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
     match req {
-        Request::Ping { .. } => (Response::Pong { proto: PROTO, pid: std::process::id() }, false),
+        Request::Ping { .. } => (
+            Response::Pong {
+                proto: PROTO,
+                pid: std::process::id(),
+            },
+            false,
+        ),
 
         Request::Alloc { holder, reqs, role } => match registry::alloc(&holder, &reqs, role) {
             Ok(ports) => (Response::Ports(ports), false),
             Err(e) => (Response::Err(format!("{e:#}")), false),
         },
-        Request::RecordPid { port, app, holder, role, pid, logfile } => {
-            match registry::record_pid(port, &app, &holder, role, pid, logfile) {
-                Ok(()) => (Response::Ok, false),
-                Err(e) => (Response::Err(format!("{e:#}")), false),
-            }
-        }
+        Request::RecordPid {
+            port,
+            app,
+            holder,
+            role,
+            pid,
+            logfile,
+        } => match registry::record_pid(port, &app, &holder, role, pid, logfile) {
+            Ok(()) => (Response::Ok, false),
+            Err(e) => (Response::Err(format!("{e:#}")), false),
+        },
         Request::Release { holder, role } => match registry::release(&holder, role) {
             Ok(freed) => (Response::Freed(freed), false),
             Err(e) => (Response::Err(format!("{e:#}")), false),
@@ -38,11 +49,28 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             Err(e) => (Response::Err(format!("{e:#}")), false),
         },
 
-        Request::Supervise { holder, app, role, argv, cwd, env, logfile, base_port } => {
-            (supervise_app(daemon, holder, app, role, argv, cwd, env, logfile, base_port), false)
-        }
+        Request::Supervise {
+            holder,
+            app,
+            role,
+            argv,
+            cwd,
+            env,
+            logfile,
+            base_port,
+        } => (
+            supervise_app(
+                daemon, holder, app, role, argv, cwd, env, logfile, base_port,
+            ),
+            false,
+        ),
         Request::Down { holder, role } => (down(daemon, holder, role), false),
-        Request::Tail { holder, app, role, lines } => (tail(holder, app, role, lines), false),
+        Request::Tail {
+            holder,
+            app,
+            role,
+            lines,
+        } => (tail(holder, app, role, lines), false),
 
         Request::Shutdown => {
             daemon.shutdown.store(true, Ordering::SeqCst);
@@ -60,9 +88,15 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
 
 #[allow(clippy::too_many_arguments)]
 fn supervise_app(
-    daemon: &Arc<Daemon>, holder: String, app: String, role: Role,
-    argv: Vec<String>, cwd: String, env: std::collections::BTreeMap<String, String>,
-    logfile: std::path::PathBuf, base_port: u16,
+    daemon: &Arc<Daemon>,
+    holder: String,
+    app: String,
+    role: Role,
+    argv: Vec<String>,
+    cwd: String,
+    env: std::collections::BTreeMap<String, String>,
+    logfile: std::path::PathBuf,
+    base_port: u16,
 ) -> Response {
     // Reserve before bind (same invariant as the flock path).
     let reqs = vec![(app.clone(), base_port)];
@@ -70,7 +104,9 @@ fn supervise_app(
         Ok(p) => p.into_iter().find(|(a, _)| *a == app).map(|(_, p)| p),
         Err(e) => return Response::Err(format!("{e:#}")),
     };
-    let Some(port) = port else { return Response::Err("alloc returned no port".into()) };
+    let Some(port) = port else {
+        return Response::Err("alloc returned no port".into());
+    };
 
     let pid = match supervise::spawn_detached(&argv, &cwd, &env, &logfile) {
         Ok(pid) => pid,
@@ -80,9 +116,11 @@ fn supervise_app(
         return Response::Err(format!("{e:#}"));
     }
     let launch = Launch { argv, cwd, env };
-    daemon.sup.lock().unwrap().insert_owned(
-        Key { holder, app, role }, pid, port, logfile, launch,
-    );
+    daemon
+        .sup
+        .lock()
+        .unwrap()
+        .insert_owned(Key { holder, app, role }, pid, port, logfile, launch);
     let ready = supervise::wait_ready(port, Duration::from_secs(120));
     Response::Supervised(vec![(port, ready)])
 }
@@ -95,9 +133,14 @@ fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
     // takes the flock before `sup`, never the reverse).
     let keys: Vec<Key> = registry::snapshot()
         .map(|d| {
-            d.entries.values()
+            d.entries
+                .values()
                 .filter(|e| e.holder == holder && role.is_none_or(|r| e.role == r))
-                .map(|e| Key { holder: e.holder.clone(), app: e.app.clone(), role: e.role })
+                .map(|e| Key {
+                    holder: e.holder.clone(),
+                    app: e.app.clone(),
+                    role: e.role,
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -117,7 +160,9 @@ fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
 fn tail(holder: String, app: String, role: Option<Role>, lines: usize) -> Response {
     match registry::snapshot() {
         Ok(d) => {
-            let log = d.entries.values()
+            let log = d
+                .entries
+                .values()
                 .find(|e| e.holder == holder && e.app == app && role.is_none_or(|r| e.role == r))
                 .and_then(|e| e.logfile.clone());
             match log {

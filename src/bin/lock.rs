@@ -4,7 +4,10 @@ use clap_complete::Shell;
 use devkit_locks::model::{Conflict, LockEntry};
 
 #[derive(Parser)]
-#[command(name = "lock", about = "Advisory file locks for parallel local sessions")]
+#[command(
+    name = "lock",
+    about = "Advisory file locks for parallel local sessions"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -58,10 +61,20 @@ enum Cmd {
 }
 
 fn print_conflicts(conflicts: &[Conflict]) {
-    eprintln!("conflict: {} path(s) held by another session:", conflicts.len());
+    eprintln!(
+        "conflict: {} path(s) held by another session:",
+        conflicts.len()
+    );
     for c in conflicts {
-        let note = c.note.as_deref().map(|n| format!(" — {n}")).unwrap_or_default();
-        eprintln!("  {} held by {} ({}s ago){}", c.path, c.held_by, c.age_secs, note);
+        let note = c
+            .note
+            .as_deref()
+            .map(|n| format!(" — {n}"))
+            .unwrap_or_default();
+        eprintln!(
+            "  {} held by {} ({}s ago){}",
+            c.path, c.held_by, c.age_secs, note
+        );
     }
 }
 
@@ -70,7 +83,13 @@ fn main() -> Result<()> {
     devkit_common::paths::migrate_legacy_state();
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Acquire { paths, holder, note, ttl, json } => {
+        Cmd::Acquire {
+            paths,
+            holder,
+            note,
+            ttl,
+            json,
+        } => {
             let out = devkit_locks::acquire(&paths, holder.as_deref(), note.as_deref(), ttl)?;
             if json {
                 let ok = out.conflicts.is_empty();
@@ -88,10 +107,15 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Check { paths, holder, json } => {
+        Cmd::Check {
+            paths,
+            holder,
+            json,
+        } => {
             let conflicts = devkit_locks::check(&paths, holder.as_deref())?;
             if json {
-                let payload = serde_json::json!({ "ok": conflicts.is_empty(), "conflicts": conflicts });
+                let payload =
+                    serde_json::json!({ "ok": conflicts.is_empty(), "conflicts": conflicts });
                 println!("{}", serde_json::to_string(&payload)?);
             } else if conflicts.is_empty() {
                 println!("available");
@@ -103,7 +127,12 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Release { paths, holder, all, force } => {
+        Cmd::Release {
+            paths,
+            holder,
+            all,
+            force,
+        } => {
             if all {
                 let freed = devkit_locks::release_all(holder.as_deref())?;
                 println!("released {} lock(s)", freed.len());
@@ -111,7 +140,10 @@ fn main() -> Result<()> {
                 let (released, refused) = devkit_locks::release(&paths, holder.as_deref(), force)?;
                 println!("released {} lock(s)", released.len());
                 if !refused.is_empty() {
-                    eprintln!("refused (held by another session; use --force): {}", refused.join(", "));
+                    eprintln!(
+                        "refused (held by another session; use --force): {}",
+                        refused.join(", ")
+                    );
                     std::process::exit(1);
                 }
             }
@@ -149,7 +181,9 @@ fn status_json(locks: &[LockEntry]) -> serde_json::Value {
 
 fn status_table(locks: &[LockEntry], all: bool) -> String {
     let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let headers: Vec<&str> = if all {
         vec!["ROOT", "PATH", "HOLDER", "AGE", "TTL-LEFT", "PID", "NOTE"]
     } else {
@@ -167,7 +201,11 @@ fn status_table(locks: &[LockEntry], all: bool) -> String {
         let note = e.note.clone().unwrap_or_default();
         let mut row = Vec::new();
         if all {
-            row.push(devkit_common::paths::leaf(&e.root).unwrap_or(&e.root).to_string());
+            row.push(
+                devkit_common::paths::leaf(&e.root)
+                    .unwrap_or(&e.root)
+                    .to_string(),
+            );
         }
         row.extend([e.path.clone(), e.holder.clone(), age, ttl_left, pid, note]);
         t.add_row(row);

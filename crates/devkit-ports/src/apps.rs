@@ -23,27 +23,42 @@ pub struct App {
 /// skipped with a warning rather than failing the whole catalog — a config may list
 /// apps that aren't present in every checkout. Requesting such an app surfaces a
 /// plain "unknown app" error at the call site.
-pub fn catalog(cfg: &Config, path_to_project: &HashMap<String, String>) -> Result<HashMap<String, App>> {
+pub fn catalog(
+    cfg: &Config,
+    path_to_project: &HashMap<String, String>,
+) -> Result<HashMap<String, App>> {
     let mut out = HashMap::new();
     for (name, a) in &cfg.apps {
-        let Some(path) = a.path.clone().or_else(|| guess_path(&cfg.defaults.apps_dir, name, path_to_project)) else {
-            eprintln!("note: skipping app `{name}` — no path in config and none inferrable from doppler.yaml");
+        let Some(path) = a
+            .path
+            .clone()
+            .or_else(|| guess_path(&cfg.defaults.apps_dir, name, path_to_project))
+        else {
+            eprintln!(
+                "note: skipping app `{name}` — no path in config and none inferrable from doppler.yaml"
+            );
             continue;
         };
-        let project = a.doppler_project.clone().or_else(|| path_to_project.get(&path).cloned());
-        out.insert(name.clone(), App {
-            name: name.clone(),
-            base_port: a.base_port,
-            doppler_project: project,
-            path,
-            launch: a.launch.clone(),
-            url_env: a.url_env.clone(),
-            provides_url: a.provides_url,
-            preserve_env: a.preserve_env.clone(),
-            static_env: a.static_env.clone(),
-            prep_env: a.prep_env.clone(),
-            setup: a.setup.clone(),
-        });
+        let project = a
+            .doppler_project
+            .clone()
+            .or_else(|| path_to_project.get(&path).cloned());
+        out.insert(
+            name.clone(),
+            App {
+                name: name.clone(),
+                base_port: a.base_port,
+                doppler_project: project,
+                path,
+                launch: a.launch.clone(),
+                url_env: a.url_env.clone(),
+                provides_url: a.provides_url,
+                preserve_env: a.preserve_env.clone(),
+                static_env: a.static_env.clone(),
+                prep_env: a.prep_env.clone(),
+                setup: a.setup.clone(),
+            },
+        );
     }
     Ok(out)
 }

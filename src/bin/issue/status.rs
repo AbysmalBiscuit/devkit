@@ -8,7 +8,9 @@ pub fn run(start: &str, ids: &[String]) -> Result<()> {
         println!("\n{finished} finished. Run `issue end` to remove them.");
     }
     if !has_key {
-        println!("\nLINEAR_API_KEY unset — Linear gate skipped. Create a key at https://linear.app/settings/api");
+        println!(
+            "\nLINEAR_API_KEY unset — Linear gate skipped. Create a key at https://linear.app/settings/api"
+        );
     }
     Ok(())
 }

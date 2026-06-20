@@ -8,7 +8,10 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// Nearest ancestor of `start` containing a `.git` entry; `start` itself if none.
@@ -33,23 +36,36 @@ fn find_root() -> Result<PathBuf> {
 /// Lexically clean `abs` and express it relative to `root` ('/'-separated; the root
 /// itself becomes "."). Errors if `abs` is not under `root`.
 pub fn normalize_under_root(abs: &Path, root: &Path) -> Result<String> {
-    let rel = abs.strip_prefix(root).ok().context("path is outside the project root")?;
+    let rel = abs
+        .strip_prefix(root)
+        .ok()
+        .context("path is outside the project root")?;
     let mut parts: Vec<String> = Vec::new();
     for c in rel.components() {
         match c {
             Component::Normal(s) => parts.push(s.to_str().context("non-utf8 path")?.to_string()),
             Component::CurDir => {}
-            Component::ParentDir => { parts.pop(); }
+            Component::ParentDir => {
+                parts.pop();
+            }
             _ => {}
         }
     }
-    Ok(if parts.is_empty() { ".".to_string() } else { parts.join("/") })
+    Ok(if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    })
 }
 
 /// Resolve a CLI path argument (absolute or cwd-relative) to a root-relative key.
 fn normalize_arg(arg: &str, cwd: &Path, root: &Path) -> Result<String> {
     let p = Path::new(arg);
-    let abs = if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
+    };
     normalize_under_root(&abs, root)
 }
 
@@ -73,7 +89,12 @@ fn ctx(paths_in: &[String], as_flag: Option<&str>) -> Result<Ctx> {
     })
 }
 
-pub fn acquire(paths_in: &[String], as_flag: Option<&str>, note: Option<&str>, ttl: u64) -> Result<AcquireOutcome> {
+pub fn acquire(
+    paths_in: &[String],
+    as_flag: Option<&str>,
+    note: Option<&str>,
+    ttl: u64,
+) -> Result<AcquireOutcome> {
     let c = ctx(paths_in, as_flag)?;
     let pid = ident::anchor_pid();
     store::with_lock(|d| {
@@ -90,7 +111,11 @@ pub fn check(paths_in: &[String], as_flag: Option<&str>) -> Result<Vec<Conflict>
     })
 }
 
-pub fn release(paths_in: &[String], as_flag: Option<&str>, force: bool) -> Result<(Vec<String>, Vec<String>)> {
+pub fn release(
+    paths_in: &[String],
+    as_flag: Option<&str>,
+    force: bool,
+) -> Result<(Vec<String>, Vec<String>)> {
     let c = ctx(paths_in, as_flag)?;
     store::with_lock(|d| Ok(d.do_release(&c.root, &c.paths, &c.holder, force)))
 }
@@ -105,11 +130,15 @@ pub fn status(all: bool) -> Result<Vec<LockEntry>> {
     let root = find_root()?.to_string_lossy().into_owned();
     store::with_lock(|d: &mut Data| {
         d.prune_dead(now());
-        let mut out: Vec<LockEntry> = d.locks.values()
+        let mut out: Vec<LockEntry> = d
+            .locks
+            .values()
             .filter(|e| all || e.root == root)
             .cloned()
             .collect();
-        out.sort_by(|a, b| (a.root.as_str(), a.path.as_str()).cmp(&(b.root.as_str(), b.path.as_str())));
+        out.sort_by(|a, b| {
+            (a.root.as_str(), a.path.as_str()).cmp(&(b.root.as_str(), b.path.as_str()))
+        });
         Ok(out)
     })
 }
@@ -149,8 +178,14 @@ mod tests {
     #[test]
     fn normalize_makes_root_relative() {
         let root = Path::new("/repo");
-        assert_eq!(normalize_under_root(Path::new("/repo/scenes/x.tscn"), root).unwrap(), "scenes/x.tscn");
-        assert_eq!(normalize_under_root(Path::new("/repo/./scenes/"), root).unwrap(), "scenes");
+        assert_eq!(
+            normalize_under_root(Path::new("/repo/scenes/x.tscn"), root).unwrap(),
+            "scenes/x.tscn"
+        );
+        assert_eq!(
+            normalize_under_root(Path::new("/repo/./scenes/"), root).unwrap(),
+            "scenes"
+        );
         assert_eq!(normalize_under_root(Path::new("/repo"), root).unwrap(), ".");
     }
 

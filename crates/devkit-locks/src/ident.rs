@@ -75,7 +75,12 @@ fn tmux_pane_pid() -> Option<u32> {
 mod tests {
     use super::*;
 
-    fn env(session: Option<&str>, pane: Option<&str>, tty: Option<&str>, ppid: Option<&str>) -> Env {
+    fn env(
+        session: Option<&str>,
+        pane: Option<&str>,
+        tty: Option<&str>,
+        ppid: Option<&str>,
+    ) -> Env {
         Env {
             devkit_session: session.map(str::to_string),
             tmux_pane: pane.map(str::to_string),
@@ -101,8 +106,14 @@ mod tests {
     }
     #[test]
     fn falls_through_to_tty_then_ppid() {
-        assert_eq!(resolve_identity(None, &env(None, None, Some("/dev/pts/1"), Some("42"))), "/dev/pts/1");
-        assert_eq!(resolve_identity(None, &env(None, None, None, Some("42"))), "42");
+        assert_eq!(
+            resolve_identity(None, &env(None, None, Some("/dev/pts/1"), Some("42"))),
+            "/dev/pts/1"
+        );
+        assert_eq!(
+            resolve_identity(None, &env(None, None, None, Some("42"))),
+            "42"
+        );
     }
 
     #[test]

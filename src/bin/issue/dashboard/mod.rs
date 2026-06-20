@@ -43,7 +43,11 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     if issues.is_empty() {
         println!("\n(no Linear issues — set LINEAR_API_KEY for the issue timeline)");
     } else if let Some(first) = data::origin(&issues) {
-        let b = if args.bucket == "auto" { bucket::choose_bucket(first, now, width).to_string() } else { args.bucket.clone() };
+        let b = if args.bucket == "auto" {
+            bucket::choose_bucket(first, now, width).to_string()
+        } else {
+            args.bucket.clone()
+        };
         let starts = bucket::bucket_starts(first, now, &b);
         let ends: Vec<_> = (0..starts.len())
             .map(|i| std::cmp::min(*starts.get(i + 1).unwrap_or(&now), now))
@@ -51,28 +55,41 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         let labels: Vec<String> = starts.iter().map(|s| bucket::label_for(*s, &b)).collect();
 
         let mut meta: HashMap<String, (String, String)> = HashMap::new();
-        let replays: Vec<_> = issues.iter().map(|i| bucket::parse_issue(i, &mut meta)).collect();
+        let replays: Vec<_> = issues
+            .iter()
+            .map(|i| bucket::parse_issue(i, &mut meta))
+            .collect();
 
         // Lifecycle stacking order: type rank, then name.
         let type_rank = |k: &str| match k {
-            "triage" => 0, "backlog" => 1, "unstarted" => 2,
-            "started" => 3, "completed" => 4, "canceled" => 5, _ => 99,
+            "triage" => 0,
+            "backlog" => 1,
+            "unstarted" => 2,
+            "started" => 3,
+            "completed" => 4,
+            "canceled" => 5,
+            _ => 99,
         };
         let mut names: Vec<String> = meta.keys().cloned().collect();
         names.sort_by(|a, b| {
-            type_rank(&meta[a].0).cmp(&type_rank(&meta[b].0)).then_with(|| a.cmp(b))
+            type_rank(&meta[a].0)
+                .cmp(&type_rank(&meta[b].0))
+                .then_with(|| a.cmp(b))
         });
 
         let mut series: Vec<Vec<u32>> = names.iter().map(|_| vec![0u32; starts.len()]).collect();
         for (si, name) in names.iter().enumerate() {
             for (bi, end) in ends.iter().enumerate() {
-                series[si][bi] = replays.iter()
+                series[si][bi] = replays
+                    .iter()
                     .filter(|r| bucket::state_at(r, *end).as_deref() == Some(name.as_str()))
                     .count() as u32;
             }
         }
         // Drop statuses that never appear.
-        let keep: Vec<usize> = (0..names.len()).filter(|&i| series[i].iter().any(|&v| v > 0)).collect();
+        let keep: Vec<usize> = (0..names.len())
+            .filter(|&i| series[i].iter().any(|&v| v > 0))
+            .collect();
         let names: Vec<String> = keep.iter().map(|&i| names[i].clone()).collect();
         let mut series: Vec<Vec<u32>> = keep.iter().map(|&i| series[i].clone()).collect();
         let colors: Vec<(u8, u8, u8)> = names.iter().map(|n| chart::hex_rgb(&meta[n].1)).collect();
@@ -92,12 +109,23 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         if args.chart == "line" {
             chart::render_lines(&title, &series, &names, &colors);
         } else {
-            chart::render_stacked_bars(&title, &labels, &series, &names, &colors, &starts, b == "day");
+            chart::render_stacked_bars(
+                &title,
+                &labels,
+                &series,
+                &names,
+                &colors,
+                &starts,
+                b == "day",
+            );
         }
     }
 
     // Footer for issues.
-    let open_now = issues.iter().filter(|i| i.state.kind != "completed" && i.state.kind != "canceled").count();
+    let open_now = issues
+        .iter()
+        .filter(|i| i.state.kind != "completed" && i.state.kind != "canceled")
+        .count();
     if !issues.is_empty() {
         println!("\nTotal assigned: {}   open now: {open_now}", issues.len());
     }
@@ -116,7 +144,11 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     stamps.extend(merged.iter().copied());
     stamps.extend(commits.iter().copied());
     if let Some(&first) = stamps.iter().min() {
-        let b = if args.bucket == "auto" { bucket::choose_bucket(first, now, width).to_string() } else { args.bucket.clone() };
+        let b = if args.bucket == "auto" {
+            bucket::choose_bucket(first, now, width).to_string()
+        } else {
+            args.bucket.clone()
+        };
         let starts = bucket::bucket_starts(first, now, &b);
         let labels: Vec<String> = starts.iter().map(|s| bucket::label_for(*s, &b)).collect();
         let c_commits = bucket::tally(&starts, &commits);
@@ -127,20 +159,44 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         let orange = (255u8, 150u8, 0u8);
         let green = (0u8, 200u8, 0u8);
         if args.chart == "line" {
-            chart::render_lines(&format!("Commits per {b}"), std::slice::from_ref(&c_commits), &["commits".into()], &[cyan]);
-            chart::render_lines(&format!("PRs per {b}"), &[c_opened.clone(), c_merged.clone()],
-                &["opened".into(), "merged".into()], &[orange, green]);
+            chart::render_lines(
+                &format!("Commits per {b}"),
+                std::slice::from_ref(&c_commits),
+                &["commits".into()],
+                &[cyan],
+            );
+            chart::render_lines(
+                &format!("PRs per {b}"),
+                &[c_opened.clone(), c_merged.clone()],
+                &["opened".into(), "merged".into()],
+                &[orange, green],
+            );
         } else {
-            chart::render_stacked_bars(&format!("Commits per {b}"), &labels, std::slice::from_ref(&c_commits),
-                &["commits".into()], &[cyan], &starts, b == "day");
-            chart::render_stacked_bars(&format!("PRs opened/merged per {b}"), &labels,
-                &[c_opened.clone(), c_merged.clone()], &["opened".into(), "merged".into()],
-                &[orange, green], &starts, b == "day");
+            chart::render_stacked_bars(
+                &format!("Commits per {b}"),
+                &labels,
+                std::slice::from_ref(&c_commits),
+                &["commits".into()],
+                &[cyan],
+                &starts,
+                b == "day",
+            );
+            chart::render_stacked_bars(
+                &format!("PRs opened/merged per {b}"),
+                &labels,
+                &[c_opened.clone(), c_merged.clone()],
+                &["opened".into(), "merged".into()],
+                &[orange, green],
+                &starts,
+                b == "day",
+            );
         }
     }
     println!(
         "\nPRs: {} opened, {} merged   Commits: {}   Lines: +{add} / -{del}",
-        opened.len(), merged.len(), commits.len()
+        opened.len(),
+        merged.len(),
+        commits.len()
     );
     Ok(())
 }

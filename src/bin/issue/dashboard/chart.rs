@@ -61,8 +61,12 @@ pub fn term_width() -> usize {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
-        let mut ws: libc_winsize =
-            libc_winsize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
+        let mut ws: libc_winsize = libc_winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
         let fd = std::io::stdout().as_raw_fd();
         // SAFETY: ws is a plain POD struct sized for struct winsize; TIOCGWINSZ fills it.
         let rc = unsafe { ioctl_winsize(fd, &mut ws) };
@@ -107,11 +111,19 @@ pub fn render_stacked_bars(
 ) {
     println!("\n{title}");
     let n = labels.len();
-    let max_total: u32 =
-        (0..n).map(|b| series.iter().map(|s| s[b]).sum::<u32>()).max().unwrap_or(0);
+    let max_total: u32 = (0..n)
+        .map(|b| series.iter().map(|s| s[b]).sum::<u32>())
+        .max()
+        .unwrap_or(0);
     // Build each bucket's bottom→top cell stack.
     let columns: Vec<Vec<usize>> = (0..n)
-        .map(|b| stack_column(&series.iter().map(|s| s[b]).collect::<Vec<_>>(), max_total, BLOCK_HEIGHT))
+        .map(|b| {
+            stack_column(
+                &series.iter().map(|s| s[b]).collect::<Vec<_>>(),
+                max_total,
+                BLOCK_HEIGHT,
+            )
+        })
         .collect();
     for row in (0..BLOCK_HEIGHT).rev() {
         let mut line = String::new();
@@ -139,18 +151,16 @@ pub fn render_stacked_bars(
         }
     }
     println!("{axis}");
-    let legend: Vec<String> =
-        names.iter().zip(colors).map(|(nm, c)| ansi(*c, &format!("■ {nm}"))).collect();
+    let legend: Vec<String> = names
+        .iter()
+        .zip(colors)
+        .map(|(nm, c)| ansi(*c, &format!("■ {nm}")))
+        .collect();
     println!("{}", legend.join("  "));
 }
 
 /// Render one non-stacked line per series via textplots (braille canvas).
-pub fn render_lines(
-    title: &str,
-    series: &[Vec<u32>],
-    names: &[String],
-    colors: &[(u8, u8, u8)],
-) {
+pub fn render_lines(title: &str, series: &[Vec<u32>], names: &[String], colors: &[(u8, u8, u8)]) {
     println!("\n{title}");
     let n = series.first().map(|s| s.len()).unwrap_or(0);
     if n == 0 {
@@ -160,7 +170,12 @@ pub fn render_lines(
     let width = (term_width().saturating_sub(12)).clamp(40, 220) as u32;
     let points: Vec<Vec<(f32, f32)>> = series
         .iter()
-        .map(|s| s.iter().enumerate().map(|(i, &v)| (i as f32, v as f32)).collect())
+        .map(|s| {
+            s.iter()
+                .enumerate()
+                .map(|(i, &v)| (i as f32, v as f32))
+                .collect()
+        })
         .collect();
     let mut chart = Chart::new(width * 2, 60, 0.0, (n.saturating_sub(1)) as f32);
     // textplots' builder borrows each Shape for the chart's lifetime.
@@ -170,8 +185,11 @@ pub fn render_lines(
         plot = plot.linecolorplot(sh, rgb::RGB8::new(col.0, col.1, col.2));
     }
     plot.display();
-    let legend: Vec<String> =
-        names.iter().zip(colors).map(|(nm, c)| ansi(*c, &format!("─ {nm}"))).collect();
+    let legend: Vec<String> = names
+        .iter()
+        .zip(colors)
+        .map(|(nm, c)| ansi(*c, &format!("─ {nm}")))
+        .collect();
     println!("{}", legend.join("  "));
 }
 

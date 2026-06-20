@@ -7,7 +7,10 @@ fn completions_contain_name(bin: &str, exe: &str) {
         .args(["completions", "bash"])
         .output()
         .expect("spawn completions");
-    assert!(out.status.success(), "{bin} completions bash exited non-zero");
+    assert!(
+        out.status.success(),
+        "{bin} completions bash exited non-zero"
+    );
     let script = String::from_utf8(out.stdout).expect("utf8 completion script");
     assert!(
         script.contains(bin),

@@ -20,7 +20,9 @@ pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> 
             team.to_uppercase(), num
         ));
     }
-    if parts.is_empty() { return None; }
+    if parts.is_empty() {
+        return None;
+    }
     Some((format!("query {{ {} }}", parts.join(" ")), aliases))
 }
 
@@ -31,11 +33,18 @@ pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, LinearState>
     };
     match fetch(&query, &aliases, key) {
         Ok(m) => m,
-        Err(e) => { eprintln!("Linear lookup failed: {e}"); HashMap::new() }
+        Err(e) => {
+            eprintln!("Linear lookup failed: {e}");
+            HashMap::new()
+        }
     }
 }
 
-fn fetch(query: &str, aliases: &HashMap<String, String>, key: &str) -> Result<HashMap<String, LinearState>> {
+fn fetch(
+    query: &str,
+    aliases: &HashMap<String, String>,
+    key: &str,
+) -> Result<HashMap<String, LinearState>> {
     let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
         .set("Authorization", key)
         .send_json(ureq::json!({ "query": query }))?
@@ -48,10 +57,13 @@ fn fetch(query: &str, aliases: &HashMap<String, String>, key: &str) -> Result<Ha
                 block.get("nodes").and_then(|n| n.get(0)),
             ) {
                 let st = &node["state"];
-                out.insert(id.clone(), LinearState {
-                    kind: st["type"].as_str().unwrap_or("").to_string(),
-                    name: st["name"].as_str().unwrap_or("").to_string(),
-                });
+                out.insert(
+                    id.clone(),
+                    LinearState {
+                        kind: st["type"].as_str().unwrap_or("").to_string(),
+                        name: st["name"].as_str().unwrap_or("").to_string(),
+                    },
+                );
             }
         }
     }

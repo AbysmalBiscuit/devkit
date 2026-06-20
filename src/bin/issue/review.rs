@@ -1,5 +1,5 @@
-use anyhow::{bail, Context, Result};
-use devkit_common::cmd::{capture, git, gh_json};
+use anyhow::{Context, Result, bail};
+use devkit_common::cmd::{capture, gh_json, git};
 use devkit_common::slack;
 use devkit_ports::config::Person;
 use serde::Deserialize;
@@ -37,7 +37,10 @@ pub(crate) fn resolve_reviewer(explicit: Option<&str>, person: &Person) -> Resul
     if let Some(r) = explicit {
         return Ok(r.to_string());
     }
-    person.github.clone().context("no --reviewer given and alias has no `github` handle")
+    person
+        .github
+        .clone()
+        .context("no --reviewer given and alias has no `github` handle")
 }
 
 /// The Slack body with the PR URL appended.
@@ -49,7 +52,10 @@ pub(crate) fn compose_text(body: &str, pr_url: &str) -> String {
 mod tests {
     use super::*;
     fn person(gh: Option<&str>) -> Person {
-        Person { slack: "U1".into(), github: gh.map(String::from) }
+        Person {
+            slack: "U1".into(),
+            github: gh.map(String::from),
+        }
     }
     #[test]
     fn guard_rejects_base_branches() {
@@ -66,13 +72,22 @@ mod tests {
     }
     #[test]
     fn reviewer_prefers_explicit_then_alias() {
-        assert_eq!(resolve_reviewer(Some("octocat"), &person(Some("exampleuser"))).unwrap(), "octocat");
-        assert_eq!(resolve_reviewer(None, &person(Some("exampleuser"))).unwrap(), "exampleuser");
+        assert_eq!(
+            resolve_reviewer(Some("octocat"), &person(Some("exampleuser"))).unwrap(),
+            "octocat"
+        );
+        assert_eq!(
+            resolve_reviewer(None, &person(Some("exampleuser"))).unwrap(),
+            "exampleuser"
+        );
         assert!(resolve_reviewer(None, &person(None)).is_err());
     }
     #[test]
     fn compose_appends_url() {
-        assert_eq!(compose_text("please review", "https://gh/pr/1"), "please review https://gh/pr/1");
+        assert_eq!(
+            compose_text("please review", "https://gh/pr/1"),
+            "please review https://gh/pr/1"
+        );
     }
 }
 
@@ -111,12 +126,17 @@ pub fn run(args: ReviewArgs) -> Result<()> {
         std::path::Path::new(&start),
     )?;
     let people: &HashMap<String, Person> = &loaded.config.people;
-    let person = people
-        .get(&args.to)
-        .with_context(|| format!("unknown person alias `{}` — add it under [people] in devkit.toml", args.to))?;
+    let person = people.get(&args.to).with_context(|| {
+        format!(
+            "unknown person alias `{}` — add it under [people] in devkit.toml",
+            args.to
+        )
+    })?;
     let reviewer = resolve_reviewer(args.reviewer.as_deref(), person)?;
 
-    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)?.trim().to_string();
+    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)?
+        .trim()
+        .to_string();
     guard_branch(&branch)?;
 
     if !args.no_push {
@@ -126,27 +146,68 @@ pub fn run(args: ReviewArgs) -> Result<()> {
     }
 
     let existing: Option<PrView> = gh_json::<Vec<PrView>>(
-        &["pr", "list", "--head", &branch, "--state", "all", "--json", "number,state,url", "--limit", "1"],
+        &[
+            "pr",
+            "list",
+            "--head",
+            &branch,
+            "--state",
+            "all",
+            "--json",
+            "number,state,url",
+            "--limit",
+            "1",
+        ],
         &start,
-    )?.into_iter().next();
+    )?
+    .into_iter()
+    .next();
 
     let pr_url = match action_for(existing.as_ref().map(|p| p.state.as_str())) {
         PrAction::Stop(reason) => bail!("{reason}"),
         PrAction::AddReviewer => {
             let pr = existing.expect("AddReviewer implies an existing PR");
-            capture("gh", &["pr", "edit", &pr.number.to_string(), "--add-reviewer", &reviewer], Some(&start))
-                .context("gh pr edit --add-reviewer failed")?;
+            capture(
+                "gh",
+                &[
+                    "pr",
+                    "edit",
+                    &pr.number.to_string(),
+                    "--add-reviewer",
+                    &reviewer,
+                ],
+                Some(&start),
+            )
+            .context("gh pr edit --add-reviewer failed")?;
             pr.url
         }
         PrAction::Create => {
-            let base = args.base.clone().unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
-            let title = args.pr_title.clone().context("--pr-title is required to create a PR")?;
+            let base = args
+                .base
+                .clone()
+                .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
+            let title = args
+                .pr_title
+                .clone()
+                .context("--pr-title is required to create a PR")?;
             let body = args.pr_body.clone().unwrap_or_default();
             let out = capture(
                 "gh",
-                &["pr", "create", "--base", &base, "--reviewer", &reviewer, "--title", &title, "--body", &body],
+                &[
+                    "pr",
+                    "create",
+                    "--base",
+                    &base,
+                    "--reviewer",
+                    &reviewer,
+                    "--title",
+                    &title,
+                    "--body",
+                    &body,
+                ],
                 Some(&start),
-            ).context("gh pr create failed")?;
+            )
+            .context("gh pr create failed")?;
             out.lines()
                 .rev()
                 .find(|l| l.contains("://"))

@@ -1,8 +1,8 @@
 //! Daemon client: connects to the supervisor over its local socket.
 
-use crate::daemon::proto::{self, Request, Response, PROTO};
+use crate::daemon::proto::{self, PROTO, Request, Response};
 use crate::daemon::transport;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use devkit_common::paths;
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{RecvHalf, SendHalf, Stream};

@@ -74,7 +74,10 @@ fn snapshot_roundtrips() {
         other => panic!("expected Snapshot, got {other:?}"),
     };
     let found = snap.entries.values().any(|e| e.holder == holder);
-    assert!(found, "Snapshot did not contain entry for '{holder}': {snap:?}");
+    assert!(
+        found,
+        "Snapshot did not contain entry for '{holder}': {snap:?}"
+    );
 
     h.request(&Request::Release { holder, role: None });
     h.shutdown();
