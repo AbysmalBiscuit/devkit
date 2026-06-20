@@ -147,7 +147,12 @@ pub fn run(args: ReviewArgs) -> Result<()> {
                 &["pr", "create", "--base", &base, "--reviewer", &reviewer, "--title", &title, "--body", &body],
                 Some(&start),
             ).context("gh pr create failed")?;
-            out.lines().rev().find(|l| l.contains("://")).unwrap_or("").trim().to_string()
+            out.lines()
+                .rev()
+                .find(|l| l.contains("://"))
+                .context("could not parse a PR URL from `gh pr create` output")?
+                .trim()
+                .to_string()
         }
     };
 

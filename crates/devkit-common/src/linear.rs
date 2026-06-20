@@ -121,10 +121,14 @@ pub fn assigned_issue_history(key: &str) -> Result<Vec<AssignedIssue>> {
                 });
             }
         }
-        if block["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
-            after = block["pageInfo"]["endCursor"].as_str().map(String::from);
-        } else {
-            return Ok(out);
+        // Continue only with a real cursor; a `hasNextPage` without an
+        // `endCursor` would otherwise re-fetch the first page forever.
+        match (
+            block["pageInfo"]["hasNextPage"].as_bool(),
+            block["pageInfo"]["endCursor"].as_str(),
+        ) {
+            (Some(true), Some(cursor)) => after = Some(cursor.to_string()),
+            _ => return Ok(out),
         }
     }
 }

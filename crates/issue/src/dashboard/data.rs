@@ -56,9 +56,14 @@ pub fn pr_timeline(all_roles: bool) -> (Vec<DateTime<Utc>>, Vec<DateTime<Utc>>, 
     (opened, merged, add, del)
 }
 
-/// Author-dates of every commit by `author` in `repo`.
+/// Author-dates of every commit by `author` in `repo` (empty on error).
 pub fn commit_dates(repo: &str, author: &str) -> Vec<DateTime<Utc>> {
-    let out = capture("git", &["-C", repo, "log", &format!("--author={author}"), "--format=%aI"], None)
-        .unwrap_or_default();
+    let out = match capture("git", &["-C", repo, "log", &format!("--author={author}"), "--format=%aI"], None) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("commit history fetch failed for {repo}: {e}");
+            return Vec::new();
+        }
+    };
     out.lines().filter_map(|l| parse_ts(l.trim())).collect()
 }

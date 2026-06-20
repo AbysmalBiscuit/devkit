@@ -1,5 +1,5 @@
 use crate::{prs, triage};
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 mod bucket;
 mod chart;
@@ -108,10 +108,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         Some(a) => a,
         None => capture_email(&start),
     };
-    let monorepo = format!(
-        "{}/monorepo",
-        devkit_ports::config::expand_tilde(&loaded_worktree_root(&args)?).to_string_lossy()
-    );
+    let monorepo = monorepo_dir(&args)?;
     let commits = data::commit_dates(&monorepo, &author);
 
     let mut stamps: Vec<chrono::DateTime<Utc>> = Vec::new();
@@ -154,12 +151,18 @@ fn capture_email(start: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The configured worktree_root (for locating the monorepo where commits land).
-fn loaded_worktree_root(args: &DashboardArgs) -> anyhow::Result<String> {
+/// The monorepo root where commits land, derived from the configured
+/// `doppler_yaml` path (its parent directory) rather than a hardcoded layout —
+/// `doppler.yaml` lives at the repo root.
+fn monorepo_dir(args: &DashboardArgs) -> anyhow::Result<String> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = devkit_ports::load::load(
         args.config.as_deref().map(std::path::Path::new),
         std::path::Path::new(&start),
     )?;
-    Ok(loaded.config.defaults.worktree_root.clone())
+    let yaml = devkit_ports::config::expand_tilde(&loaded.config.defaults.doppler_yaml);
+    let dir = yaml
+        .parent()
+        .context("doppler_yaml has no parent directory to locate the monorepo")?;
+    Ok(dir.to_string_lossy().into_owned())
 }
