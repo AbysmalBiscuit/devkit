@@ -16,3 +16,4 @@ devkit-common.workspace = true
 devkit-ports.workspace = true
 chrono.workspace = true
 textplots.workspace = true
+rgb.workspace = true

@@ -5,6 +5,10 @@ use anyhow::Result;
 #[allow(dead_code)]
 mod bucket;
 
+// Task 4.5 consumes chart's render_stacked_bars, render_lines, and term_width.
+#[allow(dead_code)]
+mod chart;
+
 // bucket, chart, mode, all_roles, and author are unused until Phase 4's timeline
 // rendering. Remove this allow when Task 4.5 implements those features.
 #[allow(dead_code)]
