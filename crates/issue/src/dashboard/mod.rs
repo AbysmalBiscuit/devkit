@@ -23,7 +23,11 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let (rows, states, has_key, url_key) = triage::gather(&start, &[])?;
     triage::render(&rows, &states, has_key, url_key.as_deref());
     println!();
-    prs::run(true, true, None, false)?;
+    // The PR tables are a secondary panel; if gh is unavailable the rest of the
+    // dashboard (triage above, timelines below) must still render.
+    if let Err(e) = prs::run(true, true, None, false) {
+        eprintln!("(PR tables unavailable: {e})");
+    }
 
     if args.no_plots {
         return Ok(());
