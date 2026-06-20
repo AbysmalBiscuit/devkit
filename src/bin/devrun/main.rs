@@ -167,6 +167,7 @@ fn print_summary(rows: &[Row]) {
 
 fn main() -> Result<()> {
     devkit_common::report::install_panic_hook("devrun");
+    devkit_common::paths::migrate_legacy_state();
     let cli = Cli::parse();
     let cwd = cwd_of(&cli);
     match &cli.cmd {

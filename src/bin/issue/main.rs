@@ -101,6 +101,7 @@ fn start(dir: &Option<String>) -> String {
 
 fn main() -> Result<()> {
     devkit_common::report::install_panic_hook("issue");
+    devkit_common::paths::migrate_legacy_state();
     let cli = Cli::parse();
     match cli.cmd {
         Some(Cmd::Setup { issue, slug, apps, dry_run }) => setup::run(setup::SetupArgs {

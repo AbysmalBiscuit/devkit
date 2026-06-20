@@ -28,6 +28,7 @@ textplots.workspace = true
 rgb.workspace = true
 devkit-common.workspace = true
 devkit-ports.workspace = true
+devkit-locks.workspace = true
 
 [workspace]
 resolver = "3"
