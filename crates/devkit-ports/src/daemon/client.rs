@@ -1,16 +1,18 @@
-//! Daemon client: connects to the supervisor over its Unix socket.
+//! Daemon client: connects to the supervisor over its local socket.
 
 use crate::daemon::proto::{self, Request, Response, PROTO};
+use crate::daemon::transport;
 use anyhow::{anyhow, Context, Result};
 use devkit_common::paths;
+use interprocess::local_socket::traits::Stream as _;
+use interprocess::local_socket::{RecvHalf, SendHalf, Stream};
 use std::io::{BufReader, BufWriter};
-use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 /// A live connection to the daemon. Reusable across requests.
 pub struct Client {
-    reader: BufReader<UnixStream>,
-    writer: BufWriter<UnixStream>,
+    reader: BufReader<RecvHalf>,
+    writer: BufWriter<SendHalf>,
 }
 
 pub fn handshake_ok(server_proto: u32) -> bool {
@@ -18,9 +20,10 @@ pub fn handshake_ok(server_proto: u32) -> bool {
 }
 
 impl Client {
-    fn from_stream(stream: UnixStream) -> Result<Self> {
-        let reader = BufReader::new(stream.try_clone()?);
-        let writer = BufWriter::new(stream);
+    fn from_stream(stream: Stream) -> Result<Self> {
+        let (recv, send) = stream.split();
+        let reader = BufReader::new(recv);
+        let writer = BufWriter::new(send);
         let mut c = Client { reader, writer };
         // Handshake: a proto mismatch means an old daemon survived a binary upgrade —
         // ask it to shut down so the caller can start a fresh one.
@@ -45,7 +48,8 @@ impl Client {
 /// handshake fails — never autostarts. Used for opportunistic registry routing
 /// (and by `status`, which must never spin a daemon up).
 pub fn try_existing() -> Option<Client> {
-    let stream = UnixStream::connect(paths::socket_file()).ok()?;
+    let name = transport::socket_name(&paths::socket_file()).ok()?;
+    let stream = Stream::connect(name).ok()?;
     Client::from_stream(stream).ok()
 }
 

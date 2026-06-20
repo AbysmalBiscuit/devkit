@@ -46,7 +46,13 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
 
         Request::Shutdown => {
             daemon.shutdown.store(true, Ordering::SeqCst);
-            let _ = std::os::unix::net::UnixStream::connect(devkit_common::paths::socket_file());
+            // Nudge the accept loop so it observes the shutdown flag and exits.
+            use interprocess::local_socket::traits::Stream as _;
+            if let Ok(name) =
+                devkit_ports::daemon::transport::socket_name(&devkit_common::paths::socket_file())
+            {
+                let _ = interprocess::local_socket::Stream::connect(name);
+            }
             (Response::Ok, true)
         }
     }

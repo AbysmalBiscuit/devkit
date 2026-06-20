@@ -9,8 +9,10 @@ use devkit_ports::daemon::proto::{self, Request};
 use devkit_ports::registry;
 use fd_lock::RwLock;
 use std::fs::OpenOptions;
+use devkit_ports::daemon::transport;
+use interprocess::local_socket::traits::{ListenerExt as _, Stream as _};
+use interprocess::local_socket::{ListenerOptions, Stream};
 use std::io::{BufReader, BufWriter};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -81,8 +83,12 @@ fn main() -> Result<()> {
 
     // Holding the lock, no live daemon owns the socket — clear any stale one and bind.
     let sock = paths::socket_file();
-    let _ = std::fs::remove_file(&sock);
-    let listener = UnixListener::bind(&sock).with_context(|| format!("binding {}", sock.display()))?;
+    let _ = std::fs::remove_file(&sock); // clear a stale unix socket file before binding
+    let name = transport::socket_name(&sock).with_context(|| "building socket name")?;
+    let listener = ListenerOptions::new()
+        .name(name)
+        .create_sync()
+        .with_context(|| format!("binding {}", sock.display()))?;
 
     let idle_timeout = std::env::var("DEVKIT_DAEMON_IDLE_SECS")
         .ok()
@@ -126,7 +132,9 @@ fn main() -> Result<()> {
             std::thread::sleep(Duration::from_millis(500));
             if d.shutdown.load(Ordering::SeqCst) || d.is_idle() {
                 d.shutdown.store(true, Ordering::SeqCst);
-                let _ = UnixStream::connect(paths::socket_file());
+                if let Ok(name) = transport::socket_name(&paths::socket_file()) {
+                    let _ = Stream::connect(name);
+                }
                 break;
             }
             // Reap exited children; restart only those whose ports.json row survives
@@ -183,9 +191,10 @@ fn main() -> Result<()> {
 }
 
 /// Serve requests on one connection until EOF or a close-signalling response.
-fn handle_conn(daemon: &Arc<Daemon>, stream: UnixStream) -> Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut writer = BufWriter::new(stream);
+fn handle_conn(daemon: &Arc<Daemon>, stream: Stream) -> Result<()> {
+    let (recv, send) = stream.split();
+    let mut reader = BufReader::new(recv);
+    let mut writer = BufWriter::new(send);
     while let Some(req) = proto::recv::<_, Request>(&mut reader)? {
         daemon.touch();
         let (resp, close) = server::dispatch(daemon, req);
