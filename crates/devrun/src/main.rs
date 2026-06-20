@@ -1,10 +1,10 @@
 mod env;
-mod supervise;
 mod baseline;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use devkit_common::{cmd::git, paths, ui};
+use devkit_common::supervise;
 use devkit_ports::config::expand_tilde;
 use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
