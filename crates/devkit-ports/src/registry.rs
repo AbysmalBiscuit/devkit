@@ -394,7 +394,7 @@ fn daemon_request(
 }
 
 /// Read the registry, pruning dead entries. Probes liveness *outside* the lock.
-fn snapshot_with(store: &impl Store) -> Result<Data> {
+pub fn snapshot_with(store: &impl Store) -> Result<Data> {
     let data = store.snapshot()?;
     let dead = data.dead_ports();
     if dead.is_empty() {
@@ -421,7 +421,7 @@ fn snapshot_with(store: &impl Store) -> Result<Data> {
 }
 
 /// Prune dead entries; returns the ports removed. Probes outside the lock.
-fn prune_with(store: &impl Store) -> Result<Vec<u16>> {
+pub fn prune_with(store: &impl Store) -> Result<Vec<u16>> {
     let data = store.snapshot()?;
     let dead = data.dead_ports();
     if dead.is_empty() {
@@ -438,7 +438,7 @@ fn prune_with(store: &impl Store) -> Result<Vec<u16>> {
 
 /// Reserve a port for each `(app, base_port)` under `holder`+`role`. Probes
 /// `listening()` outside the lock; the commit re-checks under exclusion.
-fn alloc_with(
+pub fn alloc_with(
     store: &impl Store,
     holder: &str,
     reqs: &[(String, u16)],
@@ -508,7 +508,7 @@ fn alloc_with(
     })
 }
 
-fn record_pid_with(
+pub fn record_pid_with(
     store: &impl Store,
     port: u16,
     app: &str,
@@ -523,7 +523,7 @@ fn record_pid_with(
     })
 }
 
-fn release_with(store: &impl Store, holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
+pub fn release_with(store: &impl Store, holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
     store.commit(|d| Ok(d.release(holder, role)))
 }
 

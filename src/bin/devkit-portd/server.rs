@@ -1,5 +1,5 @@
-//! Request handlers. Registry ops call the same flock facade the no-daemon path
-//! uses (the daemon is a flock participant). Supervision ops own processes.
+//! Request handlers. Registry ops go through the daemon's authoritative `MemoryStore`;
+//! reads serve from memory, mutations write through to the file. Supervision ops own processes.
 
 use crate::Daemon;
 use crate::supervisor::{Key, Launch};
@@ -21,10 +21,12 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             false,
         ),
 
-        Request::Alloc { holder, reqs, role } => match registry::alloc(&holder, &reqs, role) {
-            Ok(ports) => (Response::Ports(ports), false),
-            Err(e) => (Response::Err(format!("{e:#}")), false),
-        },
+        Request::Alloc { holder, reqs, role } => {
+            match registry::alloc_with(&daemon.port_store(), &holder, &reqs, role) {
+                Ok(ports) => (Response::Ports(ports), false),
+                Err(e) => (Response::Err(format!("{e:#}")), false),
+            }
+        }
         Request::RecordPid {
             port,
             app,
@@ -32,19 +34,21 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             role,
             pid,
             logfile,
-        } => match registry::record_pid(port, &app, &holder, role, pid, logfile) {
+        } => match registry::record_pid_with(&daemon.port_store(), port, &app, &holder, role, pid, logfile) {
             Ok(()) => (Response::Ok, false),
             Err(e) => (Response::Err(format!("{e:#}")), false),
         },
-        Request::Release { holder, role } => match registry::release(&holder, role) {
-            Ok(freed) => (Response::Freed(freed), false),
-            Err(e) => (Response::Err(format!("{e:#}")), false),
-        },
-        Request::Snapshot => match registry::snapshot() {
+        Request::Release { holder, role } => {
+            match registry::release_with(&daemon.port_store(), &holder, role) {
+                Ok(freed) => (Response::Freed(freed), false),
+                Err(e) => (Response::Err(format!("{e:#}")), false),
+            }
+        }
+        Request::Snapshot => match registry::snapshot_with(&daemon.port_store()) {
             Ok(data) => (Response::Snapshot(data), false),
             Err(e) => (Response::Err(format!("{e:#}")), false),
         },
-        Request::Prune => match registry::prune() {
+        Request::Prune => match registry::prune_with(&daemon.port_store()) {
             Ok(freed) => (Response::Freed(freed), false),
             Err(e) => (Response::Err(format!("{e:#}")), false),
         },
@@ -70,7 +74,7 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             app,
             role,
             lines,
-        } => (tail(holder, app, role, lines), false),
+        } => (tail(daemon, holder, app, role, lines), false),
 
         Request::Shutdown => {
             daemon.shutdown.store(true, Ordering::SeqCst);
@@ -100,7 +104,7 @@ fn supervise_app(
 ) -> Response {
     // Reserve before bind (same invariant as the flock path).
     let reqs = vec![(app.clone(), base_port)];
-    let port = match registry::alloc(&holder, &reqs, role) {
+    let port = match registry::alloc_with(&daemon.port_store(), &holder, &reqs, role) {
         Ok(p) => p.into_iter().find(|(a, _)| *a == app).map(|(_, p)| p),
         Err(e) => return Response::Err(format!("{e:#}")),
     };
@@ -112,7 +116,7 @@ fn supervise_app(
         Ok(pid) => pid,
         Err(e) => return Response::Err(format!("{e:#}")),
     };
-    if let Err(e) = registry::record_pid(port, &app, &holder, role, pid, logfile.clone()) {
+    if let Err(e) = registry::record_pid_with(&daemon.port_store(), port, &app, &holder, role, pid, logfile.clone()) {
         return Response::Err(format!("{e:#}"));
     }
     let launch = Launch { argv, cwd, env };
@@ -129,9 +133,9 @@ fn supervise_app(
 /// (so the supervision thread won't restart it), SIGTERM it, then release the rows.
 fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
     // Read the registry first, without holding `sup`, so this never blocks the
-    // supervision thread while that thread holds the registry flock (every path
-    // takes the flock before `sup`, never the reverse).
-    let keys: Vec<Key> = registry::snapshot()
+    // supervision thread while that thread holds the registry lock (every path
+    // takes the lock before `sup`, never the reverse).
+    let keys: Vec<Key> = registry::snapshot_with(&daemon.port_store())
         .map(|d| {
             d.entries
                 .values()
@@ -151,14 +155,14 @@ fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
         }
     }
     drop(sup);
-    match registry::release(&holder, role) {
+    match registry::release_with(&daemon.port_store(), &holder, role) {
         Ok(freed) => Response::Freed(freed),
         Err(e) => Response::Err(format!("{e:#}")),
     }
 }
 
-fn tail(holder: String, app: String, role: Option<Role>, lines: usize) -> Response {
-    match registry::snapshot() {
+fn tail(daemon: &Arc<Daemon>, holder: String, app: String, role: Option<Role>, lines: usize) -> Response {
+    match registry::snapshot_with(&daemon.port_store()) {
         Ok(d) => {
             let log = d
                 .entries

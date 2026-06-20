@@ -30,11 +30,18 @@ pub(crate) struct Daemon {
     pub(crate) shutdown: AtomicBool,
     pub(crate) idle_timeout: Duration,
     pub(crate) sup: Mutex<supervisor::Supervisor>,
+    /// Authoritative port registry, served from memory; the file is write-through.
+    pub(crate) ports: std::sync::Arc<std::sync::Mutex<registry::Data>>,
 }
 
 impl Daemon {
     fn touch(&self) {
         *self.last_activity.lock().unwrap() = Instant::now();
+    }
+
+    /// A `Store` view over the daemon's authoritative registry.
+    pub(crate) fn port_store(&self) -> registry::MemoryStore {
+        registry::MemoryStore::new(self.ports.clone(), devkit_common::paths::registry_file())
     }
     /// Idle = no live connections and no supervised children, for longer than the
     /// timeout. Supervision suppresses this by keeping `supervising()` true.
@@ -59,7 +66,15 @@ impl Daemon {
         match devkit_common::supervise::spawn_detached(&launch.argv, &launch.cwd, &launch.env, &log)
         {
             Ok(pid) => {
-                let _ = registry::record_pid(port, &key.app, &key.holder, key.role, pid, log);
+                let _ = registry::record_pid_with(
+                    &self.port_store(),
+                    port,
+                    &key.app,
+                    &key.holder,
+                    key.role,
+                    pid,
+                    log,
+                );
                 self.sup.lock().unwrap().set_pid(key, pid);
             }
             Err(e) => log_line(&format!(
@@ -112,6 +127,7 @@ fn main() -> Result<()> {
     let mem_warn = env_u64("DEVKIT_DAEMON_MEM_WARN_MB", 0) * 1024 * 1024;
     let mem_limit = env_u64("DEVKIT_DAEMON_MEM_LIMIT_MB", 0) * 1024 * 1024;
 
+    let ports = std::sync::Arc::new(std::sync::Mutex::new(registry::load()));
     let daemon = Arc::new(Daemon {
         last_activity: Mutex::new(Instant::now()),
         active_conns: AtomicUsize::new(0),
@@ -123,10 +139,12 @@ fn main() -> Result<()> {
             mem_warn,
             mem_limit,
         )),
+        ports,
     });
 
     // Adopt servers a previous daemon left running: monitor by poll, not waitpid.
-    if let Ok(data) = registry::snapshot() {
+    {
+        let data = daemon.ports.lock().unwrap().clone();
         let mut sup = daemon.sup.lock().unwrap();
         for (port, e) in &data.entries {
             if let (Some(pid), Some(log)) = (e.pid, e.logfile.clone())
@@ -169,7 +187,7 @@ fn main() -> Result<()> {
                 let dead = d.sup.lock().unwrap().reap_once();
                 if !dead.is_empty() {
                     std::thread::sleep(Duration::from_millis(200)); // debounce
-                    let snap = registry::with_lock(|d| Ok(d.clone())).unwrap_or_default();
+                    let snap = d.ports.lock().unwrap().clone();
                     for key in dead {
                         let row = snap.entries.values().find(|e| {
                             e.holder == key.holder && e.app == key.app && e.role == key.role
