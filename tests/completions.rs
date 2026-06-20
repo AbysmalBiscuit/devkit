@@ -29,3 +29,8 @@ fn devrun_emits_completions() {
 fn issue_emits_completions() {
     completions_contain_name("issue", env!("CARGO_BIN_EXE_issue"));
 }
+
+#[test]
+fn lock_emits_completions() {
+    completions_contain_name("lock", env!("CARGO_BIN_EXE_lock"));
+}
