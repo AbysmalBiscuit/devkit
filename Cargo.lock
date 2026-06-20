@@ -445,29 +445,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "issue-end"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "devkit-common",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "issue-prep"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "devkit-common",
- "devkit-ports",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -607,17 +584,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0103b1cef7ec0cf76490e969665504990193874ea05c85ff9bab8b911d0a0564"
 dependencies = [
  "zerovec",
-]
-
-[[package]]
-name = "pr-status"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "devkit-common",
- "serde",
- "serde_json",
 ]
 
 [[package]]
