@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod dashboard;
 mod end;
 mod prs;
 mod review;
@@ -57,6 +58,21 @@ enum Cmd {
         #[arg(long = "no-cache")]
         no_cache: bool,
     },
+    /// Combined at-a-glance view plus issue/PR/commit timelines.
+    Dashboard {
+        #[arg(long, default_value = "auto")]
+        bucket: String,
+        #[arg(long, default_value = "bar")]
+        chart: String,
+        #[arg(long, default_value = "absolute")]
+        mode: String,
+        #[arg(long = "all-roles")]
+        all_roles: bool,
+        #[arg(long)]
+        author: Option<String>,
+        #[arg(long = "no-plots")]
+        no_plots: bool,
+    },
     /// Push, open/reuse a PR, add a reviewer, and Slack them the body + PR link.
     Review {
         /// Slack message body (PR URL is appended automatically).
@@ -91,6 +107,11 @@ fn main() -> Result<()> {
         Some(Cmd::End { ids, yes, force, pr_only, clean_worktree }) =>
             end::run(&start(&cli.dir), &ids, yes, force, pr_only, clean_worktree),
         Some(Cmd::Prs { mine, reviews, repo, no_cache }) => prs::run(mine, reviews, repo, no_cache),
+        Some(Cmd::Dashboard { bucket, chart, mode, all_roles, author, no_plots }) =>
+            dashboard::run(dashboard::DashboardArgs {
+                bucket, chart, mode, all_roles, author, no_plots,
+                dir: cli.dir, config: cli.config,
+            }),
         Some(Cmd::Review { body, to, reviewer, base, pr_title, pr_body, no_push }) =>
             review::run(review::ReviewArgs {
                 body, to, reviewer, base, pr_title, pr_body, no_push,
