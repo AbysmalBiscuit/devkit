@@ -31,7 +31,7 @@ devkit-ports.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-common", "crates/devkit-ports"]
+members = ["crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks"]
 
 [workspace.package]
 edition = "2024"
@@ -56,6 +56,7 @@ supports-hyperlinks = "3"
 ureq = { version = "2", features = ["json"] }
 devkit-common = { path = "crates/devkit-common" }
 devkit-ports = { path = "crates/devkit-ports" }
+devkit-locks = { path = "crates/devkit-locks" }
 
 [profile.release]
 opt-level = 3        # tools do little compute; keep the registry/diff hot paths fast
