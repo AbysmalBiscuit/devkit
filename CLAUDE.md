@@ -46,7 +46,8 @@ cargo test -p devkit-ports --test registry   # multiprocess flock race test
   `RUST_BACKTRACE=1` adds a backtrace to both errors and panics.
 - App conventions are config-driven, never hardcoded: the URL-providing app is marked
   `provides_url`; per-app prep files come from `prep_env`; the apps directory is
-  `defaults.apps_dir`. Example-specific values live in `configs/example.toml`.
+  `defaults.apps_dir`. Example-specific values live in the personal config at
+  `~/.config/devkit/config.toml` (outside the repo; see `docs/configuration.md`).
 - `Role` (Issue/Baseline) is defined once in `devkit-ports::registry` with `ValueEnum` +
   `Display`; `devrun`'s CLI uses a separate `RoleSelector` (adds `Both`). No `_ => Issue`
   catch-alls — map roles exhaustively.

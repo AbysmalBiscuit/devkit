@@ -1,11 +1,10 @@
 # devkit configuration
 
 devkit's engine is project-agnostic; every project- and machine-specific detail
-lives in a single TOML config. That config is **personal and untracked** (it
-holds your worktree paths, app catalog, local secrets, and teammate handles), so
-it is gitignored — see `/configs/*.toml` in `.gitignore`. This document is the
-canonical reference for the config *shape*; copy the example below to a local
-file and adjust it.
+lives in a single TOML config. That config is **personal** (it holds your
+worktree paths, app catalog, local secrets, and teammate handles), so it lives
+outside the repo. This document is the canonical reference for the config
+*shape*; copy the example below to a local file and adjust it.
 
 ## Location
 
@@ -13,11 +12,13 @@ The config is resolved from the first of:
 
 1. `--config <path>` (global flag on every binary)
 2. `$DEVKIT_CONFIG`
-3. `./devkit.toml`
+3. `./devkit.toml` (searched upward from the working directory)
 4. `~/.config/devkit/config.toml`
 
-A common setup is to keep the real config at `configs/<you>.toml` (gitignored)
-and point `$DEVKIT_CONFIG` at it.
+The recommended setup is to keep your real config at
+`~/.config/devkit/config.toml`, where every binary discovers it automatically —
+no flag or env var needed. (`.gitignore` also ignores `/configs/*.toml`, should
+you prefer to keep a copy inside a checkout.)
 
 ## Sections
 
