@@ -15,3 +15,7 @@ ureq.workspace = true
 # Unix process primitives (signals, sessions); unavailable on Windows.
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
+
+# Win32 process primitives (handles, Toolhelp, console control).
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

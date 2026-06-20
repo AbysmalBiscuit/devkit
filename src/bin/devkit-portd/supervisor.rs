@@ -116,20 +116,13 @@ impl Supervisor {
     /// the keys whose process is now gone (the caller decides restart vs. let-die by
     /// consulting `ports.json`).
     pub(crate) fn reap_once(&mut self) -> Vec<Key> {
-        use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-        use nix::unistd::Pid;
         let mut dead = Vec::new();
         for (key, child) in self.children.iter() {
-            // A pid of 0 would make waitpid(0) reap any process-group member; never probe it.
             if child.pid == 0 {
                 continue;
             }
             let gone = match child.watch {
-                Watch::Owned => match waitpid(Pid::from_raw(child.pid as i32), Some(WaitPidFlag::WNOHANG)) {
-                    Ok(WaitStatus::StillAlive) => false,
-                    Ok(_) => true,  // exited/signaled → reaped
-                    Err(_) => true, // ECHILD etc. → treat as gone
-                },
+                Watch::Owned => devkit_common::sys::reap_owned(child.pid),
                 Watch::Adopted => !registry::pid_alive(child.pid),
             };
             if gone {
