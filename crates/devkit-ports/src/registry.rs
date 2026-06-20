@@ -1,9 +1,13 @@
 use anyhow::Result;
 use devkit_common::paths;
 use devkit_common::store::{self, Document, salvage_map};
+use fd_lock::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
@@ -78,9 +82,98 @@ impl Document for Data {
     }
 }
 
-/// Run `f` while holding the exclusive registry lock; persists the mutated `Data`.
+/// A driver for the registry read-modify-write cycle. `FlockStore` backs the
+/// direct path; the daemon's `MemoryStore` (added later) backs in-memory state.
+pub trait Store {
+    /// Current registry state — a cheap read, no mutation.
+    fn snapshot(&self) -> Result<Data>;
+    /// Exclusive read-modify-write: run `f`, persist, return its value.
+    fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T>;
+}
+
+/// Error marker: a live `devkit-portd` holds the registry write gate (`portd.lock`).
+/// Carried via `anyhow` so callers can distinguish it (e.g. a best-effort prune).
+#[derive(Debug)]
+pub struct DaemonHoldsLock;
+
+impl std::fmt::Display for DaemonHoldsLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "a devkit-portd daemon holds the registry lock; refusing to modify ports.json \
+             behind it — stop the daemon or use a daemon-enabled binary",
+        )
+    }
+}
+impl std::error::Error for DaemonHoldsLock {}
+
+/// Direct file driver. Reads load the file ungated (the daemon keeps it current via
+/// write-through). Writes first take a shared, non-blocking lock on `portd.lock` — the
+/// gate — and refuse if a daemon holds it exclusive, then run the data-flock RMW.
+pub struct FlockStore {
+    gate_path: PathBuf,
+    lock_path: PathBuf,
+    data_path: PathBuf,
+}
+
+impl FlockStore {
+    /// Real-paths store used by every direct caller.
+    pub fn new() -> Self {
+        Self {
+            gate_path: paths::daemon_lock_file(),
+            lock_path: paths::lock_file(),
+            data_path: paths::registry_file(),
+        }
+    }
+    /// Scratch-paths store for tests.
+    #[cfg(test)]
+    fn at(dir: &Path) -> Self {
+        Self {
+            gate_path: dir.join("portd.lock"),
+            lock_path: dir.join("ports.lock"),
+            data_path: dir.join("ports.json"),
+        }
+    }
+}
+
+impl Default for FlockStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Store for FlockStore {
+    fn snapshot(&self) -> Result<Data> {
+        Ok(store::load(&self.data_path))
+    }
+    fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
+        // The daemon process is itself the exclusive gate holder, so it must not
+        // attempt to re-acquire the shared lock (deadlock or spurious refusal).
+        // All other callers hold the shared gate for the whole RMW; a held exclusive
+        // (a live daemon) makes try_read fail, surfaced as the typed refusal.
+        if std::env::var_os("DEVKIT_PORTD_SELF").is_none() {
+            if let Some(parent) = self.gate_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(&self.gate_path)?;
+            let gate = RwLock::new(file);
+            // `anyhow::Error::new` (not `anyhow!`) so the type survives for `downcast_ref`.
+            let _shared = gate
+                .try_read()
+                .map_err(|_| anyhow::Error::new(DaemonHoldsLock))?;
+        }
+        store::with_lock(&self.lock_path, &self.data_path, f)
+    }
+}
+
+/// Run `f` against the registry under the direct flock path. Public because
+/// `devrun down` and the multiprocess race test drive a custom RMW through it;
+/// now gated, so it refuses to write behind a live daemon.
 pub fn with_lock<T>(f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
-    store::with_lock(&paths::lock_file(), &paths::registry_file(), f)
+    FlockStore::new().commit(f)
 }
 
 #[cfg(test)]
@@ -245,73 +338,59 @@ impl Data {
     }
 }
 
-/// Try a running daemon first; `None` means "no daemon — use flock". Any daemon
-/// error is logged and also yields `None` so the caller falls back safely. Returns
-/// `None` immediately inside the daemon itself (DEVKIT_PORTD_SELF set) so the
-/// daemon's own handlers use flock and never connect to themselves.
+/// Try a running daemon. `Ok(None)` = no daemon (caller uses the flock path).
+/// `Ok(Some(resp))` = the daemon answered (the response may be `Response::Err`,
+/// which callers decode into an `Err`). `Err` = a *live* daemon failed mid-request
+/// — surfaced to the caller rather than silently written behind its back.
+/// Returns `Ok(None)` inside the daemon itself (`DEVKIT_PORTD_SELF`).
 #[cfg(feature = "daemon")]
-fn via_daemon(req: crate::daemon::proto::Request) -> Option<crate::daemon::proto::Response> {
+fn daemon_request(
+    req: crate::daemon::proto::Request,
+) -> Result<Option<crate::daemon::proto::Response>> {
     if std::env::var_os("DEVKIT_PORTD_SELF").is_some() {
-        return None;
+        return Ok(None);
     }
-    let mut c = crate::daemon::client::try_existing()?;
-    match c.request(&req) {
-        Ok(resp) => Some(resp),
-        Err(e) => {
-            eprintln!("warning: daemon request failed ({e:#}); using flock");
-            None
-        }
-    }
+    let Some(mut c) = crate::daemon::client::try_existing() else {
+        return Ok(None);
+    };
+    Ok(Some(c.request(&req)?))
 }
 
-/// Read the registry, pruning dead entries. Probes liveness *outside* the lock:
-/// take a short read-lock, probe the snapshot unlocked, then commit any removals.
-pub fn snapshot() -> Result<Data> {
-    #[cfg(feature = "daemon")]
-    if let Some(resp) = via_daemon(crate::daemon::proto::Request::Snapshot) {
-        return match resp {
-            crate::daemon::proto::Response::Snapshot(d) => Ok(d),
-            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
-            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
-        };
-    }
-    snapshot_flock()
-}
-
-fn snapshot_flock() -> Result<Data> {
-    let data = with_lock(|d| Ok(d.clone()))?;
+/// Read the registry, pruning dead entries. Probes liveness *outside* the lock.
+fn snapshot_with(store: &impl Store) -> Result<Data> {
+    let data = store.snapshot()?;
     let dead = data.dead_ports();
     if dead.is_empty() {
         return Ok(data);
     }
-    with_lock(|d| {
+    // Best-effort prune: a read must never fail because cleanup was blocked (a
+    // daemon now owns the write gate). Persist the removals if we can; otherwise
+    // return the dead-pruned view without persisting.
+    match store.commit(|d| {
         for p in &dead {
             d.entries.remove(p);
         }
         Ok(d.clone())
-    })
+    }) {
+        Ok(pruned) => Ok(pruned),
+        Err(_) => {
+            let mut d = data;
+            for p in &dead {
+                d.entries.remove(p);
+            }
+            Ok(d)
+        }
+    }
 }
 
 /// Prune dead entries; returns the ports removed. Probes outside the lock.
-pub fn prune() -> Result<Vec<u16>> {
-    #[cfg(feature = "daemon")]
-    if let Some(resp) = via_daemon(crate::daemon::proto::Request::Prune) {
-        return match resp {
-            crate::daemon::proto::Response::Freed(v) => Ok(v),
-            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
-            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
-        };
-    }
-    prune_flock()
-}
-
-fn prune_flock() -> Result<Vec<u16>> {
-    let data = with_lock(|d| Ok(d.clone()))?;
+fn prune_with(store: &impl Store) -> Result<Vec<u16>> {
+    let data = store.snapshot()?;
     let dead = data.dead_ports();
     if dead.is_empty() {
         return Ok(Vec::new());
     }
-    with_lock(|d| {
+    store.commit(|d| {
         for p in &dead {
             d.entries.remove(p);
         }
@@ -320,30 +399,15 @@ fn prune_flock() -> Result<Vec<u16>> {
     Ok(dead)
 }
 
-/// Reserve a port for each `(app, base_port)` request under `holder`+`role`.
-///
-/// The free-port search probes `listening()` *outside* the lock; the lock is then
-/// held only for the cheap in-memory commit. If a chosen port was claimed in the
-/// gap, that one app falls back to an in-lock probe (`alloc_one`) — rare, so the
-/// common path keeps the exclusive lock free of blocking syscalls.
-pub fn alloc(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(String, u16)>> {
-    #[cfg(feature = "daemon")]
-    if let Some(resp) = via_daemon(crate::daemon::proto::Request::Alloc {
-        holder: holder.to_string(),
-        reqs: reqs.to_vec(),
-        role,
-    }) {
-        return match resp {
-            crate::daemon::proto::Response::Ports(v) => Ok(v),
-            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
-            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
-        };
-    }
-    alloc_flock(holder, reqs, role)
-}
-
-fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(String, u16)>> {
-    let mut data = snapshot_flock()?;
+/// Reserve a port for each `(app, base_port)` under `holder`+`role`. Probes
+/// `listening()` outside the lock; the commit re-checks under exclusion.
+fn alloc_with(
+    store: &impl Store,
+    holder: &str,
+    reqs: &[(String, u16)],
+    role: Role,
+) -> Result<Vec<(String, u16)>> {
+    let mut data = store.snapshot()?;
     let mut chosen: Vec<(String, u16)> = Vec::with_capacity(reqs.len());
     for (app, base) in reqs {
         if let Some(p) = data.holds(holder, app, role) {
@@ -352,7 +416,8 @@ fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(
         }
         let mut port = *base;
         loop {
-            let taken = data.entries.contains_key(&port) || chosen.iter().any(|(_, p)| *p == port);
+            let taken =
+                data.entries.contains_key(&port) || chosen.iter().any(|(_, p)| *p == port);
             if !taken && !listening(port) {
                 break;
             }
@@ -360,7 +425,6 @@ fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(
                 .checked_add(1)
                 .unwrap_or_else(|| panic!("no free port available at or above {base}"));
         }
-        // Tentatively reserve locally so later requests in this call don't collide.
         data.entries.insert(
             port,
             Entry {
@@ -375,7 +439,7 @@ fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(
         chosen.push((app.clone(), port));
     }
 
-    with_lock(|d| {
+    store.commit(|d| {
         let mut out = Vec::with_capacity(chosen.len());
         for (app, port) in &chosen {
             if let Some(p) = d.holds(holder, app, role) {
@@ -407,6 +471,68 @@ fn alloc_flock(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(
     })
 }
 
+fn record_pid_with(
+    store: &impl Store,
+    port: u16,
+    app: &str,
+    holder: &str,
+    role: Role,
+    pid: u32,
+    logfile: PathBuf,
+) -> Result<()> {
+    store.commit(|d| {
+        d.record_pid(port, app, holder, role, pid, logfile);
+        Ok(())
+    })
+}
+
+fn release_with(store: &impl Store, holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
+    store.commit(|d| Ok(d.release(holder, role)))
+}
+
+/// Read the registry, pruning dead entries (daemon fast path, else flock).
+pub fn snapshot() -> Result<Data> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = daemon_request(crate::daemon::proto::Request::Snapshot)? {
+        return match resp {
+            crate::daemon::proto::Response::Snapshot(d) => Ok(d),
+            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    snapshot_with(&FlockStore::new())
+}
+
+/// Prune dead entries; returns the ports removed.
+pub fn prune() -> Result<Vec<u16>> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = daemon_request(crate::daemon::proto::Request::Prune)? {
+        return match resp {
+            crate::daemon::proto::Response::Freed(v) => Ok(v),
+            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    prune_with(&FlockStore::new())
+}
+
+/// Reserve a port for each `(app, base_port)` request under `holder`+`role`.
+pub fn alloc(holder: &str, reqs: &[(String, u16)], role: Role) -> Result<Vec<(String, u16)>> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = daemon_request(crate::daemon::proto::Request::Alloc {
+        holder: holder.to_string(),
+        reqs: reqs.to_vec(),
+        role,
+    })? {
+        return match resp {
+            crate::daemon::proto::Response::Ports(v) => Ok(v),
+            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    alloc_with(&FlockStore::new(), holder, reqs, role)
+}
+
 /// Attach a pid + logfile to a reservation (re-establishing it if pruned).
 pub fn record_pid(
     port: u16,
@@ -417,55 +543,37 @@ pub fn record_pid(
     logfile: PathBuf,
 ) -> Result<()> {
     #[cfg(feature = "daemon")]
-    if let Some(resp) = via_daemon(crate::daemon::proto::Request::RecordPid {
+    if let Some(resp) = daemon_request(crate::daemon::proto::Request::RecordPid {
         port,
         app: app.to_string(),
         holder: holder.to_string(),
         role,
         pid,
         logfile: logfile.clone(),
-    }) {
+    })? {
         return match resp {
             crate::daemon::proto::Response::Ok => Ok(()),
             crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    record_pid_flock(port, app, holder, role, pid, logfile)
-}
-
-fn record_pid_flock(
-    port: u16,
-    app: &str,
-    holder: &str,
-    role: Role,
-    pid: u32,
-    logfile: PathBuf,
-) -> Result<()> {
-    with_lock(|d| {
-        d.record_pid(port, app, holder, role, pid, logfile);
-        Ok(())
-    })
+    record_pid_with(&FlockStore::new(), port, app, holder, role, pid, logfile)
 }
 
 /// Release all entries for `holder` (optionally one role); returns freed ports.
 pub fn release(holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
     #[cfg(feature = "daemon")]
-    if let Some(resp) = via_daemon(crate::daemon::proto::Request::Release {
+    if let Some(resp) = daemon_request(crate::daemon::proto::Request::Release {
         holder: holder.to_string(),
         role,
-    }) {
+    })? {
         return match resp {
             crate::daemon::proto::Response::Freed(v) => Ok(v),
             crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    release_flock(holder, role)
-}
-
-fn release_flock(holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
-    with_lock(|d| Ok(d.release(holder, role)))
+    release_with(&FlockStore::new(), holder, role)
 }
 
 /// Render the port-status table shared by `portman status` and `devrun status`.
@@ -595,5 +703,84 @@ mod ops_tests {
             },
         );
         assert_eq!(d.dead_ports(), vec![9100]);
+    }
+}
+
+#[cfg(test)]
+mod store_seam_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("devkit-seam-{}-{}", std::process::id(), tag));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn alloc_with_reserves_pidless_then_record_pid_attaches() {
+        let dir = tmp("alloc");
+        let store = FlockStore::at(&dir);
+        let out = alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
+        let (_, port) = out[0];
+        let d = store.snapshot().unwrap();
+        assert_eq!(d.entries[&port].pid, None, "reserve before bind: pid-less row");
+        record_pid_with(&store, port, "api", "/w", Role::Issue, 4321, PathBuf::from("/log")).unwrap();
+        assert_eq!(store.snapshot().unwrap().entries[&port].pid, Some(4321));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn release_with_frees_holder() {
+        let dir = tmp("release");
+        let store = FlockStore::at(&dir);
+        alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
+        let freed = release_with(&store, "/w", None).unwrap();
+        assert_eq!(freed.len(), 1);
+        assert!(store.snapshot().unwrap().entries.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commit_refused_while_gate_held_exclusive() {
+        let dir = tmp("gate-held");
+        let store = FlockStore::at(&dir);
+        // Simulate a running daemon: hold portd.lock exclusive on a separate fd.
+        let f = std::fs::OpenOptions::new()
+            .create(true).write(true).truncate(false)
+            .open(dir.join("portd.lock")).unwrap();
+        let mut excl = fd_lock::RwLock::new(f);
+        let _held = excl.try_write().expect("take exclusive gate");
+        let err = store
+            .commit(|d| { d.alloc_one("/w", "api", 9100, Role::Issue); Ok(()) })
+            .unwrap_err();
+        assert!(err.downcast_ref::<DaemonHoldsLock>().is_some(), "got: {err:#}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapshot_is_ungated_and_prune_is_best_effort_under_held_gate() {
+        let dir = tmp("snap-gate");
+        let store = FlockStore::at(&dir);
+        // Seed a dead reservation (dead holder dir => dead_ports flags it).
+        store
+            .commit(|d| {
+                d.entries.insert(9100, Entry {
+                    app: "api".into(), holder: "/definitely/not/here".into(),
+                    role: Role::Issue, pid: None, logfile: None, ts: 0,
+                });
+                Ok(())
+            })
+            .unwrap();
+        // Now hold the gate exclusive: snapshot must still succeed (reads ungated)
+        // and must not propagate the blocked prune.
+        let f = std::fs::OpenOptions::new()
+            .create(true).write(true).truncate(false)
+            .open(dir.join("portd.lock")).unwrap();
+        let mut excl = fd_lock::RwLock::new(f);
+        let _held = excl.try_write().unwrap();
+        let snap = snapshot_with(&store).expect("read must not fail under held gate");
+        assert!(!snap.entries.contains_key(&9100), "dead entry pruned from the returned view");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
