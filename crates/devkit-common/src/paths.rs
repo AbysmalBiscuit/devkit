@@ -7,6 +7,12 @@ pub fn state_dir() -> PathBuf {
 pub fn registry_file() -> PathBuf { state_dir().join("ports.json") }
 pub fn lock_file() -> PathBuf { state_dir().join("ports.lock") }
 pub fn logs_dir() -> PathBuf { state_dir().join("logs") }
+/// Unix socket the daemon binds; clients connect here.
+pub fn socket_file() -> PathBuf { state_dir().join("portd.sock") }
+/// Single-instance lock for the daemon — separate from the registry's `ports.lock`.
+pub fn daemon_lock_file() -> PathBuf { state_dir().join("portd.lock") }
+/// Daemon log file.
+pub fn daemon_log() -> PathBuf { logs_dir().join("portd.log") }
 
 /// `$XDG_CACHE_HOME/devkit` or `~/.cache/devkit`.
 pub fn cache_dir() -> PathBuf {
@@ -37,5 +43,11 @@ mod tests {
     fn leaf_is_basename() {
         assert_eq!(leaf("/a/b/eng-1234"), Some("eng-1234"));
         assert_eq!(leaf("solo"), Some("solo"));
+    }
+    #[test]
+    fn daemon_paths_under_state() {
+        assert!(socket_file().ends_with(".claude/state/devkit/portd.sock"));
+        assert!(daemon_lock_file().ends_with(".claude/state/devkit/portd.lock"));
+        assert!(daemon_log().ends_with(".claude/state/devkit/logs/portd.log"));
     }
 }
