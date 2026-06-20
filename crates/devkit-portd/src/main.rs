@@ -14,12 +14,17 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+// Supervisor API is consumed by request dispatch and the supervision loop.
+#[allow(dead_code)]
+mod supervisor;
+
 /// Shared daemon state, accessed from the connection threads and the idle watcher.
 pub(crate) struct Daemon {
     pub(crate) last_activity: Mutex<Instant>,
     pub(crate) active_conns: AtomicUsize,
     pub(crate) shutdown: AtomicBool,
     pub(crate) idle_timeout: Duration,
+    pub(crate) sup: Mutex<supervisor::Supervisor>,
 }
 
 impl Daemon {
@@ -35,7 +40,7 @@ impl Daemon {
     }
     /// Whether the daemon currently owns live supervised child processes.
     fn supervising(&self) -> bool {
-        false
+        self.sup.lock().unwrap().any_live()
     }
 }
 
@@ -65,11 +70,17 @@ fn main() -> Result<()> {
         .map(Duration::from_secs)
         .unwrap_or(Duration::from_secs(1800));
 
+    let max_restarts = env_u32("DEVKIT_DAEMON_MAX_RESTARTS", 5);
+    let restart_window = Duration::from_secs(env_u64("DEVKIT_DAEMON_RESTART_WINDOW", 60));
+    let mem_warn = env_u64("DEVKIT_DAEMON_MEM_WARN_MB", 0) * 1024 * 1024;
+    let mem_limit = env_u64("DEVKIT_DAEMON_MEM_LIMIT_MB", 0) * 1024 * 1024;
+
     let daemon = Arc::new(Daemon {
         last_activity: Mutex::new(Instant::now()),
         active_conns: AtomicUsize::new(0),
         shutdown: AtomicBool::new(false),
         idle_timeout,
+        sup: Mutex::new(supervisor::Supervisor::new(max_restarts, restart_window, mem_warn, mem_limit)),
     });
 
     // Idle-exit watcher: unblock the accept loop by connecting to ourselves.
@@ -145,4 +156,12 @@ fn log_line(msg: &str) {
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(paths::daemon_log()) {
         let _ = writeln!(f, "{msg}");
     }
+}
+
+fn env_u64(k: &str, d: u64) -> u64 {
+    std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d)
+}
+
+fn env_u32(k: &str, d: u32) -> u32 {
+    std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d)
 }
