@@ -2,7 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod setup;
-// status, end, and dashboard subcommands (later tasks) consume triage items
+mod status;
+// end and dashboard subcommands (later tasks) consume remaining triage items
 #[allow(dead_code)]
 mod triage;
 
@@ -30,6 +31,12 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Read-only report of every issue worktree (optionally filtered by ID).
+    Status { ids: Vec<String> },
+}
+
+fn start(dir: &Option<String>) -> String {
+    dir.clone().unwrap_or_else(|| ".".to_string())
 }
 
 fn main() -> Result<()> {
@@ -39,9 +46,7 @@ fn main() -> Result<()> {
         Some(Cmd::Setup { issue, slug, apps, dry_run }) => setup::run(setup::SetupArgs {
             issue, slug, apps, dry_run, dir: cli.dir, config: cli.config,
         }),
-        None => {
-            println!("issue: run `issue --help`");
-            Ok(())
-        }
+        Some(Cmd::Status { ids }) => status::run(&start(&cli.dir), &ids),
+        None => status::run(&start(&cli.dir), &[]),
     }
 }
