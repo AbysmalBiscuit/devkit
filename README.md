@@ -1,12 +1,12 @@
 # devkit
 
-A Rust workspace of four binaries that coordinate local development for a monorepo. Devkit provides a flock'd port registry (with an optional supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
+A Rust workspace of five binaries that coordinate local development for a monorepo. Devkit provides a flock'd port registry (with an optional supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
 
 ## Binaries
 
 ### `portman` — Port Registry
 
-Maintains a shared port registry so concurrent callers never collide on port allocation. State lives in `~/.claude/state/devkit/ports.json`, guarded by an advisory file lock. Reservation rows are written before any process binds, which prevents the allocation race across concurrent callers.
+Maintains a shared port registry so concurrent callers never collide on port allocation. State lives in `~/.local/state/devkit/ports.json`, guarded by an advisory file lock. Reservation rows are written before any process binds, which prevents the allocation race across concurrent callers.
 
 ```
 portman status                                     # table of reserved/live ports
@@ -46,6 +46,29 @@ issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-
 - **`dashboard`** — the at-a-glance triage + PR tables, plus terminal timelines of your Linear issues by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). `--no-plots` shows only the tables.
 - **`review`** — pushes the current branch, opens or reuses its PR, adds a reviewer, and sends the reviewer a Slack message with the PR link. Never force-pushes. With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON object for an agent to forward. `--to` names a `[people]` alias from the config.
 
+### `lock` — File Locks
+
+Advisory locks on paths so parallel sessions sharing one checkout (where per-session
+worktrees are too expensive) don't edit the same files at once. A flock-guarded
+registry of claims keyed by path — the file-level twin of `portman`. Locks are
+exclusive and overlap by path component, so locking a directory conflicts with
+locking a file inside it.
+
+```
+lock acquire <paths…> [--as <id>] [--note <msg>] [--ttl <secs>] [--json]
+lock release <paths…> [--as <id>]        # or: release --all
+lock check   <paths…> [--json]           # read-only: would acquire succeed?
+lock status  [--all] [--json]
+lock prune
+```
+
+Sessions identify themselves by (in priority order) `--as <id>`, `$DEVKIT_SESSION`,
+`$TMUX_PANE` (zero-config and unique per tmux pane), the controlling tty, or the
+parent pid. Conflicts fail fast: `acquire`/`check` exit `1` and report who holds the
+path. Locks expire after their TTL (default 30 min, `--ttl 0` disables) or when a
+recorded anchor pid dies; `release` frees them explicitly. For non-interactive agent
+sessions, pass a stable `--as`/`$DEVKIT_SESSION` so acquire and release agree.
+
 ## Configuration
 
 Config discovery order (first match wins):
@@ -77,7 +100,7 @@ $EDITOR ~/.config/devkit/config.toml   # paste & adapt the example from docs/con
 
 ## Install
 
-Install all four binaries (`portman`, `devrun`, `issue`, `devkit-portd`) into
+Install all five binaries (`portman`, `devrun`, `issue`, `lock`, `devkit-portd`) into
 `~/.cargo/bin` with one command:
 
 ```sh
@@ -104,6 +127,7 @@ subcommand (bash, zsh, fish, elvish, powershell). For example:
 issue completions zsh   > ~/.zfunc/_issue
 devrun completions zsh  > ~/.zfunc/_devrun
 portman completions zsh > ~/.zfunc/_portman
+lock completions zsh    > ~/.zfunc/_lock
 # bash:
 issue completions bash > ~/.local/share/bash-completion/completions/issue
 ```
@@ -112,9 +136,13 @@ issue completions bash > ~/.local/share/bash-completion/completions/issue
 
 | Data | Path |
 |---|---|
-| Port registry | `~/.claude/state/devkit/ports.json` |
-| Server logs | `~/.claude/state/devkit/logs/` |
+| Port registry | `~/.local/state/devkit/ports.json` |
+| Server logs | `~/.local/state/devkit/logs/` |
+| File-lock registry | `~/.local/state/devkit/locks.json` |
 | PR diff cache (`issue prs`) | `$XDG_CACHE_HOME/devkit/pr-status/` (or `~/.cache/devkit/pr-status/`) |
+
+The state home honors `$XDG_STATE_HOME` (default `~/.local/state`). A legacy
+`~/.claude/state/devkit` home is migrated automatically on first run.
 
 ## Requirements
 

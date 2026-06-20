@@ -57,6 +57,8 @@ pub fn pid_in_ports_json(body: &str, app_name: &str) -> Option<u32> {
 /// A running `devkit-portd` instance bound to a throwaway HOME directory.
 pub struct Harness {
     pub home: PathBuf,
+    /// `$XDG_STATE_HOME` passed to the daemon — state lives under `<xdg_state>/devkit/`.
+    pub xdg_state: PathBuf,
     child: Child,
 }
 
@@ -69,28 +71,31 @@ impl Harness {
     /// Start a daemon that idle-exits after `idle_secs` seconds of inactivity.
     pub fn start_with_idle(idle_secs: u64) -> Self {
         let home = std::env::temp_dir().join(format!("portd-test-{}", unique()));
-        // Create the directory tree the daemon expects to find (or it creates them
-        // itself, but the logs dir must exist before the first accept).
-        std::fs::create_dir_all(home.join(".claude/state/devkit/logs"))
+        // XDG_STATE_HOME is set explicitly so the daemon's state_dir() resolves
+        // to a path inside the throwaway temp dir, even when the real user's
+        // XDG_STATE_HOME env var is set in the surrounding shell.
+        let xdg_state = home.join("state");
+        std::fs::create_dir_all(xdg_state.join("devkit/logs"))
             .expect("create test HOME dirs");
 
         let bin = env!("CARGO_BIN_EXE_devkit-portd");
         let child = Command::new(bin)
             .env("HOME", &home)
+            .env("XDG_STATE_HOME", &xdg_state)
             .env("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string())
             // Suppress the daemon from touching the real HOME's registry.
             .env("DEVKIT_PORTD_SELF", "1")
             .spawn()
             .expect("spawn devkit-portd");
 
-        let h = Harness { home, child };
+        let h = Harness { home, xdg_state, child };
         h.wait_for_socket(Duration::from_secs(5));
         h
     }
 
     /// Path of the unix socket the daemon binds.
     pub fn socket(&self) -> PathBuf {
-        self.home.join(".claude/state/devkit/portd.sock")
+        self.xdg_state.join("devkit/portd.sock")
     }
 
     /// Poll until the socket file exists and accepts a connection, or panic.
@@ -139,7 +144,7 @@ impl Harness {
 
     /// Read the ports.json content, or empty string if absent.
     pub fn ports_json(&self) -> String {
-        let path = self.home.join(".claude/state/devkit/ports.json");
+        let path = self.xdg_state.join("devkit/ports.json");
         std::fs::read_to_string(&path).unwrap_or_default()
     }
 

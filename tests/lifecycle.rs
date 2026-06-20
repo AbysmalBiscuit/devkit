@@ -41,6 +41,7 @@ fn second_instance_exits_immediately() {
 
     let status = Command::new(common::daemon_bin())
         .env("HOME", &h.home)
+        .env("XDG_STATE_HOME", &h.xdg_state)
         .env("DEVKIT_DAEMON_IDLE_SECS", "3600")
         .env("DEVKIT_PORTD_SELF", "1")
         .status()

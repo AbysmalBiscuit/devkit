@@ -1,16 +1,16 @@
 # devkit
 
-A Rust workspace (edition 2024): a root `devkit` binary package whose four CLIs live
-in `src/bin/`, plus two library crates, coordinating local development for a monorepo.
+A Rust workspace (edition 2024): a root `devkit` binary package whose five CLIs live
+in `src/bin/`, plus three library crates, coordinating local development for a monorepo.
 The engine is project-agnostic; every project-specific detail lives in `devkit.toml`.
 See `README.md` for user-facing CLI docs.
 
 ## Commands
 
 ```sh
-cargo build --release                       # all four binaries → target/release
-cargo install --path .                       # install all four into ~/.cargo/bin
-cargo test --workspace                       # full gate — 92 tests, must stay green
+cargo build --release                       # all five binaries → target/release
+cargo install --path .                       # install all five into ~/.cargo/bin
+cargo test --workspace                       # full gate — 128 tests, must stay green
 cargo clippy --workspace --all-targets -- -D warnings   # zero-warning policy
 cargo test -p devkit-ports --test registry   # multiprocess flock race test
 ```
@@ -18,18 +18,20 @@ cargo test -p devkit-ports --test registry   # multiprocess flock race test
 ## Layout
 
 The workspace root is the `devkit` binary package; its CLIs live in `src/bin/` and
-install together via `cargo install --path .`. Two library crates are members.
+install together via `cargo install --path .`. Three library crates are members.
 
 | Unit | Role |
 |---|---|
 | `crates/devkit-common` | shared lib: `paths`, `cmd` (git/gh wrappers), `worktree`, `ui` (tables/links), `linear`, `slack`, `supervise` |
 | `crates/devkit-ports` | lib: `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load`, `daemon` |
+| `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
 | `src/bin/portman` | CLI over the port registry |
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
 | `src/bin/issue` | issue lifecycle: `setup`, `status`, `end`, `prs`, `dashboard`, `review` |
+| `src/bin/lock.rs` | advisory file-lock CLI |
 | `src/bin/devkit-portd` | port-registry supervisor daemon; bin gated by the `daemon` feature (on by default) |
 
-The three user-facing CLIs (`portman`, `devrun`, `issue`) each expose a
+The four user-facing CLIs (`portman`, `devrun`, `issue`, `lock`) each expose a
 `completions <shell>` subcommand via `clap_complete`.
 
 ## Invariants (do not break)
@@ -60,6 +62,17 @@ The three user-facing CLIs (`portman`, `devrun`, `issue`) each expose a
 - `Role` (Issue/Baseline) is defined once in `devkit-ports::registry` with `ValueEnum` +
   `Display`; `devrun`'s CLI uses a separate `RoleSelector` (adds `Both`). No `_ => Issue`
   catch-alls — map roles exhaustively.
+
+## File locks
+
+When multiple sessions share one checkout, claim files before editing them with the
+`lock` binary instead of writing ad-hoc `.lock` files:
+
+- `lock acquire <paths…> --as <stable-session-id>` before editing; it exits `1` with
+  the current holder if any path is taken — branch on that.
+- `lock release <paths…> --as <same-id>` (or `lock release --all --as <id>`) when done.
+- Always pass a consistent `--as <id>` (or set `$DEVKIT_SESSION`) so acquire and
+  release refer to the same holder.
 
 ## Registry facade
 
