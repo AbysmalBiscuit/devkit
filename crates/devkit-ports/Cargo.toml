@@ -13,3 +13,6 @@ serde_yaml_ng.workspace = true
 fd-lock.workspace = true
 nix.workspace = true
 devkit-common.workspace = true
+
+[features]
+daemon = []
