@@ -21,10 +21,3 @@ the lock facade resolves the project root from CWD and the holder from process
 identity client-side, so the server can't reuse the high-level functions directly.
 Reuse the `Store` seam and extract the daemon framing/transport/client into
 `devkit-common` at that point (a second daemon consumer makes it pay off).
-
-## Unify the two flock'd-JSON stores
-
-`devkit-ports::registry` (private `read`/`write`/`salvage`/`with_lock`) and
-`devkit-locks::store` are the same machine over different schemas. Extract a generic
-`devkit-common` locked-JSON store (a `with_lock<T>` parameterized by lock path, data
-path, and a `Default + Serialize + Deserialize` payload) and have both adopt it.
