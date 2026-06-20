@@ -9,6 +9,10 @@ mod bucket;
 #[allow(dead_code)]
 mod chart;
 
+// Task 4.5 consumes issues, origin, pr_timeline, and commit_dates from this module.
+#[allow(dead_code)]
+mod data;
+
 // bucket, chart, mode, all_roles, and author are unused until Phase 4's timeline
 // rendering. Remove this allow when Task 4.5 implements those features.
 #[allow(dead_code)]
