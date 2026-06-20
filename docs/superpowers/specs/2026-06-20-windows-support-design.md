@@ -1,9 +1,9 @@
 # Full Windows support for devkit
 
 **Status:** implemented. All five binaries build, lint, test, and run on
-`x86_64-pc-windows-msvc`. Shipped as a single native pass rather than the three
-phased PRs originally planned (see Delivery). The one item still open is adding
-Windows targets to the *release* build matrix.
+`x86_64-pc-windows-msvc`, and the release build matrix publishes Windows
+binaries. Shipped as a single native pass rather than the three phased PRs
+originally planned (see Delivery).
 **Date:** 2026-06-20
 
 ## Goal
@@ -135,11 +135,9 @@ landing first within that pass so the Unix-risk ordering held. What shipped:
   skips gracefully when no launchable interpreter exists.
 - CI: `windows-latest` is in the test matrix and clippy runs on it under
   `-D warnings` (clippy fans out over both platform branches).
-
-**Open**
-- The *release* build matrix (`.github/workflows/release-please.yml`) still
-  builds only Linux + macOS. Adding `x86_64-pc-windows-msvc` (and
-  `aarch64-pc-windows-msvc` build-only) is the remaining work.
+- Release: the build matrix (`.github/workflows/release-please.yml`) publishes
+  `x86_64-pc-windows-msvc` binaries; `aarch64-pc-windows-msvc` builds dry-run
+  (build-only) until a native ARM64 Windows test runner exists.
 
 ## Known limitations (to document in code/README)
 

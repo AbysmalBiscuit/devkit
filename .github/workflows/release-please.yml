@@ -42,6 +42,13 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-apple-darwin
             os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          # Build-only: no native ARM64 Windows runner exists to test the
+          # artifact, so it compiles but is not published.
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            dry-run: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,5 +59,6 @@ jobs:
           target: ${{ matrix.target }}
           archive: devkit-$tag-$target
           checksum: sha256
+          dry-run: ${{ matrix.dry-run || false }}
           ref: refs/tags/${{ needs.release-please.outputs.tag_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
