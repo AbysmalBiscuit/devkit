@@ -1,6 +1,10 @@
 use crate::{prs, triage};
 use anyhow::Result;
 
+// Task 4.5 wires these items into the timeline rendering; allow until then.
+#[allow(dead_code)]
+mod bucket;
+
 // bucket, chart, mode, all_roles, and author are unused until Phase 4's timeline
 // rendering. Remove this allow when Task 4.5 implements those features.
 #[allow(dead_code)]
