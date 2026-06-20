@@ -61,6 +61,25 @@ restart-looped forever — exhaust the budget and fall back to warn.
 
 ---
 
+## Crash-restart vs. external registry prune (race)
+
+**Status:** known limitation — daemon supervision.
+**The race:** when a supervised child crashes, the supervision thread reaps it, waits a
+short debounce, then reads `ports.json` raw (no liveness prune) to tell a crash (row
+still present → restart) from an intentional `down` (row removed → let die). That raw
+read deliberately avoids `registry::snapshot()`, which prunes dead-pid rows. But an
+*external* `registry::snapshot()` (e.g. a concurrent `devrun status`) running inside the
+sub-second crash window prunes the dead row to disk first; the daemon's raw read then
+sees it absent and treats the crash as an intentional stop — so the server is not
+restarted.
+**Why deferred:** the window is ~200–700 ms and needs a concurrent external snapshot;
+unlikely interactively, plausible in tight CI loops. A proper fix makes the daemon the
+authority on supervised-process liveness (e.g. snapshot does not prune rows a live daemon
+owns, or the daemon marks supervised rows so external prunes skip them) — which belongs
+with the future daemon-managed liveness path rather than the v1 poll loop.
+
+---
+
 ## Health-probe restarts (daemon phase 2)
 
 **Status:** deferred — spec §7.

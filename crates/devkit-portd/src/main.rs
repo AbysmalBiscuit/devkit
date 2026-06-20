@@ -132,10 +132,13 @@ fn main() -> Result<()> {
             // Reap exited children; restart only those whose ports.json row survives
             // (the cross-tool stop signal). Debounce the read so a concurrent legacy
             // `down` that removes the row just before the exit isn't misread as a crash.
+            // Use a raw read (no liveness prune) so a row with a now-dead pid is still
+            // visible here — it's the daemon's signal that the exit was a crash, not an
+            // intentional stop. `snapshot()` prunes dead-pid rows before we can see them.
             let dead = d.sup.lock().unwrap().reap_once();
             if !dead.is_empty() {
                 std::thread::sleep(Duration::from_millis(200)); // debounce
-                let snap = registry::snapshot().unwrap_or_default();
+                let snap = registry::with_lock(|d| Ok(d.clone())).unwrap_or_default();
                 for key in dead {
                     let row = snap.entries.values().find(|e|
                         e.holder == key.holder && e.app == key.app && e.role == key.role);
