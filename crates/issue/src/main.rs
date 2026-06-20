@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod end;
 mod prs;
+mod review;
 mod setup;
 mod status;
 mod triage;
@@ -56,6 +57,23 @@ enum Cmd {
         #[arg(long = "no-cache")]
         no_cache: bool,
     },
+    /// Push, open/reuse a PR, add a reviewer, and Slack them the body + PR link.
+    Review {
+        /// Slack message body (PR URL is appended automatically).
+        body: String,
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        reviewer: Option<String>,
+        #[arg(long)]
+        base: Option<String>,
+        #[arg(long = "pr-title")]
+        pr_title: Option<String>,
+        #[arg(long = "pr-body")]
+        pr_body: Option<String>,
+        #[arg(long = "no-push")]
+        no_push: bool,
+    },
 }
 
 fn start(dir: &Option<String>) -> String {
@@ -73,6 +91,11 @@ fn main() -> Result<()> {
         Some(Cmd::End { ids, yes, force, pr_only, clean_worktree }) =>
             end::run(&start(&cli.dir), &ids, yes, force, pr_only, clean_worktree),
         Some(Cmd::Prs { mine, reviews, repo, no_cache }) => prs::run(mine, reviews, repo, no_cache),
+        Some(Cmd::Review { body, to, reviewer, base, pr_title, pr_body, no_push }) =>
+            review::run(review::ReviewArgs {
+                body, to, reviewer, base, pr_title, pr_body, no_push,
+                dir: cli.dir, config: cli.config,
+            }),
         None => status::run(&start(&cli.dir), &[]),
     }
 }
