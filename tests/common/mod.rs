@@ -84,7 +84,8 @@ impl Harness {
             .env("HOME", &home)
             .env("XDG_STATE_HOME", &xdg_state)
             .env("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string())
-            // Suppress the daemon from touching the real HOME's registry.
+            // The daemon sets this itself; pre-setting it keeps facade calls in the
+            // child resolving locally rather than connecting back over the socket.
             .env("DEVKIT_PORTD_SELF", "1")
             .spawn()
             .expect("spawn devkit-portd");

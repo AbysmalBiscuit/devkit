@@ -146,10 +146,11 @@ impl Store for FlockStore {
         Ok(store::load(&self.data_path))
     }
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
-        // The daemon process is itself the exclusive gate holder, so it must not
-        // attempt to re-acquire the shared lock (deadlock or spurious refusal).
-        // All other callers hold the shared gate for the whole RMW; a held exclusive
-        // (a live daemon) makes try_read fail, surfaced as the typed refusal.
+        // A process that already holds portd.lock exclusive (devkit-portd, which
+        // sets DEVKIT_PORTD_SELF) must not re-acquire it shared: depending on the OS
+        // lock backend that would deadlock or spuriously refuse. Every other caller
+        // holds the shared gate for the whole RMW; when a daemon holds the lock
+        // exclusive, try_read fails and surfaces as the typed refusal.
         if std::env::var_os("DEVKIT_PORTD_SELF").is_none() {
             if let Some(parent) = self.gate_path.parent() {
                 std::fs::create_dir_all(parent)?;
