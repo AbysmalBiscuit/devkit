@@ -184,6 +184,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "devkit-common",
+ "devkit-locks",
  "devkit-ports",
  "fd-lock",
  "nix",
@@ -205,6 +206,18 @@ dependencies = [
  "serde_json",
  "supports-hyperlinks",
  "ureq",
+]
+
+[[package]]
+name = "devkit-locks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "devkit-common",
+ "fd-lock",
+ "nix",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
