@@ -7,6 +7,7 @@ version = "0.1.0" # x-release-please-version
 anyhow.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
+fd-lock.workspace = true
 comfy-table.workspace = true
 anstyle.workspace = true
 supports-hyperlinks.workspace = true

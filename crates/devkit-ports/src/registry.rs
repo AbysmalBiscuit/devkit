@@ -1,9 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use devkit_common::paths;
-use fd_lock::RwLock;
+use devkit_common::store::{self, Document, salvage_map};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -59,78 +58,29 @@ pub fn now() -> u64 {
         .as_secs()
 }
 
-fn read(path: &std::path::Path) -> Data {
-    let s = match fs::read_to_string(path) {
-        Ok(s) if !s.trim().is_empty() => s,
-        _ => return Data::default(),
-    };
-    match serde_json::from_str::<Data>(&s) {
-        Ok(d) => d,
-        // A parse failure usually means a schema change, not garbage. Salvage every
-        // entry we can still understand rather than discarding live reservations.
-        Err(_) => match salvage(&s) {
-            Some(d) => {
-                eprintln!(
-                    "warning: registry schema differs; salvaged {} entr{}",
-                    d.entries.len(),
-                    if d.entries.len() == 1 { "y" } else { "ies" }
-                );
-                d
-            }
-            None => {
-                let _ = fs::rename(path, path.with_extension("json.bak"));
-                eprintln!("warning: unreadable registry; backed up and reinitialised");
-                Data::default()
-            }
-        },
+impl Document for Data {
+    fn stamp_version(&mut self) {
+        self.version = SCHEMA_VERSION;
     }
-}
-
-/// Best-effort recovery: pull whatever entries still deserialize from a registry
-/// whose top-level schema has drifted. Returns None only if there's no `entries`
-/// object to recover at all.
-fn salvage(s: &str) -> Option<Data> {
-    let v: serde_json::Value = serde_json::from_str(s).ok()?;
-    let obj = v.get("entries")?.as_object()?;
-    let mut entries = BTreeMap::new();
-    for (k, val) in obj {
-        if let (Ok(port), Ok(entry)) = (
-            k.parse::<u16>(),
-            serde_json::from_value::<Entry>(val.clone()),
-        ) {
-            entries.insert(port, entry);
-        }
+    /// Recover whatever port entries still deserialize from a registry whose
+    /// top-level schema has drifted; `None` only if there's no `entries` object.
+    fn salvage(raw: &str) -> Option<Self> {
+        Some(Data {
+            version: 0,
+            entries: salvage_map(raw, "entries", |k| k.parse::<u16>().ok())?,
+        })
     }
-    Some(Data {
-        version: 0,
-        entries,
-    })
-}
-
-fn write(path: &std::path::Path, data: &Data) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(data)?)?;
-    fs::rename(&tmp, path).context("atomically replacing registry")?;
-    Ok(())
+    fn label() -> &'static str {
+        "registry"
+    }
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 /// Run `f` while holding the exclusive registry lock; persists the mutated `Data`.
 pub fn with_lock<T>(f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
-    fs::create_dir_all(paths::state_dir())?;
-    let lock_path = paths::lock_file();
-    let _ = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)?;
-    let mut lock = RwLock::new(File::open(&lock_path)?);
-    let _guard = lock.write()?; // blocks until exclusive
-    let reg = paths::registry_file();
-    let mut data = read(&reg);
-    let out = f(&mut data)?;
-    data.version = SCHEMA_VERSION;
-    write(&reg, &data)?;
-    Ok(out)
+    store::with_lock(&paths::lock_file(), &paths::registry_file(), f)
 }
 
 #[cfg(test)]
@@ -620,14 +570,14 @@ mod ops_tests {
         // reservation under `entries` must still be recovered, not discarded.
         let json = r#"{"version":"oops","entries":{"9100":{"app":"api","holder":"/w","role":"issue","pid":4321,"logfile":null,"ts":1}}}"#;
         assert!(serde_json::from_str::<Data>(json).is_err());
-        let d = salvage(json).expect("entries object present");
+        let d = Data::salvage(json).expect("entries object present");
         assert_eq!(d.entries[&9100].pid, Some(4321));
         assert_eq!(d.entries[&9100].app, "api");
     }
 
     #[test]
     fn salvage_gives_up_without_entries_object() {
-        assert!(salvage(r#"{"something":"else"}"#).is_none());
+        assert!(Data::salvage(r#"{"something":"else"}"#).is_none());
     }
 
     #[test]

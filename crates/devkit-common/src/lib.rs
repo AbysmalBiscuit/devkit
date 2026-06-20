@@ -3,6 +3,7 @@ pub mod linear;
 pub mod paths;
 pub mod report;
 pub mod slack;
+pub mod store;
 pub mod supervise;
 pub mod sys;
 pub mod ui;
