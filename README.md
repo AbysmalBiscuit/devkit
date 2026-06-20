@@ -35,7 +35,7 @@ issue setup --issue <ID> --slug <slug> --apps <a,b> [--dry-run]
 issue status [ids…]                           # read-only triage table (also the bare `issue`)
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache]
-issue dashboard [--bucket auto|day|week|month] [--chart bar|line] [--mode absolute|proportional] [--all-roles] [--author <email>] [--no-plots]
+issue dashboard [--bucket auto|day|week|month] [--chart bar|line] [--mode absolute|proportional] [--all-roles] [--author <email>] [--no-plots] [--no-cache]
 issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push]
 ```
 
@@ -43,7 +43,7 @@ issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-
 - **`status`** (the default when you run bare `issue`) — triage table of every issue worktree. A worktree is FINISHED only when its PR is MERGED, its Linear issue is Done, and the working tree is clean.
 - **`end`** — removes FINISHED worktrees. `--pr-only` ignores the Linear gate; `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation.
 - **`prs`** — at-a-glance GitHub PR triage: your open PRs and PRs awaiting your review, with a per-repo diff cache that renders `old → new` for anything changed since the last run.
-- **`dashboard`** — the at-a-glance triage + PR tables, plus terminal timelines of your Linear issues by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). `--no-plots` shows only the tables.
+- **`dashboard`** — the at-a-glance triage + PR tables, plus terminal timelines of your Linear issues by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). The timeline fetches (Linear + GitHub) are cached under `~/.cache/devkit/dashboard` for a few minutes so reruns are fast; the live triage/PR panel is never cached. `--no-plots` shows only the tables; `--no-cache` forces a fresh fetch.
 - **`review`** — pushes the current branch, opens or reuses its PR, adds a reviewer, and sends the reviewer a Slack message with the PR link. Never force-pushes. With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON object for an agent to forward. `--to` names a `[people]` alias from the config.
 
 ### `lock` — File Locks

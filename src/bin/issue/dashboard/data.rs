@@ -1,22 +1,38 @@
 use chrono::{DateTime, Utc};
 use devkit_common::cmd::{capture, gh_json};
 use devkit_common::linear::{self, AssignedIssue};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::bucket::parse_ts;
+use super::cache;
+
+/// How long a cached timeline fetch stays fresh. The timeline charts show
+/// slow-moving trends, so a few minutes of staleness is invisible; the live
+/// at-a-glance panel above them is never cached. `--no-cache` forces a refetch.
+const TTL_SECS: u64 = 900;
 
 /// Linear issues assigned to me, with history (empty if no key / on error).
-pub fn issues() -> Vec<AssignedIssue> {
+/// With `use_cache`, a fresh prior fetch is reused; failures are never cached.
+pub fn issues(use_cache: bool) -> Vec<AssignedIssue> {
     let Ok(key) = std::env::var("LINEAR_API_KEY") else {
         return Vec::new();
     };
-    match linear::assigned_issue_history(&key) {
+    if use_cache
+        && let Some(v) = cache::get::<Vec<AssignedIssue>>("issues", TTL_SECS)
+    {
+        return v;
+    }
+    let v = match linear::assigned_issue_history(&key) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Linear history fetch failed: {e}");
             Vec::new()
         }
+    };
+    if use_cache && !v.is_empty() {
+        cache::put("issues", &v);
     }
+    v
 }
 
 /// Timeline origin: my Linear account creation, else the earliest issue createdAt.
@@ -42,8 +58,44 @@ struct PrTimes {
     deletions: i64,
 }
 
+/// A `pr_timeline` result reduced to unix-second stamps so it serializes without
+/// chrono's serde feature; reconstituted into `DateTime`s on the way back out.
+#[derive(Serialize, Deserialize)]
+struct PrTimelineCache {
+    opened: Vec<i64>,
+    merged: Vec<i64>,
+    additions: i64,
+    deletions: i64,
+}
+
+fn to_datetimes(stamps: &[i64]) -> Vec<DateTime<Utc>> {
+    stamps
+        .iter()
+        .filter_map(|&s| DateTime::from_timestamp(s, 0))
+        .collect()
+}
+
 /// (opened stamps, merged stamps, total additions, total deletions) for my PRs.
-pub fn pr_timeline(all_roles: bool) -> (Vec<DateTime<Utc>>, Vec<DateTime<Utc>>, i64, i64) {
+/// With `use_cache`, a fresh prior fetch is reused; failures are never cached.
+pub fn pr_timeline(
+    all_roles: bool,
+    use_cache: bool,
+) -> (Vec<DateTime<Utc>>, Vec<DateTime<Utc>>, i64, i64) {
+    let key = if all_roles {
+        "pr-timeline-all"
+    } else {
+        "pr-timeline-mine"
+    };
+    if use_cache
+        && let Some(c) = cache::get::<PrTimelineCache>(key, TTL_SECS)
+    {
+        return (
+            to_datetimes(&c.opened),
+            to_datetimes(&c.merged),
+            c.additions,
+            c.deletions,
+        );
+    }
     let fetch = |search: &str| -> Vec<PrTimes> {
         gh_json(
             &[
@@ -66,16 +118,27 @@ pub fn pr_timeline(all_roles: bool) -> (Vec<DateTime<Utc>>, Vec<DateTime<Utc>>, 
     if all_roles {
         prs.extend(fetch("reviewed-by:@me"));
     }
-    let opened: Vec<_> = prs
+    let opened: Vec<DateTime<Utc>> = prs
         .iter()
         .filter_map(|p| p.created_at.as_deref().and_then(parse_ts))
         .collect();
-    let merged: Vec<_> = prs
+    let merged: Vec<DateTime<Utc>> = prs
         .iter()
         .filter_map(|p| p.merged_at.as_deref().and_then(parse_ts))
         .collect();
     let add = prs.iter().map(|p| p.additions).sum();
     let del = prs.iter().map(|p| p.deletions).sum();
+    if use_cache && !(opened.is_empty() && merged.is_empty()) {
+        cache::put(
+            key,
+            &PrTimelineCache {
+                opened: opened.iter().map(|d| d.timestamp()).collect(),
+                merged: merged.iter().map(|d| d.timestamp()).collect(),
+                additions: add,
+                deletions: del,
+            },
+        );
+    }
     (opened, merged, add, del)
 }
 

@@ -70,7 +70,7 @@ fn fetch(
     Ok(out)
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StateRef {
     pub name: String,
     #[serde(rename = "type")]
@@ -78,7 +78,7 @@ pub struct StateRef {
     pub color: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AssignedIssue {
     pub identifier: String,
     pub created_at: String,

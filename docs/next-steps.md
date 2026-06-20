@@ -10,13 +10,6 @@ the base repo: `../devkit/docs/issue-binary-migration.md` (i.e. the non-worktree
 checkout). Callers include `~/.claude/commands/{issue-setup,issue-end,migration-review}.md`,
 `~/.claude/scripts/issue-end-*.sh`, and `~/.local/bin/{pr-status,issue-end}.py`.
 
-## Dashboard archive-cache seam
-
-`issue dashboard` currently fetches live data (Linear GraphQL + `gh` + `git log`)
-on every run. The design anticipates an archive/cache layer so historical buckets
-don't require a full refetch each time; the fetch lives behind `dashboard/data.rs`,
-which is the seam to plug a cache into.
-
 ## Route `lock` through the supervisor daemon
 
 `lock` acquire/release/status/check go straight to the flock'd `locks.json` today.

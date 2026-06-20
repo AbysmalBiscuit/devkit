@@ -76,6 +76,8 @@ enum Cmd {
         author: Option<String>,
         #[arg(long = "no-plots")]
         no_plots: bool,
+        #[arg(long = "no-cache")]
+        no_cache: bool,
     },
     /// Push, open/reuse a PR, add a reviewer, and Slack them the body + PR link.
     Review {
@@ -141,6 +143,7 @@ fn main() -> Result<()> {
             all_roles,
             author,
             no_plots,
+            no_cache,
         }) => dashboard::run(dashboard::DashboardArgs {
             bucket,
             chart,
@@ -148,6 +151,7 @@ fn main() -> Result<()> {
             all_roles,
             author,
             no_plots,
+            no_cache,
             dir: cli.dir,
             config: cli.config,
         }),

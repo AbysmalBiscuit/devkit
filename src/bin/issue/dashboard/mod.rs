@@ -2,6 +2,7 @@ use crate::{prs, triage};
 use anyhow::{Context, Result};
 
 mod bucket;
+mod cache;
 mod chart;
 mod data;
 
@@ -12,6 +13,7 @@ pub struct DashboardArgs {
     pub all_roles: bool,
     pub author: Option<String>,
     pub no_plots: bool,
+    pub no_cache: bool,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -39,7 +41,8 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let width = chart::term_width();
 
     // --- Issues by status over time ---
-    let issues = data::issues();
+    let use_cache = !args.no_cache;
+    let issues = data::issues(use_cache);
     if issues.is_empty() {
         println!("\n(no Linear issues — set LINEAR_API_KEY for the issue timeline)");
     } else if let Some(first) = data::origin(&issues) {
@@ -131,7 +134,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     }
 
     // --- PRs opened/merged + commits over time ---
-    let (opened, merged, add, del) = data::pr_timeline(args.all_roles);
+    let (opened, merged, add, del) = data::pr_timeline(args.all_roles, use_cache);
     let author = match args.author.clone() {
         Some(a) => a,
         None => capture_email(&start),
