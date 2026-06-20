@@ -136,9 +136,7 @@ pub fn listening(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_err()
 }
 pub fn pid_alive(pid: u32) -> bool {
-    use nix::sys::signal::kill;
-    use nix::unistd::Pid;
-    kill(Pid::from_raw(pid as i32), None).is_ok()
+    devkit_common::sys::process_alive(pid)
 }
 pub fn holder_alive(holder: &str) -> bool {
     std::path::Path::new(holder).exists()

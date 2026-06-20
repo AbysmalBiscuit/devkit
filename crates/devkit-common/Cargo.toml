@@ -11,4 +11,7 @@ comfy-table.workspace = true
 anstyle.workspace = true
 supports-hyperlinks.workspace = true
 ureq.workspace = true
+
+# Unix process primitives (signals, sessions); unavailable on Windows.
+[target.'cfg(unix)'.dependencies]
 nix.workspace = true

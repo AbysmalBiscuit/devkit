@@ -4,5 +4,6 @@ pub mod paths;
 pub mod report;
 pub mod slack;
 pub mod supervise;
+pub mod sys;
 pub mod ui;
 pub mod worktree;

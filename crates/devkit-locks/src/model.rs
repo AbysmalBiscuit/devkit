@@ -68,18 +68,8 @@ pub struct AcquireOutcome {
 }
 
 /// True if a process with this pid currently exists (signal 0 probe).
-/// Returns false for pid values that cannot be valid process identifiers on
-/// this platform (e.g. values that overflow i32 or map to sentinel values
-/// such as 0 and -1 in kill(2)).
 pub fn pid_alive(pid: u32) -> bool {
-    use nix::sys::signal::kill;
-    use nix::unistd::Pid;
-    // Pids that do not fit in a positive i32 are invalid on Linux/macOS.
-    let Ok(signed) = i32::try_from(pid) else { return false };
-    if signed <= 0 {
-        return false;
-    }
-    kill(Pid::from_raw(signed), None).is_ok()
+    devkit_common::sys::process_alive(pid)
 }
 
 /// A lock is dead when its TTL has lapsed, or its anchor pid is known and gone.
