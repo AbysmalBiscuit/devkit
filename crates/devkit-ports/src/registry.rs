@@ -170,6 +170,42 @@ impl Store for FlockStore {
     }
 }
 
+/// The daemon's authoritative in-memory registry. Reads are served from memory
+/// with no flock and no file read; a mutation writes the file through (atomic
+/// rename) and updates memory only if that write succeeded — the file is the
+/// commit point, so memory and file never diverge and a crash can't orphan a pid.
+pub struct MemoryStore {
+    state: std::sync::Arc<std::sync::Mutex<Data>>,
+    data_path: PathBuf,
+}
+
+impl MemoryStore {
+    pub fn new(state: std::sync::Arc<std::sync::Mutex<Data>>, data_path: PathBuf) -> Self {
+        Self { state, data_path }
+    }
+}
+
+impl Store for MemoryStore {
+    fn snapshot(&self) -> Result<Data> {
+        Ok(self.state.lock().expect("registry mutex poisoned").clone())
+    }
+    fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
+        let mut guard = self.state.lock().expect("registry mutex poisoned");
+        let mut next = guard.clone();
+        let out = f(&mut next)?;
+        next.stamp_version();
+        store::save(&self.data_path, &next)?; // commit point: persist before memory
+        *guard = next;
+        Ok(out)
+    }
+}
+
+/// Load the registry file into a `Data` for an owner with its own exclusion
+/// (the daemon, holding `portd.lock` exclusive, at startup).
+pub fn load() -> Data {
+    store::load(&paths::registry_file())
+}
+
 /// Run `f` against the registry under the direct flock path. Public because
 /// `devrun down` and the multiprocess race test drive a custom RMW through it;
 /// now gated, so it refuses to write behind a live daemon.
@@ -782,6 +818,37 @@ mod store_seam_tests {
         let _held = excl.try_write().unwrap();
         let snap = snapshot_with(&store).expect("read must not fail under held gate");
         assert!(!snap.entries.contains_key(&9100), "dead entry pruned from the returned view");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memorystore_commit_writes_through_and_updates_memory() {
+        let dir = tmp("mem-ok");
+        let state = std::sync::Arc::new(std::sync::Mutex::new(Data::default()));
+        let store = MemoryStore::new(state.clone(), dir.join("ports.json"));
+        alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
+        // memory updated
+        assert_eq!(state.lock().unwrap().entries.len(), 1);
+        // file written through (load sees it)
+        let on_disk: Data = devkit_common::store::load(&dir.join("ports.json"));
+        assert_eq!(on_disk.entries.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memorystore_commit_failure_leaves_memory_unchanged() {
+        let dir = tmp("mem-fail");
+        let state = std::sync::Arc::new(std::sync::Mutex::new(Data::default()));
+        // Point the data path at a *directory* so the file write fails.
+        let bad = dir.join("as-dir");
+        std::fs::create_dir_all(&bad).unwrap();
+        let store = MemoryStore::new(state.clone(), bad);
+        let err = alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue);
+        assert!(err.is_err(), "write-through failure must error");
+        assert!(
+            state.lock().unwrap().entries.is_empty(),
+            "memory must be unchanged when the write fails"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
