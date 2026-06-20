@@ -1,6 +1,9 @@
 # Full Windows support for devkit
 
-**Status:** approved design, pending implementation plan
+**Status:** implemented. All five binaries build, lint, test, and run on
+`x86_64-pc-windows-msvc`. Shipped as a single native pass rather than the three
+phased PRs originally planned (see Delivery). The one item still open is adding
+Windows targets to the *release* build matrix.
 **Date:** 2026-06-20
 
 ## Goal
@@ -67,8 +70,8 @@ This removes the IPC `#[cfg]` entirely. Touched: `daemon/client.rs`,
 `devkit-portd/main.rs`, `devkit-portd/server.rs`, `tests/common/mod.rs`. A small
 helper resolves the platform socket name from `paths`.
 
-This swaps the working Unix transport, so it lands and is verified on Unix first
-(Phase 1), isolating that risk from the Windows work.
+The transport landed and was verified on Unix before the Windows named-pipe arm
+was added, isolating the transport-swap risk from the Windows work.
 
 ## Config-driven `issue setup`
 
@@ -97,8 +100,9 @@ it is never needed. Apps started outside `devrun` no longer get an auto-symlinke
 ## Path resolution
 
 `paths.rs` assumes XDG/`HOME`. Windows has neither, so state, log, and socket
-bases resolve to `%LOCALAPPDATA%\devkit` on Windows; Unix is unchanged. This is
-`#[cfg(windows)]` code, so it is added and exercised in Phase 2.
+bases resolve to `%LOCALAPPDATA%` on Windows (`HOME` falls back to `USERPROFILE`),
+while `XDG_STATE_HOME` is still honored everywhere so test isolation is preserved;
+Unix is unchanged.
 
 ## Dependencies
 
@@ -110,28 +114,32 @@ bases resolve to `%LOCALAPPDATA%\devkit` on Windows; Unix is unchanged. This is
   `nix`.
 - `devkit-locks`: drop direct `nix`.
 
-## Delivery: three phased PRs
+## Delivery
 
-### Phase 1 — Unix-only (merge gate: all 128 tests green on Linux + macOS)
-- Introduce `devkit_common::sys` with `unix.rs` only; migrate every call site.
-- Swap the daemon transport to `interprocess`.
-- Make `issue setup` config-driven; delete the symlink and hardcoded
-  `bun install`.
-- No Windows code yet; no Unix behavior change.
+The design was planned as three phased PRs but shipped as a single native-Windows
+pass on a Windows host, with the transport swap and the `sys` boundary still
+landing first within that pass so the Unix-risk ordering held. What shipped:
 
-### Phase 2 — Windows enablement (verified on a Windows host)
-- Add `sys/windows.rs` + the `windows-sys` dependency.
-- Add the `%LOCALAPPDATA%` path bases.
-- Port the Unix-only test helpers (`tests/common`, `tests/supervision`) to the
-  `sys`/`interprocess` API.
-- Gate: `cargo build` and `cargo test` pass on `x86_64-pc-windows-msvc`.
+**Done**
+- `devkit_common::sys` boundary with both `unix.rs` and `windows.rs`; every call
+  site migrated. `nix` is now a `devkit-common` `cfg(unix)`-only dependency.
+- Daemon transport unified on `interprocess` — Unix-domain socket on Unix, named
+  pipe on Windows.
+- `issue setup` is config-driven (`setup: Vec<Vec<String>>`); the `.env` symlink
+  and hardcoded `bun install` are gone, so no `symlink` primitive is needed.
+- `%LOCALAPPDATA%` path bases on Windows; `devrun logs --follow` no longer uses
+  an `os::unix` exec; the `libc` winsize ioctl is gated to Unix (Windows uses a
+  width fallback).
+- The Unix-only integration test (`tests/supervision.rs`, POSIX signals + python
+  http server) stays `#[cfg(unix)]`; the python-backed `supervise` unit test
+  skips gracefully when no launchable interpreter exists.
+- CI: `windows-latest` is in the test matrix and clippy runs on it under
+  `-D warnings` (clippy fans out over both platform branches).
 
-### Phase 3 — CI + release
-- Add `windows-latest` to the CI test matrix.
-- Add `x86_64-pc-windows-msvc` to the release build matrix; add
-  `aarch64-pc-windows-msvc` **build-only** (no native GitHub ARM64 Windows
-  runner to test on).
-- Remove the "skip Windows" note from the release workflow.
+**Open**
+- The *release* build matrix (`.github/workflows/release-please.yml`) still
+  builds only Linux + macOS. Adding `x86_64-pc-windows-msvc` (and
+  `aarch64-pc-windows-msvc` build-only) is the remaining work.
 
 ## Known limitations (to document in code/README)
 
@@ -144,13 +152,13 @@ bases resolve to `%LOCALAPPDATA%\devkit` on Windows; Unix is unchanged. This is
 
 ## Testing
 
-- Unix: the existing 128 tests are the Phase 1 gate and must stay green
-  unchanged.
-- Windows: the same integration tests (`lifecycle`, `parity`, `supervision`)
-  run once the transport is `interprocess` and the test helpers use `sys`.
-- Add focused unit tests for `sys/windows.rs` primitives where practical
-  (`process_alive` of self vs. a reaped pid, `parent_pid` non-zero,
-  `tree_rss_bytes(self) > 0`).
+- Unix: the full workspace test suite stays the merge gate on Linux + macOS and
+  must stay green unchanged.
+- Windows: the daemon integration tests (`lifecycle`, `parity`) run over the
+  named-pipe transport on `windows-latest`; `supervision` is `#[cfg(unix)]`
+  (POSIX signals + python http server) and compiles to nothing on Windows.
+- `sys/mod.rs` carries focused unit tests for the boundary primitives
+  (`process_alive` of self vs. pid 0, `parent_pid` present, `tree_rss_bytes(self) > 0`).
 
 ## Out of scope
 

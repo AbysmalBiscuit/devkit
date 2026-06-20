@@ -1,5 +1,14 @@
 # Windows Support — Phase 1 Implementation Plan
 
+> **Status: implemented (historical record).** Every task below shipped, and the
+> work originally scoped as Phase 2 (the `sys/windows.rs` backend, `windows-sys`,
+> `%LOCALAPPDATA%` paths, `devrun` `cmd_logs`, the Windows handling of the test
+> helpers) was folded into the same native pass. The codebase — not this
+> document — is the source of truth; the unchecked `- [ ]` boxes are preserved as
+> the plan that was followed, not outstanding work. The only item not yet done is
+> adding Windows targets to the release build matrix (see the design doc's
+> Delivery → Open).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Refactor all OS-specific code behind a single `devkit_common::sys` boundary and unify the daemon transport on `interprocess`, with zero change to Unix behavior — the groundwork that makes the later Windows port a matter of adding one file.
@@ -920,7 +929,7 @@ git commit -m "feat(issue): config-driven setup commands; drop .env symlink and 
 - `nix` only in `crates/devkit-common/Cargo.toml` under `cfg(unix)`; the only `std::os::unix` left is `devrun` `cmd_logs` and `tests/supervision.rs` (both Phase 2).
 - Daemon speaks over `interprocess`; `issue setup` is config-driven with no symlink.
 
-**Next:** Phase 2 (`sys/windows.rs` + `windows-sys`, `%LOCALAPPDATA%` paths, `cmd_logs`/`tests/supervision` Windows handling, build+test on `x86_64-pc-windows-msvc`) gets its own plan.
+**What followed:** the Phase 2 work (`sys/windows.rs` + `windows-sys`, `%LOCALAPPDATA%` paths, `cmd_logs`/`tests/supervision` Windows handling, build+test on `x86_64-pc-windows-msvc`) was implemented directly in the same native pass rather than via a separate plan, and CI now gates `windows-latest`. The only remaining item is adding Windows targets to the release build matrix.
 
 ## Self-review notes
 
