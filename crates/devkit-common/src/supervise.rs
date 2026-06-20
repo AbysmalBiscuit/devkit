@@ -87,39 +87,28 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    /// `configure_child` must remove `DEVKIT_PORTD_SELF` from the child's env even
-    /// when the caller's process has it set, so a devkit subprocess of a supervised
-    /// server cannot write the registry behind the live daemon.
+    /// `configure_child` must remove `DEVKIT_PORTD_SELF` from the child's env so a
+    /// devkit subprocess of a supervised server cannot write the registry behind the
+    /// live daemon. `env_remove` records the removal as `(key, None)` in `get_envs`
+    /// on every platform, so anything other than an explicit removal means the child
+    /// would inherit the marker — the regression this test guards against.
     #[test]
     fn spawn_detached_does_not_leak_daemon_marker() {
-        // Set the marker in the test process to confirm the removal is active.
-        unsafe { std::env::set_var("DEVKIT_PORTD_SELF", "1") };
         let env = BTreeMap::new();
         let mut c = Command::new("true"); // program name does not matter
         configure_child(&mut c, &[], ".", &env);
-        // get_envs() returns None for keys explicitly removed, Some(_) for inherited.
         let marker = c
             .get_envs()
             .find(|(k, _)| *k == OsStr::new("DEVKIT_PORTD_SELF"));
         match marker {
             Some((_, None)) => {} // explicit removal recorded — correct
-            Some((_, Some(v))) => panic!(
-                "DEVKIT_PORTD_SELF must be removed but child would inherit {:?}",
-                v
-            ),
-            None => {
-                // The key does not appear in get_envs() at all. On some platforms
-                // env_remove of a key not present in the inherited set is a no-op in
-                // the get_envs iterator. Confirm the test process actually has it set
-                // so the removal was meaningful and we're not testing an empty case.
-                assert!(
-                    std::env::var_os("DEVKIT_PORTD_SELF").is_some(),
-                    "DEVKIT_PORTD_SELF was not set in the test process — test is a no-op"
-                );
+            Some((_, Some(v))) => {
+                panic!("DEVKIT_PORTD_SELF must be removed but child would inherit {v:?}")
             }
+            None => panic!(
+                "DEVKIT_PORTD_SELF is not removed from the child env — spawn_detached must env_remove it"
+            ),
         }
-        // Clean up so we don't pollute other tests in the same process.
-        unsafe { std::env::remove_var("DEVKIT_PORTD_SELF") };
     }
 
     /// First python interpreter that actually launches, if any. Returns the program
