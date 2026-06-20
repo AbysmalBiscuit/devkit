@@ -1,10 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod end;
 mod setup;
 mod status;
-// end and dashboard subcommands (later tasks) consume remaining triage items
-#[allow(dead_code)]
 mod triage;
 
 #[derive(Parser)]
@@ -33,6 +32,18 @@ enum Cmd {
     },
     /// Read-only report of every issue worktree (optionally filtered by ID).
     Status { ids: Vec<String> },
+    /// Remove FINISHED worktrees (PR merged + Linear done + clean).
+    End {
+        ids: Vec<String>,
+        #[arg(short = 'y', long)]
+        yes: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long = "pr-only")]
+        pr_only: bool,
+        #[arg(long = "clean-worktree")]
+        clean_worktree: bool,
+    },
 }
 
 fn start(dir: &Option<String>) -> String {
@@ -47,6 +58,8 @@ fn main() -> Result<()> {
             issue, slug, apps, dry_run, dir: cli.dir, config: cli.config,
         }),
         Some(Cmd::Status { ids }) => status::run(&start(&cli.dir), &ids),
+        Some(Cmd::End { ids, yes, force, pr_only, clean_worktree }) =>
+            end::run(&start(&cli.dir), &ids, yes, force, pr_only, clean_worktree),
         None => status::run(&start(&cli.dir), &[]),
     }
 }
