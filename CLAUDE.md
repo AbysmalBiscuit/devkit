@@ -79,3 +79,10 @@ When multiple sessions share one checkout, claim files before editing them with 
 Go through `registry::{alloc, record_pid, release, snapshot, prune, status_table}` — they
 keep liveness syscalls (bind/stat/kill) out of the exclusive lock. Don't reintroduce
 probing inside `with_lock`. This facade is also the seam a future port daemon plugs into.
+
+When a `devkit-portd` daemon is running it is the *authoritative* registry: it
+loads `ports.json` into memory under `portd.lock` (held exclusive for its life),
+serves reads from memory, and writes through to the file on each mutation. Direct
+callers take `portd.lock` *shared* before any write (`FlockStore` / `registry::with_lock`)
+and hard-error (`DaemonHoldsLock`) if the daemon holds it — so a non-daemon binary
+can never modify `ports.json` behind a live daemon. Reads are ungated.
