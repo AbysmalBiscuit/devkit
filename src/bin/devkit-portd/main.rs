@@ -107,6 +107,10 @@ fn main() -> Result<()> {
         Err(_) => return Ok(()), // another daemon already running
     };
 
+    // Load the registry into memory while holding portd.lock and before binding the
+    // socket, so no request is ever served against an unpopulated registry.
+    let ports = std::sync::Arc::new(std::sync::Mutex::new(registry::load()));
+
     // Holding the lock, no live daemon owns the socket — clear any stale one and bind.
     let sock = paths::socket_file();
     let _ = std::fs::remove_file(&sock); // clear a stale unix socket file before binding
@@ -127,7 +131,6 @@ fn main() -> Result<()> {
     let mem_warn = env_u64("DEVKIT_DAEMON_MEM_WARN_MB", 0) * 1024 * 1024;
     let mem_limit = env_u64("DEVKIT_DAEMON_MEM_LIMIT_MB", 0) * 1024 * 1024;
 
-    let ports = std::sync::Arc::new(std::sync::Mutex::new(registry::load()));
     let daemon = Arc::new(Daemon {
         last_activity: Mutex::new(Instant::now()),
         active_conns: AtomicUsize::new(0),
