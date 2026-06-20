@@ -3,6 +3,9 @@ name = "devrun"
 edition.workspace = true
 version.workspace = true
 
+[features]
+daemon = ["devkit-ports/daemon"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

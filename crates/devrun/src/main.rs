@@ -36,6 +36,9 @@ enum Cmd {
         env_file: Option<String>,
         #[arg(long)]
         dry_run: bool,
+        /// Hand servers to the supervisor daemon (autostarting it) so they restart on crash.
+        #[arg(long)]
+        supervise: bool,
     },
     /// Stop servers and release ports for this worktree.
     Down {
@@ -127,6 +130,12 @@ fn parse_user_env(pairs: &[String], file: Option<&str>) -> Result<BTreeMap<Strin
     Ok(m)
 }
 
+/// Options controlling how `cmd_up` launches apps.
+struct UpFlags {
+    dry_run: bool,
+    supervise: bool,
+}
+
 struct Row {
     role: Role,
     app: String,
@@ -158,8 +167,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let cwd = cwd_of(&cli);
     match &cli.cmd {
-        Cmd::Up { apps, role, env, env_file, dry_run } =>
-            cmd_up(&cli, &cwd, apps, *role, env, env_file.as_deref(), *dry_run),
+        Cmd::Up { apps, role, env, env_file, dry_run, supervise } =>
+            cmd_up(&cli, &cwd, apps, *role, env, env_file.as_deref(),
+                   UpFlags { dry_run: *dry_run, supervise: *supervise }),
         Cmd::Down { role } => cmd_down(&cwd, role.and_then(RoleSelector::filter)),
         Cmd::Status { all } => cmd_status(&cwd, *all),
         Cmd::Logs { app, role, follow } => cmd_logs(&cwd, app, role.and_then(RoleSelector::filter), *follow),
@@ -168,8 +178,11 @@ fn main() -> Result<()> {
 
 fn cmd_up(
     cli: &Cli, cwd: &str, apps_arg: &[String], role: RoleSelector,
-    env_pairs: &[String], env_file: Option<&str>, dry_run: bool,
+    env_pairs: &[String], env_file: Option<&str>, flags: UpFlags,
 ) -> Result<()> {
+    let UpFlags { dry_run, supervise } = flags;
+    #[cfg(not(feature = "daemon"))]
+    let _ = supervise;
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     let cfg = &loaded.config;
     let catalog = &loaded.catalog;
@@ -254,6 +267,35 @@ fn cmd_up(
             continue;
         }
 
+        #[cfg(feature = "daemon")]
+        if supervise {
+            let mut client = devkit_ports::daemon::client::ensure_running()
+                .context("starting supervisor daemon")?;
+            for (a, port, argv, app_cwd, envmap, log) in &plans {
+                let resp = client.request(&devkit_ports::daemon::proto::Request::Supervise {
+                    holder: holder.clone(),
+                    app: a.clone(),
+                    role: *grp_role,
+                    argv: argv.clone(),
+                    cwd: app_cwd.to_str().context("app cwd not UTF-8")?.to_string(),
+                    env: envmap.clone(),
+                    logfile: log.clone(),
+                    base_port: catalog[a].base_port,
+                })?;
+                let ready = match &resp {
+                    devkit_ports::daemon::proto::Response::Supervised(v) =>
+                        v.first().map(|(_, r)| *r).unwrap_or(false),
+                    devkit_ports::daemon::proto::Response::Err(msg) => {
+                        eprintln!("daemon could not supervise {a}: {msg}");
+                        false
+                    }
+                    _ => false,
+                };
+                rows.push(Row { role: *grp_role, app: a.clone(), port: *port, pid: None, log: log.clone(), ready: Some(ready) });
+            }
+            continue; // skip the direct-spawn path for this group
+        }
+
         // Spawn every app in the group, then poll all their ports concurrently so
         // readiness waits overlap instead of summing one 120s timeout per app.
         let mut spawned = Vec::with_capacity(plans.len());
@@ -290,6 +332,16 @@ fn cmd_up(
 
 fn cmd_down(cwd: &str, role: Option<Role>) -> Result<()> {
     let holder = toplevel(cwd)?;
+    #[cfg(feature = "daemon")]
+    if let Some(mut client) = devkit_ports::daemon::client::try_existing() {
+        let resp = client.request(&devkit_ports::daemon::proto::Request::Down {
+            holder: holder.clone(), role,
+        })?;
+        if let devkit_ports::daemon::proto::Response::Freed(freed) = resp {
+            println!("stopped via daemon; released ports {freed:?}");
+            return Ok(());
+        }
+    }
     // Stop and release under one lock, without pruning first: a still-running server
     // whose reservation looks stale must still receive SIGTERM and be released.
     let mut stopped = 0;
