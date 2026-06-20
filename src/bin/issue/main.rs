@@ -23,7 +23,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Prepare an issue worktree: branch, env symlinks, deps, reserved ports.
+    /// Prepare an issue worktree: branch, per-app setup commands, reserved ports.
     Setup {
         #[arg(long)]
         issue: String,
