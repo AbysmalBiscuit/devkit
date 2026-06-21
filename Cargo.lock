@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "devkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-locks"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-ports"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
