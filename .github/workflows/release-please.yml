@@ -55,7 +55,7 @@ jobs:
           ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
-          bin: portman,devrun,issue,lock,devkit-portd
+          bin: portm,devrun,issue,lockm,devkitd
           target: ${{ matrix.target }}
           archive: devkit-$tag-$target
           checksum: sha256

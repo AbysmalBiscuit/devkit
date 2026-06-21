@@ -1,4 +1,4 @@
-//! End-to-end coverage of the `lock` binary: conflict detection, JSON output,
+//! End-to-end coverage of the `lockm` binary: conflict detection, JSON output,
 //! release, and exit codes. Each test is isolated via a private temp project
 //! (with a `.git` marker) and a private `XDG_STATE_HOME`.
 
@@ -26,7 +26,7 @@ fn project() -> PathBuf {
 }
 
 fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_lock"))
+    Command::new(env!("CARGO_BIN_EXE_lockm"))
         .args(args)
         .current_dir(project)
         .env("XDG_STATE_HOME", state)
@@ -37,7 +37,7 @@ fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
         .env_remove("DEVKIT_SESSION")
         .env_remove("TMUX_PANE")
         .output()
-        .expect("spawn lock")
+        .expect("spawn lockm")
 }
 
 #[test]

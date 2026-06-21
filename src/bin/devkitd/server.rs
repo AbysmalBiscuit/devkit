@@ -81,7 +81,7 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             // Nudge the accept loop so it observes the shutdown flag and exits.
             use interprocess::local_socket::traits::Stream as _;
             if let Ok(name) =
-                devkit_ports::daemon::transport::socket_name(&devkit_common::paths::socket_file())
+                devkit_ports::daemon::transport::socket_name(&devkit_common::paths::port_socket_file())
             {
                 let _ = interprocess::local_socket::Stream::connect(name);
             }

@@ -4,15 +4,15 @@ A Rust workspace of five binaries that coordinate local development for a monore
 
 ## Binaries
 
-### `portman` — Port Registry
+### `portm` — Port Registry
 
 Maintains a shared port registry so concurrent callers never collide on port allocation. State lives in `~/.local/state/devkit/ports.json`, guarded by an advisory file lock. Reservation rows are written before any process binds, which prevents the allocation race across concurrent callers.
 
 ```
-portman status                                     # table of reserved/live ports
-portman alloc --holder <path> [--role issue|baseline] <apps…>
-portman release --holder <path> [--role …]
-portman prune                                      # remove stale reservations
+portm status                                     # table of reserved/live ports
+portm alloc --holder <path> [--role issue|baseline] <apps…>
+portm release --holder <path> [--role …]
+portm prune                                      # remove stale reservations
 ```
 
 ### `devrun` — Supervised Dev Servers
@@ -46,20 +46,20 @@ issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-
 - **`dashboard`** — the at-a-glance triage + PR tables, plus terminal timelines of your Linear issues by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). The timeline fetches (Linear + GitHub) are cached under `~/.cache/devkit/dashboard` for a few minutes so reruns are fast; the live triage/PR panel is never cached. `--no-plots` shows only the tables; `--no-cache` forces a fresh fetch.
 - **`review`** — pushes the current branch, opens or reuses its PR, adds a reviewer, and sends the reviewer a Slack message with the PR link. Never force-pushes. With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON object for an agent to forward. `--to` names a `[people]` alias from the config.
 
-### `lock` — File Locks
+### `lockm` — File Locks
 
 Advisory locks on paths so parallel sessions sharing one checkout (where per-session
 worktrees are too expensive) don't edit the same files at once. A flock-guarded
-registry of claims keyed by path — the file-level twin of `portman`. Locks are
+registry of claims keyed by path — the file-level twin of `portm`. Locks are
 exclusive and overlap by path component, so locking a directory conflicts with
 locking a file inside it.
 
 ```
-lock acquire <paths…> [--as <id>] [--note <msg>] [--ttl <secs>] [--json]
-lock release <paths…> [--as <id>]        # or: release --all
-lock check   <paths…> [--json]           # read-only: would acquire succeed?
-lock status  [--all] [--json]
-lock prune
+lockm acquire <paths…> [--as <id>] [--note <msg>] [--ttl <secs>] [--json]
+lockm release <paths…> [--as <id>]        # or: release --all
+lockm check   <paths…> [--json]           # read-only: would acquire succeed?
+lockm status  [--all] [--json]
+lockm prune
 ```
 
 Sessions identify themselves by (in priority order) `--as <id>`, `$DEVKIT_SESSION`,
@@ -100,7 +100,7 @@ $EDITOR ~/.config/devkit/config.toml   # paste & adapt the example from docs/con
 
 ## Install
 
-Install all five binaries (`portman`, `devrun`, `issue`, `lock`, `devkit-portd`) into
+Install all five binaries (`portm`, `devrun`, `issue`, `lockm`, `devkitd`) into
 `~/.cargo/bin` with one command:
 
 ```sh
@@ -108,9 +108,9 @@ cargo install --path .
 ```
 
 This builds with default features, which include the supervisor daemon
-(`devkit-portd`) used by `devrun up --supervise`. To skip the daemon, build a
+(`devkitd`) used by `devrun up --supervise`. To skip the daemon, build a
 lean set with `cargo install --path . --no-default-features` (omits
-`devkit-portd` and `devrun`'s `--supervise` support).
+`devkitd` and `devrun`'s `--supervise` support).
 
 Or just build into `target/release` without installing:
 
@@ -126,8 +126,8 @@ subcommand (bash, zsh, fish, elvish, powershell). For example:
 ```sh
 issue completions zsh   > ~/.zfunc/_issue
 devrun completions zsh  > ~/.zfunc/_devrun
-portman completions zsh > ~/.zfunc/_portman
-lock completions zsh    > ~/.zfunc/_lock
+portm completions zsh   > ~/.zfunc/_portm
+lockm completions zsh   > ~/.zfunc/_lockm
 # bash:
 issue completions bash > ~/.local/share/bash-completion/completions/issue
 ```

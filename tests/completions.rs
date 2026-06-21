@@ -19,8 +19,8 @@ fn completions_contain_name(bin: &str, exe: &str) {
 }
 
 #[test]
-fn portman_emits_completions() {
-    completions_contain_name("portman", env!("CARGO_BIN_EXE_portman"));
+fn portm_emits_completions() {
+    completions_contain_name("portm", env!("CARGO_BIN_EXE_portm"));
 }
 
 #[test]
@@ -34,6 +34,6 @@ fn issue_emits_completions() {
 }
 
 #[test]
-fn lock_emits_completions() {
-    completions_contain_name("lock", env!("CARGO_BIN_EXE_lock"));
+fn lockm_emits_completions() {
+    completions_contain_name("lockm", env!("CARGO_BIN_EXE_lockm"));
 }

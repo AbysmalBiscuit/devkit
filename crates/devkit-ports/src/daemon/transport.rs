@@ -26,5 +26,5 @@ pub fn socket_name(path: &Path) -> std::io::Result<Name<'static>> {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
-    format!("devkit-portd-{sanitized}.sock").to_ns_name::<GenericNamespaced>()
+    format!("devkit-{sanitized}.sock").to_ns_name::<GenericNamespaced>()
 }

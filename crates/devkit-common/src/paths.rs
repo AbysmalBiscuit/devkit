@@ -81,16 +81,16 @@ pub fn logs_dir() -> PathBuf {
     state_dir().join("logs")
 }
 /// Unix socket the daemon binds; clients connect here.
-pub fn socket_file() -> PathBuf {
-    state_dir().join("portd.sock")
+pub fn port_socket_file() -> PathBuf {
+    state_dir().join("ports.sock")
 }
 /// Single-instance lock for the daemon — separate from the registry's `ports.lock`.
-pub fn daemon_lock_file() -> PathBuf {
-    state_dir().join("portd.lock")
+pub fn devkitd_lock() -> PathBuf {
+    state_dir().join("devkitd.lock")
 }
 /// Daemon log file.
 pub fn daemon_log() -> PathBuf {
-    logs_dir().join("portd.log")
+    logs_dir().join("devkitd.log")
 }
 
 /// `$XDG_CACHE_HOME/devkit` or `~/.cache/devkit`.
@@ -141,9 +141,9 @@ mod tests {
     }
     #[test]
     fn daemon_paths_under_state() {
-        assert!(socket_file().ends_with("devkit/portd.sock"));
-        assert!(daemon_lock_file().ends_with("devkit/portd.lock"));
-        assert!(daemon_log().ends_with("devkit/logs/portd.log"));
+        assert!(port_socket_file().ends_with("devkit/ports.sock"));
+        assert!(devkitd_lock().ends_with("devkit/devkitd.lock"));
+        assert!(daemon_log().ends_with("logs/devkitd.log"));
     }
 
     #[test]

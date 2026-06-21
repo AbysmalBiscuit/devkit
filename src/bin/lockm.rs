@@ -5,7 +5,7 @@ use devkit_locks::model::{Conflict, LockEntry};
 
 #[derive(Parser)]
 #[command(
-    name = "lock",
+    name = "lockm",
     about = "Advisory file locks for parallel local sessions"
 )]
 struct Cli {
@@ -79,7 +79,7 @@ fn print_conflicts(conflicts: &[Conflict]) {
 }
 
 fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("lock");
+    devkit_common::report::install_panic_hook("lockm");
     devkit_common::paths::migrate_legacy_state();
     let cli = Cli::parse();
     match cli.cmd {
@@ -164,7 +164,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "lock", &mut std::io::stdout());
+            clap_complete::generate(shell, &mut Cli::command(), "lockm", &mut std::io::stdout());
             Ok(())
         }
     }

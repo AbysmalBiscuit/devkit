@@ -1,4 +1,4 @@
-//! devkit-portd — optional supervisor daemon. Single-instance (portd.lock),
+//! devkitd — optional supervisor daemon. Single-instance (devkitd.lock),
 //! binds a unix socket, serves one request per line. This entry point owns
 //! lifecycle: lock, bind, accept, idle-exit; supervision and registry dispatch
 //! live in submodules.
@@ -86,26 +86,26 @@ impl Daemon {
 }
 
 fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("devkit-portd");
+    devkit_common::report::install_panic_hook("devkitd");
     // Mark this process as the daemon so registry facade calls resolve locally
     // instead of connecting back to this same daemon over the socket.
-    unsafe { std::env::set_var("DEVKIT_PORTD_SELF", "1") };
+    unsafe { std::env::set_var("DEVKITD_SELF", "1") };
     std::fs::create_dir_all(paths::state_dir())?;
     std::fs::create_dir_all(paths::logs_dir())?;
 
-    // Single-instance: hold portd.lock for the daemon's whole life. A peer daemon
+    // Single-instance: hold devkitd.lock for the daemon's whole life. A peer daemon
     // holds it exclusive for its entire lifetime, so all retry attempts fail →
     // exit 0 (exactly one autostart winner). A transient shared hold by a direct
-    // writer (portman/devrun taking the gate during a registry RMW) clears within
+    // writer (portm/devrun taking the gate during a registry RMW) clears within
     // ~1ms, so a brief retry distinguishes that from a live peer without blocking.
-    let lock_path = paths::daemon_lock_file();
+    let lock_path = paths::devkitd_lock();
     let lock_file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
         .open(&lock_path)?;
     let mut lock = RwLock::new(lock_file);
-    // Retry up to 5 times with 20ms gaps. A peer daemon holds portd.lock exclusive
+    // Retry up to 5 times with 20ms gaps. A peer daemon holds devkitd.lock exclusive
     // for its whole life, so all attempts fail → exit 0 (one autostart winner). A
     // transient shared hold by a direct registry writer clears within ~1ms, so a
     // retry succeeds without blocking indefinitely.
@@ -123,12 +123,12 @@ fn main() -> Result<()> {
         }
     };
 
-    // Load the registry into memory while holding portd.lock and before binding the
+    // Load the registry into memory while holding devkitd.lock and before binding the
     // socket, so no request is ever served against an unpopulated registry.
     let ports = std::sync::Arc::new(std::sync::Mutex::new(registry::load()));
 
     // Holding the lock, no live daemon owns the socket — clear any stale one and bind.
-    let sock = paths::socket_file();
+    let sock = paths::port_socket_file();
     let _ = std::fs::remove_file(&sock); // clear a stale unix socket file before binding
     let name = transport::socket_name(&sock).with_context(|| "building socket name")?;
     let listener = ListenerOptions::new()
@@ -192,7 +192,7 @@ fn main() -> Result<()> {
                 std::thread::sleep(Duration::from_millis(500));
                 if d.shutdown.load(Ordering::SeqCst) || d.is_idle() {
                     d.shutdown.store(true, Ordering::SeqCst);
-                    if let Ok(name) = transport::socket_name(&paths::socket_file()) {
+                    if let Ok(name) = transport::socket_name(&paths::port_socket_file()) {
                         let _ = Stream::connect(name);
                     }
                     break;
@@ -253,7 +253,7 @@ fn main() -> Result<()> {
     }
 
     // Clean shutdown: drop the socket and release the lock.
-    let _ = std::fs::remove_file(paths::socket_file());
+    let _ = std::fs::remove_file(paths::port_socket_file());
     drop(guard);
     Ok(())
 }

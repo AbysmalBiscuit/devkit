@@ -48,26 +48,26 @@ impl Client {
 /// handshake fails — never autostarts. Used for opportunistic registry routing
 /// (and by `status`, which must never spin a daemon up).
 pub fn try_existing() -> Option<Client> {
-    let name = transport::socket_name(&paths::socket_file()).ok()?;
+    let name = transport::socket_name(&paths::port_socket_file()).ok()?;
     let stream = Stream::connect(name).ok()?;
     Client::from_stream(stream).ok()
 }
 
-/// Locate the daemon binary: `$DEVKIT_PORTD_BIN`, else a sibling of the current
-/// executable, else `devkit-portd` on `PATH`.
+/// Locate the daemon binary: `$DEVKITD_BIN`, else a sibling of the current
+/// executable, else `devkitd` on `PATH`.
 fn portd_bin() -> std::path::PathBuf {
-    if let Some(p) = std::env::var_os("DEVKIT_PORTD_BIN") {
+    if let Some(p) = std::env::var_os("DEVKITD_BIN") {
         return p.into();
     }
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let sibling = dir.join("devkit-portd");
+        let sibling = dir.join("devkitd");
         if sibling.is_file() {
             return sibling;
         }
     }
-    std::path::PathBuf::from("devkit-portd")
+    std::path::PathBuf::from("devkitd")
 }
 
 /// Connect, autostarting a daemon if none is running. Used by supervision paths
@@ -78,7 +78,7 @@ pub fn ensure_running() -> Result<Client> {
     }
     std::process::Command::new(portd_bin())
         .spawn()
-        .with_context(|| "spawning devkit-portd")?;
+        .with_context(|| "spawning devkitd")?;
     // Poll the socket until the daemon accepts (it binds after taking its lock).
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {

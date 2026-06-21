@@ -13,7 +13,7 @@ checkout). Callers include `~/.claude/commands/{issue-setup,issue-end,migration-
 ## Authoritative in-memory mode for the lock registry
 
 The port registry now serves reads from the daemon's memory and writes through to
-the file, with `portd.lock` enforcing the daemon-vs-direct boundary (see
+the file, with `devkitd.lock` enforcing the daemon-vs-direct boundary (see
 `docs/superpowers/specs/2026-06-21-authoritative-in-memory-portd-design.md`). Give
 the lock registry the same treatment: it needs a daemon path built from scratch
 (proto variants, client, server dispatch) plus resolved-context facade variants —
@@ -27,7 +27,7 @@ Reuse the `Store` seam and extract the daemon framing/transport/client into
 Expose devkit's capabilities to coding agents over the Model Context Protocol so
 an agent can drive port allocation, dev-server supervision, the issue lifecycle,
 and file locks directly instead of shelling out to the CLIs. Tools mirror the
-existing binaries (`portman`, `devrun`, `issue`, `lock`) over the library crates
+existing binaries (`portm`, `devrun`, `issue`, `lockm`) over the library crates
 rather than reinvent them. Open questions to settle in its own brainstorming pass:
 which surfaces to expose first, read-only vs. mutating tool boundaries, and how it
 relates to the daemon (an MCP server is a natural long-lived host that could keep

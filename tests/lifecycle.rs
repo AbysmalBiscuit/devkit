@@ -32,8 +32,8 @@ fn idle_exit_with_no_clients_or_children() {
     );
 }
 
-/// A second `devkit-portd` started against the same HOME cannot take the
-/// `portd.lock` and exits 0 immediately.  The original daemon must still
+/// A second `devkitd` started against the same HOME cannot take the
+/// `devkitd.lock` and exits 0 immediately.  The original daemon must still
 /// answer a Ping after the second one exits.
 #[test]
 fn second_instance_exits_immediately() {
@@ -43,7 +43,7 @@ fn second_instance_exits_immediately() {
         .env("HOME", &h.home)
         .env("XDG_STATE_HOME", &h.xdg_state)
         .env("DEVKIT_DAEMON_IDLE_SECS", "3600")
-        .env("DEVKIT_PORTD_SELF", "1")
+        .env("DEVKITD_SELF", "1")
         .status()
         .expect("spawn second daemon");
 

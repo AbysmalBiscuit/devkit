@@ -91,7 +91,7 @@ pub trait Store {
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T>;
 }
 
-/// Error marker: a live `devkit-portd` holds the registry write gate (`portd.lock`).
+/// Error marker: a live `devkitd` holds the registry write gate (`devkitd.lock`).
 /// Carried via `anyhow` so callers can distinguish it (e.g. a best-effort prune).
 #[derive(Debug)]
 pub struct DaemonHoldsLock;
@@ -99,7 +99,7 @@ pub struct DaemonHoldsLock;
 impl std::fmt::Display for DaemonHoldsLock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(
-            "a devkit-portd daemon holds the registry lock; refusing to modify ports.json \
+            "a devkitd daemon holds the registry lock; refusing to modify ports.json \
              behind it — stop the daemon or use a daemon-enabled binary",
         )
     }
@@ -107,7 +107,7 @@ impl std::fmt::Display for DaemonHoldsLock {
 impl std::error::Error for DaemonHoldsLock {}
 
 /// Direct file driver. Reads load the file ungated (the daemon keeps it current via
-/// write-through). Writes first take a shared, non-blocking lock on `portd.lock` — the
+/// write-through). Writes first take a shared, non-blocking lock on `devkitd.lock` — the
 /// gate — and refuse if a daemon holds it exclusive, then run the data-flock RMW.
 pub struct FlockStore {
     gate_path: PathBuf,
@@ -119,7 +119,7 @@ impl FlockStore {
     /// Real-paths store used by every direct caller.
     pub fn new() -> Self {
         Self {
-            gate_path: paths::daemon_lock_file(),
+            gate_path: paths::devkitd_lock(),
             lock_path: paths::lock_file(),
             data_path: paths::registry_file(),
         }
@@ -128,7 +128,7 @@ impl FlockStore {
     #[cfg(test)]
     fn at(dir: &Path) -> Self {
         Self {
-            gate_path: dir.join("portd.lock"),
+            gate_path: dir.join("devkitd.lock"),
             lock_path: dir.join("ports.lock"),
             data_path: dir.join("ports.json"),
         }
@@ -147,7 +147,7 @@ impl Store for FlockStore {
     }
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
         // Every direct writer holds the shared gate for its entire RMW. The daemon
-        // holds portd.lock exclusive for its whole life (via MemoryStore, never
+        // holds devkitd.lock exclusive for its whole life (via MemoryStore, never
         // FlockStore), so a concurrent try_read failure here means a live daemon
         // owns the registry — surface that as the typed refusal rather than writing
         // ports.json behind it.
@@ -199,7 +199,7 @@ impl Store for MemoryStore {
 }
 
 /// Load the registry file into a `Data` for an owner with its own exclusion
-/// (the daemon, holding `portd.lock` exclusive, at startup).
+/// (the daemon, holding `devkitd.lock` exclusive, at startup).
 pub fn load() -> Data {
     store::load(&paths::registry_file())
 }
@@ -377,12 +377,12 @@ impl Data {
 /// `Ok(Some(resp))` = the daemon answered (the response may be `Response::Err`,
 /// which callers decode into an `Err`). `Err` = a *live* daemon failed mid-request
 /// — surfaced to the caller rather than silently written behind its back.
-/// Returns `Ok(None)` inside the daemon itself (`DEVKIT_PORTD_SELF`).
+/// Returns `Ok(None)` inside the daemon itself (`DEVKITD_SELF`).
 #[cfg(feature = "daemon")]
 fn daemon_request(
     req: crate::daemon::proto::Request,
 ) -> Result<Option<crate::daemon::proto::Response>> {
-    if std::env::var_os("DEVKIT_PORTD_SELF").is_some() {
+    if std::env::var_os("DEVKITD_SELF").is_some() {
         return Ok(None);
     }
     let Some(mut c) = crate::daemon::client::try_existing() else {
@@ -611,7 +611,7 @@ pub fn release(holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
     release_with(&FlockStore::new(), holder, role)
 }
 
-/// Render the port-status table shared by `portman status` and `devrun status`.
+/// Render the port-status table shared by `portm status` and `devrun status`.
 /// `only_holder = Some(h)` limits rows to that holder; `None` shows every port.
 pub fn status_table(data: &Data, only_holder: Option<&str>) -> String {
     let mut t =
@@ -780,10 +780,10 @@ mod store_seam_tests {
     fn commit_refused_while_gate_held_exclusive() {
         let dir = tmp("gate-held");
         let store = FlockStore::at(&dir);
-        // Simulate a running daemon: hold portd.lock exclusive on a separate fd.
+        // Simulate a running daemon: hold devkitd.lock exclusive on a separate fd.
         let f = std::fs::OpenOptions::new()
             .create(true).write(true).truncate(false)
-            .open(dir.join("portd.lock")).unwrap();
+            .open(dir.join("devkitd.lock")).unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().expect("take exclusive gate");
         let err = store
@@ -811,7 +811,7 @@ mod store_seam_tests {
         // and must not propagate the blocked prune.
         let f = std::fs::OpenOptions::new()
             .create(true).write(true).truncate(false)
-            .open(dir.join("portd.lock")).unwrap();
+            .open(dir.join("devkitd.lock")).unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().unwrap();
         let snap = snapshot_with(&store).expect("read must not fail under held gate");

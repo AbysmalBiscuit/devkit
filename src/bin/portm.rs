@@ -36,7 +36,7 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("portman");
+    devkit_common::report::install_panic_hook("portm");
     devkit_common::paths::migrate_legacy_state();
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Cmd::Status) {
@@ -44,7 +44,7 @@ fn main() -> Result<()> {
             clap_complete::generate(
                 shell,
                 &mut Cli::command(),
-                "portman",
+                "portm",
                 &mut std::io::stdout(),
             );
         }

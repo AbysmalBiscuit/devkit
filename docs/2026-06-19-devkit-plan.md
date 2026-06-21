@@ -1,5 +1,7 @@
 # devkit Implementation Plan
 
+> **Historical snapshot (2026-06-19).** Superseded; binary/layout names here are out of date. See README.md, AGENTS.md, and docs/superpowers/specs/ for the current design.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Rust workspace of five binaries (`portman`, `devrun`, `issue-prep`, `issue-end`, `pr-status`) that coordinate local dev: a flock'd port registry, a supervised dev-app runner with baseline A/B, mechanical issue-setup, and the migrated worktree/PR triage tools.

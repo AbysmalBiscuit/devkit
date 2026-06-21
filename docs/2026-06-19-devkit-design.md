@@ -1,5 +1,7 @@
 # devkit — local dev orchestration (Rust)
 
+> **Historical snapshot (2026-06-19).** Superseded; binary/layout names here are out of date. See README.md, AGENTS.md, and docs/superpowers/specs/ for the current design.
+
 **Status:** design approved, pending spec review
 **Date:** 2026-06-19
 **Repo:** `~/Git/lev/devkit`

@@ -25,13 +25,13 @@ install together via `cargo install --path .`. Three library crates are members.
 | `crates/devkit-common` | shared lib: `paths`, `cmd` (git/gh wrappers), `worktree`, `ui` (tables/links), `linear`, `slack`, `supervise` |
 | `crates/devkit-ports` | lib: `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load`, `daemon` |
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
-| `src/bin/portman` | CLI over the port registry |
+| `src/bin/portm.rs` | CLI over the port registry |
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
 | `src/bin/issue` | issue lifecycle: `setup`, `status`, `end`, `prs`, `dashboard`, `review` |
-| `src/bin/lock.rs` | advisory file-lock CLI |
-| `src/bin/devkit-portd` | port-registry supervisor daemon; bin gated by the `daemon` feature (on by default) |
+| `src/bin/lockm.rs` | advisory file-lock CLI |
+| `src/bin/devkitd` | port-registry supervisor daemon; bin gated by the `daemon` feature (on by default) |
 
-The four user-facing CLIs (`portman`, `devrun`, `issue`, `lock`) each expose a
+The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
 `completions <shell>` subcommand via `clap_complete`.
 
 ## Invariants (do not break)
@@ -68,11 +68,11 @@ The four user-facing CLIs (`portman`, `devrun`, `issue`, `lock`) each expose a
 ## File locks
 
 When multiple sessions share one checkout, claim files before editing them with the
-`lock` binary instead of writing ad-hoc `.lock` files:
+`lockm` binary instead of writing ad-hoc `.lock` files:
 
-- `lock acquire <paths…> --as <stable-session-id>` before editing; it exits `1` with
+- `lockm acquire <paths…> --as <stable-session-id>` before editing; it exits `1` with
   the current holder if any path is taken — branch on that.
-- `lock release <paths…> --as <same-id>` (or `lock release --all --as <id>`) when done.
+- `lockm release <paths…> --as <same-id>` (or `lockm release --all --as <id>`) when done.
 - Always pass a consistent `--as <id>` (or set `$DEVKIT_SESSION`) so acquire and
   release refer to the same holder.
 
@@ -82,9 +82,9 @@ Go through `registry::{alloc, record_pid, release, snapshot, prune, status_table
 keep liveness syscalls (bind/stat/kill) out of the exclusive lock. Don't reintroduce
 probing inside `with_lock`. This facade is also the seam a future port daemon plugs into.
 
-When a `devkit-portd` daemon is running it is the *authoritative* registry: it
-loads `ports.json` into memory under `portd.lock` (held exclusive for its life),
+When a `devkitd` daemon is running it is the *authoritative* registry: it
+loads `ports.json` into memory under `devkitd.lock` (held exclusive for its life),
 serves reads from memory, and writes through to the file on each mutation. Direct
-callers take `portd.lock` *shared* before any write (`FlockStore` / `registry::with_lock`)
+callers take `devkitd.lock` *shared* before any write (`FlockStore` / `registry::with_lock`)
 and hard-error (`DaemonHoldsLock`) if the daemon holds it — so a non-daemon binary
 can never modify `ports.json` behind a live daemon. Reads are ungated.

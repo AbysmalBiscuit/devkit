@@ -1,4 +1,4 @@
-//! Shared test harness for devkit-portd integration tests.
+//! Shared test harness for devkitd integration tests.
 //!
 //! Compile-time unused helpers are expected: different test binaries use different
 //! subsets. The allow below is the standard idiom for shared test modules.
@@ -56,7 +56,7 @@ pub fn pid_in_ports_json(body: &str, app_name: &str) -> Option<u32> {
     None
 }
 
-/// A running `devkit-portd` instance bound to a throwaway HOME directory.
+/// A running `devkitd` instance bound to a throwaway HOME directory.
 pub struct Harness {
     pub home: PathBuf,
     /// `$XDG_STATE_HOME` passed to the daemon — state lives under `<xdg_state>/devkit/`.
@@ -79,16 +79,16 @@ impl Harness {
         let xdg_state = home.join("state");
         std::fs::create_dir_all(xdg_state.join("devkit/logs")).expect("create test HOME dirs");
 
-        let bin = env!("CARGO_BIN_EXE_devkit-portd");
+        let bin = env!("CARGO_BIN_EXE_devkitd");
         let child = Command::new(bin)
             .env("HOME", &home)
             .env("XDG_STATE_HOME", &xdg_state)
             .env("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string())
             // The daemon sets this itself; pre-setting it keeps facade calls in the
             // child resolving locally rather than connecting back over the socket.
-            .env("DEVKIT_PORTD_SELF", "1")
+            .env("DEVKITD_SELF", "1")
             .spawn()
-            .expect("spawn devkit-portd");
+            .expect("spawn devkitd");
 
         let h = Harness {
             home,
@@ -101,7 +101,7 @@ impl Harness {
 
     /// Path of the unix socket the daemon binds.
     pub fn socket(&self) -> PathBuf {
-        self.xdg_state.join("devkit/portd.sock")
+        self.xdg_state.join("devkit/ports.sock")
     }
 
     /// Poll until the daemon endpoint accepts a connection, or panic.
@@ -113,7 +113,7 @@ impl Harness {
                 return;
             }
             if Instant::now() >= deadline {
-                panic!("devkit-portd socket never came up at {}", sock.display());
+                panic!("devkitd socket never came up at {}", sock.display());
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -189,5 +189,5 @@ impl Drop for Harness {
 
 /// Convenience: path to the daemon binary under test (resolved at compile time).
 pub fn daemon_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_devkit-portd")
+    env!("CARGO_BIN_EXE_devkitd")
 }
