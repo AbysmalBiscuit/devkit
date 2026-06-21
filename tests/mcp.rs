@@ -87,21 +87,14 @@ fn tool_json(resp: &Value, expect_error: bool) -> Value {
 fn ports_alloc_status_release_roundtrip() {
     let proj = project_with_config();
     let state = scratch("state");
-    // The holder must be an existing directory path: registry::holder_alive checks
-    // Path::new(holder).exists(), so a plain token like "sess-1" is immediately pruned.
-    let holder = state.to_str().unwrap();
     let root = proj.to_str().unwrap();
     let resps = mcp(
         &proj,
         &state,
         &[
-            call_req(
-                1,
-                "ports.alloc",
-                json!({ "root": root, "apps": ["web"], "holder": holder }),
-            ),
+            call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
             call_req(2, "ports.status", json!({})),
-            call_req(3, "ports.release", json!({ "holder": holder })),
+            call_req(3, "ports.release", json!({ "root": root })),
         ],
     );
     let alloc = tool_json(&resps[0], false);

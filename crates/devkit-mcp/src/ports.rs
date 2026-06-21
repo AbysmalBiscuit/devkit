@@ -36,10 +36,6 @@ pub fn actions() -> Vec<Action> {
     ]
 }
 
-fn resolve_holder(ctx: &ServerCtx, given: Option<String>) -> String {
-    given.unwrap_or_else(|| ctx.default_holder.clone())
-}
-
 fn status_schema() -> Value {
     serde_json::json!({ "type": "object", "properties": {}, "additionalProperties": false })
 }
@@ -66,16 +62,16 @@ fn alloc_schema() -> Value {
             "root": { "type": "string", "description": "Absolute path to the project root (holds devkit.toml)." },
             "apps": { "type": "array", "items": { "type": "string" }, "description": "App names from the devkit.toml catalog." },
             "role": { "type": "string", "enum": ["issue", "baseline"], "description": "Allocation role (default issue)." },
-            "holder": { "type": "string", "description": "Override the session holder id." }
+            "holder": { "type": "string", "description": "Holder identity for the reservation; must be an existing path. Defaults to root." }
         },
         "required": ["root", "apps"],
         "additionalProperties": false
     })
 }
 
-fn alloc(ctx: &ServerCtx, args: Value) -> Result<Value> {
+fn alloc(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: AllocArgs = serde_json::from_value(args).context("invalid ports.alloc arguments")?;
-    let holder = resolve_holder(ctx, a.holder);
+    let holder = a.holder.unwrap_or_else(|| a.root.clone());
     let role = a.role.unwrap_or(Role::Issue);
     let loaded = devkit_ports::load::load(None, std::path::Path::new(&a.root))
         .context("loading devkit.toml")?;
@@ -98,6 +94,7 @@ fn alloc(ctx: &ServerCtx, args: Value) -> Result<Value> {
 
 #[derive(Deserialize)]
 struct ReleaseArgs {
+    root: String,
     #[serde(default)]
     role: Option<Role>,
     #[serde(default)]
@@ -108,16 +105,18 @@ fn release_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
+            "root": { "type": "string", "description": "Absolute path to the project root (the default holder)." },
             "role": { "type": "string", "enum": ["issue", "baseline"], "description": "Only release this role (default: all roles)." },
-            "holder": { "type": "string", "description": "Override the session holder id." }
+            "holder": { "type": "string", "description": "Override the holder (defaults to root)." }
         },
+        "required": ["root"],
         "additionalProperties": false
     })
 }
 
-fn release(ctx: &ServerCtx, args: Value) -> Result<Value> {
+fn release(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: ReleaseArgs = serde_json::from_value(args).context("invalid ports.release arguments")?;
-    let holder = resolve_holder(ctx, a.holder);
+    let holder = a.holder.unwrap_or_else(|| a.root.clone());
     let freed = registry::release(&holder, a.role)?;
     Ok(serde_json::json!({ "freed": freed }))
 }
