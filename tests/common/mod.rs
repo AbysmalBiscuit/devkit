@@ -4,6 +4,7 @@
 //! subsets. The allow below is the standard idiom for shared test modules.
 #![allow(dead_code)]
 
+use devkit_locks::daemon::proto::{Request as LockRequest, Response as LockResponse};
 use devkit_ports::daemon::proto::{self, Request, Response};
 use devkit_ports::daemon::transport;
 use interprocess::local_socket::Stream;
@@ -159,6 +160,48 @@ impl Harness {
     pub fn ports_json(&self) -> String {
         let path = self.xdg_state.join("devkit/ports.json");
         std::fs::read_to_string(&path).unwrap_or_default()
+    }
+
+    /// Path of the lock control socket the daemon binds.
+    pub fn lock_socket(&self) -> PathBuf {
+        self.xdg_state.join("devkit/locks.sock")
+    }
+
+    fn lock_connect(&self) -> Option<Stream> {
+        let name = transport::socket_name(&self.lock_socket()).ok()?;
+        Stream::connect(name).ok()
+    }
+
+    /// Poll until the lock socket accepts a connection, or panic.
+    pub fn wait_for_lock_socket(&self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.lock_connect().is_some() {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!("devkitd lock socket never came up");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Open a fresh lock connection, send one request, receive one response.
+    pub fn lock_request(&self, req: &LockRequest) -> LockResponse {
+        use devkit_common::daemon::framing;
+        let stream = self.lock_connect().expect("connect to locks socket");
+        let (recv, send) = stream.split();
+        let mut writer = BufWriter::new(send);
+        let mut reader = BufReader::new(recv);
+        framing::send(&mut writer, req).expect("send lock request");
+        framing::recv::<_, LockResponse>(&mut reader)
+            .expect("recv lock response")
+            .expect("EOF before response")
+    }
+
+    /// Read the locks.json content, or empty string if absent.
+    pub fn locks_json(&self) -> String {
+        std::fs::read_to_string(self.xdg_state.join("devkit/locks.json")).unwrap_or_default()
     }
 
     /// Wait up to `timeout` for the daemon process to exit (by polling `socket_gone`

@@ -13,7 +13,7 @@ required-features = ["daemon"]
 
 [features]
 default = ["daemon"]
-daemon = ["devkit-ports/daemon"]
+daemon = ["devkit-ports/daemon", "devkit-locks/daemon"]
 
 [dependencies]
 anyhow.workspace = true

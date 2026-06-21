@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 // A few supervisor accessors back deferred features (memory-limit action, log serving)
 // and have no caller yet.
+mod lock_server;
 mod server;
 #[allow(dead_code)]
 mod supervisor;
@@ -32,6 +33,8 @@ pub(crate) struct Daemon {
     pub(crate) sup: Mutex<supervisor::Supervisor>,
     /// Authoritative port registry, served from memory; the file is write-through.
     pub(crate) ports: std::sync::Arc<std::sync::Mutex<registry::Data>>,
+    /// Authoritative lock registry, served from memory; the file is write-through.
+    pub(crate) locks: std::sync::Arc<std::sync::Mutex<devkit_locks::model::Data>>,
 }
 
 impl Daemon {
@@ -43,6 +46,12 @@ impl Daemon {
     pub(crate) fn port_store(&self) -> registry::MemoryStore {
         registry::MemoryStore::new(self.ports.clone(), devkit_common::paths::registry_file())
     }
+
+    /// A `Store` view over the daemon's authoritative lock registry.
+    pub(crate) fn lock_store(&self) -> devkit_locks::store::MemoryStore {
+        devkit_locks::store::MemoryStore::new(self.locks.clone(), devkit_common::paths::locks_file())
+    }
+
     /// Idle = no live connections and no supervised children, for longer than the
     /// timeout. Supervision suppresses this by keeping `supervising()` true.
     fn is_idle(&self) -> bool {
@@ -123,9 +132,10 @@ fn main() -> Result<()> {
         }
     };
 
-    // Load the registry into memory while holding devkitd.lock and before binding the
+    // Load the registries into memory while holding devkitd.lock and before binding any
     // socket, so no request is ever served against an unpopulated registry.
     let ports = std::sync::Arc::new(std::sync::Mutex::new(registry::load()));
+    let locks = std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::store::load()));
 
     // Holding the lock, no live daemon owns the socket — clear any stale one and bind.
     let sock = paths::port_socket_file();
@@ -159,6 +169,7 @@ fn main() -> Result<()> {
             mem_limit,
         )),
         ports,
+        locks,
     });
 
     // Adopt servers a previous daemon left running: monitor by poll, not waitpid.
@@ -192,8 +203,10 @@ fn main() -> Result<()> {
                 std::thread::sleep(Duration::from_millis(500));
                 if d.shutdown.load(Ordering::SeqCst) || d.is_idle() {
                     d.shutdown.store(true, Ordering::SeqCst);
-                    if let Ok(name) = transport::socket_name(&paths::port_socket_file()) {
-                        let _ = Stream::connect(name);
+                    for sock in [paths::port_socket_file(), paths::lock_socket_file()] {
+                        if let Ok(name) = transport::socket_name(&sock) {
+                            let _ = Stream::connect(name);
+                        }
                     }
                     break;
                 }
@@ -233,6 +246,36 @@ fn main() -> Result<()> {
         });
     }
 
+    // Lock control channel — second socket, same process and lifecycle.
+    let lock_sock = paths::lock_socket_file();
+    let _ = std::fs::remove_file(&lock_sock);
+    let lock_name = transport::socket_name(&lock_sock).with_context(|| "building lock socket name")?;
+    let lock_listener = ListenerOptions::new()
+        .name(lock_name)
+        .create_sync()
+        .with_context(|| format!("binding {}", lock_sock.display()))?;
+    {
+        let d = Arc::clone(&daemon);
+        std::thread::spawn(move || {
+            for stream in lock_listener.incoming() {
+                if d.shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok(stream) = stream else { continue };
+                let d2 = Arc::clone(&d);
+                std::thread::spawn(move || {
+                    d2.active_conns.fetch_add(1, Ordering::SeqCst);
+                    d2.touch();
+                    if let Err(e) = handle_lock_conn(&d2, stream) {
+                        log_line(&format!("lock connection error: {e:#}"));
+                    }
+                    d2.active_conns.fetch_sub(1, Ordering::SeqCst);
+                    d2.touch();
+                });
+            }
+        });
+    }
+
     for stream in listener.incoming() {
         if daemon.shutdown.load(Ordering::SeqCst) {
             break;
@@ -252,13 +295,14 @@ fn main() -> Result<()> {
         });
     }
 
-    // Clean shutdown: drop the socket and release the lock.
+    // Clean shutdown: drop both sockets and release the lock.
     let _ = std::fs::remove_file(paths::port_socket_file());
+    let _ = std::fs::remove_file(paths::lock_socket_file());
     drop(guard);
     Ok(())
 }
 
-/// Serve requests on one connection until EOF or a close-signalling response.
+/// Serve requests on one port-registry connection until EOF or a close-signalling response.
 fn handle_conn(daemon: &Arc<Daemon>, stream: Stream) -> Result<()> {
     let (recv, send) = stream.split();
     let mut reader = BufReader::new(recv);
@@ -270,6 +314,25 @@ fn handle_conn(daemon: &Arc<Daemon>, stream: Stream) -> Result<()> {
         if close {
             break;
         }
+    }
+    Ok(())
+}
+
+/// Serve requests on one lock-registry connection until EOF.
+///
+/// The lock channel has no per-request close or `Shutdown` semantics — it loops
+/// until the client closes the connection (EOF). Each frame is dispatched via
+/// `framing` directly rather than the port-proto `send`/`recv`.
+fn handle_lock_conn(daemon: &Arc<Daemon>, stream: Stream) -> Result<()> {
+    use devkit_common::daemon::framing;
+    use devkit_locks::daemon::proto::Request as LockRequest;
+    let (recv, send) = stream.split();
+    let mut reader = BufReader::new(recv);
+    let mut writer = BufWriter::new(send);
+    while let Some(req) = framing::recv::<_, LockRequest>(&mut reader)? {
+        daemon.touch();
+        let resp = lock_server::dispatch(daemon, req);
+        framing::send(&mut writer, &resp)?;
     }
     Ok(())
 }
