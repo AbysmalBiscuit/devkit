@@ -63,7 +63,12 @@ restart-looped forever — exhaust the budget and fall back to warn.
 
 ## Crash-restart vs. external registry prune (race)
 
-**Status:** known limitation — daemon supervision.
+**Status:** RESOLVED 2026-06-21 — see
+`docs/superpowers/specs/2026-06-21-daemon-authoritative-liveness-design.md`. The
+daemon now decides crash vs. stop from its supervisor table, not the registry row,
+so a concurrent prune can no longer suppress a restart. The analysis below is kept
+for context.
+
 **The race:** when a supervised child crashes, the supervision thread reaps it, waits a
 short debounce, then reads `ports.json` raw (no liveness prune) to tell a crash (row
 still present → restart) from an intentional `down` (row removed → let die). That raw

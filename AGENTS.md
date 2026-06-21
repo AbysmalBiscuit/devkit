@@ -51,6 +51,11 @@ The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
   inside it minimal; avoid slow/network calls under the lock.
 - **`devrun down` stops then releases without pruning first** — a still-running server whose
   reservation looks stale must still receive SIGTERM.
+- **The supervisor table — not the registry row — decides crash vs. stop.** A child the
+  `devkitd` supervision thread reaps is a crash and is restarted (within the crash-loop
+  budget); an intentional `Down` removes the key from the table *before* signalling the
+  child, so a stopped server is never reaped as a crash. Don't make the restart decision
+  read `ports.json`/`d.ports` — a concurrent prune would race it.
 - **`prd` is rejected** as a `doppler_config` to avoid running against production secrets.
 
 ## Conventions
