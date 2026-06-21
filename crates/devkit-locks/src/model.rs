@@ -185,6 +185,17 @@ impl Data {
         (released, refused)
     }
 
+    /// Keys of every dead lock (TTL lapsed, or anchor pid known-gone), without
+    /// mutating. Callers persist removals separately so liveness probes stay out
+    /// of the write path's critical section.
+    pub fn dead_keys(&self, now: u64) -> Vec<String> {
+        self.locks
+            .iter()
+            .filter(|(_, e)| entry_dead(e, now))
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+
     /// Release every lock held by `holder` in `root`; returns the freed paths.
     pub fn release_all(&mut self, root: &str, holder: &str) -> Vec<String> {
         let freed: Vec<String> = self
@@ -382,5 +393,18 @@ mod tests {
         assert_eq!(rel, vec!["a".to_string()]);
         assert!(d.locks.contains_key(&key_for("/repo", "b")));
         assert!(d.locks.contains_key(&key_for("/other", "c")));
+    }
+
+    #[test]
+    fn dead_keys_lists_ttl_and_pid_dead() {
+        let mut d = Data::default();
+        d.locks.extend([
+            entry("/repo", "old", "alice", 100, 60, None),     // ttl-expired by now=1000
+            entry("/repo", "fresh", "alice", 990, 60, None),   // live
+            entry("/repo", "deadpid", "alice", 1, 0, Some(u32::MAX)), // dead pid
+        ]);
+        let mut got = d.dead_keys(1000);
+        got.sort();
+        assert_eq!(got, vec![key_for("/repo", "deadpid"), key_for("/repo", "old")]);
     }
 }
