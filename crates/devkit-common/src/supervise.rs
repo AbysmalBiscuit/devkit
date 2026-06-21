@@ -48,16 +48,22 @@ pub fn spawn_detached(
     Ok(child.id())
 }
 
+/// One-shot TCP liveness check: does `127.0.0.1:port` accept a connection within
+/// 300 ms? This is the single attempt `wait_ready` polls and the health-probe
+/// thread fires once per cycle, so both judge "accepting connections" identically.
+pub fn probe_port(port: u16) -> bool {
+    TcpStream::connect_timeout(
+        &(std::net::Ipv4Addr::LOCALHOST, port).into(),
+        Duration::from_millis(300),
+    )
+    .is_ok()
+}
+
 /// Poll localhost:port until it accepts a TCP connection or times out.
 pub fn wait_ready(port: u16, timeout: Duration) -> bool {
     let start = Instant::now();
     while start.elapsed() < timeout {
-        if TcpStream::connect_timeout(
-            &(std::net::Ipv4Addr::LOCALHOST, port).into(),
-            Duration::from_millis(300),
-        )
-        .is_ok()
-        {
+        if probe_port(port) {
             return true;
         }
         std::thread::sleep(Duration::from_millis(150));
@@ -123,6 +129,16 @@ mod tests {
                 .status()
                 .is_ok()
         })
+    }
+
+    #[test]
+    fn probe_port_true_when_listening_false_when_free() {
+        use std::net::TcpListener;
+        let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(probe_port(port), "connects to a bound listener");
+        drop(l);
+        assert!(!probe_port(port), "fails on a freed port");
     }
 
     #[test]
