@@ -49,7 +49,10 @@ impl Daemon {
 
     /// A `Store` view over the daemon's authoritative lock registry.
     pub(crate) fn lock_store(&self) -> devkit_locks::store::MemoryStore {
-        devkit_locks::store::MemoryStore::new(self.locks.clone(), devkit_common::paths::locks_file())
+        devkit_locks::store::MemoryStore::new(
+            self.locks.clone(),
+            devkit_common::paths::locks_file(),
+        )
     }
 
     /// Idle = no live connections and no supervised children, for longer than the
@@ -249,7 +252,8 @@ fn main() -> Result<()> {
     // Lock control channel — second socket, same process and lifecycle.
     let lock_sock = paths::lock_socket_file();
     let _ = std::fs::remove_file(&lock_sock);
-    let lock_name = transport::socket_name(&lock_sock).with_context(|| "building lock socket name")?;
+    let lock_name =
+        transport::socket_name(&lock_sock).with_context(|| "building lock socket name")?;
     let lock_listener = ListenerOptions::new()
         .name(lock_name)
         .create_sync()

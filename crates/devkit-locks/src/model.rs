@@ -399,12 +399,15 @@ mod tests {
     fn dead_keys_lists_ttl_and_pid_dead() {
         let mut d = Data::default();
         d.locks.extend([
-            entry("/repo", "old", "alice", 100, 60, None),     // ttl-expired by now=1000
-            entry("/repo", "fresh", "alice", 990, 60, None),   // live
+            entry("/repo", "old", "alice", 100, 60, None), // ttl-expired by now=1000
+            entry("/repo", "fresh", "alice", 990, 60, None), // live
             entry("/repo", "deadpid", "alice", 1, 0, Some(u32::MAX)), // dead pid
         ]);
         let mut got = d.dead_keys(1000);
         got.sort();
-        assert_eq!(got, vec![key_for("/repo", "deadpid"), key_for("/repo", "old")]);
+        assert_eq!(
+            got,
+            vec![key_for("/repo", "deadpid"), key_for("/repo", "old")]
+        );
     }
 }

@@ -22,7 +22,9 @@ fn daemon_request(req: daemon::proto::Request) -> Result<Option<daemon::proto::R
     let Some(mut c) = daemon::client::try_existing() else {
         return Ok(None);
     };
-    Ok(Some(c.request::<daemon::proto::Request, daemon::proto::Response>(&req)?))
+    Ok(Some(
+        c.request::<daemon::proto::Request, daemon::proto::Response>(&req)?,
+    ))
 }
 
 fn now() -> u64 {
@@ -130,7 +132,16 @@ pub fn acquire(
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::acquire_with(&store::FlockStore::new(), &c.root, &c.holder, &c.paths, pid, note, ttl, now())
+    store::acquire_with(
+        &store::FlockStore::new(),
+        &c.root,
+        &c.holder,
+        &c.paths,
+        pid,
+        note,
+        ttl,
+        now(),
+    )
 }
 
 pub fn check(paths_in: &[String], as_flag: Option<&str>) -> Result<Vec<Conflict>> {
@@ -147,7 +158,13 @@ pub fn check(paths_in: &[String], as_flag: Option<&str>) -> Result<Vec<Conflict>
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::check_with(&store::FlockStore::new(), &c.root, &c.holder, &c.paths, now())
+    store::check_with(
+        &store::FlockStore::new(),
+        &c.root,
+        &c.holder,
+        &c.paths,
+        now(),
+    )
 }
 
 pub fn release(
@@ -169,7 +186,13 @@ pub fn release(
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::release_with(&store::FlockStore::new(), &c.root, &c.holder, &c.paths, force)
+    store::release_with(
+        &store::FlockStore::new(),
+        &c.root,
+        &c.holder,
+        &c.paths,
+        force,
+    )
 }
 
 pub fn release_all(as_flag: Option<&str>) -> Result<Vec<String>> {

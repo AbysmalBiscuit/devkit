@@ -17,25 +17,41 @@ fn now() -> u64 {
 pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> Response {
     let s = daemon.lock_store();
     match req {
-        Request::Ping { .. } => Response::Pong { proto: PROTO, pid: std::process::id() },
-        Request::Acquire { root, holder, paths, pid, note, ttl } => {
-            match store::acquire_with(&s, &root, &holder, &paths, pid, note.as_deref(), ttl, now()) {
+        Request::Ping { .. } => Response::Pong {
+            proto: PROTO,
+            pid: std::process::id(),
+        },
+        Request::Acquire {
+            root,
+            holder,
+            paths,
+            pid,
+            note,
+            ttl,
+        } => {
+            match store::acquire_with(&s, &root, &holder, &paths, pid, note.as_deref(), ttl, now())
+            {
                 Ok(o) => Response::Acquired(o),
                 Err(e) => Response::Err(format!("{e:#}")),
             }
         }
-        Request::Check { root, holder, paths } => {
-            match store::check_with(&s, &root, &holder, &paths, now()) {
-                Ok(v) => Response::Conflicts(v),
-                Err(e) => Response::Err(format!("{e:#}")),
-            }
-        }
-        Request::Release { root, holder, paths, force } => {
-            match store::release_with(&s, &root, &holder, &paths, force) {
-                Ok((released, refused)) => Response::Released { released, refused },
-                Err(e) => Response::Err(format!("{e:#}")),
-            }
-        }
+        Request::Check {
+            root,
+            holder,
+            paths,
+        } => match store::check_with(&s, &root, &holder, &paths, now()) {
+            Ok(v) => Response::Conflicts(v),
+            Err(e) => Response::Err(format!("{e:#}")),
+        },
+        Request::Release {
+            root,
+            holder,
+            paths,
+            force,
+        } => match store::release_with(&s, &root, &holder, &paths, force) {
+            Ok((released, refused)) => Response::Released { released, refused },
+            Err(e) => Response::Err(format!("{e:#}")),
+        },
         Request::ReleaseAll { root, holder } => match store::release_all_with(&s, &root, &holder) {
             Ok(v) => Response::Freed(v),
             Err(e) => Response::Err(format!("{e:#}")),
