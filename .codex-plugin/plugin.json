@@ -1,6 +1,6 @@
 {
   "name": "devkit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle",
   "author": { "name": "Lev Velykoivanenko" },
   "homepage": "https://github.com/AbysmalBiscuit/devkit",
