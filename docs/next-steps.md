@@ -19,45 +19,31 @@ and `locks.sock`, write-through to the files, gated by `devkitd.lock`. Delivered
 
 ## MCP server for devkit
 
-Expose devkit's capabilities to coding agents over the Model Context Protocol so
-an agent can drive port allocation, dev-server supervision, the issue lifecycle,
-and file locks directly instead of shelling out to the CLIs. Deferred; this
-section captures the analysis so the brainstorm starts ahead.
+v1 is implemented (`crates/devkit-mcp` + `src/bin/devkit-mcp`): a meta-MCP stdio
+server (`devkit_describe` + `devkit_call`) exposing the 9 port + lock actions over
+the library facades. Design: `docs/superpowers/specs/2026-06-21-devkit-mcp-server-design.md`.
+Plan: `docs/superpowers/plans/2026-06-21-devkit-mcp-server.md`.
 
-**Surface area (~19 actions).** `portm` (status, alloc, release, prune), `lockm`
-(acquire, check, release, status, prune), `devrun` (up, down, status, logs),
-`issue` (setup, status, end, prs, dashboard, review). `completions` is shell-only
-and not exposed.
+Deferred follow-ups:
 
-**Host-agnostic, assume eager loading.** Targets include Codex, Zed, Cursor, and
-generic MCP clients, many of which load every tool schema up front — so keep the
-top-level tool count low. (Claude Code lazy-loads via deferred-tool search, so the
-count matters less there, but design for the worst case.)
-
-**Three exposure shapes, meta-or-dispatch favored:**
-
-1. *Flat* — one MCP tool per action (~19 tools); best discoverability and arg
-   validation, heaviest footprint.
-2. *Per-binary dispatch* — four tools (`portm`/`devrun`/`issue`/`lockm`), each
-   taking an `action` + args; ~5x fewer tools, natural groupings, looser
-   per-action schemas.
-3. *True meta-MCP / progressive disclosure* — a `list`/`describe` tool plus a
-   `call` tool; minimal footprint, scales as devkit grows, at the cost of a
-   discovery round-trip per novel action.
-
-Lean toward dispatch or meta given the agnostic, eager-loading hosts. Settle the
-exact choice in the MCP's own brainstorm.
-
-**Implementation stance.** Tools mirror the existing CLIs over the library crates
-(`devkit-ports`, `devkit-locks`, `devkit-common`) rather than reinvent them. The
-MCP server ships in the same multi-agent plugin as the `using-devkit` skill (see
-`docs/superpowers/specs/2026-06-21-multi-agent-skill-packaging-design.md`).
-
-**Daemon relationship.** An MCP server is a natural long-lived host that could keep
-the in-memory registries (`devkitd`) warm.
-
-**Open boundaries.** Which surfaces to expose first; the read-only vs. mutating
-tool split.
+- **Daemon-aware locks.** v1 lock writes go straight through `FlockStore` and will
+  hard-error (`DaemonHoldsLock`) under a live `devkitd`. Full cooperation needs
+  daemon-aware resolved-context lock facade variants — owned by the "Authoritative
+  in-memory mode for the lock registry" section above. Until then, run lock actions
+  without a daemon, or wire that work first.
+- **`devrun` + `issue` actions.** Phase 2 of the surface (process supervision, the
+  issue/PR lifecycle). Higher blast radius; add as new registry entries — the tool
+  shape does not change.
+- **Live MCP registration for Codex and Cursor.** Only the Claude Code `.mcp.json`
+  is provided. Confirm the MCP-server registration field each host expects, install
+  the plugin in Codex and Cursor, and confirm `devkit_describe`/`devkit_call` appear.
+- **`initialize` protocol-version negotiation.** The server returns a fixed
+  `protocolVersion`; confirm it against the versions the target hosts send and
+  negotiate if a host requires it.
+- **Ports holder is the project root.** Ports actions use `root` as the registry
+  holder (the liveness path), while locks use the minted session-token holder.
+  Confirm this matches how an agent expects to address its allocations across
+  multiple worktrees.
 
 ## Verify multi-agent plugin packaging
 

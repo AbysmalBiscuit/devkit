@@ -69,6 +69,27 @@ path. Locks expire after their TTL (default 30 min, `--ttl 0` disables) or when 
 recorded anchor pid dies; `release` frees them explicitly. For non-interactive agent
 sessions, pass a stable `--as`/`$DEVKIT_SESSION` so acquire and release agree.
 
+## devkit-mcp (MCP server)
+
+`devkit-mcp` exposes devkit's port and file-lock coordination to MCP-capable
+coding agents over stdio. It presents two tools:
+
+- `devkit_describe` — list the available actions, or fetch one action's argument
+  schema (`{"action": "locks.acquire"}`).
+- `devkit_call` — invoke an action, e.g.
+  `{"action": "locks.acquire", "args": {"root": "/path/to/repo", "paths": ["src/a.rs"]}}`.
+
+v1 actions: `ports.{status,alloc,release,prune}` and
+`locks.{acquire,check,release,status,prune}`. Pass `root` (the project path) on
+every lock call and on `ports.alloc`/`ports.release`. For locks, `holder` is a
+session identity minted from `$DEVKIT_SESSION` (or a per-process id). For ports,
+`holder` defaults to `root` (the worktree path the registry uses to track liveness).
+Either can be overridden per call.
+
+Install with `cargo install --path .` (it builds alongside the other binaries),
+then register it with your agent — the bundled plugin's `.mcp.json` points at the
+`devkit-mcp` command.
+
 ## Configuration
 
 Config discovery order (first match wins):
