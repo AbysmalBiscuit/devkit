@@ -159,6 +159,8 @@ fn main() -> Result<()> {
     let restart_window = Duration::from_secs(env_u64("DEVKIT_DAEMON_RESTART_WINDOW", 60));
     let mem_warn = env_u64("DEVKIT_DAEMON_MEM_WARN_MB", 0) * 1024 * 1024;
     let mem_limit = env_u64("DEVKIT_DAEMON_MEM_LIMIT_MB", 0) * 1024 * 1024;
+    let health_probe = Duration::from_secs(env_u64("DEVKIT_DAEMON_HEALTH_PROBE_SECS", 0));
+    let health_fail_threshold = env_u32("DEVKIT_DAEMON_HEALTH_FAIL_THRESHOLD", 3);
 
     let daemon = Arc::new(Daemon {
         last_activity: Mutex::new(Instant::now()),
@@ -233,6 +235,45 @@ fn main() -> Result<()> {
                         key.role,
                         rss / 1024 / 1024
                     ));
+                }
+            }
+        });
+    }
+
+    // Health-probe thread (enabled by DEVKIT_DAEMON_HEALTH_PROBE_SECS > 0): TCP-probe
+    // each owned server's port and restart one that was once ready but has stopped
+    // accepting. It runs separately from the reap loop so its blocking 300 ms connects
+    // never delay reaping or idle-exit, and its only mutations are each child's probe
+    // counters and a SIGTERM — the reap tick does the respawn through the crash path,
+    // so the two threads never race on restart.
+    if !health_probe.is_zero() {
+        let d = Arc::clone(&daemon);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(health_probe);
+                if d.shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
+                // Snapshot eligible (key, port) under a brief lock, then release it
+                // before any connect — a 300 ms probe must never run under `sup`.
+                let targets = d.sup.lock().unwrap().probe_targets();
+                for (key, port) in targets {
+                    let ok = devkit_common::supervise::probe_port(port);
+                    // Bind the result so the `sup` guard drops before `stop`. A
+                    // returned pid means K consecutive post-arming failures: the
+                    // server is hung. SIGTERM it; the reap tick respawns it.
+                    let hung = d
+                        .sup
+                        .lock()
+                        .unwrap()
+                        .record_probe(&key, ok, health_fail_threshold);
+                    if let Some(pid) = hung {
+                        log_line(&format!(
+                            "health: {}/{} ({:?}) unresponsive — restarting",
+                            key.holder, key.app, key.role
+                        ));
+                        devkit_common::supervise::stop(pid);
+                    }
                 }
             }
         });

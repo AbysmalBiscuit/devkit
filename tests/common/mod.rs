@@ -73,6 +73,25 @@ impl Harness {
 
     /// Start a daemon that idle-exits after `idle_secs` seconds of inactivity.
     pub fn start_with_idle(idle_secs: u64) -> Self {
+        Self::start_with_env(&[("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string())])
+    }
+
+    /// Start a daemon with health probing on: `probe_secs` interval, restart after
+    /// `fail_threshold` consecutive post-arming probe failures.
+    pub fn start_with_health(idle_secs: u64, probe_secs: u64, fail_threshold: u32) -> Self {
+        Self::start_with_env(&[
+            ("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string()),
+            ("DEVKIT_DAEMON_HEALTH_PROBE_SECS", probe_secs.to_string()),
+            (
+                "DEVKIT_DAEMON_HEALTH_FAIL_THRESHOLD",
+                fail_threshold.to_string(),
+            ),
+        ])
+    }
+
+    /// Spawn a daemon bound to a throwaway HOME, with `extra` env on top of the
+    /// fixed test env, then wait for its socket.
+    fn start_with_env(extra: &[(&str, String)]) -> Self {
         let home = std::env::temp_dir().join(format!("portd-test-{}", unique()));
         // XDG_STATE_HOME is set explicitly so the daemon's state_dir() resolves
         // to a path inside the throwaway temp dir, even when the real user's
@@ -81,15 +100,16 @@ impl Harness {
         std::fs::create_dir_all(xdg_state.join("devkit/logs")).expect("create test HOME dirs");
 
         let bin = env!("CARGO_BIN_EXE_devkitd");
-        let child = Command::new(bin)
-            .env("HOME", &home)
+        let mut cmd = Command::new(bin);
+        cmd.env("HOME", &home)
             .env("XDG_STATE_HOME", &xdg_state)
-            .env("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string())
             // The daemon sets this itself; pre-setting it keeps facade calls in the
             // child resolving locally rather than connecting back over the socket.
-            .env("DEVKITD_SELF", "1")
-            .spawn()
-            .expect("spawn devkitd");
+            .env("DEVKITD_SELF", "1");
+        for (k, v) in extra {
+            cmd.env(k, v);
+        }
+        let child = cmd.spawn().expect("spawn devkitd");
 
         let h = Harness {
             home,

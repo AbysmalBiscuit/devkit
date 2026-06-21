@@ -218,6 +218,97 @@ fn restart_survives_concurrent_snapshot() {
     h.shutdown();
 }
 
+/// A server that was once ready but stops accepting connections is restarted by
+/// the health probe: after K consecutive failed probes the daemon SIGTERMs the
+/// hung (but still alive) process, and the reap path respawns it. The fixture
+/// hangs only on its first run (guarded by a sentinel file it creates), so the
+/// respawn is a healthy server and the pid in ports.json changes.
+#[test]
+fn health_probe_restarts_hung_server() {
+    // Probe every 1 s; restart after 2 consecutive post-arming failures.
+    let mut h = Harness::start_with_health(3600, 1, 2);
+    let port = common::free_port();
+    let holder = h.home.to_str().unwrap().to_string();
+    let sentinel = h.home.join("hung-once");
+
+    // Listen on `port`, accepting connections. On first run (sentinel absent),
+    // serve ~3 s — long enough for the 1 s probe to arm — then stop accepting but
+    // stay alive (hung). On later runs (sentinel present) serve forever (healthy).
+    let script = r#"
+import socket, os, sys, time
+port = int(sys.argv[1]); sentinel = sys.argv[2]
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port)); srv.listen(16); srv.settimeout(0.2)
+hang_at = None
+if not os.path.exists(sentinel):
+    open(sentinel, "w").close(); hang_at = time.time() + 3
+while True:
+    if hang_at is not None and time.time() >= hang_at:
+        srv.close()
+        while True:
+            time.sleep(1)
+    try:
+        c, _ = srv.accept(); c.close()
+    except socket.timeout:
+        pass
+"#;
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Issue,
+        argv: vec![
+            "python3".into(),
+            "-c".into(),
+            script.into(),
+            port.to_string(),
+            sentinel.to_str().unwrap().to_string(),
+        ],
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.join("hung.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "supervise did not become ready: {resp:?}"
+    );
+
+    let pid1 =
+        pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
+
+    // The fixture serves ~3 s (probe arms), then hangs; 2 failed probes →
+    // SIGTERM → respawn. Poll ports.json for the new pid.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut pid2: Option<u32> = None;
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        if let Some(p) = pid_in_ports_json(&h.ports_json(), "api")
+            && p != pid1
+        {
+            pid2 = Some(p);
+            break;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+
+    assert!(
+        pid2.is_some(),
+        "daemon did not restart the hung server within 15 s (pid1={pid1})"
+    );
+    assert_ne!(
+        pid2.unwrap(),
+        pid1,
+        "pid did not change after health restart"
+    );
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
 /// After a clean `Down`, the supervision thread must NOT restart the server —
 /// `Down` removes the key from the supervisor table before stopping the child,
 /// so the exit is never reaped as a crash.
