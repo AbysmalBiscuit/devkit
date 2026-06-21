@@ -9,3 +9,7 @@ serde = { workspace = true }
 serde_json.workspace = true
 fd-lock.workspace = true
 devkit-common.workspace = true
+interprocess = { workspace = true, optional = true }
+
+[features]
+daemon = ["dep:interprocess", "devkit-common/daemon"]

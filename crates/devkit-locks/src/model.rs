@@ -48,13 +48,13 @@ pub fn paths_overlap(a: &str, b: &str) -> bool {
         .is_some_and(|rest| rest.starts_with('/'))
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Acquired {
     pub path: String,
     pub ttl_secs: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conflict {
     pub path: String,
     pub held_by: String,
@@ -62,7 +62,7 @@ pub struct Conflict {
     pub note: Option<String>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AcquireOutcome {
     pub acquired: Vec<Acquired>,
     pub conflicts: Vec<Conflict>,

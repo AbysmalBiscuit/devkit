@@ -219,6 +219,7 @@ dependencies = [
  "anyhow",
  "devkit-common",
  "fd-lock",
+ "interprocess",
  "serde",
  "serde_json",
 ]

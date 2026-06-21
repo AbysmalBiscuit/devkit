@@ -2,6 +2,9 @@ pub mod ident;
 pub mod model;
 pub mod store;
 
+#[cfg(feature = "daemon")]
+pub mod daemon;
+
 use anyhow::{Context, Result};
 use model::{AcquireOutcome, Conflict, LockEntry};
 use std::path::{Component, Path, PathBuf};
