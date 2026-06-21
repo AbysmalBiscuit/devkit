@@ -155,8 +155,9 @@ impl Supervisor {
     }
 
     /// Reap any exited `Owned` children and detect any dead `Adopted` ones. Returns
-    /// the keys whose process is now gone (the caller decides restart vs. let-die by
-    /// consulting `ports.json`).
+    /// the keys whose process is now gone. Every returned key is a crash: an intentional
+    /// `Down` removes the key from the table before signalling its child, so a stopped
+    /// server is never reaped here.
     pub(crate) fn reap_once(&mut self) -> Vec<Key> {
         let mut dead = Vec::new();
         for (key, child) in self.children.iter() {
