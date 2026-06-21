@@ -87,7 +87,13 @@ with the future daemon-managed liveness path rather than the v1 poll loop.
 
 ## Health-probe restarts (daemon phase 2)
 
-**Status:** deferred — spec §7.
+**Status:** RESOLVED 2026-06-21 — see
+`docs/superpowers/specs/2026-06-21-daemon-health-probe-restarts-design.md`. A
+separate probe thread arms each owned server on its first successful connect and
+SIGTERMs it after K consecutive failures; the reap path respawns it within the
+crash-loop budget. Enabled via `DEVKIT_DAEMON_HEALTH_PROBE_SECS` (0 = off). The
+analysis below is kept for context.
+
 **Want:** a periodic TCP readiness probe (reusing `supervise::wait_ready`); if a
 server that was once ready refuses connections for K consecutive probes, treat it
 as hung and restart it. Kept out of core supervision to avoid false-positive

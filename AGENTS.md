@@ -58,6 +58,11 @@ The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
   budget); an intentional `Down` removes the key from the table *before* signalling the
   child, so a stopped server is never reaped as a crash. Don't make the restart decision
   read `ports.json`/`d.ports` — a concurrent prune would race it.
+- **A health-probe restart goes through the crash path, not its own.** When probing
+  is enabled (`DEVKIT_DAEMON_HEALTH_PROBE_SECS` > 0), the probe thread only SIGTERMs a
+  server that was once ready and has stopped accepting; the supervision tick then reaps
+  and respawns it within the crash-loop budget. Don't give the probe thread its own
+  respawn — two respawners would race on the same key.
 - **`prd` is rejected** as a `doppler_config` to avoid running against production secrets.
 
 ## Conventions
