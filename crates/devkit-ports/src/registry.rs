@@ -5,9 +5,9 @@ use fd_lock::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
-use std::path::PathBuf;
 #[cfg(test)]
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
@@ -451,8 +451,7 @@ pub fn alloc_with(
         }
         let mut port = *base;
         loop {
-            let taken =
-                data.entries.contains_key(&port) || chosen.iter().any(|(_, p)| *p == port);
+            let taken = data.entries.contains_key(&port) || chosen.iter().any(|(_, p)| *p == port);
             if !taken && !listening(port) {
                 break;
             }
@@ -759,8 +758,20 @@ mod store_seam_tests {
         let out = alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
         let (_, port) = out[0];
         let d = store.snapshot().unwrap();
-        assert_eq!(d.entries[&port].pid, None, "reserve before bind: pid-less row");
-        record_pid_with(&store, port, "api", "/w", Role::Issue, 4321, PathBuf::from("/log")).unwrap();
+        assert_eq!(
+            d.entries[&port].pid, None,
+            "reserve before bind: pid-less row"
+        );
+        record_pid_with(
+            &store,
+            port,
+            "api",
+            "/w",
+            Role::Issue,
+            4321,
+            PathBuf::from("/log"),
+        )
+        .unwrap();
         assert_eq!(store.snapshot().unwrap().entries[&port].pid, Some(4321));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -782,14 +793,23 @@ mod store_seam_tests {
         let store = FlockStore::at(&dir);
         // Simulate a running daemon: hold devkitd.lock exclusive on a separate fd.
         let f = std::fs::OpenOptions::new()
-            .create(true).write(true).truncate(false)
-            .open(dir.join("devkitd.lock")).unwrap();
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(dir.join("devkitd.lock"))
+            .unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().expect("take exclusive gate");
         let err = store
-            .commit(|d| { d.alloc_one("/w", "api", 9100, Role::Issue); Ok(()) })
+            .commit(|d| {
+                d.alloc_one("/w", "api", 9100, Role::Issue);
+                Ok(())
+            })
             .unwrap_err();
-        assert!(err.downcast_ref::<DaemonHoldsLock>().is_some(), "got: {err:#}");
+        assert!(
+            err.downcast_ref::<DaemonHoldsLock>().is_some(),
+            "got: {err:#}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -800,22 +820,35 @@ mod store_seam_tests {
         // Seed a dead reservation (dead holder dir => dead_ports flags it).
         store
             .commit(|d| {
-                d.entries.insert(9100, Entry {
-                    app: "api".into(), holder: "/definitely/not/here".into(),
-                    role: Role::Issue, pid: None, logfile: None, ts: 0,
-                });
+                d.entries.insert(
+                    9100,
+                    Entry {
+                        app: "api".into(),
+                        holder: "/definitely/not/here".into(),
+                        role: Role::Issue,
+                        pid: None,
+                        logfile: None,
+                        ts: 0,
+                    },
+                );
                 Ok(())
             })
             .unwrap();
         // Now hold the gate exclusive: snapshot must still succeed (reads ungated)
         // and must not propagate the blocked prune.
         let f = std::fs::OpenOptions::new()
-            .create(true).write(true).truncate(false)
-            .open(dir.join("devkitd.lock")).unwrap();
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(dir.join("devkitd.lock"))
+            .unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().unwrap();
         let snap = snapshot_with(&store).expect("read must not fail under held gate");
-        assert!(!snap.entries.contains_key(&9100), "dead entry pruned from the returned view");
+        assert!(
+            !snap.entries.contains_key(&9100),
+            "dead entry pruned from the returned view"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

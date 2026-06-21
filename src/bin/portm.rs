@@ -41,12 +41,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Cmd::Status) {
         Cmd::Completions { shell } => {
-            clap_complete::generate(
-                shell,
-                &mut Cli::command(),
-                "portm",
-                &mut std::io::stdout(),
-            );
+            clap_complete::generate(shell, &mut Cli::command(), "portm", &mut std::io::stdout());
         }
         Cmd::Status => status()?,
         Cmd::Prune => {

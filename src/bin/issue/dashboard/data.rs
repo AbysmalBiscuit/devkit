@@ -17,9 +17,7 @@ pub fn issues(use_cache: bool) -> Vec<AssignedIssue> {
     let Ok(key) = std::env::var("LINEAR_API_KEY") else {
         return Vec::new();
     };
-    if use_cache
-        && let Some(v) = cache::get::<Vec<AssignedIssue>>("issues", TTL_SECS)
-    {
+    if use_cache && let Some(v) = cache::get::<Vec<AssignedIssue>>("issues", TTL_SECS) {
         return v;
     }
     let v = match linear::assigned_issue_history(&key) {
@@ -86,9 +84,7 @@ pub fn pr_timeline(
     } else {
         "pr-timeline-mine"
     };
-    if use_cache
-        && let Some(c) = cache::get::<PrTimelineCache>(key, TTL_SECS)
-    {
+    if use_cache && let Some(c) = cache::get::<PrTimelineCache>(key, TTL_SECS) {
         return (
             to_datetimes(&c.opened),
             to_datetimes(&c.merged),

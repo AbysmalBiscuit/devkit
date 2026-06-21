@@ -22,7 +22,9 @@ fn now_secs() -> u64 {
 }
 
 fn path_for(key: &str) -> PathBuf {
-    paths::cache_dir().join("dashboard").join(format!("{key}.json"))
+    paths::cache_dir()
+        .join("dashboard")
+        .join(format!("{key}.json"))
 }
 
 #[derive(serde::Deserialize)]

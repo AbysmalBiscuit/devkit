@@ -34,7 +34,15 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             role,
             pid,
             logfile,
-        } => match registry::record_pid_with(&daemon.port_store(), port, &app, &holder, role, pid, logfile) {
+        } => match registry::record_pid_with(
+            &daemon.port_store(),
+            port,
+            &app,
+            &holder,
+            role,
+            pid,
+            logfile,
+        ) {
             Ok(()) => (Response::Ok, false),
             Err(e) => (Response::Err(format!("{e:#}")), false),
         },
@@ -80,9 +88,9 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             daemon.shutdown.store(true, Ordering::SeqCst);
             // Nudge the accept loop so it observes the shutdown flag and exits.
             use interprocess::local_socket::traits::Stream as _;
-            if let Ok(name) =
-                devkit_ports::daemon::transport::socket_name(&devkit_common::paths::port_socket_file())
-            {
+            if let Ok(name) = devkit_ports::daemon::transport::socket_name(
+                &devkit_common::paths::port_socket_file(),
+            ) {
                 let _ = interprocess::local_socket::Stream::connect(name);
             }
             (Response::Ok, true)
@@ -116,7 +124,15 @@ fn supervise_app(
         Ok(pid) => pid,
         Err(e) => return Response::Err(format!("{e:#}")),
     };
-    if let Err(e) = registry::record_pid_with(&daemon.port_store(), port, &app, &holder, role, pid, logfile.clone()) {
+    if let Err(e) = registry::record_pid_with(
+        &daemon.port_store(),
+        port,
+        &app,
+        &holder,
+        role,
+        pid,
+        logfile.clone(),
+    ) {
         return Response::Err(format!("{e:#}"));
     }
     let launch = Launch { argv, cwd, env };
@@ -161,7 +177,13 @@ fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
     }
 }
 
-fn tail(daemon: &Arc<Daemon>, holder: String, app: String, role: Option<Role>, lines: usize) -> Response {
+fn tail(
+    daemon: &Arc<Daemon>,
+    holder: String,
+    app: String,
+    role: Option<Role>,
+    lines: usize,
+) -> Response {
     match registry::snapshot_with(&daemon.port_store()) {
         Ok(d) => {
             let log = d

@@ -97,9 +97,7 @@ mod tests {
         let env = BTreeMap::new();
         let mut c = Command::new("true"); // program name does not matter
         configure_child(&mut c, &[], ".", &env);
-        let marker = c
-            .get_envs()
-            .find(|(k, _)| *k == OsStr::new("DEVKITD_SELF"));
+        let marker = c.get_envs().find(|(k, _)| *k == OsStr::new("DEVKITD_SELF"));
         match marker {
             Some((_, None)) => {} // explicit removal recorded — correct
             Some((_, Some(v))) => {
