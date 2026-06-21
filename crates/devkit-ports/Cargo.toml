@@ -15,4 +15,4 @@ interprocess = { workspace = true, optional = true }
 devkit-common.workspace = true
 
 [features]
-daemon = ["dep:interprocess"]
+daemon = ["dep:interprocess", "devkit-common/daemon"]

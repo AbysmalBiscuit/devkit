@@ -12,6 +12,10 @@ comfy-table.workspace = true
 anstyle.workspace = true
 supports-hyperlinks.workspace = true
 ureq.workspace = true
+interprocess = { workspace = true, optional = true }
+
+[features]
+daemon = ["dep:interprocess"]
 
 # Unix process primitives (signals, sessions); unavailable on Windows.
 [target.'cfg(unix)'.dependencies]

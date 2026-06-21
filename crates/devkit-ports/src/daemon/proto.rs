@@ -1,9 +1,6 @@
 use crate::registry::{Data, Role};
-use anyhow::Result;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 /// Wire-format version. Bump on any incompatible change to these types.
@@ -75,24 +72,7 @@ pub enum Response {
     Err(String),
 }
 
-/// Write one newline-delimited JSON frame and flush.
-pub fn send<W: Write>(w: &mut W, msg: &impl Serialize) -> Result<()> {
-    let mut line = serde_json::to_vec(msg)?;
-    line.push(b'\n');
-    w.write_all(&line)?;
-    w.flush()?;
-    Ok(())
-}
-
-/// Read one newline-delimited JSON frame. `Ok(None)` on clean EOF. A blank line
-/// (a protocol violation) propagates as a deserialization error.
-pub fn recv<R: BufRead, T: DeserializeOwned>(r: &mut R) -> Result<Option<T>> {
-    let mut s = String::new();
-    if r.read_line(&mut s)? == 0 {
-        return Ok(None);
-    }
-    Ok(Some(serde_json::from_str(s.trim_end())?))
-}
+pub use devkit_common::daemon::framing::{recv, send};
 
 #[cfg(test)]
 mod tests {

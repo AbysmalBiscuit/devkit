@@ -1,4 +1,6 @@
 pub mod cmd;
+#[cfg(feature = "daemon")]
+pub mod daemon;
 pub mod linear;
 pub mod paths;
 pub mod report;

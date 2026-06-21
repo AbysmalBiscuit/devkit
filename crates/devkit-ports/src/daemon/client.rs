@@ -1,61 +1,38 @@
-//! Daemon client: connects to the supervisor over its local socket.
+//! Port daemon client: connect to the supervisor over `ports.sock`, with the
+//! port-proto handshake layered on the shared `Client`.
 
-use crate::daemon::proto::{self, PROTO, Request, Response};
-use crate::daemon::transport;
-use anyhow::{Context, Result, anyhow};
+use crate::daemon::proto::{PROTO, Request, Response};
+use anyhow::{Result, anyhow};
+use devkit_common::daemon::{self, Client};
 use devkit_common::paths;
-use interprocess::local_socket::traits::Stream as _;
-use interprocess::local_socket::{RecvHalf, SendHalf, Stream};
-use std::io::{BufReader, BufWriter};
 use std::time::{Duration, Instant};
-
-/// A live connection to the daemon. Reusable across requests.
-pub struct Client {
-    reader: BufReader<RecvHalf>,
-    writer: BufWriter<SendHalf>,
-}
 
 pub fn handshake_ok(server_proto: u32) -> bool {
     server_proto == PROTO
 }
 
-impl Client {
-    fn from_stream(stream: Stream) -> Result<Self> {
-        let (recv, send) = stream.split();
-        let reader = BufReader::new(recv);
-        let writer = BufWriter::new(send);
-        let mut c = Client { reader, writer };
-        // Handshake: a proto mismatch means an old daemon survived a binary upgrade —
-        // ask it to shut down so the caller can start a fresh one.
-        match c.request(&Request::Ping { proto: PROTO })? {
-            Response::Pong { proto, .. } if handshake_ok(proto) => Ok(c),
-            Response::Pong { .. } => {
-                let _ = c.request(&Request::Shutdown);
-                Err(anyhow!("daemon proto mismatch"))
-            }
-            other => Err(anyhow!("unexpected handshake response: {other:?}")),
+/// Validate a fresh connection with the port Ping/Pong handshake. A proto
+/// mismatch (old daemon survived an upgrade) asks it to shut down and fails.
+fn shake(mut c: Client) -> Option<Client> {
+    match c.request::<Request, Response>(&Request::Ping { proto: PROTO }) {
+        Ok(Response::Pong { proto, .. }) if handshake_ok(proto) => Some(c),
+        Ok(Response::Pong { .. }) => {
+            let _ = c.request::<Request, Response>(&Request::Shutdown);
+            None
         }
-    }
-
-    /// Send one request, read one response.
-    pub fn request(&mut self, req: &Request) -> Result<Response> {
-        proto::send(&mut self.writer, req)?;
-        proto::recv(&mut self.reader)?.ok_or_else(|| anyhow!("daemon closed connection"))
+        _ => None,
     }
 }
 
-/// Connect to an already-running daemon. Returns `None` if none is up or the
-/// handshake fails — never autostarts. Used for opportunistic registry routing
-/// (and by `status`, which must never spin a daemon up).
+/// Connect to an already-running daemon; `None` if none is up or the handshake
+/// fails. Never autostarts.
 pub fn try_existing() -> Option<Client> {
-    let name = transport::socket_name(&paths::port_socket_file()).ok()?;
-    let stream = Stream::connect(name).ok()?;
-    Client::from_stream(stream).ok()
+    shake(daemon::connect(&paths::port_socket_file())?)
 }
 
-/// Locate the daemon binary: `$DEVKITD_BIN`, else a sibling of the current
-/// executable, else `devkitd` on `PATH`.
-fn portd_bin() -> std::path::PathBuf {
+/// Locate the daemon binary: `$DEVKITD_BIN`, else a sibling of the current exe,
+/// else `devkitd` on `PATH`.
+fn devkitd_bin() -> std::path::PathBuf {
     if let Some(p) = std::env::var_os("DEVKITD_BIN") {
         return p.into();
     }
@@ -70,16 +47,12 @@ fn portd_bin() -> std::path::PathBuf {
     std::path::PathBuf::from("devkitd")
 }
 
-/// Connect, autostarting a daemon if none is running. Used by supervision paths
-/// (`devrun up --supervise`) — i.e. only when the run gate is on.
+/// Connect, autostarting a daemon if none is running (supervision paths only).
 pub fn ensure_running() -> Result<Client> {
     if let Some(c) = try_existing() {
         return Ok(c);
     }
-    std::process::Command::new(portd_bin())
-        .spawn()
-        .with_context(|| "spawning devkitd")?;
-    // Poll the socket until the daemon accepts (it binds after taking its lock).
+    daemon::spawn(&devkitd_bin())?;
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if let Some(c) = try_existing() {
@@ -95,7 +68,7 @@ mod tests {
     use super::*;
     #[test]
     fn proto_match_decision() {
-        assert!(handshake_ok(crate::daemon::proto::PROTO));
-        assert!(!handshake_ok(crate::daemon::proto::PROTO + 1));
+        assert!(handshake_ok(PROTO));
+        assert!(!handshake_ok(PROTO + 1));
     }
 }
