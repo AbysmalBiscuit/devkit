@@ -34,7 +34,6 @@ pub struct RpcError {
 }
 
 impl Response {
-    #[allow(dead_code)]
     pub fn ok(id: Value, result: Value) -> Self {
         Response {
             jsonrpc: "2.0",
