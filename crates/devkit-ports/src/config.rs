@@ -30,6 +30,10 @@ pub struct DaemonConfig {
     /// Action when tree-RSS crosses `memory_limit_mb`. Only "warn" (log a line) is
     /// honored; other values currently fall back to warn behavior.
     pub memory_action: String,
+    /// Health-probe interval in seconds; 0 disables probing (no probe thread).
+    pub health_probe_secs: u64,
+    /// Consecutive post-arming probe failures before a server is judged hung.
+    pub health_fail_threshold: u32,
 }
 
 impl Default for DaemonConfig {
@@ -42,6 +46,8 @@ impl Default for DaemonConfig {
             memory_warn_mb: 0,
             memory_limit_mb: 0,
             memory_action: "warn".to_string(),
+            health_probe_secs: 0,
+            health_fail_threshold: 3,
         }
     }
 }
@@ -245,6 +251,8 @@ github = "exampleuser"
         assert_eq!(c.daemon.memory_warn_mb, 0);
         assert_eq!(c.daemon.memory_limit_mb, 0);
         assert_eq!(c.daemon.memory_action, "warn");
+        assert_eq!(c.daemon.health_probe_secs, 0);
+        assert_eq!(c.daemon.health_fail_threshold, 3);
     }
     #[test]
     fn parses_explicit_daemon_block() {
