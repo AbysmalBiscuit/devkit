@@ -33,7 +33,7 @@ install together via `cargo install --path .`. Three library crates are members.
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
 | `src/bin/issue` | issue lifecycle: `setup`, `status`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
-| `src/bin/devkitd` | port-registry supervisor daemon; bin gated by the `daemon` feature (on by default) |
+| `src/bin/devkitd` | supervisor daemon serving both the port registry (`ports.sock`) and the lock registry (`locks.sock`), authoritative in memory, write-through to the files, gated by `devkitd.lock`; bin gated by the `daemon` feature (on by default) |
 
 The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
 `completions <shell>` subcommand via `clap_complete`.
@@ -89,9 +89,12 @@ Go through `registry::{alloc, record_pid, release, snapshot, prune, status_table
 keep liveness syscalls (bind/stat/kill) out of the exclusive lock. Don't reintroduce
 probing inside `with_lock`. This facade is also the seam a future port daemon plugs into.
 
-When a `devkitd` daemon is running it is the *authoritative* registry: it
-loads `ports.json` into memory under `devkitd.lock` (held exclusive for its life),
-serves reads from memory, and writes through to the file on each mutation. Direct
-callers take `devkitd.lock` *shared* before any write (`FlockStore` / `registry::with_lock`)
-and hard-error (`DaemonHoldsLock`) if the daemon holds it — so a non-daemon binary
-can never modify `ports.json` behind a live daemon. Reads are ungated.
+When a `devkitd` daemon is running it is the *authoritative* registry for both the
+port and lock registries: it loads `ports.json` and `locks.json` into memory under
+`devkitd.lock` (held exclusive for its life), serves reads from memory over two sockets
+(`ports.sock` for ports, `locks.sock` for locks), and writes through to the respective
+files on each mutation. Direct callers take `devkitd.lock` *shared* before any write
+(`FlockStore` / `registry::with_lock`) and hard-error (`DaemonHoldsLock`) if the daemon
+holds it — so a non-daemon binary can never modify the files behind a live daemon. Reads
+are ungated. `devkit-locks` exposes the same `Store` seam as `devkit-ports`: `FlockStore`
+is the direct flock-guarded path; `MemoryStore` is the daemon path.
