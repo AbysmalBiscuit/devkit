@@ -462,15 +462,32 @@ the in-memory registries (`devkitd`) warm.
 
 **Open boundaries.** Which surfaces to expose first; the read-only vs. mutating
 tool split.
+
+## Verify multi-agent plugin packaging
+
+The packaging is shipped but not yet exercised end-to-end. Two things still need
+a live test:
+
+- **Claude marketplace install.** `github.com/AbysmalBiscuit/devkit` is private for
+  now and will be made public later. Once it is public, run
+  `/plugin marketplace add AbysmalBiscuit/devkit` then `/plugin install devkit` in a
+  fresh session and confirm the `using-devkit` skill resolves from the plugin. Until
+  then the relative-path marketplace source cannot be added via git.
+- **Codex/Cursor SessionStart hook.** The context-injection envelopes
+  (`hookSpecificOutput.additionalContext` for Codex, `additional_context` for Cursor)
+  are verified against current docs but neither agent has been run yet. Install the
+  plugin in Codex and Cursor, start a session, and confirm the "A 'using-devkit'
+  skill is available" notice appears. On Windows, confirm `run-hook.cmd` locates Git
+  Bash. If an envelope is rejected, adjust `hooks/announce-skill`.
 ```
 
 - [ ] **Step 2: Verify the new content is present and the old stub is gone**
 
 Run:
 ```bash
-rg -n "Three exposure shapes" docs/next-steps.md && (rg -q "Open questions to settle in its own brainstorming pass" docs/next-steps.md && echo "STUB STILL PRESENT" || echo "old stub removed")
+rg -n "Three exposure shapes" docs/next-steps.md && rg -n "Verify multi-agent plugin packaging" docs/next-steps.md && (rg -q "Open questions to settle in its own brainstorming pass" docs/next-steps.md && echo "STUB STILL PRESENT" || echo "old stub removed")
 ```
-Expected: a line match for "Three exposure shapes"; then `old stub removed`.
+Expected: a line match for "Three exposure shapes" and one for "Verify multi-agent plugin packaging"; then `old stub removed`.
 
 - [ ] **Step 3: Commit**
 
