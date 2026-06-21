@@ -203,6 +203,7 @@ dependencies = [
  "anyhow",
  "comfy-table",
  "fd-lock",
+ "interprocess",
  "nix",
  "serde",
  "serde_json",
