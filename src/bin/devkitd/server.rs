@@ -86,12 +86,15 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
 
         Request::Shutdown => {
             daemon.shutdown.store(true, Ordering::SeqCst);
-            // Nudge the accept loop so it observes the shutdown flag and exits.
+            // Nudge both accept loops so each observes the shutdown flag and exits.
             use interprocess::local_socket::traits::Stream as _;
-            if let Ok(name) = devkit_ports::daemon::transport::socket_name(
-                &devkit_common::paths::port_socket_file(),
-            ) {
-                let _ = interprocess::local_socket::Stream::connect(name);
+            for sock in [
+                devkit_common::paths::port_socket_file(),
+                devkit_common::paths::lock_socket_file(),
+            ] {
+                if let Ok(name) = devkit_ports::daemon::transport::socket_name(&sock) {
+                    let _ = interprocess::local_socket::Stream::connect(name);
+                }
             }
             (Response::Ok, true)
         }
