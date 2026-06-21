@@ -213,27 +213,16 @@ fn main() -> Result<()> {
                     }
                     break;
                 }
-                // Reap exited children; restart only those whose ports.json row survives
-                // (the cross-tool stop signal). Debounce the read so a concurrent legacy
-                // `down` that removes the row just before the exit isn't misread as a crash.
-                // Use a raw read (no liveness prune) so a row with a now-dead pid is still
-                // visible here — it's the daemon's signal that the exit was a crash, not an
-                // intentional stop. `snapshot()` prunes dead-pid rows before we can see them.
+                // The supervisor table is the authority on crash vs. stop. An intentional
+                // `Down` removes the key from the table before stopping the child, so a
+                // stopped server never surfaces from `reap_once`; anything reaped exited on
+                // its own and is a crash. `restart` enforces the crash-loop budget and drops
+                // adopted survivors that have no launch spec. The bound `let` releases the
+                // `sup` lock before the loop, so `restart` (which re-locks `sup`) cannot
+                // deadlock.
                 let dead = d.sup.lock().unwrap().reap_once();
-                if !dead.is_empty() {
-                    std::thread::sleep(Duration::from_millis(200)); // debounce
-                    let snap = d.ports.lock().unwrap().clone();
-                    for key in dead {
-                        let row = snap.entries.values().find(|e| {
-                            e.holder == key.holder && e.app == key.app && e.role == key.role
-                        });
-                        match row {
-                            Some(_) => restart(&d, &key),
-                            None => {
-                                d.sup.lock().unwrap().remove(&key);
-                            } // intentional stop
-                        }
-                    }
+                for key in dead {
+                    restart(&d, &key);
                 }
                 // Memory: warn once per breach (the implemented action is warn-only).
                 for (key, rss) in d.sup.lock().unwrap().memory_breaches() {
@@ -344,6 +333,12 @@ fn handle_lock_conn(daemon: &Arc<Daemon>, stream: Stream) -> Result<()> {
 /// Respawn a crashed child if its crash-loop budget allows; otherwise drop it and log.
 fn restart(daemon: &Arc<Daemon>, key: &supervisor::Key) {
     let mut sup = daemon.sup.lock().unwrap();
+    // A `Down` (or a give-up) can remove the key between the reap and here. The
+    // child is already gone and untracked, so there is nothing to restart — return
+    // without logging a spurious drop.
+    if !sup.contains(key) {
+        return;
+    }
     // An adopted survivor has no stored launch spec, so it can't be respawned —
     // drop it on exit rather than charging the crash-loop budget for a spawn that
     // can never happen.

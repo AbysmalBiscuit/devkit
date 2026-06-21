@@ -56,9 +56,9 @@ fn supervised_python_server_becomes_ready() {
     h.shutdown();
 }
 
-/// After SIGKILLing the supervised child, the daemon's supervision thread
-/// detects the exit, debounces (200 ms), sees the row in ports.json (not a
-/// clean `Down`), and respawns the server.  The pid in ports.json changes.
+/// After SIGKILLing the supervised child, the daemon's supervision thread reaps
+/// the exit and respawns the server, because the child is still tracked in the
+/// supervisor table (it was not stopped via `Down`). The pid in ports.json changes.
 #[test]
 fn restart_after_kill() {
     let mut h = Harness::start();
@@ -93,7 +93,7 @@ fn restart_after_kill() {
     kill(Pid::from_raw(pid1 as i32), Signal::SIGKILL).expect("SIGKILL failed");
 
     // Poll ports.json for up to 8 s until the pid changes (daemon restarted it).
-    // Supervision tick is 500 ms + 200 ms debounce + python startup ≈ 1–2 s total.
+    // Supervision tick is 500 ms + python startup ≈ 1–2 s total.
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut pid2: Option<u32> = None;
     loop {
@@ -125,9 +125,102 @@ fn restart_after_kill() {
     h.shutdown();
 }
 
+/// A supervised child that is SIGKILLed restarts even while clients are pruning
+/// the registry. The supervisor table — not the registry row — decides crash vs.
+/// stop, so a concurrent `Snapshot` (which drops the dead-pid row inside the
+/// daemon) cannot make a crash look like an intentional stop.
+#[test]
+fn restart_survives_concurrent_snapshot() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mut h = Harness::start();
+    let port = common::free_port();
+    let holder = h.home.to_str().unwrap().to_string();
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Issue,
+        argv: vec![
+            "python3".into(),
+            "-m".into(),
+            "http.server".into(),
+            port.to_string(),
+        ],
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.join("snap.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "supervise did not become ready: {resp:?}"
+    );
+
+    let pid1 =
+        pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
+
+    // Hammer Snapshot from independent connections: each snapshot prunes the
+    // dead-pid row inside the daemon, reproducing the prune that races the restart.
+    let sock = h.socket();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_thread = stop.clone();
+    let hammer = std::thread::spawn(move || {
+        use devkit_ports::daemon::proto;
+        use devkit_ports::daemon::transport;
+        use interprocess::local_socket::Stream;
+        use interprocess::local_socket::traits::Stream as _;
+        use std::io::{BufReader, BufWriter};
+        while !stop_thread.load(Ordering::Relaxed) {
+            if let Ok(name) = transport::socket_name(&sock)
+                && let Ok(stream) = Stream::connect(name)
+            {
+                let (recv, send) = stream.split();
+                let mut writer = BufWriter::new(send);
+                let mut reader = BufReader::new(recv);
+                if proto::send(&mut writer, &Request::Snapshot).is_ok() {
+                    let _ = proto::recv::<_, Response>(&mut reader);
+                }
+            }
+        }
+    });
+
+    // SIGKILL the child to simulate a crash.
+    kill(Pid::from_raw(pid1 as i32), Signal::SIGKILL).expect("SIGKILL failed");
+
+    // The daemon must restart it despite the concurrent pruning. Poll for a new pid.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut pid2: Option<u32> = None;
+    loop {
+        std::thread::sleep(Duration::from_millis(150));
+        if let Some(p) = pid_in_ports_json(&h.ports_json(), "api")
+            && p != pid1
+        {
+            pid2 = Some(p);
+            break;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = hammer.join();
+
+    assert!(
+        pid2.is_some(),
+        "daemon did not restart the killed server under concurrent snapshots (pid1={pid1})"
+    );
+    assert_ne!(pid2.unwrap(), pid1, "pid did not change after respawn");
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
 /// After a clean `Down`, the supervision thread must NOT restart the server —
-/// the row is gone from ports.json so the debounce path correctly treats the
-/// exit as intentional.
+/// `Down` removes the key from the supervisor table before stopping the child,
+/// so the exit is never reaped as a crash.
 #[test]
 fn down_does_not_restart() {
     let mut h = Harness::start();

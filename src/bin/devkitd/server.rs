@@ -167,6 +167,10 @@ fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
                 .collect()
         })
         .unwrap_or_default();
+    // Remove each key from the supervisor table BEFORE signalling its child. The
+    // supervision thread restarts anything it reaps; removing the key first is what
+    // marks this exit intentional so the child is not respawned. This ordering is
+    // load-bearing — do not signal before removing.
     let mut sup = daemon.sup.lock().unwrap();
     for k in &keys {
         if let Some(pid) = sup.remove(k) {

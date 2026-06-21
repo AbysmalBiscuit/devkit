@@ -104,6 +104,13 @@ impl Supervisor {
         self.children.remove(key).map(|c| c.pid)
     }
 
+    /// Whether a key is still tracked. Lets the restart path tell a concurrent
+    /// `Down`/give-up (key gone) apart from an adopted survivor with no launch
+    /// spec (key present) when deciding what to do with a reaped child.
+    pub(crate) fn contains(&self, key: &Key) -> bool {
+        self.children.contains_key(key)
+    }
+
     pub(crate) fn logfile_of(&self, key: &Key) -> Option<PathBuf> {
         self.children.get(key).map(|c| c.logfile.clone())
     }
