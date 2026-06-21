@@ -1,5 +1,6 @@
 mod actions;
 mod jsonrpc;
+mod locks;
 mod ports;
 
 use std::io::{BufRead, Write};

@@ -139,3 +139,81 @@ fn ports_alloc_unknown_app_is_an_error() {
         "error names the app"
     );
 }
+
+#[test]
+fn locks_acquire_then_other_holder_sees_conflict() {
+    let proj = project();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[
+            call_req(
+                1,
+                "locks.acquire",
+                json!({ "root": root, "paths": ["src/a.rs"], "holder": "alice" }),
+            ),
+            call_req(
+                2,
+                "locks.check",
+                json!({ "root": root, "paths": ["src/a.rs"], "holder": "bob" }),
+            ),
+        ],
+    );
+    let acq = tool_json(&resps[0], false);
+    assert_eq!(acq["acquired"].as_array().unwrap().len(), 1);
+    assert!(acq["conflicts"].as_array().unwrap().is_empty());
+
+    let conflicts = tool_json(&resps[1], false);
+    let arr = conflicts.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["held_by"], "alice");
+}
+
+#[test]
+fn locks_acquire_then_release_clears_the_lock() {
+    let proj = project();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[
+            call_req(
+                1,
+                "locks.acquire",
+                json!({ "root": root, "paths": ["x.txt"], "holder": "alice" }),
+            ),
+            call_req(
+                2,
+                "locks.release",
+                json!({ "root": root, "paths": ["x.txt"], "holder": "alice" }),
+            ),
+            call_req(3, "locks.status", json!({ "root": root })),
+        ],
+    );
+    tool_json(&resps[0], false);
+    let released = tool_json(&resps[1], false);
+    assert_eq!(released["released"].as_array().unwrap().len(), 1);
+    let status = tool_json(&resps[2], false);
+    assert!(status.as_array().unwrap().is_empty(), "no locks remain");
+}
+
+#[test]
+fn locks_release_without_paths_or_all_is_an_error() {
+    let proj = project();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[call_req(
+            1,
+            "locks.release",
+            json!({ "root": root, "holder": "alice" }),
+        )],
+    );
+    let payload = tool_json(&resps[0], true);
+    assert!(payload.as_str().unwrap().contains("paths"));
+}
