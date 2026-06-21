@@ -38,6 +38,11 @@ struct Child {
     restarts: Vec<Instant>,
     warned_mem: bool,
     launch: Option<Launch>,
+    /// Has this process accepted a health probe at least once? Until it has, probe
+    /// failures are ignored, so a slow-starting server is never judged hung.
+    armed: bool,
+    /// Consecutive failed probes since arming or the last success.
+    probe_failures: u32,
 }
 
 pub(crate) struct Supervisor {
@@ -81,6 +86,8 @@ impl Supervisor {
                 restarts: Vec::new(),
                 warned_mem: false,
                 launch: Some(launch),
+                armed: false,
+                probe_failures: 0,
             },
         );
     }
@@ -96,6 +103,8 @@ impl Supervisor {
                 restarts: Vec::new(),
                 warned_mem: false,
                 launch: None,
+                armed: false,
+                probe_failures: 0,
             },
         );
     }
@@ -122,11 +131,15 @@ impl Supervisor {
         Some((c.launch.clone()?, c.logfile.clone(), c.port))
     }
 
-    /// Update a key's pid after a successful respawn; marks the child as owned.
+    /// Update a key's pid after a successful respawn; marks the child as owned and
+    /// disarms its health probe — a fresh process must re-prove readiness before it
+    /// can be judged hung.
     pub(crate) fn set_pid(&mut self, key: &Key, pid: u32) {
         if let Some(c) = self.children.get_mut(key) {
             c.pid = pid;
             c.watch = Watch::Owned;
+            c.armed = false;
+            c.probe_failures = 0;
         }
     }
 
@@ -173,6 +186,42 @@ impl Supervisor {
             }
         }
         dead
+    }
+
+    /// Owned children eligible for health probing: respawnable (a launch spec) and
+    /// with a live pid. Adopted survivors and pid-less reservations are excluded — a
+    /// probe restart needs a launch spec to respawn from.
+    pub(crate) fn probe_targets(&self) -> Vec<(Key, u16)> {
+        self.children
+            .iter()
+            .filter(|(_, c)| c.launch.is_some() && c.pid != 0)
+            .map(|(k, c)| (k.clone(), c.port))
+            .collect()
+    }
+
+    /// Fold one probe result into a child's health state. A successful connect arms
+    /// the child and clears its failure run; a failure on an armed child grows the
+    /// consecutive-failure count. Returns the pid to SIGTERM once that count reaches
+    /// `threshold` — resetting the count in the same call, so a hung child is
+    /// signalled once per K-failure run rather than every cycle. Returns `None` for a
+    /// child below threshold, an unarmed child, or a key removed since the snapshot.
+    pub(crate) fn record_probe(&mut self, key: &Key, ok: bool, threshold: u32) -> Option<u32> {
+        let c = self.children.get_mut(key)?;
+        if ok {
+            c.armed = true;
+            c.probe_failures = 0;
+            return None;
+        }
+        if !c.armed {
+            return None;
+        }
+        c.probe_failures += 1;
+        if c.probe_failures >= threshold {
+            c.probe_failures = 0;
+            Some(c.pid)
+        } else {
+            None
+        }
     }
 
     /// Memory breaches to act on this tick: returns `(Key, bytes)` for each child
@@ -256,6 +305,81 @@ mod tests {
         assert!(s.may_restart("/w", "api", Role::Issue));
         assert!(s.may_restart("/w", "api", Role::Issue));
         assert!(s.may_restart("/w", "lab-os", Role::Issue)); // different child, own budget
+    }
+
+    fn key_for(app: &str) -> Key {
+        Key {
+            holder: "/w".into(),
+            app: app.into(),
+            role: Role::Issue,
+        }
+    }
+
+    #[test]
+    fn probe_failures_before_arming_are_ignored() {
+        let mut s = sup();
+        live(&mut s, "api", 1, 9100);
+        let k = key_for("api");
+        assert_eq!(s.record_probe(&k, false, 2), None);
+        assert_eq!(s.record_probe(&k, false, 2), None);
+        assert_eq!(s.record_probe(&k, false, 2), None);
+    }
+
+    #[test]
+    fn arms_on_success_then_signals_on_threshold() {
+        let mut s = sup();
+        live(&mut s, "api", 7, 9100);
+        let k = key_for("api");
+        assert_eq!(s.record_probe(&k, true, 2), None); // arm
+        assert_eq!(s.record_probe(&k, false, 2), None); // failure 1
+        assert_eq!(s.record_probe(&k, false, 2), Some(7)); // failure 2 → signal pid
+        assert_eq!(s.record_probe(&k, false, 2), None); // counter reset: fresh run
+    }
+
+    #[test]
+    fn success_resets_failure_run() {
+        let mut s = sup();
+        live(&mut s, "api", 7, 9100);
+        let k = key_for("api");
+        s.record_probe(&k, true, 2); // arm
+        s.record_probe(&k, false, 2); // failure 1
+        assert_eq!(s.record_probe(&k, true, 2), None); // success resets the run
+        assert_eq!(s.record_probe(&k, false, 2), None); // back to failure 1, not threshold
+    }
+
+    #[test]
+    fn set_pid_redisarms() {
+        let mut s = sup();
+        live(&mut s, "api", 7, 9100);
+        let k = key_for("api");
+        s.record_probe(&k, true, 2); // armed
+        s.set_pid(&k, 99); // respawn → disarm
+        assert_eq!(s.record_probe(&k, false, 2), None); // ignored until re-armed
+        assert_eq!(s.record_probe(&k, false, 2), None);
+        assert_eq!(s.record_probe(&k, true, 2), None); // re-arm
+        assert_eq!(s.record_probe(&k, false, 2), None);
+        assert_eq!(s.record_probe(&k, false, 2), Some(99)); // threshold on the new pid
+    }
+
+    #[test]
+    fn record_probe_on_missing_key_is_none() {
+        let mut s = sup();
+        let k = key_for("ghost");
+        assert_eq!(s.record_probe(&k, false, 2), None);
+        assert_eq!(s.record_probe(&k, true, 2), None);
+    }
+
+    #[test]
+    fn probe_targets_includes_owned_excludes_adopted() {
+        let mut s = sup();
+        live(&mut s, "api", 7, 9100); // owned
+        s.insert_adopted(key_for("legacy"), 8, 9200, PathBuf::new()); // adopted, no launch spec
+        let targets = s.probe_targets();
+        assert!(targets.iter().any(|(k, p)| k.app == "api" && *p == 9100));
+        assert!(
+            !targets.iter().any(|(k, _)| k.app == "legacy"),
+            "adopted survivors must not be probed"
+        );
     }
 
     #[test]
