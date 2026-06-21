@@ -80,3 +80,12 @@ a live test:
   plugin in Codex and Cursor, start a session, and confirm the "A 'using-devkit'
   skill is available" notice appears. On Windows, confirm `run-hook.cmd` locates Git
   Bash. If an envelope is rejected, adjust `hooks/announce-skill`.
+- **Cursor hook command path resolution.** `hooks/hooks-cursor.json` invokes the
+  runner as the relative `./hooks/run-hook.cmd` (matching the obra/superpowers
+  reference), whereas `hooks/hooks-codex.json` uses the root-anchored
+  `${PLUGIN_ROOT}/hooks/run-hook.cmd`. The relative form only resolves if Cursor runs
+  the hook with its working directory set to the plugin root; if it runs from the
+  session's repo instead, the hook silently no-ops (and looks like an envelope bug).
+  Confirm Cursor's cwd on the first live install. If it is not the plugin root, switch
+  the command to a root-anchored variable (e.g. `${CURSOR_PLUGIN_ROOT}/...`) once its
+  expansion in command position is confirmed.
