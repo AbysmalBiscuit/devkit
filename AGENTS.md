@@ -15,6 +15,10 @@ cargo clippy --workspace --all-targets -- -D warnings   # zero-warning policy
 cargo test -p devkit-ports --test registry   # multiprocess flock race test
 ```
 
+Run all three before committing: CI runs them on every push and PR, and a push to `main`
+also drives release-please. Format with `cargo fmt --all` (the `--check` above only
+verifies) using the stable toolchain CI uses, so formatting matches.
+
 ## Layout
 
 The workspace root is the `devkit` binary package; its CLIs live in `src/bin/` and
@@ -64,6 +68,9 @@ The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
 - `Role` (Issue/Baseline) is defined once in `devkit-ports::registry` with `ValueEnum` +
   `Display`; `devrun`'s CLI uses a separate `RoleSelector` (adds `Both`). No `_ => Issue`
   catch-alls — map roles exhaustively.
+- CI runs the `test` job (and `clippy`) on ubuntu, macos, and windows. Tests that spawn or
+  reap processes must poll for the expected state, not sleep a fixed interval — a loaded
+  Windows runner exits a child later than a short fixed sleep allows.
 
 ## File locks
 
