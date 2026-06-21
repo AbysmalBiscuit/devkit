@@ -230,9 +230,9 @@ mod tests {
 
     #[test]
     fn facade_without_daemon_uses_flock_path() {
-        // With DEVKITD_SELF set, daemon_request short-circuits to the flock path even
-        // if a socket existed — proving the split's fallback is wired.
-        // (No daemon is running in unit tests; this asserts the call still succeeds.)
+        // No daemon is running in unit tests, so daemon_request returns Ok(None) and
+        // the call falls through to the FlockStore path — proving the split's fallback
+        // stays wired.
         let n = prune().expect("prune via flock path");
         let _ = n; // count depends on ambient registry; success is the assertion
     }
