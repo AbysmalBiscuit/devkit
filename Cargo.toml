@@ -14,7 +14,7 @@ required-features = ["daemon"]
 
 [features]
 default = ["daemon"]
-daemon = ["devkit-ports/daemon", "devkit-locks/daemon"]
+daemon = ["devkit-ports/daemon", "devkit-locks/daemon", "devkit-mcp/daemon"]
 
 [dependencies]
 anyhow.workspace = true
@@ -30,6 +30,7 @@ rgb.workspace = true
 devkit-common.workspace = true
 devkit-ports.workspace = true
 devkit-locks.workspace = true
+devkit-mcp.workspace = true
 
 # Used only by the Unix-only supervision integration test (POSIX signals).
 [target.'cfg(unix)'.dev-dependencies]
@@ -37,7 +38,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks"]
+members = ["crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-mcp"]
 
 [workspace.package]
 edition = "2024"
@@ -71,6 +72,7 @@ ureq = { version = "2", features = ["json"] }
 devkit-common = { path = "crates/devkit-common" }
 devkit-ports = { path = "crates/devkit-ports" }
 devkit-locks = { path = "crates/devkit-locks" }
+devkit-mcp = { path = "crates/devkit-mcp" }
 
 [profile.release]
 opt-level = 3        # tools do little compute; keep the registry/diff hot paths fast

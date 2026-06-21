@@ -185,6 +185,7 @@ dependencies = [
  "clap_complete",
  "devkit-common",
  "devkit-locks",
+ "devkit-mcp",
  "devkit-ports",
  "fd-lock",
  "interprocess",
@@ -220,6 +221,18 @@ dependencies = [
  "devkit-common",
  "fd-lock",
  "interprocess",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "devkit-mcp"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "devkit-common",
+ "devkit-locks",
+ "devkit-ports",
  "serde",
  "serde_json",
 ]
