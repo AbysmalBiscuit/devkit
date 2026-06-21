@@ -26,9 +26,57 @@ Reuse the `Store` seam and extract the daemon framing/transport/client into
 
 Expose devkit's capabilities to coding agents over the Model Context Protocol so
 an agent can drive port allocation, dev-server supervision, the issue lifecycle,
-and file locks directly instead of shelling out to the CLIs. Tools mirror the
-existing binaries (`portm`, `devrun`, `issue`, `lockm`) over the library crates
-rather than reinvent them. Open questions to settle in its own brainstorming pass:
-which surfaces to expose first, read-only vs. mutating tool boundaries, and how it
-relates to the daemon (an MCP server is a natural long-lived host that could keep
-the in-memory registries warm).
+and file locks directly instead of shelling out to the CLIs. Deferred; this
+section captures the analysis so the brainstorm starts ahead.
+
+**Surface area (~19 actions).** `portm` (status, alloc, release, prune), `lockm`
+(acquire, check, release, status, prune), `devrun` (up, down, status, logs),
+`issue` (setup, status, end, prs, dashboard, review). `completions` is shell-only
+and not exposed.
+
+**Host-agnostic, assume eager loading.** Targets include Codex, Zed, Cursor, and
+generic MCP clients, many of which load every tool schema up front — so keep the
+top-level tool count low. (Claude Code lazy-loads via deferred-tool search, so the
+count matters less there, but design for the worst case.)
+
+**Three exposure shapes, meta-or-dispatch favored:**
+
+1. *Flat* — one MCP tool per action (~19 tools); best discoverability and arg
+   validation, heaviest footprint.
+2. *Per-binary dispatch* — four tools (`portm`/`devrun`/`issue`/`lockm`), each
+   taking an `action` + args; ~5x fewer tools, natural groupings, looser
+   per-action schemas.
+3. *True meta-MCP / progressive disclosure* — a `list`/`describe` tool plus a
+   `call` tool; minimal footprint, scales as devkit grows, at the cost of a
+   discovery round-trip per novel action.
+
+Lean toward dispatch or meta given the agnostic, eager-loading hosts. Settle the
+exact choice in the MCP's own brainstorm.
+
+**Implementation stance.** Tools mirror the existing CLIs over the library crates
+(`devkit-ports`, `devkit-locks`, `devkit-common`) rather than reinvent them. The
+MCP server ships in the same multi-agent plugin as the `using-devkit` skill (see
+`docs/superpowers/specs/2026-06-21-multi-agent-skill-packaging-design.md`).
+
+**Daemon relationship.** An MCP server is a natural long-lived host that could keep
+the in-memory registries (`devkitd`) warm.
+
+**Open boundaries.** Which surfaces to expose first; the read-only vs. mutating
+tool split.
+
+## Verify multi-agent plugin packaging
+
+The packaging is shipped but not yet exercised end-to-end. Two things still need
+a live test:
+
+- **Claude marketplace install.** `github.com/AbysmalBiscuit/devkit` is private for
+  now and will be made public later. Once it is public, run
+  `/plugin marketplace add AbysmalBiscuit/devkit` then `/plugin install devkit` in a
+  fresh session and confirm the `using-devkit` skill resolves from the plugin. Until
+  then the relative-path marketplace source cannot be added via git.
+- **Codex/Cursor SessionStart hook.** The context-injection envelopes
+  (`hookSpecificOutput.additionalContext` for Codex, `additional_context` for Cursor)
+  are verified against current docs but neither agent has been run yet. Install the
+  plugin in Codex and Cursor, start a session, and confirm the "A 'using-devkit'
+  skill is available" notice appears. On Windows, confirm `run-hook.cmd` locates Git
+  Bash. If an envelope is rejected, adjust `hooks/announce-skill`.
