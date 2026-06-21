@@ -5,6 +5,7 @@ use devkit_common::store::{self, Document, salvage_map};
 use fd_lock::RwLock;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::path::Path;
 
@@ -202,6 +203,42 @@ pub fn prune_with(s: &impl Store, now: u64) -> Result<usize> {
 #[allow(dead_code)] // gated direct RMW entry point retained for parity with the port registry
 pub fn with_lock<T>(f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
     FlockStore::new().commit(f)
+}
+
+/// The daemon's authoritative in-memory lock registry. Reads serve from memory;
+/// a mutation writes the file through (atomic rename) and updates memory only if
+/// that write succeeded — the file is the commit point, so memory and file never
+/// diverge.
+pub struct MemoryStore {
+    state: Arc<Mutex<Data>>,
+    data_path: PathBuf,
+}
+
+impl MemoryStore {
+    pub fn new(state: Arc<Mutex<Data>>, data_path: PathBuf) -> Self {
+        Self { state, data_path }
+    }
+}
+
+impl Store for MemoryStore {
+    fn snapshot(&self) -> Result<Data> {
+        Ok(self.state.lock().expect("lock registry mutex poisoned").clone())
+    }
+    fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
+        let mut guard = self.state.lock().expect("lock registry mutex poisoned");
+        let mut next = guard.clone();
+        let out = f(&mut next)?;
+        next.stamp_version();
+        store::save(&self.data_path, &next)?; // commit point: persist before memory
+        *guard = next;
+        Ok(out)
+    }
+}
+
+/// Load the lock-registry file into a `Data` for an owner with its own exclusion
+/// (the daemon, holding `devkitd.lock` exclusive, at startup).
+pub fn load() -> Data {
+    store::load(&paths::locks_file())
 }
 
 #[cfg(test)]
