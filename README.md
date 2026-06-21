@@ -1,6 +1,6 @@
 # devkit
 
-A Rust workspace of five binaries that coordinate local development for a monorepo. Devkit provides a flock'd port registry (with an optional supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
+A Rust workspace of five binaries that coordinate local development for a monorepo. Devkit provides a flock'd port registry and a flock'd file-lock registry (both served from memory by an optional `devkitd` supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
 
 ## Binaries
 
@@ -107,10 +107,12 @@ Install all five binaries (`portm`, `devrun`, `issue`, `lockm`, `devkitd`) into
 cargo install --path .
 ```
 
-This builds with default features, which include the supervisor daemon
-(`devkitd`) used by `devrun up --supervise`. To skip the daemon, build a
-lean set with `cargo install --path . --no-default-features` (omits
-`devkitd` and `devrun`'s `--supervise` support).
+This builds with default features, which include the `devkitd` supervisor daemon.
+`devkitd` serves both the port registry (`ports.sock`) and the lock registry
+(`locks.sock`) from memory, writing through to the files, and is used by
+`devrun up --supervise`. To skip the daemon, build a lean set with
+`cargo install --path . --no-default-features` (omits `devkitd` and `devrun`'s
+`--supervise` support).
 
 Or just build into `target/release` without installing:
 

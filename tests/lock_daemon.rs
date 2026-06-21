@@ -38,3 +38,26 @@ fn acquire_through_daemon_is_visible_to_check() {
     }
     h.shutdown();
 }
+
+/// A lock acquired through the daemon is written through to locks.json, so after
+/// the daemon exits the flock fallback still sees it.
+#[test]
+fn acquired_lock_persists_to_file_after_daemon_exits() {
+    let mut h = Harness::start();
+    h.wait_for_lock_socket(Duration::from_secs(5));
+    h.lock_request(&Request::Acquire {
+        root: "/repo".into(),
+        holder: "alice".into(),
+        paths: vec!["scenes".into()],
+        pid: None,
+        note: None,
+        ttl: 0, // no expiry, so it can't be pruned out before we read the file
+    });
+    h.shutdown(); // daemon exits; in-memory state is gone, the file must remain
+    let body = h.locks_json();
+    assert!(
+        body.contains("\"holder\": \"alice\""),
+        "written-through locks.json missing the lock: {body}"
+    );
+    assert!(body.contains("scenes"), "lock path not persisted: {body}");
+}

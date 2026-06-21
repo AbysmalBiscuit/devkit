@@ -12,15 +12,10 @@ checkout). Callers include `~/.claude/commands/{issue-setup,issue-end,migration-
 
 ## Authoritative in-memory mode for the lock registry
 
-The port registry now serves reads from the daemon's memory and writes through to
-the file, with `devkitd.lock` enforcing the daemon-vs-direct boundary (see
-`docs/superpowers/specs/2026-06-21-authoritative-in-memory-portd-design.md`). Give
-the lock registry the same treatment: it needs a daemon path built from scratch
-(proto variants, client, server dispatch) plus resolved-context facade variants —
-the lock facade resolves the project root from CWD and the holder from process
-identity client-side, so the server can't reuse the high-level functions directly.
-Reuse the `Store` seam and extract the daemon framing/transport/client into
-`devkit-common` at that point (a second daemon consumer makes it pay off).
+SHIPPED — `devkitd` now serves both the port and lock registries from memory over
+`ports.sock` and `locks.sock`, write-through to the files, gated by `devkitd.lock`.
+See `docs/superpowers/plans/2026-06-21-authoritative-in-memory-locks.md` and the
+spec at `docs/superpowers/specs/2026-06-21-authoritative-in-memory-locks-design.md`.
 
 ## MCP server for devkit
 
