@@ -278,9 +278,19 @@ mod tests {
                 env: std::collections::BTreeMap::new(),
             },
         );
-        // Give `true` a moment to exit, then reap.
-        std::thread::sleep(Duration::from_millis(200));
-        let exited = s.reap_once();
-        assert!(exited.iter().any(|k| k == &key), "child should be reaped");
+        // Poll for the exit: a real `true` can take longer than a fixed sleep to
+        // start and exit on a loaded CI runner. `reap_once` is non-mutating, so
+        // repeating it until the child is gone is safe.
+        let start = std::time::Instant::now();
+        let reaped = loop {
+            if s.reap_once().iter().any(|k| k == &key) {
+                break true;
+            }
+            if start.elapsed() > Duration::from_secs(5) {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert!(reaped, "child should be reaped");
     }
 }
