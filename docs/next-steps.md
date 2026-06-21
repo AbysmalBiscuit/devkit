@@ -21,3 +21,14 @@ the lock facade resolves the project root from CWD and the holder from process
 identity client-side, so the server can't reuse the high-level functions directly.
 Reuse the `Store` seam and extract the daemon framing/transport/client into
 `devkit-common` at that point (a second daemon consumer makes it pay off).
+
+## MCP server for devkit
+
+Expose devkit's capabilities to coding agents over the Model Context Protocol so
+an agent can drive port allocation, dev-server supervision, the issue lifecycle,
+and file locks directly instead of shelling out to the CLIs. Tools mirror the
+existing binaries (`portman`, `devrun`, `issue`, `lock`) over the library crates
+rather than reinvent them. Open questions to settle in its own brainstorming pass:
+which surfaces to expose first, read-only vs. mutating tool boundaries, and how it
+relates to the daemon (an MCP server is a natural long-lived host that could keep
+the in-memory registries warm).
