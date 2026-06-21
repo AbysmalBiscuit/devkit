@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# SessionStart hook for the devkit plugin (Codex/Cursor).
+# Injects a short notice that the using-devkit skill exists and where to read it,
+# rather than the full skill body (the skill is only conditionally relevant).
+
+set -euo pipefail
+
+notice="A 'using-devkit' skill is available in this repository. When you are working in a checkout shared by multiple agents and about to edit files, claim them first with 'lockm acquire <paths> --as <stable-id>' (it exits 1 on conflict — do not edit a held path). The same skill covers allocating dev-server ports (portm), running local dev servers (devrun), and issue worktrees (issue). Before using any of these, read skills/using-devkit/SKILL.md and follow it."
+
+# Escape for JSON embedding (single-pass bash substitutions).
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+escaped=$(escape_for_json "$notice")
+
+# Cursor reads additional_context (snake_case); Codex reads
+# hookSpecificOutput.additionalContext. printf (not heredoc) avoids a
+# bash 5.3+ heredoc hang.
+if [ -n "${CURSOR_PLUGIN_ROOT:-}" ]; then
+  printf '{\n  "additional_context": "%s"\n}\n' "$escaped" | cat
+else
+  printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$escaped" | cat
+fi
+
+exit 0

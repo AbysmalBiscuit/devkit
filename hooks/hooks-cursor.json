@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "command": "./hooks/run-hook.cmd announce-skill"
+      }
+    ]
+  }
+}
