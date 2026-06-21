@@ -119,7 +119,7 @@ convention (`ports.alloc`, `locks.acquire`).
 |---|---|---|---|
 | `ports.status` | — | — | `registry::snapshot` + `registry::status_table` |
 | `ports.alloc` | `apps[]`, `role?` | **required** (load app catalog from `devkit.toml`) | `registry::alloc(holder, reqs, role)` |
-| `ports.release` | `role?` | — | `registry::release(holder, role)` |
+| `ports.release` | `role?` | **required** (holder = root) | `registry::release(holder, role)` |
 | `ports.prune` | — | — | `registry::prune` |
 | `locks.acquire` | `paths[]`, `note?`, `ttl?` | **required** | `acquire_with(root, holder, paths, note, ttl)` |
 | `locks.check` | `paths[]` | **required** | `check_with(root, holder, paths)` |
@@ -137,10 +137,11 @@ convention (`ports.alloc`, `locks.acquire`).
   registry itself is global.
 - `locks.release` requires either `paths[]` or `all: true` (mirrors `lockm release`).
 
-**Root applicability:** `root` is required by all `locks.*` actions and by
-`ports.alloc` (catalog lookup). `ports.status`, `ports.release`, `ports.prune`, and
-`locks.prune` are global and take no `root`. `locks.status` needs `root` unless `all`
-is set (all-projects view).
+**Root applicability:** `root` is required by all `locks.*` actions, by
+`ports.alloc` (catalog lookup), and by `ports.release` (it is the holder; see
+"Identity and targeting"). `ports.status`, `ports.prune`, and `locks.prune` are
+global and take no `root`. `locks.status` needs `root` unless `all` is set
+(all-projects view).
 
 ## Identity and targeting
 
@@ -152,7 +153,9 @@ is set (all-projects view).
   otherwise a generated stable id. One stdio server process maps to one agent session,
   so this id is stable for the session's life. The agent may override `holder` per call.
   Because acquire and release both use the same server-bound holder by default, a
-  release always matches its acquire.
+  release always matches its acquire. Ports actions use the project `root` as the
+  holder, because the port registry's liveness check treats the holder as an existing
+  filesystem path; only lock actions use the minted session-token holder.
 
 ## Daemon relationship
 

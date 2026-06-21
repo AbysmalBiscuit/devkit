@@ -210,3 +210,36 @@ fn locks_release_without_paths_or_all_is_an_error() {
     let payload = tool_json(&resps[0], true);
     assert!(payload.as_str().unwrap().contains("paths"));
 }
+
+#[test]
+fn locks_acquire_on_held_path_returns_conflicts_not_error() {
+    let proj = project();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[
+            call_req(
+                1,
+                "locks.acquire",
+                json!({ "root": root, "paths": ["shared.rs"], "holder": "alice" }),
+            ),
+            call_req(
+                2,
+                "locks.acquire",
+                json!({ "root": root, "paths": ["shared.rs"], "holder": "bob" }),
+            ),
+        ],
+    );
+    tool_json(&resps[0], false);
+    // A conflict is data the agent branches on, not an error: isError stays false.
+    let outcome = tool_json(&resps[1], false);
+    assert!(
+        outcome["acquired"].as_array().unwrap().is_empty(),
+        "all-or-nothing: nothing acquired when a path conflicts"
+    );
+    let conflicts = outcome["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0]["held_by"], "alice");
+}

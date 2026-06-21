@@ -6,5 +6,6 @@
   "homepage": "https://github.com/AbysmalBiscuit/devkit",
   "repository": "https://github.com/AbysmalBiscuit/devkit",
   "license": "GPL-3.0-or-later",
-  "keywords": ["devkit", "file-locks", "ports", "dev-servers", "worktrees"]
+  "keywords": ["devkit", "file-locks", "ports", "dev-servers", "worktrees"],
+  "mcpServers": "./.mcp.json"
 }
