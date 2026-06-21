@@ -37,9 +37,10 @@ a symlink), so it drifts from the repo source. The plugin mechanism replaces it.
 ## Non-goals
 
 - Building the MCP server (deferred — see "MCP deferral" below).
-- Per-agent bootstrap runtimes / skill-search hooks of the kind superpowers ships
-  (see "Open research item"). devkit has one description-triggered skill, not a
-  skill library that needs session-start injection.
+- Superpowers' skill-search / meta-skill runtime. devkit has one
+  description-triggered skill, not a skill library that needs an on-demand loader.
+  Codex/Cursor still need a *minimal* session-start hook (see "Codex/Cursor
+  hook") — but only to announce the one skill, not to bootstrap a runtime.
 - Cross-agent skill auto-install where no convention exists (e.g. Zed) — those
   agents are served by their native context file, `AGENTS.md`.
 
@@ -54,22 +55,28 @@ devkit/
   skills/using-devkit/SKILL.md      # canonical skill (already exists)
   AGENTS.md                          # canonical context file (already exists)
   CLAUDE.md                          # pointer → AGENTS.md (already exists)
+  LICENSE                            # NEW — GPL-3.0
   .claude-plugin/
     plugin.json                      # NEW — Claude Code plugin manifest
     marketplace.json                 # NEW — self-listing marketplace
   .codex-plugin/
-    plugin.json                      # NEW — Codex manifest, "skills": "./skills/"
+    plugin.json                      # NEW — Codex manifest, "skills": "./skills/", "hooks": "./hooks/hooks-codex.json"
   .cursor-plugin/
-    plugin.json                      # NEW — Cursor manifest, "skills": "./skills/"
+    plugin.json                      # NEW — Cursor manifest, "skills": "./skills/", "hooks": "./hooks/hooks-cursor.json"
+  hooks/
+    hooks-codex.json                 # NEW — SessionStart wiring (Codex format)
+    hooks-cursor.json                # NEW — sessionStart wiring (Cursor format)
+    announce-skill                   # NEW — emits the skill-availability notice
+    run-hook.cmd                     # NEW — cross-platform runner shim (Windows-safe)
 ```
 
 ### Agent coverage
 
 | Agent | Mechanism | Notes |
 |---|---|---|
-| Claude Code | `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` | Native skill discovery from `skills/`. Install: `/plugin marketplace add <repo>` → `/plugin install devkit`. |
-| Codex | `.codex-plugin/plugin.json` (`"skills": "./skills/"`, plus an `interface` display block) | Mirrors superpowers' `.codex-plugin/plugin.json`. |
-| Cursor | `.cursor-plugin/plugin.json` (`"skills": "./skills/"`) | Mirrors superpowers' `.cursor-plugin/plugin.json`. |
+| Claude Code | `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` | Native skill discovery from `skills/`. Install: `/plugin marketplace add AbysmalBiscuit/devkit` → `/plugin install devkit`. |
+| Codex | `.codex-plugin/plugin.json` (`"skills"`, `"hooks"`, `interface` block) + `hooks/hooks-codex.json` | Manifest is metadata; the `SessionStart` hook is what actually surfaces the skill. |
+| Cursor | `.cursor-plugin/plugin.json` (`"skills"`, `"hooks"`) + `hooks/hooks-cursor.json` | Same — the `sessionStart` hook surfaces the skill. |
 | Zed | `AGENTS.md` (already present) | Zed has no skill-plugin manifest; it reads `AGENTS.md`. This is the documented ceiling, not a gap. |
 | Any other / generic | `AGENTS.md` + "point at the cloned repo" | The CLIs install via `cargo install --path .` regardless of agent; the skill is guidance on top. |
 
@@ -81,11 +88,11 @@ devkit/
 {
   "name": "devkit",
   "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle",
-  "version": "<x.y.z>",
+  "version": "0.1.0",
   "author": { "name": "Lev Velykoivanenko" },
-  "homepage": "<repo url>",
-  "repository": "<repo url>",
-  "license": "<license>",
+  "homepage": "https://github.com/AbysmalBiscuit/devkit",
+  "repository": "https://github.com/AbysmalBiscuit/devkit",
+  "license": "GPL-3.0-or-later",
   "keywords": ["devkit", "file-locks", "ports", "dev-servers", "worktrees"]
 }
 ```
@@ -98,33 +105,79 @@ devkit/
   "description": "devkit skills",
   "owner": { "name": "Lev Velykoivanenko" },
   "plugins": [
-    { "name": "devkit", "description": "...", "version": "<x.y.z>", "source": "./" }
+    { "name": "devkit", "description": "...", "version": "0.1.0", "source": "./" }
   ]
 }
 ```
+
+The `version` fields start at `0.1.0` to match the crate; release-please owns them
+thereafter (see "Version sync").
 
 `.codex-plugin/plugin.json` and `.cursor-plugin/plugin.json` carry the same
 metadata plus `"skills": "./skills/"`; Codex additionally takes an `interface`
 display block (displayName, category, capabilities). Exact field sets are
 verified against each agent's plugin spec during the plan phase.
 
-## Open research item (resolve in the plan phase)
+## Codex/Cursor hook
 
-**Do Codex and Cursor surface a skill from a manifest alone, or do they require a
-bootstrap hook?** Superpowers ships per-agent hooks
-(`hooks/hooks-codex.json`, `hooks/hooks-cursor.json`) precisely because its skills
-need a session-start bootstrap. devkit's single description-triggered skill may
-not. The plan must confirm, per agent, whether `"skills": "./skills/"` is enough
-or a minimal hook is required — by reading each agent's current plugin/skill spec
-and testing a real install. If a hook is required, add the smallest one that makes
-the skill discoverable; do not port superpowers' skill-search runtime.
+Codex and Cursor have **no native skill auto-discovery** — confirmed from the
+superpowers clone. There, `"skills": "./skills/"` is metadata only; a `SessionStart`
+hook (`hooks/session-start-codex`) reads `SKILL.md` and injects it into the session
+as `additionalContext`. That injection is what makes the skill visible. devkit
+needs the same wiring, scaled down:
+
+- **What superpowers injects:** the full body of its *meta* skill (`using-superpowers`),
+  which teaches the agent to load other skills on demand.
+- **What devkit injects:** only a short **availability notice** — the
+  `using-devkit` skill exists, here is its trigger description, read
+  `skills/using-devkit/SKILL.md` when coordinating shared-checkout edits or
+  running dev servers. The skill is conditionally relevant, so injecting its full
+  body every session would pollute context for sessions that never touch shared
+  files. The agent pulls the full content when the trigger fires.
+
+Files (mirroring superpowers' shapes):
+
+- `hooks/hooks-codex.json` — `SessionStart` with `matcher: "startup|resume|clear"`,
+  running the announce script via the runner shim.
+- `hooks/hooks-cursor.json` — `{"version": 1, "hooks": {"sessionStart": [...]}}`
+  (Cursor's lowercased event + envelope).
+- `hooks/announce-skill` — emits the JSON `additionalContext` notice (the
+  skill's frontmatter `description` + the path to read).
+- `hooks/run-hook.cmd` — cross-platform runner shim so the hook works on Windows
+  (the development platform) as well as Unix.
+
+The plan still verifies the exact hook envelope against each agent's *current*
+plugin spec and tests a real install, but the mechanism is no longer open.
 
 ## Version sync
 
-The manifests each carry a `version`. Keep them in lockstep with a small
-`scripts/bump-version.sh` (superpowers has one), or wire the versions into the
-existing release-please configuration. The plan picks one mechanism; do not
-hand-edit versions in N files.
+The four manifests each carry a `version`; release-please owns them. The repo
+already uses release-please (`release-please-config.json`, single `rust` package
+at `.`, currently `0.1.0`). Add an `extra-files` entry per manifest to the `.`
+package so a release bumps them alongside `Cargo.toml`:
+
+```jsonc
+// release-please-config.json → packages["."]
+"extra-files": [
+  { "type": "json", "path": ".claude-plugin/plugin.json",   "jsonpath": "$.version" },
+  { "type": "json", "path": ".claude-plugin/marketplace.json", "jsonpath": "$.plugins[0].version" },
+  { "type": "json", "path": ".codex-plugin/plugin.json",    "jsonpath": "$.version" },
+  { "type": "json", "path": ".cursor-plugin/plugin.json",   "jsonpath": "$.version" }
+]
+```
+
+No `bump-version.sh` — release-please is the single source of version truth. The
+plan verifies the `json`/`jsonpath` updater syntax against the release-please
+schema.
+
+## License
+
+The repo has no `LICENSE` yet. Add a GPL-3.0 `LICENSE` file at the root, set
+`license = "GPL-3.0-or-later"` in the root `Cargo.toml`, and use the same SPDX id
+in every manifest's `license` field. (Note: superpowers is MIT; GPL-3.0 is
+copyleft, so downstreams distributing modified devkit must release their changes
+under GPL-3.0 — acceptable for a personal tool, worth knowing if it is ever
+embedded elsewhere.)
 
 ## MCP deferral → `docs/next-steps.md`
 
@@ -173,8 +226,9 @@ there is a single source of truth.
   agent.
 - Confirm the skill loads from the installed plugin in a fresh Claude Code session
   before deleting the `~/.claude` copy.
-- Codex/Cursor: confirm the skill is discoverable after a real install (this is
-  the same test that resolves the open research item).
+- Codex/Cursor: confirm the `SessionStart`/`sessionStart` hook fires and the
+  availability notice appears in session context after a real install (test on
+  Windows, since that is the dev platform and the runner shim must work there).
 - A grep gate confirms no stale binary names (`portman`, `devkit-portd`) appear in
   any new manifest or in `SKILL.md`/`AGENTS.md`/`README.md`.
 
@@ -189,14 +243,20 @@ needed — the worktree is the isolation.
 Binary names in `SKILL.md` are already current. A quick accuracy pass only; no
 rewrite expected.
 
+## Resolved decisions
+
+1. **License** — GPL-3.0 (`GPL-3.0-or-later`); add a `LICENSE` file + set the
+   field in `Cargo.toml` and every manifest.
+2. **Marketplace home** — self-listed in this repo, hosted at
+   `github.com/AbysmalBiscuit/devkit`; install via
+   `/plugin marketplace add AbysmalBiscuit/devkit`.
+3. **Version source** — release-please, via `extra-files` updaters (no
+   `bump-version.sh`).
+4. **Codex/Cursor hook** — required (manifests alone do not surface skills there);
+   use the lightweight availability-notice hook described above.
+
 ## Open questions
 
-1. **License** — `AGENTS.md`/manifests need a license field; the repo has no
-   `LICENSE` file yet. What license should the plugin declare (and should a
-   `LICENSE` be added)?
-2. **Marketplace home** — self-list in this repo (decided), but is the repo
-   public / will it be pushed somewhere installable via `/plugin marketplace add`?
-3. **Version source** — adopt a `bump-version.sh`, or drive manifest versions from
-   release-please? (Affects whether the plugin version tracks the crate version.)
-4. **Codex/Cursor hook** — pending the plan-phase research: are bootstrap hooks
-   required, or do the manifests alone surface the skill?
+None blocking. The plan phase verifies live details against current specs: the
+exact hook envelope per agent, the release-please `json`/`jsonpath` updater
+syntax, and the Codex `interface` field set.
