@@ -87,7 +87,7 @@ When multiple sessions share one checkout, claim files before editing them with 
 
 Go through `registry::{alloc, record_pid, release, snapshot, prune, status_table}` — they
 keep liveness syscalls (bind/stat/kill) out of the exclusive lock. Don't reintroduce
-probing inside `with_lock`. This facade is also the seam a future port daemon plugs into.
+probing inside `with_lock`. This facade is also the seam the `devkitd` daemon plugs into.
 
 When a `devkitd` daemon is running it is the *authoritative* registry for both the
 port and lock registries: it loads `ports.json` and `locks.json` into memory under

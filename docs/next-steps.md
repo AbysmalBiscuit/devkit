@@ -12,10 +12,10 @@ checkout). Callers include `~/.claude/commands/{issue-setup,issue-end,migration-
 
 ## Authoritative in-memory mode for the lock registry
 
-SHIPPED — `devkitd` now serves both the port and lock registries from memory over
-`ports.sock` and `locks.sock`, write-through to the files, gated by `devkitd.lock`.
-See `docs/superpowers/plans/2026-06-21-authoritative-in-memory-locks.md` and the
-spec at `docs/superpowers/specs/2026-06-21-authoritative-in-memory-locks-design.md`.
+`devkitd` serves both the port and lock registries from memory over `ports.sock`
+and `locks.sock`, write-through to the files, gated by `devkitd.lock`. Delivered by
+`docs/superpowers/plans/2026-06-21-authoritative-in-memory-locks.md` and the spec at
+`docs/superpowers/specs/2026-06-21-authoritative-in-memory-locks-design.md`.
 
 ## MCP server for devkit
 
