@@ -3,7 +3,7 @@ pub mod model;
 pub mod store;
 
 use anyhow::{Context, Result};
-use model::{AcquireOutcome, Conflict, Data, LockEntry};
+use model::{AcquireOutcome, Conflict, LockEntry};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -97,18 +97,12 @@ pub fn acquire(
 ) -> Result<AcquireOutcome> {
     let c = ctx(paths_in, as_flag)?;
     let pid = ident::anchor_pid();
-    store::with_lock(|d| {
-        d.prune_dead(now());
-        Ok(d.try_acquire(&c.root, &c.paths, &c.holder, pid, note, ttl, now()))
-    })
+    store::acquire_with(&store::FlockStore::new(), &c.root, &c.holder, &c.paths, pid, note, ttl, now())
 }
 
 pub fn check(paths_in: &[String], as_flag: Option<&str>) -> Result<Vec<Conflict>> {
     let c = ctx(paths_in, as_flag)?;
-    store::with_lock(|d| {
-        d.prune_dead(now());
-        Ok(d.check(&c.root, &c.paths, &c.holder, now()))
-    })
+    store::check_with(&store::FlockStore::new(), &c.root, &c.holder, &c.paths, now())
 }
 
 pub fn release(
@@ -117,34 +111,22 @@ pub fn release(
     force: bool,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let c = ctx(paths_in, as_flag)?;
-    store::with_lock(|d| Ok(d.do_release(&c.root, &c.paths, &c.holder, force)))
+    store::release_with(&store::FlockStore::new(), &c.root, &c.holder, &c.paths, force)
 }
 
 pub fn release_all(as_flag: Option<&str>) -> Result<Vec<String>> {
     let c = ctx(&[], as_flag)?;
-    store::with_lock(|d| Ok(d.release_all(&c.root, &c.holder)))
+    store::release_all_with(&store::FlockStore::new(), &c.root, &c.holder)
 }
 
 /// Live locks for the current project root, or every project when `all`.
 pub fn status(all: bool) -> Result<Vec<LockEntry>> {
     let root = find_root()?.to_string_lossy().into_owned();
-    store::with_lock(|d: &mut Data| {
-        d.prune_dead(now());
-        let mut out: Vec<LockEntry> = d
-            .locks
-            .values()
-            .filter(|e| all || e.root == root)
-            .cloned()
-            .collect();
-        out.sort_by(|a, b| {
-            (a.root.as_str(), a.path.as_str()).cmp(&(b.root.as_str(), b.path.as_str()))
-        });
-        Ok(out)
-    })
+    store::status_with(&store::FlockStore::new(), &root, all, now())
 }
 
 pub fn prune() -> Result<usize> {
-    store::with_lock(|d| Ok(d.prune_dead(now())))
+    store::prune_with(&store::FlockStore::new(), now())
 }
 
 #[cfg(test)]
