@@ -51,6 +51,8 @@ The four user-facing CLIs (`portman`, `devrun`, `issue`, `lock`) each expose a
 
 ## Conventions
 
+- Commits follow Conventional Commits. Follow the active workflow skill's commit cadence (a design/plan skill
+  commits its own artifact; per-task execution commits per task).
 - TDD: write the failing test first; `cargo test --workspace` is the merge gate.
 - `anyhow` everywhere — its `.context()` chain and backtrace are the error-reporting
   mechanism. Each binary installs `report::install_panic_hook` for crash diagnostics;
