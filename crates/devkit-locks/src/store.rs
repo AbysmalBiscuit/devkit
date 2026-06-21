@@ -4,10 +4,10 @@ use devkit_common::paths;
 use devkit_common::store::{self, Document, salvage_map};
 use fd_lock::RwLock;
 use std::fs::OpenOptions;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 impl Document for Data {
     fn stamp_version(&mut self) {
@@ -169,7 +169,12 @@ pub fn release_all_with(s: &impl Store, root: &str, holder: &str) -> Result<Vec<
 }
 
 /// Live locks (ungated read), best-effort prune. `all` ignores the root filter.
-pub fn status_with(s: &impl Store, root: &str, all: bool, now: u64) -> Result<Vec<crate::model::LockEntry>> {
+pub fn status_with(
+    s: &impl Store,
+    root: &str,
+    all: bool,
+    now: u64,
+) -> Result<Vec<crate::model::LockEntry>> {
     let data = s.snapshot()?;
     if !data.dead_keys(now).is_empty() {
         let _ = s.commit(|d| {
@@ -222,7 +227,11 @@ impl MemoryStore {
 
 impl Store for MemoryStore {
     fn snapshot(&self) -> Result<Data> {
-        Ok(self.state.lock().expect("lock registry mutex poisoned").clone())
+        Ok(self
+            .state
+            .lock()
+            .expect("lock registry mutex poisoned")
+            .clone())
     }
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
         let mut guard = self.state.lock().expect("lock registry mutex poisoned");
@@ -290,7 +299,8 @@ mod seam_tests {
     use std::path::PathBuf;
 
     fn tmp(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("devkit-lockseam-{}-{}", std::process::id(), tag));
+        let p =
+            std::env::temp_dir().join(format!("devkit-lockseam-{}-{}", std::process::id(), tag));
         std::fs::create_dir_all(&p).unwrap();
         p
     }
@@ -299,7 +309,17 @@ mod seam_tests {
     fn acquire_with_then_check_sees_conflict_for_other_holder() {
         let dir = tmp("acq");
         let s = FlockStore::at(&dir);
-        let out = acquire_with(&s, "/repo", "alice", &["scenes".into()], None, None, 1800, 100).unwrap();
+        let out = acquire_with(
+            &s,
+            "/repo",
+            "alice",
+            &["scenes".into()],
+            None,
+            None,
+            1800,
+            100,
+        )
+        .unwrap();
         assert_eq!(out.acquired.len(), 1);
         let conflicts = check_with(&s, "/repo", "bob", &["scenes/x".into()], 120).unwrap();
         assert_eq!(conflicts.len(), 1);
@@ -311,8 +331,19 @@ mod seam_tests {
     fn release_with_frees_holders_path() {
         let dir = tmp("rel");
         let s = FlockStore::at(&dir);
-        acquire_with(&s, "/repo", "alice", &["scenes".into()], None, None, 1800, 100).unwrap();
-        let (released, refused) = release_with(&s, "/repo", "alice", &["scenes".into()], false).unwrap();
+        acquire_with(
+            &s,
+            "/repo",
+            "alice",
+            &["scenes".into()],
+            None,
+            None,
+            1800,
+            100,
+        )
+        .unwrap();
+        let (released, refused) =
+            release_with(&s, "/repo", "alice", &["scenes".into()], false).unwrap();
         assert_eq!(released, vec!["scenes".to_string()]);
         assert!(refused.is_empty());
         assert!(s.snapshot().unwrap().locks.is_empty());
@@ -335,12 +366,28 @@ mod seam_tests {
         let dir = tmp("gate");
         let s = FlockStore::at(&dir);
         let f = std::fs::OpenOptions::new()
-            .create(true).write(true).truncate(false)
-            .open(dir.join("devkitd.lock")).unwrap();
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(dir.join("devkitd.lock"))
+            .unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().expect("take exclusive gate");
-        let err = acquire_with(&s, "/repo", "alice", &["scenes".into()], None, None, 1800, 100).unwrap_err();
-        assert!(err.downcast_ref::<DaemonHoldsLock>().is_some(), "got: {err:#}");
+        let err = acquire_with(
+            &s,
+            "/repo",
+            "alice",
+            &["scenes".into()],
+            None,
+            None,
+            1800,
+            100,
+        )
+        .unwrap_err();
+        assert!(
+            err.downcast_ref::<DaemonHoldsLock>().is_some(),
+            "got: {err:#}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -348,10 +395,23 @@ mod seam_tests {
     fn check_is_ungated_under_held_gate() {
         let dir = tmp("checkgate");
         let s = FlockStore::at(&dir);
-        acquire_with(&s, "/repo", "alice", &["scenes".into()], None, None, 1800, 100).unwrap();
+        acquire_with(
+            &s,
+            "/repo",
+            "alice",
+            &["scenes".into()],
+            None,
+            None,
+            1800,
+            100,
+        )
+        .unwrap();
         let f = std::fs::OpenOptions::new()
-            .create(true).write(true).truncate(false)
-            .open(dir.join("devkitd.lock")).unwrap();
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(dir.join("devkitd.lock"))
+            .unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().unwrap();
         // ungated read must still succeed (and best-effort prune must not error out)

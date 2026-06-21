@@ -9,21 +9,51 @@ pub const PROTO: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    Ping { proto: u32 },
-    Acquire { root: String, holder: String, paths: Vec<String>, pid: Option<u32>, note: Option<String>, ttl: u64 },
-    Check { root: String, holder: String, paths: Vec<String> },
-    Release { root: String, holder: String, paths: Vec<String>, force: bool },
-    ReleaseAll { root: String, holder: String },
-    Status { root: String, all: bool },
+    Ping {
+        proto: u32,
+    },
+    Acquire {
+        root: String,
+        holder: String,
+        paths: Vec<String>,
+        pid: Option<u32>,
+        note: Option<String>,
+        ttl: u64,
+    },
+    Check {
+        root: String,
+        holder: String,
+        paths: Vec<String>,
+    },
+    Release {
+        root: String,
+        holder: String,
+        paths: Vec<String>,
+        force: bool,
+    },
+    ReleaseAll {
+        root: String,
+        holder: String,
+    },
+    Status {
+        root: String,
+        all: bool,
+    },
     Prune,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Response {
-    Pong { proto: u32, pid: u32 },
+    Pong {
+        proto: u32,
+        pid: u32,
+    },
     Acquired(AcquireOutcome),
     Conflicts(Vec<Conflict>),
-    Released { released: Vec<String>, refused: Vec<String> },
+    Released {
+        released: Vec<String>,
+        refused: Vec<String>,
+    },
     Freed(Vec<String>),
     Locks(Vec<LockEntry>),
     Pruned(usize),
@@ -51,7 +81,9 @@ mod tests {
         let mut rdr = std::io::BufReader::new(&buf[..]);
         let back: Request = recv(&mut rdr).unwrap().expect("one frame");
         match back {
-            Request::Acquire { root, holder, pid, .. } => {
+            Request::Acquire {
+                root, holder, pid, ..
+            } => {
                 assert_eq!(root, "/repo");
                 assert_eq!(holder, "alice");
                 assert_eq!(pid, Some(42));
