@@ -84,6 +84,10 @@ pub fn logs_dir() -> PathBuf {
 pub fn port_socket_file() -> PathBuf {
     state_dir().join("ports.sock")
 }
+/// Unix socket the daemon binds for the lock registry; clients connect here.
+pub fn lock_socket_file() -> PathBuf {
+    state_dir().join("locks.sock")
+}
 /// Single-instance lock for the daemon — separate from the registry's `ports.lock`.
 pub fn devkitd_lock() -> PathBuf {
     state_dir().join("devkitd.lock")
@@ -144,6 +148,7 @@ mod tests {
         assert!(port_socket_file().ends_with("devkit/ports.sock"));
         assert!(devkitd_lock().ends_with("devkit/devkitd.lock"));
         assert!(daemon_log().ends_with("logs/devkitd.log"));
+        assert!(lock_socket_file().ends_with("devkit/locks.sock"));
     }
 
     #[test]
