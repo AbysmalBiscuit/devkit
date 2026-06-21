@@ -1,4 +1,6 @@
+mod actions;
 mod jsonrpc;
+mod ports;
 
 use std::io::{BufRead, Write};
 
@@ -7,8 +9,22 @@ use serde_json::Value;
 
 use jsonrpc::{METHOD_NOT_FOUND, PARSE_ERROR, Request, Response};
 
+/// Per-session server context. One stdio server process == one agent session,
+/// so `default_holder` is stable for the process lifetime.
+pub struct ServerCtx {
+    pub default_holder: String,
+}
+
+/// `$DEVKIT_SESSION` if set and non-empty, else a stable per-process id.
+pub fn mint_holder() -> String {
+    std::env::var("DEVKIT_SESSION")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("mcp-{}", std::process::id()))
+}
+
 /// Run the stdio JSON-RPC loop until EOF.
-pub fn run(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<()> {
+pub fn run(reader: &mut impl BufRead, writer: &mut impl Write, ctx: &ServerCtx) -> Result<()> {
     while let Some(line) = jsonrpc::read_line_value(reader)? {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -24,18 +40,18 @@ pub fn run(reader: &mut impl BufRead, writer: &mut impl Write) -> Result<()> {
                 continue;
             }
         };
-        if let Some(resp) = dispatch(&req) {
+        if let Some(resp) = dispatch(ctx, &req) {
             jsonrpc::write_response(writer, &resp)?;
         }
     }
     Ok(())
 }
 
-/// Returns `None` for notifications (no `id`) — they get no response.
-fn dispatch(req: &Request) -> Option<Response> {
+fn dispatch(ctx: &ServerCtx, req: &Request) -> Option<Response> {
     match req.method.as_str() {
         "initialize" => Some(Response::ok(req.id.clone()?, initialize_result())),
         "tools/list" => Some(Response::ok(req.id.clone()?, tools_list_result())),
+        "tools/call" => Some(tools_call(ctx, req.id.clone()?, &req.params)),
         "notifications/initialized" => None,
         _ => Some(Response::err(
             req.id.clone()?,
@@ -43,6 +59,37 @@ fn dispatch(req: &Request) -> Option<Response> {
             format!("method not found: {}", req.method),
         )),
     }
+}
+
+fn tools_call(ctx: &ServerCtx, id: Value, params: &Value) -> Response {
+    let name = params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    let result: Result<Value> = match name {
+        "devkit_describe" => actions::describe(arguments),
+        "devkit_call" => actions::call(ctx, arguments),
+        other => Err(anyhow::anyhow!("unknown tool: {other}")),
+    };
+    match result {
+        Ok(v) => Response::ok(id, tool_result(&v, false)),
+        Err(e) => Response::ok(id, tool_result(&Value::String(format!("{e:#}")), true)),
+    }
+}
+
+fn tool_result(payload: &Value, is_error: bool) -> Value {
+    let text = match payload.as_str() {
+        Some(s) => s.to_string(),
+        None => serde_json::to_string(payload).unwrap_or_else(|_| "null".to_string()),
+    };
+    serde_json::json!({
+        "content": [ { "type": "text", "text": text } ],
+        "isError": is_error
+    })
 }
 
 fn initialize_result() -> Value {
@@ -90,8 +137,11 @@ mod tests {
     use serde_json::Value;
 
     fn drive(input: &str) -> Vec<Value> {
+        let ctx = ServerCtx {
+            default_holder: "test-session".to_string(),
+        };
         let mut out = Vec::new();
-        run(&mut input.as_bytes(), &mut out).unwrap();
+        run(&mut input.as_bytes(), &mut out, &ctx).unwrap();
         String::from_utf8(out)
             .unwrap()
             .lines()

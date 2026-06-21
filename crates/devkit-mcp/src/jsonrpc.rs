@@ -12,7 +12,6 @@ pub struct Request {
     #[serde(default)]
     pub id: Option<Value>,
     pub method: String,
-    #[allow(dead_code)]
     #[serde(default)]
     pub params: Value,
 }
