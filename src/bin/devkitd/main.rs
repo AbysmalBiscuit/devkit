@@ -88,7 +88,11 @@ impl Daemon {
         };
         let leaf = crate::cgroup::leaf_for(self, key);
         match devkit_common::supervise::spawn_detached(
-            &launch.argv, &launch.cwd, &launch.env, &log, leaf.as_deref(),
+            &launch.argv,
+            &launch.cwd,
+            &launch.env,
+            &log,
+            leaf.as_deref(),
         ) {
             Ok(pid) => {
                 let _ = registry::record_pid_with(
@@ -547,7 +551,12 @@ pub(crate) fn test_daemon_with_base(base: std::path::PathBuf, max_bytes: u64) ->
         active_conns: AtomicUsize::new(0),
         shutdown: AtomicBool::new(false),
         idle_timeout: Duration::from_secs(3600),
-        sup: Mutex::new(supervisor::Supervisor::new(5, Duration::from_secs(60), 0, 0)),
+        sup: Mutex::new(supervisor::Supervisor::new(
+            5,
+            Duration::from_secs(60),
+            0,
+            0,
+        )),
         ports: std::sync::Arc::new(std::sync::Mutex::new(registry::Data::default())),
         locks: std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::model::Data::default())),
         cgroup_cap: Some(CgroupCap { base, max_bytes }),

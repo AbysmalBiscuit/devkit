@@ -64,12 +64,10 @@ pub fn ensure_running() -> Result<Client> {
             .status()
         {
             Ok(s) if s.success() => {}
-            Ok(s) => eprintln!(
-                "devkitd: `systemctl --user start devkitd.service` exited with {s}"
-            ),
-            Err(e) => eprintln!(
-                "devkitd: failed to run `systemctl --user start devkitd.service`: {e}"
-            ),
+            Ok(s) => eprintln!("devkitd: `systemctl --user start devkitd.service` exited with {s}"),
+            Err(e) => {
+                eprintln!("devkitd: failed to run `systemctl --user start devkitd.service`: {e}")
+            }
         }
     } else {
         daemon::spawn(&devkitd_bin())?;
@@ -97,8 +95,7 @@ mod tests {
     fn routes_through_systemd_only_when_unit_present() {
         // Use a unique temp dir so the test does not observe the developer's real
         // ~/.config/systemd/user/devkitd.service — both branches are asserted.
-        let tmp = std::env::temp_dir()
-            .join(format!("devkit-routing-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("devkit-routing-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
 
         // Point XDG_CONFIG_HOME at the empty temp dir: no unit present → false.

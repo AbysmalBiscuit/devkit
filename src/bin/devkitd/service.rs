@@ -36,16 +36,17 @@ pub(crate) fn install() -> Result<()> {
     run_systemctl(&["daemon-reload"])?;
     // Stop any running ad-hoc daemon so the systemd-launched one can take the lock.
     // Shutdown is best-effort: there may be no daemon running.
-    let _ = devkit_ports::daemon::client::try_existing()
-        .map(|mut c| {
-            c.request::<devkit_ports::daemon::proto::Request, devkit_ports::daemon::proto::Response>(
-                &devkit_ports::daemon::proto::Request::Shutdown,
-            )
-        });
+    let _ = devkit_ports::daemon::client::try_existing().map(|mut c| {
+        c.request::<devkit_ports::daemon::proto::Request, devkit_ports::daemon::proto::Response>(
+            &devkit_ports::daemon::proto::Request::Shutdown,
+        )
+    });
     run_systemctl(&["enable", "--now", "devkitd.service"])?;
     println!("Installed devkitd as a systemd user service (Delegate=yes).");
     println!("Verify:  systemctl --user status devkitd");
-    println!("For headless persistence:  loginctl enable-linger \"$USER\"  (may require privilege)");
+    println!(
+        "For headless persistence:  loginctl enable-linger \"$USER\"  (may require privilege)"
+    );
     Ok(())
 }
 
@@ -67,7 +68,11 @@ fn run_systemctl(args: &[&str]) -> Result<()> {
         .args(args)
         .status()
         .with_context(|| format!("running systemctl --user {}", args.join(" ")))?;
-    anyhow::ensure!(status.success(), "systemctl --user {} failed", args.join(" "));
+    anyhow::ensure!(
+        status.success(),
+        "systemctl --user {} failed",
+        args.join(" ")
+    );
     Ok(())
 }
 

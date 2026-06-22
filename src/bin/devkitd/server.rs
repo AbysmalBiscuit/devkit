@@ -123,7 +123,11 @@ fn supervise_app(
         return Response::Err("alloc returned no port".into());
     };
 
-    let key = Key { holder: holder.clone(), app: app.clone(), role };
+    let key = Key {
+        holder: holder.clone(),
+        app: app.clone(),
+        role,
+    };
     let leaf = crate::cgroup::leaf_for(daemon, &key);
     let pid = match supervise::spawn_detached(&argv, &cwd, &env, &logfile, leaf.as_deref()) {
         Ok(pid) => pid,

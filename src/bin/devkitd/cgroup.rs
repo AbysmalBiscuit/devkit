@@ -79,7 +79,11 @@ mod tests {
     use super::*;
 
     fn key(holder: &str, app: &str, role: Role) -> Key {
-        Key { holder: holder.into(), app: app.into(), role }
+        Key {
+            holder: holder.into(),
+            app: app.into(),
+            role,
+        }
     }
 
     #[test]
