@@ -1,4 +1,4 @@
-use crate::model::{AcquireOutcome, Conflict, Data, LockEntry, SCHEMA_VERSION};
+use crate::model::{AcquireOutcome, Conflict, Data, LockEntry, WriteDecision, SCHEMA_VERSION};
 use anyhow::Result;
 use devkit_common::paths;
 use devkit_common::store::{self, Document, salvage_map};
@@ -129,6 +129,29 @@ pub fn acquire_with(
         d.prune_dead(now);
         Ok(d.try_acquire(root, paths, holder, pid, note, ttl, now))
     })
+}
+
+/// Hook write path: prune dead, then decide (and acquire when free) atomically.
+#[allow(clippy::too_many_arguments)]
+pub fn write_decide_with(
+    s: &impl Store,
+    root: &str,
+    holder: &str,
+    path: &str,
+    pid: Option<u32>,
+    note: Option<&str>,
+    ttl: u64,
+    now: u64,
+) -> Result<WriteDecision> {
+    s.commit(|d| {
+        d.prune_dead(now);
+        Ok(d.decide_write(root, path, holder, pid, note, ttl, now))
+    })
+}
+
+/// Hook release path: free every lock held by `prefix` or its descendants in `root`.
+pub fn release_prefix_with(s: &impl Store, root: &str, prefix: &str) -> Result<Vec<String>> {
+    s.commit(|d| Ok(d.release_prefix(root, prefix)))
 }
 
 /// Check (ungated read): conflicts that would block `holder`, with a best-effort
@@ -418,6 +441,39 @@ mod seam_tests {
         let conflicts = check_with(&s, "/repo", "bob", &["scenes".into()], 120)
             .expect("read must not fail under held gate");
         assert_eq!(conflicts.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_decide_acquires_then_blocks_other_holder() {
+        let dir = tmp("wd");
+        let s = FlockStore::at(&dir);
+        let first = write_decide_with(&s, "/repo", "S", "src/a.rs", None, Some("write-harness"), 1800, 100).unwrap();
+        assert_eq!(first, crate::model::WriteDecision::Acquired);
+        let blocked = write_decide_with(&s, "/repo", "T", "src/a.rs", None, None, 1800, 120).unwrap();
+        assert!(matches!(blocked, crate::model::WriteDecision::Denied(_)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_decide_ancestor_allows() {
+        let dir = tmp("wda");
+        let s = FlockStore::at(&dir);
+        write_decide_with(&s, "/repo", "S", "src", None, None, 1800, 100).unwrap();
+        let child = write_decide_with(&s, "/repo", "S/a1", "src/a.rs", None, None, 1800, 120).unwrap();
+        assert_eq!(child, crate::model::WriteDecision::AllowedByOwnership);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn release_prefix_with_frees_subtree() {
+        let dir = tmp("rp");
+        let s = FlockStore::at(&dir);
+        write_decide_with(&s, "/repo", "S", "a", None, None, 1800, 1).unwrap();
+        write_decide_with(&s, "/repo", "S/a1", "b", None, None, 1800, 1).unwrap();
+        let freed = release_prefix_with(&s, "/repo", "S").unwrap();
+        assert_eq!(freed.len(), 2);
+        assert!(s.snapshot().unwrap().locks.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
