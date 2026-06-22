@@ -4,14 +4,13 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use devkit_common::supervise;
-use devkit_common::{cmd::git, paths, ui};
+use devkit_common::{cmd::git, ui};
 use devkit_ports::config::expand_tilde;
 use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
 use devkit_ports::run;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 #[derive(Parser)]
 #[command(about = "Run local dev servers for an issue worktree (with optional baseline A/B)")]
@@ -100,14 +99,6 @@ fn toplevel(cwd: &str) -> Result<String> {
     Ok(git(&["rev-parse", "--show-toplevel"], cwd)?
         .trim()
         .to_string())
-}
-
-fn slug(holder: &str) -> String {
-    Path::new(holder)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("wt")
-        .to_string()
 }
 
 /// Pick known apps whose files appear in a `git diff --stat` against the baseline.
@@ -266,21 +257,7 @@ fn cmd_up(
         "no apps to run (none given and none detected in diff vs {})",
         cfg.defaults.baseline_ref
     );
-    // Ensure the URL-providing app (the API) is present whenever a consumer is
-    // selected, so it can be wired. The provider is identified by config, not by name.
-    let provider = catalog
-        .iter()
-        .find(|(_, a)| a.provides_url)
-        .map(|(n, _)| n.clone());
-    let needs_provider = apps
-        .iter()
-        .any(|a| catalog[a].url_env.is_some() && !catalog[a].provides_url);
-    if needs_provider
-        && let Some(p) = &provider
-        && !apps.contains(p)
-    {
-        apps.insert(0, p.clone());
-    }
+    run::ensure_provider(catalog, &mut apps);
 
     let user = parse_user_env(env_pairs, env_file)?;
     let issue_holder = toplevel(cwd)?;
@@ -311,6 +288,11 @@ fn cmd_up(
         g
     };
 
+    let provider = catalog
+        .iter()
+        .find(|(_, a)| a.provides_url)
+        .map(|(n, _)| n.clone());
+
     let mut rows: Vec<Row> = Vec::new();
     for (grp_role, holder, base_dir) in &groups {
         let reqs: Vec<(String, u16)> = apps
@@ -320,123 +302,56 @@ fn cmd_up(
         let ports: BTreeMap<String, u16> = registry::alloc(holder, &reqs, *grp_role)?
             .into_iter()
             .collect();
-        let provider_port = provider.as_ref().and_then(|p| ports.get(p).copied());
-
-        // Build each app's launch plan up front so dry-run and real spawns share it.
-        let mut plans = Vec::with_capacity(apps.len());
-        for a in &apps {
-            let app = &catalog[a];
-            let port = ports[a];
-            let mut argv = run::doppler_prefix(app, &cfg.defaults.doppler_config);
-            argv.extend(run::launch_argv(app, port));
-            let app_cwd = base_dir.join(&app.path);
-            let envmap = run::env_for(app, provider_port, &user);
-            let log = paths::logs_dir().join(slug(holder)).join(format!(
-                "{}-{}.log",
-                grp_role.as_str(),
-                a
-            ));
-            plans.push((a.clone(), port, argv, app_cwd, envmap, log));
-        }
+        let plans = run::plan_group(
+            catalog,
+            &cfg.defaults.doppler_config,
+            &apps,
+            &ports,
+            provider.as_deref(),
+            base_dir,
+            *grp_role,
+            &user,
+        );
 
         if dry_run {
-            for (a, port, argv, app_cwd, envmap, log) in &plans {
-                println!("[{}] {a} :{port}", grp_role.as_str());
-                println!("  cwd:  {}", app_cwd.display());
-                println!("  argv: {}", argv.join(" "));
-                let envs: Vec<String> = envmap.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            for p in &plans {
+                println!("[{}] {} :{}", grp_role.as_str(), p.app, p.port);
+                println!("  cwd:  {}", p.cwd.display());
+                println!("  argv: {}", p.argv.join(" "));
+                let envs: Vec<String> = p.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
                 println!("  env:  {}", envs.join(" "));
-                println!("  log:  {}", log.display());
+                println!("  log:  {}", p.log.display());
                 rows.push(Row {
                     role: *grp_role,
-                    app: a.clone(),
-                    port: *port,
+                    app: p.app.clone(),
+                    port: p.port,
                     pid: None,
-                    log: log.clone(),
+                    log: p.log.clone(),
                     ready: None,
                 });
             }
             continue;
         }
 
-        #[cfg(feature = "daemon")]
-        if supervise {
-            let mut client = devkit_ports::daemon::client::ensure_running()
-                .context("starting supervisor daemon")?;
-            for (a, port, argv, app_cwd, envmap, log) in &plans {
-                let resp = client.request(&devkit_ports::daemon::proto::Request::Supervise {
-                    holder: holder.clone(),
-                    app: a.clone(),
-                    role: *grp_role,
-                    argv: argv.clone(),
-                    cwd: app_cwd.to_str().context("app cwd not UTF-8")?.to_string(),
-                    env: envmap.clone(),
-                    logfile: log.clone(),
-                    base_port: catalog[a].base_port,
-                })?;
-                let ready = match &resp {
-                    devkit_ports::daemon::proto::Response::Supervised(v) => {
-                        v.first().map(|(_, r)| *r).unwrap_or(false)
-                    }
-                    devkit_ports::daemon::proto::Response::Err(msg) => {
-                        eprintln!("daemon could not supervise {a}: {msg}");
-                        false
-                    }
-                    _ => false,
-                };
-                rows.push(Row {
-                    role: *grp_role,
-                    app: a.clone(),
-                    port: *port,
-                    pid: None,
-                    log: log.clone(),
-                    ready: Some(ready),
-                });
-            }
-            continue; // skip the direct-spawn path for this group
-        }
-
-        // Spawn every app in the group, then poll all their ports concurrently so
-        // readiness waits overlap instead of summing one 120s timeout per app.
-        let mut spawned = Vec::with_capacity(plans.len());
-        for (a, port, argv, app_cwd, envmap, log) in &plans {
-            let pid = supervise::spawn_detached(
-                argv,
-                app_cwd.to_str().context("app cwd not UTF-8")?,
-                envmap,
-                log,
-            )?;
-            registry::record_pid(*port, a, holder, *grp_role, pid, log.clone())?;
-            spawned.push((a.clone(), *port, log.clone(), pid));
-        }
-
-        let ready: BTreeMap<String, bool> = std::thread::scope(|s| {
-            let handles: Vec<_> = spawned
-                .iter()
-                .map(|(a, port, _, _)| {
-                    let (a, port) = (a.clone(), *port);
-                    s.spawn(move || (a, supervise::wait_ready(port, Duration::from_secs(120))))
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
-
-        for (a, port, log, pid) in spawned {
-            let is_ready = ready[&a];
-            if !is_ready {
+        let statuses = run::launch(&plans, holder, *grp_role, supervise, true)?;
+        for s in statuses {
+            if s.state != devkit_ports::run::ServerState::Ready
+                && let Some(log) = &s.logfile
+            {
                 eprintln!(
-                    "--- {a} ({}) did not become ready; last 30 log lines: ---",
+                    "--- {} ({}) did not become ready; last 30 log lines: ---",
+                    s.app,
                     grp_role.as_str()
                 );
-                eprintln!("{}", supervise::tail(&log, 30));
+                eprintln!("{}", supervise::tail(log, 30));
             }
             rows.push(Row {
-                role: *grp_role,
-                app: a,
-                port,
-                pid: Some(pid),
-                log,
-                ready: Some(is_ready),
+                role: s.role,
+                app: s.app,
+                port: s.port,
+                pid: s.pid,
+                log: s.logfile.unwrap_or_default(),
+                ready: Some(s.state == devkit_ports::run::ServerState::Ready),
             });
         }
     }

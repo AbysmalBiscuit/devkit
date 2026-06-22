@@ -4,12 +4,15 @@
 //! out to `devrun`.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::apps::App;
 use crate::registry::{self, Data, Role};
+use devkit_common::{paths, supervise};
 
 /// Build the doppler argv prefix: `doppler run -p <project> -c <config> [--preserve-env=K]... --`
 pub fn doppler_prefix(app: &App, config: &str) -> Vec<String> {
@@ -121,6 +124,216 @@ pub fn server_rows(data: &Data, only_holder: Option<&str>) -> Vec<ServerStatus> 
     rows
 }
 
+/// The directory leaf of a holder path, used to namespace a worktree's log dir.
+pub fn holder_slug(holder: &str) -> String {
+    Path::new(holder)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("wt")
+        .to_string()
+}
+
+/// Ensure the URL-providing app (the API) is present whenever a selected app
+/// consumes its URL, so the consumer can be wired. The provider is identified by
+/// config (`provides_url`), not by name.
+pub fn ensure_provider(catalog: &HashMap<String, App>, apps: &mut Vec<String>) {
+    let provider = catalog
+        .iter()
+        .find(|(_, a)| a.provides_url)
+        .map(|(n, _)| n.clone());
+    let needs_provider = apps
+        .iter()
+        .any(|a| catalog[a].url_env.is_some() && !catalog[a].provides_url);
+    if needs_provider
+        && let Some(p) = provider
+        && !apps.contains(&p)
+    {
+        apps.insert(0, p);
+    }
+}
+
+/// A fully-resolved launch command for one app: ready to print (dry-run) or spawn.
+#[derive(Debug, Clone)]
+pub struct LaunchPlan {
+    pub app: String,
+    pub port: u16,
+    pub argv: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: BTreeMap<String, String>,
+    pub log: PathBuf,
+}
+
+/// Build a launch plan per app for one (role, holder) group. `ports` maps each app
+/// to its allocated port; `provider` names the URL-providing app if it shares the run.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_group(
+    catalog: &HashMap<String, App>,
+    doppler_config: &str,
+    apps: &[String],
+    ports: &BTreeMap<String, u16>,
+    provider: Option<&str>,
+    base_dir: &Path,
+    role: Role,
+    user_env: &BTreeMap<String, String>,
+) -> Vec<LaunchPlan> {
+    let provider_port = provider.and_then(|p| ports.get(p).copied());
+    let mut plans = Vec::with_capacity(apps.len());
+    for a in apps {
+        let app = &catalog[a];
+        let port = ports[a];
+        let mut argv = doppler_prefix(app, doppler_config);
+        argv.extend(launch_argv(app, port));
+        let cwd = base_dir.join(&app.path);
+        let env = env_for(app, provider_port, user_env);
+        let log = paths::logs_dir()
+            .join(holder_slug(base_dir.to_str().unwrap_or("wt")))
+            .join(format!("{}-{}.log", role.as_str(), a));
+        plans.push(LaunchPlan {
+            app: a.clone(),
+            port,
+            argv,
+            cwd,
+            env,
+            log,
+        });
+    }
+    plans
+}
+
+/// Is a supervisor daemon already running? Used to decide whether `up` hands
+/// servers to the daemon. Never starts one.
+pub fn daemon_running() -> bool {
+    #[cfg(feature = "daemon")]
+    {
+        crate::daemon::client::try_existing().is_some()
+    }
+    #[cfg(not(feature = "daemon"))]
+    {
+        false
+    }
+}
+
+/// Spawn (or hand to the daemon) every plan in one group and record each pid.
+/// `wait = true` blocks up to 120 s per port for readiness (the CLI path);
+/// `wait = false` returns immediately with each server in its current state.
+pub fn launch(
+    plans: &[LaunchPlan],
+    holder: &str,
+    role: Role,
+    supervise_daemon: bool,
+    wait: bool,
+) -> Result<Vec<ServerStatus>> {
+    #[cfg(feature = "daemon")]
+    if supervise_daemon {
+        return supervise_via_daemon(plans, holder, role);
+    }
+    #[cfg(not(feature = "daemon"))]
+    let _ = supervise_daemon;
+
+    let mut spawned = Vec::with_capacity(plans.len());
+    for p in plans {
+        let pid = supervise::spawn_detached(
+            &p.argv,
+            p.cwd.to_str().context("app cwd not UTF-8")?,
+            &p.env,
+            &p.log,
+        )?;
+        registry::record_pid(p.port, &p.app, holder, role, pid, p.log.clone())?;
+        spawned.push((p.app.clone(), p.port, p.log.clone(), pid));
+    }
+
+    if wait {
+        let ready: BTreeMap<String, bool> = std::thread::scope(|s| {
+            let handles: Vec<_> = spawned
+                .iter()
+                .map(|(a, port, _, _)| {
+                    let (a, port) = (a.clone(), *port);
+                    s.spawn(move || {
+                        (
+                            a,
+                            supervise::wait_ready(port, std::time::Duration::from_secs(120)),
+                        )
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        Ok(spawned
+            .into_iter()
+            .map(|(a, port, log, pid)| ServerStatus {
+                app: a.clone(),
+                role,
+                port,
+                pid: Some(pid),
+                logfile: Some(log),
+                state: if ready[&a] {
+                    ServerState::Ready
+                } else {
+                    ServerState::Starting
+                },
+            })
+            .collect())
+    } else {
+        Ok(spawned
+            .into_iter()
+            .map(|(a, port, log, pid)| ServerStatus {
+                app: a,
+                role,
+                port,
+                pid: Some(pid),
+                logfile: Some(log),
+                state: server_state(port, Some(pid)),
+            })
+            .collect())
+    }
+}
+
+#[cfg(feature = "daemon")]
+fn supervise_via_daemon(
+    plans: &[LaunchPlan],
+    holder: &str,
+    role: Role,
+) -> Result<Vec<ServerStatus>> {
+    let mut client =
+        crate::daemon::client::ensure_running().context("starting supervisor daemon")?;
+    let mut out = Vec::with_capacity(plans.len());
+    for p in plans {
+        let resp = client.request(&crate::daemon::proto::Request::Supervise {
+            holder: holder.to_string(),
+            app: p.app.clone(),
+            role,
+            argv: p.argv.clone(),
+            cwd: p.cwd.to_str().context("app cwd not UTF-8")?.to_string(),
+            env: p.env.clone(),
+            logfile: p.log.clone(),
+            base_port: p.port,
+        })?;
+        let ready = match &resp {
+            crate::daemon::proto::Response::Supervised(v) => {
+                v.first().map(|(_, r)| *r).unwrap_or(false)
+            }
+            crate::daemon::proto::Response::Err(msg) => {
+                eprintln!("daemon could not supervise {}: {msg}", p.app);
+                false
+            }
+            _ => false,
+        };
+        out.push(ServerStatus {
+            app: p.app.clone(),
+            role,
+            port: p.port,
+            pid: None,
+            logfile: Some(p.log.clone()),
+            state: if ready {
+                ServerState::Ready
+            } else {
+                ServerState::Starting
+            },
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +439,99 @@ mod tests {
             "bound port reads as ready"
         );
         drop(l);
+    }
+
+    #[test]
+    fn plan_group_builds_doppler_wrapped_argv() {
+        let mut catalog = HashMap::new();
+        catalog.insert("web".to_string(), app("web", None));
+        let mut ports = BTreeMap::new();
+        ports.insert("web".to_string(), 4321u16);
+        let plans = plan_group(
+            &catalog,
+            "dev_local",
+            &["web".to_string()],
+            &ports,
+            None,
+            std::path::Path::new("/root"),
+            Role::Issue,
+            &BTreeMap::new(),
+        );
+        assert_eq!(plans.len(), 1);
+        let p = &plans[0];
+        assert_eq!(p.app, "web");
+        assert_eq!(p.port, 4321);
+        // doppler prefix then the port-substituted launch argv.
+        assert_eq!(p.argv[0], "doppler");
+        assert_eq!(p.argv.last().unwrap(), "4321");
+        assert!(p.cwd.ends_with("apps/x"));
+    }
+
+    /// First launchable python interpreter, or None (then the test skips). Mirrors
+    /// the supervise test so CI hosts without a real python3 don't fail.
+    fn python_cmd() -> Option<&'static str> {
+        use std::process::{Command, Stdio};
+        ["python3", "python", "py"].into_iter().find(|c| {
+            Command::new(c)
+                .arg("--version")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok()
+        })
+    }
+
+    #[test]
+    fn launch_non_blocking_returns_before_readiness_then_status_flips() {
+        let Some(py) = python_cmd() else {
+            eprintln!("skipping launch_non_blocking: no launchable python");
+            return;
+        };
+        // A free port for the test server.
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+
+        let tmp = std::env::temp_dir().join(format!("devrun-run-{}.log", std::process::id()));
+        let plan = LaunchPlan {
+            app: "web".into(),
+            port,
+            argv: [py, "-m", "http.server", &port.to_string()]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            cwd: std::env::temp_dir(),
+            env: BTreeMap::new(),
+            log: tmp.clone(),
+        };
+        // Non-blocking: returns immediately; the just-spawned server is "starting".
+        let out = launch(&[plan], "/w-launch-test", Role::Issue, false, false).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].port, port);
+        assert!(out[0].pid.is_some());
+        assert!(
+            matches!(out[0].state, ServerState::Starting | ServerState::Ready),
+            "freshly spawned server is starting (or already ready), got {:?}",
+            out[0].state
+        );
+
+        // Poll (do not sleep-then-assert) until it accepts connections.
+        let mut ready = false;
+        for _ in 0..100 {
+            if registry::listening(port) {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(ready, "server never started listening");
+
+        // Cleanup: stop the spawned pid and release the reservation.
+        if let Some(pid) = out[0].pid {
+            devkit_common::supervise::stop(pid);
+        }
+        let _ = registry::release("/w-launch-test", None);
+        let _ = std::fs::remove_file(&tmp);
     }
 }
