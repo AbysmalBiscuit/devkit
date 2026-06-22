@@ -48,6 +48,16 @@ pub fn paths_overlap(a: &str, b: &str) -> bool {
         .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// True if `existing` is the same holder as `writer`, or an ancestor of it in the
+/// agent tree. Holder ids are '/'-separated segments (`session`, `session/agent`);
+/// `existing` is an ancestor of `writer` when it is a leading segment-boundary prefix.
+pub fn is_ancestor_or_self(existing: &str, writer: &str) -> bool {
+    existing == writer
+        || writer
+            .strip_prefix(existing)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Acquired {
     pub path: String,
@@ -409,5 +419,16 @@ mod tests {
             got,
             vec![key_for("/repo", "deadpid"), key_for("/repo", "old")]
         );
+    }
+
+    #[test]
+    fn ancestry_self_and_prefix() {
+        assert!(is_ancestor_or_self("S", "S"));            // self
+        assert!(is_ancestor_or_self("S", "S/a1"));         // parent of sub-agent
+        assert!(is_ancestor_or_self("S/a1", "S/a1/b2"));   // grandparent (if ever nested)
+        assert!(!is_ancestor_or_self("S/a1", "S"));        // child does not own parent
+        assert!(!is_ancestor_or_self("S/a1", "S/b2"));     // siblings contend
+        assert!(!is_ancestor_or_self("S", "Sx"));          // not a segment boundary
+        assert!(!is_ancestor_or_self("S", "T"));           // unrelated sessions
     }
 }
