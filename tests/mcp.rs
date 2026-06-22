@@ -281,6 +281,51 @@ fn devrun_status_without_root_or_all_is_an_error() {
     assert!(payload.as_str().unwrap().contains("root"));
 }
 
+#[test]
+fn devrun_logs_unknown_app_is_an_error() {
+    let proj = project();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[call_req(
+            1,
+            "devrun.logs",
+            json!({ "root": root, "app": "ghost" }),
+        )],
+    );
+    let payload = tool_json(&resps[0], true);
+    assert!(payload.as_str().unwrap().contains("ghost"));
+}
+
+#[test]
+fn devrun_down_releases_reserved_ports() {
+    let proj = project_with_config();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[
+            call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
+            call_req(2, "devrun.down", json!({ "root": root })),
+            call_req(3, "devrun.status", json!({ "root": root })),
+        ],
+    );
+    tool_json(&resps[0], false);
+
+    let down = tool_json(&resps[1], false);
+    assert_eq!(down["freed"].as_array().unwrap().len(), 1);
+    assert_eq!(down["stopped"], 0, "no pid was recorded");
+
+    let rows = tool_json(&resps[2], false);
+    assert!(
+        rows.as_array().unwrap().is_empty(),
+        "nothing tracked after down"
+    );
+}
+
 /// The MCP lifecycle a host drives on connect: `initialize` →
 /// `notifications/initialized` → `tools/list`. The notification carries no `id`
 /// and must draw no response; `initialize` must echo the protocol version and
