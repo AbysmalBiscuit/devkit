@@ -200,6 +200,68 @@ pub fn plan_group(
     plans
 }
 
+/// Result of stopping + releasing a holder's servers.
+#[derive(Debug, Clone, Serialize)]
+pub struct DownOutcome {
+    /// Processes that received SIGTERM (0 on the daemon path, which stops them itself).
+    pub stopped: usize,
+    /// Ports released.
+    pub freed: Vec<u16>,
+    /// Whether a running daemon handled the stop.
+    pub via_daemon: bool,
+}
+
+/// Stop every server for `holder` (optionally one role) and release its ports.
+/// Prefers a running daemon; otherwise stops + releases directly under one lock,
+/// without pruning first (a still-running server whose reservation looks stale
+/// must still receive SIGTERM).
+pub fn bring_down(holder: &str, role: Option<Role>) -> Result<DownOutcome> {
+    #[cfg(feature = "daemon")]
+    if let Some(mut client) = crate::daemon::client::try_existing() {
+        let resp = client.request(&crate::daemon::proto::Request::Down {
+            holder: holder.to_string(),
+            role,
+        })?;
+        if let crate::daemon::proto::Response::Freed(freed) = resp {
+            return Ok(DownOutcome {
+                stopped: freed.len(),
+                freed,
+                via_daemon: true,
+            });
+        }
+    }
+    let mut stopped = 0;
+    let freed = registry::with_lock(|d| {
+        for e in d.entries.values() {
+            if e.holder == holder
+                && role.is_none_or(|r| e.role == r)
+                && let Some(pid) = e.pid
+            {
+                supervise::stop(pid);
+                stopped += 1;
+            }
+        }
+        Ok(d.release(holder, role))
+    })?;
+    Ok(DownOutcome {
+        stopped,
+        freed,
+        via_daemon: false,
+    })
+}
+
+/// Return the last `lines` lines of a tracked app's logfile for this worktree.
+pub fn read_log(holder: &str, app: &str, role: Option<Role>, lines: usize) -> Result<String> {
+    let data = registry::snapshot()?;
+    let log = data
+        .entries
+        .values()
+        .find(|e| e.holder == holder && e.app == app && role.is_none_or(|r| e.role == r))
+        .and_then(|e| e.logfile.clone())
+        .ok_or_else(|| anyhow::anyhow!("no tracked log for app `{app}` in this worktree"))?;
+    Ok(supervise::tail(&log, lines))
+}
+
 /// Is a supervisor daemon already running? Used to decide whether `up` hands
 /// servers to the daemon. Never starts one.
 pub fn daemon_running() -> bool {
@@ -480,6 +542,55 @@ mod tests {
                 .status()
                 .is_ok()
         })
+    }
+
+    #[test]
+    fn bring_down_releases_a_pidless_reservation() {
+        let holder = format!("/down-test-{}", std::process::id());
+        registry::alloc(&holder, &[("web".to_string(), 7000)], Role::Issue).unwrap();
+        let out = bring_down(&holder, None).unwrap();
+        assert_eq!(out.stopped, 0, "no pid recorded, nothing to stop");
+        assert_eq!(out.freed.len(), 1, "the reservation is freed");
+        // Idempotent: a second down frees nothing.
+        let again = bring_down(&holder, None).unwrap();
+        assert!(again.freed.is_empty());
+    }
+
+    #[test]
+    fn read_log_tails_a_tracked_logfile() {
+        // Use logdir as the holder so holder_alive returns true (snapshot prunes
+        // entries whose holder path does not exist).
+        let logdir = std::env::temp_dir().join(format!("devrun-log-{}", std::process::id()));
+        std::fs::create_dir_all(&logdir).unwrap();
+        let holder = logdir.to_str().unwrap().to_string();
+        let logfile = logdir.join("issue-web.log");
+        std::fs::write(&logfile, "line1\nline2\nline3\n").unwrap();
+
+        // Track an entry pointing at the log, then read it back.
+        registry::with_lock(|d| {
+            d.entries.insert(
+                7100,
+                crate::registry::Entry {
+                    app: "web".into(),
+                    holder: holder.clone(),
+                    role: Role::Issue,
+                    pid: None,
+                    logfile: Some(logfile.clone()),
+                    ts: crate::registry::now(),
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+
+        let text = read_log(&holder, "web", None, 2).unwrap();
+        assert_eq!(text, "line2\nline3");
+
+        // Unknown app errors.
+        assert!(read_log(&holder, "ghost", None, 10).is_err());
+
+        let _ = registry::release(&holder, None);
+        let _ = std::fs::remove_dir_all(&logdir);
     }
 
     #[test]

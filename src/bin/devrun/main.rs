@@ -362,33 +362,15 @@ fn cmd_up(
 
 fn cmd_down(cwd: &str, role: Option<Role>) -> Result<()> {
     let holder = toplevel(cwd)?;
-    #[cfg(feature = "daemon")]
-    if let Some(mut client) = devkit_ports::daemon::client::try_existing() {
-        let resp = client.request(&devkit_ports::daemon::proto::Request::Down {
-            holder: holder.clone(),
-            role,
-        })?;
-        if let devkit_ports::daemon::proto::Response::Freed(freed) = resp {
-            println!("stopped via daemon; released ports {freed:?}");
-            return Ok(());
-        }
+    let out = run::bring_down(&holder, role)?;
+    if out.via_daemon {
+        println!("stopped via daemon; released ports {:?}", out.freed);
+    } else {
+        println!(
+            "stopped {} process(es); released ports {:?}",
+            out.stopped, out.freed
+        );
     }
-    // Stop and release under one lock, without pruning first: a still-running server
-    // whose reservation looks stale must still receive SIGTERM and be released.
-    let mut stopped = 0;
-    let freed = registry::with_lock(|d| {
-        for e in d.entries.values() {
-            if e.holder == holder
-                && role.is_none_or(|r| e.role == r)
-                && let Some(pid) = e.pid
-            {
-                supervise::stop(pid);
-                stopped += 1;
-            }
-        }
-        Ok(d.release(&holder, role))
-    })?;
-    println!("stopped {stopped} process(es); released ports {freed:?}");
     Ok(())
 }
 
@@ -411,14 +393,14 @@ fn cmd_status(cwd: &str, all: bool) -> Result<()> {
 
 fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()> {
     let holder = toplevel(cwd)?;
-    let data = registry::snapshot()?;
-    let log = data
-        .entries
-        .values()
-        .find(|e| e.holder == holder && e.app == app && role.is_none_or(|r| e.role == r))
-        .and_then(|e| e.logfile.clone())
-        .ok_or_else(|| anyhow::anyhow!("no tracked log for app `{app}` in this worktree"))?;
     if follow {
+        let data = registry::snapshot()?;
+        let log = data
+            .entries
+            .values()
+            .find(|e| e.holder == holder && e.app == app && role.is_none_or(|r| e.role == r))
+            .and_then(|e| e.logfile.clone())
+            .ok_or_else(|| anyhow::anyhow!("no tracked log for app `{app}` in this worktree"))?;
         let status = std::process::Command::new("tail")
             .arg("-f")
             .arg(&log)
@@ -426,7 +408,7 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
             .with_context(|| "running `tail -f`")?;
         std::process::exit(status.code().unwrap_or(1));
     }
-    println!("{}", supervise::tail(&log, 200));
+    println!("{}", run::read_log(&holder, app, role, 200)?);
     Ok(())
 }
 
