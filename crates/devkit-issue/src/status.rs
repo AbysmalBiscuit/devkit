@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_json, git};
-use devkit_common::linear;
+use devkit_common::linear::{self, LinearState};
 use devkit_common::worktree;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize)]
 struct Pr {
@@ -54,14 +55,88 @@ pub struct StatusReport {
     pub linear_workspace: Option<String>,
 }
 
-/// Discover worktrees and their best PR. Returns an empty vec (and skips the
-/// `gh` round-trip) when the repo has no non-main worktrees.
-fn build_rows(start: &str) -> Result<Vec<IssueWorktree>> {
-    let (main, others) = worktree::discover(start)?;
-    if others.is_empty() {
-        return Ok(Vec::new());
+/// Local-only discovery: worktrees + dirty placeholders + issue ids + the main
+/// repo path. The slow network fetches consume this. Fast — no `gh`/Linear.
+pub struct Discovered {
+    rows: Vec<IssueWorktree>,
+    main_path: String,
+    issue_ids: Vec<String>,
+}
+
+impl Discovered {
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
     }
-    let main_s = main.to_str().context("main repo path not UTF-8")?;
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+    pub fn worktree_paths(&self) -> Vec<String> {
+        self.rows.iter().map(|r| r.worktree.clone()).collect()
+    }
+    pub fn issue_ids(&self) -> &[String] {
+        &self.issue_ids
+    }
+}
+
+/// An opaque GitHub PR list for a set of worktrees.
+pub struct Prs(Vec<Pr>);
+
+/// Discover worktrees and their issue ids, filtered to `ids` when non-empty.
+/// Rows carry `dirty = false` placeholders; the dirty check is a separate step
+/// so callers can drive it with a progress bar.
+pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
+    let (main, others) = worktree::discover(start)?;
+    let main_path = main
+        .to_str()
+        .context("main repo path not UTF-8")?
+        .to_string();
+    let wanted: Vec<String> = ids.iter().map(|s| s.to_uppercase()).collect();
+    let mut rows = Vec::new();
+    for wt in &others {
+        let iid = worktree::issue_id_of(&wt.branch, &wt.path);
+        if !wanted.is_empty() && !wanted.contains(&iid) {
+            continue;
+        }
+        rows.push(IssueWorktree {
+            worktree: wt.path.to_string_lossy().into_owned(),
+            branch: wt.branch.clone(),
+            issue_id: iid,
+            dirty: false,
+            pr_number: None,
+            pr_state: "NO_PR".to_string(),
+            pr_url: None,
+            linear_kind: None,
+            linear_name: None,
+            finished: false,
+            reason_not_finished: None,
+        });
+    }
+    let issue_ids = rows
+        .iter()
+        .filter(|r| r.issue_id != "UNKNOWN")
+        .map(|r| r.issue_id.clone())
+        .collect();
+    Ok(Discovered {
+        rows,
+        main_path,
+        issue_ids,
+    })
+}
+
+/// True when a worktree has uncommitted changes.
+pub fn dirty_of(path: &str) -> bool {
+    !git(&["status", "--porcelain"], path)
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+}
+
+/// The single `gh pr list` round-trip for every worktree PR. Skips the call
+/// entirely when there are no worktrees.
+pub fn fetch_prs(d: &Discovered) -> Result<Prs> {
+    if d.rows.is_empty() {
+        return Ok(Prs(Vec::new()));
+    }
     let prs: Vec<Pr> = gh_json(
         &[
             "pr",
@@ -73,40 +148,52 @@ fn build_rows(start: &str) -> Result<Vec<IssueWorktree>> {
             "--json",
             "number,state,url,headRefName",
         ],
-        main_s,
+        &d.main_path,
     )?;
-    let mut rows = Vec::new();
-    for wt in &others {
-        let path = wt.path.to_string_lossy().into_owned();
-        let dirty = !git(&["status", "--porcelain"], &path)
-            .unwrap_or_default()
-            .trim()
-            .is_empty();
-        let iid = worktree::issue_id_of(&wt.branch, &wt.path);
+    Ok(Prs(prs))
+}
+
+/// Attach dirty flags (in row order), best PR, Linear state, and the finished
+/// verdict. `linear_workspace` is carried through to the report for link building.
+pub fn assemble(
+    d: Discovered,
+    dirty: Vec<bool>,
+    prs: Prs,
+    linear: HashMap<String, LinearState>,
+    linear_workspace: Option<String>,
+    has_key: bool,
+) -> StatusReport {
+    let mut rows = d.rows;
+    let mut finished_count = 0;
+    for (i, wt) in rows.iter_mut().enumerate() {
+        wt.dirty = dirty.get(i).copied().unwrap_or(false);
         let pr = if wt.branch != "DETACHED" {
-            best_pr(&prs, &wt.branch)
+            best_pr(&prs.0, &wt.branch)
         } else {
             None
         };
-        let (pr_number, pr_state, pr_url) = match pr {
-            Some(p) => (Some(p.number), p.state.clone(), Some(p.url.clone())),
-            None => (None, "NO_PR".to_string(), None),
-        };
-        rows.push(IssueWorktree {
-            worktree: path,
-            branch: wt.branch.clone(),
-            issue_id: iid,
-            dirty,
-            pr_number,
-            pr_state,
-            pr_url,
-            linear_kind: None,
-            linear_name: None,
-            finished: false,
-            reason_not_finished: None,
-        });
+        if let Some(p) = pr {
+            wt.pr_number = Some(p.number);
+            wt.pr_state = p.state.clone();
+            wt.pr_url = Some(p.url.clone());
+        }
+        if let Some(st) = linear.get(&wt.issue_id) {
+            wt.linear_kind = Some(st.kind.clone());
+            wt.linear_name = Some(st.name.clone());
+        }
+        let reason = reason_not_finished(wt, has_key, false);
+        wt.finished = reason.is_none();
+        if wt.finished {
+            finished_count += 1;
+        }
+        wt.reason_not_finished = reason;
     }
-    Ok(rows)
+    StatusReport {
+        worktrees: rows,
+        finished_count,
+        has_linear_key: has_key,
+        linear_workspace,
+    }
 }
 
 /// None when finished; otherwise a short reason it is not. With `pr_only`, the
@@ -147,58 +234,127 @@ pub fn reason_not_finished(wt: &IssueWorktree, has_key: bool, pr_only: bool) -> 
     }
 }
 
-/// Discover worktrees, attach Linear state, and compute the finished verdict.
-///
-/// The per-row `finished`/`reason_not_finished` is the full gate (`pr_only =
-/// false`). Callers wanting the `--pr-only` gate must re-call
-/// `reason_not_finished` with `pr_only = true` rather than trust `wt.finished`.
+/// Discover worktrees, fetch PRs + Linear state concurrently, and compute the
+/// finished verdict. Silent — no progress output (the CLI re-orchestrates the
+/// same pieces with bars). Signature unchanged for MCP/dashboard/tests.
 pub fn gather(start: &str, ids: &[String]) -> Result<StatusReport> {
-    let mut rows = build_rows(start)?;
+    let d = discover(start, ids)?;
     let key = std::env::var("LINEAR_API_KEY").ok();
     let has_key = key.is_some();
-    if rows.is_empty() {
-        return Ok(StatusReport {
-            worktrees: Vec::new(),
-            finished_count: 0,
-            has_linear_key: has_key,
-            linear_workspace: None,
+    if d.is_empty() {
+        return Ok(assemble(
+            d,
+            Vec::new(),
+            Prs(Vec::new()),
+            HashMap::new(),
+            None,
+            has_key,
+        ));
+    }
+    let paths = d.worktree_paths();
+    let ids_v: Vec<String> = d.issue_ids().to_vec();
+    let (dirty, prs, linear, ws) = std::thread::scope(|s| {
+        let dt = s.spawn(|| paths.iter().map(|p| dirty_of(p)).collect::<Vec<bool>>());
+        let pt = s.spawn(|| fetch_prs(&d));
+        let lt = s.spawn(|| {
+            (
+                linear::states(&ids_v, key.as_deref()),
+                linear::workspace_url_key(),
+            )
         });
-    }
-    if !ids.is_empty() {
-        let wanted: Vec<String> = ids.iter().map(|s| s.to_uppercase()).collect();
-        rows.retain(|r| wanted.contains(&r.issue_id));
-    }
-    let issue_ids: Vec<String> = rows
-        .iter()
-        .filter(|r| r.issue_id != "UNKNOWN")
-        .map(|r| r.issue_id.clone())
-        .collect();
-    let states = linear::states(&issue_ids, key.as_deref());
-    let linear_workspace = linear::workspace_url_key();
-    let mut finished_count = 0;
-    for wt in &mut rows {
-        if let Some(st) = states.get(&wt.issue_id) {
-            wt.linear_kind = Some(st.kind.clone());
-            wt.linear_name = Some(st.name.clone());
-        }
-        let reason = reason_not_finished(wt, has_key, false);
-        wt.finished = reason.is_none();
-        if wt.finished {
-            finished_count += 1;
-        }
-        wt.reason_not_finished = reason;
-    }
-    Ok(StatusReport {
-        worktrees: rows,
-        finished_count,
-        has_linear_key: has_key,
-        linear_workspace,
-    })
+        let dirty = dt.join().expect("dirty thread panicked");
+        let prs = pt.join().expect("prs thread panicked")?;
+        let (linear, ws) = lt.join().expect("linear thread panicked");
+        Ok::<_, anyhow::Error>((dirty, prs, linear, ws))
+    })?;
+    Ok(assemble(d, dirty, prs, linear, ws, has_key))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    // assemble zips dirty flags onto rows in order, attaches the best PR by
+    // branch, applies Linear state, and computes the finished verdict — the same
+    // result the old monolithic gather produced.
+    #[test]
+    fn assemble_attaches_pr_dirty_and_verdict() {
+        let rows = vec![IssueWorktree {
+            worktree: "/w1".into(),
+            branch: "lev/eng-1-foo".into(),
+            issue_id: "ENG-1".into(),
+            dirty: false,
+            pr_number: None,
+            pr_state: "NO_PR".into(),
+            pr_url: None,
+            linear_kind: None,
+            linear_name: None,
+            finished: false,
+            reason_not_finished: None,
+        }];
+        let d = Discovered::for_test(rows, "/main".into(), vec!["ENG-1".into()]);
+        let prs = Prs::for_test(vec![pr(7, "MERGED", "lev/eng-1-foo")]);
+        let mut linear = HashMap::new();
+        linear.insert(
+            "ENG-1".to_string(),
+            LinearState {
+                kind: "completed".into(),
+                name: "Done".into(),
+            },
+        );
+        let report = assemble(d, vec![false], prs, linear, Some("acme".into()), true);
+        let row = &report.worktrees[0];
+        assert_eq!(row.pr_number, Some(7));
+        assert_eq!(row.pr_state, "MERGED");
+        assert!(!row.dirty);
+        assert!(row.finished);
+        assert_eq!(report.finished_count, 1);
+        assert_eq!(report.linear_workspace.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn assemble_marks_dirty_from_flags() {
+        let rows = vec![IssueWorktree {
+            worktree: "/w1".into(),
+            branch: "lev/eng-2-bar".into(),
+            issue_id: "ENG-2".into(),
+            dirty: false,
+            pr_number: None,
+            pr_state: "NO_PR".into(),
+            pr_url: None,
+            linear_kind: None,
+            linear_name: None,
+            finished: false,
+            reason_not_finished: None,
+        }];
+        let d = Discovered::for_test(rows, "/main".into(), vec!["ENG-2".into()]);
+        let report = assemble(
+            d,
+            vec![true],
+            Prs::for_test(vec![]),
+            HashMap::new(),
+            None,
+            false,
+        );
+        assert!(report.worktrees[0].dirty);
+        assert!(!report.worktrees[0].finished);
+    }
+
+    impl Discovered {
+        fn for_test(rows: Vec<IssueWorktree>, main_path: String, issue_ids: Vec<String>) -> Self {
+            Discovered {
+                rows,
+                main_path,
+                issue_ids,
+            }
+        }
+    }
+    impl Prs {
+        fn for_test(prs: Vec<Pr>) -> Self {
+            Prs(prs)
+        }
+    }
 
     fn pr(n: u64, state: &str, head: &str) -> Pr {
         Pr {
