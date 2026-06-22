@@ -176,10 +176,11 @@ fn prepare_base(base: &std::path::Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
     use std::os::unix::fs::PermissionsExt as _;
     // Writability probe: the base dir must be writable by this user (delegation).
-    let _ = fs::metadata(base)
-        .with_context(|| format!("cgroup base {} missing", base.display()))?
-        .permissions()
-        .mode();
+    let meta = fs::metadata(base)
+        .with_context(|| format!("cgroup base {} missing", base.display()))?;
+    if meta.permissions().mode() & 0o200 == 0 {
+        anyhow::bail!("cgroup base {} not writable by this process", base.display());
+    }
     let sup = base.join("supervisor");
     fs::create_dir_all(&sup).with_context(|| format!("creating {}", sup.display()))?;
     // Move self out of `base` before enabling controllers on it.
