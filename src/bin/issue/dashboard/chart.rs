@@ -1,4 +1,5 @@
 use chrono::{DateTime, Datelike, Utc};
+use devkit_common::ui::term_width;
 use textplots::{Chart, ColorPlot, Shape};
 
 /// (r,g,b) parsed from a Linear `#rrggbb` hex; falls back to mid-grey.
@@ -49,51 +50,6 @@ pub fn stack_column(values: &[u32], max_total: u32, rows: usize) -> Vec<usize> {
 }
 
 const BLOCK_HEIGHT: usize = 12;
-
-/// Terminal width: $COLUMNS, else TIOCGWINSZ, else 100.
-pub fn term_width() -> usize {
-    if let Ok(c) = std::env::var("COLUMNS")
-        && let Ok(n) = c.trim().parse::<usize>()
-        && n > 0
-    {
-        return n;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        let mut ws: libc_winsize = libc_winsize {
-            ws_row: 0,
-            ws_col: 0,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        let fd = std::io::stdout().as_raw_fd();
-        // SAFETY: ws is a plain POD struct sized for struct winsize; TIOCGWINSZ fills it.
-        let rc = unsafe { ioctl_winsize(fd, &mut ws) };
-        if rc == 0 && ws.ws_col > 0 {
-            return ws.ws_col as usize;
-        }
-    }
-    100
-}
-
-#[cfg(unix)]
-#[repr(C)]
-struct libc_winsize {
-    ws_row: u16,
-    ws_col: u16,
-    ws_xpixel: u16,
-    ws_ypixel: u16,
-}
-
-#[cfg(unix)]
-unsafe fn ioctl_winsize(fd: i32, ws: *mut libc_winsize) -> i32 {
-    // TIOCGWINSZ is 0x5413 on Linux.
-    unsafe extern "C" {
-        fn ioctl(fd: i32, request: u64, ...) -> i32;
-    }
-    unsafe { ioctl(fd, 0x5413, ws) }
-}
 
 fn ansi(rgb: (u8, u8, u8), s: &str) -> String {
     format!("\x1b[38;2;{};{};{}m{s}\x1b[0m", rgb.0, rgb.1, rgb.2)

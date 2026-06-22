@@ -194,10 +194,34 @@ fn reviewer_state(pr: &ReviewPr, me: &str) -> (String, String) {
     (vote_label, action)
 }
 
-fn diff_cell(prev: Option<&str>, cur: &str) -> String {
+/// Colour an ACTION value by whose turn it is: green = ready to land, red =
+/// needs you, yellow = waiting on the author, dim = passive. Mirrors the verbs
+/// produced by `mine_action`/`reviewer_state`.
+fn paint_action(action: &str, s: &str) -> String {
+    if action.starts_with("MERGE")
+        || action.starts_with("rebase -> merge")
+        || action.starts_with("done")
+    {
+        ui::green(s)
+    } else if action.starts_with("address")
+        || action.starts_with("fix")
+        || action.starts_with("REVIEW NEEDED")
+    {
+        ui::red(s)
+    } else if action.starts_with("awaiting author") {
+        ui::yellow(s)
+    } else {
+        // awaiting review, replied, commented, draft
+        ui::dim(s)
+    }
+}
+
+/// Render `cur` through `paint`. When it differs from the cached `prev`, prefix
+/// the struck-through old value and a dim arrow so the change reads at a glance.
+fn diff_cell(prev: Option<&str>, cur: &str, paint: impl Fn(&str) -> String) -> String {
     match prev {
-        Some(p) if p != cur => format!("{p} → {cur}"),
-        _ => cur.to_string(),
+        Some(p) if p != cur => format!("{}{}{}", ui::dim_strike(p), ui::dim(" → "), paint(cur)),
+        _ => paint(cur),
     }
 }
 
@@ -300,15 +324,16 @@ pub(crate) fn fetch_reviews(repo: Option<&str>, me: &str) -> Result<Vec<ReviewPr
 
 fn issue_cell(issue_id: &str, url_key: Option<&str>) -> String {
     if issue_id == "-" {
-        return "-".to_string();
+        return ui::dim("-");
     }
-    match url_key {
+    let linked = match url_key {
         Some(k) => ui::link(
             issue_id,
             &format!("https://linear.app/{k}/issue/{issue_id}"),
         ),
         None => issue_id.to_string(),
-    }
+    };
+    ui::cyan(&linked)
 }
 
 pub(crate) fn mine_table(
@@ -317,10 +342,10 @@ pub(crate) fn mine_table(
     url_key: Option<&str>,
     prev: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> BTreeMap<String, BTreeMap<String, String>> {
-    println!("MY OPEN PRs");
+    println!("{}", ui::bold_cyan("MY OPEN PRs"));
     let mut cur = BTreeMap::new();
     if prs.is_empty() {
-        println!("  (none)");
+        println!("  {}", ui::dim("(none)"));
         return cur;
     }
     let mut t = ui::table(&["PR", "ISSUE", "REVIEW", "CHECK", "ACTION"]);
@@ -333,9 +358,9 @@ pub(crate) fn mine_table(
         t.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
             issue_cell(&issue_of(&pr.head_ref_name), url_key),
-            diff_cell(g("review"), &review),
-            diff_cell(g("check"), &check),
-            diff_cell(g("action"), &action),
+            diff_cell(g("review"), &review, |s| s.to_string()),
+            diff_cell(g("check"), &check, |s| s.to_string()),
+            diff_cell(g("action"), &action, |s| paint_action(&action, s)),
         ]);
         cur.insert(
             pr.number.to_string(),
@@ -355,10 +380,10 @@ pub(crate) fn reviews_table(
     rows: &[ReviewPr],
     prev: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> BTreeMap<String, BTreeMap<String, String>> {
-    println!("\nPRs AWAITING MY REVIEW");
+    println!("\n{}", ui::bold_cyan("PRs AWAITING MY REVIEW"));
     let mut cur = BTreeMap::new();
     if rows.is_empty() {
-        println!("  (none)");
+        println!("  {}", ui::dim("(none)"));
         return cur;
     }
     let mut sorted: Vec<&ReviewPr> = rows.iter().collect();
@@ -371,8 +396,8 @@ pub(crate) fn reviews_table(
         t.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
             pr.author.login.clone(),
-            diff_cell(g("vote"), &vote),
-            diff_cell(g("action"), &action),
+            diff_cell(g("vote"), &vote, |s| s.to_string()),
+            diff_cell(g("action"), &action, |s| paint_action(&action, s)),
         ]);
         cur.insert(
             pr.number.to_string(),
@@ -389,13 +414,15 @@ pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> R
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
 
-    let url_key = std::env::var("LINEAR_WORKSPACE").ok();
+    let pb = crate::spin::spinner("Resolving Linear workspace…");
+    let url_key = devkit_common::linear::workspace_url_key();
 
     // These gh round-trips are independent network calls, so run them
     // concurrently. The reviews fetch is the only one that needs the current
     // user (to drop self-authored PRs), so it shares a thread with the user
     // lookup and runs after it; repo resolution and the "mine" fetch have no
     // such dependency and run in parallel.
+    pb.set_message("Fetching PRs from GitHub…");
     let repo_arg = repo.as_deref();
     let (me, mine_prs, review_rows, repo_key) = std::thread::scope(|s| {
         let user_reviews = s.spawn(|| -> Result<(String, Vec<ReviewPr>)> {
@@ -428,6 +455,7 @@ pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> R
         let repo_key = repo.join().expect("repo thread panicked")?;
         Ok::<_, anyhow::Error>((me, mine_prs, review_rows, repo_key))
     })?;
+    pb.finish_and_clear();
 
     let path = repo_key.as_ref().map(|r| cache_path(r));
     let mut cache: Snap = path.as_deref().map(load_cache).unwrap_or_default();
@@ -445,9 +473,17 @@ pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> R
 
     if (want_mine && !mine_prs.is_empty()) || (want_reviews && !review_rows.is_empty()) {
         println!(
-            "\nACTION colour key: needs you (REVIEW NEEDED · address changes · fix CI) · ready to land (MERGE · done) · waiting on author · passive (awaiting review · draft)"
+            "\n{} {} (REVIEW NEEDED · address changes · fix CI) · {} (MERGE · done) · {} (awaiting author fixes) · {}",
+            ui::dim("ACTION colour:"),
+            ui::red("needs you"),
+            ui::green("ready to land"),
+            ui::yellow("waiting on author"),
+            ui::dim("passive (awaiting review · draft)"),
         );
-        println!("old → new in a cell = value changed since the last run.");
+        println!(
+            "{}",
+            ui::dim("old → new in a cell = value changed since the last run.")
+        );
     }
 
     if let Some(p) = &path {
@@ -597,8 +633,11 @@ mod tests {
     }
     #[test]
     fn diff_cell_shows_change() {
-        assert_eq!(diff_cell(Some("ok"), "fail"), "ok → fail");
-        assert_eq!(diff_cell(Some("ok"), "ok"), "ok");
-        assert_eq!(diff_cell(None, "ok"), "ok");
+        // Tests are not a tty, so colour/strike helpers pass text through and the
+        // change reads as a plain `old → new`.
+        let plain = |s: &str| s.to_string();
+        assert_eq!(diff_cell(Some("ok"), "fail", plain), "ok → fail");
+        assert_eq!(diff_cell(Some("ok"), "ok", plain), "ok");
+        assert_eq!(diff_cell(None, "ok", plain), "ok");
     }
 }

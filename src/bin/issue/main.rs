@@ -7,6 +7,7 @@ mod end;
 mod prs;
 mod review;
 mod setup;
+mod spin;
 mod status;
 mod triage;
 

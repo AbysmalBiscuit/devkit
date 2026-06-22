@@ -27,6 +27,7 @@ interprocess.workspace = true
 chrono.workspace = true
 textplots.workspace = true
 rgb.workspace = true
+indicatif.workspace = true
 devkit-common.workspace = true
 devkit-ports.workspace = true
 devkit-locks.workspace = true
@@ -65,8 +66,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_ProcessStatus",
 ] }
-comfy-table = "7"
+comfy-table = { version = "7", features = ["custom_styling"] }
 anstyle = "1"
+indicatif = "0.17"
 supports-hyperlinks = "3"
 ureq = { version = "2", features = ["json"] }
 devkit-common = { path = "crates/devkit-common" }

@@ -40,6 +40,34 @@ pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, LinearState>
     }
 }
 
+/// The workspace url slug for building `linear.app/<slug>/issue/<id>` links.
+///
+/// Prefers `$LINEAR_WORKSPACE` (no network); otherwise asks the Linear API with
+/// `$LINEAR_API_KEY`. Returns None when neither is available or the lookup fails
+/// — issue ids then render as plain, unlinked text.
+pub fn workspace_url_key() -> Option<String> {
+    if let Some(slug) = std::env::var("LINEAR_WORKSPACE")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        return Some(slug);
+    }
+    let key = std::env::var("LINEAR_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    fetch_url_key(&key).ok().flatten()
+}
+
+fn fetch_url_key(key: &str) -> Result<Option<String>> {
+    let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
+        .set("Authorization", key)
+        .send_json(ureq::json!({ "query": "query { organization { urlKey } }" }))?
+        .into_json()?;
+    Ok(resp["data"]["organization"]["urlKey"]
+        .as_str()
+        .map(String::from))
+}
+
 fn fetch(
     query: &str,
     aliases: &HashMap<String, String>,

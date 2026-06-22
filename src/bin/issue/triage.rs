@@ -3,6 +3,7 @@ use devkit_common::cmd::{gh_json, git};
 use devkit_common::linear::{self, LinearState};
 use devkit_common::ui;
 use devkit_common::worktree;
+use indicatif::ProgressBar;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -42,9 +43,10 @@ pub(crate) struct Row {
     pub(crate) pr_url: Option<String>,
 }
 
-pub(crate) fn build_rows(start: &str) -> Result<Vec<Row>> {
+pub(crate) fn build_rows(start: &str, pb: &ProgressBar) -> Result<Vec<Row>> {
     let (main, others) = worktree::discover(start)?;
     let main_s = main.to_str().context("main repo path not UTF-8")?;
+    pb.set_message("Fetching pull requests from GitHub…");
     let prs: Vec<Pr> = gh_json(
         &[
             "pr",
@@ -140,7 +142,8 @@ pub(crate) fn reason_not_finished(
 pub(crate) type Gathered = (Vec<Row>, HashMap<String, LinearState>, bool, Option<String>);
 
 pub(crate) fn gather(start: &str, ids: &[String]) -> Result<Gathered> {
-    let mut rows = build_rows(start)?;
+    let pb = crate::spin::spinner("Discovering worktrees…");
+    let mut rows = build_rows(start, &pb)?;
     if !ids.is_empty() {
         let wanted: Vec<String> = ids.iter().map(|s| s.to_uppercase()).collect();
         rows.retain(|r| wanted.contains(&r.issue_id));
@@ -151,8 +154,10 @@ pub(crate) fn gather(start: &str, ids: &[String]) -> Result<Gathered> {
         .filter(|r| r.issue_id != "UNKNOWN")
         .map(|r| r.issue_id.clone())
         .collect();
+    pb.set_message("Checking Linear issue status…");
     let states = linear::states(&issue_ids, key.as_deref());
-    let url_key = std::env::var("LINEAR_WORKSPACE").ok();
+    let url_key = linear::workspace_url_key();
+    pb.finish_and_clear();
     Ok((rows, states, key.is_some(), url_key))
 }
 
@@ -164,15 +169,19 @@ fn pr_label(row: &Row) -> String {
     }
 }
 
+/// Branch is secondary — the issue id identifies the worktree — so cap it with
+/// an ellipsis, letting the PR/LINEAR/VERDICT columns survive a narrow terminal.
+const BRANCH_MAX: usize = 46;
+
 pub(crate) fn render(
     rows: &[Row],
     states: &HashMap<String, LinearState>,
     has_key: bool,
     url_key: Option<&str>,
 ) -> usize {
-    println!("ISSUE WORKTREES");
+    println!("{}", ui::bold_cyan("ISSUE WORKTREES"));
     if rows.is_empty() {
-        println!("  (none)");
+        println!("  {}", ui::dim("(none)"));
         return 0;
     }
     let mut sorted: Vec<&Row> = rows.iter().collect();
@@ -181,45 +190,64 @@ pub(crate) fn render(
     let mut finished = 0;
     for row in sorted {
         let linear = states.get(&row.issue_id);
-        let verdict = match reason_not_finished(row, linear, has_key, false) {
+        let verdict_disp = match reason_not_finished(row, linear, has_key, false) {
             None => {
                 finished += 1;
-                "FINISHED".to_string()
+                ui::bold_green("FINISHED")
             }
-            Some(r) => r,
+            // The only "ball in your court" reason is a dirty tree; flag it
+            // yellow, leave the rest (waiting on PR/Linear) dim.
+            Some(r) if r.contains("dirty") => ui::yellow(&r),
+            Some(r) => ui::dim(&r),
         };
-        let issue_disp = match url_key {
-            Some(k) if states.contains_key(&row.issue_id) => ui::link(
-                &row.issue_id,
-                &format!("https://linear.app/{k}/issue/{}", row.issue_id),
-            ),
-            _ => row.issue_id.clone(),
+        let issue_disp = {
+            let linked = match url_key {
+                Some(k) if states.contains_key(&row.issue_id) => ui::link(
+                    &row.issue_id,
+                    &format!("https://linear.app/{k}/issue/{}", row.issue_id),
+                ),
+                _ => row.issue_id.clone(),
+            };
+            if row.issue_id == "UNKNOWN" {
+                ui::dim(&linked)
+            } else {
+                ui::cyan(&linked)
+            }
         };
-        let pr_disp = match &row.pr_url {
-            Some(u) => ui::link(&pr_label(row), u),
-            None => pr_label(row),
+        let pr_disp = {
+            let label = pr_label(row);
+            let colored = match row.pr_state.as_str() {
+                "MERGED" => ui::green(&label),
+                "OPEN" => ui::yellow(&label),
+                "CLOSED" => ui::red(&label),
+                _ => ui::dim(&label), // NO_PR
+            };
+            match &row.pr_url {
+                Some(u) => ui::link(&colored, u),
+                None => colored,
+            }
         };
         let linear_disp = match linear {
-            None => {
-                if has_key {
-                    "unknown".to_string()
-                } else {
-                    "no key".to_string()
-                }
-            }
-            Some(st) => st.name.clone(),
+            None => ui::dim(if has_key { "unknown" } else { "no key" }),
+            Some(st) => match st.kind.as_str() {
+                "completed" => ui::green(&st.name),
+                "started" => ui::yellow(&st.name),
+                "canceled" => ui::red(&st.name),
+                _ => ui::dim(&st.name),
+            },
+        };
+        let tree_disp = if row.dirty {
+            ui::red("dirty")
+        } else {
+            ui::dim("clean")
         };
         t.add_row(vec![
             issue_disp,
-            row.branch.clone(),
-            if row.dirty {
-                "dirty".to_string()
-            } else {
-                "clean".to_string()
-            },
+            ui::dim(&ui::truncate(&row.branch, BRANCH_MAX)),
+            tree_disp,
             pr_disp,
             linear_disp,
-            verdict,
+            verdict_disp,
         ]);
     }
     println!("{t}");

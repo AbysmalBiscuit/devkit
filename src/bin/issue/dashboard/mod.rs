@@ -38,11 +38,13 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     use chrono::Utc;
     use std::collections::HashMap;
     let now: chrono::DateTime<Utc> = std::time::SystemTime::now().into();
-    let width = chart::term_width();
+    let width = devkit_common::ui::term_width();
 
     // --- Issues by status over time ---
     let use_cache = !args.no_cache;
+    let pb = crate::spin::spinner("Loading Linear issue history…");
     let issues = data::issues(use_cache);
+    pb.finish_and_clear();
     if issues.is_empty() {
         println!("\n(no Linear issues — set LINEAR_API_KEY for the issue timeline)");
     } else if let Some(first) = data::origin(&issues) {
@@ -134,6 +136,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     }
 
     // --- PRs opened/merged + commits over time ---
+    let pb = crate::spin::spinner("Loading PR and commit history…");
     let (opened, merged, add, del) = data::pr_timeline(args.all_roles, use_cache);
     let author = match args.author.clone() {
         Some(a) => a,
@@ -141,6 +144,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     };
     let monorepo = monorepo_dir(&args)?;
     let commits = data::commit_dates(&monorepo, &author);
+    pb.finish_and_clear();
 
     let mut stamps: Vec<chrono::DateTime<Utc>> = Vec::new();
     stamps.extend(opened.iter().copied());
