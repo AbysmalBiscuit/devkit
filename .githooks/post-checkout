@@ -1,0 +1,21 @@
+#!/bin/sh
+# Warn when the primary working tree is moved off main. Feature branches belong
+# in worktrees under ../devkit-worktrees/ (see AGENTS.md "Worktrees"); checking
+# one out in place moves HEAD under every session sharing the clone.
+#
+# Args: $1 prev_HEAD  $2 new_HEAD  $3 branch_flag (1 = branch checkout)
+[ "$3" = "1" ] || exit 0
+
+# Linked worktrees have a distinct git-dir; only guard the primary tree.
+[ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] || exit 0
+
+branch=$(git symbolic-ref --short -q HEAD)
+[ "$branch" = "main" ] && exit 0
+
+printf '\033[31m\n'
+printf 'WARNING: the primary clone is now on "%s", not main.\n' "$branch"
+printf 'Feature work belongs in a worktree:\n'
+printf '  git switch main\n'
+printf '  git worktree add ../devkit-worktrees/%s -b %s main\n' "$branch" "$branch"
+printf '\033[0m'
+exit 0
