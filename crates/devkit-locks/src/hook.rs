@@ -41,7 +41,9 @@ fn str_field<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 /// Classify a hook payload. `event` is the subcommand arg
 /// (`pretooluse` | `subagent-stop` | `session-end`).
 pub fn parse_event(event: &str, p: &Value) -> HookEvent {
-    let session = str_field(p, "session_id").unwrap_or("unknown");
+    let Some(session) = str_field(p, "session_id") else {
+        return HookEvent::Ignore;
+    };
     let agent = str_field(p, "agent_id");
     let holder = holder_from_fields(session, agent);
     match event {
@@ -191,6 +193,19 @@ mod tests {
             v["hookSpecificOutput"]["permissionDecisionReason"],
             "blocked by S/a1"
         );
+    }
+
+    #[test]
+    fn parse_event_ignores_missing_session_id() {
+        // Write payload with no session_id → Ignore (cannot establish a holder)
+        let p = json!({ "tool_name": "Edit", "tool_input": { "file_path": "/repo/x" } });
+        assert!(matches!(parse_event("pretooluse", &p), HookEvent::Ignore));
+        // Empty session_id is treated as absent
+        let p2 = json!({ "session_id": "", "tool_name": "Write", "tool_input": { "file_path": "/repo/x" } });
+        assert!(matches!(parse_event("pretooluse", &p2), HookEvent::Ignore));
+        // A release event without session_id is also ignored
+        let p3 = json!({ "agent_id": "a1" });
+        assert!(matches!(parse_event("subagent-stop", &p3), HookEvent::Ignore));
     }
 
     #[test]
