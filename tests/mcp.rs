@@ -326,6 +326,42 @@ fn devrun_down_releases_reserved_ports() {
     );
 }
 
+#[test]
+fn devrun_up_unknown_app_is_an_error() {
+    let proj = project_with_config();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[call_req(
+            1,
+            "devrun.up",
+            json!({ "root": root, "apps": ["ghost"] }),
+        )],
+    );
+    let payload = tool_json(&resps[0], true);
+    assert!(payload.as_str().unwrap().contains("ghost"));
+}
+
+#[test]
+fn devrun_up_requires_at_least_one_app() {
+    let proj = project_with_config();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[call_req(
+            1,
+            "devrun.up",
+            json!({ "root": root, "apps": [] }),
+        )],
+    );
+    let payload = tool_json(&resps[0], true);
+    assert!(payload.as_str().unwrap().contains("at least one app"));
+}
+
 /// The MCP lifecycle a host drives on connect: `initialize` →
 /// `notifications/initialized` → `tools/list`. The notification carries no `id`
 /// and must draw no response; `initialize` must echo the protocol version and

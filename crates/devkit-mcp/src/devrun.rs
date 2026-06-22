@@ -1,7 +1,11 @@
+use std::collections::BTreeMap;
+use std::path::Path;
+
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 use serde_json::Value;
 
+use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
 use devkit_ports::run;
 
@@ -10,6 +14,12 @@ use crate::actions::Action;
 
 pub fn actions() -> Vec<Action> {
     vec![
+        Action {
+            name: "devrun.up",
+            summary: "Start dev servers for a worktree (non-blocking; poll devrun.status for readiness).",
+            schema: up_schema,
+            handler: up,
+        },
         Action {
             name: "devrun.status",
             summary: "Show tracked dev servers for a worktree (or all worktrees).",
@@ -29,6 +39,69 @@ pub fn actions() -> Vec<Action> {
             handler: logs,
         },
     ]
+}
+
+#[derive(Deserialize)]
+struct UpArgs {
+    root: String,
+    apps: Vec<String>,
+    #[serde(default)]
+    env: Option<BTreeMap<String, String>>,
+}
+
+fn up_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "root": { "type": "string", "description": "Absolute path to the worktree (holds devkit.toml; the ports holder)." },
+            "apps": { "type": "array", "items": { "type": "string" }, "description": "App names from the devkit.toml catalog." },
+            "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Per-launch env overrides (KEY=VALUE)." }
+        },
+        "required": ["root", "apps"],
+        "additionalProperties": false
+    })
+}
+
+fn up(_ctx: &ServerCtx, args: Value) -> Result<Value> {
+    let a: UpArgs = serde_json::from_value(args).context("invalid devrun.up arguments")?;
+    anyhow::ensure!(!a.apps.is_empty(), "devrun.up requires at least one app");
+
+    let loaded = load::load(None, Path::new(&a.root)).context("loading devkit.toml")?;
+    let catalog = &loaded.catalog;
+
+    let mut apps = a.apps.clone();
+    for app in &apps {
+        anyhow::ensure!(catalog.contains_key(app), "unknown app `{app}`");
+    }
+    run::ensure_provider(catalog, &mut apps);
+
+    let user = a.env.unwrap_or_default();
+    let reqs: Vec<(String, u16)> = apps
+        .iter()
+        .map(|x| (x.clone(), catalog[x].base_port))
+        .collect();
+    let ports: BTreeMap<String, u16> = registry::alloc(&a.root, &reqs, Role::Issue)?
+        .into_iter()
+        .collect();
+    let provider = catalog
+        .iter()
+        .find(|(_, ap)| ap.provides_url)
+        .map(|(n, _)| n.clone());
+    let plans = run::plan_group(
+        catalog,
+        &loaded.config.defaults.doppler_config,
+        &apps,
+        &ports,
+        provider.as_deref(),
+        Path::new(&a.root),
+        Role::Issue,
+        &user,
+    );
+    let statuses = run::launch(&plans, &a.root, Role::Issue, run::daemon_running(), false)?;
+    Ok(serde_json::json!({
+        "servers": serde_json::to_value(&statuses)?,
+        "hint": "poll devrun.status for readiness"
+    }))
 }
 
 #[derive(Deserialize)]
