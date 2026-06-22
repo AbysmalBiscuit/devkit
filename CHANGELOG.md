@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.4.0...v0.5.0) (2026-06-22)
+
+
+### Features
+
+* **devkitd:** add install-service and systemd autostart routing ([65859d5](https://github.com/AbysmalBiscuit/devkit/commit/65859d5071a14ae5ab15c65e9d606ec7030c1eab))
+* **devkitd:** add memory_max_mb config and cap resolution ([79bbb14](https://github.com/AbysmalBiscuit/devkit/commit/79bbb14bceb6f0ad49efb3a10aff68242318b1aa))
+* **devkitd:** cage supervised servers in cgroup leaves ([c96ff9b](https://github.com/AbysmalBiscuit/devkit/commit/c96ff9b0a8cc326d7f748175f5d47c751dddb835))
+* **sys:** add cgroup-v2 capability and leaf primitives ([cf9bd56](https://github.com/AbysmalBiscuit/devkit/commit/cf9bd56234bcc0655da3b25c350d90bb92eb470a))
+
+
+### Bug Fixes
+
+* **daemon:** surface systemctl start failure ([ff95ce0](https://github.com/AbysmalBiscuit/devkit/commit/ff95ce0d8aba89d3b3f258b156873d451e2727ef))
+* **devkitd:** make cgroup leaf names collision-free ([4c01e4d](https://github.com/AbysmalBiscuit/devkit/commit/4c01e4d1a75f2ebee9ab19b23b2bc53757dac6bb))
+* **sys:** check cgroup base is writable ([6cea82b](https://github.com/AbysmalBiscuit/devkit/commit/6cea82b9d1a16f05dd1f651b1a0413c569066846))
+* **sys:** delegate memory controller to leaf cgroups ([4f359e5](https://github.com/AbysmalBiscuit/devkit/commit/4f359e5ee08c1743ee38d68793928b9153f775bf))
+
 ## [0.4.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.3.0...v0.4.0) (2026-06-22)
 
 
