@@ -240,6 +240,77 @@ pub fn prune() -> Result<usize> {
     store::prune_with(&store::FlockStore::new(), now())
 }
 
+/// Resolve a write target (absolute, or cwd-relative) to (project_root, root-relative
+/// path). The root is the nearest `.git` ancestor of the file's directory, so the
+/// decision does not depend on where the hook process was spawned.
+fn write_ctx(path_in: &str) -> Result<(String, String)> {
+    let p = Path::new(path_in);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().context("getting current dir")?.join(p)
+    };
+    let start = abs.parent().unwrap_or(abs.as_path());
+    let root = find_root_from(start);
+    let rel = normalize_under_root(&abs, &root)?;
+    Ok((root.to_string_lossy().into_owned(), rel))
+}
+
+/// Enforced-write decision for `path_in` by an explicit `holder` (the hook derives
+/// the holder from the agent payload; identity is not resolved here). Free → acquire;
+/// self/ancestor → allow; otherwise deny.
+pub fn decide_write(
+    path_in: &str,
+    holder: &str,
+    note: Option<&str>,
+    ttl: u64,
+) -> Result<model::WriteDecision> {
+    let (root, path) = write_ctx(path_in)?;
+    let pid = ident::anchor_pid();
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = daemon_request(daemon::proto::Request::WriteDecide {
+        root: root.clone(),
+        holder: holder.to_string(),
+        path: path.clone(),
+        pid,
+        note: note.map(str::to_string),
+        ttl,
+    })? {
+        return match resp {
+            daemon::proto::Response::WriteDecided(d) => Ok(d),
+            daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    store::write_decide_with(
+        &store::FlockStore::new(),
+        &root,
+        holder,
+        &path,
+        pid,
+        note,
+        ttl,
+        now(),
+    )
+}
+
+/// Release every lock held by `holder_prefix` or its descendants in the cwd's repo.
+pub fn release_prefix(holder_prefix: &str) -> Result<Vec<String>> {
+    let root = find_root()?.to_string_lossy().into_owned();
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = daemon_request(daemon::proto::Request::ReleasePrefix {
+        root: root.clone(),
+        prefix: holder_prefix.to_string(),
+    })? {
+        return match resp {
+            daemon::proto::Response::Freed(v) => Ok(v),
+            daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    store::release_prefix_with(&store::FlockStore::new(), &root, holder_prefix)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,5 +365,17 @@ mod tests {
     #[test]
     fn normalize_rejects_outside_root() {
         assert!(normalize_under_root(Path::new("/elsewhere/x"), Path::new("/repo")).is_err());
+    }
+
+    #[test]
+    fn write_ctx_derives_root_and_relpath() {
+        let root = scratch("wctx");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let file = root.join("src/a.rs");
+        let (r, rel) = write_ctx(file.to_str().unwrap()).unwrap();
+        assert_eq!(PathBuf::from(&r), root);
+        assert_eq!(rel, "src/a.rs");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
