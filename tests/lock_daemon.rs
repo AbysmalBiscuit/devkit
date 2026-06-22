@@ -78,10 +78,7 @@ fn write_decide_and_release_prefix_through_daemon() {
         "expected Denied, got {denied:?}"
     );
 
-    let freed = h.lock_request(&Request::ReleasePrefix {
-        root: "/repo".into(),
-        prefix: "S".into(),
-    });
+    let freed = h.lock_request(&Request::ReleasePrefix { prefix: "S".into() });
     assert!(
         matches!(freed, Response::Freed(ref v) if v.len() == 1),
         "expected one freed, got {freed:?}"

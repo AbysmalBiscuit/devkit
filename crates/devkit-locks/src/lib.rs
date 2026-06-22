@@ -297,12 +297,11 @@ pub fn decide_write(
     )
 }
 
-/// Release every lock held by `holder_prefix` or its descendants in the cwd's repo.
+/// Release every lock held by `holder_prefix` or its descendants, across all roots.
+/// Holder ids are globally unique per session/sub-agent, so no root filter is needed.
 pub fn release_prefix(holder_prefix: &str) -> Result<Vec<String>> {
-    let root = find_root()?.to_string_lossy().into_owned();
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::ReleasePrefix {
-        root: root.clone(),
         prefix: holder_prefix.to_string(),
     })? {
         return match resp {
@@ -311,7 +310,7 @@ pub fn release_prefix(holder_prefix: &str) -> Result<Vec<String>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::release_prefix_with(&store::FlockStore::new(), &root, holder_prefix)
+    store::release_prefix_with(&store::FlockStore::new(), holder_prefix)
 }
 
 #[cfg(test)]

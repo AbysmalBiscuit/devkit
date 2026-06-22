@@ -149,9 +149,11 @@ pub fn write_decide_with(
     })
 }
 
-/// Hook release path: free every lock held by `prefix` or its descendants in `root`.
-pub fn release_prefix_with(s: &impl Store, root: &str, prefix: &str) -> Result<Vec<String>> {
-    s.commit(|d| Ok(d.release_prefix(root, prefix)))
+/// Hook release path: free every lock held by `prefix` or its descendants, across
+/// all roots. Holder ids are globally unique, so root-scoping the release leaks
+/// locks when the hook process cwd resolves to a different root.
+pub fn release_prefix_with(s: &impl Store, prefix: &str) -> Result<Vec<String>> {
+    s.commit(|d| Ok(d.release_prefix(prefix)))
 }
 
 /// Check (ungated read): conflicts that would block `holder`, with a best-effort
@@ -483,7 +485,7 @@ mod seam_tests {
         let s = FlockStore::at(&dir);
         write_decide_with(&s, "/repo", "S", "a", None, None, 1800, 1).unwrap();
         write_decide_with(&s, "/repo", "S/a1", "b", None, None, 1800, 1).unwrap();
-        let freed = release_prefix_with(&s, "/repo", "S").unwrap();
+        let freed = release_prefix_with(&s, "S").unwrap();
         assert_eq!(freed.len(), 2);
         assert!(s.snapshot().unwrap().locks.is_empty());
         let _ = std::fs::remove_dir_all(&dir);

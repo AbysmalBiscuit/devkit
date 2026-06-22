@@ -49,7 +49,6 @@ pub enum Request {
         ttl: u64,
     },
     ReleasePrefix {
-        root: String,
         prefix: String,
     },
 }

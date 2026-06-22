@@ -84,11 +84,9 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> Response {
             Ok(d) => Response::WriteDecided(d),
             Err(e) => Response::Err(format!("{e:#}")),
         },
-        Request::ReleasePrefix { root, prefix } => {
-            match store::release_prefix_with(&s, &root, &prefix) {
-                Ok(v) => Response::Freed(v),
-                Err(e) => Response::Err(format!("{e:#}")),
-            }
-        }
+        Request::ReleasePrefix { prefix } => match store::release_prefix_with(&s, &prefix) {
+            Ok(v) => Response::Freed(v),
+            Err(e) => Response::Err(format!("{e:#}")),
+        },
     }
 }

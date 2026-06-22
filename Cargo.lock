@@ -282,6 +282,7 @@ dependencies = [
  "interprocess",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

@@ -298,17 +298,21 @@ impl Data {
         WriteDecision::Acquired
     }
 
-    /// Release every lock in `root` whose holder is `prefix` or a descendant
-    /// (`prefix/…`). Used by SubagentStop (`session/agent`) and SessionEnd (`session`).
-    pub fn release_prefix(&mut self, root: &str, prefix: &str) -> Vec<String> {
-        let freed: Vec<String> = self
+    /// Release every lock whose holder is `prefix` or a descendant (`prefix/…`),
+    /// across all roots. Holder ids are globally unique per session/sub-agent, so
+    /// root-scoping the release is unnecessary and causes leaks when the hook
+    /// process cwd resolves to a different root than the edited file's repo root.
+    pub fn release_prefix(&mut self, prefix: &str) -> Vec<String> {
+        let matching: Vec<(String, String)> = self
             .locks
-            .values()
-            .filter(|e| e.root == root && is_ancestor_or_self(prefix, &e.holder))
-            .map(|e| e.path.clone())
+            .iter()
+            .filter(|(_, e)| is_ancestor_or_self(prefix, &e.holder))
+            .map(|(k, e)| (k.clone(), e.path.clone()))
             .collect();
-        for p in &freed {
-            self.locks.remove(&key_for(root, p));
+        let mut freed = Vec::with_capacity(matching.len());
+        for (key, path) in matching {
+            self.locks.remove(&key);
+            freed.push(path);
         }
         freed
     }
@@ -593,7 +597,7 @@ mod tests {
         d.decide_write("/repo", "a", "S", None, None, 1800, 1);
         d.decide_write("/repo", "b", "S/a1", None, None, 1800, 1);
         d.decide_write("/repo", "c", "T", None, None, 1800, 1);
-        let freed = d.release_prefix("/repo", "S");
+        let freed = d.release_prefix("S");
         assert_eq!(freed.len(), 2); // S and S/a1
         assert!(d.locks.contains_key(&key_for("/repo", "c"))); // T survives
     }
@@ -603,8 +607,19 @@ mod tests {
         let mut d = Data::default();
         d.decide_write("/repo", "a", "S", None, None, 1800, 1);
         d.decide_write("/repo", "b", "S/a1", None, None, 1800, 1);
-        let freed = d.release_prefix("/repo", "S/a1");
+        let freed = d.release_prefix("S/a1");
         assert_eq!(freed, vec!["b".to_string()]); // only the sub-agent's lock
         assert!(d.locks.contains_key(&key_for("/repo", "a")));
+    }
+
+    #[test]
+    fn release_prefix_frees_holder_across_roots() {
+        let mut d = Data::default();
+        d.decide_write("/repoA", "a", "S", None, None, 1800, 1);
+        d.decide_write("/repoB", "b", "S/a1", None, None, 1800, 1);
+        d.decide_write("/repoA", "c", "T", None, None, 1800, 1);
+        let freed = d.release_prefix("S"); // new root-agnostic signature
+        assert_eq!(freed.len(), 2); // S in /repoA and S/a1 in /repoB
+        assert!(d.locks.contains_key(&key_for("/repoA", "c"))); // T survives
     }
 }
