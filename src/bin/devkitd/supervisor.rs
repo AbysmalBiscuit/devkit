@@ -355,6 +355,12 @@ impl Supervisor {
     pub(crate) fn mem_limit(&self) -> u64 {
         self.mem_limit
     }
+
+    /// All currently tracked keys — used after the adopt loop to reconcile orphan
+    /// cgroup leaves against the set of live supervised servers.
+    pub(crate) fn adopted_keys(&self) -> Vec<Key> {
+        self.children.keys().cloned().collect()
+    }
 }
 
 #[cfg(test)]

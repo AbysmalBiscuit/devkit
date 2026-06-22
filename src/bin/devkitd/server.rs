@@ -123,7 +123,9 @@ fn supervise_app(
         return Response::Err("alloc returned no port".into());
     };
 
-    let pid = match supervise::spawn_detached(&argv, &cwd, &env, &logfile, None) {
+    let key = Key { holder: holder.clone(), app: app.clone(), role };
+    let leaf = crate::cgroup::leaf_for(daemon, &key);
+    let pid = match supervise::spawn_detached(&argv, &cwd, &env, &logfile, leaf.as_deref()) {
         Ok(pid) => pid,
         Err(e) => return Response::Err(format!("{e:#}")),
     };
@@ -143,7 +145,7 @@ fn supervise_app(
         .sup
         .lock()
         .unwrap()
-        .insert_owned(Key { holder, app, role }, pid, port, logfile, launch);
+        .insert_owned(key, pid, port, logfile, launch);
     let ready = supervise::wait_ready(port, Duration::from_secs(120));
     Response::Supervised(vec![(port, ready)])
 }
@@ -178,6 +180,9 @@ fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
         }
     }
     drop(sup);
+    for k in &keys {
+        crate::cgroup::remove_leaf(daemon, k);
+    }
     match registry::release_with(&daemon.port_store(), &holder, role) {
         Ok(freed) => Response::Freed(freed),
         Err(e) => Response::Err(format!("{e:#}")),

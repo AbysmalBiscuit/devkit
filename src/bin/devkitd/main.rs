@@ -19,14 +19,13 @@ use std::time::{Duration, Instant};
 
 // A few supervisor accessors back deferred features (memory-limit action, log serving)
 // and have no caller yet.
+mod cgroup;
 mod lock_server;
 mod server;
 #[allow(dead_code)]
 mod supervisor;
 
 /// Active hard-cap parameters for the spawn paths.
-// Task 4 consumes this field; allow dead_code until then.
-#[allow(dead_code)]
 pub(crate) struct CgroupCap {
     pub(crate) base: std::path::PathBuf,
     pub(crate) max_bytes: u64,
@@ -45,8 +44,6 @@ pub(crate) struct Daemon {
     pub(crate) locks: std::sync::Arc<std::sync::Mutex<devkit_locks::model::Data>>,
     /// Resolved hard-cap state: `Some` only when `memory_max_mb > 0` and cgroup-v2
     /// enforcement is available. Consulted by both spawn paths.
-    // Task 4 consumes this field; allow dead_code until then.
-    #[allow(dead_code)]
     pub(crate) cgroup_cap: Option<CgroupCap>,
 }
 
@@ -88,8 +85,10 @@ impl Daemon {
             ));
             return;
         };
-        match devkit_common::supervise::spawn_detached(&launch.argv, &launch.cwd, &launch.env, &log, None)
-        {
+        let leaf = crate::cgroup::leaf_for(self, key);
+        match devkit_common::supervise::spawn_detached(
+            &launch.argv, &launch.cwd, &launch.env, &log, leaf.as_deref(),
+        ) {
             Ok(pid) => {
                 let _ = registry::record_pid_with(
                     &self.port_store(),
@@ -248,6 +247,12 @@ fn main() -> Result<()> {
                 );
             }
         }
+    }
+
+    // Reconcile orphaned cgroup leaves from a previous daemon's unclean exit.
+    {
+        let live: Vec<supervisor::Key> = daemon.sup.lock().unwrap().adopted_keys();
+        cgroup::reconcile(&daemon, &live);
     }
 
     // Combined supervision thread: reaps exited children, restarts crashed ones,
@@ -470,6 +475,7 @@ fn restart(daemon: &Arc<Daemon>, key: &supervisor::Key) {
             "dropping {}/{} ({:?}) — no launch spec to respawn",
             key.holder, key.app, key.role
         ));
+        crate::cgroup::remove_leaf(daemon, key);
         return;
     }
     if !sup.may_restart(&key.holder, &key.app, key.role) {
@@ -479,6 +485,7 @@ fn restart(daemon: &Arc<Daemon>, key: &supervisor::Key) {
             "giving up on {}/{} ({:?}) — crash-loop budget exhausted",
             key.holder, key.app, key.role
         ));
+        crate::cgroup::remove_leaf(daemon, key);
         return;
     }
     drop(sup);
@@ -489,7 +496,7 @@ fn restart(daemon: &Arc<Daemon>, key: &supervisor::Key) {
     daemon.respawn(key);
 }
 
-fn log_line(msg: &str) {
+pub(crate) fn log_line(msg: &str) {
     use std::io::Write;
     if let Ok(mut f) = OpenOptions::new()
         .create(true)
@@ -518,6 +525,27 @@ fn env_u32(k: &str, d: u32) -> u32 {
 /// soft limit — a misconfiguration where the soft restart never gets to act first.
 fn cap_below_soft_limit(max_mb: u64, limit_mb: u64) -> bool {
     max_mb > 0 && limit_mb > 0 && max_mb <= limit_mb
+}
+
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn tests_unique() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static C: AtomicU64 = AtomicU64::new(0);
+    (std::process::id() as u64) << 32 | C.fetch_add(1, Ordering::Relaxed)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn test_daemon_with_base(base: std::path::PathBuf, max_bytes: u64) -> Daemon {
+    Daemon {
+        last_activity: Mutex::new(Instant::now()),
+        active_conns: AtomicUsize::new(0),
+        shutdown: AtomicBool::new(false),
+        idle_timeout: Duration::from_secs(3600),
+        sup: Mutex::new(supervisor::Supervisor::new(5, Duration::from_secs(60), 0, 0)),
+        ports: std::sync::Arc::new(std::sync::Mutex::new(registry::Data::default())),
+        locks: std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::model::Data::default())),
+        cgroup_cap: Some(CgroupCap { base, max_bytes }),
+    }
 }
 
 #[cfg(test)]
