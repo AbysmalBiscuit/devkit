@@ -269,7 +269,11 @@ pub fn decide_write(
     ttl: u64,
 ) -> Result<model::WriteDecision> {
     let (root, path) = write_ctx(path_in)?;
-    let pid = ident::anchor_pid();
+    // The hook process is ephemeral; harness locks are reclaimed by lifecycle
+    // release (SubagentStop/SessionEnd) or the TTL backstop, never by pid
+    // liveness. Anchoring to a pid would cause locks to be treated as dead if
+    // the hook ever ran attached to a tty.
+    let pid: Option<u32> = None;
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::WriteDecide {
         root: root.clone(),

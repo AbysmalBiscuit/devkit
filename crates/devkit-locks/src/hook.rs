@@ -205,7 +205,10 @@ mod tests {
         assert!(matches!(parse_event("pretooluse", &p2), HookEvent::Ignore));
         // A release event without session_id is also ignored
         let p3 = json!({ "agent_id": "a1" });
-        assert!(matches!(parse_event("subagent-stop", &p3), HookEvent::Ignore));
+        assert!(matches!(
+            parse_event("subagent-stop", &p3),
+            HookEvent::Ignore
+        ));
     }
 
     #[test]
