@@ -234,11 +234,18 @@ mod tests {
     }
 }
 
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 
-/// True if something is bound to localhost:port (we could NOT bind it).
+/// True if something accepts a connection on localhost:port.
+///
+/// A one-shot TCP connect, not a bind probe: a server binds the wildcard
+/// address (`0.0.0.0`), and on macOS/Windows a fresh `bind(("127.0.0.1", port))`
+/// still succeeds against that, so a bind probe wrongly reports the port free.
+/// Connecting detects an accepting server identically on every platform.
 pub fn listening(port: u16) -> bool {
-    TcpListener::bind(("127.0.0.1", port)).is_err()
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
 }
 pub fn pid_alive(pid: u32) -> bool {
     devkit_common::sys::process_alive(pid)
@@ -252,9 +259,12 @@ mod liveness_tests {
     use super::*;
     #[test]
     fn detects_bound_port() {
-        let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        // Bind the wildcard address, as a real server does, and probe via
+        // loopback: a bind probe wrongly reports this free on macOS/Windows,
+        // so listening() must connect, not bind.
+        let l = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let port = l.local_addr().unwrap().port();
-        assert!(listening(port)); // l holds it
+        assert!(listening(port)); // l accepts on 127.0.0.1:port
         drop(l);
         assert!(!listening(port)); // freed
     }
