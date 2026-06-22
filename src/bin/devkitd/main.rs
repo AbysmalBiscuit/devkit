@@ -24,6 +24,14 @@ mod server;
 #[allow(dead_code)]
 mod supervisor;
 
+/// Active hard-cap parameters for the spawn paths.
+// Task 4 consumes this field; allow dead_code until then.
+#[allow(dead_code)]
+pub(crate) struct CgroupCap {
+    pub(crate) base: std::path::PathBuf,
+    pub(crate) max_bytes: u64,
+}
+
 /// Shared daemon state, accessed from the connection threads and the idle watcher.
 pub(crate) struct Daemon {
     pub(crate) last_activity: Mutex<Instant>,
@@ -35,6 +43,11 @@ pub(crate) struct Daemon {
     pub(crate) ports: std::sync::Arc<std::sync::Mutex<registry::Data>>,
     /// Authoritative lock registry, served from memory; the file is write-through.
     pub(crate) locks: std::sync::Arc<std::sync::Mutex<devkit_locks::model::Data>>,
+    /// Resolved hard-cap state: `Some` only when `memory_max_mb > 0` and cgroup-v2
+    /// enforcement is available. Consulted by both spawn paths.
+    // Task 4 consumes this field; allow dead_code until then.
+    #[allow(dead_code)]
+    pub(crate) cgroup_cap: Option<CgroupCap>,
 }
 
 impl Daemon {
@@ -173,6 +186,32 @@ fn main() -> Result<()> {
         ));
     }
 
+    let mem_max_mb = env_u64("DEVKIT_DAEMON_MEM_MAX_MB", 0);
+    let mem_limit_mb = mem_limit / 1024 / 1024;
+    if cap_below_soft_limit(mem_max_mb, mem_limit_mb) {
+        log_line(&format!(
+            "memory: hard cap ({mem_max_mb} MB) at or below soft limit ({mem_limit_mb} MB) — soft restart will never get to act first"
+        ));
+    }
+    let cgroup_cap = if mem_max_mb > 0 {
+        match devkit_common::sys::cgroup_caps() {
+            devkit_common::sys::CgroupCaps::Enforce { base } => Some(CgroupCap {
+                base,
+                max_bytes: mem_max_mb * 1024 * 1024,
+            }),
+            devkit_common::sys::CgroupCaps::Unavailable { reason } => {
+                log_line(&format!(
+                    "memory: hard cap requested ({mem_max_mb} MB) but cgroup-v2 enforcement unavailable: {reason} — using soft memory_action only"
+                ));
+                None
+            }
+            // Off-Linux memory_max_mb is meaningless; stay silent.
+            devkit_common::sys::CgroupCaps::Unsupported => None,
+        }
+    } else {
+        None
+    };
+
     let daemon = Arc::new(Daemon {
         last_activity: Mutex::new(Instant::now()),
         active_conns: AtomicUsize::new(0),
@@ -186,6 +225,7 @@ fn main() -> Result<()> {
         )),
         ports,
         locks,
+        cgroup_cap,
     });
 
     // Adopt servers a previous daemon left running: monitor by poll, not waitpid.
@@ -472,4 +512,27 @@ fn env_u32(k: &str, d: u32) -> u32 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(d)
+}
+
+/// Whether a hard cap and a soft limit are both set with the cap at or below the
+/// soft limit — a misconfiguration where the soft restart never gets to act first.
+fn cap_below_soft_limit(max_mb: u64, limit_mb: u64) -> bool {
+    max_mb > 0 && limit_mb > 0 && max_mb <= limit_mb
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cap_below_soft_limit;
+
+    #[test]
+    fn cap_below_soft_limit_predicate() {
+        // Both set and cap <= limit → true (misconfigured).
+        assert!(cap_below_soft_limit(4096, 4096));
+        assert!(cap_below_soft_limit(2048, 4096));
+        // Cap above limit → false (correct ordering).
+        assert!(!cap_below_soft_limit(8192, 4096));
+        // Either unset (0) → false (not a misconfiguration to warn about).
+        assert!(!cap_below_soft_limit(0, 4096));
+        assert!(!cap_below_soft_limit(4096, 0));
+    }
 }

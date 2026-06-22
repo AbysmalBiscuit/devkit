@@ -34,6 +34,13 @@ pub struct DaemonConfig {
     /// Consecutive supervision ticks at or over `memory_limit_mb` before the
     /// restart action fires (debounces transient allocation spikes).
     pub memory_limit_ticks: u32,
+    /// Hard kernel memory ceiling per supervised tree, in MB (0 = off,
+    /// Linux-only). Enforced via a cgroup-v2 leaf with memory.max; a breach
+    /// OOM-kills the tree and the crash path respawns it. Set above
+    /// memory_limit_mb so the soft poll-based action stays the graceful first
+    /// responder. Falls back to the soft action where cgroup-v2 delegation is
+    /// unavailable.
+    pub memory_max_mb: u64,
     /// Health-probe interval in seconds; 0 disables probing (no probe thread).
     pub health_probe_secs: u64,
     /// Consecutive post-arming probe failures before a server is judged hung.
@@ -51,6 +58,7 @@ impl Default for DaemonConfig {
             memory_limit_mb: 0,
             memory_action: "warn".to_string(),
             memory_limit_ticks: 3,
+            memory_max_mb: 0,
             health_probe_secs: 0,
             health_fail_threshold: 3,
         }
@@ -259,6 +267,7 @@ github = "exampleuser"
         assert_eq!(c.daemon.health_probe_secs, 0);
         assert_eq!(c.daemon.health_fail_threshold, 3);
         assert_eq!(c.daemon.memory_limit_ticks, 3);
+        assert_eq!(c.daemon.memory_max_mb, 0);
     }
     #[test]
     fn parses_explicit_daemon_block() {
