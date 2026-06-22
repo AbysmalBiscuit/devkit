@@ -31,10 +31,11 @@ Deferred follow-ups:
   daemon-aware resolved-context lock facade variants — owned by the "Authoritative
   in-memory mode for the lock registry" section above. Until then, run lock actions
   without a daemon, or wire that work first.
-- **`devrun` actions (phase 2 — in design).** The synchronous, library-backed
-  subset of `devrun` (`status`, `down`, log-query) added as new registry entries;
-  the tool shape does not change. `devrun up` stays out — it blocks ~120s on
-  readiness, so it is not a request/response fit. Being designed now.
+- **`devrun` actions (phase 2 — shipped).** `devrun.status`, `devrun.up`
+  (non-blocking kick-and-poll), `devrun.down`, and `devrun.logs` are registered
+  MCP actions over the new `devkit-ports::run` facade. `devrun up`'s blocking
+  readiness wait stays CLI-only; the MCP `up` returns `starting` and the agent
+  polls `devrun.status`.
 - **`issue` actions (deferred — needs library extraction first).** Unlike `devrun`
   (whose logic already lives in `devkit-ports`/`devkit-common` facades), `issue`'s
   command logic lives in the binary modules `src/bin/issue/{triage,prs,review,end}.rs`

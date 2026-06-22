@@ -86,6 +86,13 @@ session identity minted from `$DEVKIT_SESSION` (or a per-process id). For ports,
 `holder` defaults to `root` (the worktree path the registry uses to track liveness).
 Either can be overridden per call.
 
+Phase-2 `devrun` actions: `devrun.status` (tracked servers for a worktree, or
+`all`), `devrun.up` (start servers — **non-blocking**: returns each server
+`starting`; poll `devrun.status` for readiness), `devrun.down` (stop + release
+a worktree's servers), and `devrun.logs` (tail a tracked app's log). All take
+`root` (the worktree); `up` is `issue`-role only and starts servers under a
+running `devkitd` when present, else detached.
+
 Install with `cargo install --path .` (it builds alongside the other binaries),
 then register it with your agent. The repo ships project-scoped registration for
 three hosts, each pointing at the `devkit-mcp` command on your `PATH`:

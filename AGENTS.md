@@ -29,7 +29,7 @@ install together via `cargo install --path .`. Three library crates are members.
 | `crates/devkit-common` | shared lib: `paths`, `cmd` (git/gh wrappers), `worktree`, `ui` (tables/links), `linear`, `slack`, `supervise` |
 | `crates/devkit-ports` | lib: `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load`, `daemon` |
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
-| `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks` handlers) over the port + lock facades |
+| `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks`/`devrun` handlers) over the port + lock facades and the `devkit-ports::run` server-lifecycle facade |
 | `src/bin/portm.rs` | CLI over the port registry |
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
 | `src/bin/issue` | issue lifecycle: `setup`, `status`, `end`, `prs`, `dashboard`, `review` |
