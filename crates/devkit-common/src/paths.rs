@@ -117,6 +117,16 @@ fn home() -> PathBuf {
     panic!("HOME must be set");
 }
 
+/// The `systemd --user` unit path for the daemon: `~/.config/systemd/user/devkitd.service`.
+/// Honors `$XDG_CONFIG_HOME`, else `$HOME/.config`.
+pub fn systemd_user_unit() -> PathBuf {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(|| PathBuf::from(".config"));
+    config.join("systemd/user/devkitd.service")
+}
+
 /// The final path component (basename) of `path`, if any.
 pub fn leaf(path: &str) -> Option<&str> {
     std::path::Path::new(path)
@@ -169,6 +179,10 @@ mod tests {
         let n = PathBuf::from("/new/devkit");
         let l = PathBuf::from("/legacy/devkit");
         assert_eq!(pick_state_dir(n.clone(), l.clone(), false, false), n);
+    }
+    #[test]
+    fn systemd_user_unit_under_config() {
+        assert!(systemd_user_unit().ends_with("systemd/user/devkitd.service"));
     }
     #[test]
     fn migrate_moves_legacy_to_new() {

@@ -47,12 +47,24 @@ fn devkitd_bin() -> std::path::PathBuf {
     std::path::PathBuf::from("devkitd")
 }
 
+/// Whether autostart should launch the daemon via `systemctl --user start` rather
+/// than exec'ing the binary directly: true when the systemd user unit is present.
+fn use_systemd_unit() -> bool {
+    devkit_common::paths::systemd_user_unit().is_file()
+}
+
 /// Connect, autostarting a daemon if none is running (supervision paths only).
 pub fn ensure_running() -> Result<Client> {
     if let Some(c) = try_existing() {
         return Ok(c);
     }
-    daemon::spawn(&devkitd_bin())?;
+    if use_systemd_unit() {
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "start", "devkitd.service"])
+            .status();
+    } else {
+        daemon::spawn(&devkitd_bin())?;
+    }
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if let Some(c) = try_existing() {
@@ -70,5 +82,28 @@ mod tests {
     fn proto_match_decision() {
         assert!(handshake_ok(PROTO));
         assert!(!handshake_ok(PROTO + 1));
+    }
+
+    #[test]
+    fn routes_through_systemd_only_when_unit_present() {
+        // Use a unique temp dir so the test does not observe the developer's real
+        // ~/.config/systemd/user/devkitd.service — both branches are asserted.
+        let tmp = std::env::temp_dir()
+            .join(format!("devkit-routing-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Point XDG_CONFIG_HOME at the empty temp dir: no unit present → false.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &tmp) };
+        assert!(!super::use_systemd_unit(), "no unit yet — should be false");
+
+        // Write the unit file and assert the positive branch.
+        let unit = tmp.join("systemd/user/devkitd.service");
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        std::fs::write(&unit, "").unwrap();
+        assert!(super::use_systemd_unit(), "unit present — should be true");
+
+        // Restore env and clean up.
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

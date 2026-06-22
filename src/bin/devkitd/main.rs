@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 mod cgroup;
 mod lock_server;
 mod server;
+mod service;
 #[allow(dead_code)]
 mod supervisor;
 
@@ -111,6 +112,11 @@ impl Daemon {
 
 fn main() -> Result<()> {
     devkit_common::report::install_panic_hook("devkitd");
+    match std::env::args().nth(1).as_deref() {
+        Some("install-service") => return service::install(),
+        Some("uninstall-service") => return service::uninstall(),
+        _ => {}
+    }
     // Mark this process as the daemon so registry facade calls resolve locally
     // instead of connecting back to this same daemon over the socket.
     unsafe { std::env::set_var("DEVKITD_SELF", "1") };
