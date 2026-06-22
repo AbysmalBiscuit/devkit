@@ -10,6 +10,7 @@ serde_json.workspace = true
 devkit-common.workspace = true
 devkit-ports.workspace = true
 devkit-locks.workspace = true
+devkit-issue.workspace = true
 
 [features]
 daemon = ["devkit-ports/daemon", "devkit-locks/daemon"]

@@ -1,5 +1,6 @@
 mod actions;
 mod devrun;
+mod issue;
 mod jsonrpc;
 mod locks;
 mod ports;

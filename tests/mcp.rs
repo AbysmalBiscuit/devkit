@@ -42,6 +42,20 @@ fn project_with_config() -> PathBuf {
     p
 }
 
+/// A real (empty) git repo so `git worktree list` resolves with only the main
+/// worktree — `issue.status` then returns empty without needing `gh`.
+fn git_repo() -> PathBuf {
+    let p = scratch("repo");
+    let ok = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&p)
+        .status()
+        .expect("spawn git init")
+        .success();
+    assert!(ok, "git init failed");
+    p
+}
+
 /// Spawn the server, feed the requests as NDJSON, return parsed responses in order.
 fn mcp(project: &Path, state: &Path, requests: &[Value]) -> Vec<Value> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_devkit-mcp"))
@@ -360,6 +374,48 @@ fn devrun_up_requires_at_least_one_app() {
     );
     let payload = tool_json(&resps[0], true);
     assert!(payload.as_str().unwrap().contains("at least one app"));
+}
+
+#[test]
+fn issue_actions_are_described() {
+    let proj = project();
+    let state = scratch("state");
+    let resps = mcp(
+        &proj,
+        &state,
+        &[json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "devkit_describe", "arguments": {} }
+        })],
+    );
+    let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
+    let list: Value = serde_json::from_str(text).unwrap();
+    let names: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["action"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"issue.status"), "issue.status is described");
+    assert!(names.contains(&"issue.prs"), "issue.prs is described");
+}
+
+#[test]
+fn issue_status_empty_for_repo_with_no_worktrees() {
+    let proj = git_repo();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[call_req(1, "issue.status", json!({ "root": root }))],
+    );
+    let report = tool_json(&resps[0], false);
+    assert!(
+        report["worktrees"].as_array().unwrap().is_empty(),
+        "no non-main worktrees → empty list"
+    );
+    assert_eq!(report["finished_count"], 0);
 }
 
 /// The MCP lifecycle a host drives on connect: `initialize` →
