@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
-use devkit_locks::model::{Conflict, LockEntry};
+use devkit_locks::hook::{self, HookEvent};
+use devkit_locks::model::{Conflict, LockEntry, WriteDecision};
 
 #[derive(Parser)]
 #[command(
@@ -58,6 +59,10 @@ enum Cmd {
     Prune,
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
     Completions { shell: Shell },
+    /// Internal: evaluate a coding-agent hook payload (stdin JSON) and emit a
+    /// PreToolUse decision (stdout). Events: pretooluse | subagent-stop | session-end.
+    #[command(hide = true)]
+    Hook { event: String },
 }
 
 fn print_conflicts(conflicts: &[Conflict]) {
@@ -75,6 +80,71 @@ fn print_conflicts(conflicts: &[Conflict]) {
             "  {} held by {} ({}s ago){}",
             c.path, c.held_by, c.age_secs, note
         );
+    }
+}
+
+/// Map a write decision to the optional stdout envelope. `None` = allow silently.
+fn write_output(d: &WriteDecision) -> Option<serde_json::Value> {
+    match d {
+        WriteDecision::Acquired | WriteDecision::AllowedByOwnership => None,
+        WriteDecision::Denied(conflicts) => {
+            let who = conflicts
+                .iter()
+                .map(|c| format!("{} (held by {})", c.path, c.held_by))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(hook::deny_json(&format!(
+                "devkit write-harness: {who} — locked by another agent; \
+                 coordinate or wait for it to finish"
+            )))
+        }
+    }
+}
+
+fn run_hook(event: &str) {
+    use std::io::Read;
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_err() {
+        return; // can't read payload → allow
+    }
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&buf) else {
+        return; // malformed → allow
+    };
+
+    // Resolve the checkout root from the payload cwd (fallback: process cwd).
+    let root = payload
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .map(|p| devkit_locks::find_root_from(&p))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    if !hook::harness_enabled(&root) {
+        return; // opt-in absent → no enforcement
+    }
+
+    match hook::parse_event(event, &payload) {
+        HookEvent::Write { file_path, holder, .. } => {
+            match devkit_locks::decide_write(&file_path, &holder, Some("write-harness"), 1800) {
+                Ok(decision) => {
+                    if let Some(out) = write_output(&decision) {
+                        println!("{out}");
+                    }
+                }
+                Err(e) => {
+                    // fail closed: a registry error must not silently reopen the window
+                    let out = hook::deny_json(&format!(
+                        "devkit write-harness: registry error (fail-closed): {e:#}"
+                    ));
+                    println!("{out}");
+                }
+            }
+        }
+        HookEvent::ReleaseSubagent { holder } | HookEvent::ReleaseSession { holder } => {
+            let _ = devkit_locks::release_prefix(&holder);
+        }
+        HookEvent::Ignore => {}
     }
 }
 
@@ -167,6 +237,10 @@ fn main() -> Result<()> {
             clap_complete::generate(shell, &mut Cli::command(), "lockm", &mut std::io::stdout());
             Ok(())
         }
+        Cmd::Hook { event } => {
+            run_hook(&event);
+            Ok(())
+        }
     }
 }
 
@@ -211,4 +285,31 @@ fn status_table(locks: &[LockEntry], all: bool) -> String {
         t.add_row(row);
     }
     format!("{t}\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devkit_locks::model::{Conflict, WriteDecision};
+
+    #[test]
+    fn allowed_decisions_emit_nothing() {
+        assert_eq!(write_output(&WriteDecision::Acquired), None);
+        assert_eq!(write_output(&WriteDecision::AllowedByOwnership), None);
+    }
+
+    #[test]
+    fn denied_decision_emits_deny_with_holder() {
+        let d = WriteDecision::Denied(vec![Conflict {
+            path: "src/a.rs".into(),
+            held_by: "S/b2".into(),
+            age_secs: 5,
+            note: None,
+        }]);
+        let out = write_output(&d).expect("deny json");
+        assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
+        let reason = out["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert!(reason.contains("S/b2"), "reason names the holder: {reason}");
+        assert!(reason.contains("src/a.rs"), "reason names the path: {reason}");
+    }
 }
