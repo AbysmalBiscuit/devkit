@@ -269,6 +269,14 @@ signal, exactly as a hung one is.
 - `mem_over` resets on every decision, so a slow-dying child is not
   re-signalled every tick (it needs `limit_ticks` fresh breaches); a redundant
   SIGTERM on a gone pid is a harmless no-op.
+- The peek is **advisory across a window boundary.** `can_restart` may green-light
+  a SIGTERM that `restart` then declines, because the sliding window filled between
+  the peek and the reap (other restart activity in the same window). In that corner
+  case the crashed child is *dropped* rather than left alive — the "leave alive on
+  exhaustion" guarantee holds for the budget state at decision time, not across an
+  intervening fill. This never over-counts the budget (the record stays solely in
+  `restart`) nor leaves a restart unrecorded; it is intentional and matches crash
+  semantics for an exhausted child.
 - The action never keeps the daemon alive — idle-exit still gates on
   `any_live()`.
 
