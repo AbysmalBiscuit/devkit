@@ -43,6 +43,23 @@ struct Child {
     armed: bool,
     /// Consecutive failed probes since arming or the last success.
     probe_failures: u32,
+    /// Consecutive supervision ticks this child's tree-RSS has been at or over
+    /// `mem_limit`. Reset to 0 when it drops below the limit or when a memory
+    /// action is decided for it this tick.
+    mem_over: u32,
+    /// Whether the "budget exhausted, leaving over-limit server alive" warning
+    /// has already fired for the current breach episode. Re-armed (false) when
+    /// the child drops below the limit or is respawned.
+    mem_gave_up: bool,
+}
+
+/// One memory-limit decision for a supervised child this tick.
+#[derive(Debug, PartialEq)]
+pub(crate) enum MemAction {
+    /// Crash-loop budget remains: SIGTERM this pid; the reap tick respawns it.
+    Restart { key: Key, pid: u32, rss: u64 },
+    /// Budget exhausted: warn once and leave the over-limit server running.
+    GiveUp { key: Key, rss: u64 },
 }
 
 pub(crate) struct Supervisor {
@@ -88,6 +105,8 @@ impl Supervisor {
                 launch: Some(launch),
                 armed: false,
                 probe_failures: 0,
+                mem_over: 0,
+                mem_gave_up: false,
             },
         );
     }
@@ -105,6 +124,8 @@ impl Supervisor {
                 launch: None,
                 armed: false,
                 probe_failures: 0,
+                mem_over: 0,
+                mem_gave_up: false,
             },
         );
     }
@@ -140,6 +161,8 @@ impl Supervisor {
             c.watch = Watch::Owned;
             c.armed = false;
             c.probe_failures = 0;
+            c.mem_over = 0;
+            c.mem_gave_up = false;
         }
     }
 
@@ -268,6 +291,65 @@ impl Supervisor {
             }
         }
         breaches
+    }
+
+    /// Advance every owned, live child's consecutive-breach counter against
+    /// `mem_limit` and return the memory actions to take this tick. Each child's
+    /// tree-RSS is read once. A child below `mem_limit` (or any child when
+    /// `mem_limit == 0`) has its counter and give-up flag cleared and yields no
+    /// action. A child at or over the limit for `limit_ticks` consecutive ticks
+    /// yields exactly one action: `Restart` when `can_restart` allows, else
+    /// `GiveUp` the first time per episode (suppressed by `mem_gave_up`
+    /// afterwards). The counter resets on any decision, so it re-checks roughly
+    /// every `limit_ticks` ticks while still over the limit — picking the server
+    /// back up once the crash-loop window cools down. Owned children only:
+    /// adopted survivors and pid-less reservations have no launch spec to
+    /// respawn from and are skipped, like `probe_targets`.
+    pub(crate) fn mem_limit_actions(&mut self, limit_ticks: u32) -> Vec<MemAction> {
+        if self.mem_limit == 0 {
+            return Vec::new();
+        }
+        // Pass 1: one RSS read per eligible child; advance or reset its breach
+        // counter; collect the keys (with their RSS) that have been over long
+        // enough to act on.
+        let mut candidates: Vec<(Key, u64)> = Vec::new();
+        for (key, child) in self.children.iter_mut() {
+            if child.launch.is_none() || child.pid == 0 {
+                continue;
+            }
+            let rss = tree_rss_bytes(child.pid);
+            if rss >= self.mem_limit {
+                child.mem_over = child.mem_over.saturating_add(1);
+                if child.mem_over >= limit_ticks {
+                    candidates.push((key.clone(), rss));
+                }
+            } else {
+                child.mem_over = 0;
+                child.mem_gave_up = false;
+            }
+        }
+        // Pass 2: resolve each candidate against the budget (peek, no record)
+        // and build its action. `can_restart` needs `&mut self`, so this runs
+        // after pass 1's borrow ends.
+        let mut actions = Vec::new();
+        for (key, rss) in candidates {
+            let allowed = self.can_restart(&key.holder, &key.app, key.role);
+            let Some(child) = self.children.get_mut(&key) else {
+                continue;
+            };
+            child.mem_over = 0;
+            if allowed {
+                actions.push(MemAction::Restart {
+                    pid: child.pid,
+                    key,
+                    rss,
+                });
+            } else if !child.mem_gave_up {
+                child.mem_gave_up = true;
+                actions.push(MemAction::GiveUp { key, rss });
+            }
+        }
+        actions
     }
 
     pub(crate) fn mem_limit(&self) -> u64 {
@@ -467,5 +549,101 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         };
         assert!(reaped, "child should be reaped");
+    }
+
+    /// A supervisor whose mem_limit is 1 byte — every live child is "over".
+    fn sup_mem(max_restarts: u32) -> Supervisor {
+        Supervisor::new(max_restarts, Duration::from_secs(60), 0, 1)
+    }
+
+    /// Register an owned child whose pid is this test process, so `tree_rss_bytes`
+    /// returns a real, non-zero RSS that exceeds the 1-byte limit every tick.
+    fn live_self(s: &mut Supervisor, app: &str) {
+        live(s, app, std::process::id(), 9100);
+    }
+
+    #[test]
+    fn mem_no_action_below_threshold() {
+        let mut s = sup_mem(5);
+        live_self(&mut s, "api");
+        // limit_ticks = 3: first two over-limit ticks produce nothing.
+        assert!(s.mem_limit_actions(3).is_empty());
+        assert!(s.mem_limit_actions(3).is_empty());
+    }
+
+    #[test]
+    fn mem_restart_at_threshold_then_resets() {
+        let mut s = sup_mem(5);
+        live_self(&mut s, "api");
+        let pid = std::process::id();
+        assert!(s.mem_limit_actions(3).is_empty()); // tick 1
+        assert!(s.mem_limit_actions(3).is_empty()); // tick 2
+        let acts = s.mem_limit_actions(3); // tick 3 → restart
+        assert!(
+            matches!(acts.as_slice(), [MemAction::Restart { pid: p, .. }] if *p == pid),
+            "expected one Restart for our pid, got {acts:?}"
+        );
+        // Counter reset: it takes another `limit_ticks` ticks to fire again.
+        assert!(s.mem_limit_actions(3).is_empty());
+    }
+
+    #[test]
+    fn mem_gives_up_once_when_budget_exhausted() {
+        let mut s = sup_mem(1); // one restart allowed
+        live_self(&mut s, "api");
+        let k = key_for("api");
+        // Exhaust the budget directly.
+        assert!(s.may_restart("/w", "api", Role::Issue));
+        assert!(!s.may_restart("/w", "api", Role::Issue));
+        // Threshold reached → GiveUp exactly once (budget gone).
+        s.mem_limit_actions(2);
+        let acts = s.mem_limit_actions(2);
+        assert!(
+            matches!(acts.as_slice(), [MemAction::GiveUp { .. }]),
+            "expected one GiveUp, got {acts:?}"
+        );
+        // Suppressed afterwards (mem_gave_up) while still over the limit.
+        s.mem_limit_actions(2);
+        assert!(
+            s.mem_limit_actions(2).is_empty(),
+            "GiveUp must not repeat every breach"
+        );
+        // set_pid clears the give-up state on respawn (re-arms the warning); the
+        // self-pid fixture stays over the 1-byte limit, so this only confirms the
+        // reset path runs without panicking — the mem_over reset is asserted in
+        // `set_pid_resets_mem_counter`.
+        s.set_pid(&k, std::process::id());
+    }
+
+    #[test]
+    fn mem_actions_skip_adopted_and_empty_when_off() {
+        let mut s = sup_mem(5);
+        s.insert_adopted(key_for("legacy"), std::process::id(), 9200, PathBuf::new());
+        // Adopted survivor has no launch spec → never a candidate.
+        for _ in 0..5 {
+            assert!(s.mem_limit_actions(3).is_empty());
+        }
+        // mem_limit == 0 → always empty.
+        let mut off = Supervisor::new(5, Duration::from_secs(60), 0, 0);
+        off.insert_owned(
+            key_for("api"),
+            std::process::id(),
+            9100,
+            PathBuf::new(),
+            Launch { argv: vec!["true".into()], cwd: ".".into(), env: std::collections::BTreeMap::new() },
+        );
+        assert!(off.mem_limit_actions(3).is_empty());
+    }
+
+    #[test]
+    fn set_pid_resets_mem_counter() {
+        let mut s = sup_mem(5);
+        live_self(&mut s, "api");
+        let k = key_for("api");
+        s.mem_limit_actions(3); // tick 1
+        s.mem_limit_actions(3); // tick 2 (counter now 2)
+        s.set_pid(&k, std::process::id()); // respawn resets mem_over to 0
+        assert!(s.mem_limit_actions(3).is_empty()); // back to tick 1, not threshold
+        assert!(s.mem_limit_actions(3).is_empty()); // tick 2
     }
 }
