@@ -636,7 +636,11 @@ mod tests {
             std::process::id(),
             9100,
             PathBuf::new(),
-            Launch { argv: vec!["true".into()], cwd: ".".into(), env: std::collections::BTreeMap::new() },
+            Launch {
+                argv: vec!["true".into()],
+                cwd: ".".into(),
+                env: std::collections::BTreeMap::new(),
+            },
         );
         assert!(off.mem_limit_actions(3).is_empty());
     }

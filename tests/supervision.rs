@@ -387,7 +387,11 @@ while True:
         pid2.is_some(),
         "daemon did not restart the over-limit server within 15 s (pid1={pid1})"
     );
-    assert_ne!(pid2.unwrap(), pid1, "pid did not change after memory restart");
+    assert_ne!(
+        pid2.unwrap(),
+        pid1,
+        "pid did not change after memory restart"
+    );
 
     h.request(&Request::Down { holder, role: None });
     h.shutdown();
