@@ -167,6 +167,27 @@ impl Supervisor {
         }
     }
 
+    /// Whether a restart is currently allowed for the given child under the
+    /// crash-loop budget, WITHOUT recording one. Prunes timestamps outside the window
+    /// (an idempotent cleanup) but never pushes. An unknown key returns `false`, like
+    /// `may_restart`. The recording counterpart is `may_restart`, called from the reap
+    /// path; this peek lets the memory path decide whether to kill before `restart`
+    /// charges the budget, so a restart is counted exactly once.
+    pub(crate) fn can_restart(&mut self, holder: &str, app: &str, role: Role) -> bool {
+        let key = Key {
+            holder: holder.into(),
+            app: app.into(),
+            role,
+        };
+        let now = Instant::now();
+        let window = self.window;
+        let Some(entry) = self.children.get_mut(&key) else {
+            return false;
+        };
+        entry.restarts.retain(|t| now.duration_since(*t) < window);
+        (entry.restarts.len() as u32) < self.max_restarts
+    }
+
     /// Reap any exited `Owned` children and detect any dead `Adopted` ones. Returns
     /// the keys whose process is now gone. Every returned key is a crash: an intentional
     /// `Down` removes the key from the table before signalling its child, so a stopped
@@ -305,6 +326,28 @@ mod tests {
         assert!(s.may_restart("/w", "api", Role::Issue));
         assert!(s.may_restart("/w", "api", Role::Issue));
         assert!(s.may_restart("/w", "lab-os", Role::Issue)); // different child, own budget
+    }
+
+    #[test]
+    fn can_restart_peeks_without_consuming_budget() {
+        let mut s = sup(); // max_restarts = 2
+        live(&mut s, "api", 1, 9100);
+        // Peeking any number of times must not consume the budget.
+        assert!(s.can_restart("/w", "api", Role::Issue));
+        assert!(s.can_restart("/w", "api", Role::Issue));
+        assert!(s.can_restart("/w", "api", Role::Issue));
+        // Two real attempts still succeed; the third is blocked.
+        assert!(s.may_restart("/w", "api", Role::Issue));
+        assert!(s.may_restart("/w", "api", Role::Issue));
+        assert!(!s.may_restart("/w", "api", Role::Issue));
+        // Once exhausted, the peek reports false too.
+        assert!(!s.can_restart("/w", "api", Role::Issue));
+    }
+
+    #[test]
+    fn can_restart_unknown_key_is_false() {
+        let mut s = sup();
+        assert!(!s.can_restart("/w", "ghost", Role::Issue));
     }
 
     fn key_for(app: &str) -> Key {
