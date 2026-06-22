@@ -31,9 +31,19 @@ Deferred follow-ups:
   daemon-aware resolved-context lock facade variants — owned by the "Authoritative
   in-memory mode for the lock registry" section above. Until then, run lock actions
   without a daemon, or wire that work first.
-- **`devrun` + `issue` actions.** Phase 2 of the surface (process supervision, the
-  issue/PR lifecycle). Higher blast radius; add as new registry entries — the tool
-  shape does not change.
+- **`devrun` actions (phase 2 — in design).** The synchronous, library-backed
+  subset of `devrun` (`status`, `down`, log-query) added as new registry entries;
+  the tool shape does not change. `devrun up` stays out — it blocks ~120s on
+  readiness, so it is not a request/response fit. Being designed now.
+- **`issue` actions (deferred — needs library extraction first).** Unlike `devrun`
+  (whose logic already lives in `devkit-ports`/`devkit-common` facades), `issue`'s
+  command logic lives in the binary modules `src/bin/issue/{triage,prs,review,end}.rs`
+  with data-gathering and rendering interleaved. No `issue` operation can become an
+  MCP action until that logic is extracted into a library facade (the same pattern
+  ports/locks/devrun follow). Candidate synchronous actions once extracted:
+  `issue.status`, `issue.prs`, `issue.review`, and `issue.end` (with `--yes`, which is
+  destructive). `issue setup` (long-running) and `issue dashboard` (slow, rendering-
+  heavy) are not request/response fits. Scope this as its own spec/plan cycle.
 - **Live MCP registration for Codex and Cursor (manual verification pending).**
   Registration configs ship for all three hosts (`.mcp.json`, `.cursor/mcp.json`,
   `.codex/config.toml`), each pointing at `devkit-mcp`. Claude Code is confirmed
