@@ -51,13 +51,12 @@ terminal.
 
 ## `memory_action = "restart"`
 
-**Status:** deferred — daemon v1 supports `memory_action = "warn"` only (spec §6a).
-**Want:** when a supervised server's tree-RSS crosses `memory_limit_mb`,
-gracefully SIGTERM + respawn it to reclaim the leak, hands-off.
-**Constraints already specified:** a memory-triggered restart must count against
-the same crash-loop guard as a crash restart (`max_restarts` /
-`restart_window_secs`); a server that re-balloons immediately must not be
-restart-looped forever — exhaust the budget and fall back to warn.
+**Status:** RESOLVED 2026-06-22 — see
+`docs/superpowers/specs/2026-06-22-daemon-memory-action-restart-design.md`. A
+server whose tree-RSS stays over `memory_limit_mb` for `memory_limit_ticks`
+consecutive supervision ticks is SIGTERM'd and respawned through the crash path
+within the crash-loop budget; once the budget is exhausted the daemon warns and
+leaves the server alive (`memory_action = "restart"`, default off).
 
 ---
 

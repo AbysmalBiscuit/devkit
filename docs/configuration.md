@@ -51,6 +51,13 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 | `prep_env` | no | Env vars written into the per-app prep file during `issue setup`. |
 | `setup` | no | Commands run in the app's directory during `issue setup`, in order. Each entry is one argv array (program + args), e.g. `[["doppler", "run", "-c", "local_config", "--", "bun", "install"]]`. Use this for installs and any doppler wiring; nothing project-specific is hardcoded in the tool. |
 
+To enforce a hard per-app memory cap *without* the daemon restarting the server,
+set a runtime or OS limit through the app's `static_env` — e.g.
+`static_env = { NODE_OPTIONS = "--max-old-space-size=2048" }`, or wrap `launch`
+in a `ulimit -v` shell. The runtime/OS aborts the process on breach and the
+daemon's crash-restart recovers it; this keeps enforcement in the runtime rather
+than the daemon's `memory_action`.
+
 ### `[harness]`
 
 Per-checkout opt-in for the agent write-access harness. This table is read
