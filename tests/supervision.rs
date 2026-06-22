@@ -487,14 +487,10 @@ while True:
 fn test_cgroup_base() -> Option<std::path::PathBuf> {
     use std::fs;
     let candidates = [std::env::var_os("DEVKIT_TEST_CGROUP_ROOT").map(std::path::PathBuf::from)];
-    for base in candidates.into_iter().flatten() {
-        if fs::create_dir_all(base.join("servers")).is_ok()
+    candidates.into_iter().flatten().find(|base| {
+        fs::create_dir_all(base.join("servers")).is_ok()
             && fs::write(base.join("cgroup.subtree_control"), "+memory\n").is_ok()
-        {
-            return Some(base);
-        }
-    }
-    None
+    })
 }
 
 /// A `memory.max` breach OOM-kills the supervised leaf; the daemon reaps the

@@ -113,7 +113,7 @@ mod tests {
         std::fs::create_dir_all(servers.join(leaf_name(&live))).unwrap();
         std::fs::create_dir_all(servers.join(leaf_name(&orphan))).unwrap();
         let d = crate::test_daemon_with_base(base.clone(), 1 << 30);
-        reconcile(&d, &[live.clone()]);
+        reconcile(&d, std::slice::from_ref(&live));
         let left = devkit_common::sys::cgroup_list_leaves(&base);
         assert!(left.contains(&leaf_name(&live)), "live leaf kept");
         assert!(!left.contains(&leaf_name(&orphan)), "orphan leaf removed");
