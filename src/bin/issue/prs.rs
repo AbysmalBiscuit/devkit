@@ -148,16 +148,24 @@ pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> R
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
 
-    let pb = crate::spin::spinner("Resolving Linear workspace…");
-    let url_key = devkit_common::linear::workspace_url_key();
-    pb.set_message("Fetching PRs from GitHub…");
-    let report = devkit_issue::prs::gather(".", mine, reviews, repo.as_deref())?;
-    let repo_key = if no_cache {
-        None
-    } else {
-        Some(devkit_issue::prs::resolve_repo(repo.as_deref(), ".")?)
-    };
-    pb.finish_and_clear();
+    let steps = crate::spin::Steps::new();
+    let _b1 = steps.spinner("[1/2] Resolving Linear workspace…");
+    let _b2 = steps.spinner("[2/2] Fetching PRs from GitHub…");
+
+    let (url_key, report, repo_key) = std::thread::scope(|s| {
+        let linear_t = s.spawn(devkit_common::linear::workspace_url_key);
+        let github_t = s.spawn(|| -> Result<_> {
+            let resolved = devkit_issue::prs::resolve_repo(repo.as_deref(), ".")?;
+            let report = devkit_issue::prs::gather(".", mine, reviews, Some(&resolved))?;
+            let repo_key = if no_cache { None } else { Some(resolved) };
+            Ok((report, repo_key))
+        });
+        let url_key = linear_t.join().expect("linear thread panicked");
+        let (report, repo_key) = github_t.join().expect("github thread panicked")?;
+        Ok::<_, anyhow::Error>((url_key, report, repo_key))
+    })?;
+
+    steps.clear();
 
     let path = repo_key.as_ref().map(|r| cache_path(r));
     let mut cache: Snap = path.as_deref().map(load_cache).unwrap_or_default();
