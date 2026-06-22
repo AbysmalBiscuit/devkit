@@ -309,6 +309,175 @@ while True:
     h.shutdown();
 }
 
+/// A server whose tree-RSS balloons past `memory_limit_mb` is restarted: after
+/// `memory_limit_ticks` consecutive over-limit ticks the daemon SIGTERMs it and
+/// the reap path respawns it. The fixture balloons only on its first run
+/// (sentinel-guarded), so the respawn is small and the pid in ports.json changes
+/// exactly once.
+#[test]
+fn memory_restart_over_limit_server() {
+    // Act past 60 MB after 2 consecutive over-limit ticks; generous restart budget.
+    let mut h = Harness::start_with_memory(3600, 60, 2, 5);
+    let port = common::free_port();
+    let holder = h.home.to_str().unwrap().to_string();
+    let sentinel = h.home.join("ballooned-once");
+
+    // Bind + accept so wait_ready succeeds. First run (sentinel absent): touch
+    // ~120 MB resident, then keep serving (alive, over limit). Later runs: small.
+    let script = r#"
+import socket, os, sys, time
+port = int(sys.argv[1]); sentinel = sys.argv[2]
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port)); srv.listen(16); srv.settimeout(0.2)
+buf = None
+if not os.path.exists(sentinel):
+    open(sentinel, "w").close()
+    buf = bytearray(120 * 1024 * 1024)
+    for i in range(0, len(buf), 4096):
+        buf[i] = 1  # fault in each page so RSS (not just VSZ) grows
+while True:
+    try:
+        c, _ = srv.accept(); c.close()
+    except socket.timeout:
+        pass
+"#;
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Issue,
+        argv: vec![
+            "python3".into(),
+            "-c".into(),
+            script.into(),
+            port.to_string(),
+            sentinel.to_str().unwrap().to_string(),
+        ],
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.join("balloon.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "supervise did not become ready: {resp:?}"
+    );
+
+    let pid1 =
+        pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
+
+    // Poll up to 15 s for the pid to change (daemon restarted the over-limit server).
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut pid2: Option<u32> = None;
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        if let Some(p) = pid_in_ports_json(&h.ports_json(), "api")
+            && p != pid1
+        {
+            pid2 = Some(p);
+            break;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+
+    assert!(
+        pid2.is_some(),
+        "daemon did not restart the over-limit server within 15 s (pid1={pid1})"
+    );
+    assert_ne!(pid2.unwrap(), pid1, "pid did not change after memory restart");
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
+/// A server that re-balloons on every start is restarted only within the
+/// crash-loop budget; once exhausted the daemon leaves it alive (warns) rather
+/// than dropping it — unlike a health-probe give-up. With max_restarts = 1 the
+/// pid changes once, then the entry stays present.
+#[test]
+fn memory_restart_gives_up_within_budget() {
+    // Act past 60 MB after 2 over-limit ticks; allow only ONE restart.
+    let mut h = Harness::start_with_memory(3600, 60, 2, 1);
+    let port = common::free_port();
+    let holder = h.home.to_str().unwrap().to_string();
+
+    // Balloon on every run (no sentinel): each respawn re-breaches the limit.
+    let script = r#"
+import socket, os, sys, time
+port = int(sys.argv[1])
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port)); srv.listen(16); srv.settimeout(0.2)
+buf = bytearray(120 * 1024 * 1024)
+for i in range(0, len(buf), 4096):
+    buf[i] = 1
+while True:
+    try:
+        c, _ = srv.accept(); c.close()
+    except socket.timeout:
+        pass
+"#;
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Issue,
+        argv: vec![
+            "python3".into(),
+            "-c".into(),
+            script.into(),
+            port.to_string(),
+        ],
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.join("balloon-loop.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "supervise did not become ready: {resp:?}"
+    );
+
+    let pid1 =
+        pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
+
+    // One restart is allowed: wait for the pid to change once.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut pid2: Option<u32> = None;
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        if let Some(p) = pid_in_ports_json(&h.ports_json(), "api")
+            && p != pid1
+        {
+            pid2 = Some(p);
+            break;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+    assert!(
+        pid2.is_some(),
+        "daemon did not perform the one allowed restart (pid1={pid1})"
+    );
+
+    // After the budget is exhausted the server must stay ALIVE (left running),
+    // not dropped. Give it several seconds of further over-limit ticks, then
+    // confirm the entry is still present.
+    std::thread::sleep(Duration::from_secs(3));
+    let json = h.ports_json();
+    assert!(
+        json.contains("\"api\""),
+        "over-limit server was dropped after budget exhaustion — it should be left alive: {json}"
+    );
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
 /// After a clean `Down`, the supervision thread must NOT restart the server —
 /// `Down` removes the key from the supervisor table before stopping the child,
 /// so the exit is never reaped as a crash.

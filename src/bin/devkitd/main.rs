@@ -161,6 +161,17 @@ fn main() -> Result<()> {
     let mem_limit = env_u64("DEVKIT_DAEMON_MEM_LIMIT_MB", 0) * 1024 * 1024;
     let health_probe = Duration::from_secs(env_u64("DEVKIT_DAEMON_HEALTH_PROBE_SECS", 0));
     let health_fail_threshold = env_u32("DEVKIT_DAEMON_HEALTH_FAIL_THRESHOLD", 3);
+    let memory_action =
+        std::env::var("DEVKIT_DAEMON_MEMORY_ACTION").unwrap_or_else(|_| "warn".to_string());
+    let mem_restart = memory_action == "restart";
+    let mem_limit_ticks = env_u32("DEVKIT_DAEMON_MEM_LIMIT_TICKS", 3);
+    if mem_restart && mem_limit > 0 && mem_warn > 0 && mem_limit <= mem_warn {
+        log_line(&format!(
+            "memory: limit ({} MB) is at or below warn ({} MB) — warn threshold is redundant",
+            mem_limit / 1024 / 1024,
+            mem_warn / 1024 / 1024
+        ));
+    }
 
     let daemon = Arc::new(Daemon {
         last_activity: Mutex::new(Instant::now()),
@@ -235,6 +246,35 @@ fn main() -> Result<()> {
                         key.role,
                         rss / 1024 / 1024
                     ));
+                }
+                // Memory limit: when the action is "restart", SIGTERM a server
+                // that has been over the limit for `mem_limit_ticks` consecutive
+                // ticks (the reap tick respawns it within the crash-loop budget);
+                // once the budget is exhausted, warn and leave it running.
+                if mem_restart {
+                    for action in d.sup.lock().unwrap().mem_limit_actions(mem_limit_ticks) {
+                        match action {
+                            supervisor::MemAction::Restart { key, pid, rss } => {
+                                log_line(&format!(
+                                    "memory: {}/{} ({:?}) tree-RSS {} MB over limit — restarting",
+                                    key.holder,
+                                    key.app,
+                                    key.role,
+                                    rss / 1024 / 1024
+                                ));
+                                devkit_common::supervise::stop(pid);
+                            }
+                            supervisor::MemAction::GiveUp { key, rss } => {
+                                log_line(&format!(
+                                    "memory: {}/{} ({:?}) tree-RSS {} MB over limit but crash-loop budget exhausted — leaving alive",
+                                    key.holder,
+                                    key.app,
+                                    key.role,
+                                    rss / 1024 / 1024
+                                ));
+                            }
+                        }
+                    }
                 }
             }
         });

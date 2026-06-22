@@ -89,6 +89,18 @@ impl Harness {
         ])
     }
 
+    /// Start a daemon with memory_action=restart: act past `limit_mb` after
+    /// `ticks` consecutive over-limit supervision ticks, within `max_restarts`.
+    pub fn start_with_memory(idle_secs: u64, limit_mb: u64, ticks: u32, max_restarts: u32) -> Self {
+        Self::start_with_env(&[
+            ("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string()),
+            ("DEVKIT_DAEMON_MEMORY_ACTION", "restart".to_string()),
+            ("DEVKIT_DAEMON_MEM_LIMIT_MB", limit_mb.to_string()),
+            ("DEVKIT_DAEMON_MEM_LIMIT_TICKS", ticks.to_string()),
+            ("DEVKIT_DAEMON_MAX_RESTARTS", max_restarts.to_string()),
+        ])
+    }
+
     /// Spawn a daemon bound to a throwaway HOME, with `extra` env on top of the
     /// fixed test env, then wait for its socket.
     fn start_with_env(extra: &[(&str, String)]) -> Self {
