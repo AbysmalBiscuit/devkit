@@ -33,7 +33,6 @@ pub struct Steps {
 }
 
 impl Steps {
-    #[allow(dead_code)]
     pub fn new() -> Steps {
         let mp = if std::io::stderr().is_terminal() {
             MultiProgress::new()
@@ -44,7 +43,6 @@ impl Steps {
     }
 
     /// An indeterminate spinner bar for a single opaque/batched fetch.
-    #[allow(dead_code)]
     pub fn spinner(&self, msg: &str) -> ProgressBar {
         let pb = self.mp.add(ProgressBar::new_spinner());
         pb.set_style(
@@ -57,7 +55,6 @@ impl Steps {
     }
 
     /// A determinate fill bar for a loop over a known count (`len`).
-    #[allow(dead_code)]
     pub fn bar(&self, msg: &str, len: u64) -> ProgressBar {
         let pb = self.mp.add(ProgressBar::new(len));
         pb.set_style(
@@ -73,7 +70,6 @@ impl Steps {
     }
 
     /// Clear every bar in the group (call once all work is done).
-    #[allow(dead_code)]
     pub fn clear(&self) {
         let _ = self.mp.clear();
     }
