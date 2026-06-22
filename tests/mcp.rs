@@ -243,3 +243,51 @@ fn locks_acquire_on_held_path_returns_conflicts_not_error() {
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0]["held_by"], "alice");
 }
+
+/// The MCP lifecycle a host drives on connect: `initialize` →
+/// `notifications/initialized` → `tools/list`. The notification carries no `id`
+/// and must draw no response; `initialize` must echo the protocol version and
+/// server identity; `tools/list` must expose exactly the two meta tools.
+#[test]
+fn handshake_lifecycle_initialize_notification_tools_list() {
+    let proj = project();
+    let state = scratch("state");
+    let resps = mcp(
+        &proj,
+        &state,
+        &[
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": { "name": "test-client", "version": "0" }
+                }
+            }),
+            json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+        ],
+    );
+
+    // Three requests, but the notification (no `id`) draws no response.
+    assert_eq!(resps.len(), 2, "notification must not produce a response");
+
+    let init = &resps[0];
+    assert_eq!(init["id"], 1);
+    assert_eq!(init["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(init["result"]["serverInfo"]["name"], "devkit-mcp");
+    assert!(
+        init["result"]["capabilities"]["tools"].is_object(),
+        "advertises the tools capability"
+    );
+
+    let list = &resps[1];
+    assert_eq!(list["id"], 2);
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().expect("tool name"))
+        .collect();
+    assert_eq!(names, ["devkit_describe", "devkit_call"]);
+}
