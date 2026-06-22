@@ -482,6 +482,135 @@ while True:
     h.shutdown();
 }
 
+/// A writable cgroup-v2 leaf-capable base for this test, or None to skip.
+#[cfg(target_os = "linux")]
+fn test_cgroup_base() -> Option<std::path::PathBuf> {
+    use std::fs;
+    let candidates = [std::env::var_os("DEVKIT_TEST_CGROUP_ROOT").map(std::path::PathBuf::from)];
+    for base in candidates.into_iter().flatten() {
+        if fs::create_dir_all(base.join("servers")).is_ok()
+            && fs::write(base.join("cgroup.subtree_control"), "+memory\n").is_ok()
+        {
+            return Some(base);
+        }
+    }
+    None
+}
+
+/// A `memory.max` breach OOM-kills the supervised leaf; the daemon reaps the
+/// dead child as a crash and respawns it through the existing crash path. The
+/// pid in ports.json changes — kernel enforcement, not a soft poll restart.
+#[cfg(target_os = "linux")]
+#[test]
+fn cgroup_cap_oom_kills_and_respawns() {
+    let Some(base) = test_cgroup_base() else {
+        eprintln!(
+            "skipping cgroup_cap_oom_kills_and_respawns: no writable delegated cgroup-v2 base (set DEVKIT_TEST_CGROUP_ROOT)"
+        );
+        return;
+    };
+
+    let mut h = Harness::start_with_cgroup_cap(3600, base.to_str().unwrap(), 64);
+    let port = common::free_port();
+    let holder = h.home.to_str().unwrap().to_string();
+
+    // Bind the port so wait_ready succeeds, then balloon past the 64 MB cap.
+    // Imports trimmed to exactly what this fixture uses: socket, sys.
+    let script = r#"
+import socket, sys
+port = int(sys.argv[1])
+s = socket.socket(); s.bind(("127.0.0.1", port)); s.listen()
+blocks = []
+while True:
+    blocks.append(bytearray(16 * 1024 * 1024))
+"#;
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Issue,
+        argv: vec![
+            "python3".into(),
+            "-c".into(),
+            script.into(),
+            port.to_string(),
+        ],
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.join("cgroup-balloon.log"),
+        base_port: port,
+    });
+    assert!(
+        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "supervise did not become ready: {resp:?}"
+    );
+
+    let pid1 =
+        pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
+
+    // Poll up to 30 s for the pid to change: OOM-kill → crash → respawn.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut pid2: Option<u32> = None;
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        if let Some(p) = pid_in_ports_json(&h.ports_json(), "api")
+            && p != pid1
+        {
+            pid2 = Some(p);
+            break;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+
+    assert!(
+        pid2.is_some(),
+        "daemon did not respawn after OOM-kill within 30 s (pid1={pid1})"
+    );
+    assert_ne!(pid2.unwrap(), pid1, "pid did not change after OOM respawn");
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
+/// When `memory_max_mb > 0` but the cgroup base is non-writable / nonexistent,
+/// `cgroup_caps()` returns Unavailable. The daemon still supervises the server
+/// uncapped and does not fail the spawn.
+#[cfg(target_os = "linux")]
+#[test]
+fn cap_requested_without_delegation_falls_back() {
+    // Point the override at a nonexistent path so setup fails (Unavailable).
+    let mut h = Harness::start_with_cgroup_cap(3600, "/sys/fs/cgroup/nonexistent-devkit-test", 64);
+    let port = common::free_port();
+    let holder = h.home.to_str().unwrap().to_string();
+
+    let resp = h.request(&Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Issue,
+        argv: vec![
+            "python3".into(),
+            "-m".into(),
+            "http.server".into(),
+            port.to_string(),
+        ],
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.join("fallback.log"),
+        base_port: port,
+    });
+
+    // The spawn must succeed even though cgroup delegation is unavailable.
+    assert!(
+        matches!(&resp, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "expected ready=true even without cgroup delegation, got {resp:?}"
+    );
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
 /// After a clean `Down`, the supervision thread must NOT restart the server —
 /// `Down` removes the key from the supervisor table before stopping the child,
 /// so the exit is never reaped as a crash.

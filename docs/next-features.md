@@ -8,8 +8,8 @@ future implementation starts from the analysis rather than from scratch.
 
 ## Hard cgroup-v2 memory cap for supervised servers
 
-**Status:** delegated — depends on the supervisor daemon
-(`docs/superpowers/specs/2026-06-20-supervisor-daemon-design.md`).
+**Status:** RESOLVED 2026-06-22 — see
+`docs/superpowers/specs/2026-06-22-daemon-hard-cgroup-memory-cap-design.md`.
 **Want:** start each supervised dev server under a hard per-server memory ceiling
 so a runaway (Next/Turbopack ballooning to 8–20 GB) is contained instead of
 eating all RAM. Daemon v1 ships only the portable poll-based **track + warn**

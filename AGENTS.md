@@ -68,6 +68,19 @@ The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
   same key. The memory path *peeks* the budget (`can_restart`) before killing so
   the kill is skipped once exhausted (warn and leave alive), but the budget is
   recorded only in `restart()`, so a restart counts exactly once.
+- **A hard-cap breach is a crash, not a restart path.** `memory.max` +
+  `memory.oom.group=1` OOM-kills the supervised leaf; the reap → crash → respawn
+  path handles it within the crash-loop budget. No dedicated restart path exists
+  for the hard cap — the same rule already established for health-probe and the
+  soft memory restart.
+- **Cap setup is fail-open.** Any cgroup error (mkdir denied, `memory.max` write
+  fails, fd open fails) logs once and proceeds with an uncapped spawn; it never
+  blocks or kills a server. A broken cgroup configuration degrades to the soft
+  `memory_action` path.
+- **`memory_max_mb` sits above `memory_limit_mb`.** The soft poll-based action
+  (`memory_action = "restart"`) is the graceful first responder; the kernel cap
+  (`memory_max_mb`) is the backstop. Set `memory_max_mb` higher than
+  `memory_limit_mb` so the soft restart gets to act first.
 - **`prd` is rejected** as a `doppler_config` to avoid running against production secrets.
 
 ## Conventions

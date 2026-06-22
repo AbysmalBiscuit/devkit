@@ -56,7 +56,53 @@ set a runtime or OS limit through the app's `static_env` — e.g.
 `static_env = { NODE_OPTIONS = "--max-old-space-size=2048" }`, or wrap `launch`
 in a `ulimit -v` shell. The runtime/OS aborts the process on breach and the
 daemon's crash-restart recovers it; this keeps enforcement in the runtime rather
-than the daemon's `memory_action`.
+than the daemon's `memory_action`. On Linux with cgroup-v2 delegation the daemon
+also supports a first-class `memory_max_mb` kernel cap — see the `[daemon]`
+section below.
+
+### `[daemon]`
+
+Optional daemon-level tuning. Env overrides are listed alongside each key.
+
+#### Memory management
+
+Two layers of memory control are available; they compose without conflict:
+
+| Key | Env override | Default | Meaning |
+|---|---|---|---|
+| `memory_max_mb` | `DEVKIT_DAEMON_MEM_MAX_MB` | `0` (off) | Hard kernel ceiling per supervised server tree, in MB. Linux-only (cgroup-v2). See subsection below. |
+| `memory_limit_mb` | `DEVKIT_DAEMON_MEM_LIMIT_MB` | `0` (off) | Soft RSS threshold, in MB. When a server's tree-RSS stays over this for `memory_limit_ticks` consecutive supervision ticks, the daemon SIGTERMs it and respawns within the crash-loop budget. Requires `memory_action = "restart"`. |
+| `memory_action` | `DEVKIT_DAEMON_MEMORY_ACTION` | `""` (off) | Set to `"restart"` to enable the soft poll-based restart on `memory_limit_mb` breach. |
+| `memory_limit_ticks` | `DEVKIT_DAEMON_MEM_LIMIT_TICKS` | `2` | Consecutive over-`memory_limit_mb` supervision ticks before the soft restart fires. |
+
+#### `memory_max_mb` — hard cgroup-v2 kernel cap (Linux only)
+
+`memory_max_mb` sets a hard per-server memory ceiling enforced by the kernel via
+a cgroup-v2 `memory.max` leaf. A server whose resident set exceeds the cap is
+OOM-killed by the kernel; the daemon observes that as a crash and respawns it
+through the existing crash-restart path. It is **not** a new restart path —
+the same crash-loop budget applies.
+
+`memory_max_mb` sits **above** `memory_limit_mb`: the soft poll-based action
+(`memory_action = "restart"`) is the graceful first responder, acting at
+`memory_limit_mb`; the kernel cap at `memory_max_mb` is the backstop for spikes
+too fast for the 500 ms poll loop. Set `memory_max_mb` higher than
+`memory_limit_mb` (or omit `memory_limit_mb` entirely) to preserve this ordering.
+
+**Requires cgroup-v2 delegation.** The daemon must run inside a delegated
+cgroup-v2 subtree with the memory controller enabled. The recommended setup is
+`devkitd install-service`, which writes a `systemd --user` unit with
+`Delegate=yes` — no `sudo` required. Without delegation the daemon logs a
+one-time warning and falls back to the soft `memory_action` path; no server spawn
+ever fails because cgroup setup is unavailable (fail-open).
+
+Cap setup is **fail-open**: any cgroup error logs once and proceeds uncapped
+rather than blocking or killing a server. A broken cgroup configuration degrades
+to today's soft behavior.
+
+**macOS / Windows**: `memory_max_mb` is documented but has no effect. The daemon
+stays silent (no warning) — the soft `memory_action` path remains available on
+all platforms.
 
 ### `[harness]`
 

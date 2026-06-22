@@ -89,6 +89,17 @@ impl Harness {
         ])
     }
 
+    /// Start a daemon with a hard cgroup cap. `cgroup_root` is a pre-created,
+    /// writable cgroup-v2 base (the test owns it); `max_mb` is the per-tree
+    /// ceiling. Soft action stays off unless the caller also sets memory vars.
+    pub fn start_with_cgroup_cap(idle_secs: u64, cgroup_root: &str, max_mb: u64) -> Self {
+        Self::start_with_env(&[
+            ("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string()),
+            ("DEVKIT_DAEMON_MEM_MAX_MB", max_mb.to_string()),
+            ("DEVKIT_DAEMON_CGROUP_ROOT", cgroup_root.to_string()),
+        ])
+    }
+
     /// Start a daemon with memory_action=restart: act past `limit_mb` after
     /// `ticks` consecutive over-limit supervision ticks, within `max_restarts`.
     pub fn start_with_memory(idle_secs: u64, limit_mb: u64, ticks: u32, max_restarts: u32) -> Self {
