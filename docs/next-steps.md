@@ -36,15 +36,12 @@ Deferred follow-ups:
   MCP actions over the new `devkit-ports::run` facade. `devrun up`'s blocking
   readiness wait stays CLI-only; the MCP `up` returns `starting` and the agent
   polls `devrun.status`.
-- **`issue` actions (deferred — needs library extraction first).** Unlike `devrun`
-  (whose logic already lives in `devkit-ports`/`devkit-common` facades), `issue`'s
-  command logic lives in the binary modules `src/bin/issue/{triage,prs,review,end}.rs`
-  with data-gathering and rendering interleaved. No `issue` operation can become an
-  MCP action until that logic is extracted into a library facade (the same pattern
-  ports/locks/devrun follow). Candidate synchronous actions once extracted:
-  `issue.status`, `issue.prs`, `issue.review`, and `issue.end` (with `--yes`, which is
-  destructive). `issue setup` (long-running) and `issue dashboard` (slow, rendering-
-  heavy) are not request/response fits. Scope this as its own spec/plan cycle.
+- **`issue` read actions (phase 3 — shipped, read-only).** `issue.status` and
+  `issue.prs` are registered MCP actions over the new `devkit-issue` facade
+  (`status::gather`, `prs::gather`). The `issue` binary was refactored to consume
+  the facade. Still deferred: the mutating `issue.review` (push/PR/Slack) and
+  `issue.end` (worktree removal) actions, which need confirm-gating; and
+  `issue setup`/`issue dashboard`, which are not request/response fits.
 - **Live MCP registration for Codex and Cursor (manual verification pending).**
   Registration configs ship for all three hosts (`.mcp.json`, `.cursor/mcp.json`,
   `.codex/config.toml`), each pointing at `devkit-mcp`. Claude Code is confirmed

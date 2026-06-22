@@ -93,6 +93,13 @@ a worktree's servers), and `devrun.logs` (tail a tracked app's log). All take
 `root` (the worktree); `up` is `issue`-role only and starts servers under a
 running `devkitd` when present, else detached.
 
+The MCP server also exposes two read-only `issue` actions: `issue.status` lists
+the issue worktrees for a directory (`root`, default `.`; optional `ids` filter)
+with each one's PR state, Linear state, and a finished/not-finished verdict;
+`issue.prs` triages your GitHub PRs (`mine`, `reviews` — neither set means both;
+optional `repo`). Both return structured JSON with the verdicts and next-action
+labels pre-computed. They never mutate; `issue review`/`issue end` stay CLI-only.
+
 Install with `cargo install --path .` (it builds alongside the other binaries),
 then register it with your agent. The repo ships project-scoped registration for
 three hosts, each pointing at the `devkit-mcp` command on your `PATH`:
