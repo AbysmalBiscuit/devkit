@@ -88,7 +88,7 @@ impl Daemon {
             ));
             return;
         };
-        match devkit_common::supervise::spawn_detached(&launch.argv, &launch.cwd, &launch.env, &log)
+        match devkit_common::supervise::spawn_detached(&launch.argv, &launch.cwd, &launch.env, &log, None)
         {
             Ok(pid) => {
                 let _ = registry::record_pid_with(

@@ -123,7 +123,7 @@ fn supervise_app(
         return Response::Err("alloc returned no port".into());
     };
 
-    let pid = match supervise::spawn_detached(&argv, &cwd, &env, &logfile) {
+    let pid = match supervise::spawn_detached(&argv, &cwd, &env, &logfile, None) {
         Ok(pid) => pid,
         Err(e) => return Response::Err(format!("{e:#}")),
     };

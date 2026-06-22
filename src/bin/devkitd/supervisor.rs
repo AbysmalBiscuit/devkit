@@ -522,6 +522,7 @@ mod tests {
             ".",
             &std::collections::BTreeMap::new(),
             &std::env::temp_dir().join("portd-test.log"),
+            None,
         )
         .unwrap();
         s.insert_owned(

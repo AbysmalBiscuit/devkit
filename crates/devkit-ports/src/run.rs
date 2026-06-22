@@ -299,6 +299,7 @@ pub fn launch(
             p.cwd.to_str().context("app cwd not UTF-8")?,
             &p.env,
             &p.log,
+            None,
         )?;
         registry::record_pid(p.port, &p.app, holder, role, pid, p.log.clone())?;
         spawned.push((p.app.clone(), p.port, p.log.clone(), pid));

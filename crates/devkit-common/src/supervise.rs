@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -27,12 +27,14 @@ fn configure_child<'a>(
 }
 
 /// Spawn `argv` detached (own session), env-augmented, stdout+stderr → logfile.
-/// Returns the child pid.
+/// When `cgroup_leaf` is `Some`, the child joins that cgroup in `pre_exec` before
+/// `exec` (Linux only; a no-op elsewhere). Returns the child pid.
 pub fn spawn_detached(
     argv: &[String],
     cwd: &str,
     env: &BTreeMap<String, String>,
     logfile: &PathBuf,
+    cgroup_leaf: Option<&Path>,
 ) -> Result<u32> {
     fs::create_dir_all(logfile.parent().unwrap())?;
     let out = File::create(logfile)?;
@@ -44,6 +46,9 @@ pub fn spawn_detached(
         .stdout(out)
         .stderr(err);
     crate::sys::detach(&mut c);
+    if let Some(leaf) = cgroup_leaf {
+        crate::sys::join_cgroup(&mut c, leaf);
+    }
     let child = c.spawn().with_context(|| format!("spawning {prog}"))?;
     Ok(child.id())
 }
@@ -157,7 +162,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let env = BTreeMap::new();
-        let pid = spawn_detached(&argv, ".", &env, &tmp).unwrap();
+        let pid = spawn_detached(&argv, ".", &env, &tmp, None).unwrap();
         assert!(
             wait_ready(port, Duration::from_secs(10)),
             "server never came up"
