@@ -1,13 +1,21 @@
 {
   "name": "devkit",
   "displayName": "devkit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle",
-  "author": { "name": "Lev Velykoivanenko" },
+  "author": {
+    "name": "Lev Velykoivanenko"
+  },
   "homepage": "https://github.com/AbysmalBiscuit/devkit",
   "repository": "https://github.com/AbysmalBiscuit/devkit",
   "license": "GPL-3.0-or-later",
-  "keywords": ["devkit", "file-locks", "ports", "dev-servers", "worktrees"],
+  "keywords": [
+    "devkit",
+    "file-locks",
+    "ports",
+    "dev-servers",
+    "worktrees"
+  ],
   "skills": "./skills/",
   "hooks": "./hooks/hooks-cursor.json"
 }
