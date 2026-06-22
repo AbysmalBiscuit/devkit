@@ -113,10 +113,70 @@ Add `--json` to `acquire`/`check`/`status` for machine-readable output. Run
 Each user-facing CLI has `--help` on every subcommand and a `completions <shell>`
 subcommand for shell completion.
 
+## Enforced mode (automatic write locks)
+
+When a checkout's `devkit.toml` sets:
+
+```toml
+[harness]
+enforce_writes = true
+```
+
+the devkit plugin installs a `PreToolUse` hook that enforces write locks
+automatically. **In an enforced checkout, agents do not call `lockm acquire` or
+`lockm release` themselves — the harness owns the protocol.**
+
+### How it works
+
+- **Auto-acquire on first write.** Before the first `Edit`, `MultiEdit`, `Write`,
+  or `NotebookEdit` that touches a file, the hook acquires a lock on that file on
+  behalf of the session. Subsequent writes to the same file by the same session
+  (or a sub-agent it delegates to) are allowed without re-acquiring.
+
+- **Holder identity.** Top-level session writes are held under the session id.
+  Sub-agent writes are held under `session_id/agent_id`. A parent session that
+  holds a file implicitly covers its sub-agents — a sub-agent whose parent already
+  owns a file can write it without contention.
+
+- **A blocked write returns a deny.** When another session holds a conflicting
+  lock, the hook denies the tool call and surfaces a message naming the holder:
+  ```
+  devkit write-harness: src/auth.rs (held by <holder>) — locked by another
+  agent; coordinate or wait for it to finish
+  ```
+  The agent should wait for the other session to finish, or work on a different
+  file.
+
+- **Automatic release.** Locks acquired by a sub-agent are released when that
+  sub-agent stops (`SubagentStop`). All locks held by a session are released when
+  the session ends (`SessionEnd`), regardless of how the session exits (normal,
+  Ctrl-C, or error). A TTL backstop (30 min by default) cleans up any locks that
+  survive a hard kill.
+
+- **`Bash` writes are not covered.** The harness intercepts only the structured
+  write tools listed above. Shell-level writes made via `Bash` are outside its
+  scope.
+
+- **Fail-open when the harness is off.** In any checkout without the
+  `enforce_writes = true` marker, the hook exits immediately without blocking any
+  writes. No locks are taken and there is no overhead.
+
+- **Fail-open when `lockm` is absent.** If the `lockm` binary is not on `PATH`,
+  the hook invocation fails silently and the write proceeds. Install `lockm` via
+  `cargo install --path .` to activate enforcement.
+
+- **Fail-closed on registry errors.** If `lockm` is present but the registry
+  returns an error (corruption, permission problem), the hook denies the write
+  rather than allowing it through silently.
+
+Manual `lockm acquire`/`release` calls remain the correct approach in checkouts
+that do not set `enforce_writes = true`. In an enforced checkout there is no need
+to call them — doing so is harmless but redundant.
+
 ## Common mistakes
 
 - **Editing a shared file without acquiring it** → you may clobber another agent's
-  in-flight work. Always `lockm acquire` first.
+  in-flight work. Always `lockm acquire` first (in non-enforced checkouts).
 - **`--force`-ing past a live holder** → defeats coordination. Wait or work
   elsewhere instead.
 - **Mismatched `--as`/`$DEVKIT_SESSION` between acquire and release** → you can't

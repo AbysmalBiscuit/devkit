@@ -51,6 +51,47 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 | `prep_env` | no | Env vars written into the per-app prep file during `issue setup`. |
 | `setup` | no | Commands run in the app's directory during `issue setup`, in order. Each entry is one argv array (program + args), e.g. `[["doppler", "run", "-c", "local_config", "--", "bun", "install"]]`. Use this for installs and any doppler wiring; nothing project-specific is hardcoded in the tool. |
 
+### `[harness]`
+
+Per-checkout opt-in for the agent write-access harness. This table is read
+from the checkout's own `devkit.toml`; it is not part of the personal config
+at `~/.config/devkit/config.toml`.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enforce_writes` | bool | `false` | When `true`, the devkit plugin's `PreToolUse` hook enforces write locks automatically. When absent or `false`, the hook exits immediately with no effect. |
+
+**What enforcement gates.** The hook intercepts `Edit`, `MultiEdit`, `Write`,
+and `NotebookEdit` — the structured write tools. Shell-level writes made via
+`Bash` are outside the harness's scope (a documented gap; coordinate those
+manually with `lockm acquire`).
+
+**Activation requires `lockm` on `PATH`.** The hooks invoke bare `lockm hook
+<event>`. Install via `cargo install --path .`; the binary must be resolvable
+from the shell that runs hook commands.
+
+**Fail-open / fail-closed behaviour.**
+
+- *Harness off* (`enforce_writes` absent or `false`, or no `devkit.toml`
+  found): the hook exits 0 immediately. No locks are taken; zero overhead.
+- *`lockm` absent from `PATH`*: the hook invocation fails silently and the
+  write proceeds. This is fail-open to avoid blocking agents on machines that
+  do not have the binary installed.
+- *Registry error when the harness is on*: the hook denies the write rather
+  than allowing it through silently (fail-closed). The deny message includes
+  the error so the agent can report it.
+
+**Example** — to opt a checkout in, add to its `devkit.toml`:
+
+```toml
+[harness]
+enforce_writes = true
+```
+
+No other configuration is required. The remainder of the `devkit.toml` may be
+a full project config or an otherwise empty file — only the `[harness]` table
+is read by the hook.
+
 ### `[people.<alias>]`
 
 Teammate handle aliases used by `issue review` (`--to <alias>`). The alias maps
