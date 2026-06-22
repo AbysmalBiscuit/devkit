@@ -59,9 +59,18 @@ pub fn ensure_running() -> Result<Client> {
         return Ok(c);
     }
     if use_systemd_unit() {
-        let _ = std::process::Command::new("systemctl")
+        match std::process::Command::new("systemctl")
             .args(["--user", "start", "devkitd.service"])
-            .status();
+            .status()
+        {
+            Ok(s) if s.success() => {}
+            Ok(s) => eprintln!(
+                "devkitd: `systemctl --user start devkitd.service` exited with {s}"
+            ),
+            Err(e) => eprintln!(
+                "devkitd: failed to run `systemctl --user start devkitd.service`: {e}"
+            ),
+        }
     } else {
         daemon::spawn(&devkitd_bin())?;
     }
