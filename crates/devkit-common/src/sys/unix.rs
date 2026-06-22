@@ -143,27 +143,37 @@ pub(super) fn cgroup_caps() -> super::CgroupCaps {
         let base = std::path::PathBuf::from(root);
         return match prepare_base(&base) {
             Ok(()) => CgroupCaps::Enforce { base },
-            Err(e) => CgroupCaps::Unavailable { reason: format!("{e:#}") },
+            Err(e) => CgroupCaps::Unavailable {
+                reason: format!("{e:#}"),
+            },
         };
     }
     // cgroup-v2 unified hierarchy is mounted at /sys/fs/cgroup with a
     // cgroup.controllers file at the root.
     let mount = std::path::Path::new("/sys/fs/cgroup");
     if !mount.join("cgroup.controllers").is_file() {
-        return CgroupCaps::Unavailable { reason: "cgroup-v2 unified hierarchy not mounted".into() };
+        return CgroupCaps::Unavailable {
+            reason: "cgroup-v2 unified hierarchy not mounted".into(),
+        };
     }
     // Resolve this process's own cgroup: /proc/self/cgroup line "0::<rel>".
-    let rel = match fs::read_to_string("/proc/self/cgroup")
-        .ok()
-        .and_then(|s| s.lines().find_map(|l| l.strip_prefix("0::").map(str::to_string)))
-    {
+    let rel = match fs::read_to_string("/proc/self/cgroup").ok().and_then(|s| {
+        s.lines()
+            .find_map(|l| l.strip_prefix("0::").map(str::to_string))
+    }) {
         Some(r) => r,
-        None => return CgroupCaps::Unavailable { reason: "no cgroup-v2 entry in /proc/self/cgroup".into() },
+        None => {
+            return CgroupCaps::Unavailable {
+                reason: "no cgroup-v2 entry in /proc/self/cgroup".into(),
+            };
+        }
     };
     let base = mount.join(rel.trim_start_matches('/'));
     match prepare_base(&base) {
         Ok(()) => CgroupCaps::Enforce { base },
-        Err(e) => CgroupCaps::Unavailable { reason: format!("{e:#}") },
+        Err(e) => CgroupCaps::Unavailable {
+            reason: format!("{e:#}"),
+        },
     }
 }
 
@@ -176,16 +186,22 @@ fn prepare_base(base: &std::path::Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
     use std::os::unix::fs::PermissionsExt as _;
     // Writability probe: the base dir must be writable by this user (delegation).
-    let meta = fs::metadata(base)
-        .with_context(|| format!("cgroup base {} missing", base.display()))?;
+    let meta =
+        fs::metadata(base).with_context(|| format!("cgroup base {} missing", base.display()))?;
     if meta.permissions().mode() & 0o200 == 0 {
-        anyhow::bail!("cgroup base {} not writable by this process", base.display());
+        anyhow::bail!(
+            "cgroup base {} not writable by this process",
+            base.display()
+        );
     }
     let sup = base.join("supervisor");
     fs::create_dir_all(&sup).with_context(|| format!("creating {}", sup.display()))?;
     // Move self out of `base` before enabling controllers on it.
-    fs::write(sup.join("cgroup.procs"), format!("{}\n", std::process::id()))
-        .with_context(|| "moving daemon into supervisor leaf")?;
+    fs::write(
+        sup.join("cgroup.procs"),
+        format!("{}\n", std::process::id()),
+    )
+    .with_context(|| "moving daemon into supervisor leaf")?;
     fs::create_dir_all(base.join("servers")).with_context(|| "creating servers subtree")?;
     // Enable the memory controller for children. Ignore "already enabled".
     let _ = fs::write(base.join("cgroup.subtree_control"), "+memory\n");
@@ -196,6 +212,13 @@ fn prepare_base(base: &std::path::Path) -> anyhow::Result<()> {
     {
         anyhow::bail!("memory controller unavailable in {}", base.display());
     }
+    // Delegate the memory controller one level further: leaves live at
+    // `<base>/servers/<name>`, so `servers` must enable +memory in its own
+    // subtree_control or the grandchild leaves get no memory.max to cap.
+    let _ = fs::write(
+        base.join("servers").join("cgroup.subtree_control"),
+        "+memory\n",
+    );
     Ok(())
 }
 
