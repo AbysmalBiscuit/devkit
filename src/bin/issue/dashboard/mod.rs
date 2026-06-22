@@ -22,7 +22,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
 
     // At-a-glance: worktree triage, then my PRs + PRs awaiting my review.
-    let report = devkit_issue::status::gather(&start, &[])?;
+    let report = crate::status::gather_with_bars(&start, &[])?;
     triage::render(&report);
     println!();
     // The PR tables are a secondary panel; if gh is unavailable the rest of the
@@ -42,9 +42,12 @@ pub fn run(args: DashboardArgs) -> Result<()> {
 
     // --- Issues by status over time ---
     let use_cache = !args.no_cache;
-    let pb = crate::spin::spinner("Loading Linear issue history…");
-    let issues = data::issues(use_cache);
-    pb.finish_and_clear();
+    let steps = crate::spin::Steps::new();
+    let pb = steps.spinner("Loading Linear issue history…");
+    let issues = data::issues(use_cache, |n| {
+        pb.set_message(format!("Loading Linear issue history… {n} issues"));
+    });
+    steps.clear();
     if issues.is_empty() {
         println!("\n(no Linear issues — set LINEAR_API_KEY for the issue timeline)");
     } else if let Some(first) = data::origin(&issues) {
@@ -136,15 +139,22 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     }
 
     // --- PRs opened/merged + commits over time ---
-    let pb = crate::spin::spinner("Loading PR and commit history…");
-    let (opened, merged, add, del) = data::pr_timeline(args.all_roles, use_cache);
     let author = match args.author.clone() {
         Some(a) => a,
         None => capture_email(&start),
     };
     let monorepo = monorepo_dir(&args)?;
-    let commits = data::commit_dates(&monorepo, &author);
-    pb.finish_and_clear();
+    let steps = crate::spin::Steps::new();
+    let _b1 = steps.spinner("[1/2] Loading PR history…");
+    let _b2 = steps.spinner("[2/2] Loading commit history…");
+    let (opened, merged, add, del, commits) = std::thread::scope(|s| {
+        let pr_t = s.spawn(|| data::pr_timeline(args.all_roles, use_cache));
+        let commit_t = s.spawn(|| data::commit_dates(&monorepo, &author));
+        let (opened, merged, add, del) = pr_t.join().expect("pr timeline thread panicked");
+        let commits = commit_t.join().expect("commit thread panicked");
+        (opened, merged, add, del, commits)
+    });
+    steps.clear();
 
     let mut stamps: Vec<chrono::DateTime<Utc>> = Vec::new();
     stamps.extend(opened.iter().copied());

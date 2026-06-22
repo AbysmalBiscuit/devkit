@@ -13,14 +13,16 @@ const TTL_SECS: u64 = 900;
 
 /// Linear issues assigned to me, with history (empty if no key / on error).
 /// With `use_cache`, a fresh prior fetch is reused; failures are never cached.
-pub fn issues(use_cache: bool) -> Vec<AssignedIssue> {
+/// `on_page` is called after each page with the running total so the caller can
+/// update a progress indicator.
+pub fn issues(use_cache: bool, on_page: impl FnMut(usize)) -> Vec<AssignedIssue> {
     let Ok(key) = std::env::var("LINEAR_API_KEY") else {
         return Vec::new();
     };
     if use_cache && let Some(v) = cache::get::<Vec<AssignedIssue>>("issues", TTL_SECS) {
         return v;
     }
-    let v = match linear::assigned_issue_history(&key) {
+    let v = match linear::assigned_issue_history_with_progress(&key, on_page) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Linear history fetch failed: {e}");
