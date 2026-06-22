@@ -27,9 +27,13 @@ pub struct DaemonConfig {
     pub memory_warn_mb: u64,
     /// Take `memory_action` past this tree-RSS in MB (0 = off).
     pub memory_limit_mb: u64,
-    /// Action when tree-RSS crosses `memory_limit_mb`. Only "warn" (log a line) is
-    /// honored; other values currently fall back to warn behavior.
+    /// Action when tree-RSS crosses `memory_limit_mb`: "warn" (log a line) or
+    /// "restart" (SIGTERM and let the crash path respawn). Any other value falls
+    /// back to warn.
     pub memory_action: String,
+    /// Consecutive supervision ticks at or over `memory_limit_mb` before the
+    /// restart action fires (debounces transient allocation spikes).
+    pub memory_limit_ticks: u32,
     /// Health-probe interval in seconds; 0 disables probing (no probe thread).
     pub health_probe_secs: u64,
     /// Consecutive post-arming probe failures before a server is judged hung.
@@ -46,6 +50,7 @@ impl Default for DaemonConfig {
             memory_warn_mb: 0,
             memory_limit_mb: 0,
             memory_action: "warn".to_string(),
+            memory_limit_ticks: 3,
             health_probe_secs: 0,
             health_fail_threshold: 3,
         }
@@ -253,6 +258,7 @@ github = "exampleuser"
         assert_eq!(c.daemon.memory_action, "warn");
         assert_eq!(c.daemon.health_probe_secs, 0);
         assert_eq!(c.daemon.health_fail_threshold, 3);
+        assert_eq!(c.daemon.memory_limit_ticks, 3);
     }
     #[test]
     fn parses_explicit_daemon_block() {
