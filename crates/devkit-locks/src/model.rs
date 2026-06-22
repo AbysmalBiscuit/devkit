@@ -64,12 +64,23 @@ pub struct Acquired {
     pub ttl_secs: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
     pub path: String,
     pub held_by: String,
     pub age_secs: u64,
     pub note: Option<String>,
+}
+
+/// Outcome of evaluating a single write against the registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WriteDecision {
+    /// File was free; a fresh lock was taken for the writer.
+    Acquired,
+    /// Writer already owns the file (self or an ancestor holds an overlapping lock).
+    AllowedByOwnership,
+    /// Blocked: live overlapping locks held by non-ancestors.
+    Denied(Vec<Conflict>),
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -212,6 +223,87 @@ impl Data {
             .locks
             .values()
             .filter(|e| e.root == root && e.holder == holder)
+            .map(|e| e.path.clone())
+            .collect();
+        for p in &freed {
+            self.locks.remove(&key_for(root, p));
+        }
+        freed
+    }
+
+    /// Live overlapping locks for `path` in `root` whose holder is NOT an
+    /// ancestor-or-self of `writer` — the locks that block the write.
+    pub fn write_blockers(&self, root: &str, path: &str, writer: &str, now: u64) -> Vec<Conflict> {
+        let mut out = Vec::new();
+        for e in self.locks.values() {
+            if e.root == root
+                && !entry_dead(e, now)
+                && paths_overlap(&e.path, path)
+                && !is_ancestor_or_self(&e.holder, writer)
+            {
+                out.push(Conflict {
+                    path: path.to_string(),
+                    held_by: e.holder.clone(),
+                    age_secs: now.saturating_sub(e.ts),
+                    note: e.note.clone(),
+                });
+            }
+        }
+        out
+    }
+
+    /// Decide a write and, only when the file is free, take a lock for `writer`.
+    /// Mutates self solely in the `Acquired` case (insert) or to renew the writer's
+    /// own exact-path lock; an ancestor's lock is never overwritten.
+    #[allow(clippy::too_many_arguments)]
+    pub fn decide_write(
+        &mut self,
+        root: &str,
+        path: &str,
+        writer: &str,
+        pid: Option<u32>,
+        note: Option<&str>,
+        ttl: u64,
+        now: u64,
+    ) -> WriteDecision {
+        let blockers = self.write_blockers(root, path, writer, now);
+        if !blockers.is_empty() {
+            return WriteDecision::Denied(blockers);
+        }
+        let overlaps = self.locks.values().any(|e| {
+            e.root == root && !entry_dead(e, now) && paths_overlap(&e.path, path)
+        });
+        if overlaps {
+            // Held only by self or an ancestor. Renew the writer's own exact lock if present.
+            if let Some(e) = self.locks.get_mut(&key_for(root, path)) {
+                if e.holder == writer {
+                    e.ts = now;
+                }
+            }
+            return WriteDecision::AllowedByOwnership;
+        }
+        self.locks.insert(
+            key_for(root, path),
+            LockEntry {
+                path: path.to_string(),
+                root: root.to_string(),
+                holder: writer.to_string(),
+                pid,
+                note: note.map(str::to_string),
+                ts: now,
+                ttl,
+            },
+        );
+        WriteDecision::Acquired
+    }
+
+    /// Release every lock in `root` whose holder is `prefix` or a descendant
+    /// (`prefix/…`). Used by SubagentStop (`session/agent`) and SessionEnd (`session`).
+    pub fn release_prefix(&mut self, root: &str, prefix: &str) -> Vec<String> {
+        let freed: Vec<String> = self
+            .locks
+            .values()
+            .filter(|e| e.root == root && is_ancestor_or_self(prefix, &e.holder))
             .map(|e| e.path.clone())
             .collect();
         for p in &freed {
@@ -430,5 +522,80 @@ mod tests {
         assert!(!is_ancestor_or_self("S/a1", "S/b2"));     // siblings contend
         assert!(!is_ancestor_or_self("S", "Sx"));          // not a segment boundary
         assert!(!is_ancestor_or_self("S", "T"));           // unrelated sessions
+    }
+
+    #[test]
+    fn decide_write_free_acquires() {
+        let mut d = Data::default();
+        let r = d.decide_write("/repo", "src/a.rs", "S", None, Some("write-harness"), 1800, 100);
+        assert_eq!(r, WriteDecision::Acquired);
+        assert_eq!(d.locks[&key_for("/repo", "src/a.rs")].holder, "S");
+    }
+
+    #[test]
+    fn decide_write_self_is_allowed_and_renews() {
+        let mut d = Data::default();
+        d.decide_write("/repo", "src/a.rs", "S", None, None, 1800, 100);
+        let r = d.decide_write("/repo", "src/a.rs", "S", None, None, 1800, 250);
+        assert_eq!(r, WriteDecision::AllowedByOwnership);
+        assert_eq!(d.locks.len(), 1);
+        assert_eq!(d.locks[&key_for("/repo", "src/a.rs")].ts, 250); // renewed
+    }
+
+    #[test]
+    fn decide_write_ancestor_allowed_without_clobber() {
+        let mut d = Data::default();
+        // parent S holds the directory; child S/a1 writes a file under it
+        d.decide_write("/repo", "src", "S", None, None, 1800, 100);
+        let r = d.decide_write("/repo", "src/a.rs", "S/a1", None, None, 1800, 120);
+        assert_eq!(r, WriteDecision::AllowedByOwnership);
+        // the parent's lock is untouched; no new row inserted for the child
+        assert_eq!(d.locks.len(), 1);
+        assert_eq!(d.locks[&key_for("/repo", "src")].holder, "S");
+    }
+
+    #[test]
+    fn decide_write_sibling_denied() {
+        let mut d = Data::default();
+        d.decide_write("/repo", "src/a.rs", "S/a1", None, None, 1800, 100);
+        let r = d.decide_write("/repo", "src/a.rs", "S/b2", None, None, 1800, 140);
+        match r {
+            WriteDecision::Denied(c) => {
+                assert_eq!(c.len(), 1);
+                assert_eq!(c[0].held_by, "S/a1");
+                assert_eq!(c[0].age_secs, 40);
+            }
+            other => panic!("expected Denied, got {other:?}"),
+        }
+        assert_eq!(d.locks.len(), 1); // nothing acquired for the loser
+    }
+
+    #[test]
+    fn decide_write_other_session_denied() {
+        let mut d = Data::default();
+        d.decide_write("/repo", "src/a.rs", "S", None, None, 1800, 100);
+        let r = d.decide_write("/repo", "src/a.rs", "T", None, None, 1800, 110);
+        assert!(matches!(r, WriteDecision::Denied(_)));
+    }
+
+    #[test]
+    fn release_prefix_frees_session_subtree_only() {
+        let mut d = Data::default();
+        d.decide_write("/repo", "a", "S", None, None, 1800, 1);
+        d.decide_write("/repo", "b", "S/a1", None, None, 1800, 1);
+        d.decide_write("/repo", "c", "T", None, None, 1800, 1);
+        let freed = d.release_prefix("/repo", "S");
+        assert_eq!(freed.len(), 2);                 // S and S/a1
+        assert!(d.locks.contains_key(&key_for("/repo", "c"))); // T survives
+    }
+
+    #[test]
+    fn release_prefix_single_subagent() {
+        let mut d = Data::default();
+        d.decide_write("/repo", "a", "S", None, None, 1800, 1);
+        d.decide_write("/repo", "b", "S/a1", None, None, 1800, 1);
+        let freed = d.release_prefix("/repo", "S/a1");
+        assert_eq!(freed, vec!["b".to_string()]);   // only the sub-agent's lock
+        assert!(d.locks.contains_key(&key_for("/repo", "a")));
     }
 }
