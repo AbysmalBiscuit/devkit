@@ -280,6 +280,7 @@ dependencies = [
  "anyhow",
  "devkit-common",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
