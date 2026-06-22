@@ -608,11 +608,17 @@ mod tests {
             s.mem_limit_actions(2).is_empty(),
             "GiveUp must not repeat every breach"
         );
-        // set_pid clears the give-up state on respawn (re-arms the warning); the
-        // self-pid fixture stays over the 1-byte limit, so this only confirms the
-        // reset path runs without panicking — the mem_over reset is asserted in
-        // `set_pid_resets_mem_counter`.
+        // A respawn re-arms the warning: `set_pid` clears the give-up flag, so a
+        // fresh over-limit episode warns again rather than staying silent. The
+        // respawn does not refund the crash-loop budget, so the next threshold
+        // breach is still a `GiveUp` (not a `Restart`).
         s.set_pid(&k, std::process::id());
+        s.mem_limit_actions(2); // re-armed tick 1
+        let rearmed = s.mem_limit_actions(2); // tick 2 → GiveUp again
+        assert!(
+            matches!(rearmed.as_slice(), [MemAction::GiveUp { .. }]),
+            "set_pid must re-arm the give-up warning, got {rearmed:?}"
+        );
     }
 
     #[test]
