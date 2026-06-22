@@ -87,8 +87,16 @@ session identity minted from `$DEVKIT_SESSION` (or a per-process id). For ports,
 Either can be overridden per call.
 
 Install with `cargo install --path .` (it builds alongside the other binaries),
-then register it with your agent — the bundled plugin's `.mcp.json` points at the
-`devkit-mcp` command.
+then register it with your agent. The repo ships project-scoped registration for
+three hosts, each pointing at the `devkit-mcp` command on your `PATH`:
+
+- **Claude Code** — `.mcp.json` (also referenced by the bundled plugin manifest).
+- **Cursor** — `.cursor/mcp.json` (same `mcpServers` shape).
+- **Codex** — `.codex/config.toml` (`[mcp_servers.devkit]`; project MCP servers
+  load only in trusted projects).
+
+After installing, open the host in this repo and confirm `devkit_describe` and
+`devkit_call` appear (`/mcp` lists active servers in Claude Code and Codex).
 
 ## Configuration
 

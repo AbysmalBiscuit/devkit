@@ -90,9 +90,13 @@ Deferred follow-ups:
 - **`devrun` + `issue` actions.** Phase 2 of the surface (process supervision, the
   issue/PR lifecycle). Higher blast radius; add as new registry entries — the tool
   shape does not change.
-- **Live MCP registration for Codex and Cursor.** Only the Claude Code `.mcp.json`
-  is provided. Confirm the MCP-server registration field each host expects, install
-  the plugin in Codex and Cursor, and confirm `devkit_describe`/`devkit_call` appear.
+- **Live MCP registration for Codex and Cursor.** Registration configs now ship for
+  all three hosts (`.mcp.json`, `.cursor/mcp.json`, `.codex/config.toml`), each
+  pointing at `devkit-mcp`. Claude Code is confirmed live — it connects and both
+  tools are callable (`devkit_describe`/`devkit_call`). Still unconfirmed in a
+  running host: install in Codex and Cursor and confirm the two tools appear. The
+  server returns a fixed `protocolVersion` (`2024-11-05`, the MCP baseline); if a
+  host rejects it, do the negotiation follow-up below.
 - **`initialize` protocol-version negotiation.** The server returns a fixed
   `protocolVersion`; confirm it against the versions the target hosts send and
   negotiate if a host requires it.
