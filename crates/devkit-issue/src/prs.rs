@@ -3,68 +3,121 @@ use devkit_common::cmd::gh_json;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-// gh JSON shapes ----------------------------------------------------------------
+// GraphQL response shapes ---------------------------------------------------------
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct Check {
-    conclusion: Option<String>,
-    status: Option<String>,
-    state: Option<String>,
+#[derive(serde::Deserialize)]
+struct GqlResp {
+    data: GqlData,
 }
 
-#[derive(Deserialize)]
-struct Author {
+#[derive(serde::Deserialize)]
+struct GqlData {
+    viewer: Viewer,
+    mine: SearchNodes,
+    #[serde(rename = "reviewRequested")]
+    review_requested: SearchNodes,
+    #[serde(rename = "reviewedBy")]
+    reviewed_by: SearchNodes,
+}
+
+#[derive(serde::Deserialize)]
+struct Viewer {
     login: String,
 }
 
-#[derive(Deserialize)]
-struct Review {
-    author: Author,
-    #[serde(default)]
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct SearchNodes {
+    nodes: Vec<PrNode>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct ActorLogin {
+    login: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct ReviewNode {
+    author: ActorLogin,
     state: String,
-    #[serde(rename = "submittedAt", default)]
+    #[serde(rename = "submittedAt")]
     submitted_at: String,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(serde::Deserialize, Default)]
 #[serde(default)]
-struct ReviewRequest {
-    login: String,
+struct ReviewConn {
+    nodes: Vec<ReviewNode>,
 }
 
-#[derive(Deserialize)]
-struct MinePr {
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct ReqNode {
+    #[serde(rename = "requestedReviewer")]
+    requested_reviewer: Option<ActorLogin>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct ReqConn {
+    nodes: Vec<ReqNode>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct Rollup {
+    state: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct CommitInner {
+    #[serde(rename = "statusCheckRollup")]
+    status_check_rollup: Option<Rollup>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct CommitNode {
+    commit: CommitInner,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct CommitsConn {
+    nodes: Vec<CommitNode>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct PrNode {
     number: u64,
     url: String,
-    #[serde(rename = "headRefName", default)]
+    #[serde(rename = "headRefName")]
     head_ref_name: String,
-    #[serde(rename = "isDraft", default)]
+    #[serde(rename = "isDraft")]
     is_draft: bool,
-    #[serde(rename = "reviewDecision", default)]
+    #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
-    #[serde(default)]
     mergeable: String,
-    #[serde(rename = "statusCheckRollup", default)]
-    status_check_rollup: Vec<Check>,
-    #[serde(default)]
-    reviews: Vec<Review>,
+    author: ActorLogin,
+    commits: CommitsConn,
+    reviews: ReviewConn,
+    #[serde(rename = "reviewRequests")]
+    review_requests: ReqConn,
 }
 
-#[derive(Deserialize)]
-struct ReviewPr {
-    number: u64,
-    url: String,
-    author: Author,
-    #[serde(rename = "latestReviews", default)]
-    latest_reviews: Vec<Review>,
-    #[serde(rename = "reviewRequests", default)]
-    review_requests: Vec<ReviewRequest>,
-}
-
-#[derive(Deserialize)]
-struct Me {
-    login: String,
+impl PrNode {
+    /// The status-check rollup state of the last commit, if any.
+    fn rollup_state(&self) -> Option<&str> {
+        self.commits
+            .nodes
+            .first()
+            .and_then(|c| c.commit.status_check_rollup.as_ref())
+            .map(|r| r.state.as_str())
+    }
 }
 
 #[derive(Deserialize)]
@@ -77,6 +130,7 @@ struct RepoInfo {
 
 const BOTS: [&str; 3] = ["greptile-apps", "linear-code", "coderabbitai"];
 const FAIL: [&str; 4] = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"];
+#[allow(dead_code)]
 const RUNNING: [&str; 3] = ["IN_PROGRESS", "QUEUED", "PENDING"];
 
 fn is_bot(login: &str) -> bool {
@@ -90,34 +144,22 @@ fn issue_of(head: &str) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-fn checks_of(rollup: &[Check]) -> &'static str {
-    if rollup.is_empty() {
-        return "-";
+fn checks_text(rollup: Option<&str>) -> &'static str {
+    match rollup {
+        None => "-",
+        Some("SUCCESS") => "ok",
+        Some(s) if FAIL.contains(&s) => "fail",
+        Some(_) => "run",
     }
-    let fail = rollup.iter().any(|c| {
-        c.conclusion.as_deref().is_some_and(|x| FAIL.contains(&x))
-            || matches!(c.state.as_deref(), Some("FAILURE") | Some("ERROR"))
-    });
-    if fail {
-        return "fail";
-    }
-    let run = rollup.iter().any(|c| {
-        c.status.as_deref().is_some_and(|x| RUNNING.contains(&x))
-            || c.state.as_deref() == Some("PENDING")
-    });
-    if run {
-        return "run";
-    }
-    "ok"
 }
 
-fn review_text(pr: &MinePr) -> &'static str {
+fn review_text(pr: &PrNode) -> &'static str {
     match pr.review_decision.as_deref() {
         Some("CHANGES_REQUESTED") => "changes",
         Some("APPROVED") => "approved",
         Some("REVIEW_REQUIRED") => "awaiting",
         _ => {
-            if pr.reviews.is_empty() {
+            if pr.reviews.nodes.is_empty() {
                 "awaiting"
             } else {
                 "commented"
@@ -127,9 +169,10 @@ fn review_text(pr: &MinePr) -> &'static str {
 }
 
 /// True when my latest review is newer than the latest non-bot reviewer's.
-fn has_replied(pr: &MinePr, me: &str) -> bool {
+fn has_replied(pr: &PrNode, me: &str) -> bool {
     let mine = pr
         .reviews
+        .nodes
         .iter()
         .filter(|r| r.author.login == me)
         .map(|r| r.submitted_at.as_str())
@@ -137,6 +180,7 @@ fn has_replied(pr: &MinePr, me: &str) -> bool {
         .unwrap_or("");
     let theirs = pr
         .reviews
+        .nodes
         .iter()
         .filter(|r| r.author.login != me && !is_bot(&r.author.login))
         .map(|r| r.submitted_at.as_str())
@@ -145,7 +189,7 @@ fn has_replied(pr: &MinePr, me: &str) -> bool {
     !mine.is_empty() && mine > theirs
 }
 
-fn mine_action(pr: &MinePr, me: &str) -> String {
+fn mine_action(pr: &PrNode, me: &str) -> String {
     if pr.is_draft {
         return "draft".into();
     }
@@ -162,7 +206,7 @@ fn mine_action(pr: &MinePr, me: &str) -> String {
         Some("APPROVED") => {
             if conflict {
                 "rebase -> merge".into()
-            } else if checks_of(&pr.status_check_rollup) == "fail" {
+            } else if checks_text(pr.rollup_state()) == "fail" {
                 "fix CI -> merge".into()
             } else {
                 "MERGE".into()
@@ -172,16 +216,23 @@ fn mine_action(pr: &MinePr, me: &str) -> String {
     }
 }
 
-/// (my_vote, action) for a PR where I'm a reviewer.
-fn reviewer_state(pr: &ReviewPr, me: &str) -> (String, String) {
+/// (my_vote, action) for a PR where I'm a reviewer. My latest review state is
+/// taken from `reviews` (most recent by submittedAt among my reviews).
+fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
     let vote = pr
-        .latest_reviews
+        .reviews
+        .nodes
         .iter()
         .filter(|r| r.author.login == me)
+        .max_by(|a, b| a.submitted_at.cmp(&b.submitted_at))
         .map(|r| r.state.clone())
-        .next_back()
         .unwrap_or_default();
-    let requested = pr.review_requests.iter().any(|req| req.login == me);
+    let requested = pr
+        .review_requests
+        .nodes
+        .iter()
+        .filter_map(|r| r.requested_reviewer.as_ref())
+        .any(|rr| rr.login == me);
     let vote_label = match vote.as_str() {
         "APPROVED" => "approved",
         "CHANGES_REQUESTED" => "changes",
@@ -203,63 +254,78 @@ fn reviewer_state(pr: &ReviewPr, me: &str) -> (String, String) {
     (vote_label, action)
 }
 
-// gh fetches --------------------------------------------------------------------
+// GraphQL fetch -----------------------------------------------------------------
 
-/// Resolve `owner/name`. Returns `repo` as-is when given, else asks `gh`.
-pub fn resolve_repo(repo: Option<&str>, cwd: &str) -> Result<String> {
-    if let Some(r) = repo {
-        return Ok(r.to_string());
-    }
-    let info: RepoInfo = gh_json(&["repo", "view", "--json", "nameWithOwner"], cwd)?;
-    Ok(info.name_with_owner)
+const PR_FIELDS: &str = "number url headRefName isDraft reviewDecision mergeable \
+author { login } \
+commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
+reviews(first: 100) { nodes { author { login } state submittedAt } } \
+reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }";
+
+fn build_query(repo: &str) -> String {
+    let scope = format!("repo:{repo} ");
+    let frag = format!("nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }}");
+    format!(
+        "query {{ viewer {{ login }} \
+mine: search(query: \"{scope}is:pr is:open author:@me\", type: ISSUE, first: 100) {{ {frag} }} \
+reviewRequested: search(query: \"{scope}is:pr is:open review-requested:@me\", type: ISSUE, first: 100) {{ {frag} }} \
+reviewedBy: search(query: \"{scope}is:pr is:open reviewed-by:@me\", type: ISSUE, first: 100) {{ {frag} }} }}"
+    )
 }
 
-fn fetch_mine(repo: Option<&str>, cwd: &str) -> Result<Vec<MinePr>> {
-    let mut args: Vec<String> = vec!["pr".into(), "list".into()];
-    if let Some(r) = repo {
-        args.push("--repo".into());
-        args.push(r.into());
-    }
-    for a in [
-        "--author",
-        "@me",
-        "--state",
-        "open",
-        "--limit",
-        "100",
-        "--json",
-        "number,url,headRefName,isDraft,reviewDecision,mergeable,statusCheckRollup,reviews",
-    ] {
-        args.push(a.into());
-    }
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    gh_json(&refs, cwd)
-}
+/// Turn one GraphQL response into the report. Pure → unit-tested.
+fn classify(data: GqlData, want_mine: bool, want_reviews: bool) -> PrsReport {
+    let me = data.viewer.login;
 
-fn fetch_reviews(repo: Option<&str>, me: &str, cwd: &str) -> Result<Vec<ReviewPr>> {
-    let fields = "number,url,headRefName,author,latestReviews,reviewRequests";
-    let mut seen: BTreeMap<u64, ReviewPr> = BTreeMap::new();
-    for search in ["review-requested:@me", "reviewed-by:@me"] {
-        let mut args: Vec<String> = vec!["pr".into(), "list".into()];
-        if let Some(r) = repo {
-            args.push("--repo".into());
-            args.push(r.into());
-        }
-        for a in [
-            "--state", "open", "--limit", "100", "--search", search, "--json", fields,
-        ] {
-            args.push(a.into());
-        }
-        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let batch: Vec<ReviewPr> = gh_json(&refs, cwd)?;
-        for pr in batch {
+    let mine_views: Vec<MinePrView> = if want_mine {
+        data.mine
+            .nodes
+            .iter()
+            .filter(|pr| pr.number != 0)
+            .map(|pr| MinePrView {
+                number: pr.number,
+                url: pr.url.clone(),
+                issue_id: issue_of(&pr.head_ref_name),
+                review_state: review_text(pr).to_string(),
+                check_state: checks_text(pr.rollup_state()).to_string(),
+                action: mine_action(pr, &me),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let review_views: Vec<ReviewPrView> = if want_reviews {
+        let mut seen: BTreeMap<u64, PrNode> = BTreeMap::new();
+        for pr in data
+            .review_requested
+            .nodes
+            .into_iter()
+            .chain(data.reviewed_by.nodes)
+            .filter(|pr| pr.number != 0 && pr.author.login != me)
+        {
             seen.entry(pr.number).or_insert(pr);
         }
+        seen.into_values()
+            .map(|pr| {
+                let (my_vote, action) = reviewer_state(&pr, &me);
+                ReviewPrView {
+                    number: pr.number,
+                    url: pr.url.clone(),
+                    author: pr.author.login.clone(),
+                    my_vote,
+                    action,
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    PrsReport {
+        mine: mine_views,
+        reviews: review_views,
     }
-    Ok(seen
-        .into_values()
-        .filter(|pr| pr.author.login != me)
-        .collect())
 }
 
 // views + gather ----------------------------------------------------------------
@@ -289,117 +355,113 @@ pub struct PrsReport {
     pub reviews: Vec<ReviewPrView>,
 }
 
-/// Fetch and classify the caller's PRs. Neither flag set ⇒ both groups.
-/// Stateless: no diff cache is read or written.
+/// Resolve `owner/name`. Returns `repo` as-is when given, else asks `gh`.
+pub fn resolve_repo(repo: Option<&str>, cwd: &str) -> Result<String> {
+    if let Some(r) = repo {
+        return Ok(r.to_string());
+    }
+    let info: RepoInfo = gh_json(&["repo", "view", "--json", "nameWithOwner"], cwd)?;
+    Ok(info.name_with_owner)
+}
+
+/// Fetch and classify the caller's PRs in a single GraphQL round-trip. Neither
+/// flag set ⇒ both groups. Stateless: no diff cache is read or written.
 pub fn gather(root: &str, mine: bool, reviews: bool, repo: Option<&str>) -> Result<PrsReport> {
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
-
-    // Independent gh round-trips run concurrently; the reviews fetch needs the
-    // current user, so it shares a thread with the user lookup.
-    let (me, mine_prs, review_rows) = std::thread::scope(|s| {
-        let user_reviews = s.spawn(|| -> Result<(String, Vec<ReviewPr>)> {
-            let me: Me = gh_json(&["api", "user"], root)?;
-            let me = me.login;
-            let rows = if want_reviews {
-                fetch_reviews(repo, &me, root)?
-            } else {
-                vec![]
-            };
-            Ok((me, rows))
-        });
-        let mine_thread = s.spawn(|| -> Result<Vec<MinePr>> {
-            if want_mine {
-                fetch_mine(repo, root)
-            } else {
-                Ok(vec![])
-            }
-        });
-        let (me, review_rows) = user_reviews.join().expect("user/reviews thread panicked")?;
-        let mine_prs = mine_thread.join().expect("mine thread panicked")?;
-        Ok::<_, anyhow::Error>((me, mine_prs, review_rows))
-    })?;
-
-    let mine_views: Vec<MinePrView> = mine_prs
-        .iter()
-        .map(|pr| MinePrView {
-            number: pr.number,
-            url: pr.url.clone(),
-            issue_id: issue_of(&pr.head_ref_name),
-            review_state: review_text(pr).to_string(),
-            check_state: checks_of(&pr.status_check_rollup).to_string(),
-            action: mine_action(pr, &me),
-        })
-        .collect();
-
-    let mut sorted: Vec<&ReviewPr> = review_rows.iter().collect();
-    sorted.sort_by_key(|p| p.number);
-    let review_views: Vec<ReviewPrView> = sorted
-        .iter()
-        .map(|pr| {
-            let (my_vote, action) = reviewer_state(pr, &me);
-            ReviewPrView {
-                number: pr.number,
-                url: pr.url.clone(),
-                author: pr.author.login.clone(),
-                my_vote,
-                action,
-            }
-        })
-        .collect();
-
-    Ok(PrsReport {
-        mine: mine_views,
-        reviews: review_views,
-    })
+    let repo = match repo {
+        Some(r) => r.to_string(),
+        None => resolve_repo(None, root)?,
+    };
+    let query = build_query(&repo);
+    let arg = format!("query={query}");
+    let resp: GqlResp = gh_json(&["api", "graphql", "-f", &arg], root)?;
+    Ok(classify(resp.data, want_mine, want_reviews))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn mine(decision: Option<&str>, mergeable: &str, draft: bool, checks: Vec<Check>) -> MinePr {
-        MinePr {
-            number: 1,
-            url: "u".into(),
-            head_ref_name: "h".into(),
-            is_draft: draft,
-            review_decision: decision.map(String::from),
-            mergeable: mergeable.into(),
-            status_check_rollup: checks,
-            reviews: vec![],
-        }
+    fn node(json: serde_json::Value) -> PrNode {
+        serde_json::from_value(json).unwrap()
     }
-    fn check(conclusion: Option<&str>, status: Option<&str>) -> Check {
-        Check {
-            conclusion: conclusion.map(String::from),
-            status: status.map(String::from),
-            state: None,
-        }
+
+    // A representative `gh api graphql` response parses into the views with the
+    // same classification the old per-`gh pr list` path produced.
+    #[test]
+    fn parses_graphql_and_classifies() {
+        let raw = r#"{
+          "data": {
+            "viewer": { "login": "me" },
+            "mine": { "nodes": [
+              { "number": 10, "url": "u10", "headRefName": "lev/eng-1-foo",
+                "isDraft": false, "reviewDecision": "APPROVED", "mergeable": "MERGEABLE",
+                "author": {"login": "me"},
+                "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]},
+                "reviews": {"nodes": [{"author": {"login": "alice"}, "state": "APPROVED", "submittedAt": "2026-06-20T10:00:00Z"}]},
+                "reviewRequests": {"nodes": []} }
+            ]},
+            "reviewRequested": { "nodes": [
+              { "number": 20, "url": "u20", "headRefName": "x",
+                "isDraft": false, "reviewDecision": "REVIEW_REQUIRED", "mergeable": "MERGEABLE",
+                "author": {"login": "bob"},
+                "commits": {"nodes": []},
+                "reviews": {"nodes": []},
+                "reviewRequests": {"nodes": [{"requestedReviewer": {"login": "me"}}]} }
+            ]},
+            "reviewedBy": { "nodes": [] }
+          }
+        }"#;
+        let resp: GqlResp = serde_json::from_str(raw).unwrap();
+        let report = classify(resp.data, true, true);
+        assert_eq!(report.mine.len(), 1);
+        assert_eq!(report.mine[0].number, 10);
+        assert_eq!(report.mine[0].issue_id, "ENG-1");
+        assert_eq!(report.mine[0].review_state, "approved");
+        assert_eq!(report.mine[0].check_state, "ok");
+        assert_eq!(report.mine[0].action, "MERGE");
+        assert_eq!(report.reviews.len(), 1);
+        assert_eq!(report.reviews[0].number, 20);
+        assert_eq!(report.reviews[0].my_vote, "-");
+        assert_eq!(report.reviews[0].action, "REVIEW NEEDED");
     }
+
+    fn mine_node(
+        decision: Option<&str>,
+        mergeable: &str,
+        draft: bool,
+        rollup: Option<&str>,
+    ) -> PrNode {
+        let commits = match rollup {
+            Some(s) => {
+                serde_json::json!({"nodes": [{"commit": {"statusCheckRollup": {"state": s}}}]})
+            }
+            None => serde_json::json!({"nodes": []}),
+        };
+        node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h",
+            "isDraft": draft, "reviewDecision": decision, "mergeable": mergeable,
+            "author": {"login": "x"}, "commits": commits,
+            "reviews": {"nodes": []}, "reviewRequests": {"nodes": []}
+        }))
+    }
+
     #[test]
     fn checks_fail_run_ok_empty() {
-        assert_eq!(checks_of(&[]), "-");
-        assert_eq!(
-            checks_of(&[check(Some("SUCCESS"), Some("COMPLETED"))]),
-            "ok"
-        );
-        assert_eq!(
-            checks_of(&[check(Some("FAILURE"), Some("COMPLETED"))]),
-            "fail"
-        );
-        assert_eq!(checks_of(&[check(None, Some("IN_PROGRESS"))]), "run");
+        assert_eq!(checks_text(None), "-");
+        assert_eq!(checks_text(Some("SUCCESS")), "ok");
+        assert_eq!(checks_text(Some("FAILURE")), "fail");
+        assert_eq!(checks_text(Some("ERROR")), "fail");
+        assert_eq!(checks_text(Some("PENDING")), "run");
+        assert_eq!(checks_text(Some("EXPECTED")), "run");
     }
+
     #[test]
     fn approved_green_merges() {
         assert_eq!(
             mine_action(
-                &mine(
-                    Some("APPROVED"),
-                    "MERGEABLE",
-                    false,
-                    vec![check(Some("SUCCESS"), None)]
-                ),
+                &mine_node(Some("APPROVED"), "MERGEABLE", false, Some("SUCCESS")),
                 "me"
             ),
             "MERGE"
@@ -409,12 +471,7 @@ mod tests {
     fn approved_with_failing_ci() {
         assert_eq!(
             mine_action(
-                &mine(
-                    Some("APPROVED"),
-                    "MERGEABLE",
-                    false,
-                    vec![check(Some("FAILURE"), None)]
-                ),
+                &mine_node(Some("APPROVED"), "MERGEABLE", false, Some("FAILURE")),
                 "me"
             ),
             "fix CI -> merge"
@@ -424,7 +481,7 @@ mod tests {
     fn changes_requested_action() {
         assert_eq!(
             mine_action(
-                &mine(Some("CHANGES_REQUESTED"), "MERGEABLE", false, vec![]),
+                &mine_node(Some("CHANGES_REQUESTED"), "MERGEABLE", false, None),
                 "me"
             ),
             "address changes"
@@ -433,52 +490,43 @@ mod tests {
     #[test]
     fn draft_action() {
         assert_eq!(
-            mine_action(&mine(None, "MERGEABLE", true, vec![]), "me"),
+            mine_action(&mine_node(None, "MERGEABLE", true, None), "me"),
             "draft"
         );
     }
     #[test]
     fn review_text_variants() {
         assert_eq!(
-            review_text(&mine(Some("APPROVED"), "x", false, vec![])),
+            review_text(&mine_node(Some("APPROVED"), "x", false, None)),
             "approved"
         );
         assert_eq!(
-            review_text(&mine(Some("CHANGES_REQUESTED"), "x", false, vec![])),
+            review_text(&mine_node(Some("CHANGES_REQUESTED"), "x", false, None)),
             "changes"
         );
-        assert_eq!(review_text(&mine(None, "x", false, vec![])), "awaiting");
+        assert_eq!(review_text(&mine_node(None, "x", false, None)), "awaiting");
     }
     #[test]
     fn reviewer_state_requested_needs_review() {
-        let pr = ReviewPr {
-            number: 1,
-            url: "u".into(),
-            author: Author {
-                login: "other".into(),
-            },
-            latest_reviews: vec![],
-            review_requests: vec![ReviewRequest { login: "me".into() }],
-        };
+        let pr = node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+            "reviewDecision": null, "mergeable": "MERGEABLE", "author": {"login": "other"},
+            "commits": {"nodes": []}, "reviews": {"nodes": []},
+            "reviewRequests": {"nodes": [{"requestedReviewer": {"login": "me"}}]}
+        }));
         let (vote, action) = reviewer_state(&pr, "me");
         assert_eq!(vote, "-");
         assert_eq!(action, "REVIEW NEEDED");
     }
     #[test]
     fn reviewer_state_approved_done() {
-        let pr = ReviewPr {
-            number: 1,
-            url: "u".into(),
-            author: Author {
-                login: "other".into(),
-            },
-            latest_reviews: vec![Review {
-                author: Author { login: "me".into() },
-                state: "APPROVED".into(),
-                submitted_at: "".into(),
-            }],
-            review_requests: vec![],
-        };
+        let pr = node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+            "reviewDecision": null, "mergeable": "MERGEABLE", "author": {"login": "other"},
+            "commits": {"nodes": []},
+            "reviews": {"nodes": [{"author": {"login": "me"}, "state": "APPROVED", "submittedAt": "2026-01-01T00:00:00Z"}]},
+            "reviewRequests": {"nodes": []}
+        }));
         let (vote, action) = reviewer_state(&pr, "me");
         assert_eq!(vote, "approved");
         assert_eq!(action, "done (approved)");
