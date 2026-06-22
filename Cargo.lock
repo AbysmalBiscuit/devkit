@@ -242,6 +242,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "devkit-common",
+ "devkit-issue",
  "devkit-locks",
  "devkit-mcp",
  "devkit-ports",
@@ -273,6 +274,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "devkit-issue"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "devkit-common",
+ "serde",
+]
+
+[[package]]
 name = "devkit-locks"
 version = "0.3.0"
 dependencies = [
@@ -291,6 +301,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "devkit-common",
+ "devkit-issue",
  "devkit-locks",
  "devkit-ports",
  "serde",
