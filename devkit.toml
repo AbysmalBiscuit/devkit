@@ -1,0 +1,3 @@
+# devkit dogfoods its own write-access harness on this checkout.
+[harness]
+enforce_writes = true

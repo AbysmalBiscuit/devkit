@@ -15,5 +15,6 @@
     "dev-servers",
     "worktrees"
   ],
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
 }
