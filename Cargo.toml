@@ -31,6 +31,7 @@ indicatif.workspace = true
 devkit-common.workspace = true
 devkit-ports.workspace = true
 devkit-locks.workspace = true
+devkit-issue.workspace = true
 devkit-mcp.workspace = true
 
 # Used only by the Unix-only supervision integration test (POSIX signals).
@@ -39,7 +40,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-mcp"]
+members = ["crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp"]
 
 [workspace.package]
 edition = "2024"
@@ -74,6 +75,7 @@ ureq = { version = "2", features = ["json"] }
 devkit-common = { path = "crates/devkit-common" }
 devkit-ports = { path = "crates/devkit-ports" }
 devkit-locks = { path = "crates/devkit-locks" }
+devkit-issue = { path = "crates/devkit-issue" }
 devkit-mcp = { path = "crates/devkit-mcp" }
 
 [profile.release]

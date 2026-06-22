@@ -1,17 +1,19 @@
-use crate::triage::{gather, render};
+use crate::triage::render;
 use anyhow::Result;
 use devkit_common::ui;
 
 pub fn run(start: &str, ids: &[String]) -> Result<()> {
-    let (rows, states, has_key, url_key) = gather(start, ids)?;
-    let finished = render(&rows, &states, has_key, url_key.as_deref());
+    let pb = crate::spin::spinner("Discovering worktrees…");
+    let report = devkit_issue::status::gather(start, ids)?;
+    pb.finish_and_clear();
+    let finished = render(&report);
     if finished > 0 {
         println!(
             "\n{} Run `issue end` to remove them.",
             ui::green(&format!("{finished} finished."))
         );
     }
-    if !has_key {
+    if !report.has_linear_key {
         println!(
             "\n{}",
             ui::dim(

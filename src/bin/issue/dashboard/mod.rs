@@ -22,8 +22,8 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
 
     // At-a-glance: worktree triage, then my PRs + PRs awaiting my review.
-    let (rows, states, has_key, url_key) = triage::gather(&start, &[])?;
-    triage::render(&rows, &states, has_key, url_key.as_deref());
+    let report = devkit_issue::status::gather(&start, &[])?;
+    triage::render(&report);
     println!();
     // The PR tables are a secondary panel; if gh is unavailable the rest of the
     // dashboard (triage above, timelines below) must still render.

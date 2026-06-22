@@ -1,0 +1,9 @@
+[package]
+name = "devkit-issue"
+edition.workspace = true
+version = "0.2.0" # x-release-please-version
+
+[dependencies]
+anyhow.workspace = true
+serde = { workspace = true }
+devkit-common.workspace = true

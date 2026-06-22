@@ -3,14 +3,15 @@ use devkit_common::cmd::git;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::triage::{Row, gather, reason_not_finished, render};
+use crate::triage::render;
+use devkit_issue::status::{IssueWorktree, gather, reason_not_finished};
 
-fn select_explicit(rows: &[Row], selectors: &[String]) -> Vec<Row> {
+fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWorktree> {
     let mut chosen = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for sel in selectors {
         let s = sel.to_lowercase();
-        let hits: Vec<&Row> = rows
+        let hits: Vec<&IssueWorktree> = rows
             .iter()
             .filter(|r| {
                 let base = Path::new(&r.worktree)
@@ -144,14 +145,14 @@ pub fn run(
     pr_only: bool,
     clean_worktree: bool,
 ) -> Result<()> {
-    let targets: Vec<Row> = if clean_worktree {
+    let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
-        let (rows, states, has_key, url_key) = gather(start, &[])?;
-        render(&rows, &states, has_key, url_key.as_deref());
-        let t = select_explicit(&rows, ids);
+        let report = gather(start, &[])?;
+        render(&report);
+        let t = select_explicit(&report.worktrees, ids);
         if t.is_empty() {
             println!("\nNo matching worktrees.");
             return Ok(());
@@ -162,14 +163,15 @@ pub fn run(
         );
         t
     } else {
-        let (rows, states, has_key, url_key) = gather(start, ids)?;
-        render(&rows, &states, has_key, url_key.as_deref());
+        let report = gather(start, ids)?;
+        render(&report);
         if pr_only {
             println!("--pr-only: Linear 'Done' gate skipped.");
         }
-        let t: Vec<Row> = rows
+        let t: Vec<IssueWorktree> = report
+            .worktrees
             .iter()
-            .filter(|r| reason_not_finished(r, states.get(&r.issue_id), has_key, pr_only).is_none())
+            .filter(|r| reason_not_finished(r, report.has_linear_key, pr_only).is_none())
             .cloned()
             .collect();
         if t.is_empty() {
