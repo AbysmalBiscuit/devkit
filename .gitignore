@@ -1,4 +1,5 @@
 /target
+/.worktrees
 
 # Personal/local devkit configs. The config that drives the engine is
 # machine- and person-specific (paths, app catalog, Slack/GitHub handles,
