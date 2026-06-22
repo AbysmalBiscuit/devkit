@@ -135,6 +135,161 @@ pub(super) fn controlling_tty() -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
+pub(super) fn cgroup_caps() -> super::CgroupCaps {
+    use super::CgroupCaps;
+    // Optional manual override (also used by integration tests): a pre-delegated,
+    // writable cgroup-v2 base the daemon should use instead of auto-detecting.
+    if let Some(root) = std::env::var_os("DEVKIT_DAEMON_CGROUP_ROOT") {
+        let base = std::path::PathBuf::from(root);
+        return match prepare_base(&base) {
+            Ok(()) => CgroupCaps::Enforce { base },
+            Err(e) => CgroupCaps::Unavailable { reason: format!("{e:#}") },
+        };
+    }
+    // cgroup-v2 unified hierarchy is mounted at /sys/fs/cgroup with a
+    // cgroup.controllers file at the root.
+    let mount = std::path::Path::new("/sys/fs/cgroup");
+    if !mount.join("cgroup.controllers").is_file() {
+        return CgroupCaps::Unavailable { reason: "cgroup-v2 unified hierarchy not mounted".into() };
+    }
+    // Resolve this process's own cgroup: /proc/self/cgroup line "0::<rel>".
+    let rel = match fs::read_to_string("/proc/self/cgroup")
+        .ok()
+        .and_then(|s| s.lines().find_map(|l| l.strip_prefix("0::").map(str::to_string)))
+    {
+        Some(r) => r,
+        None => return CgroupCaps::Unavailable { reason: "no cgroup-v2 entry in /proc/self/cgroup".into() },
+    };
+    let base = mount.join(rel.trim_start_matches('/'));
+    match prepare_base(&base) {
+        Ok(()) => CgroupCaps::Enforce { base },
+        Err(e) => CgroupCaps::Unavailable { reason: format!("{e:#}") },
+    }
+}
+
+/// Make `base` able to host memory-capped leaves: enable `+memory` in
+/// `cgroup.subtree_control`, and — to satisfy cgroup-v2's no-internal-processes
+/// rule — move this process into `<base>/supervisor/` so server leaves can sit
+/// beside it under `<base>/servers/`. Idempotent.
+#[cfg(target_os = "linux")]
+fn prepare_base(base: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    // Writability probe: the base dir must be writable by this user (delegation).
+    let _ = fs::metadata(base)
+        .with_context(|| format!("cgroup base {} missing", base.display()))?
+        .permissions()
+        .mode();
+    let sup = base.join("supervisor");
+    fs::create_dir_all(&sup).with_context(|| format!("creating {}", sup.display()))?;
+    // Move self out of `base` before enabling controllers on it.
+    fs::write(sup.join("cgroup.procs"), format!("{}\n", std::process::id()))
+        .with_context(|| "moving daemon into supervisor leaf")?;
+    fs::create_dir_all(base.join("servers")).with_context(|| "creating servers subtree")?;
+    // Enable the memory controller for children. Ignore "already enabled".
+    let _ = fs::write(base.join("cgroup.subtree_control"), "+memory\n");
+    if !fs::read_to_string(base.join("cgroup.controllers"))
+        .unwrap_or_default()
+        .split_whitespace()
+        .any(|c| c == "memory")
+    {
+        anyhow::bail!("memory controller unavailable in {}", base.display());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn cgroup_create_leaf(
+    base: &std::path::Path,
+    name: &str,
+    max_bytes: u64,
+) -> anyhow::Result<std::path::PathBuf> {
+    use anyhow::Context as _;
+    let leaf = base.join("servers").join(name);
+    fs::create_dir_all(&leaf).with_context(|| format!("mkdir {}", leaf.display()))?;
+    fs::write(leaf.join("memory.max"), format!("{max_bytes}\n"))
+        .with_context(|| format!("set memory.max on {}", leaf.display()))?;
+    // Kill the whole leaf together on breach so the daemon sees a clean tree exit.
+    let _ = fs::write(leaf.join("memory.oom.group"), "1\n");
+    Ok(leaf)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn cgroup_remove_leaf(leaf: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    fs::remove_dir(leaf).with_context(|| format!("rmdir {}", leaf.display()))
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn cgroup_list_leaves(base: &std::path::Path) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Ok(rd) = fs::read_dir(base.join("servers")) {
+        for ent in rd.flatten() {
+            if ent.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                && let Some(n) = ent.file_name().to_str()
+            {
+                names.push(n.to_string());
+            }
+        }
+    }
+    names
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn join_cgroup(cmd: &mut std::process::Command, leaf: &std::path::Path) {
+    use std::os::fd::{AsRawFd, OwnedFd};
+    use std::os::unix::process::CommandExt as _;
+    // Open the leaf's cgroup.procs in the parent (write, close-on-exec). A failure
+    // here leaves the child uncapped — fail-open, never block the spawn.
+    let path = leaf.join("cgroup.procs");
+    let Ok(file) = fs::OpenOptions::new().write(true).open(&path) else {
+        return;
+    };
+    let fd: OwnedFd = file.into();
+    // SAFETY: the closure runs in the forked child before `exec` and calls only
+    // async-signal-safe primitives — getpid(), arithmetic via fmt_pid, and a
+    // single write() to a pre-opened fd. Writing the pid to cgroup.procs moves the
+    // child (and every descendant it later forks) into the leaf. The write error
+    // is ignored: an unplaced child runs uncapped rather than failing the spawn.
+    unsafe {
+        cmd.pre_exec(move || {
+            let mut buf = [0u8; 20];
+            let s = super::fmt_pid(nix::libc::getpid() as i64, &mut buf);
+            let _ = nix::libc::write(
+                fd.as_raw_fd(),
+                s.as_ptr() as *const nix::libc::c_void,
+                s.len(),
+            );
+            Ok(())
+        });
+    }
+}
+
+// macOS: no cgroups.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn cgroup_caps() -> super::CgroupCaps {
+    super::CgroupCaps::Unsupported
+}
+#[cfg(not(target_os = "linux"))]
+pub(super) fn cgroup_create_leaf(
+    _base: &std::path::Path,
+    _name: &str,
+    _max_bytes: u64,
+) -> anyhow::Result<std::path::PathBuf> {
+    anyhow::bail!("cgroups unsupported on this platform")
+}
+#[cfg(not(target_os = "linux"))]
+pub(super) fn cgroup_remove_leaf(_leaf: &std::path::Path) -> anyhow::Result<()> {
+    Ok(())
+}
+#[cfg(not(target_os = "linux"))]
+pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
+    Vec::new()
+}
+#[cfg(not(target_os = "linux"))]
+pub(super) fn join_cgroup(_cmd: &mut std::process::Command, _leaf: &std::path::Path) {}
+
+#[cfg(target_os = "linux")]
 fn read_ppid(pid: u32) -> Option<u32> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rest = stat.rsplit_once(')')?.1;

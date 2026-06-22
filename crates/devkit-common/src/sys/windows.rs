@@ -153,3 +153,21 @@ fn working_set_bytes(pid: u32) -> u64 {
         }
     }
 }
+
+pub(super) fn cgroup_caps() -> super::CgroupCaps {
+    super::CgroupCaps::Unsupported
+}
+pub(super) fn cgroup_create_leaf(
+    _base: &std::path::Path,
+    _name: &str,
+    _max_bytes: u64,
+) -> anyhow::Result<std::path::PathBuf> {
+    anyhow::bail!("cgroups unsupported on this platform")
+}
+pub(super) fn cgroup_remove_leaf(_leaf: &std::path::Path) -> anyhow::Result<()> {
+    Ok(())
+}
+pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
+    Vec::new()
+}
+pub(super) fn join_cgroup(_cmd: &mut std::process::Command, _leaf: &std::path::Path) {}
