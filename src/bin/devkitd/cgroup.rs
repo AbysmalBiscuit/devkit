@@ -8,9 +8,24 @@ use crate::{CgroupCap, Daemon};
 use devkit_ports::registry::Role;
 use std::path::PathBuf;
 
+/// FNV-1a 64-bit hash — stable across Rust versions and runs, unlike
+/// `DefaultHasher`. Used to make leaf names collision-free without a dependency.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
 /// A filesystem-safe leaf directory name for a supervised key. cgroup leaf names
 /// may not contain `/`; holders are worktree paths, so every `/`, `\`, and `.` is
-/// escaped to `_` and the role appended, keeping distinct keys distinct.
+/// escaped to `_` and the role appended. The sanitized prefix is for readability;
+/// the trailing 16-hex-digit FNV-1a hash of the raw key fields (separated by NUL)
+/// guarantees that distinct keys always produce distinct names even when their
+/// sanitized prefixes collide (e.g. holders `/a/b` and `/a_b` both sanitize to
+/// `_a_b` but carry different hashes).
 pub(crate) fn leaf_name(key: &Key) -> String {
     let san = |s: &str| {
         s.chars()
@@ -27,7 +42,22 @@ pub(crate) fn leaf_name(key: &Key) -> String {
         Role::Issue => "issue",
         Role::Baseline => "baseline",
     };
-    format!("{}__{}__{}", san(&key.holder), san(&key.app), role)
+    // Hash the raw (un-sanitized) fields with NUL separators so that field
+    // contents cannot forge a separator (e.g. a holder ending in `\0` appended
+    // to an app string would otherwise shift the boundary).
+    let mut raw = Vec::with_capacity(key.holder.len() + key.app.len() + role.len() + 2);
+    raw.extend_from_slice(key.holder.as_bytes());
+    raw.push(0);
+    raw.extend_from_slice(key.app.as_bytes());
+    raw.push(0);
+    raw.extend_from_slice(role.as_bytes());
+    format!(
+        "{}__{}__{}__{:016x}",
+        san(&key.holder),
+        san(&key.app),
+        role,
+        fnv1a(&raw)
+    )
 }
 
 impl Daemon {
@@ -90,13 +120,22 @@ mod tests {
     fn leaf_name_is_filesystem_safe_and_distinct() {
         let a = leaf_name(&key("/home/ex/wt", "web", Role::Issue));
         assert!(!a.contains('/'), "no slashes in a leaf name: {a}");
-        assert_eq!(a, "_home_ex_wt__web__issue");
+        // The readable prefix is intact; the trailing hash makes names unique.
+        assert!(
+            a.starts_with("_home_ex_wt__web__issue__"),
+            "expected readable prefix in: {a}"
+        );
         // Role distinguishes otherwise-identical keys.
         let b = leaf_name(&key("/home/ex/wt", "web", Role::Baseline));
         assert_ne!(a, b);
         // App distinguishes.
         let c = leaf_name(&key("/home/ex/wt", "api", Role::Issue));
         assert_ne!(a, c);
+        // Distinct holders that sanitize to the same prefix must still differ
+        // (the trailing hash disambiguates).
+        let p = leaf_name(&key("/a/b", "web", Role::Issue));
+        let q = leaf_name(&key("/a_b", "web", Role::Issue));
+        assert_ne!(p, q, "punctuation-only difference must not collide");
     }
 
     #[cfg(target_os = "linux")]
