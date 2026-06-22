@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.2.0...v0.3.0) (2026-06-22)
+
+
+### Features
+
+* add claude code plugin manifest ([efc3432](https://github.com/AbysmalBiscuit/devkit/commit/efc3432926ba5508769f05384650cacfa53e2328))
+* add codex and cursor skill plugins ([8a78c0f](https://github.com/AbysmalBiscuit/devkit/commit/8a78c0f5b41cb596ad341d256a48e5b3fcd9fa2d))
+* **config:** add health-probe daemon knobs ([2da382e](https://github.com/AbysmalBiscuit/devkit/commit/2da382ecad441c8b49ea283398da0e9974f70226))
+* **devkitd:** restart hung servers via a health probe ([514af3b](https://github.com/AbysmalBiscuit/devkit/commit/514af3ba18e9d66c20b1870de648ed1902d33a4f))
+* **devkitd:** serve the lock registry from memory over locks.sock ([c8965ab](https://github.com/AbysmalBiscuit/devkit/commit/c8965ab8ccdb2105a4ef7855c7d8bb22216f9968))
+* **devkitd:** track health-probe state per supervised child ([10ac971](https://github.com/AbysmalBiscuit/devkit/commit/10ac971e638e4c4374ffc985cd44ba3d87f4d56b))
+* **issue:** improve status/PR table rendering ([f1eb89c](https://github.com/AbysmalBiscuit/devkit/commit/f1eb89ceb3306e6e83e93c22338deeee342ca11d))
+* **locks:** add lock daemon proto and locks.sock client ([a0e8588](https://github.com/AbysmalBiscuit/devkit/commit/a0e8588270c0fbcbf02c8573911b107fc4ded7f1))
+* **locks:** add MemoryStore write-through driver and startup load ([044a036](https://github.com/AbysmalBiscuit/devkit/commit/044a0362d25b2c48df64f132b62137ea11c23507))
+* **locks:** add Store seam, devkitd.lock gate, and generic *_with ops ([ae25513](https://github.com/AbysmalBiscuit/devkit/commit/ae25513f29e3223ecef27cf5a1baed8b506c1461))
+* **locks:** route the facade through the daemon when one is up ([d7e25f4](https://github.com/AbysmalBiscuit/devkit/commit/d7e25f41b14687c86043f3007960afe4ac3cacc6))
+* **mcp:** add action registry, describe/call, and ports actions ([4423dd3](https://github.com/AbysmalBiscuit/devkit/commit/4423dd316d1e07d8a2c39b36e21e8c5e7212ff13))
+* **mcp:** add file-lock actions ([4c7f5b1](https://github.com/AbysmalBiscuit/devkit/commit/4c7f5b15bb46a9b390457bf2ce333e27d45b6e0c))
+* **mcp:** handle initialize and tools/list ([c13b2f1](https://github.com/AbysmalBiscuit/devkit/commit/c13b2f128aecbfa211295be47554ee2fef2e1163))
+* **mcp:** register server for Codex and Cursor ([5879a99](https://github.com/AbysmalBiscuit/devkit/commit/5879a99efe8eb4a9f82a6f273503db39fcba6db2))
+* **mcp:** scaffold devkit-mcp crate with stdio json-rpc loop ([a7026be](https://github.com/AbysmalBiscuit/devkit/commit/a7026bec7aab0851bc1e06b7f2b8af5a51afa327))
+
+
+### Bug Fixes
+
+* **devkitd:** make supervisor table authoritative for restarts ([6d0b183](https://github.com/AbysmalBiscuit/devkit/commit/6d0b183882ef5d59b4610cf2e39ed3e172927acc))
+* **locks:** replace stray NUL byte in test comment with its escape text ([371ac17](https://github.com/AbysmalBiscuit/devkit/commit/371ac17b61c42f2e6ee168debcbe99b030fc3d6a))
+* **mcp:** register server in plugin manifest, add acquire-conflict test ([8a4f74c](https://github.com/AbysmalBiscuit/devkit/commit/8a4f74c2328b629a0b03518436961e1c21c83f42))
+* **mcp:** use project root as the ports holder for liveness ([53f6620](https://github.com/AbysmalBiscuit/devkit/commit/53f66204bc0a09aac3b0c20c1007b6642b6931a0))
+
 ## [0.2.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.1.0...v0.2.0) (2026-06-21)
 
 
