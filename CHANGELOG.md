@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.4.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.3.0...v0.4.0) (2026-06-22)
+
+
+### Features
+
+* **devkitd:** add memory_limit_ticks config ([6259286](https://github.com/AbysmalBiscuit/devkit/commit/6259286bc0c90fd963a9bf32bb4deb707e0e8079))
+* **devkitd:** add non-recording budget peek ([41e4881](https://github.com/AbysmalBiscuit/devkit/commit/41e4881ddaace8ebf880acc69ce9edc26b6679b2))
+* **devkitd:** decide memory-limit restarts ([7370d69](https://github.com/AbysmalBiscuit/devkit/commit/7370d69bac921cab293264db20d63703cdedd78b))
+* **devkitd:** restart servers over memory limit ([3e20bd6](https://github.com/AbysmalBiscuit/devkit/commit/3e20bd64355828692d80f7d79fbeb6c596341180))
+* **devkitd:** serve write-decide and prefix-release over locks.sock ([1b487df](https://github.com/AbysmalBiscuit/devkit/commit/1b487df511015c62281191bf5df9ab9c2d9efb0c))
+* **issue:** add multi-bar Steps progress helper ([116c347](https://github.com/AbysmalBiscuit/devkit/commit/116c347c138f90d7fd1919c50b7464a9ce7210b3))
+* **issue:** add step bars and parallel history to dashboard ([ba5b3be](https://github.com/AbysmalBiscuit/devkit/commit/ba5b3bee6f19f7a6ec6dee902ab92f159d670ac5))
+* **issue:** extract pr triage into devkit-issue ([27de75a](https://github.com/AbysmalBiscuit/devkit/commit/27de75ae2b2e154a348db1e7e4b4d79b078c1a8d))
+* **issue:** extract status gathering into devkit-issue ([fc448a1](https://github.com/AbysmalBiscuit/devkit/commit/fc448a145cd9bb0bc032eb127bb0925e46d35460))
+* **issue:** fetch prs and linear workspace in parallel ([f521289](https://github.com/AbysmalBiscuit/devkit/commit/f5212898e5c014ede87f43a25430e6359944ae39))
+* **issue:** show parallel step bars for status ([cd56c98](https://github.com/AbysmalBiscuit/devkit/commit/cd56c9801b864bb90e5e98181606f26205cd15ac))
+* **linear:** add per-page progress callback to issue history ([86230c4](https://github.com/AbysmalBiscuit/devkit/commit/86230c4496852e09592d035e083f82b778c3990a))
+* **lockm:** add hook subcommand enforcing write access ([2bec067](https://github.com/AbysmalBiscuit/devkit/commit/2bec0671d37f600e4a460939fc8a41c1aaf406a6))
+* **locks:** add ancestor-aware write decision and prefix release ([4ff8eeb](https://github.com/AbysmalBiscuit/devkit/commit/4ff8eeb75331ef19873a791a30e124030323c528))
+* **locks:** add decide_write and release_prefix facade ([a93de57](https://github.com/AbysmalBiscuit/devkit/commit/a93de57609f6d94b71fcafc07f25b6ba9aca33f9))
+* **locks:** add holder ancestor-or-self predicate ([817fb90](https://github.com/AbysmalBiscuit/devkit/commit/817fb90a01c22ba76d8b42dfcd4fcca017dff8c1))
+* **locks:** add hook payload parsing and activation gate ([3bc4c3b](https://github.com/AbysmalBiscuit/devkit/commit/3bc4c3ba8a3c635283c46ea98e1aa8a6693a68cf))
+* **locks:** add write-decide and prefix-release store ops ([0767390](https://github.com/AbysmalBiscuit/devkit/commit/0767390ae70d103ce8ff5fc7440a4951a836e42c))
+* **mcp:** add devrun.down and devrun.logs actions ([24a0864](https://github.com/AbysmalBiscuit/devkit/commit/24a0864067adbb16f0344d1bd7cb0c03a5e2d499))
+* **mcp:** add devrun.status action ([8f8d39c](https://github.com/AbysmalBiscuit/devkit/commit/8f8d39c3b692172e1ba2b1c7421af1ae857b75a8))
+* **mcp:** add issue.status and issue.prs actions ([1ace104](https://github.com/AbysmalBiscuit/devkit/commit/1ace104c45edef29ee030e6ce9126fb64c741cc0))
+* **mcp:** add non-blocking devrun.up action ([ca99e4f](https://github.com/AbysmalBiscuit/devkit/commit/ca99e4f1e789f98478ee2262fee9d7a6763bb3cc))
+* **plugin:** wire write-harness hooks and dogfood opt-in ([65ec462](https://github.com/AbysmalBiscuit/devkit/commit/65ec4625d73dc93602b42cf835a7cbb353f320cd))
+
+
+### Bug Fixes
+
+* **issue:** restore prs workspace spinner step ([0aaaef8](https://github.com/AbysmalBiscuit/devkit/commit/0aaaef80e34693712d29194e1d8ec4ac9fb7133b))
+* **locks:** ignore hook payloads without a session id ([dd8ebae](https://github.com/AbysmalBiscuit/devkit/commit/dd8ebae1c9058bef1a1b5e54054f83b64ee06822))
+* **locks:** pin harness write locks to ttl, not pid ([89ed986](https://github.com/AbysmalBiscuit/devkit/commit/89ed9862e6e7f7b6a6832f68f5dbb4cba8cde217))
+* **locks:** release holder locks across all roots ([d610b06](https://github.com/AbysmalBiscuit/devkit/commit/d610b063267a3049368791a381aa155cee1c7ec3))
+* **plugin:** stop double-loading hooks/hooks.json ([16d4ba2](https://github.com/AbysmalBiscuit/devkit/commit/16d4ba287e92b1b15504aa7d1e4a15482f92cf2b))
+* **registry:** detect listeners via tcp connect ([3a2ac96](https://github.com/AbysmalBiscuit/devkit/commit/3a2ac96eed0baf897ca2541da2f4d4859de07f29))
+
+
+### Performance Improvements
+
+* **issue:** fetch all prs in one graphql request ([a14b56e](https://github.com/AbysmalBiscuit/devkit/commit/a14b56ea19223e6ca5e3afba9ff7d6d510b79e46))
+
 ## [0.3.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.2.0...v0.3.0) (2026-06-22)
 
 
