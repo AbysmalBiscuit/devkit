@@ -373,7 +373,7 @@ Move the per-group spawn/supervise/wait logic out of `cmd_up` into reusable `run
   - `run::holder_slug(holder: &str) -> String`
   - `run::ensure_provider(catalog: &HashMap<String,App>, apps: &mut Vec<String>)`
   - `run::LaunchPlan { pub app: String, pub port: u16, pub argv: Vec<String>, pub cwd: PathBuf, pub env: BTreeMap<String,String>, pub log: PathBuf }`
-  - `run::plan_group(catalog, doppler_config, apps, ports, provider, base_dir, user_env) -> Vec<LaunchPlan>`
+  - `run::plan_group(catalog, doppler_config, apps, ports, provider, base_dir, role, user_env) -> Vec<LaunchPlan>`
   - `run::launch(plans: &[LaunchPlan], holder: &str, role: Role, supervise: bool, wait: bool) -> Result<Vec<ServerStatus>>`
   - `run::daemon_running() -> bool`
 
@@ -395,6 +395,7 @@ Append to the `tests` module in `crates/devkit-ports/src/run.rs`:
             &ports,
             None,
             std::path::Path::new("/root"),
+            Role::Issue,
             &BTreeMap::new(),
         );
         assert_eq!(plans.len(), 1);
@@ -545,6 +546,7 @@ pub fn plan_group(
     ports: &BTreeMap<String, u16>,
     provider: Option<&str>,
     base_dir: &Path,
+    role: Role,
     user_env: &BTreeMap<String, String>,
 ) -> Vec<LaunchPlan> {
     let provider_port = provider.and_then(|p| ports.get(p).copied());
@@ -558,7 +560,7 @@ pub fn plan_group(
         let env = env_for(app, provider_port, user_env);
         let log = paths::logs_dir()
             .join(holder_slug(base_dir.to_str().unwrap_or("wt")))
-            .join(format!("{}-{}.log", "issue", a));
+            .join(format!("{}-{}.log", role.as_str(), a));
         plans.push(LaunchPlan {
             app: a.clone(),
             port,
@@ -705,7 +707,7 @@ fn supervise_via_daemon(
 }
 ```
 
-Note: `plan_group` derives the log directory from `base_dir`'s leaf (it equals the holder for the issue group). The CLI previously namespaced by `slug(holder)`; for the issue group `holder == base_dir` so the log path is unchanged.
+Note: `plan_group` derives the log directory from `base_dir`'s leaf (it equals the holder for each group: `issue_holder` for issue, the baseline path for baseline). The CLI previously namespaced by `slug(holder)`; since `holder == base_dir` for both groups the directory is unchanged. The filename keeps its role prefix via `role.as_str()` (`issue-<app>.log` / `baseline-<app>.log`), so the CLI's baseline-role log paths are unchanged; the issue-only MCP `up` passes `Role::Issue`.
 
 - [ ] **Step 4: Run the unit tests to verify they pass**
 
@@ -769,6 +771,7 @@ In `src/bin/devrun/main.rs`, delete the local `slug` helper (lines 105-111) and 
             &ports,
             provider.as_deref(),
             base_dir,
+            *grp_role,
             &user,
         );
 
@@ -1530,6 +1533,7 @@ fn up(_ctx: &ServerCtx, args: Value) -> Result<Value> {
         &ports,
         provider.as_deref(),
         Path::new(&a.root),
+        Role::Issue,
         &user,
     );
     let statuses = run::launch(&plans, &a.root, Role::Issue, run::daemon_running(), false)?;
