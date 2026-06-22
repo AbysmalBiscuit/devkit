@@ -148,8 +148,9 @@ pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> R
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
 
-    let pb = crate::spin::spinner("Fetching PRs from GitHub…");
+    let pb = crate::spin::spinner("Resolving Linear workspace…");
     let url_key = devkit_common::linear::workspace_url_key();
+    pb.set_message("Fetching PRs from GitHub…");
     let report = devkit_issue::prs::gather(".", mine, reviews, repo.as_deref())?;
     let repo_key = if no_cache {
         None
