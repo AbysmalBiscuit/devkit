@@ -244,6 +244,43 @@ fn locks_acquire_on_held_path_returns_conflicts_not_error() {
     assert_eq!(conflicts[0]["held_by"], "alice");
 }
 
+#[test]
+fn devrun_status_lists_tracked_servers_for_root() {
+    let proj = project_with_config();
+    let state = scratch("state");
+    let root = proj.to_str().unwrap();
+    let resps = mcp(
+        &proj,
+        &state,
+        &[
+            // Reserve a port so there is something to report.
+            call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
+            call_req(2, "devrun.status", json!({ "root": root })),
+            call_req(3, "devrun.status", json!({ "all": true })),
+        ],
+    );
+    tool_json(&resps[0], false);
+
+    let rows = tool_json(&resps[1], false);
+    let arr = rows.as_array().expect("status returns an array");
+    assert_eq!(arr.len(), 1, "one tracked server for this root");
+    assert_eq!(arr[0]["app"], "web");
+    // Nothing is listening, no pid → crashed.
+    assert_eq!(arr[0]["state"], "crashed");
+
+    let all = tool_json(&resps[2], false);
+    assert!(!all.as_array().unwrap().is_empty(), "all view is non-empty");
+}
+
+#[test]
+fn devrun_status_without_root_or_all_is_an_error() {
+    let proj = project();
+    let state = scratch("state");
+    let resps = mcp(&proj, &state, &[call_req(1, "devrun.status", json!({}))]);
+    let payload = tool_json(&resps[0], true);
+    assert!(payload.as_str().unwrap().contains("root"));
+}
+
 /// The MCP lifecycle a host drives on connect: `initialize` →
 /// `notifications/initialized` → `tools/list`. The notification carries no `id`
 /// and must draw no response; `initialize` must echo the protocol version and

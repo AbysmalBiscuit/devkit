@@ -18,6 +18,7 @@ pub fn actions() -> Vec<Action> {
     let mut v = Vec::new();
     v.extend(crate::ports::actions());
     v.extend(crate::locks::actions());
+    v.extend(crate::devrun::actions());
     v
 }
 
