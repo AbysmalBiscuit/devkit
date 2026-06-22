@@ -270,9 +270,10 @@ impl Data {
         if !blockers.is_empty() {
             return WriteDecision::Denied(blockers);
         }
-        let overlaps = self.locks.values().any(|e| {
-            e.root == root && !entry_dead(e, now) && paths_overlap(&e.path, path)
-        });
+        let overlaps = self
+            .locks
+            .values()
+            .any(|e| e.root == root && !entry_dead(e, now) && paths_overlap(&e.path, path));
         if overlaps {
             // Held only by self or an ancestor. Renew the writer's own exact lock if present.
             if let Some(e) = self.locks.get_mut(&key_for(root, path))
@@ -515,19 +516,27 @@ mod tests {
 
     #[test]
     fn ancestry_self_and_prefix() {
-        assert!(is_ancestor_or_self("S", "S"));            // self
-        assert!(is_ancestor_or_self("S", "S/a1"));         // parent of sub-agent
-        assert!(is_ancestor_or_self("S/a1", "S/a1/b2"));   // grandparent (if ever nested)
-        assert!(!is_ancestor_or_self("S/a1", "S"));        // child does not own parent
-        assert!(!is_ancestor_or_self("S/a1", "S/b2"));     // siblings contend
-        assert!(!is_ancestor_or_self("S", "Sx"));          // not a segment boundary
-        assert!(!is_ancestor_or_self("S", "T"));           // unrelated sessions
+        assert!(is_ancestor_or_self("S", "S")); // self
+        assert!(is_ancestor_or_self("S", "S/a1")); // parent of sub-agent
+        assert!(is_ancestor_or_self("S/a1", "S/a1/b2")); // grandparent (if ever nested)
+        assert!(!is_ancestor_or_self("S/a1", "S")); // child does not own parent
+        assert!(!is_ancestor_or_self("S/a1", "S/b2")); // siblings contend
+        assert!(!is_ancestor_or_self("S", "Sx")); // not a segment boundary
+        assert!(!is_ancestor_or_self("S", "T")); // unrelated sessions
     }
 
     #[test]
     fn decide_write_free_acquires() {
         let mut d = Data::default();
-        let r = d.decide_write("/repo", "src/a.rs", "S", None, Some("write-harness"), 1800, 100);
+        let r = d.decide_write(
+            "/repo",
+            "src/a.rs",
+            "S",
+            None,
+            Some("write-harness"),
+            1800,
+            100,
+        );
         assert_eq!(r, WriteDecision::Acquired);
         assert_eq!(d.locks[&key_for("/repo", "src/a.rs")].holder, "S");
     }
@@ -585,7 +594,7 @@ mod tests {
         d.decide_write("/repo", "b", "S/a1", None, None, 1800, 1);
         d.decide_write("/repo", "c", "T", None, None, 1800, 1);
         let freed = d.release_prefix("/repo", "S");
-        assert_eq!(freed.len(), 2);                 // S and S/a1
+        assert_eq!(freed.len(), 2); // S and S/a1
         assert!(d.locks.contains_key(&key_for("/repo", "c"))); // T survives
     }
 
@@ -595,7 +604,7 @@ mod tests {
         d.decide_write("/repo", "a", "S", None, None, 1800, 1);
         d.decide_write("/repo", "b", "S/a1", None, None, 1800, 1);
         let freed = d.release_prefix("/repo", "S/a1");
-        assert_eq!(freed, vec!["b".to_string()]);   // only the sub-agent's lock
+        assert_eq!(freed, vec!["b".to_string()]); // only the sub-agent's lock
         assert!(d.locks.contains_key(&key_for("/repo", "a")));
     }
 }

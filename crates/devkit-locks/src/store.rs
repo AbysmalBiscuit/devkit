@@ -1,4 +1,4 @@
-use crate::model::{AcquireOutcome, Conflict, Data, LockEntry, WriteDecision, SCHEMA_VERSION};
+use crate::model::{AcquireOutcome, Conflict, Data, LockEntry, SCHEMA_VERSION, WriteDecision};
 use anyhow::Result;
 use devkit_common::paths;
 use devkit_common::store::{self, Document, salvage_map};
@@ -448,9 +448,20 @@ mod seam_tests {
     fn write_decide_acquires_then_blocks_other_holder() {
         let dir = tmp("wd");
         let s = FlockStore::at(&dir);
-        let first = write_decide_with(&s, "/repo", "S", "src/a.rs", None, Some("write-harness"), 1800, 100).unwrap();
+        let first = write_decide_with(
+            &s,
+            "/repo",
+            "S",
+            "src/a.rs",
+            None,
+            Some("write-harness"),
+            1800,
+            100,
+        )
+        .unwrap();
         assert_eq!(first, crate::model::WriteDecision::Acquired);
-        let blocked = write_decide_with(&s, "/repo", "T", "src/a.rs", None, None, 1800, 120).unwrap();
+        let blocked =
+            write_decide_with(&s, "/repo", "T", "src/a.rs", None, None, 1800, 120).unwrap();
         assert!(matches!(blocked, crate::model::WriteDecision::Denied(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -460,7 +471,8 @@ mod seam_tests {
         let dir = tmp("wda");
         let s = FlockStore::at(&dir);
         write_decide_with(&s, "/repo", "S", "src", None, None, 1800, 100).unwrap();
-        let child = write_decide_with(&s, "/repo", "S/a1", "src/a.rs", None, None, 1800, 120).unwrap();
+        let child =
+            write_decide_with(&s, "/repo", "S/a1", "src/a.rs", None, None, 1800, 120).unwrap();
         assert_eq!(child, crate::model::WriteDecision::AllowedByOwnership);
         let _ = std::fs::remove_dir_all(&dir);
     }

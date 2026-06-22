@@ -54,8 +54,13 @@ fn write_decide_and_release_prefix_through_daemon() {
         note: Some("write-harness".into()),
         ttl: 0,
     });
-    assert!(matches!(acq, Response::WriteDecided(devkit_locks::model::WriteDecision::Acquired)),
-        "expected Acquired, got {acq:?}");
+    assert!(
+        matches!(
+            acq,
+            Response::WriteDecided(devkit_locks::model::WriteDecision::Acquired)
+        ),
+        "expected Acquired, got {acq:?}"
+    );
 
     let denied = h.lock_request(&Request::WriteDecide {
         root: "/repo".into(),
@@ -65,11 +70,22 @@ fn write_decide_and_release_prefix_through_daemon() {
         note: None,
         ttl: 0,
     });
-    assert!(matches!(denied, Response::WriteDecided(devkit_locks::model::WriteDecision::Denied(_))),
-        "expected Denied, got {denied:?}");
+    assert!(
+        matches!(
+            denied,
+            Response::WriteDecided(devkit_locks::model::WriteDecision::Denied(_))
+        ),
+        "expected Denied, got {denied:?}"
+    );
 
-    let freed = h.lock_request(&Request::ReleasePrefix { root: "/repo".into(), prefix: "S".into() });
-    assert!(matches!(freed, Response::Freed(ref v) if v.len() == 1), "expected one freed, got {freed:?}");
+    let freed = h.lock_request(&Request::ReleasePrefix {
+        root: "/repo".into(),
+        prefix: "S".into(),
+    });
+    assert!(
+        matches!(freed, Response::Freed(ref v) if v.len() == 1),
+        "expected one freed, got {freed:?}"
+    );
     h.shutdown();
 }
 

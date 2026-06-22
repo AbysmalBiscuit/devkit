@@ -125,7 +125,9 @@ fn run_hook(event: &str) {
     }
 
     match hook::parse_event(event, &payload) {
-        HookEvent::Write { file_path, holder, .. } => {
+        HookEvent::Write {
+            file_path, holder, ..
+        } => {
             match devkit_locks::decide_write(&file_path, &holder, Some("write-harness"), 1800) {
                 Ok(decision) => {
                     if let Some(out) = write_output(&decision) {
@@ -308,8 +310,13 @@ mod tests {
         }]);
         let out = write_output(&d).expect("deny json");
         assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
-        let reason = out["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        let reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap();
         assert!(reason.contains("S/b2"), "reason names the holder: {reason}");
-        assert!(reason.contains("src/a.rs"), "reason names the path: {reason}");
+        assert!(
+            reason.contains("src/a.rs"),
+            "reason names the path: {reason}"
+        );
     }
 }

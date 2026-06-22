@@ -249,7 +249,9 @@ fn write_ctx(path_in: &str) -> Result<(String, String)> {
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else {
-        std::env::current_dir().context("getting current dir")?.join(p)
+        std::env::current_dir()
+            .context("getting current dir")?
+            .join(p)
     };
     let start = abs.parent().unwrap_or(abs.as_path());
     let root = find_root_from(start);

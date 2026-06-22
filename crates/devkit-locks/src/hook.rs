@@ -3,7 +3,7 @@
 //! decision logic stays in `model`/`store`.
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 /// Tool names whose writes the harness governs.
@@ -20,9 +20,17 @@ pub fn holder_from_fields(session_id: &str, agent_id: Option<&str>) -> String {
 
 #[derive(Debug)]
 pub enum HookEvent {
-    Write { tool_name: String, file_path: String, holder: String },
-    ReleaseSubagent { holder: String },
-    ReleaseSession { holder: String },
+    Write {
+        tool_name: String,
+        file_path: String,
+        holder: String,
+    },
+    ReleaseSubagent {
+        holder: String,
+    },
+    ReleaseSession {
+        holder: String,
+    },
     Ignore,
 }
 
@@ -42,7 +50,10 @@ pub fn parse_event(event: &str, p: &Value) -> HookEvent {
             if !WRITE_TOOLS.contains(&tool) {
                 return HookEvent::Ignore;
             }
-            match p.get("tool_input").and_then(|ti| str_field(ti, "file_path")) {
+            match p
+                .get("tool_input")
+                .and_then(|ti| str_field(ti, "file_path"))
+            {
                 Some(fp) => HookEvent::Write {
                     tool_name: tool.to_string(),
                     file_path: fp.to_string(),
@@ -115,7 +126,11 @@ mod tests {
             "tool_input": { "file_path": "/repo/src/a.rs" }
         });
         match parse_event("pretooluse", &p) {
-            HookEvent::Write { tool_name, file_path, holder } => {
+            HookEvent::Write {
+                tool_name,
+                file_path,
+                holder,
+            } => {
                 assert_eq!(tool_name, "Edit");
                 assert_eq!(file_path, "/repo/src/a.rs");
                 assert_eq!(holder, "S");
@@ -138,7 +153,8 @@ mod tests {
 
     #[test]
     fn parse_write_event_ignores_non_write_tool() {
-        let p = json!({ "session_id": "S", "tool_name": "Bash", "tool_input": { "command": "ls" } });
+        let p =
+            json!({ "session_id": "S", "tool_name": "Bash", "tool_input": { "command": "ls" } });
         assert!(matches!(parse_event("pretooluse", &p), HookEvent::Ignore));
     }
 
@@ -171,18 +187,33 @@ mod tests {
         let v = deny_json("blocked by S/a1");
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
         assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
-        assert_eq!(v["hookSpecificOutput"]["permissionDecisionReason"], "blocked by S/a1");
+        assert_eq!(
+            v["hookSpecificOutput"]["permissionDecisionReason"],
+            "blocked by S/a1"
+        );
     }
 
     #[test]
     fn harness_enabled_reads_flag() {
         let dir = std::env::temp_dir().join(format!("devkit-harness-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("devkit.toml"), "[harness]\nenforce_writes = true\n").unwrap();
+        std::fs::write(
+            dir.join("devkit.toml"),
+            "[harness]\nenforce_writes = true\n",
+        )
+        .unwrap();
         assert!(harness_enabled(&dir));
-        std::fs::write(dir.join("devkit.toml"), "[harness]\nenforce_writes = false\n").unwrap();
+        std::fs::write(
+            dir.join("devkit.toml"),
+            "[harness]\nenforce_writes = false\n",
+        )
+        .unwrap();
         assert!(!harness_enabled(&dir));
-        std::fs::write(dir.join("devkit.toml"), "[defaults]\nworktree_root = \"x\"\n").unwrap();
+        std::fs::write(
+            dir.join("devkit.toml"),
+            "[defaults]\nworktree_root = \"x\"\n",
+        )
+        .unwrap();
         assert!(!harness_enabled(&dir)); // missing section → off, despite unrelated keys
         let _ = std::fs::remove_file(dir.join("devkit.toml"));
         assert!(!harness_enabled(&dir)); // no devkit.toml → off

@@ -37,7 +37,11 @@ fn concurrent_write_decide_yields_one_winner() {
                 .env("XDG_STATE_HOME", &tmp)
                 .env("DEVKIT_TEST_WRITE", holder)
                 .env("DEVKIT_TEST_FILE", &file)
-                .args(["--exact", "concurrent_write_decide_yields_one_winner", "--nocapture"])
+                .args([
+                    "--exact",
+                    "concurrent_write_decide_yields_one_winner",
+                    "--nocapture",
+                ])
                 .stdout(std::process::Stdio::piped())
                 .spawn()
                 .unwrap()

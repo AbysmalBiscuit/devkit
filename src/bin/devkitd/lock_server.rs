@@ -72,7 +72,14 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> Response {
             note,
             ttl,
         } => match store::write_decide_with(
-            &s, &root, &holder, &path, pid, note.as_deref(), ttl, now(),
+            &s,
+            &root,
+            &holder,
+            &path,
+            pid,
+            note.as_deref(),
+            ttl,
+            now(),
         ) {
             Ok(d) => Response::WriteDecided(d),
             Err(e) => Response::Err(format!("{e:#}")),
