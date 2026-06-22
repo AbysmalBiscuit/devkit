@@ -1,5 +1,4 @@
 mod baseline;
-mod env;
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -9,6 +8,7 @@ use devkit_common::{cmd::git, paths, ui};
 use devkit_ports::config::expand_tilde;
 use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
+use devkit_ports::run;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -327,10 +327,10 @@ fn cmd_up(
         for a in &apps {
             let app = &catalog[a];
             let port = ports[a];
-            let mut argv = env::doppler_prefix(app, &cfg.defaults.doppler_config);
-            argv.extend(env::launch_argv(app, port));
+            let mut argv = run::doppler_prefix(app, &cfg.defaults.doppler_config);
+            argv.extend(run::launch_argv(app, port));
             let app_cwd = base_dir.join(&app.path);
-            let envmap = env::env_for(app, provider_port, &user);
+            let envmap = run::env_for(app, provider_port, &user);
             let log = paths::logs_dir().join(slug(holder)).join(format!(
                 "{}-{}.log",
                 grp_role.as_str(),
