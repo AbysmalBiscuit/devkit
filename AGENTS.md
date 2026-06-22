@@ -88,6 +88,24 @@ The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
   reap processes must poll for the expected state, not sleep a fixed interval — a loaded
   Windows runner exits a child later than a short fixed sleep allows.
 
+## Worktrees
+
+The primary clone (`C:/Users/Lev/Git/lev/devkit`) stays on `main`. Feature work
+never checks out a branch in it — every branch lives in its own worktree under
+`../devkit-worktrees/`:
+
+- Start work with `git worktree add ../devkit-worktrees/<name> -b <branch> main`,
+  not `git checkout -b <branch>` in the primary clone. Several agent sessions
+  share this repo at once; an in-place checkout moves the branch under all of
+  them and corrupts the others' view of HEAD.
+- Land finished work by fast-forwarding `main` from outside its worktree
+  (`git -C <primary> switch main && git merge --ff-only <branch>`, or
+  `git fetch . <branch>:main` while `main` is checked out nowhere), then
+  `git worktree remove` the worktree.
+- If you ever find the primary clone on a non-`main` branch, stop and restore it
+  (`git switch main`, re-home the stray branch in a worktree) before doing
+  anything else. The `post-checkout` guard hook warns when this happens.
+
 ## File locks
 
 When multiple sessions share one checkout, claim files before editing them with the
