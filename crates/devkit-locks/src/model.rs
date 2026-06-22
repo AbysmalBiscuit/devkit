@@ -275,10 +275,10 @@ impl Data {
         });
         if overlaps {
             // Held only by self or an ancestor. Renew the writer's own exact lock if present.
-            if let Some(e) = self.locks.get_mut(&key_for(root, path)) {
-                if e.holder == writer {
-                    e.ts = now;
-                }
+            if let Some(e) = self.locks.get_mut(&key_for(root, path))
+                && e.holder == writer
+            {
+                e.ts = now;
             }
             return WriteDecision::AllowedByOwnership;
         }

@@ -39,6 +39,40 @@ fn acquire_through_daemon_is_visible_to_check() {
     h.shutdown();
 }
 
+/// A write decision through the daemon acquires a free file, then denies a
+/// non-ancestor holder; a prefix release frees the subtree, written through to file.
+#[test]
+fn write_decide_and_release_prefix_through_daemon() {
+    let mut h = Harness::start();
+    h.wait_for_lock_socket(Duration::from_secs(5));
+
+    let acq = h.lock_request(&Request::WriteDecide {
+        root: "/repo".into(),
+        holder: "S".into(),
+        path: "src/a.rs".into(),
+        pid: None,
+        note: Some("write-harness".into()),
+        ttl: 0,
+    });
+    assert!(matches!(acq, Response::WriteDecided(devkit_locks::model::WriteDecision::Acquired)),
+        "expected Acquired, got {acq:?}");
+
+    let denied = h.lock_request(&Request::WriteDecide {
+        root: "/repo".into(),
+        holder: "T".into(),
+        path: "src/a.rs".into(),
+        pid: None,
+        note: None,
+        ttl: 0,
+    });
+    assert!(matches!(denied, Response::WriteDecided(devkit_locks::model::WriteDecision::Denied(_))),
+        "expected Denied, got {denied:?}");
+
+    let freed = h.lock_request(&Request::ReleasePrefix { root: "/repo".into(), prefix: "S".into() });
+    assert!(matches!(freed, Response::Freed(ref v) if v.len() == 1), "expected one freed, got {freed:?}");
+    h.shutdown();
+}
+
 /// A lock acquired through the daemon is written through to locks.json, so after
 /// the daemon exits the flock fallback still sees it.
 #[test]

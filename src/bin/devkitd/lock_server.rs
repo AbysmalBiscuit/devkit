@@ -64,5 +64,24 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> Response {
             Ok(n) => Response::Pruned(n),
             Err(e) => Response::Err(format!("{e:#}")),
         },
+        Request::WriteDecide {
+            root,
+            holder,
+            path,
+            pid,
+            note,
+            ttl,
+        } => match store::write_decide_with(
+            &s, &root, &holder, &path, pid, note.as_deref(), ttl, now(),
+        ) {
+            Ok(d) => Response::WriteDecided(d),
+            Err(e) => Response::Err(format!("{e:#}")),
+        },
+        Request::ReleasePrefix { root, prefix } => {
+            match store::release_prefix_with(&s, &root, &prefix) {
+                Ok(v) => Response::Freed(v),
+                Err(e) => Response::Err(format!("{e:#}")),
+            }
+        }
     }
 }

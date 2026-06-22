@@ -40,6 +40,18 @@ pub enum Request {
         all: bool,
     },
     Prune,
+    WriteDecide {
+        root: String,
+        holder: String,
+        path: String,
+        pid: Option<u32>,
+        note: Option<String>,
+        ttl: u64,
+    },
+    ReleasePrefix {
+        root: String,
+        prefix: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -57,6 +69,7 @@ pub enum Response {
     Freed(Vec<String>),
     Locks(Vec<LockEntry>),
     Pruned(usize),
+    WriteDecided(crate::model::WriteDecision),
     Ok,
     Err(String),
 }
