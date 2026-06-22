@@ -102,14 +102,16 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn reconcile_removes_orphan_leaves() {
-        // A temp dir standing in for a delegated cgroup base; cgroup_create_leaf
-        // here just mkdirs + writes plain files (no kernel controller needed).
+        // A temp dir standing in for a delegated cgroup base. Leaves are created
+        // as empty dirs, modeling a process-free orphan cgroup — which is exactly
+        // the removable state reconcile expects (rmdir succeeds; a real cgroup's
+        // memory.* pseudo-files do not block rmdir, and a tmpfs dir has none).
         let base = std::env::temp_dir().join(format!("devkitd-cg-{}", crate::tests_unique()));
-        std::fs::create_dir_all(base.join("servers")).unwrap();
+        let servers = base.join("servers");
         let live = key("/w", "api", Role::Issue);
         let orphan = key("/w", "ghost", Role::Issue);
-        devkit_common::sys::cgroup_create_leaf(&base, &leaf_name(&live), 1 << 30).unwrap();
-        devkit_common::sys::cgroup_create_leaf(&base, &leaf_name(&orphan), 1 << 30).unwrap();
+        std::fs::create_dir_all(servers.join(leaf_name(&live))).unwrap();
+        std::fs::create_dir_all(servers.join(leaf_name(&orphan))).unwrap();
         let d = crate::test_daemon_with_base(base.clone(), 1 << 30);
         reconcile(&d, &[live.clone()]);
         let left = devkit_common::sys::cgroup_list_leaves(&base);
