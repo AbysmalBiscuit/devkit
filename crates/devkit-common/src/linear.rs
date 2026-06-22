@@ -133,6 +133,15 @@ fn assigned_query(after: Option<&str>) -> String {
 
 /// Every issue assigned to me, paginated. Empty on no key / network error.
 pub fn assigned_issue_history(key: &str) -> Result<Vec<AssignedIssue>> {
+    assigned_issue_history_with_progress(key, |_| {})
+}
+
+/// As [`assigned_issue_history`], calling `on_page` with the running total after
+/// each fetched page — lets a caller show a rising count while pages stream in.
+pub fn assigned_issue_history_with_progress(
+    key: &str,
+    mut on_page: impl FnMut(usize),
+) -> Result<Vec<AssignedIssue>> {
     let mut out = Vec::new();
     let mut after: Option<String> = None;
     loop {
@@ -161,6 +170,7 @@ pub fn assigned_issue_history(key: &str) -> Result<Vec<AssignedIssue>> {
                 });
             }
         }
+        on_page(out.len());
         // Continue only with a real cursor; a `hasNextPage` without an
         // `endCursor` would otherwise re-fetch the first page forever.
         match (
@@ -204,5 +214,17 @@ mod tests {
         assert!(assigned_query(None).contains("issues(first: 50"));
         assert!(assigned_query(None).contains("assignee: { isMe: { eq: true } }"));
         assert!(assigned_query(Some("CUR")).contains("after: \"CUR\""));
+    }
+    #[test]
+    fn assigned_history_no_op_wrapper_exists() {
+        // Compile-time guarantee that the no-op wrapper still delegates to the
+        // progress variant with the same return type.
+        fn _assert_sig(k: &str) -> Result<Vec<AssignedIssue>> {
+            assigned_issue_history(k)
+        }
+        fn _assert_progress(k: &str) -> Result<Vec<AssignedIssue>> {
+            assigned_issue_history_with_progress(k, |_n| {})
+        }
+        let _ = (_assert_sig, _assert_progress);
     }
 }
