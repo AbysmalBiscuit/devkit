@@ -1179,6 +1179,7 @@ git commit -m "test(locks): cover concurrent write-decide race"
 
 **Files:**
 - Create: `hooks/hooks.json`
+- Edit: `.claude-plugin/plugin.json` (add `"hooks": "./hooks/hooks.json"` pointer)
 - Create: `devkit.toml` (repo root, dogfood opt-in)
 
 **Interfaces:**
@@ -1218,7 +1219,7 @@ git commit -m "test(locks): cover concurrent write-decide race"
 
 Note: `lockm` is invoked by bare name so it resolves from PATH (where `cargo install --path .` puts it). If absent, the shell exit (127) is a non-blocking PreToolUse error — the write proceeds (fail-open), matching the spec.
 
-- [ ] **Step 2: Reference the manifest from the plugin** — confirm `.claude-plugin/plugin.json` picks up `hooks/hooks.json`. Per the plugin spec, a plugin-root `hooks/hooks.json` is auto-discovered; if `plugin.json` requires an explicit `"hooks"` pointer, add `"hooks": "./hooks/hooks.json"`. Verify by reading the current `.claude-plugin/plugin.json` and matching the established `"skills"`/`"hooks"` key convention used by `hooks-codex.json`.
+- [ ] **Step 2: Reference the manifest from the plugin** — add an explicit `"hooks": "./hooks/hooks.json"` key to `.claude-plugin/plugin.json`. Claude Code does **not** auto-discover a plugin-root `hooks/hooks.json`; the manifest must point at it (a string path, an array of paths, or an inline object). Use the string-path form to match the manifest's existing `"mcpServers": "./.mcp.json"` convention. Without this key the hooks never fire.
 
 - [ ] **Step 3: Add the dogfood opt-in** — create repo-root `devkit.toml`:
 
@@ -1313,8 +1314,17 @@ Confirm, polling state (no fixed sleeps):
 
 **Type consistency:** `WriteDecision { Acquired, AllowedByOwnership, Denied(Vec<Conflict>) }` used identically in Tasks 2/3/4/5/7. `decide_write(path_in, holder, note, ttl)` and `release_prefix(holder_prefix)` signatures match between Task 4 (def) and Task 7 (call). `write_decide_with`/`release_prefix_with` signatures match Tasks 3/5. `holder_from_fields`/`parse_event`/`deny_json`/`harness_enabled` match Tasks 6/7. Task 8 reuses the public `decide_write` facade (Task 4) via multiprocess self-re-exec — no store change, no new ctor.
 
-## Open questions (verify during execution)
+## Open questions
 
-1. **`.claude-plugin/plugin.json` hooks discovery** (Task 9 Step 2) — whether plugin-root `hooks/hooks.json` is auto-discovered or needs an explicit `"hooks": "./hooks/hooks.json"` pointer. Resolve by reading the current manifest and the plugin spec.
-2. **`SessionEnd` reliability on hard exit** — if it does not fire on Ctrl-C, locks fall to the TTL backstop (1800s). Confirm during the Task 10 manual run; if too coarse, consider a shorter harness TTL.
-3. **`agent_id` stability across a sub-agent's tool calls** — the design assumes it is constant for the life of one sub-agent invocation (so all its writes share a holder). Confirm in the Task 10 run.
+Resolved against the Claude Code hooks/plugins reference (docs as of 2026-06-19):
+
+1. **`.claude-plugin/plugin.json` hooks discovery** — **RESOLVED: no auto-discovery.** A plugin-root `hooks/hooks.json` is *not* picked up implicitly; the manifest must point at it via a `"hooks"` key (string path / array / inline object). Task 9 Step 2 now adds `"hooks": "./hooks/hooks.json"` unconditionally.
+2. **`SessionEnd` reliability on hard exit** — **RESOLVED: fires regardless of how the session ends** — normal exit, crash, and signal termination (`SIGINT`/`SIGTERM`), per the reference. So `release_prefix(session_id)` runs on Ctrl-C; the TTL backstop only covers a true kill -9 / power loss. Release runs for every `session_end_reason` (`clear`/`resume`/`logout`/`prompt_input_exit`/`bypass_permissions_disabled`/`other`) — safe because auto-acquire re-claims on the next write if a `resume` continues. Note: `SessionEnd` cannot block (exit/JSON ignored); it is cleanup-only, which is all the release needs.
+3. **`agent_id` stability across a sub-agent's tool calls** — **RESOLVED (high confidence).** `agent_id` is the documented correlation key: the value in a sub-agent's `PreToolUse` payload is the same one delivered to that sub-agent's `SubagentStop`. It is therefore stable for the life of one sub-agent invocation, so all its writes share holder `session_id/agent_id` and `SubagentStop` releases exactly that prefix. Still worth an eyeball in the Task 10 e2e run.
+
+Confirmed mechanics folded into the implementation tasks (no longer open):
+
+- **Holder identity** — `session_id` is shared by parent and sub-agents; `agent_id` is present *only* inside a sub-agent. So top-level holder = `session_id`, sub-agent holder = `session_id/agent_id` (Tasks 1/6). The two-level cap is real: `agent_id` is a single opaque id, not a nested chain.
+- **Deny envelope** — `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}` with exit 0; `permissionDecisionReason` is surfaced to the model (Tasks 6/7). `permissionDecision` accepts `allow`/`deny`/`ask`/`defer`; the harness uses only `deny` (and stays silent / exits 0 to allow).
+- **Fail-open on missing `lockm`** — a bare-name spawn that fails (binary not on PATH) is a non-blocking `PreToolUse` error, so the write proceeds (Task 9 Step 1 note). Verify in the e2e run.
+- **Payload fields** — `session_id`, `tool_name`, `tool_input.file_path`, `agent_id` (optional), `cwd`, `transcript_path` (Task 6 `parse_event`). Root is still derived from the target file's absolute path, not `cwd`.
