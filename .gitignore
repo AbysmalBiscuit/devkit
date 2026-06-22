@@ -6,3 +6,6 @@
 # local secrets) and must never be distributed. Document the config *shape*
 # in docs/ instead — see docs/configuration.md.
 /configs/*.toml
+
+# Subagent-driven-development progress ledger (local scratch)
+/.superpowers/
