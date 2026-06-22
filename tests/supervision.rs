@@ -325,7 +325,7 @@ fn memory_restart_over_limit_server() {
     // Bind + accept so wait_ready succeeds. First run (sentinel absent): touch
     // ~120 MB resident, then keep serving (alive, over limit). Later runs: small.
     let script = r#"
-import socket, os, sys, time
+import socket, os, sys
 port = int(sys.argv[1]); sentinel = sys.argv[2]
 srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -406,7 +406,7 @@ fn memory_restart_gives_up_within_budget() {
 
     // Balloon on every run (no sentinel): each respawn re-breaches the limit.
     let script = r#"
-import socket, os, sys, time
+import socket, sys
 port = int(sys.argv[1])
 srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
