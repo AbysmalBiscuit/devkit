@@ -148,6 +148,10 @@ pub fn reason_not_finished(wt: &IssueWorktree, has_key: bool, pr_only: bool) -> 
 }
 
 /// Discover worktrees, attach Linear state, and compute the finished verdict.
+///
+/// The per-row `finished`/`reason_not_finished` is the full gate (`pr_only =
+/// false`). Callers wanting the `--pr-only` gate must re-call
+/// `reason_not_finished` with `pr_only = true` rather than trust `wt.finished`.
 pub fn gather(start: &str, ids: &[String]) -> Result<StatusReport> {
     let mut rows = build_rows(start)?;
     let key = std::env::var("LINEAR_API_KEY").ok();
