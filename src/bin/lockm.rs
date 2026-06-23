@@ -120,8 +120,8 @@ fn run_hook(event: &str) {
         .map(|p| devkit_locks::find_root_from(&p))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    if !hook::harness_enabled(&root) {
-        return; // opt-in absent → no enforcement
+    if !hook::enforcement_enabled(&root) {
+        return; // no opt-in (env, checkout, or global config) → no enforcement
     }
 
     match hook::parse_event(event, &payload) {

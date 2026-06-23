@@ -115,16 +115,19 @@ subcommand for shell completion.
 
 ## Enforced mode (automatic write locks)
 
-When a checkout's `devkit.toml` sets:
+When write enforcement is enabled, the devkit plugin's `PreToolUse` hook enforces
+write locks automatically. **In an enforced checkout, agents do not call `lockm
+acquire` or `lockm release` themselves — the harness owns the protocol.**
 
-```toml
-[harness]
-enforce_writes = true
-```
+Enforcement turns on from any of three sources (the env var overrides the files):
 
-the devkit plugin installs a `PreToolUse` hook that enforces write locks
-automatically. **In an enforced checkout, agents do not call `lockm acquire` or
-`lockm release` themselves — the harness owns the protocol.**
+- `DEVKIT_ENFORCE_WRITES=1` in the environment — a machine-wide master switch
+  (`0`/`false` forces it off).
+- `[harness] enforce_writes = true` in the **global** config (`$DEVKIT_CONFIG`, else
+  `~/.config/devkit/config.toml`) — enforces across every checkout, no per-worktree
+  file needed.
+- `[harness] enforce_writes = true` in a **checkout's own** `devkit.toml` — opts that
+  one checkout in.
 
 ### How it works
 
@@ -157,9 +160,10 @@ automatically. **In an enforced checkout, agents do not call `lockm acquire` or
   write tools listed above. Shell-level writes made via `Bash` are outside its
   scope.
 
-- **Fail-open when the harness is off.** In any checkout without the
-  `enforce_writes = true` marker, the hook exits immediately without blocking any
-  writes. No locks are taken and there is no overhead.
+- **Fail-open when the harness is off.** When no source opts the checkout in (env
+  unset, no global-config flag, no checkout `devkit.toml` flag), the hook exits
+  immediately without blocking any writes. No locks are taken and there is no
+  overhead.
 
 - **Fail-open when `lockm` is absent.** If the `lockm` binary is not on `PATH`,
   the hook invocation fails silently and the write proceeds. Install `lockm` via

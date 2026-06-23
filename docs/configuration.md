@@ -106,13 +106,30 @@ all platforms.
 
 ### `[harness]`
 
-Per-checkout opt-in for the agent write-access harness. This table is read
-from the checkout's own `devkit.toml`; it is not part of the personal config
-at `~/.config/devkit/config.toml`.
+Opt-in for the agent write-access harness.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `enforce_writes` | bool | `false` | When `true`, the devkit plugin's `PreToolUse` hook enforces write locks automatically. When absent or `false`, the hook exits immediately with no effect. |
+
+**Three opt-in sources, with precedence.** The hook resolves whether to enforce
+for a given checkout from, in order:
+
+1. **`DEVKIT_ENFORCE_WRITES`** (env) — an explicit master switch. `1`/`true`/`yes`/`on`
+   forces enforcement on; `0`/`false`/`no`/`off` forces it off, overriding both
+   config files. Unset/blank/unrecognized → no opinion, fall through.
+2. **The checkout's own `devkit.toml`** `[harness] enforce_writes` — per-checkout
+   opt-in, read from the checkout root (the first ancestor containing `.git`).
+3. **The global config** `[harness] enforce_writes` — read from `$DEVKIT_CONFIG`
+   (else `~/.config/devkit/config.toml`). Set it here to enforce across **every**
+   checkout without a per-checkout file.
+
+With the env var unset, enforcement is on when **either** the checkout file **or**
+the global config opts in. Set `enforce_writes = true` in the global config for a
+machine-wide default; drop a per-checkout `devkit.toml` only when you want to opt a
+single checkout in (or, with the global default on, set the env var to `off` to opt
+a session out). The global-config and env routes need **no** per-worktree file — so
+they avoid shadowing the global config in `devrun`/`portm` discovery.
 
 **What enforcement gates.** The hook intercepts `Edit`, `MultiEdit`, `Write`,
 and `NotebookEdit` — the structured write tools. Shell-level writes made via
@@ -125,8 +142,9 @@ from the shell that runs hook commands.
 
 **Fail-open / fail-closed behaviour.**
 
-- *Harness off* (`enforce_writes` absent or `false`, or no `devkit.toml`
-  found): the hook exits 0 immediately. No locks are taken; zero overhead.
+- *Harness off* (no opt-in from any source — env unset, no checkout `devkit.toml`
+  flag, and no global-config flag): the hook exits 0 immediately. No locks are
+  taken; zero overhead.
 - *`lockm` absent from `PATH`*: the hook invocation fails silently and the
   write proceeds. This is fail-open to avoid blocking agents on machines that
   do not have the binary installed.
@@ -134,16 +152,16 @@ from the shell that runs hook commands.
   than allowing it through silently (fail-closed). The deny message includes
   the error so the agent can report it.
 
-**Example** — to opt a checkout in, add to its `devkit.toml`:
+**Example** — enforce everywhere via the global config (`~/.config/devkit/config.toml`):
 
 ```toml
 [harness]
 enforce_writes = true
 ```
 
-No other configuration is required. The remainder of the `devkit.toml` may be
-a full project config or an otherwise empty file — only the `[harness]` table
-is read by the hook.
+Or per-checkout, add the same table to that checkout's own `devkit.toml`; only the
+`[harness]` table is read, so it may be an otherwise-empty file or a full project
+config. Or skip both files and set `DEVKIT_ENFORCE_WRITES=1` in the environment.
 
 ### `[people.<alias>]`
 
