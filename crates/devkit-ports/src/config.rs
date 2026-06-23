@@ -193,6 +193,25 @@ fn record_origin(path: &str, v: &toml::Value, src: &Path, origin: &mut HashMap<S
     }
 }
 
+/// Flatten a serialized config `Value` into `(dotted-path, leaf-value)` pairs. Tables
+/// recurse; scalars and arrays are leaves. Mirrors `record_origin`'s leaf model so
+/// every emitted path can be looked up in `Provenance::origin`.
+pub fn flatten(v: &toml::Value, prefix: &str, out: &mut Vec<(String, toml::Value)>) {
+    match v {
+        toml::Value::Table(t) => {
+            for (k, sub) in t {
+                let path = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                flatten(sub, &path, out);
+            }
+        }
+        _ => out.push((prefix.to_string(), v.clone())),
+    }
+}
+
 fn read_layer(p: &Path) -> Result<(PathBuf, toml::Table)> {
     let body = std::fs::read_to_string(p)
         .with_context(|| format!("reading config layer {}", p.display()))?;
@@ -604,5 +623,19 @@ github = "exampleuser"
         let root = unique_tmp("empty");
         let err = resolve_with_home(None, &root, None).unwrap_err();
         assert!(err.to_string().contains("no devkit.toml"));
+    }
+
+    #[test]
+    fn flatten_yields_sorted_dotted_leaves() {
+        let v: toml::Value =
+            toml::from_str("[a]\nx=1\n[a.b]\ny='z'\nlist=['p','q']\n").unwrap();
+        let mut out = Vec::new();
+        flatten(&v, "", &mut out);
+        let paths: Vec<&str> = out.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(paths.contains(&"a.x"));
+        assert!(paths.contains(&"a.b.y"));
+        // arrays are single leaves, not flattened element-by-element
+        assert!(paths.contains(&"a.b.list"));
+        assert!(!paths.iter().any(|p| p.starts_with("a.b.list.")));
     }
 }
