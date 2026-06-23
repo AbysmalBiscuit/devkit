@@ -1,4 +1,5 @@
 mod baseline;
+mod config;
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -58,8 +59,32 @@ enum Cmd {
         #[arg(short = 'f', long)]
         follow: bool,
     },
+    /// Show the effective merged config, or list configured apps.
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
     Completions { shell: Shell },
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Print the effective merged config (TOML by default).
+    Show {
+        /// Annotate each value with the file it was resolved from.
+        #[arg(long)]
+        origin: bool,
+        /// Emit JSON instead of TOML.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the configured apps from the merged config.
+    Apps {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// CLI selector over registry roles. `Both` runs/affects the issue branch and a
@@ -206,6 +231,10 @@ fn main() -> Result<()> {
         Cmd::Logs { app, role, follow } => {
             cmd_logs(&cwd, app, role.and_then(RoleSelector::filter), *follow)
         }
+        Cmd::Config { cmd } => match cmd {
+            ConfigCmd::Show { origin, json } => config::show(&cli, &cwd, *origin, *json),
+            ConfigCmd::Apps { json } => config::apps(&cli, &cwd, *json),
+        },
         Cmd::Completions { shell } => {
             clap_complete::generate(
                 *shell,

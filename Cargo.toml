@@ -22,6 +22,7 @@ clap.workspace = true
 clap_complete.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
+toml.workspace = true
 fd-lock.workspace = true
 interprocess.workspace = true
 chrono.workspace = true
