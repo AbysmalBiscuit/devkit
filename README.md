@@ -196,7 +196,6 @@ The state home honors `$XDG_STATE_HOME` (default `~/.local/state`). A legacy
 - `git`
 - `gh` (GitHub CLI, authenticated)
 - `doppler`
-- `bun`
 
 **Optional:**
 
