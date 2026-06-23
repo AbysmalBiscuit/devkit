@@ -304,7 +304,6 @@ fn cmd_up(
             .collect();
         let plans = run::plan_group(
             catalog,
-            &cfg.defaults.doppler_config,
             &apps,
             &ports,
             provider.as_deref(),

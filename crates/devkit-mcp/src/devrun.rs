@@ -89,7 +89,6 @@ fn up(_ctx: &ServerCtx, args: Value) -> Result<Value> {
         .map(|(n, _)| n.clone());
     let plans = run::plan_group(
         catalog,
-        &loaded.config.defaults.doppler_config,
         &apps,
         &ports,
         provider.as_deref(),

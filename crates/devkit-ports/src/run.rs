@@ -14,22 +14,6 @@ use crate::apps::App;
 use crate::registry::{self, Data, Role};
 use devkit_common::{paths, supervise};
 
-/// Build the doppler argv prefix: `doppler run -p <project> -c <config> [--preserve-env=K]... --`
-pub fn doppler_prefix(app: &App, config: &str) -> Vec<String> {
-    let mut v = vec!["doppler".into(), "run".into()];
-    if let Some(p) = &app.doppler_project {
-        v.push("-p".into());
-        v.push(p.clone());
-    }
-    v.push("-c".into());
-    v.push(config.into());
-    for k in &app.preserve_env {
-        v.push(format!("--preserve-env={k}"));
-    }
-    v.push("--".into());
-    v
-}
-
 /// Resolve `{port}` in the launch argv.
 pub fn launch_argv(app: &App, port: u16) -> Vec<String> {
     app.launch
@@ -241,7 +225,6 @@ pub struct LaunchPlan {
 #[allow(clippy::too_many_arguments)]
 pub fn plan_group(
     catalog: &HashMap<String, App>,
-    doppler_config: &str,
     apps: &[String],
     ports: &BTreeMap<String, u16>,
     provider: Option<&str>,
@@ -254,8 +237,7 @@ pub fn plan_group(
     for a in apps {
         let app = &catalog[a];
         let port = ports[a];
-        let mut argv = doppler_prefix(app, doppler_config);
-        argv.extend(launch_argv(app, port));
+        let argv = launch_argv(app, port);
         let cwd = base_dir.join(&app.path);
         let env = env_for(app, provider_port, user_env);
         let log = paths::logs_dir()
@@ -358,6 +340,9 @@ pub fn launch(
     supervise_daemon: bool,
     wait: bool,
 ) -> Result<Vec<ServerStatus>> {
+    for p in plans {
+        assert_not_prd(p)?;
+    }
     #[cfg(feature = "daemon")]
     if supervise_daemon {
         return supervise_via_daemon(plans, holder, role);
@@ -664,14 +649,13 @@ mod tests {
     }
 
     #[test]
-    fn plan_group_builds_doppler_wrapped_argv() {
+    fn plan_group_runs_launch_verbatim() {
         let mut catalog = HashMap::new();
         catalog.insert("web".to_string(), app("web", None));
         let mut ports = BTreeMap::new();
         ports.insert("web".to_string(), 4321u16);
         let plans = plan_group(
             &catalog,
-            "dev_local",
             &["web".to_string()],
             &ports,
             None,
@@ -683,9 +667,8 @@ mod tests {
         let p = &plans[0];
         assert_eq!(p.app, "web");
         assert_eq!(p.port, 4321);
-        // doppler prefix then the port-substituted launch argv.
-        assert_eq!(p.argv[0], "doppler");
-        assert_eq!(p.argv.last().unwrap(), "4321");
+        // No prefix is built: argv is the port-substituted launch, verbatim.
+        assert_eq!(p.argv, vec!["next", "dev", "-p", "4321"]);
         assert!(p.cwd.ends_with("apps/x"));
     }
 
