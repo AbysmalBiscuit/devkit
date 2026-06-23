@@ -71,7 +71,6 @@ pub struct Defaults {
     pub branch_prefix: String,
     pub baseline_ref: String,
     pub baseline_path: String,
-    pub doppler_config: String,
     pub doppler_yaml: String,
     /// Repo-relative directory apps live under (e.g. "apps"). Used to infer app
     /// paths from doppler.yaml and to detect changed apps in a diff.
@@ -110,8 +109,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub provides_url: bool,
     #[serde(default)]
-    pub preserve_env: Vec<String>,
-    #[serde(default)]
     pub static_env: HashMap<String, String>,
     /// Env written to `<app>/.env.local` during `issue setup` (e.g. dummy workflow ids).
     #[serde(default)]
@@ -121,9 +118,6 @@ pub struct AppConfig {
     /// `[["doppler","run","-c","local","--","bun","install"]]`.
     #[serde(default)]
     pub setup: Vec<Vec<String>>,
-    /// Optional overrides; normally derived from doppler.yaml.
-    #[serde(default)]
-    pub doppler_project: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
 }
@@ -131,10 +125,6 @@ pub struct AppConfig {
 impl Config {
     pub fn parse(s: &str) -> Result<Self> {
         let cfg: Config = toml::from_str(s).context("parsing devkit.toml")?;
-        anyhow::ensure!(
-            cfg.defaults.doppler_config != "prd",
-            "refusing config with doppler_config = prd"
-        );
         Ok(cfg)
     }
 }
@@ -183,13 +173,11 @@ worktree_root = "~/Git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
 baseline_path = "~/Git/example/_baseline"
-doppler_config = "dev_local"
 doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
 [apps.api]
 base_port = 9100
-launch = ["nitro", "dev", "--port", "{port}"]
+launch = ["doppler", "run", "-c", "dev_local", "--", "nitro", "dev", "--port", "{port}"]
 url_env = "FOUNDRY_API_BASE_URL"
-preserve_env = ["SUPABASE_JWT_SECRET"]
 static_env = { SUPABASE_JWT_SECRET = "s" }
 "#;
     #[test]
@@ -200,11 +188,6 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             c.apps["api"].url_env.as_deref(),
             Some("FOUNDRY_API_BASE_URL")
         );
-    }
-    #[test]
-    fn rejects_prd() {
-        let bad = SAMPLE.replace("dev_local", "prd");
-        assert!(Config::parse(&bad).is_err());
     }
     #[test]
     fn parses_app_setup_commands() {
@@ -238,7 +221,6 @@ worktree_root = "~/Git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
 baseline_path = "~/Git/example/_baseline"
-doppler_config = "dev_local"
 doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
 pr_base = "staging"
 [apps.api]
