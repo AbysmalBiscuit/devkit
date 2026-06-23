@@ -17,7 +17,7 @@ portm prune                                      # remove stale reservations
 
 ### `devrun`: Supervised Dev Servers
 
-Launches and supervises dev servers for one or more apps. Apps not explicitly named are auto-detected by diffing `git diff <baseline_ref>...HEAD`. When any webapp is selected, `api` is added automatically and `FOUNDRY_API_BASE_URL` is wired to the local api port. Servers are launched under `doppler run -c dev_local`, bypassing each app's own `dev` script. `--role both` runs the issue branch and a fresh `origin/staging` baseline side-by-side on separate ports for direct A/B comparison.
+Launches and supervises dev servers for one or more apps. Apps not explicitly named are auto-detected by diffing `git diff <baseline_ref>...HEAD`. When any webapp is selected, `api` is added automatically and `FOUNDRY_API_BASE_URL` is wired to the local api port. Each app's `launch` command is run verbatim with `{port}` substituted; wrap it in `doppler run` in the config if the app needs Doppler-injected secrets. `--role both` runs the issue branch and a fresh `origin/staging` baseline side-by-side on separate ports for direct A/B comparison.
 
 ```
 devrun up [apps…] [--role issue|baseline|both] [--env K=V] [--env-file F] [--dry-run]
@@ -121,7 +121,7 @@ Config discovery order (first match wins):
 3. `./devkit.toml` (walks up to the filesystem root)
 4. `~/.config/devkit/config.toml`
 
-App `path` and `doppler_project` are normally inferred from the monorepo's `doppler.yaml`; individual `[apps.<name>]` sections may override them. The `doppler_config` value must not be `prd`: devkit guards against accidentally running against production secrets.
+App `path` is normally inferred from the monorepo's `doppler.yaml`; individual `[apps.<name>]` sections may override it with an explicit `path`. `launch` is run verbatim, so a Doppler wrapper lives in each app's `launch`; devkit refuses to start a Doppler launch that resolves to the `prd` config, guarding against accidentally running against production secrets.
 
 App conventions are config-driven, not hardcoded:
 
@@ -195,10 +195,10 @@ The state home honors `$XDG_STATE_HOME` (default `~/.local/state`). A legacy
 
 - `git`
 - `gh` (GitHub CLI, authenticated)
-- `doppler`
 
 **Optional:**
 
+- `doppler`: only if an app's `launch` wraps its command in `doppler run` (see [docs/configuration.md](docs/configuration.md))
 - `$LINEAR_API_KEY`: enables the Linear issue-Done gate in `issue status`/`issue end` and the issue timeline in `issue dashboard`
 - `$LINEAR_WORKSPACE`: enables clickable Linear issue links in `issue status`
 - `$SLACK_TOKEN`: lets `issue review` post the reviewer message directly (otherwise it emits a `SlackIntent` JSON object)

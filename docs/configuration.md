@@ -30,8 +30,7 @@ you prefer to keep a copy inside a checkout.)
 | `branch_prefix` | yes | Prefix for branches created by `issue setup` (e.g. `you/`). |
 | `baseline_ref` | yes | Git ref the baseline server tracks (e.g. `origin/staging`). |
 | `baseline_path` | yes | Checkout path for the baseline server. `~` is expanded. |
-| `doppler_config` | yes | Doppler config name for secret injection. **`prd` is rejected** to avoid running against production secrets. |
-| `doppler_yaml` | yes | Path to the repo's `doppler.yaml` (maps paths → Doppler projects). `~` is expanded. Optional at runtime: if absent, apps need an explicit project/path. |
+| `doppler_yaml` | no | Path to the repo's `doppler.yaml`; its `setup` paths seed app **path inference**. `~` is expanded. Absent → apps need an explicit `path`. |
 | `pr_base` | no (default `"staging"`) | Default base branch for PRs opened by `issue review`. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
 
@@ -42,14 +41,26 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 | Key | Required | Meaning |
 |---|---|---|
 | `base_port` | yes | Base port; per-worktree ports are allocated from here via the registry. |
-| `launch` | yes | Launch argv. `{port}` is substituted with the allocated port. |
+| `launch` | yes | The complete launch command, run verbatim. `{port}` is substituted with the allocated port. Write the whole invocation here, including any `doppler run -c <config> --` wrapper and `--preserve-env=…` flags the app needs. |
 | `path` | no | App subdirectory (relative to the repo) when it differs from `<name>`. |
 | `url_env` | no | Env var that receives the app's URL. |
 | `provides_url` | no | `true` marks the one app whose URL other apps consume. Exactly one app should set this. |
-| `preserve_env` | no | Env vars copied through from the ambient environment. |
 | `static_env` | no | Inline env vars always set for this app. |
 | `prep_env` | no | Env vars written into the per-app prep file during `issue setup`. |
 | `setup` | no | Commands run in the app's directory during `issue setup`, in order. Each entry is one argv array (program + args), e.g. `[["doppler", "run", "-c", "local_config", "--", "bun", "install"]]`. Use this for installs and any doppler wiring; nothing project-specific is hardcoded in the tool. |
+
+devkit runs `launch` exactly as written — it builds no command prefix. To use
+Doppler, wrap the command yourself, e.g.
+`launch = ["doppler","run","-c","dev_local","--","nitro","dev","--port","{port}"]`.
+Before starting such a server, devkit refuses a launch that resolves to the
+`prd` config: it reads `-c`/`--config` from `launch`, then `DOPPLER_CONFIG` from
+the app's env, then `doppler configure get config --scope <app dir>`; a Doppler
+launch whose config is `prd` or cannot be resolved is rejected.
+
+**Migration:** earlier configs set `[defaults].doppler_config` and let devkit
+prepend `doppler run`. Move that wrapper into each app's `launch`, and delete the
+`doppler_config`, `doppler_project`, and `preserve_env` keys (fold any
+`--preserve-env=…` into `launch`).
 
 To enforce a hard per-app memory cap *without* the daemon restarting the server,
 set a runtime or OS limit through the app's `static_env` — e.g.
@@ -182,16 +193,14 @@ worktree_root  = "~/Git/acme"
 branch_prefix  = "you/"
 baseline_ref   = "origin/staging"
 baseline_path  = "~/Git/acme/_baseline"
-doppler_config = "dev_local"
 doppler_yaml   = "~/Git/acme/monorepo/doppler.yaml"
 pr_base        = "staging"
 
 [apps.api]
 base_port    = 9100
-launch       = ["nitro", "dev", "--port", "{port}"]
+launch       = ["doppler", "run", "-c", "dev_local", "--preserve-env=SOME_JWT_SECRET", "--", "nitro", "dev", "--port", "{port}"]
 url_env      = "API_BASE_URL"
 provides_url = true
-preserve_env = ["SOME_JWT_SECRET"]
 static_env   = { SOME_JWT_SECRET = "local-dev-placeholder-value" }
 
 [apps.web]

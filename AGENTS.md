@@ -81,7 +81,13 @@ The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
   (`memory_action = "restart"`) is the graceful first responder; the kernel cap
   (`memory_max_mb`) is the backstop. Set `memory_max_mb` higher than
   `memory_limit_mb` so the soft restart gets to act first.
-- **`prd` is rejected** as a `doppler_config` to avoid running against production secrets.
+- **A `prd` doppler launch is rejected.** `launch` is run verbatim, so devkit
+  guards at launch time: for a launch whose program is `doppler`, it resolves the
+  config from `-c`/`--config`, else `DOPPLER_CONFIG`, else `doppler configure get
+  config --scope <app dir>`, and refuses to start a server when that resolves to
+  `prd` or cannot be resolved. The guard lives in `run::assert_not_prd`, called
+  from `run::launch`, so it covers `devrun`, the MCP `devrun.up`, and both the
+  daemon and direct spawn paths.
 
 ## Conventions
 
