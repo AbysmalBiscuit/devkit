@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.5.0...v0.6.0) (2026-06-23)
+
+
+### Features
+
+* **locks:** enable write harness via env and global config ([54cd3f3](https://github.com/AbysmalBiscuit/devkit/commit/54cd3f3b770f81bebacf387b4b6985a350dd9bd8))
+
 ## [0.5.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.4.0...v0.5.0) (2026-06-22)
 
 
