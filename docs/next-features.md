@@ -97,3 +97,32 @@ analysis below is kept for context.
 server that was once ready refuses connections for K consecutive probes, treat it
 as hung and restart it. Kept out of core supervision to avoid false-positive
 restarts; the supervision thread already loops, so there is room for it.
+
+---
+
+## Configurable per-app prep step (generalize `.env.local` writing)
+
+**Status:** OPEN — wants its own brainstorm/spec.
+**Want:** make the `issue setup` per-app prep step fully configurable instead of
+hardcoding the `.env.local` filename, dotenv format, and write-if-absent strategy.
+
+**Current state (not symlinking — a written file).** `issue setup`
+(`src/bin/issue/setup.rs:92-110`) writes a `<app>/.env.local` file with
+`key=value` lines drawn from each app's `prep_env` map, only when `prep_env` is
+non-empty, and skips if the file already exists. The *content* is config-driven
+(`prep_env` in `devkit.toml`); a generic per-app `setup` command list handles
+everything else. So the behavior is already optional — but three mechanics are
+hardcoded: the filename `.env.local`, the `key=value` (dotenv) format, and the
+write-if-absent logic. A project that wants a different prep filename/location, a
+different format, or a symlink to shared secrets instead of a written file cannot
+express that today.
+
+**Design questions for when this is picked up:**
+- Add a per-app `prep_file` field (target path, default `.env.local`) so the
+  name/location is configurable.
+- Decide whether `prep_env`-writing should collapse into the generic `setup`
+  task list (one uniform mechanism) or stay a typed step (clearer intent,
+  cross-platform write without shelling out).
+- Symlink-vs-write: support linking an app's prep file to a shared secrets file,
+  not just writing one. Settle the format question (dotenv only, or other).
+- Keep it cross-platform — symlinks and file writes behave differently on Windows.
