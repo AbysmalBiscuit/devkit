@@ -121,7 +121,7 @@ Config discovery order (first match wins):
 3. `./devkit.toml` (walks up to the filesystem root)
 4. `~/.config/devkit/config.toml`
 
-App `path` is normally inferred from the monorepo's `doppler.yaml`; individual `[apps.<name>]` sections may override it with an explicit `path`. `launch` is run verbatim, so a Doppler wrapper lives in each app's `launch`; devkit refuses to start a Doppler launch that resolves to the `prd` config, guarding against accidentally running against production secrets.
+App `path` is normally inferred from the monorepo's `doppler.yaml`; individual `[apps.<name>]` sections may override it with an explicit `path`. `launch` is run verbatim, so a Doppler wrapper lives in each app's `launch`; devkit refuses to start a Doppler launch whose config resolves to `prd`, so it can't run against production secrets.
 
 App conventions are config-driven, not hardcoded:
 
