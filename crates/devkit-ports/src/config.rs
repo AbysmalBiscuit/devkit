@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
     pub defaults: Defaults,
     pub apps: HashMap<String, AppConfig>,
@@ -13,7 +13,7 @@ pub struct Config {
     pub daemon: DaemonConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DaemonConfig {
     /// Run gate: autostart the daemon only when true (or via DEVKIT_DAEMON=1 / --supervise).
@@ -65,7 +65,7 @@ impl Default for DaemonConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Defaults {
     pub worktree_root: String,
     pub branch_prefix: String,
@@ -91,14 +91,14 @@ fn default_pr_base() -> String {
 }
 
 /// A team member's handle mapping (Slack user-id, GitHub login, etc.).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Person {
     pub slack: String,
     #[serde(default)]
     pub github: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct AppConfig {
     pub base_port: u16,
     pub launch: Vec<String>,
@@ -109,11 +109,6 @@ pub struct AppConfig {
     /// not by a hardcoded name.
     #[serde(default)]
     pub provides_url: bool,
-    #[serde(default)]
-    pub static_env: HashMap<String, String>,
-    /// Env written to `<app>/.env.local` during `issue setup` (e.g. dummy workflow ids).
-    #[serde(default)]
-    pub prep_env: HashMap<String, String>,
     /// Commands run in the app's directory during `issue setup`, in order. Each
     /// inner array is one argv (program + args), e.g.
     /// `[["doppler","run","-c","local","--","bun","install"]]`.
@@ -121,6 +116,14 @@ pub struct AppConfig {
     pub setup: Vec<Vec<String>>,
     #[serde(default)]
     pub path: Option<String>,
+    // Map fields kept last so the serialized TOML groups scalars/arrays before the
+    // nested env tables — readable, stable output. (toml 0.8 also orders values
+    // before tables on its own, so this is for layout, not a serializer requirement.)
+    #[serde(default)]
+    pub static_env: HashMap<String, String>,
+    /// Env written to `<app>/.env.local` during `issue setup` (e.g. dummy workflow ids).
+    #[serde(default)]
+    pub prep_env: HashMap<String, String>,
 }
 
 impl Config {
@@ -272,5 +275,25 @@ github = "exampleuser"
         assert_eq!(c.daemon.idle_timeout_secs, 600);
         assert_eq!(c.daemon.memory_warn_mb, 6000);
         assert_eq!(c.daemon.max_restarts, 5); // untouched field keeps its default
+    }
+
+    #[test]
+    fn config_roundtrips_through_toml_serialization() {
+        let c = Config::parse(SAMPLE).unwrap();
+        let s = toml::to_string_pretty(&c).expect("serialize config to toml");
+        let c2 = Config::parse(&s).expect("reparse serialized config");
+        assert_eq!(c2.apps["api"].base_port, 9100);
+        assert_eq!(c2.defaults.branch_prefix, "lev/");
+    }
+
+    #[test]
+    fn config_serializes_app_with_static_env_and_trailing_scalars() {
+        // An app carrying both a map field (static_env) and scalar/array fields
+        // (setup, path) serializes cleanly with all keys present.
+        let src = format!("{SAMPLE}setup = [[\"bun\", \"install\"]]\npath = \"apps/api\"\n");
+        let c = Config::parse(&src).unwrap();
+        let s = toml::to_string_pretty(&c).expect("serialize app with trailing scalars");
+        assert!(s.contains("setup"));
+        assert!(s.contains("path"));
     }
 }
