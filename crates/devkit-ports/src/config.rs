@@ -484,10 +484,8 @@ github = "exampleuser"
     fn deeper_layer_overrides_scalar_keeps_others() {
         let base = tbl("[defaults]\nworktree_root='/a'\nbranch_prefix='x/'\n");
         let top = tbl("[defaults]\nbranch_prefix='y/'\n");
-        let (m, origin) = merge_layers(&[
-            (PathBuf::from("/base"), base),
-            (PathBuf::from("/top"), top),
-        ]);
+        let (m, origin) =
+            merge_layers(&[(PathBuf::from("/base"), base), (PathBuf::from("/top"), top)]);
         assert_eq!(m["defaults"]["branch_prefix"].as_str(), Some("y/"));
         assert_eq!(m["defaults"]["worktree_root"].as_str(), Some("/a"));
         assert_eq!(origin["defaults.branch_prefix"], PathBuf::from("/top"));
@@ -498,10 +496,7 @@ github = "exampleuser"
     fn arrays_replace_wholesale() {
         let base = tbl("[apps.api]\nlaunch=['a','b']\n");
         let top = tbl("[apps.api]\nlaunch=['c']\n");
-        let (m, origin) = merge_layers(&[
-            (PathBuf::from("/b"), base),
-            (PathBuf::from("/t"), top),
-        ]);
+        let (m, origin) = merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
         let launch = m["apps"]["api"]["launch"].as_array().unwrap();
         assert_eq!(launch.len(), 1);
         assert_eq!(launch[0].as_str(), Some("c"));
@@ -512,10 +507,7 @@ github = "exampleuser"
     fn nested_maps_merge_per_key() {
         let base = tbl("[apps.api.static_env]\nA='1'\nB='2'\n");
         let top = tbl("[apps.api.static_env]\nB='9'\nC='3'\n");
-        let (m, origin) = merge_layers(&[
-            (PathBuf::from("/b"), base),
-            (PathBuf::from("/t"), top),
-        ]);
+        let (m, origin) = merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
         let se = &m["apps"]["api"]["static_env"];
         assert_eq!(se["A"].as_str(), Some("1"));
         assert_eq!(se["B"].as_str(), Some("9"));
@@ -555,7 +547,10 @@ github = "exampleuser"
         assert_eq!(cfg.apps["api"].base_port, 2); // child overrides
         assert_eq!(cfg.apps["api"].launch, vec!["a".to_string()]); // inherited
         assert_eq!(prov.layers.len(), 2);
-        assert_eq!(prov.origin["defaults.branch_prefix"], child.join("devkit.toml"));
+        assert_eq!(
+            prov.origin["defaults.branch_prefix"],
+            child.join("devkit.toml")
+        );
     }
 
     #[test]
@@ -587,7 +582,11 @@ github = "exampleuser"
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         let home = root.join("home.toml");
-        std::fs::write(&home, "[defaults]\nbranch_prefix='HOME/'\nworktree_root='/hw'\n").unwrap();
+        std::fs::write(
+            &home,
+            "[defaults]\nbranch_prefix='HOME/'\nworktree_root='/hw'\n",
+        )
+        .unwrap();
         std::fs::write(
             repo.join("devkit.toml"),
             format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=2\nlaunch=['a']\n"),
@@ -595,7 +594,10 @@ github = "exampleuser"
         .unwrap();
         let (cfg, prov) = resolve_with_home(None, &repo, Some(&home)).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "x/"); // repo wins over home
-        assert_eq!(prov.origin["defaults.branch_prefix"], repo.join("devkit.toml"));
+        assert_eq!(
+            prov.origin["defaults.branch_prefix"],
+            repo.join("devkit.toml")
+        );
         // a field only the home layer sets still resolves, attributed to home
         assert_eq!(prov.layers.first(), Some(&home));
     }
@@ -611,7 +613,11 @@ github = "exampleuser"
             format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=7\nlaunch=['a']\n"),
         )
         .unwrap();
-        std::fs::write(child.join("devkit.toml"), "[defaults]\nbranch_prefix='IGNORED/'\n").unwrap();
+        std::fs::write(
+            child.join("devkit.toml"),
+            "[defaults]\nbranch_prefix='IGNORED/'\n",
+        )
+        .unwrap();
         let (cfg, prov) = resolve_with_home(Some(&explicit), &child, None).unwrap();
         assert_eq!(cfg.apps["api"].base_port, 7);
         assert_eq!(cfg.defaults.branch_prefix, "x/"); // child file not consulted
@@ -627,8 +633,7 @@ github = "exampleuser"
 
     #[test]
     fn flatten_yields_sorted_dotted_leaves() {
-        let v: toml::Value =
-            toml::from_str("[a]\nx=1\n[a.b]\ny='z'\nlist=['p','q']\n").unwrap();
+        let v: toml::Value = toml::from_str("[a]\nx=1\n[a.b]\ny='z'\nlist=['p','q']\n").unwrap();
         let mut out = Vec::new();
         flatten(&v, "", &mut out);
         let paths: Vec<&str> = out.iter().map(|(p, _)| p.as_str()).collect();

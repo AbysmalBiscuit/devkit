@@ -24,7 +24,12 @@ devrun up [apps…] [--role issue|baseline|both] [--env K=V] [--env-file F] [--d
 devrun down [--role …]
 devrun status [--all]
 devrun logs <app> [-f]
+devrun config show [--origin] [--json]
+devrun config apps [--json]
 ```
+
+- **`config show`**: prints the effective merged config as TOML. `--origin` annotates each value with the file it was resolved from (or `# (default)` for serde defaults); `--json` emits JSON instead of TOML. `--origin --json` emits `{ "config": …, "origins": { "dotted.path": "file" } }`.
+- **`config apps`**: lists the configured apps from the merged config (columns: name, port, path, provides_url, url_env, launch). `--json` emits a structured array. A pure config readout with no live readiness — for running state use `devrun status`.
 
 ### `issue`: Issue Lifecycle
 
@@ -114,12 +119,12 @@ After installing, open the host in this repo and confirm `devkit_describe` and
 
 ## Configuration
 
-Config discovery order (first match wins):
+Config is layered. Every `devkit.toml` from the filesystem root down to the cwd is merged, with `~/.config/devkit/config.toml` as the lowest-precedence base layer beneath them all. Deeper files override shallower ones per value: tables merge key-by-key, while scalars and arrays replace wholesale. `devrun config show` prints the merged result; `--origin` traces each value to the file it came from.
 
-1. `--config <path>` flag
-2. `$DEVKIT_CONFIG` environment variable
-3. `./devkit.toml` (walks up to the filesystem root)
-4. `~/.config/devkit/config.toml`
+Two escapes bypass the walk:
+
+- `[config] root = true` in a `devkit.toml` stops the upward walk at that file and drops every shallower layer, including the home config — full isolation.
+- `--config <path>` or `$DEVKIT_CONFIG` selects a single file verbatim, with no layering or home base.
 
 App `path` is normally inferred from the monorepo's `doppler.yaml`; individual `[apps.<name>]` sections may override it with an explicit `path`. `launch` is run verbatim, so a Doppler wrapper lives in each app's `launch`; devkit refuses to start a Doppler launch whose config resolves to `prd`, so it can't run against production secrets.
 

@@ -19,7 +19,10 @@ pub fn show(cli: &Cli, cwd: &str, origin: bool, json: bool) -> Result<()> {
             }
         }
         (true, true) => {
-            println!("{}", serde_json::to_string_pretty(&origin_json(cfg, prov)?)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&origin_json(cfg, prov)?)?
+            );
         }
         (false, true) => println!("{}", serde_json::to_string_pretty(cfg)?),
         (false, false) => println!("{}", toml::to_string_pretty(cfg)?),
@@ -134,12 +137,18 @@ mod tests {
         );
         let lines = origin_lines(&cfg, &prov).unwrap();
         // a value present in the origin map is attributed to its file
-        assert!(lines.iter().any(|l| l.starts_with("defaults.worktree_root =")
-            && l.contains("# from /home/u/.config/devkit/config.toml")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("defaults.worktree_root =")
+                    && l.contains("# from /home/u/.config/devkit/config.toml"))
+        );
         // a serde-defaulted value (pr_base) has no origin → marked (default)
-        assert!(lines
-            .iter()
-            .any(|l| l.starts_with("defaults.pr_base =") && l.contains("# (default)")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("defaults.pr_base =") && l.contains("# (default)"))
+        );
         // output is sorted by path
         let mut sorted = lines.clone();
         sorted.sort();
@@ -150,8 +159,10 @@ mod tests {
     fn origin_json_has_config_and_origins() {
         let cfg = sample_cfg();
         let mut prov = Provenance::default();
-        prov.origin
-            .insert("defaults.worktree_root".into(), PathBuf::from("/x/devkit.toml"));
+        prov.origin.insert(
+            "defaults.worktree_root".into(),
+            PathBuf::from("/x/devkit.toml"),
+        );
         let v = origin_json(&cfg, &prov).unwrap();
         assert!(v.get("config").is_some());
         assert_eq!(
