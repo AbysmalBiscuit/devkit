@@ -87,3 +87,9 @@ a live test:
   Confirm Cursor's cwd on the first live install. If it is not the plugin root, switch
   the command to a root-anchored variable (e.g. `${CURSOR_PLUGIN_ROOT}/...`) once its
   expansion in command position is confirmed.
+
+  ## Setup help/oath for linear and slack
+
+  Better setup/ux would be achieved with step by step instructions and/or just direct
+  oauth/token setup from the cli.
+
