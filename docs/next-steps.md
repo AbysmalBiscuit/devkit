@@ -93,3 +93,11 @@ a live test:
   Better setup/ux would be achieved with step by step instructions and/or just direct
   oauth/token setup from the cli.
 
+## Ability to dump/show devrun/devkit config
+
+## Ability to resolve devkit.toml config files hierarchically, the same way claude code resolves CLAUDE.md files
+
+Given: `~/path/to/project/{repo1,repo2,repo3,...}/.git`
+A `devkit.toml` file here: `~/path/to/project/devkit.toml` will get resolved and applied to all devkit calls inside any repos/worktrees.
+The same applies to `~/path/to/devkit.toml`
+With the deepest hierarchy file taking priority.
