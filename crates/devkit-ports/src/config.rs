@@ -145,7 +145,6 @@ pub struct Provenance {
 /// Deep-merge parsed layers given lowest→highest precedence. Tables merge key by
 /// key; every non-table value (scalar or array) is replaced wholesale by a higher
 /// layer. Records, per leaf dotted-path, the highest layer that set it.
-#[allow(dead_code)] // resolve() in the filesystem layer is the production caller
 pub(crate) fn merge_layers(
     layers: &[(PathBuf, toml::Table)],
 ) -> (toml::Table, HashMap<String, PathBuf>) {
@@ -192,6 +191,106 @@ fn record_origin(path: &str, v: &toml::Value, src: &Path, origin: &mut HashMap<S
             origin.insert(path.to_string(), src.to_path_buf());
         }
     }
+}
+
+fn read_layer(p: &Path) -> Result<(PathBuf, toml::Table)> {
+    let body = std::fs::read_to_string(p)
+        .with_context(|| format!("reading config layer {}", p.display()))?;
+    let table: toml::Table =
+        toml::from_str(&body).with_context(|| format!("parsing config layer {}", p.display()))?;
+    Ok((p.to_path_buf(), table))
+}
+
+fn home_config_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".config/devkit/config.toml"))
+}
+
+/// Whether a parsed layer declares `[config] root = true` (stop walking upward).
+fn is_root_layer(t: &toml::Table) -> bool {
+    t.get("config")
+        .and_then(|c| c.as_table())
+        .and_then(|c| c.get("root"))
+        .and_then(|r| r.as_bool())
+        .unwrap_or(false)
+}
+
+/// Build the ordered layer list (lowest→highest precedence): the home config (unless
+/// a `root = true` marker cuts it off), then each `devkit.toml` from the filesystem
+/// root down to `start`. An explicit path or `$DEVKIT_CONFIG` is the sole layer.
+fn discover(
+    explicit: Option<&Path>,
+    start: &Path,
+    home: Option<&Path>,
+) -> Result<Vec<(PathBuf, toml::Table)>> {
+    if let Some(p) = explicit {
+        return Ok(vec![read_layer(p)?]);
+    }
+    if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
+        return Ok(vec![read_layer(&PathBuf::from(p))?]);
+    }
+
+    // Walk upward collecting devkit.toml files (deepest first); stop at a root marker.
+    let mut stack: Vec<(PathBuf, toml::Table)> = Vec::new();
+    let mut rooted = false;
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        let c = d.join("devkit.toml");
+        if c.is_file() {
+            let layer = read_layer(&c)?;
+            let is_root = is_root_layer(&layer.1);
+            stack.push(layer);
+            if is_root {
+                rooted = true;
+                break;
+            }
+        }
+        dir = d.parent();
+    }
+
+    let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
+    if !rooted
+        && let Some(h) = home
+        && h.is_file()
+    {
+        layers.push(read_layer(h)?);
+    }
+    stack.reverse(); // deepest-first → shallowest-first (lowest precedence first)
+    layers.extend(stack);
+
+    if layers.is_empty() {
+        anyhow::bail!(
+            "no devkit.toml found (--config / $DEVKIT_CONFIG / ./devkit.toml walking up / ~/.config/devkit/config.toml)"
+        );
+    }
+    Ok(layers)
+}
+
+/// Resolve the effective config by layering and deep-merging all applicable files.
+pub fn resolve(explicit: Option<&Path>, start: &Path) -> Result<(Config, Provenance)> {
+    resolve_with_home(explicit, start, home_config_path().as_deref())
+}
+
+/// `resolve` with an injectable home-config path (tests pass a controlled path or
+/// `None` so the real `~/.config/devkit/config.toml` never participates).
+pub(crate) fn resolve_with_home(
+    explicit: Option<&Path>,
+    start: &Path,
+    home: Option<&Path>,
+) -> Result<(Config, Provenance)> {
+    let layers = discover(explicit, start, home)?;
+    let order: Vec<PathBuf> = layers.iter().map(|(p, _)| p.clone()).collect();
+    let (merged, origin) = merge_layers(&layers);
+    let cfg: Config = toml::Value::Table(merged)
+        .try_into()
+        .context("deserializing merged devkit config")?;
+    Ok((
+        cfg,
+        Provenance {
+            layers: order,
+            origin,
+        },
+    ))
 }
 
 /// `--config` → `$DEVKIT_CONFIG` → `./devkit.toml` walking up → `~/.config/devkit/config.toml`.
@@ -404,5 +503,106 @@ github = "exampleuser"
         assert_eq!(se["C"].as_str(), Some("3"));
         assert_eq!(origin["apps.api.static_env.B"], PathBuf::from("/t"));
         assert_eq!(origin["apps.api.static_env.A"], PathBuf::from("/b"));
+    }
+
+    fn unique_tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("devkit-cfg-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    const FULL_DEFAULTS: &str =
+        "worktree_root='/w'\nbranch_prefix='x/'\nbaseline_ref='r'\nbaseline_path='/b'\n";
+
+    #[test]
+    fn resolve_merges_parent_and_child() {
+        let root = unique_tmp("merge");
+        let child = root.join("repo");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(
+            root.join("devkit.toml"),
+            format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=1\nlaunch=['a']\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            child.join("devkit.toml"),
+            "[defaults]\nbranch_prefix='y/'\n[apps.api]\nbase_port=2\n",
+        )
+        .unwrap();
+        let (cfg, prov) = resolve_with_home(None, &child, None).unwrap();
+        assert_eq!(cfg.defaults.branch_prefix, "y/"); // child overrides
+        assert_eq!(cfg.defaults.worktree_root, "/w"); // inherited from parent
+        assert_eq!(cfg.apps["api"].base_port, 2); // child overrides
+        assert_eq!(cfg.apps["api"].launch, vec!["a".to_string()]); // inherited
+        assert_eq!(prov.layers.len(), 2);
+        assert_eq!(prov.origin["defaults.branch_prefix"], child.join("devkit.toml"));
+    }
+
+    #[test]
+    fn root_marker_stops_walk() {
+        let root = unique_tmp("rooted");
+        let child = root.join("repo");
+        std::fs::create_dir_all(&child).unwrap();
+        let home = root.join("home.toml");
+        std::fs::write(&home, "[defaults]\nbranch_prefix='HOME/'\n").unwrap();
+        std::fs::write(
+            root.join("devkit.toml"),
+            "[defaults]\nworktree_root='/PARENT'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            child.join("devkit.toml"),
+            format!("[config]\nroot=true\n[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=2\nlaunch=['a']\n"),
+        )
+        .unwrap();
+        let (cfg, prov) = resolve_with_home(None, &child, Some(&home)).unwrap();
+        assert_eq!(cfg.defaults.worktree_root, "/w"); // parent's /PARENT dropped
+        assert_eq!(cfg.defaults.branch_prefix, "x/"); // home's HOME/ dropped
+        assert_eq!(prov.layers, vec![child.join("devkit.toml")]);
+    }
+
+    #[test]
+    fn home_layer_is_lowest_precedence() {
+        let root = unique_tmp("home");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let home = root.join("home.toml");
+        std::fs::write(&home, "[defaults]\nbranch_prefix='HOME/'\nworktree_root='/hw'\n").unwrap();
+        std::fs::write(
+            repo.join("devkit.toml"),
+            format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=2\nlaunch=['a']\n"),
+        )
+        .unwrap();
+        let (cfg, prov) = resolve_with_home(None, &repo, Some(&home)).unwrap();
+        assert_eq!(cfg.defaults.branch_prefix, "x/"); // repo wins over home
+        assert_eq!(prov.origin["defaults.branch_prefix"], repo.join("devkit.toml"));
+        // a field only the home layer sets still resolves, attributed to home
+        assert_eq!(prov.layers.first(), Some(&home));
+    }
+
+    #[test]
+    fn explicit_config_bypasses_layering() {
+        let root = unique_tmp("explicit");
+        let child = root.join("repo");
+        std::fs::create_dir_all(&child).unwrap();
+        let explicit = root.join("custom.toml");
+        std::fs::write(
+            &explicit,
+            format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=7\nlaunch=['a']\n"),
+        )
+        .unwrap();
+        std::fs::write(child.join("devkit.toml"), "[defaults]\nbranch_prefix='IGNORED/'\n").unwrap();
+        let (cfg, prov) = resolve_with_home(Some(&explicit), &child, None).unwrap();
+        assert_eq!(cfg.apps["api"].base_port, 7);
+        assert_eq!(cfg.defaults.branch_prefix, "x/"); // child file not consulted
+        assert_eq!(prov.layers, vec![explicit]);
+    }
+
+    #[test]
+    fn resolve_errors_when_no_config_found() {
+        let root = unique_tmp("empty");
+        let err = resolve_with_home(None, &root, None).unwrap_err();
+        assert!(err.to_string().contains("no devkit.toml"));
     }
 }
