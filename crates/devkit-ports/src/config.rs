@@ -71,6 +71,7 @@ pub struct Defaults {
     pub branch_prefix: String,
     pub baseline_ref: String,
     pub baseline_path: String,
+    #[serde(default)]
     pub doppler_yaml: String,
     /// Repo-relative directory apps live under (e.g. "apps"). Used to infer app
     /// paths from doppler.yaml and to detect changed apps in a diff.
@@ -235,6 +236,16 @@ github = "exampleuser"
         let igor = c.people.get("igor").unwrap();
         assert_eq!(igor.slack, "U0XXXXXXXXX");
         assert_eq!(igor.github.as_deref(), Some("exampleuser"));
+    }
+    #[test]
+    fn doppler_yaml_optional() {
+        let without = SAMPLE
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("doppler_yaml"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let c = Config::parse(&without).unwrap();
+        assert_eq!(c.defaults.doppler_yaml, "");
     }
     #[test]
     fn daemon_defaults_when_absent() {
