@@ -95,14 +95,39 @@ a live test:
 
 ## Ability to dump/show devrun/devkit config
 
+**Status:** RESOLVED 2026-06-23 — `devrun config show [--origin] [--json]` prints the
+effective merged config (TOML by default; `--origin` annotates each value with its
+source file or `# (default)`; `--json` emits JSON), and `devrun config apps [--json]`
+lists the configured app catalog. See
+`docs/superpowers/specs/2026-06-23-layered-config-and-config-command-design.md` (§2) and
+`docs/superpowers/plans/2026-06-23-layered-config-and-config-command.md`.
+
 ## Ability to resolve devkit.toml config files hierarchically, the same way claude code resolves CLAUDE.md files
 
-Given: `~/path/to/project/{repo1,repo2,repo3,...}/.git`
-A `devkit.toml` file here: `~/path/to/project/devkit.toml` will get resolved and applied to all devkit calls inside any repos/worktrees.
-The same applies to `~/path/to/devkit.toml`
-With the deepest hierarchy file taking priority.
+**Status:** RESOLVED 2026-06-23 — `config::resolve` layers every `devkit.toml` from the
+filesystem root down to the cwd over the `~/.config/devkit/config.toml` base layer and
+deep-merges them (tables merge key by key; scalars and arrays replace wholesale), so the
+deepest file wins per value. `[config] root = true` stops the upward walk and drops all
+shallower layers including home; `--config`/`$DEVKIT_CONFIG` selects a single file
+verbatim, bypassing layering. Routed through `load::load`, so every binary and the MCP
+server inherit it. See the spec/plan referenced above (§1).
+
+Original intent (kept for context):
+
+> Given: `~/path/to/project/{repo1,repo2,repo3,...}/.git`
+> A `devkit.toml` file here: `~/path/to/project/devkit.toml` will get resolved and applied to all devkit calls inside any repos/worktrees.
+> The same applies to `~/path/to/devkit.toml`
+> With the deepest hierarchy file taking priority.
+
+Deferred follow-up:
+
+- **Remove the orphaned `config::locate`.** Routing `load::load` through
+  `config::resolve` left `devkit_ports::config::locate` with no production caller; it
+  remains `pub` and is referenced only by a doc comment in
+  `devkit-locks::hook::global_config_path`. Either delete it (updating that comment to
+  describe the fallback directly) or fold its single-path lookup into the resolver.
+  Harmless as-is.
 
 ## Configurable templates for messages
 
 ## Configurable templates for issue start
-
