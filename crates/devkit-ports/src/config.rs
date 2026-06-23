@@ -133,6 +133,67 @@ impl Config {
     }
 }
 
+/// Per-leaf record of which config layer supplied each value.
+#[derive(Debug, Default)]
+pub struct Provenance {
+    /// Resolved layer files, lowest→highest precedence.
+    pub layers: Vec<PathBuf>,
+    /// Dotted config path (e.g. `apps.api.base_port`) → file that supplied it.
+    pub origin: HashMap<String, PathBuf>,
+}
+
+/// Deep-merge parsed layers given lowest→highest precedence. Tables merge key by
+/// key; every non-table value (scalar or array) is replaced wholesale by a higher
+/// layer. Records, per leaf dotted-path, the highest layer that set it.
+#[allow(dead_code)] // resolve() in the filesystem layer is the production caller
+pub(crate) fn merge_layers(
+    layers: &[(PathBuf, toml::Table)],
+) -> (toml::Table, HashMap<String, PathBuf>) {
+    let mut merged = toml::Table::new();
+    let mut origin = HashMap::new();
+    for (path, table) in layers {
+        deep_merge(&mut merged, table, path, "", &mut origin);
+    }
+    (merged, origin)
+}
+
+fn deep_merge(
+    acc: &mut toml::Table,
+    overlay: &toml::Table,
+    src: &Path,
+    prefix: &str,
+    origin: &mut HashMap<String, PathBuf>,
+) {
+    for (k, v) in overlay {
+        let path = if prefix.is_empty() {
+            k.clone()
+        } else {
+            format!("{prefix}.{k}")
+        };
+        if let (Some(toml::Value::Table(at)), toml::Value::Table(ot)) = (acc.get_mut(k), v) {
+            deep_merge(at, ot, src, &path, origin);
+        } else {
+            record_origin(&path, v, src, origin);
+            acc.insert(k.clone(), v.clone());
+        }
+    }
+}
+
+/// Record the source file for every scalar/array leaf reachable from `v`. A table
+/// recurses into its keys; everything else is a single leaf.
+fn record_origin(path: &str, v: &toml::Value, src: &Path, origin: &mut HashMap<String, PathBuf>) {
+    match v {
+        toml::Value::Table(t) => {
+            for (k, sub) in t {
+                record_origin(&format!("{path}.{k}"), sub, src, origin);
+            }
+        }
+        _ => {
+            origin.insert(path.to_string(), src.to_path_buf());
+        }
+    }
+}
+
 /// `--config` → `$DEVKIT_CONFIG` → `./devkit.toml` walking up → `~/.config/devkit/config.toml`.
 pub fn locate(explicit: Option<&Path>, start: &Path) -> Option<PathBuf> {
     if let Some(p) = explicit {
@@ -295,5 +356,53 @@ github = "exampleuser"
         let s = toml::to_string_pretty(&c).expect("serialize app with trailing scalars");
         assert!(s.contains("setup"));
         assert!(s.contains("path"));
+    }
+
+    fn tbl(s: &str) -> toml::Table {
+        toml::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn deeper_layer_overrides_scalar_keeps_others() {
+        let base = tbl("[defaults]\nworktree_root='/a'\nbranch_prefix='x/'\n");
+        let top = tbl("[defaults]\nbranch_prefix='y/'\n");
+        let (m, origin) = merge_layers(&[
+            (PathBuf::from("/base"), base),
+            (PathBuf::from("/top"), top),
+        ]);
+        assert_eq!(m["defaults"]["branch_prefix"].as_str(), Some("y/"));
+        assert_eq!(m["defaults"]["worktree_root"].as_str(), Some("/a"));
+        assert_eq!(origin["defaults.branch_prefix"], PathBuf::from("/top"));
+        assert_eq!(origin["defaults.worktree_root"], PathBuf::from("/base"));
+    }
+
+    #[test]
+    fn arrays_replace_wholesale() {
+        let base = tbl("[apps.api]\nlaunch=['a','b']\n");
+        let top = tbl("[apps.api]\nlaunch=['c']\n");
+        let (m, origin) = merge_layers(&[
+            (PathBuf::from("/b"), base),
+            (PathBuf::from("/t"), top),
+        ]);
+        let launch = m["apps"]["api"]["launch"].as_array().unwrap();
+        assert_eq!(launch.len(), 1);
+        assert_eq!(launch[0].as_str(), Some("c"));
+        assert_eq!(origin["apps.api.launch"], PathBuf::from("/t"));
+    }
+
+    #[test]
+    fn nested_maps_merge_per_key() {
+        let base = tbl("[apps.api.static_env]\nA='1'\nB='2'\n");
+        let top = tbl("[apps.api.static_env]\nB='9'\nC='3'\n");
+        let (m, origin) = merge_layers(&[
+            (PathBuf::from("/b"), base),
+            (PathBuf::from("/t"), top),
+        ]);
+        let se = &m["apps"]["api"]["static_env"];
+        assert_eq!(se["A"].as_str(), Some("1"));
+        assert_eq!(se["B"].as_str(), Some("9"));
+        assert_eq!(se["C"].as_str(), Some("3"));
+        assert_eq!(origin["apps.api.static_env.B"], PathBuf::from("/t"));
+        assert_eq!(origin["apps.api.static_env.A"], PathBuf::from("/b"));
     }
 }
