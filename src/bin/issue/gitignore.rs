@@ -60,9 +60,10 @@ mod tests {
 
     #[test]
     fn resolve_prefers_configured_path() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        let p = resolve_excludes_path(Some("~/custom/ignore"), "/home/u", None);
-        assert_eq!(p, PathBuf::from(format!("{home}/custom/ignore")));
+        // A configured excludesfile wins over the xdg/home fallback and is
+        // tilde-expanded the same way every other config path is.
+        let p = resolve_excludes_path(Some("~/custom/ignore"), "/home/u", Some("/home/u/.xdg"));
+        assert_eq!(p, expand_tilde("~/custom/ignore"));
     }
 
     #[test]
