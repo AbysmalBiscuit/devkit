@@ -4,6 +4,7 @@ pub mod daemon;
 pub mod linear;
 pub mod paths;
 pub mod report;
+pub mod secrets;
 pub mod slack;
 pub mod store;
 pub mod supervise;
