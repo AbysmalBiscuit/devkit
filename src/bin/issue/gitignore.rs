@@ -26,7 +26,6 @@ fn needs_devkit(contents: &str) -> bool {
 
 /// Ensure `.devkit/` is in the global excludes file. Idempotent; append-only.
 /// Returns an error on IO failure — the caller decides whether to ignore it.
-#[allow(dead_code)]
 pub fn ensure_devkit_ignored() -> Result<()> {
     let configured = devkit_common::cmd::capture("git", &["config", "--global", "core.excludesfile"], None)
         .ok()

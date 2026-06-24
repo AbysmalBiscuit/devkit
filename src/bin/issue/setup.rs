@@ -11,6 +11,7 @@ pub struct SetupArgs {
     pub slug: String,
     pub apps: Vec<String>,
     pub dry_run: bool,
+    pub no_gitignore: bool,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
@@ -21,10 +22,6 @@ struct Prepared {
     worktree: String,
     branch: String,
     ports: BTreeMap<String, u16>,
-}
-
-fn branch_name(prefix: &str, slug: &str) -> String {
-    format!("{prefix}{slug}")
 }
 
 /// Write each prep file into `app_dir`. Content is written verbatim; parent
@@ -56,9 +53,23 @@ pub fn run(args: SetupArgs) -> Result<()> {
     }
 
     let wt_root = expand_tilde(&cfg.defaults.worktree_root);
-    let worktree = wt_root.join(&args.slug);
+    let ctx = serde_json::json!({
+        "prefix": cfg.defaults.branch_prefix,
+        "issue": args.issue,
+        "slug": args.slug,
+        "apps": args.apps,
+    });
+    let vars = &cfg.templates.variables;
+    let branch = devkit_common::template::render(cfg.templates.branch(), &ctx, vars)
+        .context("rendering `branch` template")?
+        .trim()
+        .to_string();
+    let wt_name = devkit_common::template::render(cfg.templates.worktree_dir(), &ctx, vars)
+        .context("rendering `worktree_dir` template")?
+        .trim()
+        .to_string();
+    let worktree = wt_root.join(&wt_name);
     let monorepo = wt_root.join("monorepo");
-    let branch = branch_name(&cfg.defaults.branch_prefix, &args.slug);
     let holder = worktree.to_string_lossy().into_owned();
 
     if args.dry_run {
@@ -107,6 +118,18 @@ pub fn run(args: SetupArgs) -> Result<()> {
         monorepo_s,
     )?;
 
+    crate::record::write(
+        &worktree,
+        &crate::record::IssueRecord {
+            issue: args.issue.clone(),
+            slug: args.slug.clone(),
+            apps: args.apps.clone(),
+        },
+    )?;
+    if !args.no_gitignore && let Err(e) = crate::gitignore::ensure_devkit_ignored() {
+        eprintln!("warning: could not update global gitignore: {e:#}");
+    }
+
     // Per-app bootstrap: write the app's configured prep files, then run its
     // setup commands in its directory. Everything project-specific — filenames,
     // file contents, installs, doppler wiring — lives in config, not here.
@@ -152,6 +175,8 @@ pub fn run(args: SetupArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_ports::config::Templates;
+    use serde_json::json;
     use std::path::PathBuf;
 
     fn scratch(tag: &str) -> PathBuf {
@@ -163,8 +188,19 @@ mod tests {
     }
 
     #[test]
-    fn branch_uses_prefix_and_slug() {
-        assert_eq!(branch_name("lev/", "eng-1234-fix"), "lev/eng-1234-fix");
+    fn default_branch_renders_prefix_and_slug() {
+        let t = Templates::default();
+        let ctx = json!({"prefix": "lev/", "issue": "eng-1", "slug": "fix"});
+        let out = devkit_common::template::render(t.branch(), &ctx, &t.variables).unwrap();
+        assert_eq!(out, "lev/fix");
+    }
+
+    #[test]
+    fn default_worktree_dir_renders_slug() {
+        let t = Templates::default();
+        let ctx = json!({"prefix": "lev/", "issue": "eng-1", "slug": "fix"});
+        let out = devkit_common::template::render(t.worktree_dir(), &ctx, &t.variables).unwrap();
+        assert_eq!(out, "fix");
     }
 
     #[test]

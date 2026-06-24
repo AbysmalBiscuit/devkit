@@ -39,6 +39,8 @@ enum Cmd {
         apps: Vec<String>,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long = "no-gitignore")]
+        no_gitignore: bool,
     },
     /// Read-only report of every issue worktree (optionally filtered by ID).
     Status { ids: Vec<String> },
@@ -117,11 +119,13 @@ fn main() -> Result<()> {
             slug,
             apps,
             dry_run,
+            no_gitignore,
         }) => setup::run(setup::SetupArgs {
             issue,
             slug,
             apps,
             dry_run,
+            no_gitignore,
             dir: cli.dir,
             config: cli.config,
         }),

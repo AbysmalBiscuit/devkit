@@ -4,8 +4,6 @@ use std::path::Path;
 
 /// Per-worktree record written by `issue setup` and read by `issue review`,
 /// carrying the setup-time context that is otherwise unavailable at review.
-// Task 5 wires up callers; allow until then.
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IssueRecord {
     pub issue: String,
@@ -14,13 +12,11 @@ pub struct IssueRecord {
 }
 
 /// `<worktree>/.devkit/issue.toml`.
-#[allow(dead_code)]
 fn path(worktree: &Path) -> std::path::PathBuf {
     worktree.join(".devkit").join("issue.toml")
 }
 
 /// Write the record under `<worktree>/.devkit/`, creating the directory.
-#[allow(dead_code)]
 pub fn write(worktree: &Path, rec: &IssueRecord) -> Result<()> {
     let p = path(worktree);
     std::fs::create_dir_all(p.parent().expect("path has a parent"))
