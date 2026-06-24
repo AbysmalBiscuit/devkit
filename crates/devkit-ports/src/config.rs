@@ -136,9 +136,6 @@ pub struct AppConfig {
     // before tables on its own, so this is for layout, not a serializer requirement.)
     #[serde(default)]
     pub static_env: HashMap<String, String>,
-    /// Env written to `<app>/.env.local` during `issue setup` (e.g. dummy workflow ids).
-    #[serde(default)]
-    pub prep_env: HashMap<String, String>,
     /// Files written into the app's directory during `issue setup` (before `setup`).
     #[serde(default)]
     pub prep_files: Vec<PrepFile>,
