@@ -165,7 +165,7 @@ App `path` is normally inferred from the monorepo's `doppler.yaml`; individual `
 App conventions are config-driven, not hardcoded:
 
 - `provides_url = true` marks the app that serves the URL other apps consume (the API). Consumer apps name that variable in their own `url_env`; `devrun` wires it to the provider's local port and auto-includes the provider when a consumer is run.
-- `prep_files` declares files written into an app's directory during `issue setup` (before its `setup` commands). Each is `{ path, content, overwrite }`; `content` is written verbatim, and existing files are kept unless `overwrite = true`.
+- `prep_files` declares files written into an app's directory during `issue setup` (before its `setup` commands). Each is `{ path, content, overwrite }`; `content` is rendered as a minijinja template with the issue context (`prefix`, `issue`, `slug`, `apps`, `app`, `branch`, `worktree`), and existing files are kept unless `overwrite = true`.
 - `defaults.apps_dir` (default `apps`) is the repo-relative directory apps live under; it drives path inference and diff-based app detection.
 
 ### Setting up your config

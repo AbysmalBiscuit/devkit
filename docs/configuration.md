@@ -63,7 +63,7 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 | `url_env` | no | Env var that receives the app's URL. |
 | `provides_url` | no | `true` marks the one app whose URL other apps consume. Exactly one app should set this. |
 | `static_env` | no | Inline env vars always set for this app. |
-| `prep_files` | no | Files written into the app's directory during `issue setup`, before `setup` commands run. Each entry is `{ path, content, overwrite }` — `path` is relative to the app dir (parent dirs created), `content` is written verbatim, and `overwrite` (default `false`) keeps an existing file unless set to `true`. As an array, a deeper `devkit.toml` replaces the whole list rather than appending. |
+| `prep_files` | no | Files written into the app's directory during `issue setup`, before `setup` commands run. Each entry is `{ path, content, overwrite }` — `path` is relative to the app dir (parent dirs created), `content` is rendered as a minijinja template with the issue context (`prefix`, `issue`, `slug`, `apps`, `app`, `branch`, `worktree`) plus `[templates].variables`, and `overwrite` (default `false`) keeps an existing file unless set to `true`. Emit a literal `{{` with `{% raw %}…{% endraw %}`. As an array, a deeper `devkit.toml` replaces the whole list rather than appending. |
 | `setup` | no | Commands run in the app's directory during `issue setup`, in order. Each entry is one argv array (program + args), e.g. `[["doppler", "run", "-c", "local_config", "--", "bun", "install"]]`. Use this for installs and any doppler wiring; nothing project-specific is hardcoded in the tool. |
 
 devkit runs `launch` exactly as written — it builds no command prefix. To use
