@@ -87,7 +87,8 @@ fn load_from(path: &Path) -> Result<Secrets> {
 
 fn write_to(path: &Path, s: &Secrets) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
     }
     let body = toml::to_string_pretty(s).context("serializing secrets")?;
     std::fs::write(path, body).with_context(|| format!("writing {}", path.display()))?;
@@ -185,14 +186,20 @@ mod tests {
     fn env_wins_over_file() {
         assert_eq!(pick(Some("e".into()), Some("f".into())), Some("e".into()));
         assert_eq!(pick(None, Some("f".into())), Some("f".into()));
-        assert_eq!(pick(Some(String::new()), Some("f".into())), Some("f".into()));
+        assert_eq!(
+            pick(Some(String::new()), Some("f".into())),
+            Some("f".into())
+        );
         assert_eq!(pick(None, None), None);
     }
 
     #[test]
     fn source_reflects_precedence() {
         assert_eq!(source_of(Some("e".into()), Some("f".into())), Source::Env);
-        assert_eq!(source_of(Some(String::new()), Some("f".into())), Source::File);
+        assert_eq!(
+            source_of(Some(String::new()), Some("f".into())),
+            Source::File
+        );
         assert_eq!(source_of(None, None), Source::Unset);
     }
 

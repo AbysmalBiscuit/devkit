@@ -41,7 +41,10 @@ pub fn validate(token: &str) -> Result<SlackIdentity> {
 
 fn parse_identity(resp: &serde_json::Value) -> Result<SlackIdentity> {
     if resp.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-        let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+        let err = resp
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
         bail!("Slack token rejected: {err}");
     }
     Ok(SlackIdentity {

@@ -22,7 +22,10 @@ pub fn run(provider: Provider, token: Option<String>) -> Result<()> {
         Provider::Linear => {
             let id = linear::validate(&token).context("validating Linear API key")?;
             store_linear(&path, &token, &id)?;
-            println!("✓ linear: workspace \"{}\" ({})", id.workspace_url_key, id.viewer_email);
+            println!(
+                "✓ linear: workspace \"{}\" ({})",
+                id.workspace_url_key, id.viewer_email
+            );
         }
         Provider::Slack => {
             let id = slack::validate(&token).context("validating Slack token")?;

@@ -31,12 +31,18 @@ fn worst_exit(rows: &[Row]) -> i32 {
 }
 
 fn is_unreachable(e: &anyhow::Error) -> bool {
-    matches!(e.downcast_ref::<ureq::Error>(), Some(ureq::Error::Transport(_)))
+    matches!(
+        e.downcast_ref::<ureq::Error>(),
+        Some(ureq::Error::Transport(_))
+    )
 }
 
 fn validate_linear(v: &str) -> Check {
     match linear::validate(v) {
-        Ok(id) => Check::Ok(format!("workspace \"{}\" ({})", id.workspace_url_key, id.viewer_email)),
+        Ok(id) => Check::Ok(format!(
+            "workspace \"{}\" ({})",
+            id.workspace_url_key, id.viewer_email
+        )),
         Err(e) if is_unreachable(&e) => Check::Unreachable,
         Err(e) => Check::Invalid(e.to_string()),
     }
@@ -138,12 +144,19 @@ mod tests {
     use super::*;
 
     fn row(check: Check) -> Row {
-        Row { key: "x", source: Source::Unset, check }
+        Row {
+            key: "x",
+            source: Source::Unset,
+            check,
+        }
     }
 
     #[test]
     fn invalid_fails_exit() {
-        let rows = vec![row(Check::Ok("ok".into())), row(Check::Invalid("bad".into()))];
+        let rows = vec![
+            row(Check::Ok("ok".into())),
+            row(Check::Invalid("bad".into())),
+        ];
         assert_eq!(worst_exit(&rows), 1);
     }
 
