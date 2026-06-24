@@ -5,6 +5,9 @@ use clap_complete::Shell;
 mod dashboard;
 mod end;
 mod gitignore;
+// Read/write helpers are exercised by the `info` subcommand.
+#[allow(dead_code)]
+mod info_cache;
 mod prs;
 mod record;
 mod review;
