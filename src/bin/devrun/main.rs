@@ -11,6 +11,7 @@ use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
 use devkit_ports::run;
 use std::collections::BTreeMap;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -41,10 +42,46 @@ enum Cmd {
         #[arg(long)]
         supervise: bool,
     },
-    /// Stop servers and release ports for this worktree.
+    /// Stop servers and release ports. Defaults to this worktree; reaching another
+    /// worktree needs --all/--others/--holder and prompts (requires a terminal).
     Down {
+        /// Fuzzy selectors matched (substring) across columns. Mutually exclusive
+        /// with the column filters below.
+        #[arg(conflicts_with_all = ["app", "port", "role", "pid", "listening", "not_listening", "older_than"])]
+        selectors: Vec<String>,
+        /// Every holder, including this worktree.
+        #[arg(long)]
+        all: bool,
+        /// Every holder except this worktree.
+        #[arg(long, conflicts_with = "all")]
+        others: bool,
+        /// One specific worktree (repeatable), by path.
+        #[arg(long = "holder", conflicts_with_all = ["all", "others"])]
+        holders: Vec<String>,
+        /// Collapse cross-worktree confirmation into one combined prompt.
+        #[arg(long)]
+        batch: bool,
+        /// Filter: app name (repeatable).
+        #[arg(long)]
+        app: Vec<String>,
+        /// Filter: port (repeatable).
+        #[arg(long)]
+        port: Vec<u16>,
+        /// Filter: role.
         #[arg(long, value_enum)]
         role: Option<RoleSelector>,
+        /// Filter: pid.
+        #[arg(long)]
+        pid: Option<u32>,
+        /// Filter: only servers currently listening.
+        #[arg(long, conflicts_with = "not_listening")]
+        listening: bool,
+        /// Filter: only servers not currently listening.
+        #[arg(long = "not-listening")]
+        not_listening: bool,
+        /// Filter: only servers older than this (90s, 30m, 2h, 1d).
+        #[arg(long = "older-than")]
+        older_than: Option<String>,
     },
     /// Show tracked servers (this worktree, or --all).
     Status {
@@ -165,6 +202,100 @@ fn parse_user_env(pairs: &[String], file: Option<&str>) -> Result<BTreeMap<Strin
     Ok(m)
 }
 
+/// Parse an age threshold like `90s`, `30m`, `2h`, `1d` (bare number = seconds) to seconds.
+fn parse_age(s: &str) -> Result<u64> {
+    let s = s.trim();
+    let (num, mult) = if let Some(n) = s.strip_suffix('s') {
+        (n, 1u64)
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, 60)
+    } else if let Some(n) = s.strip_suffix('h') {
+        (n, 3600)
+    } else if let Some(n) = s.strip_suffix('d') {
+        (n, 86_400)
+    } else {
+        (s, 1)
+    };
+    let v: u64 = num
+        .trim()
+        .parse()
+        .with_context(|| format!("invalid --older-than `{s}`: expected e.g. 90s, 30m, 2h, 1d"))?;
+    let secs = v
+        .checked_mul(mult)
+        .with_context(|| format!("--older-than `{s}` is too large"))?;
+    Ok(secs)
+}
+
+/// CLI inputs for `down`, normalized (role already collapsed to a registry `Role`,
+/// `--older-than` already parsed to seconds). Kept separate from the clap variant so
+/// the selector builder is unit-testable.
+#[derive(Default)]
+struct DownArgs {
+    selectors: Vec<String>,
+    all: bool,
+    others: bool,
+    holders: Vec<String>,
+    batch: bool,
+    app: Vec<String>,
+    port: Vec<u16>,
+    role: Option<Role>,
+    pid: Option<u32>,
+    listening: bool,
+    not_listening: bool,
+    older_than_secs: Option<u64>,
+}
+
+/// Build the registry selector from CLI args. `--holder` paths resolve to their git
+/// toplevel when possible, else are used verbatim.
+fn build_selector(a: &DownArgs, current: &str) -> registry::DownSelector {
+    let scope = if !a.holders.is_empty() {
+        registry::Scope::Holders(
+            a.holders
+                .iter()
+                .map(|h| toplevel(h).unwrap_or_else(|_| h.clone()))
+                .collect(),
+        )
+    } else if a.all {
+        registry::Scope::All
+    } else if a.others {
+        registry::Scope::Others(current.to_string())
+    } else {
+        registry::Scope::Current(current.to_string())
+    };
+
+    let has_columns = !a.app.is_empty()
+        || !a.port.is_empty()
+        || a.role.is_some()
+        || a.pid.is_some()
+        || a.listening
+        || a.not_listening
+        || a.older_than_secs.is_some();
+
+    let filter = if !a.selectors.is_empty() {
+        registry::Filter::Tokens(a.selectors.clone())
+    } else if has_columns {
+        let listening = if a.listening {
+            Some(true)
+        } else if a.not_listening {
+            Some(false)
+        } else {
+            None
+        };
+        registry::Filter::Columns(registry::ColumnFilter {
+            app: a.app.clone(),
+            port: a.port.clone(),
+            role: a.role,
+            pid: a.pid,
+            listening,
+            older_than_secs: a.older_than_secs,
+        })
+    } else {
+        registry::Filter::All
+    };
+
+    registry::DownSelector { scope, filter }
+}
+
 /// Options controlling how `cmd_up` launches apps.
 struct UpFlags {
     dry_run: bool,
@@ -226,7 +357,40 @@ fn main() -> Result<()> {
                 supervise: *supervise,
             },
         ),
-        Cmd::Down { role } => cmd_down(&cwd, role.and_then(RoleSelector::filter)),
+        Cmd::Down {
+            selectors,
+            all,
+            others,
+            holders,
+            batch,
+            app,
+            port,
+            role,
+            pid,
+            listening,
+            not_listening,
+            older_than,
+        } => {
+            let older_than_secs = match older_than {
+                Some(s) => Some(parse_age(s)?),
+                None => None,
+            };
+            let args = DownArgs {
+                selectors: selectors.clone(),
+                all: *all,
+                others: *others,
+                holders: holders.clone(),
+                batch: *batch,
+                app: app.clone(),
+                port: port.clone(),
+                role: role.and_then(RoleSelector::filter),
+                pid: *pid,
+                listening: *listening,
+                not_listening: *not_listening,
+                older_than_secs,
+            };
+            cmd_down(&cwd, &args)
+        }
         Cmd::Status { all } => cmd_status(&cwd, *all),
         Cmd::Logs { app, role, follow } => {
             cmd_logs(&cwd, app, role.and_then(RoleSelector::filter), *follow)
@@ -388,9 +552,44 @@ fn cmd_up(
     Ok(())
 }
 
-fn cmd_down(cwd: &str, role: Option<Role>) -> Result<()> {
-    let holder = toplevel(cwd)?;
-    let out = run::bring_down(&holder, role)?;
+/// True if any matched row belongs to a holder other than `current`.
+fn touches_foreign(matched: &[(u16, &registry::Entry)], current: &str) -> bool {
+    matched.iter().any(|(_, e)| e.holder != current)
+}
+
+/// Render a status table limited to the given ports.
+fn preview_table(data: &registry::Data, ports: &[u16]) -> String {
+    let mut d = registry::Data::default();
+    for p in ports {
+        if let Some(e) = data.entries.get(p) {
+            d.entries.insert(*p, e.clone());
+        }
+    }
+    registry::status_table(&d, None)
+}
+
+/// Foreign holders among the matched rows, in first-seen order.
+fn foreign_holders(matched: &[(u16, &registry::Entry)], current: &str) -> Vec<String> {
+    let mut seen = Vec::new();
+    for (_, e) in matched {
+        if e.holder != current && !seen.contains(&e.holder) {
+            seen.push(e.holder.clone());
+        }
+    }
+    seen
+}
+
+fn confirm(question: &str) -> bool {
+    print!("{question} [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+fn report_down(out: &run::DownOutcome) {
     if out.via_daemon {
         println!("stopped via daemon; released ports {:?}", out.freed);
     } else {
@@ -399,6 +598,78 @@ fn cmd_down(cwd: &str, role: Option<Role>) -> Result<()> {
             out.stopped, out.freed
         );
     }
+}
+
+fn cmd_down(cwd: &str, args: &DownArgs) -> Result<()> {
+    let current = toplevel(cwd)?;
+    let selector = build_selector(args, &current);
+    let data = registry::snapshot()?;
+    let now = registry::now();
+    let ports = registry::select(&data, &selector, now);
+    if ports.is_empty() {
+        println!("no tracked servers match the selection");
+        return Ok(());
+    }
+    let matched: Vec<(u16, &registry::Entry)> = ports
+        .iter()
+        .filter_map(|p| data.entries.get(p).map(|e| (*p, e)))
+        .collect();
+
+    // Entirely in the current worktree: stop directly, no prompt.
+    if !touches_foreign(&matched, &current) {
+        let out = run::bring_down_ports(&ports)?;
+        report_down(&out);
+        return Ok(());
+    }
+
+    // Foreign holders present: require an interactive terminal.
+    if !std::io::stdin().is_terminal() {
+        eprintln!("{}", preview_table(&data, &ports));
+        anyhow::bail!("cross-worktree down requires an interactive terminal");
+    }
+
+    let batch = args.batch || args.all;
+    let mut chosen: Vec<u16> = Vec::new();
+    if batch {
+        println!("{}", preview_table(&data, &ports));
+        let holders = foreign_holders(&matched, &current);
+        let includes_current = matched.iter().any(|(_, e)| e.holder == current);
+        if confirm(&format!(
+            "Stop {} server(s) across {} worktree(s)?",
+            ports.len(),
+            holders.len() + usize::from(includes_current)
+        )) {
+            chosen = ports.clone();
+        }
+    } else {
+        // Per-worktree prompts for foreign holders; current worktree stops silently.
+        for holder in foreign_holders(&matched, &current) {
+            let group: Vec<u16> = matched
+                .iter()
+                .filter(|(_, e)| e.holder == holder)
+                .map(|(p, _)| *p)
+                .collect();
+            println!("{}", preview_table(&data, &group));
+            let label = devkit_common::paths::leaf(&holder).unwrap_or(&holder);
+            if confirm(&format!("Stop {} server(s) in {label}?", group.len())) {
+                chosen.extend(group);
+            } else {
+                println!("    skipped");
+            }
+        }
+        for (p, e) in &matched {
+            if e.holder == current {
+                chosen.push(*p);
+            }
+        }
+    }
+
+    if chosen.is_empty() {
+        println!("nothing stopped");
+        return Ok(());
+    }
+    let out = run::bring_down_ports(&chosen)?;
+    report_down(&out);
     Ok(())
 }
 
@@ -443,6 +714,71 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::apps_from_diff;
+
+    #[test]
+    fn parse_age_handles_units() {
+        use super::parse_age;
+        assert_eq!(parse_age("90s").unwrap(), 90);
+        assert_eq!(parse_age("30m").unwrap(), 1800);
+        assert_eq!(parse_age("2h").unwrap(), 7200);
+        assert_eq!(parse_age("1d").unwrap(), 86400);
+        assert_eq!(parse_age("45").unwrap(), 45, "bare number is seconds");
+        assert!(parse_age("nope").is_err());
+    }
+
+    #[test]
+    fn build_selector_maps_scope_and_filter() {
+        use super::{DownArgs, build_selector};
+        use devkit_ports::registry::{Filter, Scope};
+
+        // Default: current worktree, no filter.
+        let a = DownArgs::default();
+        let s = build_selector(&a, "/wt/cur");
+        assert!(matches!(s.scope, Scope::Current(ref h) if h == "/wt/cur"));
+        assert!(matches!(s.filter, Filter::All));
+
+        // --all + positional token.
+        let a = DownArgs {
+            all: true,
+            selectors: vec!["api".into()],
+            ..Default::default()
+        };
+        let s = build_selector(&a, "/wt/cur");
+        assert!(matches!(s.scope, Scope::All));
+        assert!(matches!(s.filter, Filter::Tokens(ref t) if t == &vec!["api".to_string()]));
+
+        // --others + column filter.
+        let a = DownArgs {
+            others: true,
+            app: vec!["web".into()],
+            ..Default::default()
+        };
+        let s = build_selector(&a, "/wt/cur");
+        assert!(matches!(s.scope, Scope::Others(ref h) if h == "/wt/cur"));
+        match s.filter {
+            Filter::Columns(c) => assert_eq!(c.app, vec!["web".to_string()]),
+            _ => panic!("expected Columns filter"),
+        }
+    }
+
+    #[test]
+    fn touches_foreign_detects_other_holders() {
+        use super::touches_foreign;
+        use devkit_ports::registry::{Entry, Role};
+        let e = |holder: &str| Entry {
+            app: "api".into(),
+            holder: holder.into(),
+            role: Role::Issue,
+            pid: None,
+            logfile: None,
+            ts: 0,
+        };
+        let cur = e("/wt/cur");
+        let other = e("/wt/other");
+        assert!(!touches_foreign(&[(1, &cur)], "/wt/cur"));
+        assert!(touches_foreign(&[(1, &cur), (2, &other)], "/wt/cur"));
+    }
+
     #[test]
     fn picks_known_apps_from_diff() {
         let diff =
