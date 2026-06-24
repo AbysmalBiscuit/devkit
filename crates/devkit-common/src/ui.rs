@@ -18,7 +18,18 @@ pub fn table(headers: &[&str]) -> Table {
 
 /// OSC8 hyperlink when the terminal supports it; otherwise just the label.
 pub fn link(label: &str, url: &str) -> String {
-    if supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout) {
+    link_styled(
+        supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout),
+        label,
+        url,
+    )
+}
+
+/// Render `label` as an OSC8 hyperlink to `url` when `supported`, else the bare
+/// label. Split from `link` so the formatting is testable without depending on
+/// ambient terminal or `FORCE_HYPERLINK` detection.
+fn link_styled(supported: bool, label: &str, url: &str) -> String {
+    if supported {
         format!("\x1b]8;;{url}\x1b\\{label}\x1b]8;;\x1b\\")
     } else {
         label.to_string()
@@ -167,8 +178,17 @@ mod tests {
 
     #[test]
     fn link_plain_when_unsupported() {
-        // In test env stdout is not a tty; link == label.
-        assert_eq!(link("PR #1", "https://x"), "PR #1");
+        // Without hyperlink support the bare label is returned, regardless of
+        // ambient terminal/`FORCE_HYPERLINK` detection.
+        assert_eq!(link_styled(false, "PR #1", "https://x"), "PR #1");
+    }
+
+    #[test]
+    fn link_emits_osc8_when_supported() {
+        assert_eq!(
+            link_styled(true, "PR #1", "https://x"),
+            "\x1b]8;;https://x\x1b\\PR #1\x1b]8;;\x1b\\"
+        );
     }
 
     #[test]
