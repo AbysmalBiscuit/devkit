@@ -470,6 +470,7 @@ mod tests {
             provides_url: false,
             static_env: HashMap::new(),
             prep_env: HashMap::new(),
+            prep_files: vec![],
             setup: vec![],
         }
     }

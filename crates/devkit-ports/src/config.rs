@@ -98,6 +98,21 @@ pub struct Person {
     pub github: Option<String>,
 }
 
+/// A file written into an app's directory during `issue setup`, before the app's
+/// `setup` commands run. `content` is written verbatim — no format assembly or
+/// newline injection. Parent directories are created. Existing files are left
+/// untouched unless `overwrite` is set.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PrepFile {
+    /// Target path, relative to the app's directory.
+    pub path: String,
+    /// File contents, written byte-for-byte.
+    pub content: String,
+    /// Overwrite an existing file rather than skipping it.
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AppConfig {
     pub base_port: u16,
@@ -124,6 +139,9 @@ pub struct AppConfig {
     /// Env written to `<app>/.env.local` during `issue setup` (e.g. dummy workflow ids).
     #[serde(default)]
     pub prep_env: HashMap<String, String>,
+    /// Files written into the app's directory during `issue setup` (before `setup`).
+    #[serde(default)]
+    pub prep_files: Vec<PrepFile>,
 }
 
 impl Config {
@@ -608,6 +626,37 @@ github = "exampleuser"
         let root = unique_tmp("empty");
         let err = resolve_with_home(None, &root, None).unwrap_err();
         assert!(err.to_string().contains("no devkit.toml"));
+    }
+
+    #[test]
+    fn parses_prep_files_with_overwrite_default() {
+        let toml = r#"
+[defaults]
+worktree_root = "~/wt"
+branch_prefix = "x/"
+baseline_ref = "origin/main"
+baseline_path = "/b"
+
+[apps.api]
+base_port = 9100
+launch = ["nitro", "dev"]
+
+[[apps.api.prep_files]]
+path = ".env.local"
+content = "A=1\n"
+
+[[apps.api.prep_files]]
+path = "config/local.json"
+content = "{}\n"
+overwrite = true
+"#;
+        let c = Config::parse(toml).unwrap();
+        let pf = &c.apps["api"].prep_files;
+        assert_eq!(pf.len(), 2);
+        assert_eq!(pf[0].path, ".env.local");
+        assert_eq!(pf[0].content, "A=1\n");
+        assert!(!pf[0].overwrite); // default false
+        assert!(pf[1].overwrite);
     }
 
     #[test]

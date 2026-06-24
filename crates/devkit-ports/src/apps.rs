@@ -12,6 +12,7 @@ pub struct App {
     pub provides_url: bool,
     pub static_env: HashMap<String, String>,
     pub prep_env: HashMap<String, String>,
+    pub prep_files: Vec<crate::config::PrepFile>,
     pub setup: Vec<Vec<String>>,
 }
 
@@ -49,6 +50,7 @@ pub fn catalog(
                 provides_url: a.provides_url,
                 static_env: a.static_env.clone(),
                 prep_env: a.prep_env.clone(),
+                prep_files: a.prep_files.clone(),
                 setup: a.setup.clone(),
             },
         );
