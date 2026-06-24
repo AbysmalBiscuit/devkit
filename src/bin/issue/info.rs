@@ -45,14 +45,16 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
     };
 
     let top = current_top(start);
-    let Some(i) = pick_index(&report.worktrees, selector, top.as_deref()) else {
-        match selector {
-            Some(sel) => anyhow::bail!("no worktree matches '{sel}'"),
-            None => anyhow::bail!("not in an issue worktree"),
-        }
+    let mut row = match pick_index(&report.worktrees, selector, top.as_deref()) {
+        Some(i) => report.worktrees[i].clone(),
+        // No selector and the current worktree isn't in the triage rows (the
+        // main clone is omitted from those): report on it directly anyway.
+        None => match (selector, top.as_deref()) {
+            (None, Some(top)) => local_row(top)?,
+            (Some(sel), _) => anyhow::bail!("no worktree matches '{sel}'"),
+            (None, None) => anyhow::bail!("not in a git worktree"),
+        },
     };
-
-    let mut row = report.worktrees[i].clone();
 
     if cache_only {
         if let Some(pr) = crate::info_cache::read(Path::new(&row.worktree)) {
@@ -85,6 +87,35 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
     Ok(())
 }
 
+/// Build a row for the worktree at `top` straight from git, for the current-dir
+/// case where discovery did not list it (notably the main clone). PR and Linear
+/// stay empty — the main clone has neither — while the cache-only path still
+/// overlays a cached PR if one happens to exist.
+fn local_row(top: &str) -> Result<IssueWorktree> {
+    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], top)?
+        .trim()
+        .to_string();
+    let branch = if branch == "HEAD" {
+        "DETACHED".to_string()
+    } else {
+        branch
+    };
+    let issue_id = devkit_common::worktree::issue_id_of(&branch, Path::new(top));
+    Ok(IssueWorktree {
+        worktree: top.to_string(),
+        branch,
+        issue_id,
+        dirty: st::dirty_of(top),
+        pr_number: None,
+        pr_state: "NO_PR".to_string(),
+        pr_url: None,
+        linear_kind: None,
+        linear_name: None,
+        finished: false,
+        reason_not_finished: None,
+    })
+}
+
 /// Overlay a cached PR onto an offline row. The PR fields come from the cache;
 /// the finished verdict is cleared because it cannot be computed without a
 /// Linear fetch, and the row's `NO_PR` verdict would otherwise contradict the
@@ -115,6 +146,42 @@ mod tests {
             finished: false,
             reason_not_finished: None,
         }
+    }
+
+    #[test]
+    fn local_row_reads_branch_id_and_dirty() {
+        use std::process::Command;
+        let base = std::env::temp_dir().join(format!("devkit-localrow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let run = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&base)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        run(&["init", "-q", "-b", "lev/eng-9-foo"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(base.join("f"), "x").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "init"]);
+
+        let top = base.to_str().unwrap();
+        let r = local_row(top).unwrap();
+        assert_eq!(r.issue_id, "ENG-9");
+        assert_eq!(r.branch, "lev/eng-9-foo");
+        assert_eq!(r.pr_number, None);
+        assert!(!r.dirty);
+
+        std::fs::write(base.join("g"), "y").unwrap();
+        assert!(local_row(top).unwrap().dirty);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
