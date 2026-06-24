@@ -49,7 +49,11 @@ mod tests {
         let wt = scratch("rt");
         let _ = std::fs::remove_dir_all(&wt);
         std::fs::create_dir_all(&wt).unwrap();
-        let pr = CachedPr { number: 123, state: "OPEN".into(), url: "https://x/pr/123".into() };
+        let pr = CachedPr {
+            number: 123,
+            state: "OPEN".into(),
+            url: "https://x/pr/123".into(),
+        };
         write(&wt, &pr).unwrap();
         assert_eq!(read(&wt), Some(pr));
         let _ = std::fs::remove_dir_all(&wt);
@@ -77,7 +81,15 @@ mod tests {
         let wt = scratch("notmp");
         let _ = std::fs::remove_dir_all(&wt);
         std::fs::create_dir_all(&wt).unwrap();
-        write(&wt, &CachedPr { number: 1, state: "MERGED".into(), url: "u".into() }).unwrap();
+        write(
+            &wt,
+            &CachedPr {
+                number: 1,
+                state: "MERGED".into(),
+                url: "u".into(),
+            },
+        )
+        .unwrap();
         let leftover: Vec<_> = std::fs::read_dir(wt.join(".devkit"))
             .unwrap()
             .filter_map(|e| e.ok())

@@ -27,7 +27,14 @@ fn gather_local_returns_offline_rows_without_network() {
 
     let wt = base.join("eng-1-foo");
     git(
-        &["worktree", "add", "-q", "-b", "lev/eng-1-bar", wt.to_str().unwrap()],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "lev/eng-1-bar",
+            wt.to_str().unwrap(),
+        ],
         &main,
     );
 

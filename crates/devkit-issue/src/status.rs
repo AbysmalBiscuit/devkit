@@ -278,7 +278,14 @@ pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = discover(start, ids)?;
     let has_key = devkit_common::secrets::resolve("LINEAR_API_KEY").is_some();
     let dirty: Vec<bool> = d.worktree_paths().iter().map(|p| dirty_of(p)).collect();
-    Ok(assemble(d, dirty, Prs(Vec::new()), HashMap::new(), None, has_key))
+    Ok(assemble(
+        d,
+        dirty,
+        Prs(Vec::new()),
+        HashMap::new(),
+        None,
+        has_key,
+    ))
 }
 
 #[cfg(test)]
