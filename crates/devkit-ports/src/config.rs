@@ -312,27 +312,6 @@ pub(crate) fn resolve_with_home(
     ))
 }
 
-/// `--config` → `$DEVKIT_CONFIG` → `./devkit.toml` walking up → `~/.config/devkit/config.toml`.
-pub fn locate(explicit: Option<&Path>, start: &Path) -> Option<PathBuf> {
-    if let Some(p) = explicit {
-        return Some(p.to_path_buf());
-    }
-    if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
-        return Some(PathBuf::from(p));
-    }
-    let mut dir = Some(start);
-    while let Some(d) = dir {
-        let c = d.join("devkit.toml");
-        if c.is_file() {
-            return Some(c);
-        }
-        dir = d.parent();
-    }
-    let home = std::env::var_os("HOME")?;
-    let fallback = PathBuf::from(home).join(".config/devkit/config.toml");
-    fallback.is_file().then_some(fallback)
-}
-
 pub fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/")
         && let Some(h) = std::env::var_os("HOME")

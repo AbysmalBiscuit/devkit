@@ -121,8 +121,8 @@ fn parse_env_override(val: Option<&str>) -> Option<bool> {
 }
 
 /// The global devkit config file: `$DEVKIT_CONFIG`, else `~/.config/devkit/config.toml`.
-/// Mirrors the fallback `devkit_ports::config::locate` uses, so the harness reads the
-/// same global config the other binaries do.
+/// Mirrors the `~/.config/devkit/config.toml` base layer the resolver loads, so the
+/// harness reads the same global config the other binaries do.
 fn global_config_path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
         return Some(PathBuf::from(p));
