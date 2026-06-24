@@ -131,9 +131,10 @@ pub struct AppConfig {
     pub setup: Vec<Vec<String>>,
     #[serde(default)]
     pub path: Option<String>,
-    // Map fields kept last so the serialized TOML groups scalars/arrays before the
-    // nested env tables — readable, stable output. (toml 0.8 also orders values
-    // before tables on its own, so this is for layout, not a serializer requirement.)
+    // Table-like fields (`static_env`, `prep_files`) kept last so the serialized
+    // TOML groups scalars/arrays before the nested table and array-of-tables —
+    // readable, stable output. (toml 0.8 also orders values before tables on its
+    // own, so this is for source layout, not a serializer requirement.)
     #[serde(default)]
     pub static_env: HashMap<String, String>,
     /// Files written into the app's directory during `issue setup` (before `setup`).
@@ -457,6 +458,37 @@ github = "exampleuser"
         let c2 = Config::parse(&s).expect("reparse serialized config");
         assert_eq!(c2.apps["api"].base_port, 9100);
         assert_eq!(c2.defaults.branch_prefix, "lev/");
+    }
+
+    #[test]
+    fn roundtrips_app_with_static_env_and_prep_files() {
+        let src = format!(
+            "{SAMPLE}\n\
+[[apps.api.prep_files]]\n\
+path = \".env.local\"\n\
+content = \"FOO=bar\\n\"\n\
+overwrite = true\n\
+\n\
+[[apps.api.prep_files]]\n\
+path = \"config/extra.toml\"\n\
+content = \"key = 1\\n\"\n"
+        );
+        let c = Config::parse(&src).unwrap();
+        let s = toml::to_string(&c).expect("serialize app with static_env and prep_files");
+        let c2 = Config::parse(&s).expect("reparse serialized config");
+
+        let a1 = &c.apps["api"];
+        let a2 = &c2.apps["api"];
+        assert_eq!(a2.static_env, a1.static_env);
+        assert_eq!(a2.prep_files.len(), 2);
+        assert_eq!(a2.prep_files.len(), a1.prep_files.len());
+        for (p1, p2) in a1.prep_files.iter().zip(a2.prep_files.iter()) {
+            assert_eq!(p2.path, p1.path);
+            assert_eq!(p2.content, p1.content);
+            assert_eq!(p2.overwrite, p1.overwrite);
+        }
+        assert!(a2.prep_files[0].overwrite);
+        assert!(!a2.prep_files[1].overwrite);
     }
 
     #[test]
