@@ -368,6 +368,19 @@ impl Data {
         e.logfile = Some(logfile);
     }
 
+    /// Release exactly the listed ports that are still present. Returns freed ports.
+    pub fn release_ports(&mut self, ports: &[u16]) -> Vec<u16> {
+        let freed: Vec<u16> = ports
+            .iter()
+            .copied()
+            .filter(|p| self.entries.contains_key(p))
+            .collect();
+        for p in &freed {
+            self.entries.remove(p);
+        }
+        freed
+    }
+
     /// Release all entries for a holder (optionally one role). Returns freed ports.
     pub fn release(&mut self, holder: &str, role: Option<Role>) -> Vec<u16> {
         let freed: Vec<u16> = self
@@ -532,6 +545,10 @@ pub fn record_pid_with(
 
 pub fn release_with(store: &impl Store, holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
     store.commit(|d| Ok(d.release(holder, role)))
+}
+
+pub fn release_ports_with(store: &impl Store, ports: &[u16]) -> Result<Vec<u16>> {
+    store.commit(|d| Ok(d.release_ports(ports)))
 }
 
 /// Read the registry, pruning dead entries (daemon fast path, else flock).
@@ -730,6 +747,18 @@ mod ops_tests {
     #[test]
     fn salvage_gives_up_without_entries_object() {
         assert!(Data::salvage(r#"{"something":"else"}"#).is_none());
+    }
+
+    #[test]
+    fn release_ports_removes_only_listed_present_ports() {
+        let mut d = Data::default();
+        let p1 = d.alloc_one("/w", "api", 9100, Role::Issue);
+        let p2 = d.alloc_one("/w", "web", 9200, Role::Issue);
+        // Release the first allocated port and one absent port (65000 is unlikely to be allocated).
+        let freed = d.release_ports(&[p1, 65000]);
+        assert_eq!(freed, vec![p1], "only the present listed port is freed");
+        assert!(d.entries.contains_key(&p2), "unlisted ports stay");
+        assert!(!d.entries.contains_key(&p1));
     }
 
     #[test]
