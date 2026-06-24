@@ -21,6 +21,36 @@ fn check_response(resp: &serde_json::Value) -> Result<()> {
     bail!("Slack chat.postMessage failed: {err}");
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlackIdentity {
+    pub team: String,
+    pub user: String,
+    pub url: String,
+}
+
+/// Validate `token` via `auth.test`, returning the bot/user identity. The ureq
+/// error is preserved as the top-level error (no `.context`) so a caller can
+/// downcast it to tell an unreachable host from a rejected token.
+pub fn validate(token: &str) -> Result<SlackIdentity> {
+    let resp: serde_json::Value = ureq::post("https://slack.com/api/auth.test")
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()?
+        .into_json()?;
+    parse_identity(&resp)
+}
+
+fn parse_identity(resp: &serde_json::Value) -> Result<SlackIdentity> {
+    if resp.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+        bail!("Slack token rejected: {err}");
+    }
+    Ok(SlackIdentity {
+        team: resp["team"].as_str().unwrap_or("").to_string(),
+        user: resp["user"].as_str().unwrap_or("").to_string(),
+        url: resp["url"].as_str().unwrap_or("").to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -33,5 +63,24 @@ mod tests {
         let e = check_response(&serde_json::json!({ "ok": false, "error": "channel_not_found" }))
             .unwrap_err();
         assert!(e.to_string().contains("channel_not_found"));
+    }
+
+    #[test]
+    fn slack_identity_parsed() {
+        let v = serde_json::json!({
+            "ok": true, "team": "Adaptyv", "user": "devkit",
+            "url": "https://adaptyv.slack.com/"
+        });
+        let id = parse_identity(&v).unwrap();
+        assert_eq!(id.team, "Adaptyv");
+        assert_eq!(id.user, "devkit");
+        assert_eq!(id.url, "https://adaptyv.slack.com/");
+    }
+
+    #[test]
+    fn slack_not_ok_surfaces_error() {
+        let v = serde_json::json!({ "ok": false, "error": "invalid_auth" });
+        let e = parse_identity(&v).unwrap_err();
+        assert!(e.to_string().contains("invalid_auth"));
     }
 }

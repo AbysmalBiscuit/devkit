@@ -7,6 +7,47 @@ pub struct LinearState {
     pub name: String, // "Done"
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinearIdentity {
+    /// `organization.urlKey` — also persisted as `linear_workspace`.
+    pub workspace_url_key: String,
+    pub org_name: String,
+    pub viewer_email: String,
+}
+
+/// Validate `key` against Linear, returning the caller's identity. The ureq
+/// error is preserved as the top-level error (no `.context`) so a caller can
+/// downcast it to distinguish an unreachable host from a rejected key.
+pub fn validate(key: &str) -> Result<LinearIdentity> {
+    let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
+        .set("Authorization", key)
+        .send_json(ureq::json!({
+            "query": "query { viewer { email } organization { urlKey name } }"
+        }))?
+        .into_json()?;
+    parse_identity(&resp)
+}
+
+fn parse_identity(resp: &serde_json::Value) -> Result<LinearIdentity> {
+    if let Some(errors) = resp.get("errors").and_then(|e| e.as_array()) {
+        let msg = errors
+            .first()
+            .and_then(|e| e["message"].as_str())
+            .unwrap_or("unknown error");
+        anyhow::bail!("invalid Linear API key: {msg}");
+    }
+    let org = &resp["data"]["organization"];
+    let viewer = &resp["data"]["viewer"];
+    let url_key = org["urlKey"]
+        .as_str()
+        .context("invalid Linear API key: no organization in response")?;
+    Ok(LinearIdentity {
+        workspace_url_key: url_key.to_string(),
+        org_name: org["name"].as_str().unwrap_or("").to_string(),
+        viewer_email: viewer["email"].as_str().unwrap_or("").to_string(),
+    })
+}
+
 /// Build the batched GraphQL query for the given `ENG-1234` ids. Pure → testable.
 pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> {
     let mut aliases = HashMap::new();
@@ -226,5 +267,30 @@ mod tests {
             assigned_issue_history_with_progress(k, |_n| {})
         }
         let _ = (_assert_sig, _assert_progress);
+    }
+
+    #[test]
+    fn linear_identity_parsed() {
+        let v = serde_json::json!({
+            "data": { "viewer": { "email": "me@x.io" },
+                      "organization": { "urlKey": "adaptyv", "name": "Adaptyv" } }
+        });
+        let id = parse_identity(&v).unwrap();
+        assert_eq!(id.workspace_url_key, "adaptyv");
+        assert_eq!(id.org_name, "Adaptyv");
+        assert_eq!(id.viewer_email, "me@x.io");
+    }
+
+    #[test]
+    fn linear_errors_body_is_invalid() {
+        let v = serde_json::json!({ "errors": [{ "message": "authentication failed" }] });
+        let e = parse_identity(&v).unwrap_err();
+        assert!(e.to_string().contains("invalid Linear API key"));
+    }
+
+    #[test]
+    fn linear_missing_org_is_invalid() {
+        let v = serde_json::json!({ "data": { "viewer": { "email": "" }, "organization": {} } });
+        assert!(parse_identity(&v).is_err());
     }
 }
