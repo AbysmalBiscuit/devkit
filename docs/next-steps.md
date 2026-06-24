@@ -64,29 +64,49 @@ Deferred follow-ups:
 
 ## Verify multi-agent plugin packaging
 
-The packaging is shipped but not yet exercised end-to-end. Two things still need
-a live test:
+The packaging is shipped. Codex is verified end-to-end (2026-06-24); Claude and
+Cursor still need a live test.
 
-- **Claude marketplace install.** `github.com/AbysmalBiscuit/devkit` is private for
-  now and will be made public later. Once it is public, run
-  `/plugin marketplace add AbysmalBiscuit/devkit` then `/plugin install devkit` in a
-  fresh session and confirm the `using-devkit` skill resolves from the plugin. Until
-  then the relative-path marketplace source cannot be added via git.
-- **Codex/Cursor SessionStart hook.** The context-injection envelopes
-  (`hookSpecificOutput.additionalContext` for Codex, `additional_context` for Cursor)
-  are verified against current docs but neither agent has been run yet. Install the
-  plugin in Codex and Cursor, start a session, and confirm the "A 'using-devkit'
-  skill is available" notice appears. On Windows, confirm `run-hook.cmd` locates Git
-  Bash. If an envelope is rejected, adjust `hooks/announce-skill`.
-- **Cursor hook command path resolution.** `hooks/hooks-cursor.json` invokes the
-  runner as the relative `./hooks/run-hook.cmd` (matching the obra/superpowers
-  reference), whereas `hooks/hooks-codex.json` uses the root-anchored
+- **Codex install — VERIFIED 2026-06-24.** From the now-public repo,
+  `codex plugin marketplace add AbysmalBiscuit/devkit` then
+  `codex plugin add devkit@devkit` install cleanly (Codex v0.142.0, ~4 MB — the
+  git clone excludes `target/`/`.worktrees/`). Codex selects `.codex-plugin/plugin.json`
+  and registers the `using-devkit` skill *natively* from `skills: "./skills/"`: it
+  appears in Codex's `<skills_instructions>` block in every fresh session, so the
+  agent is told the skill exists. That native registration — not the SessionStart
+  hook — is the working delivery path on Codex.
+  - **The `announce-skill` SessionStart hook does not fire on Codex, and is
+    redundant there.** Codex discovers hooks from a `hooks.json` at the *plugin
+    root* with *relative* command paths and tool-scoped events (`PostToolUse`,
+    `Stop` — per the curated `figma`/`replayio` plugins). devkit's hook sits at
+    `hooks/hooks-codex.json` behind a `hooks:` pointer Codex ignores, uses
+    `${PLUGIN_ROOT}`, and keys on `SessionStart`, which no curated Codex plugin
+    uses. The hook is silently inert, but native skill registration already covers
+    the awareness goal, so no Codex-side fix is pursued. (The same root-discovery
+    rule means the lockm `hooks/hooks.json` does not fire on Codex either — a
+    separate question if Codex ever needs the file-lock hooks.)
+- **Claude marketplace install — NOT DONE (ready).** The repo is public; a fresh
+  clone resolves `.claude-plugin/marketplace.json` (`source: "./"`) and
+  `skills/using-devkit/SKILL.md`. Remaining is the live smoke test only a fresh
+  Claude Code session can run: `/plugin marketplace add AbysmalBiscuit/devkit` then
+  `/plugin install devkit`, confirm `using-devkit` resolves.
+- **Cursor install — NOT DONE.** Cursor is not installed on the dev machine, so
+  the SessionStart context injection (`additional_context` envelope from
+  `hooks/announce-skill`) has not been exercised in a running Cursor host. Install
+  the plugin in Cursor, start a session, and confirm the "A 'using-devkit' skill is
+  available" notice appears (or that Cursor registers the skill natively, as Codex
+  does). On Windows, confirm `run-hook.cmd` locates Git Bash. If the envelope is
+  rejected, adjust `hooks/announce-skill`.
+- **Cursor hook command path resolution — NOT DONE (depends on the Cursor test).**
+  `hooks/hooks-cursor.json` invokes the runner as the relative `./hooks/run-hook.cmd`
+  (matching the obra/superpowers reference), whereas `hooks/hooks-codex.json` uses
   `${PLUGIN_ROOT}/hooks/run-hook.cmd`. The relative form only resolves if Cursor runs
-  the hook with its working directory set to the plugin root; if it runs from the
-  session's repo instead, the hook silently no-ops (and looks like an envelope bug).
-  Confirm Cursor's cwd on the first live install. If it is not the plugin root, switch
-  the command to a root-anchored variable (e.g. `${CURSOR_PLUGIN_ROOT}/...`) once its
-  expansion in command position is confirmed.
+  the hook with its working directory set to the plugin root; otherwise it silently
+  no-ops (and looks like an envelope bug). Doc research (2026-06-24) suggests Cursor
+  has **no** `${CURSOR_PLUGIN_ROOT}` expansion in manifest command position — a known
+  structural gap — which would make the relative form the *only* working option and
+  rule out the previously-proposed root-anchored switch. Confirm Cursor's hook cwd and
+  variable-expansion behavior on the first live install before changing anything.
 
 ## Setup help/oauth for linear and slack
 
