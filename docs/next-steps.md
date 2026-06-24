@@ -127,4 +127,15 @@ Deferred follow-up:
 
 ## Configurable templates for messages
 
+**Status:** RESOLVED 2026-06-24 — Slack review text and PR title/body are
+minijinja templates under `[templates]` (`slack`, `pr_title`, `pr_body`), with
+defaults reproducing prior behavior. See
+`docs/superpowers/specs/2026-06-24-config-templating-design.md` and
+`docs/superpowers/plans/2026-06-24-config-templating.md`.
+
 ## Configurable templates for issue start
+
+**Status:** RESOLVED 2026-06-24 — `issue setup` renders the branch name and
+worktree directory from `[templates]` (`branch`, `worktree_dir`), and persists a
+`.devkit/issue.toml` record so review-time templates can reference `issue`/`slug`/`apps`.
+See the spec/plan referenced above.

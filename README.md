@@ -146,6 +146,36 @@ mkdir -p ~/.config/devkit
 $EDITOR ~/.config/devkit/config.toml   # paste & adapt the example from docs/configuration.md
 ```
 
+### Templates
+
+`issue setup` and `issue review` render five strings from optional minijinja
+templates under `[templates]`. Each unset key falls back to a default that
+matches the historical hardcoded output.
+
+```toml
+[templates]
+branch       = "{{ prefix }}{{ issue }}-{{ slug }}"
+worktree_dir = "{{ slug }}"
+pr_title     = "{{ issue }}: {{ input }}"
+pr_body      = "Closes {{ issue }}.\n\n{{ input }}"
+slack        = "{{ pr_title }}\n{{ input }}\n{{ pr_url }}"
+
+[templates.variables]            # constants; a context field of the same name wins
+team = "platform"
+```
+
+| Key | Default | Context |
+|---|---|---|
+| `branch`, `worktree_dir` | `{{ prefix }}{{ slug }}`, `{{ slug }}` | `prefix`, `issue`, `slug`, `apps` |
+| `pr_title` | `{{ input }}` | review base + `input` = `--pr-title` |
+| `pr_body` | `{{ input }}` | review base + `input` = `--pr-body`, `pr_title` |
+| `slack` | `{{ input }} {{ pr_url }}` | review base + `input` = `body` arg, `pr_title`, `pr_url` |
+
+Review base context: `branch`, `reviewer`, `to`, and `issue`/`slug`/`apps` from
+the `.devkit/issue.toml` record `issue setup` writes in the worktree. `issue
+setup` also adds `.devkit/` to your global gitignore (`--no-gitignore` skips it).
+An undefined variable is an error (strict mode), so typos surface immediately.
+
 ## Install
 
 Install all five binaries (`portm`, `devrun`, `issue`, `lockm`, `devkitd`) into
