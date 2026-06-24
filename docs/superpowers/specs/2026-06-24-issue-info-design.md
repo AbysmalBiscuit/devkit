@@ -21,6 +21,11 @@ issue info [SELECTOR] [--json] [--cache-only]
 - `--json`: emit the machine-readable object instead of the human summary.
 - `--cache-only`: do no network. The PR number comes from the per-worktree
   cache; Linear state and the finished verdict render as `—` (unknown offline).
+  This omission is deliberate, not a gap to fill later: the only field
+  `--cache-only` drops is the mutable Linear *status*. The Linear *id* is still
+  present (branch-derived, never cached, never stale), and nothing that runs
+  offline — including the tmux label use case — needs the status. Caching the
+  status would only add TTL machinery and staleness for no consumer.
 
 `--no-fetch` is intentionally omitted. With a cache, the offline mode *is*
 `--cache-only`; reading a small local JSON file is already instant, so a
