@@ -2,7 +2,7 @@
 name = "devkit"
 description = "Local development coordination tools: portm, lockm, devrun, issue, devkitd"
 edition.workspace = true
-version = "0.6.0" # x-release-please-version
+version = "0.7.0" # x-release-please-version
 license = "GPL-3.0-or-later"
 
 # The supervisor daemon needs the port-registry daemon backend; gate its bin on
