@@ -11,6 +11,8 @@ pub struct Config {
     pub people: HashMap<String, Person>,
     #[serde(default)]
     pub daemon: DaemonConfig,
+    #[serde(default)]
+    pub templates: Templates,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -111,6 +113,45 @@ pub struct PrepFile {
     /// Overwrite an existing file rather than skipping it.
     #[serde(default)]
     pub overwrite: bool,
+}
+
+pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
+pub const DEFAULT_WORKTREE_DIR: &str = "{{ slug }}";
+pub const DEFAULT_PR_TITLE: &str = "{{ input }}";
+pub const DEFAULT_PR_BODY: &str = "{{ input }}";
+pub const DEFAULT_SLACK: &str = "{{ input }} {{ pr_url }}";
+
+/// Config-driven minijinja templates for the issue-lifecycle strings. Each
+/// `None` field falls back to its `DEFAULT_*` constant, which reproduces the
+/// historical hardcoded output. `variables` are user constants merged under
+/// every render context.
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct Templates {
+    pub branch: Option<String>,
+    pub worktree_dir: Option<String>,
+    pub pr_title: Option<String>,
+    pub pr_body: Option<String>,
+    pub slack: Option<String>,
+    #[serde(default)]
+    pub variables: std::collections::BTreeMap<String, String>,
+}
+
+impl Templates {
+    pub fn branch(&self) -> &str {
+        self.branch.as_deref().unwrap_or(DEFAULT_BRANCH)
+    }
+    pub fn worktree_dir(&self) -> &str {
+        self.worktree_dir.as_deref().unwrap_or(DEFAULT_WORKTREE_DIR)
+    }
+    pub fn pr_title(&self) -> &str {
+        self.pr_title.as_deref().unwrap_or(DEFAULT_PR_TITLE)
+    }
+    pub fn pr_body(&self) -> &str {
+        self.pr_body.as_deref().unwrap_or(DEFAULT_PR_BODY)
+    }
+    pub fn slack(&self) -> &str {
+        self.slack.as_deref().unwrap_or(DEFAULT_SLACK)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -699,5 +740,36 @@ overwrite = true
         // arrays are single leaves, not flattened element-by-element
         assert!(paths.contains(&"a.b.list"));
         assert!(!paths.iter().any(|p| p.starts_with("a.b.list.")));
+    }
+
+    #[test]
+    fn templates_default_when_absent() {
+        let t: Templates = toml::from_str("").unwrap();
+        assert!(t.branch.is_none());
+        assert!(t.variables.is_empty());
+        assert_eq!(t.branch(), DEFAULT_BRANCH);
+        assert_eq!(t.worktree_dir(), DEFAULT_WORKTREE_DIR);
+        assert_eq!(t.pr_title(), DEFAULT_PR_TITLE);
+        assert_eq!(t.pr_body(), DEFAULT_PR_BODY);
+        assert_eq!(t.slack(), DEFAULT_SLACK);
+    }
+
+    #[test]
+    fn templates_partial_override() {
+        let t: Templates = toml::from_str("branch = \"{{ slug }}\"\n").unwrap();
+        assert_eq!(t.branch(), "{{ slug }}");
+        assert_eq!(t.worktree_dir(), DEFAULT_WORKTREE_DIR);
+    }
+
+    #[test]
+    fn templates_variables_parse() {
+        let t: Templates = toml::from_str("[variables]\nteam = \"platform\"\n").unwrap();
+        assert_eq!(t.variables.get("team").map(String::as_str), Some("platform"));
+    }
+
+    #[test]
+    fn config_has_default_templates() {
+        let cfg = Config::parse(tests_sample()).unwrap();
+        assert_eq!(cfg.templates.branch(), DEFAULT_BRANCH);
     }
 }
