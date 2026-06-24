@@ -117,12 +117,25 @@ pub fn acquire(
     ttl: u64,
 ) -> Result<AcquireOutcome> {
     let c = ctx(paths_in, as_flag)?;
-    let pid = ident::anchor_pid();
+    acquire_resolved(&c.root, &c.holder, &c.paths, ident::anchor_pid(), note, ttl)
+}
+
+/// Acquire `paths` for `holder` under `root` with a pre-resolved context (no CWD
+/// or identity derivation). Routes through a live daemon when one is up, else the
+/// flock store. The CWD-deriving `acquire` delegates here.
+pub fn acquire_resolved(
+    root: &str,
+    holder: &str,
+    paths: &[String],
+    pid: Option<u32>,
+    note: Option<&str>,
+    ttl: u64,
+) -> Result<AcquireOutcome> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::Acquire {
-        root: c.root.clone(),
-        holder: c.holder.clone(),
-        paths: c.paths.clone(),
+        root: root.to_string(),
+        holder: holder.to_string(),
+        paths: paths.to_vec(),
         pid,
         note: note.map(str::to_string),
         ttl,
@@ -135,9 +148,9 @@ pub fn acquire(
     }
     store::acquire_with(
         &store::FlockStore::new(),
-        &c.root,
-        &c.holder,
-        &c.paths,
+        root,
+        holder,
+        paths,
         pid,
         note,
         ttl,
@@ -147,11 +160,16 @@ pub fn acquire(
 
 pub fn check(paths_in: &[String], as_flag: Option<&str>) -> Result<Vec<Conflict>> {
     let c = ctx(paths_in, as_flag)?;
+    check_resolved(&c.root, &c.holder, &c.paths)
+}
+
+/// Conflicts that would block `holder` from `paths` under `root` (pre-resolved).
+pub fn check_resolved(root: &str, holder: &str, paths: &[String]) -> Result<Vec<Conflict>> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::Check {
-        root: c.root.clone(),
-        holder: c.holder.clone(),
-        paths: c.paths.clone(),
+        root: root.to_string(),
+        holder: holder.to_string(),
+        paths: paths.to_vec(),
     })? {
         return match resp {
             daemon::proto::Response::Conflicts(v) => Ok(v),
@@ -159,13 +177,7 @@ pub fn check(paths_in: &[String], as_flag: Option<&str>) -> Result<Vec<Conflict>
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::check_with(
-        &store::FlockStore::new(),
-        &c.root,
-        &c.holder,
-        &c.paths,
-        now(),
-    )
+    store::check_with(&store::FlockStore::new(), root, holder, paths, now())
 }
 
 pub fn release(
@@ -174,11 +186,22 @@ pub fn release(
     force: bool,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let c = ctx(paths_in, as_flag)?;
+    release_resolved(&c.root, &c.holder, &c.paths, force)
+}
+
+/// Release named `paths` held by `holder` under `root` (pre-resolved). Returns
+/// (released, refused).
+pub fn release_resolved(
+    root: &str,
+    holder: &str,
+    paths: &[String],
+    force: bool,
+) -> Result<(Vec<String>, Vec<String>)> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::Release {
-        root: c.root.clone(),
-        holder: c.holder.clone(),
-        paths: c.paths.clone(),
+        root: root.to_string(),
+        holder: holder.to_string(),
+        paths: paths.to_vec(),
         force,
     })? {
         return match resp {
@@ -187,21 +210,20 @@ pub fn release(
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::release_with(
-        &store::FlockStore::new(),
-        &c.root,
-        &c.holder,
-        &c.paths,
-        force,
-    )
+    store::release_with(&store::FlockStore::new(), root, holder, paths, force)
 }
 
 pub fn release_all(as_flag: Option<&str>) -> Result<Vec<String>> {
     let c = ctx(&[], as_flag)?;
+    release_all_resolved(&c.root, &c.holder)
+}
+
+/// Release every lock held by `holder` under `root` (pre-resolved).
+pub fn release_all_resolved(root: &str, holder: &str) -> Result<Vec<String>> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::ReleaseAll {
-        root: c.root.clone(),
-        holder: c.holder.clone(),
+        root: root.to_string(),
+        holder: holder.to_string(),
     })? {
         return match resp {
             daemon::proto::Response::Freed(v) => Ok(v),
@@ -209,15 +231,20 @@ pub fn release_all(as_flag: Option<&str>) -> Result<Vec<String>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::release_all_with(&store::FlockStore::new(), &c.root, &c.holder)
+    store::release_all_with(&store::FlockStore::new(), root, holder)
 }
 
 /// Live locks for the current project root, or every project when `all`.
 pub fn status(all: bool) -> Result<Vec<LockEntry>> {
     let root = find_root()?.to_string_lossy().into_owned();
+    status_resolved(&root, all)
+}
+
+/// Live locks for `root`, or every project when `all` (pre-resolved root).
+pub fn status_resolved(root: &str, all: bool) -> Result<Vec<LockEntry>> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::Status {
-        root: root.clone(),
+        root: root.to_string(),
         all,
     })? {
         return match resp {
@@ -226,7 +253,7 @@ pub fn status(all: bool) -> Result<Vec<LockEntry>> {
             other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
         };
     }
-    store::status_with(&store::FlockStore::new(), &root, all, now())
+    store::status_with(&store::FlockStore::new(), root, all, now())
 }
 
 pub fn prune() -> Result<usize> {
@@ -335,6 +362,37 @@ mod tests {
         // stays wired.
         let n = prune().expect("prune via flock path");
         let _ = n; // count depends on ambient registry; success is the assertion
+    }
+
+    #[test]
+    fn resolved_fns_roundtrip_via_flock_path() {
+        // No daemon runs in unit tests, so the `_resolved` fns fall through to the
+        // FlockStore path. A unique root namespaces these lock rows.
+        let root = scratch("resolved-roundtrip");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let r = root.to_string_lossy().into_owned();
+        let paths = vec!["a.rs".to_string()];
+
+        let out = acquire_resolved(&r, "holder-a", &paths, None, None, 60).expect("acquire");
+        assert_eq!(out.acquired.len(), 1);
+        assert_eq!(out.acquired[0].path, "a.rs");
+        assert!(out.conflicts.is_empty());
+
+        let conflicts = check_resolved(&r, "holder-b", &paths).expect("check");
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].held_by, "holder-a");
+
+        let entries = status_resolved(&r, false).expect("status");
+        assert!(entries.iter().any(|e| e.path == "a.rs" && e.holder == "holder-a"));
+
+        let (released, refused) = release_resolved(&r, "holder-a", &paths, false).expect("release");
+        assert_eq!(released, vec!["a.rs".to_string()]);
+        assert!(refused.is_empty());
+
+        // release_all on a now-empty root is a no-op but must succeed.
+        assert!(release_all_resolved(&r, "holder-a").expect("release_all").is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
