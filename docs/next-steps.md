@@ -26,11 +26,11 @@ Plan: `docs/superpowers/plans/2026-06-21-devkit-mcp-server.md`.
 
 Deferred follow-ups:
 
-- **Daemon-aware locks.** v1 lock writes go straight through `FlockStore` and will
-  hard-error (`DaemonHoldsLock`) under a live `devkitd`. Full cooperation needs
-  daemon-aware resolved-context lock facade variants — owned by the "Authoritative
-  in-memory mode for the lock registry" section above. Until then, run lock actions
-  without a daemon, or wire that work first.
+- **Daemon-aware locks (shipped).** Lock actions route through explicit-context
+  `devkit_locks::{acquire,check,release,release_all,status}_resolved` (and the
+  already-daemon-aware `prune`), which try a live `devkitd` over `locks.sock` first and
+  fall back to `FlockStore`. The MCP locks handler no longer hits `FlockStore` directly,
+  so it cooperates with a running daemon instead of erroring `DaemonHoldsLock`.
 - **`devrun` actions (phase 2 — shipped).** `devrun.status`, `devrun.up`
   (non-blocking kick-and-poll), `devrun.down`, and `devrun.logs` are registered
   MCP actions over the new `devkit-ports::run` facade. `devrun up`'s blocking
@@ -54,13 +54,14 @@ Deferred follow-ups:
     3. Invoke one, e.g. `devkit_describe` then `devkit_call` → `ports.status`.
   If a host fails to connect, suspect the fixed `protocolVersion` (`2024-11-05`, the
   MCP baseline) — the negotiation follow-up below is the fix.
-- **`initialize` protocol-version negotiation.** The server returns a fixed
-  `protocolVersion`; confirm it against the versions the target hosts send and
-  negotiate if a host requires it.
-- **Ports holder is the project root.** Ports actions use `root` as the registry
-  holder (the liveness path), while locks use the minted session-token holder.
-  Confirm this matches how an agent expects to address its allocations across
-  multiple worktrees.
+- **`initialize` protocol-version negotiation (shipped).** The server echoes the
+  client's requested `protocolVersion` back (falling back to the `2024-11-05` baseline
+  when absent). devkit-mcp is version-agnostic (only `tools/list` + `tools/call`), so
+  echoing maximizes host compatibility.
+- **Ports holder is the project root (resolved).** Confirmed correct by design: the
+  holder is the worktree root **path** because `holder_alive` = `path.exists()` is the
+  liveness signal that auto-reclaims a worktree's ports on removal — distinct from locks'
+  session-token holder. Documented in `AGENTS.md` (Registry facade).
 
 ## Verify multi-agent plugin packaging
 

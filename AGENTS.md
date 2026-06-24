@@ -164,3 +164,11 @@ files on each mutation. Direct callers take `devkitd.lock` *shared* before any w
 holds it — so a non-daemon binary can never modify the files behind a live daemon. Reads
 are ungated. `devkit-locks` exposes the same `Store` seam as `devkit-ports`: `FlockStore`
 is the direct flock-guarded path; `MemoryStore` is the daemon path.
+
+The ports holder is the worktree **root path**, not a minted session token:
+`registry::holder_alive(holder)` is `Path::new(holder).exists()`, so a holder is judged
+live by whether its directory still exists. This is what makes a worktree's ports
+auto-reclaim on `git worktree remove` — the holder path vanishes and `prune` frees the
+rows. (Locks instead use a session-token holder with TTL/pid liveness; the two registries
+intentionally differ.) Cross-worktree, an agent addresses each worktree's allocations by
+that worktree's root path.
