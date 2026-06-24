@@ -106,76 +106,81 @@ Add `--json` to `acquire`/`check`/`status` for machine-readable output. Run
 |---|---|
 | `lockm` | Advisory file locks for parallel sessions — the collaboration tool above. |
 | `portm` | Port registry: `alloc`/`release`/`status`/`prune` dev-server ports without collisions. |
-| `devrun` | Run and supervise local dev servers for a worktree: `up`, `down`, `status`, `logs`. |
-| `issue` | Issue lifecycle: `setup` a worktree (branch, env, deps, reserved ports), `status`, `end`, `prs`, `dashboard`, `review`. |
+| `devrun` | Run and supervise local dev servers for a worktree: `up`, `down`, `status`, `logs`, `config`. |
+| `issue` | Issue lifecycle: `setup` a worktree, `status`, `end`, `prs`, `dashboard`, `review`. |
 | `devkitd` | Background daemon owning the port registry. Started automatically by `portm`/`devrun`; you rarely invoke it directly. |
 
-Each user-facing CLI has `--help` on every subcommand and a `completions <shell>`
-subcommand for shell completion.
+**Full command and flag reference → `cli-reference.md`** (in this skill directory).
+Each user-facing CLI also has `--help` on every subcommand. The workflow below is the
+common path; reach for the reference when you need a specific flag.
+
+## Dev-server & issue-worktree workflow
+
+`issue` and `devrun` act on the **current working directory's worktree** by default
+(override with `-C/--dir <path>`), and `issue review` ships the branch checked out
+there. So `cd` into the right worktree first. The handoffs that aren't obvious from
+per-command help:
+
+**Start an issue → run its servers.** `issue setup` prints a JSON summary; read
+`worktree` (where to `cd`) and `ports` (already reserved for you):
+
+```sh
+issue setup --issue ENG-123 --slug fix-auth --apps web,api
+#  → {"issue":"ENG-123","worktree":"/abs/path/…","branch":"lev/eng-123-fix-auth","ports":{…}}
+cd /abs/path/…                                # the printed worktree
+devrun up web api                             # name apps explicitly — a fresh worktree has no diff to auto-detect
+```
+
+`devrun up` defaults to `--role issue` and reuses `setup`'s reserved ports. Selecting a
+webapp pulls in `api` automatically.
+
+**Stop your servers (without touching other worktrees).** `devrun down` stops servers
+*and releases their ports*, scoped to **this worktree only** by default:
+
+```sh
+portm status                                  # who holds which ports (this project)
+devrun down                                   # stop + release this worktree's servers
+```
+
+Reaching another worktree needs an explicit scope flag (`--all`/`--others`/`--holder`)
+*and* an interactive terminal — an agent (no PTY) cannot stop another worktree's
+servers. The holder is the **worktree root path**; get yours with
+`git rev-parse --show-toplevel`.
+
+**Ship for review.** `issue review` pushes (never force-pushes), opens/reuses the PR,
+requests a reviewer, and Slacks them the link:
+
+```sh
+issue review "Auth fix ready — please review session handling." --to bob --reviewer octocat
+```
+
+See `cli-reference.md` for every flag of `setup`, `review`, `down`, and the rest.
 
 ## Enforced mode (automatic write locks)
 
-When write enforcement is enabled, the devkit plugin's `PreToolUse` hook enforces
-write locks automatically. **In an enforced checkout, agents do not call `lockm
-acquire` or `lockm release` themselves — the harness owns the protocol.**
+Some checkouts turn on write enforcement, where the devkit plugin's `PreToolUse` hook
+owns the lock protocol. **In an enforced checkout, do not call `lockm acquire`/`release`
+yourself — the harness auto-locks each file on your first `Edit`/`Write` and releases
+when the session (or sub-agent) ends.** Manual calls are harmless but redundant.
 
-Enforcement turns on from any of three sources (the env var overrides the files):
+Enforcement turns on from any of (env var overrides the files):
 
-- `DEVKIT_ENFORCE_WRITES=1` in the environment — a machine-wide master switch
-  (`0`/`false` forces it off).
+- `DEVKIT_ENFORCE_WRITES=1` — machine-wide master switch (`0`/`false` forces off).
 - `[harness] enforce_writes = true` in the **global** config (`$DEVKIT_CONFIG`, else
-  `~/.config/devkit/config.toml`) — enforces across every checkout, no per-worktree
-  file needed.
-- `[harness] enforce_writes = true` in a **checkout's own** `devkit.toml` — opts that
-  one checkout in.
+  `~/.config/devkit/config.toml`) — every checkout.
+- `[harness] enforce_writes = true` in a **checkout's own** `devkit.toml` — that one.
 
-### How it works
+What this means in practice:
 
-- **Auto-acquire on first write.** Before the first `Edit`, `MultiEdit`, `Write`,
-  or `NotebookEdit` that touches a file, the hook acquires a lock on that file on
-  behalf of the session. Subsequent writes to the same file by the same session
-  (or a sub-agent it delegates to) are allowed without re-acquiring.
+- A blocked write returns a **deny** naming the holder — wait for them, or edit a
+  different file.
+- **`Bash` writes are not covered** — only structured write tools (`Edit`/`MultiEdit`/
+  `Write`/`NotebookEdit`).
+- When enforcement is off (or `lockm` isn't on `PATH`) the hook fails open and blocks
+  nothing.
 
-- **Holder identity.** Top-level session writes are held under the session id.
-  Sub-agent writes are held under `session_id/agent_id`. A parent session that
-  holds a file implicitly covers its sub-agents — a sub-agent whose parent already
-  owns a file can write it without contention.
-
-- **A blocked write returns a deny.** When another session holds a conflicting
-  lock, the hook denies the tool call and surfaces a message naming the holder:
-  ```
-  devkit write-harness: src/auth.rs (held by <holder>) — locked by another
-  agent; coordinate or wait for it to finish
-  ```
-  The agent should wait for the other session to finish, or work on a different
-  file.
-
-- **Automatic release.** Locks acquired by a sub-agent are released when that
-  sub-agent stops (`SubagentStop`). All locks held by a session are released when
-  the session ends (`SessionEnd`), regardless of how the session exits (normal,
-  Ctrl-C, or error). A TTL backstop (30 min by default) cleans up any locks that
-  survive a hard kill.
-
-- **`Bash` writes are not covered.** The harness intercepts only the structured
-  write tools listed above. Shell-level writes made via `Bash` are outside its
-  scope.
-
-- **Fail-open when the harness is off.** When no source opts the checkout in (env
-  unset, no global-config flag, no checkout `devkit.toml` flag), the hook exits
-  immediately without blocking any writes. No locks are taken and there is no
-  overhead.
-
-- **Fail-open when `lockm` is absent.** If the `lockm` binary is not on `PATH`,
-  the hook invocation fails silently and the write proceeds. Install `lockm` via
-  `cargo install --path .` to activate enforcement.
-
-- **Fail-closed on registry errors.** If `lockm` is present but the registry
-  returns an error (corruption, permission problem), the hook denies the write
-  rather than allowing it through silently.
-
-Manual `lockm acquire`/`release` calls remain the correct approach in checkouts
-that do not set `enforce_writes = true`. In an enforced checkout there is no need
-to call them — doing so is harmless but redundant.
+The full mechanism (holder identity, sub-agent delegation, release lifecycle, fail-open
+vs fail-closed) is in `cli-reference.md`.
 
 ## Common mistakes
 
