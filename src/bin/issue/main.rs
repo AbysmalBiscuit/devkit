@@ -8,6 +8,7 @@ mod gitignore;
 mod prs;
 mod record;
 mod review;
+mod select;
 mod setup;
 mod spin;
 mod status;

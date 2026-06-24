@@ -10,23 +10,9 @@ fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWor
     let mut chosen = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for sel in selectors {
-        let s = sel.to_lowercase();
         let hits: Vec<&IssueWorktree> = rows
             .iter()
-            .filter(|r| {
-                let base = Path::new(&r.worktree)
-                    .file_name()
-                    .and_then(|x| x.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                [
-                    r.issue_id.to_lowercase(),
-                    r.branch.to_lowercase(),
-                    base,
-                    r.worktree.to_lowercase(),
-                ]
-                .contains(&s)
-            })
+            .filter(|r| crate::select::matches(r, sel))
             .collect();
         if hits.is_empty() {
             eprintln!("no worktree matches '{sel}'");
