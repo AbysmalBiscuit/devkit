@@ -77,6 +77,7 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
             false,
         ),
         Request::Down { holder, role } => (down(daemon, holder, role), false),
+        Request::DownPorts { ports } => (down_ports(daemon, ports), false),
         Request::Tail {
             holder,
             app,
@@ -188,6 +189,46 @@ fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
         crate::cgroup::remove_leaf(daemon, k);
     }
     match registry::release_with(&daemon.port_store(), &holder, role) {
+        Ok(freed) => Response::Freed(freed),
+        Err(e) => Response::Err(format!("{e:#}")),
+    }
+}
+
+/// Like `down`, but scoped to an explicit port set: resolve each listed port to its
+/// supervised key, remove it from the table BEFORE signalling its child (so the
+/// supervision thread treats the exit as intentional and does not restart it), then
+/// release exactly those ports. The remove-before-signal ordering is load-bearing,
+/// mirroring `down`.
+fn down_ports(daemon: &Arc<Daemon>, ports: Vec<u16>) -> Response {
+    use std::collections::BTreeSet;
+    let want: BTreeSet<u16> = ports.iter().copied().collect();
+    // Read the registry first, without holding `sup`, so this never blocks the
+    // supervision thread while that thread holds the registry lock (every path
+    // takes the lock before `sup`, never the reverse).
+    let keys: Vec<Key> = registry::snapshot_with(&daemon.port_store())
+        .map(|d| {
+            d.entries
+                .iter()
+                .filter(|(port, _)| want.contains(port))
+                .map(|(_, e)| Key {
+                    holder: e.holder.clone(),
+                    app: e.app.clone(),
+                    role: e.role,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut sup = daemon.sup.lock().unwrap();
+    for k in &keys {
+        if let Some(pid) = sup.remove(k) {
+            supervise::stop(pid);
+        }
+    }
+    drop(sup);
+    for k in &keys {
+        crate::cgroup::remove_leaf(daemon, k);
+    }
+    match registry::release_ports_with(&daemon.port_store(), &ports) {
         Ok(freed) => Response::Freed(freed),
         Err(e) => Response::Err(format!("{e:#}")),
     }

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Wire-format version. Bump on any incompatible change to these types.
-pub const PROTO: u32 = 1;
+pub const PROTO: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -46,6 +46,11 @@ pub enum Request {
     Down {
         holder: String,
         role: Option<Role>,
+    },
+    /// Stop + release exactly these ports (precise cross-worktree down). The daemon
+    /// resolves each port to its supervised key and stops it intentionally.
+    DownPorts {
+        ports: Vec<u16>,
     },
     Tail {
         holder: String,
@@ -101,6 +106,21 @@ mod tests {
                 assert_eq!(holder, "/w");
                 assert_eq!(role, Role::Issue);
             }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn down_ports_frame_roundtrips() {
+        let msg = Request::DownPorts {
+            ports: vec![9100, 9200],
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        send(&mut buf, &msg).unwrap();
+        let mut rdr = std::io::BufReader::new(&buf[..]);
+        let back: Request = recv(&mut rdr).unwrap().expect("one frame");
+        match back {
+            Request::DownPorts { ports } => assert_eq!(ports, vec![9100, 9200]),
             _ => panic!("wrong variant"),
         }
     }
