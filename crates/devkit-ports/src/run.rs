@@ -707,19 +707,82 @@ mod tests {
         assert!(p.cwd.ends_with("apps/x"));
     }
 
-    /// First launchable python interpreter, or None (then the test skips). Mirrors
-    /// the supervise test so CI hosts without a real python3 don't fail.
-    fn python_cmd() -> Option<&'static str> {
+    /// Command prefix that runs a *real* python interpreter, or None (then the test
+    /// skips). Mirrors the supervise helper: a direct `["python3"]`-style prefix, or
+    /// a uv invocation when the only bare `python` is the Windows Store app-alias
+    /// shim, which answers `--version` with "Python was not found …".
+    fn python_cmd() -> Option<Vec<String>> {
+        for cand in ["python3", "python", "py"] {
+            let prefix = vec![cand.to_string()];
+            if is_real_python(&prefix) {
+                return Some(prefix);
+            }
+        }
+        // uv fallbacks: `uv python find` yields a bare interpreter path (no wrapper
+        // process); `uv run python` is the last resort.
+        if let Some(path) = uv_python_path() {
+            let prefix = vec![path];
+            if is_real_python(&prefix) {
+                return Some(prefix);
+            }
+        }
+        let uv_run: Vec<String> = ["uv", "run", "python"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        if is_real_python(&uv_run) {
+            return Some(uv_run);
+        }
+        None
+    }
+
+    /// Path of an interpreter `uv python find` resolves, if uv is installed and
+    /// finds one. The caller validates the path before use.
+    fn uv_python_path() -> Option<String> {
         use std::process::{Command, Stdio};
-        ["python3", "python", "py"].into_iter().find(|c| {
-            Command::new(c)
-                .arg("--version")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok()
-        })
+        let out = Command::new("uv")
+            .args(["python", "find"])
+            .stdin(Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!path.is_empty()).then_some(path)
+    }
+
+    /// True when running `prefix --version` exits successfully and prints
+    /// `Python <digit>…`. A real interpreter writes its version (stdout on 3.4+,
+    /// stderr on older); the Store shim writes "Python was not found …", so
+    /// requiring a digit right after "Python " rejects the shim despite it
+    /// borrowing the "Python" prefix.
+    fn is_real_python(prefix: &[String]) -> bool {
+        use std::process::{Command, Stdio};
+        let Some((prog, rest)) = prefix.split_first() else {
+            return false;
+        };
+        let Ok(out) = Command::new(prog)
+            .args(rest)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .output()
+        else {
+            return false;
+        };
+        if !out.status.success() {
+            return false;
+        }
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        combined
+            .trim_start()
+            .strip_prefix("Python ")
+            .and_then(|rest| rest.trim_start().chars().next())
+            .is_some_and(|c| c.is_ascii_digit())
     }
 
     #[test]
@@ -811,13 +874,16 @@ mod tests {
         drop(l);
 
         let tmp = std::env::temp_dir().join(format!("devrun-run-{}.log", std::process::id()));
+        let mut argv = py;
+        argv.extend(
+            ["-m", "http.server", &port.to_string()]
+                .into_iter()
+                .map(|s| s.to_string()),
+        );
         let plan = LaunchPlan {
             app: "web".into(),
             port,
-            argv: [py, "-m", "http.server", &port.to_string()]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            argv,
             cwd: std::env::temp_dir(),
             env: BTreeMap::new(),
             log: tmp.clone(),

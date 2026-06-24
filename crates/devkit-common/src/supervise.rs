@@ -120,20 +120,84 @@ mod tests {
         }
     }
 
-    /// First python interpreter that actually launches, if any. Returns the program
-    /// name to invoke. `None` when no interpreter can be spawned — e.g. a host where
-    /// `python3` exists only as a shell shim the OS cannot exec directly — in which
-    /// case the dependent test skips rather than failing on a missing tool.
-    fn python_cmd() -> Option<&'static str> {
-        ["python3", "python", "py"].into_iter().find(|cand| {
-            Command::new(cand)
-                .arg("--version")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok()
-        })
+    /// Command prefix that runs a *real* python interpreter, or `None`. The prefix
+    /// is `["python3"]`-style for a direct interpreter, or a uv invocation when the
+    /// only bare `python` is the Windows Store app-execution alias — a shim that
+    /// answers `--version` with "Python was not found …" instead of a version.
+    /// `None` when nothing real is found, in which case the dependent test skips
+    /// rather than failing on a missing or fake tool.
+    fn python_cmd() -> Option<Vec<String>> {
+        // Direct interpreters first.
+        for cand in ["python3", "python", "py"] {
+            let prefix = vec![cand.to_string()];
+            if is_real_python(&prefix) {
+                return Some(prefix);
+            }
+        }
+        // uv fallbacks: a uv-managed interpreter. `uv python find` yields a bare
+        // interpreter path (no wrapper process, so `stop` reaches it directly);
+        // `uv run python` is the last resort.
+        if let Some(path) = uv_python_path() {
+            let prefix = vec![path];
+            if is_real_python(&prefix) {
+                return Some(prefix);
+            }
+        }
+        let uv_run: Vec<String> = ["uv", "run", "python"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        if is_real_python(&uv_run) {
+            return Some(uv_run);
+        }
+        None
+    }
+
+    /// Path of an interpreter `uv python find` resolves, if uv is installed and
+    /// finds one. The path is validated by the caller before use.
+    fn uv_python_path() -> Option<String> {
+        let out = Command::new("uv")
+            .args(["python", "find"])
+            .stdin(Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!path.is_empty()).then_some(path)
+    }
+
+    /// True when running `prefix --version` exits successfully and prints
+    /// `Python <digit>…`. A real interpreter writes its version (to stdout on 3.4+,
+    /// stderr on older); the Store shim writes "Python was not found …", so
+    /// requiring a digit right after "Python " rejects the shim even though it
+    /// borrows the "Python" prefix.
+    fn is_real_python(prefix: &[String]) -> bool {
+        let Some((prog, rest)) = prefix.split_first() else {
+            return false;
+        };
+        let Ok(out) = Command::new(prog)
+            .args(rest)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .output()
+        else {
+            return false;
+        };
+        if !out.status.success() {
+            return false;
+        }
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        combined
+            .trim_start()
+            .strip_prefix("Python ")
+            .and_then(|rest| rest.trim_start().chars().next())
+            .is_some_and(|c| c.is_ascii_digit())
     }
 
     #[test]
@@ -172,10 +236,12 @@ mod tests {
         let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = l.local_addr().unwrap().port();
         drop(l);
-        let argv: Vec<String> = [py, "-m", "http.server", &port.to_string()]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let mut argv = py;
+        argv.extend(
+            ["-m", "http.server", &port.to_string()]
+                .into_iter()
+                .map(|s| s.to_string()),
+        );
         let env = BTreeMap::new();
         let pid = spawn_detached(&argv, ".", &env, &tmp, None).unwrap();
         assert!(
