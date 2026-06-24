@@ -383,14 +383,22 @@ mod tests {
         assert_eq!(conflicts[0].held_by, "holder-a");
 
         let entries = status_resolved(&r, false).expect("status");
-        assert!(entries.iter().any(|e| e.path == "a.rs" && e.holder == "holder-a"));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.path == "a.rs" && e.holder == "holder-a")
+        );
 
         let (released, refused) = release_resolved(&r, "holder-a", &paths, false).expect("release");
         assert_eq!(released, vec!["a.rs".to_string()]);
         assert!(refused.is_empty());
 
         // release_all on a now-empty root is a no-op but must succeed.
-        assert!(release_all_resolved(&r, "holder-a").expect("release_all").is_empty());
+        assert!(
+            release_all_resolved(&r, "holder-a")
+                .expect("release_all")
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -237,15 +237,18 @@ mod tests {
         let r = root.to_string_lossy().into_owned();
         let c = ctx();
 
-        let out = acquire(&c, serde_json::json!({ "root": r, "paths": ["x.rs"], "ttl": 60 }))
-            .expect("acquire");
+        let out = acquire(
+            &c,
+            serde_json::json!({ "root": r, "paths": ["x.rs"], "ttl": 60 }),
+        )
+        .expect("acquire");
         assert_eq!(out["acquired"].as_array().unwrap().len(), 1);
 
         let st = status(&c, serde_json::json!({ "root": r })).expect("status");
         assert!(st.as_array().unwrap().iter().any(|e| e["path"] == "x.rs"));
 
-        let rel = release(&c, serde_json::json!({ "root": r, "paths": ["x.rs"] }))
-            .expect("release");
+        let rel =
+            release(&c, serde_json::json!({ "root": r, "paths": ["x.rs"] })).expect("release");
         assert_eq!(rel["released"], serde_json::json!(["x.rs"]));
 
         let _ = std::fs::remove_dir_all(&root);

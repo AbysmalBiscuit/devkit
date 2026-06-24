@@ -204,7 +204,8 @@ mod tests {
 
     #[test]
     fn initialize_defaults_protocol_version_when_absent() {
-        let resps = drive("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n");
+        let resps =
+            drive("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n");
         assert_eq!(resps[0]["result"]["protocolVersion"], "2024-11-05");
     }
 
