@@ -10,7 +10,7 @@ See `README.md` for user-facing CLI docs.
 ```sh
 cargo build --release                       # all six binaries → target/release
 cargo install --path .                       # install all six into ~/.cargo/bin
-cargo test --workspace                       # full gate — 128 tests, must stay green
+cargo test --workspace                       # full gate — 327 tests, must stay green
 cargo clippy --workspace --all-targets -- -D warnings   # zero-warning policy
 cargo test -p devkit-ports --test registry   # multiprocess flock race test
 ```

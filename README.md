@@ -198,8 +198,8 @@ An undefined variable is an error (strict mode), so typos surface immediately.
 
 ## Install
 
-Install all five binaries (`portm`, `devrun`, `issue`, `lockm`, `devkitd`) into
-`~/.cargo/bin` with one command:
+Install all six binaries (`portm`, `devrun`, `issue`, `lockm`, `devkit`, `devkitd`)
+into `~/.cargo/bin` with one command:
 
 ```sh
 cargo install --path .
