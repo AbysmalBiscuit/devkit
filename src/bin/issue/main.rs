@@ -5,6 +5,7 @@ use clap_complete::Shell;
 mod dashboard;
 mod end;
 mod prs;
+mod record;
 mod review;
 mod setup;
 mod spin;
