@@ -139,11 +139,26 @@ mod tests {
     #[test]
     fn probe_port_true_when_listening_false_when_free() {
         use std::net::TcpListener;
+
+        // Positive: a bound listener accepts the probe's connection.
         let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = l.local_addr().unwrap().port();
         assert!(probe_port(port), "connects to a bound listener");
         drop(l);
-        assert!(!probe_port(port), "fails on a freed port");
+
+        // Negative: a port with nothing listening refuses the probe. A just-freed
+        // ephemeral port can be re-bound by a concurrent test in this binary, so
+        // derive a fresh free port each attempt and accept the first one observed
+        // closed rather than asserting a specific port stays free.
+        for _ in 0..100 {
+            let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let free = l.local_addr().unwrap().port();
+            drop(l);
+            if !probe_port(free) {
+                return;
+            }
+        }
+        panic!("no freed port observed as closed after 100 attempts");
     }
 
     #[test]
