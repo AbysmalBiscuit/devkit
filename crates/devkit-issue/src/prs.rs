@@ -128,14 +128,9 @@ struct RepoInfo {
 
 // pure logic --------------------------------------------------------------------
 
-const BOTS: [&str; 3] = ["greptile-apps", "linear-code", "coderabbitai"];
 const FAIL: [&str; 4] = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"];
 #[allow(dead_code)]
 const RUNNING: [&str; 3] = ["IN_PROGRESS", "QUEUED", "PENDING"];
-
-fn is_bot(login: &str) -> bool {
-    BOTS.contains(&login) || login.ends_with("[bot]")
-}
 
 /// The issue id a PR addresses, taken from its branch (head) ref and uppercased.
 fn issue_of(head: &str) -> String {
@@ -154,8 +149,10 @@ fn checks_text(rollup: Option<&str>) -> &'static str {
 }
 
 fn review_text(pr: &PrNode) -> &'static str {
+    if changes_requested(pr) {
+        return "changes";
+    }
     match pr.review_decision.as_deref() {
-        Some("CHANGES_REQUESTED") => "changes",
         Some("APPROVED") => "approved",
         Some("REVIEW_REQUIRED") => "awaiting",
         _ => {
@@ -168,41 +165,64 @@ fn review_text(pr: &PrNode) -> &'static str {
     }
 }
 
-/// True when my latest review is newer than the latest non-bot reviewer's.
-fn has_replied(pr: &PrNode, me: &str) -> bool {
-    let mine = pr
-        .reviews
-        .nodes
-        .iter()
-        .filter(|r| r.author.login == me)
-        .map(|r| r.submitted_at.as_str())
-        .max()
-        .unwrap_or("");
-    let theirs = pr
-        .reviews
-        .nodes
-        .iter()
-        .filter(|r| r.author.login != me && !is_bot(&r.author.login))
-        .map(|r| r.submitted_at.as_str())
-        .max()
-        .unwrap_or("");
-    !mine.is_empty() && mine > theirs
+/// Logins whose current effective review is `CHANGES_REQUESTED`. A reviewer's
+/// effective state is their most recent `APPROVED` / `CHANGES_REQUESTED` /
+/// `DISMISSED` review; `COMMENTED` and `PENDING` reviews leave a standing
+/// request untouched. Bots are included — any actor that requests changes counts.
+fn change_requesters(pr: &PrNode) -> Vec<&str> {
+    let mut latest: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
+    for r in &pr.reviews.nodes {
+        if !matches!(
+            r.state.as_str(),
+            "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
+        ) {
+            continue;
+        }
+        let slot = latest.entry(r.author.login.as_str()).or_insert(("", ""));
+        if r.submitted_at.as_str() >= slot.0 {
+            *slot = (r.submitted_at.as_str(), r.state.as_str());
+        }
+    }
+    latest
+        .into_iter()
+        .filter(|(_, (_, state))| *state == "CHANGES_REQUESTED")
+        .map(|(login, _)| login)
+        .collect()
 }
 
-fn mine_action(pr: &PrNode, me: &str) -> String {
+/// True when the PR carries a standing change request. Driven by the per-author
+/// effective review state so any actor (human or bot, required or not) counts;
+/// falls back to GitHub's `reviewDecision` in case the review list was truncated.
+fn changes_requested(pr: &PrNode) -> bool {
+    !change_requesters(pr).is_empty() || pr.review_decision.as_deref() == Some("CHANGES_REQUESTED")
+}
+
+/// True when a reviewer who requested changes is back in the pending
+/// review-request list. GitHub drops a reviewer from `reviewRequests` once they
+/// submit a review, so their reappearance means re-review was requested of them.
+fn re_review_requested(pr: &PrNode) -> bool {
+    let requesters = change_requesters(pr);
+    pr.review_requests
+        .nodes
+        .iter()
+        .filter_map(|r| r.requested_reviewer.as_ref())
+        .any(|rr| requesters.contains(&rr.login.as_str()))
+}
+
+fn mine_action(pr: &PrNode) -> String {
     if pr.is_draft {
         return "draft".into();
     }
     let conflict = pr.mergeable == "CONFLICTING";
+    if changes_requested(pr) {
+        let base = if re_review_requested(pr) {
+            "await re-review"
+        } else {
+            "address changes"
+        };
+        return format!("{base}{}", if conflict { " + rebase" } else { "" });
+    }
     match pr.review_decision.as_deref() {
-        Some("CHANGES_REQUESTED") => {
-            let base = if has_replied(pr, me) {
-                "replied; await re-review"
-            } else {
-                "address changes"
-            };
-            format!("{base}{}", if conflict { " + rebase" } else { "" })
-        }
         Some("APPROVED") => {
             if conflict {
                 "rebase -> merge".into()
@@ -259,7 +279,7 @@ fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
 const PR_FIELDS: &str = "number url headRefName isDraft reviewDecision mergeable \
 author { login } \
 commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
-reviews(first: 100) { nodes { author { login } state submittedAt } } \
+reviews(last: 100) { nodes { author { login } state submittedAt } } \
 reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }";
 
 fn build_query(repo: &str) -> String {
@@ -288,7 +308,7 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool) -> PrsReport {
                 issue_id: issue_of(&pr.head_ref_name),
                 review_state: review_text(pr).to_string(),
                 check_state: checks_text(pr.rollup_state()).to_string(),
-                action: mine_action(pr, &me),
+                action: mine_action(pr),
             })
             .collect()
     } else {
@@ -460,39 +480,123 @@ mod tests {
     #[test]
     fn approved_green_merges() {
         assert_eq!(
-            mine_action(
-                &mine_node(Some("APPROVED"), "MERGEABLE", false, Some("SUCCESS")),
-                "me"
-            ),
+            mine_action(&mine_node(
+                Some("APPROVED"),
+                "MERGEABLE",
+                false,
+                Some("SUCCESS")
+            )),
             "MERGE"
         );
     }
     #[test]
     fn approved_with_failing_ci() {
         assert_eq!(
-            mine_action(
-                &mine_node(Some("APPROVED"), "MERGEABLE", false, Some("FAILURE")),
-                "me"
-            ),
+            mine_action(&mine_node(
+                Some("APPROVED"),
+                "MERGEABLE",
+                false,
+                Some("FAILURE")
+            )),
             "fix CI -> merge"
         );
     }
     #[test]
     fn changes_requested_action() {
         assert_eq!(
-            mine_action(
-                &mine_node(Some("CHANGES_REQUESTED"), "MERGEABLE", false, None),
-                "me"
-            ),
+            mine_action(&mine_node(
+                Some("CHANGES_REQUESTED"),
+                "MERGEABLE",
+                false,
+                None
+            )),
             "address changes"
         );
     }
     #[test]
     fn draft_action() {
         assert_eq!(
-            mine_action(&mine_node(None, "MERGEABLE", true, None), "me"),
+            mine_action(&mine_node(None, "MERGEABLE", true, None)),
             "draft"
         );
+    }
+
+    /// A node addressing a change request: the human's `CHANGES_REQUESTED`
+    /// followed by my own `COMMENTED` replies (e.g. answering a bot's inline
+    /// threads), with `requested` controlling whether the human is re-requested.
+    fn change_request_node(requested: bool) -> PrNode {
+        let reviews = serde_json::json!({"nodes": [
+            {"author": {"login": "human"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-23T11:00:00Z"},
+            {"author": {"login": "me"}, "state": "COMMENTED", "submittedAt": "2026-06-23T13:00:00Z"}
+        ]});
+        let requests = if requested {
+            serde_json::json!({"nodes": [{"requestedReviewer": {"login": "human"}}]})
+        } else {
+            serde_json::json!({"nodes": []})
+        };
+        node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+            "reviewDecision": "CHANGES_REQUESTED", "mergeable": "MERGEABLE",
+            "author": {"login": "me"}, "commits": {"nodes": []},
+            "reviews": reviews, "reviewRequests": requests
+        }))
+    }
+
+    // Replying to a comment thread (my COMMENTED review newer than the human's
+    // CHANGES_REQUESTED) is not a re-review: with the human absent from the
+    // pending request list the action stays "address changes".
+    #[test]
+    fn reply_without_re_request_stays_address_changes() {
+        assert_eq!(mine_action(&change_request_node(false)), "address changes");
+    }
+
+    // Once the change-requester is re-requested they are back in reviewRequests,
+    // so the action flips to "await re-review".
+    #[test]
+    fn re_requested_awaits_re_review() {
+        assert_eq!(mine_action(&change_request_node(true)), "await re-review");
+    }
+
+    // A change request from a non-required reviewer (or bot) that GitHub does not
+    // surface in `reviewDecision` still shows as "changes" / "address changes".
+    #[test]
+    fn non_required_change_request_counts() {
+        let pr = node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+            "reviewDecision": null, "mergeable": "MERGEABLE", "author": {"login": "me"},
+            "commits": {"nodes": []},
+            "reviews": {"nodes": [
+                {"author": {"login": "greptile-apps"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-18T17:00:00Z"}
+            ]},
+            "reviewRequests": {"nodes": []}
+        }));
+        assert_eq!(review_text(&pr), "changes");
+        assert_eq!(mine_action(&pr), "address changes");
+    }
+
+    // A later APPROVED clears a standing change request; a later COMMENTED does not.
+    #[test]
+    fn approval_clears_changes_comment_does_not() {
+        let with = |last: &str, ts: &str| {
+            node(serde_json::json!({
+                "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+                "reviewDecision": null, "mergeable": "MERGEABLE", "author": {"login": "me"},
+                "commits": {"nodes": []},
+                "reviews": {"nodes": [
+                    {"author": {"login": "human"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-23T11:00:00Z"},
+                    {"author": {"login": "human"}, "state": last, "submittedAt": ts}
+                ]},
+                "reviewRequests": {"nodes": []}
+            }))
+        };
+        assert!(!changes_requested(&with(
+            "APPROVED",
+            "2026-06-23T12:00:00Z"
+        )));
+        assert!(changes_requested(&with(
+            "COMMENTED",
+            "2026-06-23T12:00:00Z"
+        )));
     }
     #[test]
     fn review_text_variants() {
