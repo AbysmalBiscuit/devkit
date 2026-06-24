@@ -35,7 +35,8 @@ fn write_prep_files(app_dir: &Path, files: &[PrepFile]) -> Result<()> {
         let target = app_dir.join(&pf.path);
         if pf.overwrite || !target.exists() {
             if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).ok();
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating parent dir for prep file `{}`", pf.path))?;
             }
             std::fs::write(&target, &pf.content)
                 .with_context(|| format!("writing prep file `{}`", pf.path))?;
@@ -151,7 +152,6 @@ pub fn run(args: SetupArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devkit_ports::config::PrepFile;
     use std::path::PathBuf;
 
     fn scratch(tag: &str) -> PathBuf {
