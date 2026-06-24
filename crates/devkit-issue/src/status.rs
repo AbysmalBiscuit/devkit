@@ -270,6 +270,17 @@ pub fn gather(start: &str, ids: &[String]) -> Result<StatusReport> {
     Ok(assemble(d, dirty, prs, linear, ws, has_key))
 }
 
+/// Local-only status: discovery + dirty checks, with no `gh`/Linear network.
+/// PRs stay `NO_PR` and Linear stays unknown; callers (e.g. `issue info
+/// --cache-only`) overlay cached data themselves. Same signature shape as
+/// `gather`.
+pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
+    let d = discover(start, ids)?;
+    let has_key = devkit_common::secrets::resolve("LINEAR_API_KEY").is_some();
+    let dirty: Vec<bool> = d.worktree_paths().iter().map(|p| dirty_of(p)).collect();
+    Ok(assemble(d, dirty, Prs(Vec::new()), HashMap::new(), None, has_key))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
