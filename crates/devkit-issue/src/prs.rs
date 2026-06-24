@@ -37,12 +37,22 @@ struct ActorLogin {
     login: String,
 }
 
+/// Deserialize a possibly-null string as the empty string. GitHub returns
+/// `submittedAt: null` for a PENDING review, which a bare `String` rejects;
+/// `#[serde(default)]` only covers a missing field, not an explicit null.
+fn null_as_empty<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct ReviewNode {
     author: ActorLogin,
     state: String,
-    #[serde(rename = "submittedAt")]
+    #[serde(rename = "submittedAt", deserialize_with = "null_as_empty")]
     submitted_at: String,
 }
 
@@ -473,6 +483,23 @@ mod tests {
         assert_eq!(report.reviews[0].number, 20);
         assert_eq!(report.reviews[0].my_vote, "-");
         assert_eq!(report.reviews[0].action, "REVIEW NEEDED");
+    }
+
+    // GitHub returns `submittedAt: null` for a PENDING review. The node must
+    // still deserialize, with the timestamp treated as empty.
+    #[test]
+    fn pending_review_with_null_submitted_at_parses() {
+        let pr = node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h",
+            "isDraft": false, "reviewDecision": null, "mergeable": "MERGEABLE",
+            "author": {"login": "x"},
+            "commits": {"nodes": []},
+            "reviews": {"nodes": [
+                {"author": {"login": "me"}, "state": "PENDING", "submittedAt": null}
+            ]},
+            "reviewRequests": {"nodes": []}
+        }));
+        assert_eq!(pr.reviews.nodes[0].submitted_at, "");
     }
 
     fn mine_node(
