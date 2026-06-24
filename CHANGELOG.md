@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.7.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.6.0...v0.7.0) (2026-06-24)
+
+
+### Features
+
+* **common:** add credential secret store ([af5ebce](https://github.com/AbysmalBiscuit/devkit/commit/af5ebcee220dc4a4f8fde5c3c8296d8b5702593c))
+* **common:** add credential validators ([49688d6](https://github.com/AbysmalBiscuit/devkit/commit/49688d632e8dc8ca1c7b6fe9f00e00c1c3664829))
+* **common:** add minijinja template render helper ([bc10c35](https://github.com/AbysmalBiscuit/devkit/commit/bc10c358f557a7556f12ff3282e3fdc4f449dfdd))
+* **config:** add prep_files app field alongside prep_env ([a62f799](https://github.com/AbysmalBiscuit/devkit/commit/a62f79982dd8b17300071fc4674a779976d46e30))
+* **devkit:** add devkit binary with auth command ([f103674](https://github.com/AbysmalBiscuit/devkit/commit/f10367469d3a3f7c8008390d44d9d0b4273bf59d))
+* **devkit:** add doctor command ([c80c7fa](https://github.com/AbysmalBiscuit/devkit/commit/c80c7faa3f6bb036544bc89c13df31bbc42eb4a6))
+* **devkitd:** add DownPorts request and handler ([e1f513f](https://github.com/AbysmalBiscuit/devkit/commit/e1f513fc27e71d717ffc70ae32857898cfa2329c))
+* **devrun:** add config apps catalog listing ([d0ea447](https://github.com/AbysmalBiscuit/devkit/commit/d0ea4475eb9257577d13ab75d55432dd35d08478))
+* **devrun:** add config show with optional value provenance ([84d87a6](https://github.com/AbysmalBiscuit/devkit/commit/84d87a60ff2d91d77563cba2608622902131309b))
+* **devrun:** add launch-time prd guard for doppler launches ([2582439](https://github.com/AbysmalBiscuit/devkit/commit/2582439137a99da4268f72b7159c15621c05a68f))
+* **devrun:** cross-worktree down with tty-gated confirmation ([7d4caaa](https://github.com/AbysmalBiscuit/devkit/commit/7d4caaa899161c96f1ce82a75c7b1e55c676c704))
+* **devrun:** run launch argv verbatim instead of wrapping in doppler ([7cbf022](https://github.com/AbysmalBiscuit/devkit/commit/7cbf02258db502c98a48a0ac1735fc4b8cc13aef))
+* **issue:** ensure .devkit is in the global gitignore ([63fa2a3](https://github.com/AbysmalBiscuit/devkit/commit/63fa2a3c4b98159710747c8943b38f6433476fd6))
+* **issue:** persist setup record for review-time context ([294e125](https://github.com/AbysmalBiscuit/devkit/commit/294e12562e39c4db797ba92daae0876a5d09095f))
+* **issue:** render branch and worktree dir from templates ([9b81d17](https://github.com/AbysmalBiscuit/devkit/commit/9b81d17f71725e0198ad0211537c5cc7524af43e))
+* **issue:** render PR and Slack text from templates ([beee371](https://github.com/AbysmalBiscuit/devkit/commit/beee3713f8a2879561d1065ebb05d94f8f37da10))
+* **issue:** template prep-file content at setup ([82ada50](https://github.com/AbysmalBiscuit/devkit/commit/82ada508a7f25b7644a16f981ac79722f839a81e))
+* **issue:** write configurable prep_files during setup ([68a10c5](https://github.com/AbysmalBiscuit/devkit/commit/68a10c5cf5addd8147d687a36a67269b91257779))
+* **locks:** add explicit-context daemon-aware facade fns ([9aac338](https://github.com/AbysmalBiscuit/devkit/commit/9aac3383bc8394c3e324d14d4359452c3b954720))
+* **mcp:** echo the client's initialize protocol version ([7f528a7](https://github.com/AbysmalBiscuit/devkit/commit/7f528a743046bf27d169328d2dcfae9896eca07a))
+* **mcp:** route lock actions through the daemon-aware facade ([977153e](https://github.com/AbysmalBiscuit/devkit/commit/977153ed7d6d14f8f9e8527ed1508109af81d1f9))
+* **ports:** add deep-merge with per-leaf provenance ([3ef0cd9](https://github.com/AbysmalBiscuit/devkit/commit/3ef0cd90ef9d25ae56c07697d77fb04a54694cea))
+* **ports:** add Templates config struct with defaults ([dd3942b](https://github.com/AbysmalBiscuit/devkit/commit/dd3942b1d7ffdc67bca18262c28a7312adee5017))
+* **ports:** layer devkit.toml from cwd to root plus home config ([e91d564](https://github.com/AbysmalBiscuit/devkit/commit/e91d5647254f0b730b9b1d1449a87826ba2a0a59))
+* **ports:** make config types serializable for config show ([6e33456](https://github.com/AbysmalBiscuit/devkit/commit/6e33456f9e709a64da29b8e98317a95f37d43b46))
+* **ports:** resolve layered config through load and expose provenance ([fdc8701](https://github.com/AbysmalBiscuit/devkit/commit/fdc87010ce7239babc1e4e85521340cd8e97e6c1))
+* **registry:** add down selection model ([3953ce0](https://github.com/AbysmalBiscuit/devkit/commit/3953ce0ac5b87c45e3bd9a024f9ab0012d0a5733))
+* **registry:** release ports by explicit set ([56ac606](https://github.com/AbysmalBiscuit/devkit/commit/56ac606d1ee0708fa1009656e7d69b2b621f61f4))
+* **run:** add bring_down_ports facade ([39e9121](https://github.com/AbysmalBiscuit/devkit/commit/39e91216d8a4f2309296c6d3b9dcd1682f8055a9))
+
+
+### Bug Fixes
+
+* **issue:** gate await re-review on re-request ([5fec5eb](https://github.com/AbysmalBiscuit/devkit/commit/5fec5ebcd827c9ad48e957f221c1bbbe0992a804))
+* **issue:** keep changes-requested vote over later comment ([90b96a3](https://github.com/AbysmalBiscuit/devkit/commit/90b96a37184cddfb8e9b6b141438c25940d8e70b))
+* **ports:** make doppler_yaml key optional ([23bbb44](https://github.com/AbysmalBiscuit/devkit/commit/23bbb44eab082f023977941b3b000c1c270b1f9e))
+
 ## [0.6.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.5.0...v0.6.0) (2026-06-23)
 
 
