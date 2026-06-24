@@ -667,6 +667,126 @@ pub fn status_table(data: &Data, only_holder: Option<&str>) -> String {
     format!("{t}")
 }
 
+/// Which holders a `down` selection considers.
+#[derive(Debug, Clone)]
+pub enum Scope {
+    /// Only this holder's rows (the default — current worktree).
+    Current(String),
+    /// Every holder.
+    All,
+    /// Every holder except this one.
+    Others(String),
+    /// Exactly these holders.
+    Holders(Vec<String>),
+}
+
+impl Scope {
+    fn includes(&self, holder: &str) -> bool {
+        match self {
+            Scope::Current(h) => holder == h,
+            Scope::All => true,
+            Scope::Others(h) => holder != h,
+            Scope::Holders(hs) => hs.iter().any(|h| h == holder),
+        }
+    }
+}
+
+/// AND-combined column predicates. Empty `Vec`s / `None`s match anything.
+#[derive(Debug, Clone, Default)]
+pub struct ColumnFilter {
+    pub app: Vec<String>,
+    pub port: Vec<u16>,
+    pub role: Option<Role>,
+    pub pid: Option<u32>,
+    pub listening: Option<bool>,
+    pub older_than_secs: Option<u64>,
+}
+
+impl ColumnFilter {
+    fn matches(&self, port: u16, e: &Entry, now: u64) -> bool {
+        if !self.app.is_empty() && !self.app.iter().any(|a| a == &e.app) {
+            return false;
+        }
+        if !self.port.is_empty() && !self.port.contains(&port) {
+            return false;
+        }
+        if let Some(r) = self.role
+            && e.role != r
+        {
+            return false;
+        }
+        if let Some(pid) = self.pid
+            && e.pid != Some(pid)
+        {
+            return false;
+        }
+        if let Some(want) = self.listening
+            && listening(port) != want
+        {
+            return false;
+        }
+        if let Some(secs) = self.older_than_secs
+            && now.saturating_sub(e.ts) < secs
+        {
+            return false;
+        }
+        true
+    }
+}
+
+/// How to narrow the in-scope rows.
+#[derive(Debug, Clone)]
+pub enum Filter {
+    /// Every in-scope row.
+    All,
+    /// Case-insensitive substring tokens, OR'd across columns.
+    Tokens(Vec<String>),
+    /// AND-combined column predicates.
+    Columns(ColumnFilter),
+}
+
+/// Returns true if any identity column of this row contains `token` (already lowercased).
+fn row_contains(port: u16, e: &Entry, token: &str) -> bool {
+    let leaf = devkit_common::paths::leaf(&e.holder).unwrap_or(&e.holder);
+    leaf.to_lowercase().contains(token)
+        || e.holder.to_lowercase().contains(token)
+        || e.app.to_lowercase().contains(token)
+        || port.to_string().contains(token)
+        || e.role.as_str().contains(token)
+        || e.pid.is_some_and(|p| p.to_string().contains(token))
+}
+
+impl Filter {
+    fn matches(&self, port: u16, e: &Entry, now: u64) -> bool {
+        match self {
+            Filter::All => true,
+            Filter::Tokens(toks) => toks
+                .iter()
+                .any(|t| row_contains(port, e, &t.to_lowercase())),
+            Filter::Columns(c) => c.matches(port, e, now),
+        }
+    }
+}
+
+/// A resolved `down` selection: which holders, narrowed by which filter.
+#[derive(Debug, Clone)]
+pub struct DownSelector {
+    pub scope: Scope,
+    pub filter: Filter,
+}
+
+/// Resolve a selector against a snapshot to the matching ports. Pure except for
+/// `listening()` syscalls when the `--listening` predicate is set; callers pass an
+/// already-pruned snapshot and the current `now()`.
+pub fn select(data: &Data, sel: &DownSelector, now: u64) -> Vec<u16> {
+    data.entries
+        .iter()
+        .filter(|(_, e)| sel.scope.includes(&e.holder))
+        .filter(|(port, e)| sel.filter.matches(**port, e, now))
+        .map(|(port, _)| *port)
+        .collect()
+}
+
 #[cfg(test)]
 mod ops_tests {
     use super::*;
@@ -920,5 +1040,135 @@ mod store_seam_tests {
             "memory must be unchanged when the write fails"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod select_tests {
+    use super::*;
+
+    fn entry(app: &str, holder: &str, role: Role, pid: Option<u32>, ts: u64) -> Entry {
+        Entry {
+            app: app.into(),
+            holder: holder.into(),
+            role,
+            pid,
+            logfile: None,
+            ts,
+        }
+    }
+
+    fn data() -> Data {
+        let mut d = Data::default();
+        // current worktree
+        d.entries.insert(
+            9100,
+            entry("api", "/wt/feat-a", Role::Issue, Some(11), 1000),
+        );
+        d.entries.insert(
+            9200,
+            entry("web", "/wt/feat-a", Role::Issue, Some(12), 1000),
+        );
+        // another worktree
+        d.entries
+            .insert(9300, entry("api", "/wt/feat-b", Role::Baseline, None, 100));
+        d
+    }
+
+    fn sorted(mut v: Vec<u16>) -> Vec<u16> {
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn scope_current_keeps_only_that_holder() {
+        let sel = DownSelector {
+            scope: Scope::Current("/wt/feat-a".into()),
+            filter: Filter::All,
+        };
+        assert_eq!(sorted(select(&data(), &sel, 2000)), vec![9100, 9200]);
+    }
+
+    #[test]
+    fn scope_others_excludes_current() {
+        let sel = DownSelector {
+            scope: Scope::Others("/wt/feat-a".into()),
+            filter: Filter::All,
+        };
+        assert_eq!(sorted(select(&data(), &sel, 2000)), vec![9300]);
+    }
+
+    #[test]
+    fn scope_all_keeps_every_holder() {
+        let sel = DownSelector {
+            scope: Scope::All,
+            filter: Filter::All,
+        };
+        assert_eq!(sorted(select(&data(), &sel, 2000)), vec![9100, 9200, 9300]);
+    }
+
+    #[test]
+    fn scope_holders_keeps_listed() {
+        let sel = DownSelector {
+            scope: Scope::Holders(vec!["/wt/feat-b".into()]),
+            filter: Filter::All,
+        };
+        assert_eq!(sorted(select(&data(), &sel, 2000)), vec![9300]);
+    }
+
+    #[test]
+    fn token_matches_across_columns_and_ors() {
+        // "api" matches app on 9100 and 9300; "9200" matches port. Scope All.
+        let sel = DownSelector {
+            scope: Scope::All,
+            filter: Filter::Tokens(vec!["api".into(), "9200".into()]),
+        };
+        assert_eq!(sorted(select(&data(), &sel, 2000)), vec![9100, 9200, 9300]);
+    }
+
+    #[test]
+    fn token_matches_holder_leaf_and_role_and_pid() {
+        let d = data();
+        let by_leaf = DownSelector {
+            scope: Scope::All,
+            filter: Filter::Tokens(vec!["feat-b".into()]),
+        };
+        assert_eq!(sorted(select(&d, &by_leaf, 2000)), vec![9300]);
+        let by_role = DownSelector {
+            scope: Scope::All,
+            filter: Filter::Tokens(vec!["baseline".into()]),
+        };
+        assert_eq!(sorted(select(&d, &by_role, 2000)), vec![9300]);
+        let by_pid = DownSelector {
+            scope: Scope::All,
+            filter: Filter::Tokens(vec!["11".into()]),
+        };
+        assert_eq!(sorted(select(&d, &by_pid, 2000)), vec![9100]);
+    }
+
+    #[test]
+    fn columns_and_combine() {
+        let sel = DownSelector {
+            scope: Scope::All,
+            filter: Filter::Columns(ColumnFilter {
+                app: vec!["api".into()],
+                role: Some(Role::Issue),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(sorted(select(&data(), &sel, 2000)), vec![9100]);
+    }
+
+    #[test]
+    fn older_than_filters_on_ts() {
+        // now=2000; 9300 ts=100 (age 1900), 9100/9200 ts=1000 (age 1000).
+        let sel = DownSelector {
+            scope: Scope::All,
+            filter: Filter::Columns(ColumnFilter {
+                older_than_secs: Some(1500),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(sorted(select(&data(), &sel, 2000)), vec![9300]);
     }
 }
