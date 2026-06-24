@@ -52,7 +52,10 @@ pub fn run(reader: &mut impl BufRead, writer: &mut impl Write, ctx: &ServerCtx) 
 
 fn dispatch(ctx: &ServerCtx, req: &Request) -> Option<Response> {
     match req.method.as_str() {
-        "initialize" => Some(Response::ok(req.id.clone()?, initialize_result())),
+        "initialize" => Some(Response::ok(
+            req.id.clone()?,
+            initialize_result(client_protocol_version(&req.params)),
+        )),
         "tools/list" => Some(Response::ok(req.id.clone()?, tools_list_result())),
         "tools/call" => Some(tools_call(ctx, req.id.clone()?, &req.params)),
         "notifications/initialized" => None,
@@ -95,9 +98,18 @@ fn tool_result(payload: &Value, is_error: bool) -> Value {
     })
 }
 
-fn initialize_result() -> Value {
+/// The client's requested MCP protocol version from `initialize` params, when it is
+/// a non-empty string. The server is version-agnostic, so this is echoed back.
+fn client_protocol_version(params: &Value) -> Option<&str> {
+    params
+        .get("protocolVersion")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+}
+
+fn initialize_result(requested: Option<&str>) -> Value {
     serde_json::json!({
-        "protocolVersion": "2024-11-05",
+        "protocolVersion": requested.unwrap_or("2024-11-05"),
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "devkit-mcp", "version": env!("CARGO_PKG_VERSION") }
     })
@@ -180,6 +192,20 @@ mod tests {
             drive("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n");
         assert_eq!(resps[0]["result"]["serverInfo"]["name"], "devkit-mcp");
         assert!(resps[0]["result"]["capabilities"]["tools"].is_object());
+    }
+
+    #[test]
+    fn initialize_echoes_client_protocol_version() {
+        let resps = drive(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+        );
+        assert_eq!(resps[0]["result"]["protocolVersion"], "2025-06-18");
+    }
+
+    #[test]
+    fn initialize_defaults_protocol_version_when_absent() {
+        let resps = drive("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n");
+        assert_eq!(resps[0]["result"]["protocolVersion"], "2024-11-05");
     }
 
     #[test]
