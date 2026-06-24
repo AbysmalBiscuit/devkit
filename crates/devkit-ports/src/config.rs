@@ -764,7 +764,10 @@ overwrite = true
     #[test]
     fn templates_variables_parse() {
         let t: Templates = toml::from_str("[variables]\nteam = \"platform\"\n").unwrap();
-        assert_eq!(t.variables.get("team").map(String::as_str), Some("platform"));
+        assert_eq!(
+            t.variables.get("team").map(String::as_str),
+            Some("platform")
+        );
     }
 
     #[test]

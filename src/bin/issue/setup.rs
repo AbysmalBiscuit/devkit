@@ -126,7 +126,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
             apps: args.apps.clone(),
         },
     )?;
-    if !args.no_gitignore && let Err(e) = crate::gitignore::ensure_devkit_ignored() {
+    if !args.no_gitignore
+        && let Err(e) = crate::gitignore::ensure_devkit_ignored()
+    {
         eprintln!("warning: could not update global gitignore: {e:#}");
     }
 

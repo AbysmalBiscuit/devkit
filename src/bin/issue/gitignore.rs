@@ -27,10 +27,11 @@ fn needs_devkit(contents: &str) -> bool {
 /// Ensure `.devkit/` is in the global excludes file. Idempotent; append-only.
 /// Returns an error on IO failure — the caller decides whether to ignore it.
 pub fn ensure_devkit_ignored() -> Result<()> {
-    let configured = devkit_common::cmd::capture("git", &["config", "--global", "core.excludesfile"], None)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let configured =
+        devkit_common::cmd::capture("git", &["config", "--global", "core.excludesfile"], None)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
     let home = std::env::var("HOME").context("HOME not set")?;
     let xdg = std::env::var("XDG_CONFIG_HOME").ok();
     let path = resolve_excludes_path(configured.as_deref(), &home, xdg.as_deref());

@@ -205,7 +205,11 @@ pub fn run(args: ReviewArgs) -> Result<()> {
         .trim()
         .to_string();
     let record = crate::record::read(std::path::Path::new(&toplevel));
-    let missing_at = if record.is_none() { Some(toplevel.as_str()) } else { None };
+    let missing_at = if record.is_none() {
+        Some(toplevel.as_str())
+    } else {
+        None
+    };
     let tmpls = &loaded.config.templates;
     let vars = &tmpls.variables;
     let base = base_ctx(record.as_ref(), &branch, &reviewer, &args.to);
@@ -215,7 +219,10 @@ pub fn run(args: ReviewArgs) -> Result<()> {
         "pr_title",
         &with_fields(
             &base,
-            &[("input", serde_json::json!(args.pr_title.clone().unwrap_or_default()))],
+            &[(
+                "input",
+                serde_json::json!(args.pr_title.clone().unwrap_or_default()),
+            )],
         ),
         vars,
         missing_at,
@@ -226,7 +233,10 @@ pub fn run(args: ReviewArgs) -> Result<()> {
         &with_fields(
             &base,
             &[
-                ("input", serde_json::json!(args.pr_body.clone().unwrap_or_default())),
+                (
+                    "input",
+                    serde_json::json!(args.pr_body.clone().unwrap_or_default()),
+                ),
                 ("pr_title", serde_json::json!(pr_title)),
             ],
         ),
@@ -308,7 +318,10 @@ pub fn run(args: ReviewArgs) -> Result<()> {
         &with_fields(
             &base,
             &[
-                ("input", serde_json::json!(args.body.clone().unwrap_or_default())),
+                (
+                    "input",
+                    serde_json::json!(args.body.clone().unwrap_or_default()),
+                ),
                 ("pr_title", serde_json::json!(pr_title)),
                 ("pr_url", serde_json::json!(pr_url)),
             ],

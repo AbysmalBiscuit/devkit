@@ -7,7 +7,7 @@ pub mod report;
 pub mod slack;
 pub mod store;
 pub mod supervise;
-pub mod template;
 pub mod sys;
+pub mod template;
 pub mod ui;
 pub mod worktree;
