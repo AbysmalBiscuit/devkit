@@ -239,7 +239,7 @@ pub fn reason_not_finished(wt: &IssueWorktree, has_key: bool, pr_only: bool) -> 
 /// same pieces with bars). Signature unchanged for MCP/dashboard/tests.
 pub fn gather(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = discover(start, ids)?;
-    let key = std::env::var("LINEAR_API_KEY").ok();
+    let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
     let has_key = key.is_some();
     if d.is_empty() {
         return Ok(assemble(

@@ -13,7 +13,7 @@ pub fn gather_with_bars(start: &str, ids: &[String]) -> Result<StatusReport> {
     let disco = st::discover(start, ids)?;
     p1.finish_and_clear();
 
-    let key = std::env::var("LINEAR_API_KEY").ok();
+    let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
     let has_key = key.is_some();
     if disco.is_empty() {
         steps.clear();

@@ -16,7 +16,7 @@ const TTL_SECS: u64 = 900;
 /// `on_page` is called after each page with the running total so the caller can
 /// update a progress indicator.
 pub fn issues(use_cache: bool, on_page: impl FnMut(usize)) -> Vec<AssignedIssue> {
-    let Ok(key) = std::env::var("LINEAR_API_KEY") else {
+    let Some(key) = devkit_common::secrets::resolve("LINEAR_API_KEY") else {
         return Vec::new();
     };
     if use_cache && let Some(v) = cache::get::<Vec<AssignedIssue>>("issues", TTL_SECS) {
@@ -37,7 +37,7 @@ pub fn issues(use_cache: bool, on_page: impl FnMut(usize)) -> Vec<AssignedIssue>
 
 /// Timeline origin: my Linear account creation, else the earliest issue createdAt.
 pub fn origin(issues: &[AssignedIssue]) -> Option<DateTime<Utc>> {
-    if let Ok(key) = std::env::var("LINEAR_API_KEY")
+    if let Some(key) = devkit_common::secrets::resolve("LINEAR_API_KEY")
         && let Ok(s) = linear::viewer_created_at(&key)
         && let Some(d) = parse_ts(&s)
     {

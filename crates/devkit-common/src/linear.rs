@@ -87,15 +87,10 @@ pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, LinearState>
 /// `$LINEAR_API_KEY`. Returns None when neither is available or the lookup fails
 /// — issue ids then render as plain, unlinked text.
 pub fn workspace_url_key() -> Option<String> {
-    if let Some(slug) = std::env::var("LINEAR_WORKSPACE")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(slug) = crate::secrets::resolve("LINEAR_WORKSPACE") {
         return Some(slug);
     }
-    let key = std::env::var("LINEAR_API_KEY")
-        .ok()
-        .filter(|s| !s.is_empty())?;
+    let key = crate::secrets::resolve("LINEAR_API_KEY")?;
     fetch_url_key(&key).ok().flatten()
 }
 

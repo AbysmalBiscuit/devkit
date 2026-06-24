@@ -330,7 +330,7 @@ pub fn run(args: ReviewArgs) -> Result<()> {
         missing_at,
     )?;
 
-    match std::env::var("SLACK_TOKEN").ok().filter(|t| !t.is_empty()) {
+    match devkit_common::secrets::resolve("SLACK_TOKEN") {
         Some(token) => {
             slack::post_message(&token, &person.slack, &text)?;
             println!("Sent to {} ({}). PR: {pr_url}", args.to, person.slack);
