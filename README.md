@@ -52,6 +52,7 @@ One command covering the whole issue lifecycle. Global `-C/--dir` and `--config`
 ```
 issue setup --issue <ID> --slug <slug> --apps <a,b> [--dry-run]
 issue status [ids…]                           # read-only triage table (also the bare `issue`)
+issue info [selector] [--json] [--cache-only] # one worktree's PR number + Linear id (defaults to current)
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache]
 issue dashboard [--bucket auto|day|week|month] [--chart bar|line] [--mode absolute|proportional] [--all-roles] [--author <email>] [--no-plots] [--no-cache]
@@ -60,6 +61,7 @@ issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-
 
 - **`setup`**: mechanical start of a Linear issue. Creates a worktree off the baseline ref, symlinks env files, runs `bun install`, reserves ports via the registry, and prints a JSON summary.
 - **`status`** (the default when you run bare `issue`): triage table of every issue worktree. A worktree is FINISHED only when its PR is MERGED, its Linear issue is Done, and the working tree is clean.
+- **`info`**: shows one worktree's PR number and Linear id. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single machine-readable object (the `IssueWorktree` struct, with `pr_number`/`issue_id` for scripts). `--cache-only` skips the network — the PR number comes from the per-worktree cache at `<worktree>/.devkit/pr.json` and Linear state renders as `—`. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
 - **`end`**: removes FINISHED worktrees. `--pr-only` ignores the Linear gate; `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation.
 - **`prs`**: GitHub PR triage of your open PRs and PRs awaiting your review, with a per-repo diff cache that renders `old → new` for anything changed since the last run.
 - **`dashboard`**: the triage + PR tables, plus terminal timelines of your Linear issues by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). The timeline fetches (Linear + GitHub) are cached under `~/.cache/devkit/dashboard` for a few minutes so reruns are fast; the live triage/PR panel is never cached. `--no-plots` shows only the tables; `--no-cache` forces a fresh fetch.

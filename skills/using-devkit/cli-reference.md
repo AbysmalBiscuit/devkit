@@ -70,6 +70,7 @@ mutually exclusive with the column filters. `--older-than` accepts `90s`/`30m`/`
 ```sh
 issue setup --issue <ID> --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
+issue info [selector] [--json] [--cache-only]         # one worktree's PR number + Linear id
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo]
 issue dashboard [--chart bar|line] [--no-plots] [--no-cache]
@@ -117,6 +118,13 @@ object for an agent to forward.
 - **`status`** (also bare `issue`) — read-only triage table of every issue worktree.
   A worktree is FINISHED only when its PR is merged, its Linear issue is Done, and the
   tree is clean.
+- **`info`** — one worktree's PR number and Linear id. The optional selector is an
+  issue id, branch, worktree basename, or path; omit it for the current worktree.
+  `--json` emits a single `IssueWorktree` object (scripts read `.pr_number` /
+  `.issue_id`). `--cache-only` skips the network: the PR number comes from the
+  per-worktree cache at `<worktree>/.devkit/pr.json` and Linear renders as `—`. A live
+  run writes the PR through to that cache, which `git worktree remove` deletes with the
+  worktree.
 - **`end`** — removes FINISHED worktrees. `--pr-only` ignores the Linear gate;
   `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree
   guard; `-y` skips confirmation.
