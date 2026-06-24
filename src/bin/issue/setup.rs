@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, git};
-use devkit_ports::config::expand_tilde;
+use devkit_ports::config::{expand_tilde, PrepFile};
 use devkit_ports::load;
 use devkit_ports::registry::{self, Data, Role};
 use std::collections::BTreeMap;
@@ -25,6 +25,23 @@ struct Prepared {
 
 fn branch_name(prefix: &str, slug: &str) -> String {
     format!("{prefix}{slug}")
+}
+
+/// Write each prep file into `app_dir`. Content is written verbatim; parent
+/// directories are created; an existing file is left untouched unless the entry
+/// opts into `overwrite`.
+fn write_prep_files(app_dir: &Path, files: &[PrepFile]) -> Result<()> {
+    for pf in files {
+        let target = app_dir.join(&pf.path);
+        if pf.overwrite || !target.exists() {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(&target, &pf.content)
+                .with_context(|| format!("writing prep file `{}`", pf.path))?;
+        }
+    }
+    Ok(())
 }
 
 pub fn run(args: SetupArgs) -> Result<()> {
@@ -89,25 +106,16 @@ pub fn run(args: SetupArgs) -> Result<()> {
         monorepo_s,
     )?;
 
-    // Per-app bootstrap: write prep_env to <app>/.env.local (frameworks auto-load
-    // it), then run the app's configured setup commands in its directory. Anything
-    // project-specific — installs, doppler wiring — lives in config, not here.
+    // Per-app bootstrap: write the app's configured prep files, then run its
+    // setup commands in its directory. Everything project-specific — filenames,
+    // file contents, installs, doppler wiring — lives in config, not here.
     for a in &args.apps {
         let app = &catalog[a];
         let app_dir = worktree.join(&app.path);
         std::fs::create_dir_all(&app_dir).ok();
 
-        if !app.prep_env.is_empty() {
-            let f = app_dir.join(".env.local");
-            if !f.exists() {
-                let body: String = app
-                    .prep_env
-                    .iter()
-                    .map(|(k, v)| format!("{k}={v}\n"))
-                    .collect();
-                std::fs::write(&f, body)?;
-            }
-        }
+        write_prep_files(&app_dir, &app.prep_files)
+            .with_context(|| format!("preparing files for app `{a}`"))?;
 
         for cmd in &app.setup {
             let (prog, rest) = cmd.split_first().context("empty setup command")?;
@@ -143,8 +151,61 @@ pub fn run(args: SetupArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_ports::config::PrepFile;
+    use std::path::PathBuf;
+
+    fn scratch(tag: &str) -> PathBuf {
+        // Unique per process + tag; no tempfile dependency.
+        let dir = std::env::temp_dir().join(format!("devkit-prep-{}-{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn branch_uses_prefix_and_slug() {
         assert_eq!(branch_name("lev/", "eng-1234-fix"), "lev/eng-1234-fix");
+    }
+
+    #[test]
+    fn writes_content_verbatim_and_creates_parents() {
+        let dir = scratch("verbatim");
+        let files = vec![PrepFile {
+            path: "config/local.json".into(),
+            content: "{\"mode\":\"local\"}\n".into(),
+            overwrite: false,
+        }];
+        write_prep_files(&dir, &files).unwrap();
+        let got = std::fs::read_to_string(dir.join("config/local.json")).unwrap();
+        assert_eq!(got, "{\"mode\":\"local\"}\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_if_absent_preserves_existing() {
+        let dir = scratch("absent");
+        std::fs::write(dir.join(".env.local"), "ORIGINAL\n").unwrap();
+        let files = vec![PrepFile {
+            path: ".env.local".into(),
+            content: "REPLACED\n".into(),
+            overwrite: false,
+        }];
+        write_prep_files(&dir, &files).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(".env.local")).unwrap(), "ORIGINAL\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn overwrite_replaces_existing() {
+        let dir = scratch("overwrite");
+        std::fs::write(dir.join(".env.local"), "ORIGINAL\n").unwrap();
+        let files = vec![PrepFile {
+            path: ".env.local".into(),
+            content: "REPLACED\n".into(),
+            overwrite: true,
+        }];
+        write_prep_files(&dir, &files).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(".env.local")).unwrap(), "REPLACED\n");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
