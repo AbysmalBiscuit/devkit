@@ -305,6 +305,43 @@ pub fn bring_down(holder: &str, role: Option<Role>) -> Result<DownOutcome> {
     })
 }
 
+/// Stop + release exactly the listed ports. Prefers a running daemon (precise
+/// `DownPorts`); otherwise SIGTERMs each port's pid and removes its row under one
+/// lock, without pruning first (the still-running-but-stale invariant).
+pub fn bring_down_ports(ports: &[u16]) -> Result<DownOutcome> {
+    #[cfg(feature = "daemon")]
+    if let Some(mut client) = crate::daemon::client::try_existing() {
+        let resp = client.request(&crate::daemon::proto::Request::DownPorts {
+            ports: ports.to_vec(),
+        })?;
+        if let crate::daemon::proto::Response::Freed(freed) = resp {
+            return Ok(DownOutcome {
+                stopped: freed.len(),
+                freed,
+                via_daemon: true,
+            });
+        }
+    }
+    let want: std::collections::BTreeSet<u16> = ports.iter().copied().collect();
+    let mut stopped = 0;
+    let freed = registry::with_lock(|d| {
+        for (port, e) in d.entries.iter() {
+            if want.contains(port)
+                && let Some(pid) = e.pid
+            {
+                supervise::stop(pid);
+                stopped += 1;
+            }
+        }
+        Ok(d.release_ports(ports))
+    })?;
+    Ok(DownOutcome {
+        stopped,
+        freed,
+        via_daemon: false,
+    })
+}
+
 /// Return the last `lines` lines of a tracked app's logfile for this worktree.
 pub fn read_log(holder: &str, app: &str, role: Option<Role>, lines: usize) -> Result<String> {
     let data = registry::snapshot()?;
@@ -695,6 +732,34 @@ mod tests {
         // Idempotent: a second down frees nothing.
         let again = bring_down(&holder, None).unwrap();
         assert!(again.freed.is_empty());
+    }
+
+    #[test]
+    fn bring_down_ports_releases_listed_reservations() {
+        // A real holder dir so a concurrent prune (which drops reservations whose
+        // holder path is gone) can't steal the still-reserved second port out from
+        // under this test before it asserts.
+        let holderdir =
+            std::env::temp_dir().join(format!("down-ports-test-{}", std::process::id()));
+        std::fs::create_dir_all(&holderdir).unwrap();
+        let holder = holderdir.to_str().unwrap().to_string();
+        let got = registry::alloc(
+            &holder,
+            &[("api".to_string(), 7300), ("web".to_string(), 7400)],
+            Role::Issue,
+        )
+        .unwrap();
+        let ports: Vec<u16> = got.into_iter().map(|(_, p)| p).collect();
+
+        // Down just the first port.
+        let out = bring_down_ports(&[ports[0]]).unwrap();
+        assert_eq!(out.stopped, 0, "pidless reservation, nothing to SIGTERM");
+        assert_eq!(out.freed, vec![ports[0]]);
+
+        // The second is still reserved; clean it up.
+        let rest = registry::release(&holder, None).unwrap();
+        assert_eq!(rest, vec![ports[1]]);
+        let _ = std::fs::remove_dir_all(&holderdir);
     }
 
     #[test]
