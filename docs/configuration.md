@@ -20,6 +20,23 @@ The recommended setup is to keep your real config at
 no flag or env var needed. (`.gitignore` also ignores `/configs/*.toml`, should
 you prefer to keep a copy inside a checkout.)
 
+## Secrets
+
+Credentials are **not** stored in `config.toml`. They resolve env-first, then from
+a separate `~/.config/devkit/secrets.toml` written `0600`:
+
+~~~toml
+# ~/.config/devkit/secrets.toml  (chmod 600)
+linear_api_key   = "lin_api_…"
+linear_workspace = "adaptyv"
+slack_token      = "xoxb-…"
+~~~
+
+Resolution order for each credential is `$ENV` → `secrets.toml` → unset, so a
+shell export or a Doppler-injected variable always overrides the file. Populate
+the file with `devkit auth <linear|slack>` (it validates the token against the
+live API before saving) and inspect it with `devkit doctor`.
+
 ## Sections
 
 ### `[defaults]`

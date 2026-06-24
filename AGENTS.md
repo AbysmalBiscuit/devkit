@@ -1,6 +1,6 @@
 # devkit
 
-A Rust workspace (edition 2024): a root `devkit` binary package whose five CLIs live
+A Rust workspace (edition 2024): a root `devkit` binary package whose six CLIs live
 in `src/bin/`, plus three library crates, coordinating local development for a monorepo.
 The engine is project-agnostic; every project-specific detail lives in `devkit.toml`.
 See `README.md` for user-facing CLI docs.
@@ -8,8 +8,8 @@ See `README.md` for user-facing CLI docs.
 ## Commands
 
 ```sh
-cargo build --release                       # all five binaries → target/release
-cargo install --path .                       # install all five into ~/.cargo/bin
+cargo build --release                       # all six binaries → target/release
+cargo install --path .                       # install all six into ~/.cargo/bin
 cargo test --workspace                       # full gate — 128 tests, must stay green
 cargo clippy --workspace --all-targets -- -D warnings   # zero-warning policy
 cargo test -p devkit-ports --test registry   # multiprocess flock race test
@@ -35,11 +35,12 @@ install together via `cargo install --path .`. Three library crates are members.
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
 | `src/bin/issue` | issue lifecycle: `setup`, `status`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
+| `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens), `doctor` |
 | `src/bin/devkit-mcp` | meta-MCP stdio server exposing the port + lock facades to coding agents |
 | `src/bin/devkitd` | supervisor daemon serving both the port registry (`ports.sock`) and the lock registry (`locks.sock`), authoritative in memory, write-through to the files, gated by `devkitd.lock`; bin gated by the `daemon` feature (on by default) |
 
-The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
-`completions <shell>` subcommand via `clap_complete`.
+The five user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`, `devkit`) each
+expose a `completions <shell>` subcommand via `clap_complete`.
 
 ## Invariants (do not break)
 
@@ -107,6 +108,11 @@ The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
 - CI runs the `test` job (and `clippy`) on ubuntu, macos, and windows. Tests that spawn or
   reap processes must poll for the expected state, not sleep a fixed interval — a loaded
   Windows runner exits a child later than a short fixed sleep allows.
+- **`devkit` configures and diagnoses the toolkit itself** — credentials
+  (`auth`) and `doctor`. The operational verbs (`portm`, `devrun`, `issue`,
+  `lockm`) stay in their own binaries; `config` stays on `devrun`. Token reads
+  resolve through `devkit-common::secrets` (env → `secrets.toml`), never from
+  `config.toml`.
 
 ## Worktrees
 

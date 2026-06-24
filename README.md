@@ -1,6 +1,6 @@
 # devkit
 
-A Rust workspace of five binaries that coordinate local development for a monorepo. Devkit provides flock'd port and file-lock registries (both served from memory by an optional `devkitd` supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
+A Rust workspace of six binaries that coordinate local development for a monorepo. Devkit provides flock'd port and file-lock registries (both served from memory by an optional `devkitd` supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
 
 ## Binaries
 
@@ -73,6 +73,26 @@ parent pid. Conflicts fail fast: `acquire`/`check` exit `1` and report who holds
 path. Locks expire after their TTL (default 30 min, `--ttl 0` disables) or when a
 recorded anchor pid dies; `release` frees them explicitly. For non-interactive agent
 sessions, pass a stable `--as`/`$DEVKIT_SESSION` so acquire and release agree.
+
+### `devkit`: Setup & Diagnostics
+
+Configures and diagnoses the toolkit itself. `auth` validates a Linear or Slack
+credential against the live API and stores it in `~/.config/devkit/secrets.toml`
+(`0600`); `doctor` reports where each credential resolves from and whether it is
+valid. Tokens always resolve env-first, so a shell export or Doppler-injected var
+still wins.
+
+~~~
+devkit auth <linear|slack> [--token <value>]   # validate + store; prompts (no echo) by default
+devkit doctor [--json]                          # check configured credentials
+devkit completions <shell>
+~~~
+
+- **`auth`**: prompts for the token without echo (or reads `--token`/piped stdin),
+  validates it, and saves it. For Linear it also stores the workspace slug derived
+  from the API, so issue links work without setting `LINEAR_WORKSPACE`.
+- **`doctor`**: one row per credential — source (`env`/`file`/`unset`) and live
+  validity. Exits non-zero only when a credential that *is* set fails validation.
 
 ## devkit-mcp (MCP server)
 
@@ -237,6 +257,9 @@ The state home honors `$XDG_STATE_HOME` (default `~/.local/state`). A legacy
 - `$LINEAR_API_KEY`: enables the Linear issue-Done gate in `issue status`/`issue end` and the issue timeline in `issue dashboard`
 - `$LINEAR_WORKSPACE`: enables clickable Linear issue links in `issue status`
 - `$SLACK_TOKEN`: lets `issue review` post the reviewer message directly (otherwise it emits a `SlackIntent` JSON object)
+
+Each of these resolves env-first, then from `~/.config/devkit/secrets.toml`. Run
+`devkit auth <linear|slack>` to store them, or `devkit doctor` to check them.
 
 ## Troubleshooting
 

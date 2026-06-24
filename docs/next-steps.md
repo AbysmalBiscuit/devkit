@@ -88,10 +88,16 @@ a live test:
   the command to a root-anchored variable (e.g. `${CURSOR_PLUGIN_ROOT}/...`) once its
   expansion in command position is confirmed.
 
-  ## Setup help/oath for linear and slack
+## Setup help/oauth for linear and slack
 
-  Better setup/ux would be achieved with step by step instructions and/or just direct
-  oauth/token setup from the cli.
+**Status:** RESOLVED 2026-06-24 — the `devkit` binary provides `devkit auth
+<linear|slack>` (validate a token against the live API and store it in
+`~/.config/devkit/secrets.toml`, `0600`) and `devkit doctor` (report each
+credential's source and validity). Tokens resolve env-first, then from the
+secrets file, via `devkit-common::secrets`. OAuth browser flows and an OS-keyring
+backend are deferred follow-ups. See
+`docs/superpowers/specs/2026-06-24-devkit-credential-setup-design.md` and
+`docs/superpowers/plans/2026-06-24-devkit-credential-setup.md`.
 
 ## Ability to dump/show devrun/devkit config
 
