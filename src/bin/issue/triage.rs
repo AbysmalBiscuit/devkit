@@ -13,7 +13,10 @@ fn pr_label(row: &IssueWorktree) -> String {
 /// an ellipsis, letting the PR/LINEAR/VERDICT columns survive a narrow terminal.
 const BRANCH_MAX: usize = 46;
 
-pub(crate) fn render(report: &StatusReport) -> usize {
+/// Render the worktree triage table. When `offline`, the LINEAR and VERDICT
+/// columns show `—`: both depend on a Linear fetch that the caller skipped, so
+/// any computed value would be stale (e.g. `issue info --cache-only`).
+pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
     println!("{}", ui::bold_cyan("ISSUE WORKTREES"));
     if report.worktrees.is_empty() {
         println!("  {}", ui::dim("(none)"));
@@ -23,7 +26,9 @@ pub(crate) fn render(report: &StatusReport) -> usize {
     sorted.sort_by(|a, b| a.issue_id.cmp(&b.issue_id));
     let mut t = ui::table(&["ISSUE", "BRANCH", "TREE", "PR", "LINEAR", "VERDICT"]);
     for row in sorted {
-        let verdict_disp = if row.finished {
+        let verdict_disp = if offline {
+            ui::dim("—")
+        } else if row.finished {
             ui::bold_green("FINISHED")
         } else {
             // The only "ball in your court" reason is a dirty tree; flag it
@@ -61,19 +66,23 @@ pub(crate) fn render(report: &StatusReport) -> usize {
                 None => colored,
             }
         };
-        let linear_disp = match row.linear_kind.as_deref() {
-            None => ui::dim(if report.has_linear_key {
-                "unknown"
-            } else {
-                "no key"
-            }),
-            Some(kind) => {
-                let name = row.linear_name.as_deref().unwrap_or("");
-                match kind {
-                    "completed" => ui::green(name),
-                    "started" => ui::yellow(name),
-                    "canceled" => ui::red(name),
-                    _ => ui::dim(name),
+        let linear_disp = if offline {
+            ui::dim("—")
+        } else {
+            match row.linear_kind.as_deref() {
+                None => ui::dim(if report.has_linear_key {
+                    "unknown"
+                } else {
+                    "no key"
+                }),
+                Some(kind) => {
+                    let name = row.linear_name.as_deref().unwrap_or("");
+                    match kind {
+                        "completed" => ui::green(name),
+                        "started" => ui::yellow(name),
+                        "canceled" => ui::red(name),
+                        _ => ui::dim(name),
+                    }
                 }
             }
         };

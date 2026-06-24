@@ -137,7 +137,7 @@ pub fn run(
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
         let report = gather(start, &[])?;
-        render(&report);
+        render(&report, false);
         let t = select_explicit(&report.worktrees, ids);
         if t.is_empty() {
             println!("\nNo matching worktrees.");
@@ -150,7 +150,7 @@ pub fn run(
         t
     } else {
         let report = gather(start, ids)?;
-        render(&report);
+        render(&report, false);
         if pr_only {
             println!("--pr-only: Linear 'Done' gate skipped.");
         }

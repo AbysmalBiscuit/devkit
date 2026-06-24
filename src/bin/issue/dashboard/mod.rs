@@ -23,7 +23,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
 
     // At-a-glance: worktree triage, then my PRs + PRs awaiting my review.
     let report = crate::status::gather_with_bars(&start, &[])?;
-    triage::render(&report);
+    triage::render(&report, false);
     println!();
     // The PR tables are a secondary panel; if gh is unavailable the rest of the
     // dashboard (triage above, timelines below) must still render.

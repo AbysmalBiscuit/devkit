@@ -67,7 +67,7 @@ pub fn gather_with_bars(start: &str, ids: &[String]) -> Result<StatusReport> {
 
 pub fn run(start: &str, ids: &[String]) -> Result<()> {
     let report = gather_with_bars(start, ids)?;
-    let finished = render(&report);
+    let finished = render(&report, false);
     if finished > 0 {
         println!(
             "\n{} Run `issue end` to remove them.",

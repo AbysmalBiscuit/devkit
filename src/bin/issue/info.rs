@@ -56,9 +56,7 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
 
     if cache_only {
         if let Some(pr) = crate::info_cache::read(Path::new(&row.worktree)) {
-            row.pr_number = Some(pr.number);
-            row.pr_state = pr.state;
-            row.pr_url = Some(pr.url);
+            apply_cached_pr(&mut row, pr);
         }
     } else if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
         // gather sets pr_number and pr_url together, so both-Some is the normal
@@ -82,9 +80,21 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
             linear_workspace: report.linear_workspace.clone(),
             worktrees: vec![row],
         };
-        render(&one);
+        render(&one, cache_only);
     }
     Ok(())
+}
+
+/// Overlay a cached PR onto an offline row. The PR fields come from the cache;
+/// the finished verdict is cleared because it cannot be computed without a
+/// Linear fetch, and the row's `NO_PR` verdict would otherwise contradict the
+/// cached PR.
+fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::info_cache::CachedPr) {
+    row.pr_number = Some(pr.number);
+    row.pr_state = pr.state;
+    row.pr_url = Some(pr.url);
+    row.finished = false;
+    row.reason_not_finished = None;
 }
 
 #[cfg(test)]
@@ -123,6 +133,25 @@ mod tests {
             row("/b", "lev/eng-2-y", "ENG-2"),
         ];
         assert_eq!(pick_index(&rows, None, Some("/b")), Some(1));
+    }
+
+    #[test]
+    fn cache_overlay_sets_pr_and_clears_verdict() {
+        let mut r = row("/a", "lev/eng-1-x", "ENG-1");
+        r.reason_not_finished = Some("no PR, Linear unknown".into());
+        apply_cached_pr(
+            &mut r,
+            crate::info_cache::CachedPr {
+                number: 123,
+                state: "OPEN".into(),
+                url: "https://x/pr/123".into(),
+            },
+        );
+        assert_eq!(r.pr_number, Some(123));
+        assert_eq!(r.pr_state, "OPEN");
+        assert_eq!(r.pr_url.as_deref(), Some("https://x/pr/123"));
+        assert!(!r.finished);
+        assert_eq!(r.reason_not_finished, None);
     }
 
     #[test]
