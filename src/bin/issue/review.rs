@@ -43,9 +43,59 @@ pub(crate) fn resolve_reviewer(explicit: Option<&str>, person: &Person) -> Resul
         .context("no --reviewer given and alias has no `github` handle")
 }
 
-/// The Slack body with the PR URL appended.
-pub(crate) fn compose_text(body: &str, pr_url: &str) -> String {
-    format!("{body} {pr_url}")
+/// Reject an empty rendered PR title on the create path.
+pub(crate) fn require_pr_title(title: &str) -> Result<()> {
+    if title.trim().is_empty() {
+        bail!("--pr-title is required to create a PR");
+    }
+    Ok(())
+}
+
+/// Render a review template, attaching the template key and, when the setup
+/// record is absent, a hint that an `{{ issue }}`/`{{ slug }}` reference needs it.
+fn render_review(
+    tmpl: &str,
+    key: &str,
+    ctx: &serde_json::Value,
+    vars: &std::collections::BTreeMap<String, String>,
+    missing_record_at: Option<&str>,
+) -> Result<String> {
+    let mut r = devkit_common::template::render(tmpl, ctx, vars)
+        .with_context(|| format!("rendering `{key}` template"));
+    if let Some(worktree) = missing_record_at {
+        r = r.with_context(|| {
+            format!("no .devkit/issue.toml found in {worktree} — was it created by `issue setup`?")
+        });
+    }
+    r
+}
+
+/// Base context shared by every review template.
+fn base_ctx(
+    record: Option<&crate::record::IssueRecord>,
+    branch: &str,
+    reviewer: &str,
+    to: &str,
+) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    m.insert("branch".into(), serde_json::json!(branch));
+    m.insert("reviewer".into(), serde_json::json!(reviewer));
+    m.insert("to".into(), serde_json::json!(to));
+    if let Some(r) = record {
+        m.insert("issue".into(), serde_json::json!(r.issue));
+        m.insert("slug".into(), serde_json::json!(r.slug));
+        m.insert("apps".into(), serde_json::json!(r.apps));
+    }
+    serde_json::Value::Object(m)
+}
+
+/// Clone `base` and add extra fields for a single template render.
+fn with_fields(base: &serde_json::Value, extra: &[(&str, serde_json::Value)]) -> serde_json::Value {
+    let mut m = base.as_object().cloned().unwrap_or_default();
+    for (k, v) in extra {
+        m.insert((*k).into(), v.clone());
+    }
+    serde_json::Value::Object(m)
 }
 
 #[cfg(test)]
@@ -83,16 +133,22 @@ mod tests {
         assert!(resolve_reviewer(None, &person(None)).is_err());
     }
     #[test]
-    fn compose_appends_url() {
-        assert_eq!(
-            compose_text("please review", "https://gh/pr/1"),
-            "please review https://gh/pr/1"
-        );
+    fn default_slack_appends_url() {
+        let t = devkit_ports::config::Templates::default();
+        let ctx = serde_json::json!({"input": "please review", "pr_url": "https://gh/pr/1"});
+        let out = devkit_common::template::render(t.slack(), &ctx, &t.variables).unwrap();
+        assert_eq!(out, "please review https://gh/pr/1");
+    }
+
+    #[test]
+    fn require_pr_title_rejects_empty() {
+        assert!(require_pr_title("  ").is_err());
+        assert!(require_pr_title("Fix login").is_ok());
     }
 }
 
 pub struct ReviewArgs {
-    pub body: String,
+    pub body: Option<String>,
     pub to: String,
     pub reviewer: Option<String>,
     pub base: Option<String>,
@@ -145,6 +201,39 @@ pub fn run(args: ReviewArgs) -> Result<()> {
             .context("git push failed (refusing to force-push)")?;
     }
 
+    let toplevel = git(&["rev-parse", "--show-toplevel"], &start)?
+        .trim()
+        .to_string();
+    let record = crate::record::read(std::path::Path::new(&toplevel));
+    let missing_at = if record.is_none() { Some(toplevel.as_str()) } else { None };
+    let tmpls = &loaded.config.templates;
+    let vars = &tmpls.variables;
+    let base = base_ctx(record.as_ref(), &branch, &reviewer, &args.to);
+
+    let pr_title = render_review(
+        tmpls.pr_title(),
+        "pr_title",
+        &with_fields(
+            &base,
+            &[("input", serde_json::json!(args.pr_title.clone().unwrap_or_default()))],
+        ),
+        vars,
+        missing_at,
+    )?;
+    let pr_body = render_review(
+        tmpls.pr_body(),
+        "pr_body",
+        &with_fields(
+            &base,
+            &[
+                ("input", serde_json::json!(args.pr_body.clone().unwrap_or_default())),
+                ("pr_title", serde_json::json!(pr_title)),
+            ],
+        ),
+        vars,
+        missing_at,
+    )?;
+
     let existing: Option<PrView> = gh_json::<Vec<PrView>>(
         &[
             "pr",
@@ -182,28 +271,24 @@ pub fn run(args: ReviewArgs) -> Result<()> {
             pr.url
         }
         PrAction::Create => {
-            let base = args
+            require_pr_title(&pr_title)?;
+            let base_branch = args
                 .base
                 .clone()
                 .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
-            let title = args
-                .pr_title
-                .clone()
-                .context("--pr-title is required to create a PR")?;
-            let body = args.pr_body.clone().unwrap_or_default();
             let out = capture(
                 "gh",
                 &[
                     "pr",
                     "create",
                     "--base",
-                    &base,
+                    &base_branch,
                     "--reviewer",
                     &reviewer,
                     "--title",
-                    &title,
+                    &pr_title,
                     "--body",
-                    &body,
+                    &pr_body,
                 ],
                 Some(&start),
             )
@@ -217,7 +302,20 @@ pub fn run(args: ReviewArgs) -> Result<()> {
         }
     };
 
-    let text = compose_text(&args.body, &pr_url);
+    let text = render_review(
+        tmpls.slack(),
+        "slack",
+        &with_fields(
+            &base,
+            &[
+                ("input", serde_json::json!(args.body.clone().unwrap_or_default())),
+                ("pr_title", serde_json::json!(pr_title)),
+                ("pr_url", serde_json::json!(pr_url)),
+            ],
+        ),
+        vars,
+        missing_at,
+    )?;
 
     match std::env::var("SLACK_TOKEN").ok().filter(|t| !t.is_empty()) {
         Some(token) => {

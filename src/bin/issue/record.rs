@@ -27,7 +27,6 @@ pub fn write(worktree: &Path, rec: &IssueRecord) -> Result<()> {
 
 /// Read the record from `<worktree>/.devkit/issue.toml`, or `None` if absent or
 /// unparseable.
-#[allow(dead_code)]
 pub fn read(worktree: &Path) -> Option<IssueRecord> {
     let body = std::fs::read_to_string(path(worktree)).ok()?;
     toml::from_str(&body).ok()

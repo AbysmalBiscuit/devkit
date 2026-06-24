@@ -86,8 +86,8 @@ enum Cmd {
     },
     /// Push, open/reuse a PR, add a reviewer, and Slack them the body + PR link.
     Review {
-        /// Slack message body (PR URL is appended automatically).
-        body: String,
+        /// Slack message body; fills the `slack` template's `{{ input }}`.
+        body: Option<String>,
         #[arg(long)]
         to: String,
         #[arg(long)]
