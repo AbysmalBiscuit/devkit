@@ -1,13 +1,12 @@
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
 use devkit_locks::normalize_under_root;
-use devkit_locks::store::{
-    FlockStore, acquire_with, check_with, prune_with, release_all_with, release_with, status_with,
+use devkit_locks::{
+    acquire_resolved, check_resolved, release_all_resolved, release_resolved, status_resolved,
 };
 
 use crate::ServerCtx;
@@ -46,13 +45,6 @@ pub fn actions() -> Vec<Action> {
             handler: prune,
         },
     ]
-}
-
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
 }
 
 fn resolve_holder(ctx: &ServerCtx, given: Option<String>) -> String {
@@ -113,16 +105,7 @@ fn acquire(ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: AcquireArgs = serde_json::from_value(args).context("invalid locks.acquire arguments")?;
     let holder = resolve_holder(ctx, a.holder);
     let paths = normalize(&a.root, &a.paths)?;
-    let outcome = acquire_with(
-        &FlockStore::new(),
-        &a.root,
-        &holder,
-        &paths,
-        None,
-        a.note.as_deref(),
-        a.ttl,
-        now(),
-    )?;
+    let outcome = acquire_resolved(&a.root, &holder, &paths, None, a.note.as_deref(), a.ttl)?;
     Ok(serde_json::to_value(outcome)?)
 }
 
@@ -151,7 +134,7 @@ fn check(ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: CheckArgs = serde_json::from_value(args).context("invalid locks.check arguments")?;
     let holder = resolve_holder(ctx, a.holder);
     let paths = normalize(&a.root, &a.paths)?;
-    let conflicts = check_with(&FlockStore::new(), &a.root, &holder, &paths, now())?;
+    let conflicts = check_resolved(&a.root, &holder, &paths)?;
     Ok(serde_json::to_value(conflicts)?)
 }
 
@@ -187,14 +170,14 @@ fn release(ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: ReleaseArgs = serde_json::from_value(args).context("invalid locks.release arguments")?;
     let holder = resolve_holder(ctx, a.holder);
     if a.all {
-        let released = release_all_with(&FlockStore::new(), &a.root, &holder)?;
+        let released = release_all_resolved(&a.root, &holder)?;
         return Ok(serde_json::json!({ "released": released, "refused": [] }));
     }
     if a.paths.is_empty() {
         bail!("locks.release requires `paths` unless `all` is true");
     }
     let paths = normalize(&a.root, &a.paths)?;
-    let (released, refused) = release_with(&FlockStore::new(), &a.root, &holder, &paths, a.force)?;
+    let (released, refused) = release_resolved(&a.root, &holder, &paths, a.force)?;
     Ok(serde_json::json!({ "released": released, "refused": refused }))
 }
 
@@ -224,7 +207,7 @@ fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
         (None, true) => String::new(),
         (None, false) => bail!("locks.status requires `root` unless `all` is true"),
     };
-    let entries = status_with(&FlockStore::new(), &root, a.all, now())?;
+    let entries = status_resolved(&root, a.all)?;
     Ok(serde_json::to_value(entries)?)
 }
 
@@ -233,6 +216,38 @@ fn prune_schema() -> Value {
 }
 
 fn prune(_ctx: &ServerCtx, _args: Value) -> Result<Value> {
-    let pruned = prune_with(&FlockStore::new(), now())?;
+    let pruned = devkit_locks::prune()?;
     Ok(serde_json::json!({ "pruned": pruned }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> ServerCtx {
+        ServerCtx {
+            default_holder: format!("mcp-locks-test-{}", std::process::id()),
+        }
+    }
+
+    #[test]
+    fn acquire_status_release_roundtrip_through_handlers() {
+        let root = std::env::temp_dir().join(format!("devkit-mcp-locks-{}", std::process::id()));
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let r = root.to_string_lossy().into_owned();
+        let c = ctx();
+
+        let out = acquire(&c, serde_json::json!({ "root": r, "paths": ["x.rs"], "ttl": 60 }))
+            .expect("acquire");
+        assert_eq!(out["acquired"].as_array().unwrap().len(), 1);
+
+        let st = status(&c, serde_json::json!({ "root": r })).expect("status");
+        assert!(st.as_array().unwrap().iter().any(|e| e["path"] == "x.rs"));
+
+        let rel = release(&c, serde_json::json!({ "root": r, "paths": ["x.rs"] }))
+            .expect("release");
+        assert_eq!(rel["released"], serde_json::json!(["x.rs"]));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
