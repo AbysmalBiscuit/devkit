@@ -4,6 +4,7 @@ use clap_complete::Shell;
 
 mod dashboard;
 mod end;
+mod gitignore;
 mod prs;
 mod record;
 mod review;
