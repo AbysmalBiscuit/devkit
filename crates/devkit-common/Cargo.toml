@@ -12,6 +12,7 @@ comfy-table.workspace = true
 anstyle.workspace = true
 supports-hyperlinks.workspace = true
 ureq.workspace = true
+minijinja.workspace = true
 interprocess = { workspace = true, optional = true }
 
 [features]
