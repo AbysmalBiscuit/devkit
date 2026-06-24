@@ -46,7 +46,7 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 | `url_env` | no | Env var that receives the app's URL. |
 | `provides_url` | no | `true` marks the one app whose URL other apps consume. Exactly one app should set this. |
 | `static_env` | no | Inline env vars always set for this app. |
-| `prep_env` | no | Env vars written into the per-app prep file during `issue setup`. |
+| `prep_files` | no | Files written into the app's directory during `issue setup`, before `setup` commands run. Each entry is `{ path, content, overwrite }` — `path` is relative to the app dir (parent dirs created), `content` is written verbatim, and `overwrite` (default `false`) keeps an existing file unless set to `true`. As an array, a deeper `devkit.toml` replaces the whole list rather than appending. |
 | `setup` | no | Commands run in the app's directory during `issue setup`, in order. Each entry is one argv array (program + args), e.g. `[["doppler", "run", "-c", "local_config", "--", "bun", "install"]]`. Use this for installs and any doppler wiring; nothing project-specific is hardcoded in the tool. |
 
 devkit runs `launch` exactly as written — it builds no command prefix. To use
@@ -207,8 +207,13 @@ static_env   = { SOME_JWT_SECRET = "local-dev-placeholder-value" }
 base_port  = 4100
 launch     = ["next", "dev", "-p", "{port}"]
 url_env    = "API_BASE_URL"
-prep_env   = { SOME_FEATURE_FLAG = "dummy" }
 setup      = [["doppler", "run", "-c", "local_config", "--", "bun", "install"]]
+
+[[apps.web.prep_files]]
+path    = ".env.local"
+content = """
+SOME_FEATURE_FLAG=dummy
+"""
 
 [apps.worker]
 base_port = 8080

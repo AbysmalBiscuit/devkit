@@ -98,7 +98,7 @@ The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
   mechanism. Each binary installs `report::install_panic_hook` for crash diagnostics;
   `RUST_BACKTRACE=1` adds a backtrace to both errors and panics.
 - App conventions are config-driven, never hardcoded: the URL-providing app is marked
-  `provides_url`; per-app prep files come from `prep_env`; the apps directory is
+  `provides_url`; per-app prep files come from `prep_files`; the apps directory is
   `defaults.apps_dir`. Example-specific values live in the personal config at
   `~/.config/devkit/config.toml` (outside the repo; see `docs/configuration.md`).
 - `Role` (Issue/Baseline) is defined once in `devkit-ports::registry` with `ValueEnum` +

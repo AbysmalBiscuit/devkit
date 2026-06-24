@@ -102,7 +102,12 @@ restarts; the supervision thread already loops, so there is room for it.
 
 ## Configurable per-app prep step (generalize `.env.local` writing)
 
-**Status:** OPEN — wants its own brainstorm/spec.
+**Status:** RESOLVED 2026-06-24 — see
+`docs/superpowers/specs/2026-06-24-configurable-per-app-prep-files-design.md`.
+Per-app prep is now a configurable `prep_files` list (per file: `path`, verbatim
+`content`, `overwrite`); the hardcoded `.env.local` filename, dotenv format, and
+write-if-absent-only strategy are gone. Format/template generation and symlink mode
+stay deferred to the messages-templates feature. The analysis below is kept for context.
 **Want:** make the `issue setup` per-app prep step fully configurable instead of
 hardcoding the `.env.local` filename, dotenv format, and write-if-absent strategy.
 
