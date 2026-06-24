@@ -121,12 +121,9 @@ Original intent (kept for context):
 
 Deferred follow-up:
 
-- **Remove the orphaned `config::locate`.** Routing `load::load` through
-  `config::resolve` left `devkit_ports::config::locate` with no production caller; it
-  remains `pub` and is referenced only by a doc comment in
-  `devkit-locks::hook::global_config_path`. Either delete it (updating that comment to
-  describe the fallback directly) or fold its single-path lookup into the resolver.
-  Harmless as-is.
+- **Remove the orphaned `config::locate`.** RESOLVED 2026-06-24 — deleted the dead
+  function and repointed the `devkit-locks::hook::global_config_path` doc comment at
+  the resolver's `~/.config/devkit/config.toml` base-layer fallback.
 
 ## Configurable templates for messages
 
