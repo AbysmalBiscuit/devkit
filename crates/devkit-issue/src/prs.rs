@@ -247,7 +247,12 @@ fn my_vote(pr: &PrNode, me: &str) -> &'static str {
         .nodes
         .iter()
         .filter(|r| r.author.login == me)
-        .filter(|r| matches!(r.state.as_str(), "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"))
+        .filter(|r| {
+            matches!(
+                r.state.as_str(),
+                "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
+            )
+        })
         .max_by(|a, b| a.submitted_at.cmp(&b.submitted_at))
         .map(|r| r.state.as_str());
     match decision {
