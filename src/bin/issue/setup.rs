@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, git};
-use devkit_ports::config::{expand_tilde, PrepFile};
+use devkit_ports::config::{PrepFile, expand_tilde};
 use devkit_ports::load;
 use devkit_ports::registry::{self, Data, Role};
 use std::collections::BTreeMap;
@@ -191,7 +191,10 @@ mod tests {
             overwrite: false,
         }];
         write_prep_files(&dir, &files).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join(".env.local")).unwrap(), "ORIGINAL\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".env.local")).unwrap(),
+            "ORIGINAL\n"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -205,7 +208,10 @@ mod tests {
             overwrite: true,
         }];
         write_prep_files(&dir, &files).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join(".env.local")).unwrap(), "REPLACED\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".env.local")).unwrap(),
+            "REPLACED\n"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }
