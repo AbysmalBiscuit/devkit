@@ -22,6 +22,8 @@ clap.workspace = true
 clap_complete.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
+ureq.workspace = true
+rpassword.workspace = true
 toml.workspace = true
 fd-lock.workspace = true
 interprocess.workspace = true
@@ -74,6 +76,7 @@ anstyle = "1"
 indicatif = "0.17"
 supports-hyperlinks = "3"
 ureq = { version = "2", features = ["json"] }
+rpassword = "7"
 devkit-common = { path = "crates/devkit-common" }
 devkit-ports = { path = "crates/devkit-ports" }
 devkit-locks = { path = "crates/devkit-locks" }
