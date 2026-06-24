@@ -101,3 +101,8 @@ Given: `~/path/to/project/{repo1,repo2,repo3,...}/.git`
 A `devkit.toml` file here: `~/path/to/project/devkit.toml` will get resolved and applied to all devkit calls inside any repos/worktrees.
 The same applies to `~/path/to/devkit.toml`
 With the deepest hierarchy file taking priority.
+
+## Configurable templates for messages
+
+## Configurable templates for issue start
+
