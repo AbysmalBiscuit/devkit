@@ -24,18 +24,26 @@ struct Prepared {
     ports: BTreeMap<String, u16>,
 }
 
-/// Write each prep file into `app_dir`. Content is written verbatim; parent
+/// Write each prep file into `app_dir`. `content` is rendered as a minijinja
+/// template against `ctx`/`vars` (strict undefined) before writing; parent
 /// directories are created; an existing file is left untouched unless the entry
-/// opts into `overwrite`.
-fn write_prep_files(app_dir: &Path, files: &[PrepFile]) -> Result<()> {
+/// opts into `overwrite`. Only files that will be written are rendered.
+fn write_prep_files(
+    app_dir: &Path,
+    files: &[PrepFile],
+    ctx: &serde_json::Value,
+    vars: &BTreeMap<String, String>,
+) -> Result<()> {
     for pf in files {
         let target = app_dir.join(&pf.path);
         if pf.overwrite || !target.exists() {
+            let rendered = devkit_common::template::render(&pf.content, ctx, vars)
+                .with_context(|| format!("rendering prep file `{}`", pf.path))?;
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("creating parent dir for prep file `{}`", pf.path))?;
             }
-            std::fs::write(&target, &pf.content)
+            std::fs::write(&target, &rendered)
                 .with_context(|| format!("writing prep file `{}`", pf.path))?;
         }
     }
@@ -140,7 +148,16 @@ pub fn run(args: SetupArgs) -> Result<()> {
         let app_dir = worktree.join(&app.path);
         std::fs::create_dir_all(&app_dir).ok();
 
-        write_prep_files(&app_dir, &app.prep_files)
+        let mut file_ctx = ctx.clone();
+        if let Some(obj) = file_ctx.as_object_mut() {
+            obj.insert("app".into(), serde_json::Value::String(a.clone()));
+            obj.insert("branch".into(), serde_json::Value::String(branch.clone()));
+            obj.insert(
+                "worktree".into(),
+                serde_json::Value::String(worktree.to_string_lossy().into_owned()),
+            );
+        }
+        write_prep_files(&app_dir, &app.prep_files, &file_ctx, vars)
             .with_context(|| format!("preparing files for app `{a}`"))?;
 
         for cmd in &app.setup {
@@ -189,6 +206,30 @@ mod tests {
         dir
     }
 
+    fn novars() -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
+    fn ctx() -> serde_json::Value {
+        json!({"prefix": "lev/", "issue": "eng-1", "slug": "fix", "apps": ["web"], "app": "web"})
+    }
+
+    #[test]
+    fn renders_issue_context() {
+        let dir = scratch("render");
+        let files = vec![PrepFile {
+            path: ".env.local".into(),
+            content: "ISSUE={{ issue }}\n".into(),
+            overwrite: false,
+        }];
+        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".env.local")).unwrap(),
+            "ISSUE=eng-1\n"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn default_branch_renders_prefix_and_slug() {
         let t = Templates::default();
@@ -213,7 +254,7 @@ mod tests {
             content: "{\"mode\":\"local\"}\n".into(),
             overwrite: false,
         }];
-        write_prep_files(&dir, &files).unwrap();
+        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
         let got = std::fs::read_to_string(dir.join("config/local.json")).unwrap();
         assert_eq!(got, "{\"mode\":\"local\"}\n");
         std::fs::remove_dir_all(&dir).ok();
@@ -228,7 +269,7 @@ mod tests {
             content: "REPLACED\n".into(),
             overwrite: false,
         }];
-        write_prep_files(&dir, &files).unwrap();
+        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join(".env.local")).unwrap(),
             "ORIGINAL\n"
@@ -245,10 +286,55 @@ mod tests {
             content: "REPLACED\n".into(),
             overwrite: true,
         }];
-        write_prep_files(&dir, &files).unwrap();
+        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join(".env.local")).unwrap(),
             "REPLACED\n"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renders_app_name() {
+        let dir = scratch("appvar");
+        let files = vec![PrepFile {
+            path: "app.txt".into(),
+            content: "{{ app }}".into(),
+            overwrite: false,
+        }];
+        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("app.txt")).unwrap(), "web");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unknown_var_is_an_error() {
+        let dir = scratch("badvar");
+        let files = vec![PrepFile {
+            path: ".env.local".into(),
+            content: "{{ nope }}".into(),
+            overwrite: false,
+        }];
+        assert!(write_prep_files(&dir, &files, &ctx(), &novars()).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn skipped_existing_file_is_not_rendered() {
+        let dir = scratch("skiprender");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".env.local"), "ORIGINAL\n").unwrap();
+        // A malformed template on an existing, non-overwrite file must not be
+        // rendered (and so must not error) — the file is left untouched.
+        let files = vec![PrepFile {
+            path: ".env.local".into(),
+            content: "{{ nope }}".into(),
+            overwrite: false,
+        }];
+        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".env.local")).unwrap(),
+            "ORIGINAL\n"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -13,6 +13,9 @@ pub fn render(
 ) -> Result<String> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
+    // Preserve a template's trailing newline so verbatim file content (e.g. an
+    // `.env.local` ending in `\n`) round-trips unchanged.
+    env.set_keep_trailing_newline(true);
     env.add_template("t", template)
         .context("compiling template")?;
     let tmpl = env.get_template("t").expect("template just added");
