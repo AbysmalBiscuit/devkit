@@ -5,8 +5,7 @@ use clap_complete::Shell;
 mod dashboard;
 mod end;
 mod gitignore;
-// Read/write helpers are exercised by the `info` subcommand.
-#[allow(dead_code)]
+mod info;
 mod info_cache;
 mod prs;
 mod record;
@@ -20,7 +19,7 @@ mod triage;
 #[derive(Parser)]
 #[command(
     name = "issue",
-    about = "Issue lifecycle: setup, status, end, prs, dashboard, review"
+    about = "Issue lifecycle: setup, status, info, end, prs, dashboard, review"
 )]
 struct Cli {
     #[arg(short = 'C', long = "dir", global = true)]
@@ -48,6 +47,15 @@ enum Cmd {
     },
     /// Read-only report of every issue worktree (optionally filtered by ID).
     Status { ids: Vec<String> },
+    /// Show one worktree's PR + Linear id (current worktree, or a SELECTOR).
+    Info {
+        /// Issue id, branch, worktree basename, or path. Defaults to cwd.
+        selector: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long = "cache-only")]
+        cache_only: bool,
+    },
     /// Remove FINISHED worktrees (PR merged + Linear done + clean).
     End {
         ids: Vec<String>,
@@ -134,6 +142,11 @@ fn main() -> Result<()> {
             config: cli.config,
         }),
         Some(Cmd::Status { ids }) => status::run(&start(&cli.dir), &ids),
+        Some(Cmd::Info {
+            selector,
+            json,
+            cache_only,
+        }) => info::run(&start(&cli.dir), selector.as_deref(), json, cache_only),
         Some(Cmd::End {
             ids,
             yes,
