@@ -236,24 +236,47 @@ fn mine_action(pr: &PrNode) -> String {
     }
 }
 
-/// (my_vote, action) for a PR where I'm a reviewer. My latest review state is
-/// taken from `reviews` (most recent by submittedAt among my reviews).
-fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
-    let vote = pr
+/// My effective review verdict on a PR. A `COMMENTED` reply never supersedes a
+/// standing `APPROVED`/`CHANGES_REQUESTED`: the latest *decision* review
+/// (`APPROVED`/`CHANGES_REQUESTED`/`DISMISSED`) wins, mirroring GitHub's own
+/// review-decision semantics and the `change_requesters` rule on the mine path.
+/// Only when there is no standing decision does a `COMMENTED` review count.
+fn my_vote(pr: &PrNode, me: &str) -> &'static str {
+    let decision = pr
         .reviews
         .nodes
         .iter()
         .filter(|r| r.author.login == me)
+        .filter(|r| matches!(r.state.as_str(), "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"))
         .max_by(|a, b| a.submitted_at.cmp(&b.submitted_at))
-        .map(|r| r.state.clone())
-        .unwrap_or_default();
+        .map(|r| r.state.as_str());
+    match decision {
+        Some("APPROVED") => "APPROVED",
+        Some("CHANGES_REQUESTED") => "CHANGES_REQUESTED",
+        // No standing decision (none, or a dismissed review): a comment still
+        // prompts the reviewer to decide.
+        _ if pr
+            .reviews
+            .nodes
+            .iter()
+            .any(|r| r.author.login == me && r.state == "COMMENTED") =>
+        {
+            "COMMENTED"
+        }
+        _ => "",
+    }
+}
+
+/// (my_vote, action) for a PR where I'm a reviewer.
+fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
+    let vote = my_vote(pr, me);
     let requested = pr
         .review_requests
         .nodes
         .iter()
         .filter_map(|r| r.requested_reviewer.as_ref())
         .any(|rr| rr.login == me);
-    let vote_label = match vote.as_str() {
+    let vote_label = match vote {
         "APPROVED" => "approved",
         "CHANGES_REQUESTED" => "changes",
         "COMMENTED" => "commented",
@@ -263,7 +286,7 @@ fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
     let action = if requested {
         "REVIEW NEEDED"
     } else {
-        match vote.as_str() {
+        match vote {
             "APPROVED" => "done (approved)",
             "CHANGES_REQUESTED" => "awaiting author fixes",
             "COMMENTED" => "commented; decide",
@@ -622,6 +645,61 @@ mod tests {
         assert_eq!(vote, "-");
         assert_eq!(action, "REVIEW NEEDED");
     }
+    // A later COMMENTED reply (e.g. answering a thread) does not clear a standing
+    // CHANGES_REQUESTED: the effective vote stays "changes" / "awaiting author fixes".
+    #[test]
+    fn reviewer_state_comment_does_not_supersede_changes() {
+        let pr = node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+            "reviewDecision": "CHANGES_REQUESTED", "mergeable": "MERGEABLE",
+            "author": {"login": "other"}, "commits": {"nodes": []},
+            "reviews": {"nodes": [
+                {"author": {"login": "me"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-17T08:27:20Z"},
+                {"author": {"login": "me"}, "state": "COMMENTED", "submittedAt": "2026-06-17T10:05:44Z"}
+            ]},
+            "reviewRequests": {"nodes": []}
+        }));
+        let (vote, action) = reviewer_state(&pr, "me");
+        assert_eq!(vote, "changes");
+        assert_eq!(action, "awaiting author fixes");
+    }
+
+    // With only COMMENTED reviews and no standing decision, the vote remains
+    // "commented" so the reviewer is prompted to decide.
+    #[test]
+    fn reviewer_state_only_comments_decides() {
+        let pr = node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+            "reviewDecision": null, "mergeable": "MERGEABLE",
+            "author": {"login": "other"}, "commits": {"nodes": []},
+            "reviews": {"nodes": [
+                {"author": {"login": "me"}, "state": "COMMENTED", "submittedAt": "2026-06-17T10:05:44Z"}
+            ]},
+            "reviewRequests": {"nodes": []}
+        }));
+        let (vote, action) = reviewer_state(&pr, "me");
+        assert_eq!(vote, "commented");
+        assert_eq!(action, "commented; decide");
+    }
+
+    // A later APPROVED supersedes an earlier CHANGES_REQUESTED (real decision change).
+    #[test]
+    fn reviewer_state_approval_supersedes_changes() {
+        let pr = node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+            "reviewDecision": "APPROVED", "mergeable": "MERGEABLE",
+            "author": {"login": "other"}, "commits": {"nodes": []},
+            "reviews": {"nodes": [
+                {"author": {"login": "me"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-17T08:27:20Z"},
+                {"author": {"login": "me"}, "state": "APPROVED", "submittedAt": "2026-06-17T10:05:44Z"}
+            ]},
+            "reviewRequests": {"nodes": []}
+        }));
+        let (vote, action) = reviewer_state(&pr, "me");
+        assert_eq!(vote, "approved");
+        assert_eq!(action, "done (approved)");
+    }
+
     #[test]
     fn reviewer_state_approved_done() {
         let pr = node(serde_json::json!({
