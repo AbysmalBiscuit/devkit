@@ -21,7 +21,7 @@ Launches and supervises dev servers for one or more apps. Apps not explicitly na
 
 ```
 devrun up [apps…] [--role issue|baseline|both] [--env K=V] [--env-file F] [--dry-run]
-devrun down [--role …]
+devrun down [--role …] [--all | --others | --holder <path>] [--app …] [--older-than …] [--batch] [selector]
 devrun status [--all]
 devrun logs <app> [-f]
 devrun config show [--origin] [--json]
@@ -30,6 +30,20 @@ devrun config apps [--json]
 
 - **`config show`**: prints the effective merged config as TOML. `--origin` annotates each value with the file it was resolved from (or `# (default)` for serde defaults); `--json` emits JSON instead of TOML. `--origin --json` emits `{ "config": …, "origins": { "dotted.path": "file" } }`.
 - **`config apps`**: lists the configured apps from the merged config (columns: name, port, path, provides_url, url_env, launch). `--json` emits a structured array. A pure config readout with no live readiness — for running state use `devrun status`.
+- **`down`**: stops servers and releases their ports. By default stops every server in the current worktree. Reaching another worktree requires an explicit scope flag and a confirmation read from a terminal:
+
+  | Command | Effect |
+  |---|---|
+  | `devrun down` | stop all servers in this worktree |
+  | `devrun down --role baseline` | this worktree, baseline only |
+  | `devrun down api` | this worktree, fuzzy-match `api` across columns |
+  | `devrun down --all` | every server, every worktree (one batch prompt) |
+  | `devrun down --others` | every server in every *other* worktree |
+  | `devrun down --others api` | `api` in other worktrees (per-worktree prompts) |
+  | `devrun down --holder ../wt/feat-x` | one specific worktree |
+  | `devrun down --all --app api --older-than 1h` | precise filter, all worktrees |
+
+  A positional selector substring-matches across `HOLDER`/`APP`/`PORT`/`ROLE`/`PID` and is mutually exclusive with the column filters (`--app`, `--port`, `--role`, `--pid`, `--listening`/`--not-listening`, `--older-than`). `--older-than` accepts `90s`, `30m`, `2h`, `1d` (bare number = seconds). Any selection that reaches outside the current worktree prints a preview and prompts; with no interactive terminal it is refused. `--all`/`--batch` collapse the per-worktree prompts into one.
 
 ### `issue`: Issue Lifecycle
 

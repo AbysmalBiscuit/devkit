@@ -55,6 +55,12 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   inside it minimal; avoid slow/network calls under the lock.
 - **`devrun down` stops then releases without pruning first** — a still-running server whose
   reservation looks stale must still receive SIGTERM.
+- **Cross-worktree `devrun down` is TTY-gated.** A selection touching a holder
+  other than the current worktree is refused unless stdin is an interactive
+  terminal (`cmd_down` in `src/bin/devrun/main.rs`), and is reachable only via the
+  named scope flags `--all`/`--others`/`--holder` — so an agent (no PTY) cannot
+  stop another worktree's servers, and a harness can deny those flags by name. The
+  MCP `devrun.down` handler stays root-scoped and never gains a cross-holder arg.
 - **The supervisor table — not the registry row — decides crash vs. stop.** A child the
   `devkitd` supervision thread reaps is a crash and is restarted (within the crash-loop
   budget); an intentional `Down` removes the key from the table *before* signalling the
