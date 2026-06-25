@@ -38,39 +38,74 @@ fn current_top(start: &str) -> Option<String> {
 }
 
 pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) -> Result<()> {
-    let report = if cache_only {
-        st::gather_local(start, &[])?
-    } else {
-        st::gather(start, &[])?
-    };
-
+    // `issue info` reports a single worktree, so discover once (one cheap
+    // `git worktree list`) and enrich only the target — never run the
+    // per-worktree dirty/PR/Linear work for every worktree the way a full
+    // `status` gather does.
+    let d = st::discover(start, &[])?;
     let top = current_top(start);
-    let mut row = match pick_index(&report.worktrees, selector, top.as_deref()) {
-        Some(i) => report.worktrees[i].clone(),
+    let has_key = devkit_common::secrets::resolve("LINEAR_API_KEY").is_some();
+
+    let (mut row, discovered) = match pick_index(d.rows(), selector, top.as_deref()) {
+        Some(i) => {
+            let mut r = d.rows()[i].clone();
+            r.dirty = st::dirty_of(&r.worktree);
+            (r, true)
+        }
         // No selector and the current worktree isn't in the triage rows (the
         // main clone is omitted from those): report on it directly anyway.
         None => match (selector, top.as_deref()) {
-            (None, Some(top)) => local_row(top)?,
+            (None, Some(top)) => (local_row(top)?, false),
             (Some(sel), _) => anyhow::bail!("no worktree matches '{sel}'"),
             (None, None) => anyhow::bail!("not in a git worktree"),
         },
     };
 
+    let mut linear_workspace = None;
     if cache_only {
         if let Some(pr) = crate::info_cache::read(Path::new(&row.worktree)) {
             apply_cached_pr(&mut row, pr);
+        } else if discovered {
+            // Offline verdict from local signal only — PR stays NO_PR and Linear
+            // stays unknown. The main-clone row keeps its empty verdict.
+            let reason = st::reason_not_finished(&row, has_key, false);
+            row.finished = reason.is_none();
+            row.reason_not_finished = reason;
         }
-    } else if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
-        // gather sets pr_number and pr_url together, so both-Some is the normal
-        // PR case; a PR-less row simply leaves the cache untouched.
-        let _ = crate::info_cache::write(
-            Path::new(&row.worktree),
-            &crate::info_cache::CachedPr {
-                number,
-                state: row.pr_state.clone(),
-                url,
-            },
-        );
+    } else if discovered {
+        // Live: one `gh pr list` plus a single-id Linear lookup, scoped to this
+        // row — not the whole worktree set.
+        st::fetch_prs(&d)?.apply_best(&mut row);
+        if row.issue_id != "UNKNOWN" {
+            let linear = devkit_common::linear::states(
+                std::slice::from_ref(&row.issue_id),
+                devkit_common::secrets::resolve("LINEAR_API_KEY").as_deref(),
+            );
+            if let Some(s) = linear.get(&row.issue_id) {
+                row.linear_kind = Some(s.kind.clone());
+                row.linear_name = Some(s.name.clone());
+            }
+        }
+        let reason = st::reason_not_finished(&row, has_key, false);
+        row.finished = reason.is_none();
+        row.reason_not_finished = reason;
+        linear_workspace = devkit_common::linear::workspace_url_key();
+        if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
+            // pr_number and pr_url are set together, so both-Some is the normal
+            // PR case; a PR-less row simply leaves the cache untouched.
+            let _ = crate::info_cache::write(
+                Path::new(&row.worktree),
+                &crate::info_cache::CachedPr {
+                    number,
+                    state: row.pr_state.clone(),
+                    url,
+                },
+            );
+        }
+    } else {
+        // Live, but the target is the main clone (no associated PR/Linear): only
+        // the workspace link is worth resolving for rendering.
+        linear_workspace = devkit_common::linear::workspace_url_key();
     }
 
     if json {
@@ -78,8 +113,8 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
     } else {
         let one = StatusReport {
             finished_count: usize::from(row.finished),
-            has_linear_key: report.has_linear_key,
-            linear_workspace: report.linear_workspace.clone(),
+            has_linear_key: has_key,
+            linear_workspace,
             worktrees: vec![row],
         };
         render(&one, cache_only);

@@ -76,10 +76,32 @@ impl Discovered {
     pub fn issue_ids(&self) -> &[String] {
         &self.issue_ids
     }
+    /// The discovered worktree rows, with dirty/PR/Linear still unfilled. Lets a
+    /// single-worktree caller (`issue info`) pick its target without paying the
+    /// per-worktree enrichment cost of a full gather.
+    pub fn rows(&self) -> &[IssueWorktree] {
+        &self.rows
+    }
 }
 
 /// An opaque GitHub PR list for a set of worktrees.
 pub struct Prs(Vec<Pr>);
+
+impl Prs {
+    /// Overlay the best PR for `row`'s branch onto it, leaving the row untouched
+    /// when the branch is detached or has no PR. Same rule `assemble` applies
+    /// per row, exposed so a single-worktree caller can enrich one row.
+    pub fn apply_best(&self, row: &mut IssueWorktree) {
+        if row.branch == "DETACHED" {
+            return;
+        }
+        if let Some(p) = best_pr(&self.0, &row.branch) {
+            row.pr_number = Some(p.number);
+            row.pr_state = p.state.clone();
+            row.pr_url = Some(p.url.clone());
+        }
+    }
+}
 
 /// Discover worktrees and their issue ids, filtered to `ids` when non-empty.
 /// Rows carry `dirty = false` placeholders; the dirty check is a separate step
@@ -129,6 +151,32 @@ pub fn dirty_of(path: &str) -> bool {
         .unwrap_or_default()
         .trim()
         .is_empty()
+}
+
+/// `dirty_of` for many worktrees, run on a bounded thread pool with order
+/// preserved. Each check is an independent, I/O-bound `git status` walk, so
+/// fanning them across cores turns N serial walks into roughly one walk's
+/// latency. Contiguous chunks keep the output aligned with `paths`.
+pub fn dirty_many(paths: &[String]) -> Vec<bool> {
+    if paths.len() <= 1 {
+        return paths.iter().map(|p| dirty_of(p)).collect();
+    }
+    let width = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, 16)
+        .min(paths.len());
+    let chunk = paths.len().div_ceil(width);
+    std::thread::scope(|s| {
+        let handles: Vec<_> = paths
+            .chunks(chunk)
+            .map(|c| s.spawn(|| c.iter().map(|p| dirty_of(p)).collect::<Vec<bool>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("dirty worker panicked"))
+            .collect()
+    })
 }
 
 /// The single `gh pr list` round-trip for every worktree PR. Skips the call
@@ -254,7 +302,7 @@ pub fn gather(start: &str, ids: &[String]) -> Result<StatusReport> {
     let paths = d.worktree_paths();
     let ids_v: Vec<String> = d.issue_ids().to_vec();
     let (dirty, prs, linear, ws) = std::thread::scope(|s| {
-        let dt = s.spawn(|| paths.iter().map(|p| dirty_of(p)).collect::<Vec<bool>>());
+        let dt = s.spawn(|| dirty_many(&paths));
         let pt = s.spawn(|| fetch_prs(&d));
         let lt = s.spawn(|| {
             (
@@ -277,7 +325,7 @@ pub fn gather(start: &str, ids: &[String]) -> Result<StatusReport> {
 pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = discover(start, ids)?;
     let has_key = devkit_common::secrets::resolve("LINEAR_API_KEY").is_some();
-    let dirty: Vec<bool> = d.worktree_paths().iter().map(|p| dirty_of(p)).collect();
+    let dirty = dirty_many(&d.worktree_paths());
     Ok(assemble(
         d,
         dirty,
@@ -419,6 +467,24 @@ mod tests {
     fn best_pr_none_for_unknown_head() {
         let prs = vec![pr(1, "MERGED", "feat")];
         assert!(best_pr(&prs, "other").is_none());
+    }
+
+    #[test]
+    fn apply_best_overlays_pr_and_skips_detached() {
+        let prs = Prs::for_test(vec![pr(7, "MERGED", "lev/eng-1-foo")]);
+        let mut row = wt("ENG-1", "NO_PR", false, None);
+        row.branch = "lev/eng-1-foo".into();
+        row.pr_number = None;
+        prs.apply_best(&mut row);
+        assert_eq!(row.pr_number, Some(7));
+        assert_eq!(row.pr_state, "MERGED");
+
+        let mut detached = wt("UNKNOWN", "NO_PR", false, None);
+        detached.branch = "DETACHED".into();
+        detached.pr_number = None;
+        prs.apply_best(&mut detached);
+        assert_eq!(detached.pr_number, None);
+        assert_eq!(detached.pr_state, "NO_PR");
     }
 
     #[test]
