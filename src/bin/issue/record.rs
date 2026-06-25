@@ -19,8 +19,9 @@ fn path(worktree: &Path) -> std::path::PathBuf {
 /// Write the record under `<worktree>/.devkit/`, creating the directory.
 pub fn write(worktree: &Path, rec: &IssueRecord) -> Result<()> {
     let p = path(worktree);
-    std::fs::create_dir_all(p.parent().expect("path has a parent"))
-        .with_context(|| format!("creating {}", p.parent().unwrap().display()))?;
+    let dir = p.parent().expect("path has a parent");
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    crate::gitignore::write_self_ignore(dir);
     let body = toml::to_string(rec).context("serializing issue record")?;
     std::fs::write(&p, body).with_context(|| format!("writing {}", p.display()))
 }

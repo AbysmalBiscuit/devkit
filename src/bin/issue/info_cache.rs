@@ -30,6 +30,7 @@ pub fn write(worktree: &Path, pr: &CachedPr) -> Result<()> {
     let p = path(worktree);
     let dir = p.parent().expect("pr.json path has a parent");
     std::fs::create_dir_all(dir)?;
+    crate::gitignore::write_self_ignore(dir);
     let tmp = dir.join(format!("pr.json.tmp.{}", std::process::id()));
     std::fs::write(&tmp, serde_json::to_vec_pretty(pr)?)?;
     std::fs::rename(&tmp, &p)?;
