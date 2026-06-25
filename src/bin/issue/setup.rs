@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, git};
 use devkit_ports::config::{PrepFile, expand_tilde};
 use devkit_ports::load;
-use devkit_ports::registry::{self, Data, Role};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -21,7 +20,6 @@ struct Prepared {
     issue: String,
     worktree: String,
     branch: String,
-    ports: BTreeMap<String, u16>,
 }
 
 /// Write each prep file into `app_dir`. `content` is rendered as a minijinja
@@ -81,21 +79,13 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let holder = worktree.to_string_lossy().into_owned();
 
     if args.dry_run {
-        // Compute would-be ports against a snapshot WITHOUT reserving them.
-        let mut data: Data = registry::snapshot()?;
-        let mut ports = BTreeMap::new();
-        for a in &args.apps {
-            let base = catalog[a].base_port;
-            ports.insert(a.clone(), data.alloc_one(&holder, a, base, Role::Issue));
-        }
         let out = Prepared {
             issue: args.issue.clone(),
             worktree: holder,
             branch,
-            ports,
         };
         println!("{}", serde_json::to_string_pretty(&out)?);
-        eprintln!("(dry-run: no worktree created, no ports reserved)");
+        eprintln!("(dry-run: no worktree created)");
         return Ok(());
     }
 
@@ -171,21 +161,14 @@ pub fn run(args: SetupArgs) -> Result<()> {
         }
     }
 
-    // reserve ports
-    let reqs: Vec<(String, u16)> = args
-        .apps
-        .iter()
-        .map(|a| (a.clone(), catalog[a].base_port))
-        .collect();
-    let ports: BTreeMap<String, u16> = registry::alloc(&holder, &reqs, Role::Issue)?
-        .into_iter()
-        .collect();
-
+    // Ports are not reserved here. A worktree's servers get their ports
+    // dynamically from `devrun up`, which allocates against the live registry at
+    // start time — so the numbers always reflect what is actually free and no
+    // unused reservation can be reclaimed by another session in the meantime.
     let out = Prepared {
         issue: args.issue.clone(),
         worktree: holder,
         branch,
-        ports,
     };
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())

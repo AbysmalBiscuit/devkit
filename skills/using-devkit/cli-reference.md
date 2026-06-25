@@ -46,7 +46,7 @@ devrun config apps [--json]                           # list configured apps
 **`up`** — default `--role issue`. `--role both` runs the issue branch and a fresh
 baseline side-by-side on separate ports for A/B comparison. `--supervise` hands
 servers to the daemon so they restart on crash. `--dry-run` prints the launch plan
-without starting. It reuses the ports `issue setup` already reserved.
+without starting. It allocates ports dynamically from the live registry at start time.
 
 **`down`** — stops servers **and releases their ports** (prints `released ports {…}`).
 Defaults to **this worktree only**. Reaching another worktree needs an explicit scope
@@ -80,21 +80,22 @@ issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-
 ### `issue setup`
 
 Mechanical start of a Linear issue. Creates a worktree off the baseline ref, symlinks
-env files, runs the per-app setup commands (e.g. `bun install`), reserves ports, and
-**prints a JSON summary to stdout**:
+env files, runs the per-app setup commands (e.g. `bun install`), and **prints a JSON
+summary to stdout**:
 
 ```json
-{ "issue": "ENG-123", "worktree": "/abs/path/to/worktree", "branch": "lev/eng-123-fix-auth", "ports": { "web": 4101, "api": 4001 } }
+{ "issue": "ENG-123", "worktree": "/abs/path/to/worktree", "branch": "lev/eng-123-fix-auth" }
 ```
 
-Read `worktree` to know where to `cd`; `ports` are already reserved for `devrun up`.
+Read `worktree` to know where to `cd`. Setup does not reserve ports — `devrun up`
+allocates them dynamically when the worktree's servers start.
 
 | Flag | Meaning |
 |---|---|
 | `--issue <ID>` | Linear issue id; drives the branch name and summary. **Required.** |
 | `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). **Required.** |
 | `--apps <a,b>` | comma-separated apps to set up; omit to use the config default. |
-| `--dry-run` | print what it would do without creating the worktree or reserving ports. |
+| `--dry-run` | print what it would do without creating the worktree. |
 | `--no-gitignore` | skip updating the global gitignore (normally ensures devkit artifacts like `ISSUE_*.md` are ignored). |
 
 ### `issue review`
