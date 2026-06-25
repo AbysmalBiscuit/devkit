@@ -2,13 +2,15 @@
 
 Follow-ups intentionally left out of the `issue` consolidation branch.
 
-## Update external callers to the `issue` binary
+## Add the issue skills to the repo as references
 
-`issue-prep`, `issue-end`, and `pr-status` are gone. The concrete old→new command
-mapping and the per-file list of callers to update lives in an uncommitted note in
-the base repo: `../devkit/docs/issue-binary-migration.md` (i.e. the non-worktree
-checkout). Callers include `~/.claude/commands/{issue-setup,issue-end,migration-review}.md`,
-`~/.claude/scripts/issue-end-*.sh`, and `~/.local/bin/{pr-status,issue-end}.py`.
+The `issue-*` skills that drive the `issue` binary (`issue-setup`, `issue-start`,
+`issue-review`, `issue-end`, `migration-review`, and friends) currently live only
+under `~/.claude/` on the dev machine, untracked. Vendor copies into the repo as
+reference material so the CLI ships alongside the workflows it's meant to power and
+the skills survive a fresh checkout. Open questions: where they live (e.g.
+`docs/skills/` vs. a packaged `skills/` consumed by the plugin), and whether the
+in-repo copies are the source of truth or a mirror of the `~/.claude/` originals.
 
 ## Authoritative in-memory mode for the lock registry
 
