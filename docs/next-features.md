@@ -6,6 +6,43 @@ future implementation starts from the analysis rather than from scratch.
 
 ---
 
+## Explore `gix` (gitoxide) for git operations
+
+**Status:** DEFERRED — shelling out to the `git` CLI stays the default for now.
+**Want:** evaluate replacing the `git` subprocess calls in
+`devkit-common::cmd` (and the per-worktree `status`/`worktree list`/`rev-parse`
+reads behind `devkit-issue::status`) with the pure-Rust `gix` crate, to drop
+process-spawn overhead and parse structured data instead of porcelain text.
+
+**Why deferred — the spawn is not the cost.** Profiling the slow path
+(`issue status` over ~34 worktrees) showed each `git status --porcelain` is
+~30 ms, almost entirely the working-tree walk (`sys` time); process spawn is
+negligible. Two dependency-free changes already captured the available local
+win: the per-worktree dirty checks now run on a bounded thread pool
+(`status::dirty_many`, ~1.2 s → ~0.16 s for 34 worktrees), and enabling
+`core.untrackedCache` on a repo cuts a single warm `status` to ~16 ms — a perk
+we get *for free* by shelling out, since the CLI honors the user's git config
+(untracked-cache, `fsmonitor`, index v4, sparse-checkout). After both,
+`issue status` is network-bound (`gh` + Linear), not git-bound, so a git library
+cannot move the headline number.
+
+**What it would take / open questions for when this is picked up:**
+- Benchmark `gix status` against the warm-cache CLI on a large monorepo before
+  committing — `libgit2`/`git2` status is frequently *slower* than the CLI for
+  exactly this reason (no untracked-cache/fsmonitor), and `gix`'s status API is
+  still maturing. The win must be demonstrated, not assumed.
+- A swap must preserve the user's git config optimizations or it regresses.
+- Cross-platform parity matters: CI runs ubuntu/macos/windows; `gix` behavior on
+  Windows working trees needs verification.
+- Smaller, lower-risk entry points than `status`: `gix` for `worktree list` and
+  `rev-parse`-style ref reads (structured, no porcelain parsing) where
+  correctness — not speed — is the draw.
+- Adjacent CLI win intentionally *not* taken: `--no-optional-locks` on the
+  read-only status calls conflicts with `core.untrackedCache` (it suppresses the
+  index write that persists the cache), so untracked-cache was preferred.
+
+---
+
 ## Hard cgroup-v2 memory cap for supervised servers
 
 **Status:** RESOLVED 2026-06-22 — see
