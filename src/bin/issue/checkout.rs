@@ -219,8 +219,8 @@ fn prompt_choice(
 
 /// The id stored in `.devkit/issue.toml`: the Linear id if known, else the id
 /// parsed from the PR head ref, else `UNKNOWN`.
-fn record_issue_id(linear_id: &Option<String>, head_ref: &str) -> String {
-    linear_id.clone().unwrap_or_else(|| {
+fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
+    linear_id.map(str::to_string).unwrap_or_else(|| {
         devkit_common::worktree::find_id(head_ref)
             .map(|s| s.to_uppercase())
             .unwrap_or_else(|| "UNKNOWN".into())
@@ -274,10 +274,6 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         None => wt_root.join(&wt_name),
     };
 
-    if args.setup {
-        anyhow::bail!("--setup is not implemented yet");
-    }
-
     anyhow::ensure!(
         !worktree.exists(),
         "worktree path already exists: {}",
@@ -303,10 +299,11 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     )
     .with_context(|| format!("checking out PR #{}", meta.number))?;
 
+    let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
     crate::record::write(
         &worktree,
         &crate::record::IssueRecord {
-            issue: record_issue_id(&resolved.linear_id, &meta.head_ref_name),
+            issue: issue.clone(),
             slug: slugify(&meta.title),
             apps: if args.setup {
                 args.apps.clone()
@@ -315,6 +312,23 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             },
         },
     )?;
+
+    if args.setup {
+        let setup_ctx = serde_json::json!({
+            "prefix": cfg.defaults.branch_prefix,
+            "issue": issue,
+            "slug": slugify(&meta.title),
+            "apps": args.apps,
+        });
+        crate::setup::prep_apps(
+            &worktree,
+            &meta.head_ref_name,
+            &args.apps,
+            catalog,
+            &setup_ctx,
+            &cfg.templates.variables,
+        )?;
+    }
 
     println!(
         "{}",
@@ -418,12 +432,9 @@ mod tests {
 
     #[test]
     fn record_issue_id_prefers_linear_then_head_ref() {
-        assert_eq!(
-            record_issue_id(&Some("ENG-42".into()), "lev/eng-9-x"),
-            "ENG-42"
-        );
-        assert_eq!(record_issue_id(&None, "lev/eng-9-fix"), "ENG-9");
-        assert_eq!(record_issue_id(&None, "no-id-here"), "UNKNOWN");
+        assert_eq!(record_issue_id(Some("ENG-42"), "lev/eng-9-x"), "ENG-42");
+        assert_eq!(record_issue_id(None, "lev/eng-9-fix"), "ENG-9");
+        assert_eq!(record_issue_id(None, "no-id-here"), "UNKNOWN");
     }
 
     #[test]

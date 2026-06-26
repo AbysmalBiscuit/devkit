@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, git};
 use devkit_ports::config::{PrepFile, expand_tilde};
 use devkit_ports::load;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 pub struct SetupArgs {
@@ -43,6 +43,50 @@ fn write_prep_files(
             }
             std::fs::write(&target, &rendered)
                 .with_context(|| format!("writing prep file `{}`", pf.path))?;
+        }
+    }
+    Ok(())
+}
+
+/// Per-app bootstrap shared by `setup` and `checkout-pr --setup`: write each
+/// app's prep files (rendered against `base_ctx` plus `app`/`branch`/`worktree`),
+/// then run its setup commands in its directory.
+pub(crate) fn prep_apps(
+    worktree: &Path,
+    branch: &str,
+    apps: &[String],
+    catalog: &HashMap<String, devkit_ports::apps::App>,
+    base_ctx: &serde_json::Value,
+    vars: &BTreeMap<String, String>,
+) -> Result<()> {
+    for a in apps {
+        let app = &catalog[a];
+        let app_dir = worktree.join(&app.path);
+        std::fs::create_dir_all(&app_dir).ok();
+
+        let mut file_ctx = base_ctx.clone();
+        if let Some(obj) = file_ctx.as_object_mut() {
+            obj.insert("app".into(), serde_json::Value::String(a.clone()));
+            obj.insert(
+                "branch".into(),
+                serde_json::Value::String(branch.to_string()),
+            );
+            obj.insert(
+                "worktree".into(),
+                serde_json::Value::String(worktree.to_string_lossy().into_owned()),
+            );
+        }
+        write_prep_files(&app_dir, &app.prep_files, &file_ctx, vars)
+            .with_context(|| format!("preparing files for app `{a}`"))?;
+
+        for cmd in &app.setup {
+            let (prog, rest) = cmd.split_first().context("empty setup command")?;
+            capture(
+                prog,
+                &rest.iter().map(String::as_str).collect::<Vec<_>>(),
+                app_dir.to_str(),
+            )
+            .with_context(|| format!("running setup `{}` for app `{a}`", cmd.join(" ")))?;
         }
     }
     Ok(())
@@ -133,33 +177,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     // Per-app bootstrap: write the app's configured prep files, then run its
     // setup commands in its directory. Everything project-specific — filenames,
     // file contents, installs, doppler wiring — lives in config, not here.
-    for a in &args.apps {
-        let app = &catalog[a];
-        let app_dir = worktree.join(&app.path);
-        std::fs::create_dir_all(&app_dir).ok();
-
-        let mut file_ctx = ctx.clone();
-        if let Some(obj) = file_ctx.as_object_mut() {
-            obj.insert("app".into(), serde_json::Value::String(a.clone()));
-            obj.insert("branch".into(), serde_json::Value::String(branch.clone()));
-            obj.insert(
-                "worktree".into(),
-                serde_json::Value::String(worktree.to_string_lossy().into_owned()),
-            );
-        }
-        write_prep_files(&app_dir, &app.prep_files, &file_ctx, vars)
-            .with_context(|| format!("preparing files for app `{a}`"))?;
-
-        for cmd in &app.setup {
-            let (prog, rest) = cmd.split_first().context("empty setup command")?;
-            capture(
-                prog,
-                &rest.iter().map(String::as_str).collect::<Vec<_>>(),
-                app_dir.to_str(),
-            )
-            .with_context(|| format!("running setup `{}` for app `{a}`", cmd.join(" ")))?;
-        }
-    }
+    prep_apps(&worktree, &branch, &args.apps, catalog, &ctx, vars)?;
 
     // Ports are not reserved here. A worktree's servers get their ports
     // dynamically from `devrun up`, which allocates against the live registry at
