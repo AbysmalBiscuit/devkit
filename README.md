@@ -57,7 +57,8 @@ issue info [selector] [--json] [--cache-only] # one worktree's PR number + Linea
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache]
 issue dashboard [--bucket auto|day|week|month] [--chart bar|line] [--mode absolute|proportional] [--all-roles] [--author <email>] [--no-plots] [--no-cache]
-issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push]
+issue review request [<body>] --to <alias|#channel> [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push] [--arg k=v]
+issue review finish  [<body>] [--pr <number>] [--to <alias|#channel>] [--arg k=v]
 ```
 
 - **`setup`**: mechanical start of a Linear issue. Creates a worktree off the baseline ref, symlinks env files, runs `bun install`, and prints a JSON summary. It does not reserve ports — `devrun up` allocates them dynamically when the worktree's servers start.
@@ -67,7 +68,36 @@ issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-
 - **`end`**: removes FINISHED worktrees. `--pr-only` ignores the Linear gate; `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation.
 - **`prs`**: GitHub PR triage of your open PRs and PRs awaiting your review, with a per-repo diff cache that renders `old → new` for anything changed since the last run.
 - **`dashboard`**: the triage + PR tables, plus terminal timelines of your Linear issues by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). The timeline fetches (Linear + GitHub) are cached under `~/.cache/devkit/dashboard` for a few minutes so reruns are fast; the live triage/PR panel is never cached. `--no-plots` shows only the tables; `--no-cache` forces a fresh fetch.
-- **`review`**: pushes the current branch, opens or reuses its PR, adds a reviewer, and sends the reviewer a Slack message with the PR link. Never force-pushes. With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON object for an agent to forward. `--to` names a `[people]` alias from the config.
+- **`review`**: two subcommands — `review request` (push, open/reuse PR, add GitHub reviewers, Slack them) and `review finish` (Slack the PR author when you are done reviewing). See below.
+
+### `issue review request`
+
+Push the branch, open or reuse the PR, request review on GitHub, and Slack the reviewers.
+
+```sh
+issue review request "ready for a look" --to igor
+issue review request --to igor --to '#eng' --arg team=infra   # body optional; channel + people
+issue review request                                          # re-ping the PR's existing reviewers
+```
+
+- `--to <alias|#channel>` (repeatable). People are added as GitHub reviewers (those with a `github` handle) and Slacked; `#channels` are Slack-only. Omit `--to` to re-request and Slack the PR's current human reviewers.
+- `--base`, `--pr-title`, `--pr-body`, `--no-push` as before.
+- `--arg key=value` (repeatable) overrides a variable declared in `[templates.variables]`.
+
+### `issue review finish`
+
+Announce over Slack that you finished reviewing. Posts nothing to GitHub.
+
+```sh
+issue review finish "LGTM, merging after CI"          # inside the PR's worktree → notifies the author
+issue review finish --pr 1234 --to lev                # from anywhere, explicit PR + recipient
+```
+
+- Resolves the PR from the current branch, or `--pr <number>` when run outside a worktree.
+- Defaults to notifying the PR author; `--to` overrides (repeatable, people or `#channels`).
+- `--arg key=value` as above.
+
+Templates: `review_request` and `review_finish` under `[templates]`. Per-recipient render fields: `name` (alias or channel), `slack_id` (user id, empty for channels), plus `pr_url`, `pr_title`, `input` (and `author` for finish).
 
 ### `lockm`: File Locks
 
@@ -192,11 +222,12 @@ matches the historical hardcoded output.
 
 ```toml
 [templates]
-branch       = "{{ prefix }}{{ issue }}-{{ slug }}"
-worktree_dir = "{{ slug }}"
-pr_title     = "{{ issue }}: {{ input }}"
-pr_body      = "Closes {{ issue }}.\n\n{{ input }}"
-slack        = "{{ pr_title }}\n{{ input }}\n{{ pr_url }}"
+branch          = "{{ prefix }}{{ issue }}-{{ slug }}"
+worktree_dir    = "{{ slug }}"
+pr_title        = "{{ issue }}: {{ input }}"
+pr_body         = "Closes {{ issue }}.\n\n{{ input }}"
+review_request  = "{{ input }} {{ pr_url }}"
+review_finish   = "{{ input }} {{ pr_url }}"
 
 [templates.variables]            # constants; a context field of the same name wins
 team = "platform"
@@ -208,11 +239,13 @@ team = "platform"
 | `checkout_worktree_dir` | `{{ pr_number }}-{{ pr_title }}` (or `{{ pr_number }}-{{ pr_title }}_[{{ linear_id }}]` via Linear) | `pr_number`, `pr_title`, `linear_id`, `linear_title` |
 | `pr_title` | `{{ input }}` | review base + `input` = `--pr-title` |
 | `pr_body` | `{{ input }}` | review base + `input` = `--pr-body`, `pr_title` |
-| `slack` | `{{ input }} {{ pr_url }}` | review base + `input` = `body` arg, `pr_title`, `pr_url` |
+| `review_request` | `{{ input }} {{ pr_url }}` | review base + `input` = body arg, `pr_title`, `pr_url`, `name`, `slack_id` |
+| `review_finish` | `{{ input }} {{ pr_url }}` | `pr_url`, `pr_title`, `author`, `input`, `name`, `slack_id` |
 
-Review base context: `branch`, `reviewer`, `to`, and `issue`/`slug`/`apps` from
-the `.devkit/issue.toml` record `issue setup` writes in the worktree. `issue
-setup` also adds `.devkit/` to your global gitignore (`--no-gitignore` skips it).
+Review base context for `review_request`: `branch`, `issue`/`slug`/`apps` from
+the `.devkit/issue.toml` record `issue setup` writes in the worktree, plus
+`pr_url`, `pr_title`, and per-recipient `name`/`slack_id`. `issue setup` also
+adds `.devkit/` to your global gitignore (`--no-gitignore` skips it).
 An undefined variable is an error (strict mode), so typos surface immediately.
 
 ## Install
