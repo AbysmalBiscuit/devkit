@@ -3,6 +3,7 @@ pub mod cmd;
 pub mod daemon;
 pub mod linear;
 pub mod paths;
+pub mod progress;
 pub mod report;
 pub mod secrets;
 pub mod slack;

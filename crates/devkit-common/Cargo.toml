@@ -11,6 +11,7 @@ toml.workspace = true
 fd-lock.workspace = true
 comfy-table.workspace = true
 anstyle.workspace = true
+indicatif.workspace = true
 supports-hyperlinks.workspace = true
 ureq.workspace = true
 minijinja.workspace = true
