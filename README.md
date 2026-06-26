@@ -51,6 +51,7 @@ One command covering the whole issue lifecycle. Global `-C/--dir` and `--config`
 
 ```
 issue setup --issue <ID> --slug <slug> --apps <a,b> [--dry-run]
+issue checkout-pr <PR_LINEAR_ID_URL> [WORKTREE_PATH] [--setup [--apps a,b]]
 issue status [ids…]                           # read-only triage table (also the bare `issue`)
 issue info [selector] [--json] [--cache-only] # one worktree's PR number + Linear id (defaults to current)
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
@@ -60,6 +61,7 @@ issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-
 ```
 
 - **`setup`**: mechanical start of a Linear issue. Creates a worktree off the baseline ref, symlinks env files, runs `bun install`, and prints a JSON summary. It does not reserve ports — `devrun up` allocates them dynamically when the worktree's servers start.
+- **`checkout-pr`**: checks out an existing PR branch into a new worktree (unlike `setup`, which creates a new branch). The target may be a GitHub PR number (`#3340`), a bare number (`3340`, probed against both GitHub and Linear and disambiguated — prompts on a real collision in a TTY, errors if ambiguous without one), a Linear id (`ENG-3340`, whose attached PR is used — an issue with no attached PR is an error), or a GitHub/Linear URL. The worktree directory is named by the `templates.checkout_worktree_dir` template (variables: `pr_number`, `pr_title`, `linear_id`, `linear_title`; titles are slugified; `linear_*` are empty on the PR-only path); the default renders e.g. `3340-fix-login`, or `3340-fix-login_[ENG-42]` when reached via Linear. Pass `[WORKTREE_PATH]` to override the placement. The PR's own branch name is kept; the template governs only the directory. Add `--setup [--apps a,b]` to also run the per-app prep pipeline, exactly as `issue setup` does. The worktree gets a `.devkit/issue.toml` record so `issue status`/`issue end` recognise it.
 - **`status`** (the default when you run bare `issue`): triage table of every issue worktree. A worktree is FINISHED only when its PR is MERGED, its Linear issue is Done, and the working tree is clean.
 - **`info`**: shows one worktree's PR number and Linear id. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single machine-readable object (the `IssueWorktree` struct, with `pr_number`/`issue_id` for scripts). `--cache-only` skips the network — the PR number comes from the per-worktree cache at `<worktree>/.devkit/pr.json` and Linear state renders as `—`. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
 - **`end`**: removes FINISHED worktrees. `--pr-only` ignores the Linear gate; `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation.
@@ -203,6 +205,7 @@ team = "platform"
 | Key | Default | Context |
 |---|---|---|
 | `branch`, `worktree_dir` | `{{ prefix }}{{ slug }}`, `{{ slug }}` | `prefix`, `issue`, `slug`, `apps` |
+| `checkout_worktree_dir` | `{{ pr_number }}-{{ pr_title }}` (or `{{ pr_number }}-{{ pr_title }}_[{{ linear_id }}]` via Linear) | `pr_number`, `pr_title`, `linear_id`, `linear_title` |
 | `pr_title` | `{{ input }}` | review base + `input` = `--pr-title` |
 | `pr_body` | `{{ input }}` | review base + `input` = `--pr-body`, `pr_title` |
 | `slack` | `{{ input }} {{ pr_url }}` | review base + `input` = `body` arg, `pr_title`, `pr_url` |

@@ -33,7 +33,7 @@ install together via `cargo install --path .`. Three library crates are members.
 | `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks`/`devrun`/`issue` handlers) over the port + lock facades, the `devkit-ports::run` server-lifecycle facade, and the `devkit-issue` triage facade |
 | `src/bin/portm.rs` | CLI over the port registry |
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
-| `src/bin/issue` | issue lifecycle: `setup`, `status`, `end`, `prs`, `dashboard`, `review` |
+| `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
 | `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens), `doctor` |
 | `src/bin/devkit-mcp` | meta-MCP stdio server exposing the port + lock facades to coding agents |
