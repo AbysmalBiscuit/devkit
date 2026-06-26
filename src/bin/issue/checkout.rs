@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use devkit_common::cmd::{capture, gh_json};
+use devkit_common::cmd::{capture, gh_json, git};
 use devkit_common::linear::{self, LinearIssueRef};
 use devkit_ports::config::expand_tilde;
 use devkit_ports::load;
@@ -217,6 +217,16 @@ fn prompt_choice(
     Ok(chosen.cloned())
 }
 
+/// The id stored in `.devkit/issue.toml`: the Linear id if known, else the id
+/// parsed from the PR head ref, else `UNKNOWN`.
+fn record_issue_id(linear_id: &Option<String>, head_ref: &str) -> String {
+    linear_id.clone().unwrap_or_else(|| {
+        devkit_common::worktree::find_id(head_ref)
+            .map(|s| s.to_uppercase())
+            .unwrap_or_else(|| "UNKNOWN".into())
+    })
+}
+
 pub fn run(args: CheckoutArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
@@ -268,12 +278,50 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         anyhow::bail!("--setup is not implemented yet");
     }
 
+    anyhow::ensure!(
+        !worktree.exists(),
+        "worktree path already exists: {}",
+        worktree.display()
+    );
+    let worktree_s = worktree.to_str().context("worktree path not UTF-8")?;
+
+    git(&["fetch", "origin"], monorepo_s)?;
+    git(
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            worktree_s,
+            &cfg.defaults.baseline_ref,
+        ],
+        monorepo_s,
+    )?;
+    capture(
+        "gh",
+        &["pr", "checkout", &meta.number.to_string()],
+        Some(worktree_s),
+    )
+    .with_context(|| format!("checking out PR #{}", meta.number))?;
+
+    crate::record::write(
+        &worktree,
+        &crate::record::IssueRecord {
+            issue: record_issue_id(&resolved.linear_id, &meta.head_ref_name),
+            slug: slugify(&meta.title),
+            apps: if args.setup {
+                args.apps.clone()
+            } else {
+                vec![]
+            },
+        },
+    )?;
+
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "pr": meta.number,
             "branch": meta.head_ref_name,
-            "worktree": worktree.to_string_lossy(),
+            "worktree": worktree_s,
         }))?
     );
     Ok(())
@@ -366,6 +414,16 @@ mod tests {
             decide_fuzzy(true, &[lref("ENG-1", "a")], false),
             FuzzyDecision::ErrorAmbiguous
         );
+    }
+
+    #[test]
+    fn record_issue_id_prefers_linear_then_head_ref() {
+        assert_eq!(
+            record_issue_id(&Some("ENG-42".into()), "lev/eng-9-x"),
+            "ENG-42"
+        );
+        assert_eq!(record_issue_id(&None, "lev/eng-9-fix"), "ENG-9");
+        assert_eq!(record_issue_id(&None, "no-id-here"), "UNKNOWN");
     }
 
     #[test]
