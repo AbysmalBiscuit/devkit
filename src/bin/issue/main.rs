@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
+mod checkout;
 mod dashboard;
 mod end;
 mod gitignore;
@@ -44,6 +45,17 @@ enum Cmd {
         dry_run: bool,
         #[arg(long = "no-gitignore")]
         no_gitignore: bool,
+    },
+    /// Check out an existing PR (by number, Linear id, or URL) into a new worktree.
+    CheckoutPr {
+        /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | linear issue URL.
+        target: String,
+        /// Worktree path; defaults to the config-resolved placement.
+        worktree_path: Option<String>,
+        #[arg(long)]
+        setup: bool,
+        #[arg(long, value_delimiter = ',')]
+        apps: Vec<String>,
     },
     /// Read-only report of every issue worktree (optionally filtered by ID).
     Status { ids: Vec<String> },
@@ -138,6 +150,19 @@ fn main() -> Result<()> {
             apps,
             dry_run,
             no_gitignore,
+            dir: cli.dir,
+            config: cli.config,
+        }),
+        Some(Cmd::CheckoutPr {
+            target,
+            worktree_path,
+            setup,
+            apps,
+        }) => checkout::run(checkout::CheckoutArgs {
+            target,
+            worktree_path,
+            setup,
+            apps,
             dir: cli.dir,
             config: cli.config,
         }),
