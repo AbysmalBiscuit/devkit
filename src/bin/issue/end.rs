@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::git;
+use devkit_common::progress::Steps;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -131,12 +132,13 @@ pub fn run(
     pr_only: bool,
     clean_worktree: bool,
 ) -> Result<()> {
+    let steps = Steps::new();
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
-        let report = gather(start, &[])?;
+        let report = steps.during("Fetching PR + Linear status…", || gather(start, &[]))?;
         render(&report, false);
         let t = select_explicit(&report.worktrees, ids);
         if t.is_empty() {
@@ -149,7 +151,7 @@ pub fn run(
         );
         t
     } else {
-        let report = gather(start, ids)?;
+        let report = steps.during("Fetching PR + Linear status…", || gather(start, ids))?;
         render(&report, false);
         if pr_only {
             println!("--pr-only: Linear 'Done' gate skipped.");
@@ -181,7 +183,9 @@ pub fn run(
             println!("    skipped");
             continue;
         }
-        match cleanup(&row.worktree, &row.issue_id, force) {
+        match steps.during(&format!("Removing {label}…"), || {
+            cleanup(&row.worktree, &row.issue_id, force)
+        }) {
             Ok(()) => removed += 1,
             Err(CleanupError::Dirty) => {
                 eprintln!("    {label} is dirty — rerun with --force to discard.")

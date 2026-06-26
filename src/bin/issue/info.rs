@@ -1,6 +1,7 @@
 use crate::triage::render;
 use anyhow::Result;
 use devkit_common::cmd::git;
+use devkit_common::progress::Steps;
 use devkit_issue::status::{self as st, IssueWorktree, StatusReport};
 use std::path::Path;
 
@@ -62,6 +63,7 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
     };
 
     let mut linear_workspace = None;
+    let steps = Steps::new();
     if cache_only {
         if let Some(pr) = crate::info_cache::read(Path::new(&row.worktree)) {
             apply_cached_pr(&mut row, pr);
@@ -75,12 +77,16 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
     } else if discovered {
         // Live: one `gh pr list` plus a single-id Linear lookup, scoped to this
         // row — not the whole worktree set.
-        st::fetch_prs(&d)?.apply_best(&mut row);
+        steps
+            .during("Fetching PR status…", || st::fetch_prs(&d))?
+            .apply_best(&mut row);
         if row.issue_id != "UNKNOWN" {
-            let linear = devkit_common::linear::states(
-                std::slice::from_ref(&row.issue_id),
-                devkit_common::secrets::resolve("LINEAR_API_KEY").as_deref(),
-            );
+            let linear = steps.during("Fetching Linear status…", || {
+                devkit_common::linear::states(
+                    std::slice::from_ref(&row.issue_id),
+                    devkit_common::secrets::resolve("LINEAR_API_KEY").as_deref(),
+                )
+            });
             if let Some(s) = linear.get(&row.issue_id) {
                 row.linear_kind = Some(s.kind.clone());
                 row.linear_name = Some(s.name.clone());
@@ -89,7 +95,8 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
         let reason = st::reason_not_finished(&row, has_key, false);
         row.finished = reason.is_none();
         row.reason_not_finished = reason;
-        linear_workspace = devkit_common::linear::workspace_url_key();
+        linear_workspace =
+            steps.during("Resolving Linear workspace…", devkit_common::linear::workspace_url_key);
         if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
             // pr_number and pr_url are set together, so both-Some is the normal
             // PR case; a PR-less row simply leaves the cache untouched.
@@ -105,7 +112,8 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
     } else {
         // Live, but the target is the main clone (no associated PR/Linear): only
         // the workspace link is worth resolving for rendering.
-        linear_workspace = devkit_common::linear::workspace_url_key();
+        linear_workspace =
+            steps.during("Resolving Linear workspace…", devkit_common::linear::workspace_url_key);
     }
 
     if json {
