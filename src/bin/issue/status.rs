@@ -7,7 +7,7 @@ use std::collections::HashMap;
 /// Discover worktrees, then fetch PRs and Linear state concurrently behind a
 /// numbered group of progress bars, clearing them before the caller renders.
 pub fn gather_with_bars(start: &str, ids: &[String]) -> Result<StatusReport> {
-    let steps = crate::spin::Steps::new();
+    let steps = devkit_common::progress::Steps::new();
 
     let p1 = steps.spinner("[1/4] Discovering worktrees…");
     let disco = st::discover(start, ids)?;

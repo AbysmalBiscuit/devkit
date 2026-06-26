@@ -42,7 +42,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
 
     // --- Issues by status over time ---
     let use_cache = !args.no_cache;
-    let steps = crate::spin::Steps::new();
+    let steps = devkit_common::progress::Steps::new();
     let pb = steps.spinner("Loading Linear issue history…");
     let issues = data::issues(use_cache, |n| {
         pb.set_message(format!("Loading Linear issue history… {n} issues"));
@@ -144,7 +144,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         None => capture_email(&start),
     };
     let monorepo = monorepo_dir(&args)?;
-    let steps = crate::spin::Steps::new();
+    let steps = devkit_common::progress::Steps::new();
     let _b1 = steps.spinner("[1/2] Loading PR history…");
     let _b2 = steps.spinner("[2/2] Loading commit history…");
     let (opened, merged, add, del, commits) = std::thread::scope(|s| {

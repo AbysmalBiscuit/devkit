@@ -160,7 +160,7 @@ pub fn run(
         .map(|l| l.config.defaults.ignored_checks)
         .unwrap_or_default();
 
-    let steps = crate::spin::Steps::new();
+    let steps = devkit_common::progress::Steps::new();
     let _b1 = steps.spinner("[1/2] Resolving Linear workspace…");
     let _b2 = steps.spinner("[2/2] Fetching PRs from GitHub…");
 

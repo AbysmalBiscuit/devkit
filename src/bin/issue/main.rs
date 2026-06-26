@@ -13,7 +13,6 @@ mod record;
 mod review;
 mod select;
 mod setup;
-mod spin;
 mod status;
 mod triage;
 
