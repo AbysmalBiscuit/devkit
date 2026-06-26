@@ -15,6 +15,112 @@ pub struct LinearIdentity {
     pub viewer_email: String,
 }
 
+/// A GitHub PR linked to a Linear issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinearPr {
+    pub url: String,
+    pub number: u64,
+}
+
+/// A Linear issue candidate from a by-number lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinearIssueRef {
+    pub id: String, // "ENG-42"
+    pub title: String,
+}
+
+/// Parse the PR number out of a `…/pull/<n>` GitHub URL.
+pub fn pr_number_from_url(url: &str) -> Option<u64> {
+    let tail = url.split("/pull/").nth(1)?;
+    let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// GraphQL fetching one issue's title + GitHub PR attachments. Returns None
+/// for ids that are not in `TEAM-NUMBER` form.
+pub fn issue_pr_query(id: &str) -> Option<String> {
+    let (team, num) = id.split_once('-')?;
+    Some(format!(
+        "query {{ issues(filter: {{ team: {{ key: {{ eq: \"{}\" }} }}, number: {{ eq: {} }} }}) \
+         {{ nodes {{ title attachments {{ nodes {{ url }} }} }} }} }}",
+        team.to_uppercase(),
+        num
+    ))
+}
+
+/// From an `issue_pr_query` response, the first GitHub PR attachment + the title.
+pub fn parse_issue_pr(resp: &serde_json::Value) -> (Option<LinearPr>, String) {
+    let node = &resp["data"]["issues"]["nodes"][0];
+    let title = node["title"].as_str().unwrap_or("").to_string();
+    let pr = node["attachments"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a["url"].as_str())
+        .find(|u| u.contains("github.com") && u.contains("/pull/"))
+        .and_then(|u| {
+            pr_number_from_url(u).map(|number| LinearPr {
+                url: u.to_string(),
+                number,
+            })
+        });
+    (pr, title)
+}
+
+/// Resolve a Linear id to its attached GitHub PR + the issue title.
+pub fn issue_pr(id: &str, key: &str) -> Result<(Option<LinearPr>, String)> {
+    let query = issue_pr_query(id).context("not a TEAM-NUMBER Linear id")?;
+    let resp = post_graphql(&query, key)?;
+    Ok(parse_issue_pr(&resp))
+}
+
+/// GraphQL for every issue (any team) with `number == n`.
+pub fn issues_by_number_query(n: u64) -> String {
+    format!(
+        "query {{ issues(filter: {{ number: {{ eq: {} }} }}) \
+         {{ nodes {{ identifier title }} }} }}",
+        n
+    )
+}
+
+/// Parse the candidates from an `issues_by_number_query` response.
+pub fn parse_number_candidates(resp: &serde_json::Value) -> Vec<LinearIssueRef> {
+    resp["data"]["issues"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            Some(LinearIssueRef {
+                id: n["identifier"].as_str()?.to_string(),
+                title: n["title"].as_str().unwrap_or("").to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Look up every Linear issue whose number is `n`, across all teams.
+pub fn issues_by_number(n: u64, key: &str) -> Result<Vec<LinearIssueRef>> {
+    let resp = post_graphql(&issues_by_number_query(n), key)?;
+    Ok(parse_number_candidates(&resp))
+}
+
+fn post_graphql(query: &str, key: &str) -> Result<serde_json::Value> {
+    let v: serde_json::Value = ureq::post("https://api.linear.app/graphql")
+        .set("Authorization", key)
+        .send_json(ureq::json!({ "query": query }))?
+        .into_json()?;
+    if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
+        && !errors.is_empty()
+    {
+        let msg = errors
+            .first()
+            .and_then(|e| e["message"].as_str())
+            .unwrap_or("unknown GraphQL error");
+        anyhow::bail!("Linear API error: {msg}");
+    }
+    Ok(v)
+}
+
 /// Validate `key` against Linear, returning the caller's identity. The ureq
 /// error is preserved as the top-level error (no `.context`) so a caller can
 /// downcast it to distinguish an unreachable host from a rejected key.
@@ -287,5 +393,70 @@ mod tests {
     fn linear_missing_org_is_invalid() {
         let v = serde_json::json!({ "data": { "viewer": { "email": "" }, "organization": {} } });
         assert!(parse_identity(&v).is_err());
+    }
+
+    #[test]
+    fn pr_number_parsed_from_url() {
+        assert_eq!(
+            pr_number_from_url("https://github.com/org/repo/pull/3340"),
+            Some(3340)
+        );
+        assert_eq!(
+            pr_number_from_url("https://github.com/org/repo/issues/9"),
+            None
+        );
+    }
+
+    #[test]
+    fn issue_pr_query_filters_team_and_number() {
+        let q = issue_pr_query("ENG-42").unwrap();
+        assert!(q.contains("key: { eq: \"ENG\" }"));
+        assert!(q.contains("number: { eq: 42 }"));
+        assert!(q.contains("attachments"));
+        assert!(issue_pr_query("nodash").is_none());
+    }
+
+    #[test]
+    fn parse_issue_pr_finds_github_attachment() {
+        let v = serde_json::json!({"data": {"issues": {"nodes": [{
+            "title": "Fix login",
+            "attachments": {"nodes": [
+                {"url": "https://example.com/doc"},
+                {"url": "https://github.com/org/repo/pull/3340"}
+            ]}
+        }]}}});
+        let (pr, title) = parse_issue_pr(&v);
+        assert_eq!(title, "Fix login");
+        assert_eq!(pr.unwrap().number, 3340);
+    }
+
+    #[test]
+    fn parse_issue_pr_no_attachment_is_none() {
+        let v = serde_json::json!({"data": {"issues": {"nodes": [{
+            "title": "No PR yet", "attachments": {"nodes": []}
+        }]}}});
+        let (pr, title) = parse_issue_pr(&v);
+        assert!(pr.is_none());
+        assert_eq!(title, "No PR yet");
+    }
+
+    #[test]
+    fn parse_issue_pr_empty_nodes_is_none() {
+        let v = serde_json::json!({"data": {"issues": {"nodes": []}}});
+        let (pr, title) = parse_issue_pr(&v);
+        assert!(pr.is_none());
+        assert_eq!(title, "");
+    }
+
+    #[test]
+    fn parse_number_candidates_collects_ids_and_titles() {
+        let v = serde_json::json!({"data": {"issues": {"nodes": [
+            {"identifier": "ENG-3340", "title": "A"},
+            {"identifier": "OPS-3340", "title": "B"}
+        ]}}});
+        let got = parse_number_candidates(&v);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].id, "ENG-3340");
+        assert_eq!(got[1].title, "B");
     }
 }
