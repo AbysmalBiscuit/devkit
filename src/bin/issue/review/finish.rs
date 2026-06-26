@@ -5,7 +5,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::{
-    Target, deliver, parse_args, person_by_login, resolve_target, target_from_person, with_fields,
+    Target, base_ctx, deliver, parse_args, person_by_login, resolve_target, target_from_person,
+    with_fields,
 };
 
 pub struct Args {
@@ -62,29 +63,25 @@ pub fn run(args: Args) -> Result<()> {
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
 
     // PR from the current branch (best effort), unless --pr is given.
-    let branch_pr = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)
+    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)
         .ok()
-        .and_then(|branch| {
-            gh_json::<Vec<PrLite>>(
-                &[
-                    "pr",
-                    "list",
-                    "--head",
-                    branch.trim(),
-                    "--state",
-                    "all",
-                    "--json",
-                    "number",
-                    "--limit",
-                    "1",
-                ],
-                &start,
-            )
-            .ok()
-            .and_then(|v| v.into_iter().next())
-            .map(|p| p.number)
-        });
+        .map(|b| b.trim().to_string());
+    let branch_pr = branch.as_deref().and_then(|b| {
+        gh_json::<Vec<PrLite>>(
+            &[
+                "pr", "list", "--head", b, "--state", "all", "--json", "number", "--limit", "1",
+            ],
+            &start,
+        )
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .map(|p| p.number)
+    });
     let number = resolve_pr(branch_pr, args.pr)?;
+
+    let record = git(&["rev-parse", "--show-toplevel"], &start)
+        .ok()
+        .and_then(|top| crate::record::read(std::path::Path::new(top.trim())));
 
     let view: PrFull = gh_json(
         &[
@@ -110,8 +107,9 @@ pub fn run(args: Args) -> Result<()> {
             .collect::<Result<_>>()?
     };
 
-    let base = with_fields(
-        &serde_json::json!({}),
+    let base = base_ctx(record.as_ref(), branch.as_deref().unwrap_or(""));
+    let notify_ctx = with_fields(
+        &base,
         &[
             ("pr_url", serde_json::json!(view.url)),
             ("pr_title", serde_json::json!(view.title)),
@@ -125,7 +123,7 @@ pub fn run(args: Args) -> Result<()> {
     deliver(
         tmpls.review_finish(),
         "review_finish",
-        &base,
+        &notify_ctx,
         &vars,
         None,
         &targets,
