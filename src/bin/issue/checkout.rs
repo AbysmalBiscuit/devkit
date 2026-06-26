@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, gh_json, git};
 use devkit_common::linear::{self, LinearIssueRef};
+use devkit_common::progress::Steps;
 use devkit_ports::config::expand_tilde;
 use devkit_ports::load;
 use std::io::{IsTerminal, Write};
@@ -141,7 +142,7 @@ fn resolve_linear(id: &str, title: Option<String>, key: &str) -> Result<Resolved
 }
 
 /// Resolve the raw input to a concrete PR. Network + interactive.
-fn resolve(target: &str, key: Option<&str>, repo: &str) -> Result<Resolved> {
+fn resolve(target: &str, key: Option<&str>, repo: &str, steps: &Steps) -> Result<Resolved> {
     match classify(target)? {
         Ident::Pr(n) => Ok(Resolved {
             pr_number: n,
@@ -150,7 +151,9 @@ fn resolve(target: &str, key: Option<&str>, repo: &str) -> Result<Resolved> {
         }),
         Ident::Linear(id) => {
             let key = key.context("Linear id given but LINEAR_API_KEY is not set")?;
-            resolve_linear(&id, None, key)
+            steps.during(&format!("Resolving Linear issue {id}…"), || {
+                resolve_linear(&id, None, key)
+            })
         }
         Ident::Fuzzy(n) => {
             // No Linear key → a bare number is a GitHub PR.
@@ -161,8 +164,12 @@ fn resolve(target: &str, key: Option<&str>, repo: &str) -> Result<Resolved> {
                     linear_title: None,
                 });
             };
-            let exists = pr_exists(n, repo)?;
-            let candidates = linear::issues_by_number(n, key)?;
+            // Probe both sides under a spinner; clear it before any prompt.
+            let (exists, candidates) = steps.during(&format!("Resolving {n}…"), || {
+                let exists = pr_exists(n, repo)?;
+                let candidates = linear::issues_by_number(n, key)?;
+                Ok::<_, anyhow::Error>((exists, candidates))
+            })?;
             let is_tty = std::io::stdin().is_terminal();
             match decide_fuzzy(exists, &candidates, is_tty) {
                 FuzzyDecision::ErrorNone => {
@@ -265,19 +272,23 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
 
     let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
-    let resolved = resolve(&args.target, key.as_deref(), monorepo_s)?;
+    let steps = Steps::new();
+    let resolved = resolve(&args.target, key.as_deref(), monorepo_s, &steps)?;
 
-    let meta: PrMeta = gh_json(
-        &[
-            "pr",
-            "view",
-            &resolved.pr_number.to_string(),
-            "--json",
-            "number,title,headRefName",
-        ],
-        monorepo_s,
-    )
-    .with_context(|| format!("fetching PR #{}", resolved.pr_number))?;
+    let meta: PrMeta = steps
+        .during(&format!("Fetching PR #{}…", resolved.pr_number), || {
+            gh_json(
+                &[
+                    "pr",
+                    "view",
+                    &resolved.pr_number.to_string(),
+                    "--json",
+                    "number,title,headRefName",
+                ],
+                monorepo_s,
+            )
+        })
+        .with_context(|| format!("fetching PR #{}", resolved.pr_number))?;
 
     let ctx = serde_json::json!({
         "pr_number": meta.number,
@@ -305,29 +316,34 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     );
     let worktree_s = worktree.to_str().context("worktree path not UTF-8")?;
 
-    git(&["fetch", "origin"], monorepo_s)?;
-    git(
-        &[
-            "worktree",
-            "add",
-            "--detach",
-            worktree_s,
-            &cfg.defaults.baseline_ref,
-        ],
-        monorepo_s,
-    )?;
+    steps.during("Fetching from origin…", || git(&["fetch", "origin"], monorepo_s))?;
+    steps.during("Creating worktree…", || {
+        git(
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                worktree_s,
+                &cfg.defaults.baseline_ref,
+            ],
+            monorepo_s,
+        )
+    })?;
 
     // Once the worktree exists, any failure through record::write leaves an
     // orphan with no record — invisible to status/end, and blocked from
     // re-creation. Clean it up atomically so the user ends up with a recorded
     // worktree or with nothing.
     let issue = with_cleanup(&worktree, monorepo_s, || {
-        capture(
-            "gh",
-            &["pr", "checkout", &meta.number.to_string()],
-            Some(worktree_s),
-        )
-        .with_context(|| format!("checking out PR #{}", meta.number))?;
+        steps
+            .during(&format!("Checking out PR #{}…", meta.number), || {
+                capture(
+                    "gh",
+                    &["pr", "checkout", &meta.number.to_string()],
+                    Some(worktree_s),
+                )
+            })
+            .with_context(|| format!("checking out PR #{}", meta.number))?;
 
         let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
         crate::record::write(
@@ -352,14 +368,16 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             "slug": slugify(&meta.title),
             "apps": args.apps,
         });
-        crate::setup::prep_apps(
-            &worktree,
-            &meta.head_ref_name,
-            &args.apps,
-            catalog,
-            &setup_ctx,
-            &cfg.templates.variables,
-        )?;
+        steps.during("Preparing apps…", || {
+            crate::setup::prep_apps(
+                &worktree,
+                &meta.head_ref_name,
+                &args.apps,
+                catalog,
+                &setup_ctx,
+                &cfg.templates.variables,
+            )
+        })?;
     }
 
     println!(
