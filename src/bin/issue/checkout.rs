@@ -316,7 +316,9 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     );
     let worktree_s = worktree.to_str().context("worktree path not UTF-8")?;
 
-    steps.during("Fetching from origin…", || git(&["fetch", "origin"], monorepo_s))?;
+    steps.during("Fetching from origin…", || {
+        git(&["fetch", "origin"], monorepo_s)
+    })?;
     steps.during("Creating worktree…", || {
         git(
             &[

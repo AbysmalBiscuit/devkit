@@ -142,7 +142,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
     let total = 2 + usize::from(!args.apps.is_empty());
     let steps = Steps::with_total(total);
-    steps.during("Fetching from origin…", || git(&["fetch", "origin"], monorepo_s))?;
+    steps.during("Fetching from origin…", || {
+        git(&["fetch", "origin"], monorepo_s)
+    })?;
     if git(
         &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
         monorepo_s,

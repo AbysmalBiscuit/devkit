@@ -73,8 +73,8 @@ pub fn run(args: Args) -> Result<()> {
             .during("Looking up PR for branch…", || {
                 gh_json::<Vec<PrLite>>(
                     &[
-                        "pr", "list", "--head", b, "--state", "all", "--json", "number",
-                        "--limit", "1",
+                        "pr", "list", "--head", b, "--state", "all", "--json", "number", "--limit",
+                        "1",
                     ],
                     &start,
                 )

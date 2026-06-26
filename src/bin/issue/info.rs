@@ -95,8 +95,10 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
         let reason = st::reason_not_finished(&row, has_key, false);
         row.finished = reason.is_none();
         row.reason_not_finished = reason;
-        linear_workspace =
-            steps.during("Resolving Linear workspace…", devkit_common::linear::workspace_url_key);
+        linear_workspace = steps.during(
+            "Resolving Linear workspace…",
+            devkit_common::linear::workspace_url_key,
+        );
         if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
             // pr_number and pr_url are set together, so both-Some is the normal
             // PR case; a PR-less row simply leaves the cache untouched.
@@ -112,8 +114,10 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
     } else {
         // Live, but the target is the main clone (no associated PR/Linear): only
         // the workspace link is worth resolving for rendering.
-        linear_workspace =
-            steps.during("Resolving Linear workspace…", devkit_common::linear::workspace_url_key);
+        linear_workspace = steps.during(
+            "Resolving Linear workspace…",
+            devkit_common::linear::workspace_url_key,
+        );
     }
 
     if json {
