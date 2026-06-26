@@ -126,7 +126,8 @@ pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
 pub const DEFAULT_WORKTREE_DIR: &str = "{{ slug }}";
 pub const DEFAULT_PR_TITLE: &str = "{{ input }}";
 pub const DEFAULT_PR_BODY: &str = "{{ input }}";
-pub const DEFAULT_SLACK: &str = "{{ input }} {{ pr_url }}";
+pub const DEFAULT_REVIEW_REQUEST: &str = "{{ input }} {{ pr_url }}";
+pub const DEFAULT_REVIEW_FINISH: &str = "{{ input }} {{ pr_url }}";
 pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
     "{{ pr_number }}-{{ pr_title }}{% if linear_id %}_[{{ linear_id }}]{% endif %}";
 
@@ -141,7 +142,8 @@ pub struct Templates {
     pub checkout_worktree_dir: Option<String>,
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
-    pub slack: Option<String>,
+    pub review_request: Option<String>,
+    pub review_finish: Option<String>,
     #[serde(default)]
     pub variables: std::collections::BTreeMap<String, String>,
 }
@@ -164,8 +166,15 @@ impl Templates {
     pub fn pr_body(&self) -> &str {
         self.pr_body.as_deref().unwrap_or(DEFAULT_PR_BODY)
     }
-    pub fn slack(&self) -> &str {
-        self.slack.as_deref().unwrap_or(DEFAULT_SLACK)
+    pub fn review_request(&self) -> &str {
+        self.review_request
+            .as_deref()
+            .unwrap_or(DEFAULT_REVIEW_REQUEST)
+    }
+    pub fn review_finish(&self) -> &str {
+        self.review_finish
+            .as_deref()
+            .unwrap_or(DEFAULT_REVIEW_FINISH)
     }
 }
 
@@ -789,7 +798,8 @@ overwrite = true
         assert_eq!(t.worktree_dir(), DEFAULT_WORKTREE_DIR);
         assert_eq!(t.pr_title(), DEFAULT_PR_TITLE);
         assert_eq!(t.pr_body(), DEFAULT_PR_BODY);
-        assert_eq!(t.slack(), DEFAULT_SLACK);
+        assert_eq!(t.review_request(), DEFAULT_REVIEW_REQUEST);
+        assert_eq!(t.review_finish(), DEFAULT_REVIEW_FINISH);
     }
 
     #[test]

@@ -133,10 +133,10 @@ mod tests {
         assert!(resolve_reviewer(None, &person(None)).is_err());
     }
     #[test]
-    fn default_slack_appends_url() {
+    fn default_review_request_appends_url() {
         let t = devkit_ports::config::Templates::default();
         let ctx = serde_json::json!({"input": "please review", "pr_url": "https://gh/pr/1"});
-        let out = devkit_common::template::render(t.slack(), &ctx, &t.variables).unwrap();
+        let out = devkit_common::template::render(t.review_request(), &ctx, &t.variables).unwrap();
         assert_eq!(out, "please review https://gh/pr/1");
     }
 
@@ -313,8 +313,8 @@ pub fn run(args: ReviewArgs) -> Result<()> {
     };
 
     let text = render_review(
-        tmpls.slack(),
-        "slack",
+        tmpls.review_request(),
+        "review_request",
         &with_fields(
             &base,
             &[
