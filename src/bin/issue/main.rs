@@ -138,6 +138,20 @@ enum ReviewCmd {
         #[arg(long = "arg")]
         args: Vec<String>,
     },
+    /// Announce over Slack that you finished reviewing; notify the author or --to.
+    Finish {
+        /// Slack body; fills the `review_finish` template's `{{ input }}`.
+        body: Option<String>,
+        /// Recipient: a `[people]` alias or `#channel`. Repeatable. Defaults to the PR author.
+        #[arg(long = "to")]
+        to: Vec<String>,
+        /// PR number; required when not run inside the PR's worktree.
+        #[arg(long)]
+        pr: Option<u64>,
+        /// Override a declared template variable: `--arg key=value`. Repeatable.
+        #[arg(long = "arg")]
+        args: Vec<String>,
+    },
 }
 
 fn start(dir: &Option<String>) -> String {
@@ -231,6 +245,14 @@ fn main() -> Result<()> {
                 pr_title,
                 pr_body,
                 no_push,
+                args,
+                dir: cli.dir,
+                config: cli.config,
+            }),
+            ReviewCmd::Finish { body, to, pr, args } => review::finish::run(review::finish::Args {
+                body,
+                to,
+                pr,
                 args,
                 dir: cli.dir,
                 config: cli.config,
