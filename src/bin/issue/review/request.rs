@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use devkit_common::cmd::{capture, gh_json, git};
+use devkit_common::progress::Steps;
 use devkit_ports::config::Person;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -129,8 +130,12 @@ pub fn run(args: Args) -> Result<()> {
         .to_string();
     guard_branch(&branch)?;
 
+    let steps = Steps::new();
     if !args.no_push {
-        git(&["push", "-u", "origin", &branch], &start)
+        steps
+            .during("Pushing branch…", || {
+                git(&["push", "-u", "origin", &branch], &start)
+            })
             .context("git push failed (refusing to force-push)")?;
     }
 
@@ -165,46 +170,54 @@ pub fn run(args: Args) -> Result<()> {
         missing_at,
     )?;
 
-    let existing: Option<PrView> = gh_json::<Vec<PrView>>(
-        &[
-            "pr",
-            "list",
-            "--head",
-            &branch,
-            "--state",
-            "all",
-            "--json",
-            "number,state,url",
-            "--limit",
-            "1",
-        ],
-        &start,
-    )?
-    .into_iter()
-    .next();
+    let existing: Option<PrView> = steps
+        .during("Looking up existing PR…", || {
+            gh_json::<Vec<PrView>>(
+                &[
+                    "pr",
+                    "list",
+                    "--head",
+                    &branch,
+                    "--state",
+                    "all",
+                    "--json",
+                    "number,state,url",
+                    "--limit",
+                    "1",
+                ],
+                &start,
+            )
+        })?
+        .into_iter()
+        .next();
 
     let (pr_url, targets) = match action_for(existing.as_ref().map(|p| p.state.as_str())) {
         PrAction::Stop(reason) => bail!("{reason}"),
         PrAction::AddReviewer => {
             let pr = existing.expect("AddReviewer implies an existing PR");
-            let targets = resolve_request_targets(&explicit, pr.number, &start, people)?;
+            let targets = steps.during("Resolving reviewers…", || {
+                resolve_request_targets(&explicit, pr.number, &start, people)
+            })?;
             let (logins, warnings) = reviewer_logins(&targets);
             for w in &warnings {
                 eprintln!("warning: {w}");
             }
             if !logins.is_empty() {
-                capture(
-                    "gh",
-                    &[
-                        "pr",
-                        "edit",
-                        &pr.number.to_string(),
-                        "--add-reviewer",
-                        &logins.join(","),
-                    ],
-                    Some(&start),
-                )
-                .context("gh pr edit --add-reviewer failed")?;
+                steps
+                    .during("Adding reviewers…", || {
+                        capture(
+                            "gh",
+                            &[
+                                "pr",
+                                "edit",
+                                &pr.number.to_string(),
+                                "--add-reviewer",
+                                &logins.join(","),
+                            ],
+                            Some(&start),
+                        )
+                    })
+                    .context("gh pr edit --add-reviewer failed")?;
             }
             (pr.url, targets)
         }
@@ -252,7 +265,9 @@ pub fn run(args: Args) -> Result<()> {
                 gh_args.push("--reviewer");
                 gh_args.push(&joined);
             }
-            let out = capture("gh", &gh_args, Some(&start)).context("gh pr create failed")?;
+            let out = steps
+                .during("Creating PR…", || capture("gh", &gh_args, Some(&start)))
+                .context("gh pr create failed")?;
             let url = out
                 .lines()
                 .rev()
@@ -282,6 +297,7 @@ pub fn run(args: Args) -> Result<()> {
         &vars,
         missing_at,
         &targets,
+        &steps,
     )
 }
 

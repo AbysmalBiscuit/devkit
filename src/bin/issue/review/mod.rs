@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use devkit_common::progress::Steps;
 use devkit_common::slack;
 use devkit_ports::config::Person;
 use std::collections::{BTreeMap, HashMap};
@@ -186,6 +187,7 @@ pub(crate) fn deliver(
     vars: &BTreeMap<String, String>,
     missing_at: Option<&str>,
     targets: &[Target],
+    steps: &Steps,
 ) -> Result<()> {
     let token = devkit_common::secrets::resolve("SLACK_TOKEN");
     for t in targets {
@@ -193,7 +195,9 @@ pub(crate) fn deliver(
         let text = render_review(tmpl, key, &ctx, vars, missing_at)?;
         match &token {
             Some(tok) => {
-                slack::post_message(tok, &t.channel, &text)?;
+                steps.during(&format!("Notifying {} on Slack…", t.name), || {
+                    slack::post_message(tok, &t.channel, &text)
+                })?;
                 println!("Sent to {} ({})", t.name, t.channel);
             }
             None => {

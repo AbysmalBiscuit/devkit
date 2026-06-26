@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_json, git};
+use devkit_common::progress::Steps;
 use devkit_ports::config::Person;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -62,20 +63,25 @@ pub fn run(args: Args) -> Result<()> {
     let mut vars = tmpls.variables.clone();
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
 
+    let steps = Steps::new();
     // PR from the current branch (best effort), unless --pr is given.
     let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)
         .ok()
         .map(|b| b.trim().to_string());
     let branch_pr = branch.as_deref().and_then(|b| {
-        gh_json::<Vec<PrLite>>(
-            &[
-                "pr", "list", "--head", b, "--state", "all", "--json", "number", "--limit", "1",
-            ],
-            &start,
-        )
-        .ok()
-        .and_then(|v| v.into_iter().next())
-        .map(|p| p.number)
+        steps
+            .during("Looking up PR for branch…", || {
+                gh_json::<Vec<PrLite>>(
+                    &[
+                        "pr", "list", "--head", b, "--state", "all", "--json", "number",
+                        "--limit", "1",
+                    ],
+                    &start,
+                )
+            })
+            .ok()
+            .and_then(|v| v.into_iter().next())
+            .map(|p| p.number)
     });
     let number = resolve_pr(branch_pr, args.pr)?;
 
@@ -83,16 +89,18 @@ pub fn run(args: Args) -> Result<()> {
         .ok()
         .and_then(|top| crate::record::read(std::path::Path::new(top.trim())));
 
-    let view: PrFull = gh_json(
-        &[
-            "pr",
-            "view",
-            &number.to_string(),
-            "--json",
-            "url,title,author",
-        ],
-        &start,
-    )?;
+    let view: PrFull = steps.during(&format!("Fetching PR #{number}…"), || {
+        gh_json(
+            &[
+                "pr",
+                "view",
+                &number.to_string(),
+                "--json",
+                "url,title,author",
+            ],
+            &start,
+        )
+    })?;
     let author_login = view.author.login;
 
     let targets: Vec<Target> = if args.to.is_empty() {
@@ -127,6 +135,7 @@ pub fn run(args: Args) -> Result<()> {
         &vars,
         None,
         &targets,
+        &steps,
     )
 }
 
