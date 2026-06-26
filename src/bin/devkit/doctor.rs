@@ -1,4 +1,5 @@
 use anyhow::Result;
+use devkit_common::progress::Steps;
 use devkit_common::secrets::{self, Source};
 use devkit_common::{linear, slack};
 
@@ -56,13 +57,13 @@ fn validate_slack(v: &str) -> Check {
     }
 }
 
-fn gather() -> Vec<Row> {
+fn gather(steps: &Steps) -> Vec<Row> {
     vec![
         Row {
             key: "linear_api_key",
             source: secrets::source("LINEAR_API_KEY"),
             check: match secrets::resolve("LINEAR_API_KEY") {
-                Some(v) => validate_linear(&v),
+                Some(v) => steps.during("Validating Linear API key…", || validate_linear(&v)),
                 None => Check::Unset(HINT_LINEAR),
             },
         },
@@ -78,7 +79,7 @@ fn gather() -> Vec<Row> {
             key: "slack_token",
             source: secrets::source("SLACK_TOKEN"),
             check: match secrets::resolve("SLACK_TOKEN") {
-                Some(v) => validate_slack(&v),
+                Some(v) => steps.during("Validating Slack token…", || validate_slack(&v)),
                 None => Check::Unset(HINT_SLACK),
             },
         },
@@ -127,7 +128,11 @@ fn print_json(rows: &[Row]) {
 }
 
 pub fn run(json: bool) -> Result<()> {
-    let rows = gather();
+    let total = usize::from(secrets::resolve("LINEAR_API_KEY").is_some())
+        + usize::from(secrets::resolve("SLACK_TOKEN").is_some());
+    let steps = Steps::with_total(total);
+    let rows = gather(&steps);
+    steps.clear();
     if json {
         print_json(&rows);
     } else {

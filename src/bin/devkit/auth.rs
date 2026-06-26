@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use devkit_common::progress::Steps;
 use devkit_common::{linear, secrets, slack};
 use std::io::{IsTerminal, Read};
 use std::path::Path;
@@ -18,9 +19,12 @@ fn store_slack(path: &Path, token: &str) -> Result<()> {
 pub fn run(provider: Provider, token: Option<String>) -> Result<()> {
     let token = acquire(provider, token)?;
     let path = secrets::secrets_path();
+    let steps = Steps::new();
     match provider {
         Provider::Linear => {
-            let id = linear::validate(&token).context("validating Linear API key")?;
+            let id = steps
+                .during("Validating Linear API key…", || linear::validate(&token))
+                .context("validating Linear API key")?;
             store_linear(&path, &token, &id)?;
             println!(
                 "✓ linear: workspace \"{}\" ({})",
@@ -28,7 +32,9 @@ pub fn run(provider: Provider, token: Option<String>) -> Result<()> {
             );
         }
         Provider::Slack => {
-            let id = slack::validate(&token).context("validating Slack token")?;
+            let id = steps
+                .during("Validating Slack token…", || slack::validate(&token))
+                .context("validating Slack token")?;
             store_slack(&path, &token)?;
             println!("✓ slack: team \"{}\" (user {})", id.team, id.user);
         }
