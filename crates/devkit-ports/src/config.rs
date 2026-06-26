@@ -120,6 +120,8 @@ pub const DEFAULT_WORKTREE_DIR: &str = "{{ slug }}";
 pub const DEFAULT_PR_TITLE: &str = "{{ input }}";
 pub const DEFAULT_PR_BODY: &str = "{{ input }}";
 pub const DEFAULT_SLACK: &str = "{{ input }} {{ pr_url }}";
+pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
+    "{{ pr_number }}-{{ pr_title }}{% if linear_id %}_[{{ linear_id }}]{% endif %}";
 
 /// Config-driven minijinja templates for the issue-lifecycle strings. Each
 /// `None` field falls back to its `DEFAULT_*` constant, which reproduces the
@@ -129,6 +131,7 @@ pub const DEFAULT_SLACK: &str = "{{ input }} {{ pr_url }}";
 pub struct Templates {
     pub branch: Option<String>,
     pub worktree_dir: Option<String>,
+    pub checkout_worktree_dir: Option<String>,
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
     pub slack: Option<String>,
@@ -142,6 +145,11 @@ impl Templates {
     }
     pub fn worktree_dir(&self) -> &str {
         self.worktree_dir.as_deref().unwrap_or(DEFAULT_WORKTREE_DIR)
+    }
+    pub fn checkout_worktree_dir(&self) -> &str {
+        self.checkout_worktree_dir
+            .as_deref()
+            .unwrap_or(DEFAULT_CHECKOUT_WORKTREE_DIR)
     }
     pub fn pr_title(&self) -> &str {
         self.pr_title.as_deref().unwrap_or(DEFAULT_PR_TITLE)
@@ -774,5 +782,19 @@ overwrite = true
     fn config_has_default_templates() {
         let cfg = Config::parse(tests_sample()).unwrap();
         assert_eq!(cfg.templates.branch(), DEFAULT_BRANCH);
+    }
+
+    #[test]
+    fn default_checkout_worktree_dir_template() {
+        let t = Templates::default();
+        assert_eq!(t.checkout_worktree_dir(), DEFAULT_CHECKOUT_WORKTREE_DIR);
+        assert!(t.checkout_worktree_dir().contains("pr_number"));
+        assert!(t.checkout_worktree_dir().contains("linear_id"));
+    }
+
+    #[test]
+    fn checkout_worktree_dir_override_wins() {
+        let t: Templates = toml::from_str("checkout_worktree_dir = \"{{ pr_number }}\"\n").unwrap();
+        assert_eq!(t.checkout_worktree_dir(), "{{ pr_number }}");
     }
 }
