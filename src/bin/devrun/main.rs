@@ -4,6 +4,7 @@ mod config;
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
+use devkit_common::progress::Steps;
 use devkit_common::supervise;
 use devkit_common::{cmd::git, ui};
 use devkit_ports::config::expand_tilde;
@@ -455,6 +456,8 @@ fn cmd_up(
     let user = parse_user_env(env_pairs, env_file)?;
     let issue_holder = toplevel(cwd)?;
 
+    let steps = Steps::new();
+
     // (role, holder, base_dir) — base_dir is where <app.path> is rooted.
     let groups: Vec<(Role, String, PathBuf)> = {
         let baseline_path = expand_tilde(&cfg.defaults.baseline_path);
@@ -473,7 +476,9 @@ fn cmd_up(
                         .to_str()
                         .context("baseline_path not UTF-8")?
                         .to_string();
-                    baseline::ensure_fresh(&issue_holder, &bp, &cfg.defaults.baseline_ref)?;
+                    steps.during("Refreshing baseline…", || {
+                        baseline::ensure_fresh(&issue_holder, &bp, &cfg.defaults.baseline_ref)
+                    })?;
                     g.push((Role::Baseline, bp.clone(), baseline_path.clone()));
                 }
             }
@@ -525,7 +530,10 @@ fn cmd_up(
             continue;
         }
 
-        let statuses = run::launch(&plans, holder, *grp_role, supervise, true)?;
+        let statuses = steps.during(
+            &format!("Starting {} server(s) [{}]…", apps.len(), grp_role.as_str()),
+            || run::launch(&plans, holder, *grp_role, supervise, true),
+        )?;
         for s in statuses {
             if s.state != devkit_ports::run::ServerState::Ready
                 && let Some(log) = &s.logfile
