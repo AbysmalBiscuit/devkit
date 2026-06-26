@@ -267,6 +267,7 @@ dependencies = [
  "anyhow",
  "comfy-table",
  "fd-lock",
+ "indicatif",
  "interprocess",
  "minijinja",
  "nix",
