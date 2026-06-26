@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, bail};
-use devkit_common::cmd::{capture, gh_json, git};
 use devkit_common::slack;
 use devkit_ports::config::Person;
-use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+pub(crate) mod finish;
+pub(crate) mod request;
 
 /// What to do given an existing PR's state (or none) for the current branch.
 #[derive(Debug, PartialEq, Eq)]
@@ -11,6 +12,19 @@ pub(crate) enum PrAction {
     Create,
     AddReviewer,
     Stop(String),
+}
+
+/// A resolved Slack recipient: a person alias or a `#channel`.
+#[derive(Debug, Clone)]
+pub(crate) struct Target {
+    /// Conversation id/name passed to `chat.postMessage`.
+    pub channel: String,
+    /// Template `{{ name }}`: the people alias, or the channel string.
+    pub name: String,
+    /// Template `{{ slack_id }}`: the person's user id; `None` for a channel.
+    pub slack_id: Option<String>,
+    /// GitHub login, when this is a person with a `github` handle.
+    pub github: Option<String>,
 }
 
 /// Branches we must never open a review against.
@@ -32,17 +46,6 @@ pub(crate) fn action_for(pr_state: Option<&str>) -> PrAction {
     }
 }
 
-/// Resolve the GitHub reviewer handle: explicit flag wins, else the alias's github.
-pub(crate) fn resolve_reviewer(explicit: Option<&str>, person: &Person) -> Result<String> {
-    if let Some(r) = explicit {
-        return Ok(r.to_string());
-    }
-    person
-        .github
-        .clone()
-        .context("no --reviewer given and alias has no `github` handle")
-}
-
 /// Reject an empty rendered PR title on the create path.
 pub(crate) fn require_pr_title(title: &str) -> Result<()> {
     if title.trim().is_empty() {
@@ -51,13 +54,117 @@ pub(crate) fn require_pr_title(title: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build a `Target` from a `[people]` alias and its entry.
+pub(crate) fn target_from_person(alias: &str, p: &Person) -> Target {
+    Target {
+        channel: p.slack.clone(),
+        name: alias.to_string(),
+        slack_id: Some(p.slack.clone()),
+        github: p.github.clone(),
+    }
+}
+
+/// Classify one `--to` value. `#…` is a channel (Slack-only); anything else
+/// must be a `[people]` alias.
+pub(crate) fn resolve_target(value: &str, people: &HashMap<String, Person>) -> Result<Target> {
+    if value.starts_with('#') {
+        return Ok(Target {
+            channel: value.to_string(),
+            name: value.to_string(),
+            slack_id: None,
+            github: None,
+        });
+    }
+    let p = people.get(value).with_context(|| {
+        format!("unknown person alias `{value}` — add it under [people] in devkit.toml, or use `#channel`")
+    })?;
+    Ok(target_from_person(value, p))
+}
+
+/// Find the `[people]` alias + entry whose github login matches (case-insensitive).
+pub(crate) fn person_by_login<'a>(
+    login: &str,
+    people: &'a HashMap<String, Person>,
+) -> Option<(&'a String, &'a Person)> {
+    people.iter().find(|(_, p)| {
+        p.github
+            .as_deref()
+            .is_some_and(|g| g.eq_ignore_ascii_case(login))
+    })
+}
+
+/// A GitHub login is a human reviewer unless it is an app/bot (`name[bot]`).
+pub(crate) fn is_human_login(login: &str) -> bool {
+    !login.ends_with("[bot]")
+}
+
+/// Parse repeated `--arg key=value` pairs, validating each key against the
+/// declared `[templates.variables]` allowlist.
+pub(crate) fn parse_args(
+    pairs: &[String],
+    allowed: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for pair in pairs {
+        let (k, v) = pair
+            .split_once('=')
+            .with_context(|| format!("--arg must be key=value, got `{pair}`"))?;
+        if !allowed.contains_key(k) {
+            bail!("--arg `{k}` is not declared in [templates.variables]");
+        }
+        out.insert(k.to_string(), v.to_string());
+    }
+    Ok(out)
+}
+
+/// Clone `base` and add extra fields for a single template render.
+pub(crate) fn with_fields(
+    base: &serde_json::Value,
+    extra: &[(&str, serde_json::Value)],
+) -> serde_json::Value {
+    let mut m = base.as_object().cloned().unwrap_or_default();
+    for (k, v) in extra {
+        m.insert((*k).into(), v.clone());
+    }
+    serde_json::Value::Object(m)
+}
+
+/// Base context shared by every review template: branch + issue record fields.
+pub(crate) fn base_ctx(
+    record: Option<&crate::record::IssueRecord>,
+    branch: &str,
+) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    m.insert("branch".into(), serde_json::json!(branch));
+    if let Some(r) = record {
+        m.insert("issue".into(), serde_json::json!(r.issue));
+        m.insert("slug".into(), serde_json::json!(r.slug));
+        m.insert("apps".into(), serde_json::json!(r.apps));
+    }
+    serde_json::Value::Object(m)
+}
+
+/// Per-recipient context: `name` + `slack_id` bound on top of `base`.
+pub(crate) fn recipient_ctx(base: &serde_json::Value, t: &Target) -> serde_json::Value {
+    with_fields(
+        base,
+        &[
+            ("name", serde_json::json!(t.name)),
+            (
+                "slack_id",
+                serde_json::json!(t.slack_id.clone().unwrap_or_default()),
+            ),
+        ],
+    )
+}
+
 /// Render a review template, attaching the template key and, when the setup
 /// record is absent, a hint that an `{{ issue }}`/`{{ slug }}` reference needs it.
-fn render_review(
+pub(crate) fn render_review(
     tmpl: &str,
     key: &str,
     ctx: &serde_json::Value,
-    vars: &std::collections::BTreeMap<String, String>,
+    vars: &BTreeMap<String, String>,
     missing_record_at: Option<&str>,
 ) -> Result<String> {
     let mut r = devkit_common::template::render(tmpl, ctx, vars)
@@ -70,49 +177,61 @@ fn render_review(
     r
 }
 
-/// Base context shared by every review template.
-fn base_ctx(
-    record: Option<&crate::record::IssueRecord>,
-    branch: &str,
-    reviewer: &str,
-    to: &str,
-) -> serde_json::Value {
-    let mut m = serde_json::Map::new();
-    m.insert("branch".into(), serde_json::json!(branch));
-    m.insert("reviewer".into(), serde_json::json!(reviewer));
-    m.insert("to".into(), serde_json::json!(to));
-    if let Some(r) = record {
-        m.insert("issue".into(), serde_json::json!(r.issue));
-        m.insert("slug".into(), serde_json::json!(r.slug));
-        m.insert("apps".into(), serde_json::json!(r.apps));
+/// Render `tmpl` once per target (binding `name`/`slack_id`) and Slack each.
+/// With no `SLACK_TOKEN`, print the resolved intents instead.
+pub(crate) fn deliver(
+    tmpl: &str,
+    key: &str,
+    base: &serde_json::Value,
+    vars: &BTreeMap<String, String>,
+    missing_at: Option<&str>,
+    targets: &[Target],
+) -> Result<()> {
+    let token = devkit_common::secrets::resolve("SLACK_TOKEN");
+    for t in targets {
+        let ctx = recipient_ctx(base, t);
+        let text = render_review(tmpl, key, &ctx, vars, missing_at)?;
+        match &token {
+            Some(tok) => {
+                slack::post_message(tok, &t.channel, &text)?;
+                println!("Sent to {} ({})", t.name, t.channel);
+            }
+            None => {
+                let intent =
+                    serde_json::json!({ "to": t.name, "channel": t.channel, "text": text });
+                println!("{}", serde_json::to_string_pretty(&intent)?);
+            }
+        }
     }
-    serde_json::Value::Object(m)
-}
-
-/// Clone `base` and add extra fields for a single template render.
-fn with_fields(base: &serde_json::Value, extra: &[(&str, serde_json::Value)]) -> serde_json::Value {
-    let mut m = base.as_object().cloned().unwrap_or_default();
-    for (k, v) in extra {
-        m.insert((*k).into(), v.clone());
-    }
-    serde_json::Value::Object(m)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn person(gh: Option<&str>) -> Person {
+    use devkit_ports::config::Person;
+    use std::collections::{BTreeMap, HashMap};
+
+    fn person(slack: &str, gh: Option<&str>) -> Person {
         Person {
-            slack: "U1".into(),
+            slack: slack.into(),
             github: gh.map(String::from),
         }
     }
+    fn people() -> HashMap<String, Person> {
+        HashMap::from([
+            ("lev".to_string(), person("U_LEV", Some("LevValle"))),
+            ("igor".to_string(), person("U_IGOR", None)),
+        ])
+    }
+
     #[test]
     fn guard_rejects_base_branches() {
         assert!(guard_branch("staging").is_err());
         assert!(guard_branch("main").is_err());
         assert!(guard_branch("lev/eng-1-fix").is_ok());
     }
+
     #[test]
     fn action_maps_pr_state() {
         assert_eq!(action_for(None), PrAction::Create);
@@ -120,18 +239,13 @@ mod tests {
         assert!(matches!(action_for(Some("MERGED")), PrAction::Stop(_)));
         assert!(matches!(action_for(Some("CLOSED")), PrAction::Stop(_)));
     }
+
     #[test]
-    fn reviewer_prefers_explicit_then_alias() {
-        assert_eq!(
-            resolve_reviewer(Some("octocat"), &person(Some("exampleuser"))).unwrap(),
-            "octocat"
-        );
-        assert_eq!(
-            resolve_reviewer(None, &person(Some("exampleuser"))).unwrap(),
-            "exampleuser"
-        );
-        assert!(resolve_reviewer(None, &person(None)).is_err());
+    fn require_pr_title_rejects_empty() {
+        assert!(require_pr_title("  ").is_err());
+        assert!(require_pr_title("Fix login").is_ok());
     }
+
     #[test]
     fn default_review_request_appends_url() {
         let t = devkit_ports::config::Templates::default();
@@ -141,210 +255,68 @@ mod tests {
     }
 
     #[test]
-    fn require_pr_title_rejects_empty() {
-        assert!(require_pr_title("  ").is_err());
-        assert!(require_pr_title("Fix login").is_ok());
-    }
-}
+    fn resolve_target_classifies_channel_person_and_unknown() {
+        let p = people();
+        let chan = resolve_target("#eng", &p).unwrap();
+        assert_eq!(chan.channel, "#eng");
+        assert_eq!(chan.name, "#eng");
+        assert!(chan.slack_id.is_none());
+        assert!(chan.github.is_none());
 
-pub struct ReviewArgs {
-    pub body: Option<String>,
-    pub to: String,
-    pub reviewer: Option<String>,
-    pub base: Option<String>,
-    pub pr_title: Option<String>,
-    pub pr_body: Option<String>,
-    pub no_push: bool,
-    pub dir: Option<String>,
-    pub config: Option<String>,
-}
+        let lev = resolve_target("lev", &p).unwrap();
+        assert_eq!(lev.channel, "U_LEV");
+        assert_eq!(lev.name, "lev");
+        assert_eq!(lev.slack_id.as_deref(), Some("U_LEV"));
+        assert_eq!(lev.github.as_deref(), Some("LevValle"));
 
-#[derive(Deserialize)]
-struct PrView {
-    number: u64,
-    state: String,
-    url: String,
-}
-
-#[derive(serde::Serialize)]
-struct SlackIntent<'a> {
-    slack_id: &'a str,
-    text: &'a str,
-    pr_url: &'a str,
-    github: &'a str,
-    branch: &'a str,
-}
-
-pub fn run(args: ReviewArgs) -> Result<()> {
-    let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
-    let loaded = devkit_ports::load::load(
-        args.config.as_deref().map(std::path::Path::new),
-        std::path::Path::new(&start),
-    )?;
-    let people: &HashMap<String, Person> = &loaded.config.people;
-    let person = people.get(&args.to).with_context(|| {
-        format!(
-            "unknown person alias `{}` — add it under [people] in devkit.toml",
-            args.to
-        )
-    })?;
-    let reviewer = resolve_reviewer(args.reviewer.as_deref(), person)?;
-
-    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)?
-        .trim()
-        .to_string();
-    guard_branch(&branch)?;
-
-    if !args.no_push {
-        // Never force-push; surface the rejection verbatim.
-        git(&["push", "-u", "origin", &branch], &start)
-            .context("git push failed (refusing to force-push)")?;
+        assert!(resolve_target("nobody", &p).is_err());
     }
 
-    let toplevel = git(&["rev-parse", "--show-toplevel"], &start)?
-        .trim()
-        .to_string();
-    let record = crate::record::read(std::path::Path::new(&toplevel));
-    let missing_at = if record.is_none() {
-        Some(toplevel.as_str())
-    } else {
-        None
-    };
-    let tmpls = &loaded.config.templates;
-    let vars = &tmpls.variables;
-    let base = base_ctx(record.as_ref(), &branch, &reviewer, &args.to);
-
-    let pr_title = render_review(
-        tmpls.pr_title(),
-        "pr_title",
-        &with_fields(
-            &base,
-            &[(
-                "input",
-                serde_json::json!(args.pr_title.clone().unwrap_or_default()),
-            )],
-        ),
-        vars,
-        missing_at,
-    )?;
-    let pr_body = render_review(
-        tmpls.pr_body(),
-        "pr_body",
-        &with_fields(
-            &base,
-            &[
-                (
-                    "input",
-                    serde_json::json!(args.pr_body.clone().unwrap_or_default()),
-                ),
-                ("pr_title", serde_json::json!(pr_title)),
-            ],
-        ),
-        vars,
-        missing_at,
-    )?;
-
-    let existing: Option<PrView> = gh_json::<Vec<PrView>>(
-        &[
-            "pr",
-            "list",
-            "--head",
-            &branch,
-            "--state",
-            "all",
-            "--json",
-            "number,state,url",
-            "--limit",
-            "1",
-        ],
-        &start,
-    )?
-    .into_iter()
-    .next();
-
-    let pr_url = match action_for(existing.as_ref().map(|p| p.state.as_str())) {
-        PrAction::Stop(reason) => bail!("{reason}"),
-        PrAction::AddReviewer => {
-            let pr = existing.expect("AddReviewer implies an existing PR");
-            capture(
-                "gh",
-                &[
-                    "pr",
-                    "edit",
-                    &pr.number.to_string(),
-                    "--add-reviewer",
-                    &reviewer,
-                ],
-                Some(&start),
-            )
-            .context("gh pr edit --add-reviewer failed")?;
-            pr.url
-        }
-        PrAction::Create => {
-            require_pr_title(&pr_title)?;
-            let base_branch = args
-                .base
-                .clone()
-                .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
-            let out = capture(
-                "gh",
-                &[
-                    "pr",
-                    "create",
-                    "--base",
-                    &base_branch,
-                    "--reviewer",
-                    &reviewer,
-                    "--title",
-                    &pr_title,
-                    "--body",
-                    &pr_body,
-                ],
-                Some(&start),
-            )
-            .context("gh pr create failed")?;
-            out.lines()
-                .rev()
-                .find(|l| l.contains("://"))
-                .context("could not parse a PR URL from `gh pr create` output")?
-                .trim()
-                .to_string()
-        }
-    };
-
-    let text = render_review(
-        tmpls.review_request(),
-        "review_request",
-        &with_fields(
-            &base,
-            &[
-                (
-                    "input",
-                    serde_json::json!(args.body.clone().unwrap_or_default()),
-                ),
-                ("pr_title", serde_json::json!(pr_title)),
-                ("pr_url", serde_json::json!(pr_url)),
-            ],
-        ),
-        vars,
-        missing_at,
-    )?;
-
-    match devkit_common::secrets::resolve("SLACK_TOKEN") {
-        Some(token) => {
-            slack::post_message(&token, &person.slack, &text)?;
-            println!("Sent to {} ({}). PR: {pr_url}", args.to, person.slack);
-        }
-        None => {
-            let intent = SlackIntent {
-                slack_id: &person.slack,
-                text: &text,
-                pr_url: &pr_url,
-                github: &reviewer,
-                branch: &branch,
-            };
-            println!("{}", serde_json::to_string_pretty(&intent)?);
-        }
+    #[test]
+    fn person_by_login_is_case_insensitive() {
+        let p = people();
+        let (alias, _) = person_by_login("levvalle", &p).unwrap();
+        assert_eq!(alias, "lev");
+        assert!(person_by_login("ghost", &p).is_none());
     }
-    Ok(())
+
+    #[test]
+    fn is_human_login_excludes_bots() {
+        assert!(is_human_login("LevValle"));
+        assert!(!is_human_login("coderabbitai[bot]"));
+    }
+
+    #[test]
+    fn parse_args_validates_against_allowlist() {
+        let allowed = BTreeMap::from([("team".to_string(), "platform".to_string())]);
+        let ok = parse_args(&["team=infra".to_string()], &allowed).unwrap();
+        assert_eq!(ok.get("team").map(String::as_str), Some("infra"));
+        assert!(parse_args(&["ghost=x".to_string()], &allowed).is_err());
+        assert!(parse_args(&["noeq".to_string()], &allowed).is_err());
+    }
+
+    #[test]
+    fn recipient_ctx_binds_name_and_slack_id() {
+        let base = serde_json::json!({"pr_url": "u"});
+        let person_t = Target {
+            channel: "U_LEV".into(),
+            name: "lev".into(),
+            slack_id: Some("U_LEV".into()),
+            github: Some("LevValle".into()),
+        };
+        let c = recipient_ctx(&base, &person_t);
+        assert_eq!(c["name"], "lev");
+        assert_eq!(c["slack_id"], "U_LEV");
+        assert_eq!(c["pr_url"], "u");
+
+        let chan_t = Target {
+            channel: "#eng".into(),
+            name: "#eng".into(),
+            slack_id: None,
+            github: None,
+        };
+        let c = recipient_ctx(&base, &chan_t);
+        assert_eq!(c["name"], "#eng");
+        assert_eq!(c["slack_id"], "");
+    }
 }

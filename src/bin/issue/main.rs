@@ -108,14 +108,24 @@ enum Cmd {
         #[arg(long = "no-cache")]
         no_cache: bool,
     },
-    /// Push, open/reuse a PR, add a reviewer, and Slack them the body + PR link.
+    /// Request or finish a review.
     Review {
-        /// Slack message body; fills the `slack` template's `{{ input }}`.
+        #[command(subcommand)]
+        cmd: ReviewCmd,
+    },
+    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    Completions { shell: Shell },
+}
+
+#[derive(Subcommand)]
+enum ReviewCmd {
+    /// Push, open/reuse the PR, request review, and Slack the reviewers.
+    Request {
+        /// Slack body; fills the `review_request` template's `{{ input }}`.
         body: Option<String>,
-        #[arg(long)]
-        to: String,
-        #[arg(long)]
-        reviewer: Option<String>,
+        /// Recipient: a `[people]` alias or `#channel`. Repeatable.
+        #[arg(long = "to")]
+        to: Vec<String>,
         #[arg(long)]
         base: Option<String>,
         #[arg(long = "pr-title")]
@@ -124,9 +134,10 @@ enum Cmd {
         pr_body: Option<String>,
         #[arg(long = "no-push")]
         no_push: bool,
+        /// Override a declared template variable: `--arg key=value`. Repeatable.
+        #[arg(long = "arg")]
+        args: Vec<String>,
     },
-    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
-    Completions { shell: Shell },
 }
 
 fn start(dir: &Option<String>) -> String {
@@ -204,25 +215,27 @@ fn main() -> Result<()> {
             dir: cli.dir,
             config: cli.config,
         }),
-        Some(Cmd::Review {
-            body,
-            to,
-            reviewer,
-            base,
-            pr_title,
-            pr_body,
-            no_push,
-        }) => review::run(review::ReviewArgs {
-            body,
-            to,
-            reviewer,
-            base,
-            pr_title,
-            pr_body,
-            no_push,
-            dir: cli.dir,
-            config: cli.config,
-        }),
+        Some(Cmd::Review { cmd }) => match cmd {
+            ReviewCmd::Request {
+                body,
+                to,
+                base,
+                pr_title,
+                pr_body,
+                no_push,
+                args,
+            } => review::request::run(review::request::Args {
+                body,
+                to,
+                base,
+                pr_title,
+                pr_body,
+                no_push,
+                args,
+                dir: cli.dir,
+                config: cli.config,
+            }),
+        },
         Some(Cmd::Completions { shell }) => {
             clap_complete::generate(shell, &mut Cli::command(), "issue", &mut std::io::stdout());
             Ok(())
