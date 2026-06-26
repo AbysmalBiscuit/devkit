@@ -227,6 +227,30 @@ fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
     })
 }
 
+/// Run `f`; on error, remove the just-created worktree at `worktree` (in
+/// `monorepo`) before propagating, so a failed checkout or record write never
+/// leaves an orphan worktree with no `.devkit/issue.toml`. Without the record,
+/// the worktree is invisible to `issue status`/`issue end` yet blocks a re-run
+/// at the path-exists guard. A failure of the removal itself is ignored — the
+/// original error is what propagates.
+fn with_cleanup<T>(worktree: &Path, monorepo: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    match f() {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            let _ = git(
+                &[
+                    "worktree",
+                    "remove",
+                    "--force",
+                    worktree.to_str().unwrap_or_default(),
+                ],
+                monorepo,
+            );
+            Err(e)
+        }
+    }
+}
+
 pub fn run(args: CheckoutArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
@@ -292,26 +316,34 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         ],
         monorepo_s,
     )?;
-    capture(
-        "gh",
-        &["pr", "checkout", &meta.number.to_string()],
-        Some(worktree_s),
-    )
-    .with_context(|| format!("checking out PR #{}", meta.number))?;
 
-    let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
-    crate::record::write(
-        &worktree,
-        &crate::record::IssueRecord {
-            issue: issue.clone(),
-            slug: slugify(&meta.title),
-            apps: if args.setup {
-                args.apps.clone()
-            } else {
-                vec![]
+    // Once the worktree exists, any failure through record::write leaves an
+    // orphan with no record — invisible to status/end, and blocked from
+    // re-creation. Clean it up atomically so the user ends up with a recorded
+    // worktree or with nothing.
+    let issue = with_cleanup(&worktree, monorepo_s, || {
+        capture(
+            "gh",
+            &["pr", "checkout", &meta.number.to_string()],
+            Some(worktree_s),
+        )
+        .with_context(|| format!("checking out PR #{}", meta.number))?;
+
+        let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
+        crate::record::write(
+            &worktree,
+            &crate::record::IssueRecord {
+                issue: issue.clone(),
+                slug: slugify(&meta.title),
+                apps: if args.setup {
+                    args.apps.clone()
+                } else {
+                    vec![]
+                },
             },
-        },
-    )?;
+        )?;
+        Ok(issue)
+    })?;
 
     if args.setup {
         let setup_ctx = serde_json::json!({
@@ -344,6 +376,83 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+
+    fn git_cmd(args: &[&str], cwd: &std::path::Path) {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .status()
+            .expect("git runs")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+
+    /// Verify that `with_cleanup` removes the worktree on failure and returns
+    /// the original error, and leaves the worktree intact on success.
+    #[test]
+    fn with_cleanup_removes_worktree_on_error_and_preserves_on_success() {
+        let base = std::env::temp_dir().join(format!("devkit-co-wc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        git_cmd(&["init", "-q", "-b", "main"], &repo);
+        git_cmd(&["config", "user.email", "t@t"], &repo);
+        git_cmd(&["config", "user.name", "t"], &repo);
+        std::fs::write(repo.join("f"), "x").unwrap();
+        git_cmd(&["add", "."], &repo);
+        git_cmd(&["commit", "-qm", "init"], &repo);
+
+        // Error path: closure fails → worktree must be removed.
+        let wt_err = base.join("wt-err");
+        git_cmd(
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                wt_err.to_str().unwrap(),
+                "HEAD",
+            ],
+            &repo,
+        );
+        assert!(wt_err.exists(), "worktree must exist before with_cleanup");
+
+        let repo_s = repo.to_str().unwrap();
+        let result = with_cleanup(&wt_err, repo_s, || -> Result<()> { anyhow::bail!("boom") });
+        assert!(result.is_err());
+        assert!(
+            format!("{:#}", result.unwrap_err()).contains("boom"),
+            "original error must propagate"
+        );
+        assert!(
+            !wt_err.exists(),
+            "worktree must be removed after a failed closure"
+        );
+
+        // Success path: closure succeeds → worktree must remain intact.
+        let wt_ok = base.join("wt-ok");
+        git_cmd(
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                wt_ok.to_str().unwrap(),
+                "HEAD",
+            ],
+            &repo,
+        );
+        assert!(wt_ok.exists(), "worktree must exist before with_cleanup");
+
+        let ok_result = with_cleanup(&wt_ok, repo_s, || -> Result<()> { Ok(()) });
+        assert!(ok_result.is_ok(), "success must propagate");
+        assert!(
+            wt_ok.exists(),
+            "worktree must remain after a successful closure"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     fn lref(id: &str, title: &str) -> LinearIssueRef {
         LinearIssueRef {
