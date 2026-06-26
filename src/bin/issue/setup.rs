@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, git};
+use devkit_common::progress::Steps;
 use devkit_ports::config::{PrepFile, expand_tilde};
 use devkit_ports::load;
 use std::collections::{BTreeMap, HashMap};
@@ -139,7 +140,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
         worktree.display()
     );
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
-    git(&["fetch", "origin"], monorepo_s)?;
+    let total = 2 + usize::from(!args.apps.is_empty());
+    let steps = Steps::with_total(total);
+    steps.during("Fetching from origin…", || git(&["fetch", "origin"], monorepo_s))?;
     if git(
         &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
         monorepo_s,
@@ -148,17 +151,19 @@ pub fn run(args: SetupArgs) -> Result<()> {
     {
         anyhow::bail!("branch {branch} already exists — let /issue-setup decide how to proceed");
     }
-    git(
-        &[
-            "worktree",
-            "add",
-            "-b",
-            &branch,
-            worktree.to_str().unwrap(),
-            &cfg.defaults.baseline_ref,
-        ],
-        monorepo_s,
-    )?;
+    steps.during("Creating worktree…", || {
+        git(
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &branch,
+                worktree.to_str().unwrap(),
+                &cfg.defaults.baseline_ref,
+            ],
+            monorepo_s,
+        )
+    })?;
 
     crate::record::write(
         &worktree,
@@ -177,7 +182,13 @@ pub fn run(args: SetupArgs) -> Result<()> {
     // Per-app bootstrap: write the app's configured prep files, then run its
     // setup commands in its directory. Everything project-specific — filenames,
     // file contents, installs, doppler wiring — lives in config, not here.
-    prep_apps(&worktree, &branch, &args.apps, catalog, &ctx, vars)?;
+    if args.apps.is_empty() {
+        prep_apps(&worktree, &branch, &args.apps, catalog, &ctx, vars)?;
+    } else {
+        steps.during("Preparing apps…", || {
+            prep_apps(&worktree, &branch, &args.apps, catalog, &ctx, vars)
+        })?;
+    }
 
     // Ports are not reserved here. A worktree's servers get their ports
     // dynamically from `devrun up`, which allocates against the live registry at
