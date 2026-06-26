@@ -144,9 +144,21 @@ fn reviews_table(
 
 // Entry point -------------------------------------------------------------------
 
-pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> Result<()> {
+pub fn run(
+    mine: bool,
+    reviews: bool,
+    repo: Option<String>,
+    no_cache: bool,
+    config: Option<String>,
+) -> Result<()> {
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
+
+    // Check-name globs to discount from the CHECK verdict. Absent or unreadable
+    // config simply means no checks are ignored — triage still works repo-wide.
+    let ignored_checks = devkit_ports::load::load(config.as_deref().map(Path::new), Path::new("."))
+        .map(|l| l.config.defaults.ignored_checks)
+        .unwrap_or_default();
 
     let steps = crate::spin::Steps::new();
     let _b1 = steps.spinner("[1/2] Resolving Linear workspace…");
@@ -154,9 +166,11 @@ pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> R
 
     let (url_key, report, repo_key) = std::thread::scope(|s| {
         let linear_t = s.spawn(devkit_common::linear::workspace_url_key);
-        let github_t = s.spawn(|| -> Result<_> {
+        let ignored_checks = &ignored_checks;
+        let github_t = s.spawn(move || -> Result<_> {
             let resolved = devkit_issue::prs::resolve_repo(repo.as_deref(), ".")?;
-            let report = devkit_issue::prs::gather(".", mine, reviews, Some(&resolved))?;
+            let report =
+                devkit_issue::prs::gather(".", mine, reviews, Some(&resolved), ignored_checks)?;
             let repo_key = if no_cache { None } else { Some(resolved) };
             Ok((report, repo_key))
         });

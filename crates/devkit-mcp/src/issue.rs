@@ -78,6 +78,10 @@ fn prs_schema() -> Value {
 fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: PrsArgs = serde_json::from_value(args).context("invalid issue.prs arguments")?;
     let root = a.root.unwrap_or_else(|| ".".to_string());
-    let report = prs::gather(&root, a.mine, a.reviews, a.repo.as_deref())?;
+    // Check-name globs to discount from the CHECK verdict; absent config ⇒ none.
+    let ignored_checks = devkit_ports::load::load(None, std::path::Path::new(&root))
+        .map(|l| l.config.defaults.ignored_checks)
+        .unwrap_or_default();
+    let report = prs::gather(&root, a.mine, a.reviews, a.repo.as_deref(), &ignored_checks)?;
     Ok(serde_json::to_value(report)?)
 }

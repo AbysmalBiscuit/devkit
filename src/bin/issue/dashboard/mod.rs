@@ -27,7 +27,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     println!();
     // The PR tables are a secondary panel; if gh is unavailable the rest of the
     // dashboard (triage above, timelines below) must still render.
-    if let Err(e) = prs::run(true, true, None, false) {
+    if let Err(e) = prs::run(true, true, None, false, args.config.clone()) {
         eprintln!("(PR tables unavailable: {e})");
     }
 

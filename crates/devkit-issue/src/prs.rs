@@ -79,6 +79,60 @@ struct ReqConn {
 #[serde(default)]
 struct Rollup {
     state: String,
+    contexts: ContextsConn,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct ContextsConn {
+    nodes: Vec<RollupContext>,
+}
+
+/// One status-check entry under a commit's rollup. GitHub returns a union of
+/// `CheckRun` (Actions etc., carrying `name` + `conclusion` + `status`) and
+/// `StatusContext` (external statuses, carrying `context` + `state`); both shapes
+/// deserialize into this flattened node, with empty fields for the absent half.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct RollupContext {
+    name: String,
+    status: String,
+    conclusion: Option<String>,
+    context: String,
+    state: String,
+}
+
+impl RollupContext {
+    /// The check's display name, from whichever union half populated it.
+    fn name(&self) -> &str {
+        if self.name.is_empty() {
+            &self.context
+        } else {
+            &self.name
+        }
+    }
+
+    /// Normalised verdict for this single check: `"fail"`, `"run"`, or `"ok"`.
+    fn verdict(&self) -> &'static str {
+        // StatusContext: only `state` is set.
+        if self.name.is_empty() && !self.context.is_empty() {
+            return match self.state.as_str() {
+                "SUCCESS" => "ok",
+                s if FAIL.contains(&s) => "fail",
+                _ => "run", // PENDING, EXPECTED, …
+            };
+        }
+        // CheckRun: a non-terminal status is still running; otherwise judge the
+        // conclusion. A completed run with no conclusion is treated as running.
+        if !self.status.is_empty() && self.status != "COMPLETED" {
+            return "run";
+        }
+        match self.conclusion.as_deref() {
+            Some("SUCCESS" | "NEUTRAL" | "SKIPPED") => "ok",
+            Some(_) => "fail", // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE, STALE
+            None => "run",
+        }
+    }
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -158,12 +212,117 @@ fn checks_text(rollup: Option<&str>) -> &'static str {
     }
 }
 
+/// Case-insensitive glob match supporting `*` (any run) and `?` (any one char).
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let t: Vec<char> = text.to_lowercase().chars().collect();
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star, mut resume) = (None, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            resume = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            resume += 1;
+            ti = resume;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+fn name_ignored(name: &str, ignored: &[String]) -> bool {
+    ignored.iter().any(|pat| glob_match(pat, name))
+}
+
+/// The CHECK verdict for a PR, with `ignored` check-name globs discounted. When
+/// the rollup carries per-check contexts, the verdict is recomputed from the
+/// non-ignored checks so a single known-broken check (e.g. a deploy left red by
+/// an unfinished PR) no longer fails the column; ignored failures are counted so
+/// they can still be surfaced. Falls back to the aggregate rollup state when no
+/// contexts are present.
+enum Checks {
+    /// No rollup at all.
+    None,
+    /// All non-ignored checks green; `masked` is the count of ignored checks
+    /// that were themselves failing (so the green can be flagged as masking them).
+    Ok { masked: usize },
+    /// A non-ignored check is still running.
+    Run,
+    /// Non-ignored checks that failed, by name (empty when only the aggregate
+    /// rollup state was available).
+    Fail(Vec<String>),
+}
+
+fn check_verdict(pr: &PrNode, ignored: &[String]) -> Checks {
+    let contexts = pr
+        .commits
+        .nodes
+        .first()
+        .and_then(|c| c.commit.status_check_rollup.as_ref())
+        .map(|r| &r.contexts.nodes);
+    let contexts = match contexts {
+        Some(c) if !c.is_empty() => c,
+        // No per-check detail: fall back to the aggregate rollup state.
+        _ => {
+            return match checks_text(pr.rollup_state()) {
+                "-" => Checks::None,
+                "ok" => Checks::Ok { masked: 0 },
+                "run" => Checks::Run,
+                _ => Checks::Fail(Vec::new()),
+            };
+        }
+    };
+    let mut failing = Vec::new();
+    let mut running = false;
+    let mut masked = 0;
+    for c in contexts {
+        let ignored = name_ignored(c.name(), ignored);
+        match c.verdict() {
+            "fail" if ignored => masked += 1,
+            "fail" => failing.push(c.name().to_string()),
+            "run" if !ignored => running = true,
+            _ => {}
+        }
+    }
+    if !failing.is_empty() {
+        Checks::Fail(failing)
+    } else if running {
+        Checks::Run
+    } else {
+        Checks::Ok { masked }
+    }
+}
+
+/// Render a [`Checks`] verdict into the CHECK cell string.
+fn checks_cell(c: &Checks) -> String {
+    match c {
+        Checks::None => "-".to_string(),
+        Checks::Run => "run".to_string(),
+        Checks::Ok { masked: 0 } => "ok".to_string(),
+        Checks::Ok { masked } => format!("ok ({masked} ignored)"),
+        Checks::Fail(names) if names.is_empty() => "fail".to_string(),
+        Checks::Fail(names) => format!("fail: {}", names.join(", ")),
+    }
+}
+
 fn review_text(pr: &PrNode) -> &'static str {
     if changes_requested(pr) {
         return "changes";
     }
+    if approved(pr) {
+        return "approved";
+    }
     match pr.review_decision.as_deref() {
-        Some("APPROVED") => "approved",
         Some("REVIEW_REQUIRED") => "awaiting",
         _ => {
             if pr.reviews.nodes.is_empty() {
@@ -175,11 +334,11 @@ fn review_text(pr: &PrNode) -> &'static str {
     }
 }
 
-/// Logins whose current effective review is `CHANGES_REQUESTED`. A reviewer's
-/// effective state is their most recent `APPROVED` / `CHANGES_REQUESTED` /
-/// `DISMISSED` review; `COMMENTED` and `PENDING` reviews leave a standing
-/// request untouched. Bots are included — any actor that requests changes counts.
-fn change_requesters(pr: &PrNode) -> Vec<&str> {
+/// Per-author effective review state: each reviewer's most recent `APPROVED` /
+/// `CHANGES_REQUESTED` / `DISMISSED` review wins; `COMMENTED` and `PENDING`
+/// reviews leave a standing decision untouched. Bots are included — any actor
+/// that votes counts. Mirrors GitHub's own review-decision semantics.
+fn effective_reviews(pr: &PrNode) -> BTreeMap<&str, &str> {
     let mut latest: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
     for r in &pr.reviews.nodes {
         if !matches!(
@@ -195,7 +354,15 @@ fn change_requesters(pr: &PrNode) -> Vec<&str> {
     }
     latest
         .into_iter()
-        .filter(|(_, (_, state))| *state == "CHANGES_REQUESTED")
+        .map(|(login, (_, state))| (login, state))
+        .collect()
+}
+
+/// Logins whose current effective review is `CHANGES_REQUESTED`.
+fn change_requesters(pr: &PrNode) -> Vec<&str> {
+    effective_reviews(pr)
+        .into_iter()
+        .filter(|(_, state)| *state == "CHANGES_REQUESTED")
         .map(|(login, _)| login)
         .collect()
 }
@@ -205,6 +372,18 @@ fn change_requesters(pr: &PrNode) -> Vec<&str> {
 /// falls back to GitHub's `reviewDecision` in case the review list was truncated.
 fn changes_requested(pr: &PrNode) -> bool {
     !change_requesters(pr).is_empty() || pr.review_decision.as_deref() == Some("CHANGES_REQUESTED")
+}
+
+/// True when the PR carries a standing approval and no standing change request.
+/// `reviewDecision` is empty when the repo requires no review, so an approval on
+/// such a PR shows only in the per-author review state — derived symmetrically to
+/// [`changes_requested`] so a non-required approval still reads as approved.
+fn approved(pr: &PrNode) -> bool {
+    if changes_requested(pr) {
+        return false;
+    }
+    pr.review_decision.as_deref() == Some("APPROVED")
+        || effective_reviews(pr).values().any(|s| *s == "APPROVED")
 }
 
 /// True when a reviewer who requested changes is back in the pending
@@ -219,7 +398,7 @@ fn re_review_requested(pr: &PrNode) -> bool {
         .any(|rr| requesters.contains(&rr.login.as_str()))
 }
 
-fn mine_action(pr: &PrNode) -> String {
+fn mine_action(pr: &PrNode, ignored: &[String]) -> String {
     if pr.is_draft {
         return "draft".into();
     }
@@ -232,17 +411,16 @@ fn mine_action(pr: &PrNode) -> String {
         };
         return format!("{base}{}", if conflict { " + rebase" } else { "" });
     }
-    match pr.review_decision.as_deref() {
-        Some("APPROVED") => {
-            if conflict {
-                "rebase -> merge".into()
-            } else if checks_text(pr.rollup_state()) == "fail" {
-                "fix CI -> merge".into()
-            } else {
-                "MERGE".into()
-            }
+    if approved(pr) {
+        if conflict {
+            "rebase -> merge".into()
+        } else if matches!(check_verdict(pr, ignored), Checks::Fail(_)) {
+            "fix CI -> merge".into()
+        } else {
+            "MERGE".into()
         }
-        _ => format!("awaiting review{}", if conflict { "; rebase" } else { "" }),
+    } else {
+        format!("awaiting review{}", if conflict { "; rebase" } else { "" })
     }
 }
 
@@ -316,7 +494,11 @@ fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
 
 const PR_FIELDS: &str = "number url headRefName isDraft reviewDecision mergeable \
 author { login } \
-commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } \
+commits(last: 1) { nodes { commit { statusCheckRollup { state \
+contexts(first: 100) { nodes { \
+__typename \
+... on CheckRun { name status conclusion } \
+... on StatusContext { context state } } } } } } } \
 reviews(last: 100) { nodes { author { login } state submittedAt } } \
 reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }";
 
@@ -331,8 +513,9 @@ reviewedBy: search(query: \"{scope}is:pr is:open reviewed-by:@me\", type: ISSUE,
     )
 }
 
-/// Turn one GraphQL response into the report. Pure → unit-tested.
-fn classify(data: GqlData, want_mine: bool, want_reviews: bool) -> PrsReport {
+/// Turn one GraphQL response into the report. Pure → unit-tested. `ignored`
+/// holds the check-name globs discounted from each PR's CHECK verdict.
+fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[String]) -> PrsReport {
     let me = data.viewer.login;
 
     let mine_views: Vec<MinePrView> = if want_mine {
@@ -345,8 +528,8 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool) -> PrsReport {
                 url: pr.url.clone(),
                 issue_id: issue_of(&pr.head_ref_name),
                 review_state: review_text(pr).to_string(),
-                check_state: checks_text(pr.rollup_state()).to_string(),
-                action: mine_action(pr),
+                check_state: checks_cell(&check_verdict(pr, ignored)),
+                action: mine_action(pr, ignored),
             })
             .collect()
     } else {
@@ -424,7 +607,13 @@ pub fn resolve_repo(repo: Option<&str>, cwd: &str) -> Result<String> {
 
 /// Fetch and classify the caller's PRs in a single GraphQL round-trip. Neither
 /// flag set ⇒ both groups. Stateless: no diff cache is read or written.
-pub fn gather(root: &str, mine: bool, reviews: bool, repo: Option<&str>) -> Result<PrsReport> {
+pub fn gather(
+    root: &str,
+    mine: bool,
+    reviews: bool,
+    repo: Option<&str>,
+    ignored_checks: &[String],
+) -> Result<PrsReport> {
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
     let repo = match repo {
@@ -434,7 +623,7 @@ pub fn gather(root: &str, mine: bool, reviews: bool, repo: Option<&str>) -> Resu
     let query = build_query(&repo);
     let arg = format!("query={query}");
     let resp: GqlResp = gh_json(&["api", "graphql", "-f", &arg], root)?;
-    Ok(classify(resp.data, want_mine, want_reviews))
+    Ok(classify(resp.data, want_mine, want_reviews, ignored_checks))
 }
 
 #[cfg(test)]
@@ -472,7 +661,7 @@ mod tests {
           }
         }"#;
         let resp: GqlResp = serde_json::from_str(raw).unwrap();
-        let report = classify(resp.data, true, true);
+        let report = classify(resp.data, true, true, &[]);
         assert_eq!(report.mine.len(), 1);
         assert_eq!(report.mine[0].number, 10);
         assert_eq!(report.mine[0].issue_id, "ENG-1");
@@ -533,45 +722,122 @@ mod tests {
     }
 
     #[test]
+    fn glob_match_star_question_and_case() {
+        assert!(glob_match("vercel*", "vercel-deploy"));
+        assert!(glob_match("*preview*", "Vercel – Preview Comments")); // case-insensitive
+        assert!(glob_match("ci/?", "ci/a"));
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("lint", "lint"));
+        assert!(!glob_match("vercel*", "lint"));
+        assert!(!glob_match("ci/?", "ci/ab"));
+    }
+
+    /// Build a PR node carrying explicit rollup contexts (CheckRun shape).
+    fn pr_with_contexts(rollup: &str, contexts: serde_json::Value) -> PrNode {
+        node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+            "reviewDecision": "APPROVED", "mergeable": "MERGEABLE", "author": {"login": "me"},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {
+                "state": rollup, "contexts": {"nodes": contexts}
+            }}}]},
+            "reviews": {"nodes": []}, "reviewRequests": {"nodes": []}
+        }))
+    }
+
+    // A rollup that GitHub reports as FAILURE, but whose only failing check is
+    // ignored, reads green — flagged as masking one ignored failure — and the PR
+    // becomes mergeable rather than "fix CI".
+    #[test]
+    fn ignored_check_masks_rollup_failure() {
+        let pr = pr_with_contexts(
+            "FAILURE",
+            serde_json::json!([
+                {"name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"name": "vercel-deploy", "status": "COMPLETED", "conclusion": "FAILURE"}
+            ]),
+        );
+        let ignored = vec!["vercel*".to_string()];
+        assert_eq!(checks_cell(&check_verdict(&pr, &ignored)), "ok (1 ignored)");
+        assert_eq!(mine_action(&pr, &ignored), "MERGE");
+        // Without the ignore pattern the real failure stands, named.
+        assert_eq!(checks_cell(&check_verdict(&pr, &[])), "fail: vercel-deploy");
+        assert_eq!(mine_action(&pr, &[]), "fix CI -> merge");
+    }
+
+    // A genuine (non-ignored) failure is still reported by name even when an
+    // ignored check is also red.
+    #[test]
+    fn real_failure_survives_ignore() {
+        let pr = pr_with_contexts(
+            "FAILURE",
+            serde_json::json!([
+                {"name": "test", "status": "COMPLETED", "conclusion": "FAILURE"},
+                {"name": "vercel-deploy", "status": "COMPLETED", "conclusion": "FAILURE"}
+            ]),
+        );
+        let ignored = vec!["vercel*".to_string()];
+        assert_eq!(checks_cell(&check_verdict(&pr, &ignored)), "fail: test");
+        assert_eq!(mine_action(&pr, &ignored), "fix CI -> merge");
+    }
+
+    // A StatusContext (external status) shape is classified by its `state`, and a
+    // non-terminal CheckRun status reads as still running.
+    #[test]
+    fn status_context_and_running_check() {
+        let pr = pr_with_contexts(
+            "PENDING",
+            serde_json::json!([
+                {"context": "ci/build", "state": "SUCCESS"},
+                {"name": "deploy", "status": "IN_PROGRESS", "conclusion": null}
+            ]),
+        );
+        assert_eq!(checks_cell(&check_verdict(&pr, &[])), "run");
+    }
+
+    // With no per-check contexts the verdict falls back to the aggregate rollup.
+    #[test]
+    fn check_verdict_falls_back_to_rollup() {
+        let pr = mine_node(Some("APPROVED"), "MERGEABLE", false, Some("FAILURE"));
+        assert_eq!(
+            checks_cell(&check_verdict(&pr, &["vercel*".to_string()])),
+            "fail"
+        );
+    }
+
+    #[test]
     fn approved_green_merges() {
         assert_eq!(
-            mine_action(&mine_node(
-                Some("APPROVED"),
-                "MERGEABLE",
-                false,
-                Some("SUCCESS")
-            )),
+            mine_action(
+                &mine_node(Some("APPROVED"), "MERGEABLE", false, Some("SUCCESS")),
+                &[]
+            ),
             "MERGE"
         );
     }
     #[test]
     fn approved_with_failing_ci() {
         assert_eq!(
-            mine_action(&mine_node(
-                Some("APPROVED"),
-                "MERGEABLE",
-                false,
-                Some("FAILURE")
-            )),
+            mine_action(
+                &mine_node(Some("APPROVED"), "MERGEABLE", false, Some("FAILURE")),
+                &[]
+            ),
             "fix CI -> merge"
         );
     }
     #[test]
     fn changes_requested_action() {
         assert_eq!(
-            mine_action(&mine_node(
-                Some("CHANGES_REQUESTED"),
-                "MERGEABLE",
-                false,
-                None
-            )),
+            mine_action(
+                &mine_node(Some("CHANGES_REQUESTED"), "MERGEABLE", false, None),
+                &[]
+            ),
             "address changes"
         );
     }
     #[test]
     fn draft_action() {
         assert_eq!(
-            mine_action(&mine_node(None, "MERGEABLE", true, None)),
+            mine_action(&mine_node(None, "MERGEABLE", true, None), &[]),
             "draft"
         );
     }
@@ -602,14 +868,20 @@ mod tests {
     // pending request list the action stays "address changes".
     #[test]
     fn reply_without_re_request_stays_address_changes() {
-        assert_eq!(mine_action(&change_request_node(false)), "address changes");
+        assert_eq!(
+            mine_action(&change_request_node(false), &[]),
+            "address changes"
+        );
     }
 
     // Once the change-requester is re-requested they are back in reviewRequests,
     // so the action flips to "await re-review".
     #[test]
     fn re_requested_awaits_re_review() {
-        assert_eq!(mine_action(&change_request_node(true)), "await re-review");
+        assert_eq!(
+            mine_action(&change_request_node(true), &[]),
+            "await re-review"
+        );
     }
 
     // A change request from a non-required reviewer (or bot) that GitHub does not
@@ -626,7 +898,7 @@ mod tests {
             "reviewRequests": {"nodes": []}
         }));
         assert_eq!(review_text(&pr), "changes");
-        assert_eq!(mine_action(&pr), "address changes");
+        assert_eq!(mine_action(&pr, &[]), "address changes");
     }
 
     // A later APPROVED clears a standing change request; a later COMMENTED does not.
@@ -653,6 +925,27 @@ mod tests {
             "2026-06-23T12:00:00Z"
         )));
     }
+    // A PR approved when the repo requires no reviews: GitHub returns an empty
+    // `reviewDecision`, so approval must be derived from the standing per-author
+    // review. An earlier CHANGES_REQUESTED superseded by a later APPROVED, plus a
+    // third party's COMMENTED reviews, still reads as approved.
+    #[test]
+    fn empty_decision_with_standing_approval_reads_approved() {
+        let pr = node(serde_json::json!({
+            "number": 3348, "url": "u", "headRefName": "lev/swe-9898-foo", "isDraft": false,
+            "reviewDecision": "", "mergeable": "MERGEABLE", "author": {"login": "me"},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE"}}}]},
+            "reviews": {"nodes": [
+                {"author": {"login": "igor"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-23T12:01:19Z"},
+                {"author": {"login": "biscuit"}, "state": "COMMENTED", "submittedAt": "2026-06-24T17:54:39Z"},
+                {"author": {"login": "igor"}, "state": "APPROVED", "submittedAt": "2026-06-26T16:09:41Z"}
+            ]},
+            "reviewRequests": {"nodes": []}
+        }));
+        assert_eq!(review_text(&pr), "approved");
+        assert_eq!(mine_action(&pr, &[]), "fix CI -> merge");
+    }
+
     #[test]
     fn review_text_variants() {
         assert_eq!(

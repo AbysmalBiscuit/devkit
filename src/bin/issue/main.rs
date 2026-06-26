@@ -184,7 +184,7 @@ fn main() -> Result<()> {
             reviews,
             repo,
             no_cache,
-        }) => prs::run(mine, reviews, repo, no_cache),
+        }) => prs::run(mine, reviews, repo, no_cache, cli.config),
         Some(Cmd::Dashboard {
             bucket,
             chart,

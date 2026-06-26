@@ -82,6 +82,13 @@ pub struct Defaults {
     /// Base branch used when opening PRs (e.g. "staging", "main").
     #[serde(default = "default_pr_base")]
     pub pr_base: String,
+    /// Glob patterns for status-check names to discount from a PR's CHECK
+    /// verdict — e.g. a deploy left red by an unfinished PR. Matched
+    /// case-insensitively against each check's name; a PR reads green when only
+    /// ignored checks fail, and the ignored failures are still surfaced in the
+    /// triage output rather than hidden.
+    #[serde(default)]
+    pub ignored_checks: Vec<String>,
 }
 
 fn default_apps_dir() -> String {
@@ -462,6 +469,29 @@ github = "exampleuser"
         let igor = c.people.get("igor").unwrap();
         assert_eq!(igor.slack, "U0XXXXXXXXX");
         assert_eq!(igor.github.as_deref(), Some("exampleuser"));
+    }
+    #[test]
+    fn ignored_checks_parse_and_default() {
+        assert!(
+            Config::parse(SAMPLE)
+                .unwrap()
+                .defaults
+                .ignored_checks
+                .is_empty()
+        );
+        let src = r#"
+[defaults]
+worktree_root = "~/Git/example"
+branch_prefix = "lev/"
+baseline_ref = "origin/staging"
+baseline_path = "~/Git/example/_baseline"
+ignored_checks = ["vercel*", "*Preview*"]
+[apps.api]
+base_port = 9100
+launch = ["nitro", "dev", "--port", "{port}"]
+"#;
+        let c = Config::parse(src).unwrap();
+        assert_eq!(c.defaults.ignored_checks, vec!["vercel*", "*Preview*"]);
     }
     #[test]
     fn doppler_yaml_optional() {
