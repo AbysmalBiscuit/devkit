@@ -723,7 +723,7 @@ fn render_strays(strays: &[devkit_ports::strays::Stray]) -> String {
             s.app.clone().unwrap_or_else(|| "-".into()),
             s.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             holder.to_string(),
-            format!("{:?}", s.source).to_lowercase(),
+            s.source.as_str().to_string(),
             s.command.clone().unwrap_or_else(|| "-".into()),
         ]);
     }
@@ -845,6 +845,22 @@ mod tests {
         assert_eq!(roots, vec![1]);
         let roots2 = reap_roots(&[mk(9202, Some(42))]);
         assert_eq!(roots2, vec![42]);
+    }
+
+    #[test]
+    fn render_strays_names_source_in_snake_case() {
+        use super::render_strays;
+        use devkit_ports::strays::{Source, Stray};
+        let out = render_strays(&[Stray {
+            port: Some(9200),
+            pid: Some(1),
+            holder: Some("/w1".into()),
+            app: Some("api".into()),
+            command: Some("doppler run -- bun nitro dev".into()),
+            source: Source::ProcessPattern,
+        }]);
+        assert!(out.contains("process_pattern"));
+        assert!(!out.contains("processpattern"));
     }
 
     #[test]

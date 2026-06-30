@@ -18,6 +18,18 @@ pub enum Source {
     Both,
 }
 
+impl Source {
+    /// Snake_case label, identical to the serialized form, so the `devrun status`
+    /// table and the MCP JSON name a source the same way.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Source::PortBand => "port_band",
+            Source::ProcessPattern => "process_pattern",
+            Source::Both => "both",
+        }
+    }
+}
+
 /// A dev server that is listening but not owned by a live registry row.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Stray {
@@ -360,6 +372,14 @@ mod tests {
     impl PortProbe for Listening {
         fn listening(&self, port: u16) -> bool {
             self.0.contains(&port)
+        }
+    }
+
+    #[test]
+    fn source_as_str_matches_serialized_form() {
+        for s in [Source::PortBand, Source::ProcessPattern, Source::Both] {
+            let json = serde_json::to_string(&s).unwrap();
+            assert_eq!(json, format!("\"{}\"", s.as_str()));
         }
     }
 
