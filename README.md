@@ -23,6 +23,7 @@ Launches and supervises dev servers for one or more apps. Apps not explicitly na
 devrun up [apps…] [--role issue|baseline|both] [--env K=V] [--env-file F] [--dry-run]
 devrun down [--role …] [--all | --others | --holder <path>] [--app …] [--older-than …] [--batch] [selector]
 devrun status [--all]
+devrun reap [--all]
 devrun logs <app> [-f]
 devrun config show [--origin] [--json]
 devrun config apps [--json]
@@ -44,6 +45,8 @@ devrun config apps [--json]
   | `devrun down --all --app api --older-than 1h` | precise filter, all worktrees |
 
   A positional selector substring-matches across `HOLDER`/`APP`/`PORT`/`ROLE`/`PID` and is mutually exclusive with the column filters (`--app`, `--port`, `--role`, `--pid`, `--listening`/`--not-listening`, `--older-than`). `--older-than` accepts `90s`, `30m`, `2h`, `1d` (bare number = seconds). Any selection that reaches outside the current worktree prints a preview and prompts; with no interactive terminal it is refused. `--all`/`--batch` collapse the per-worktree prompts into one.
+- **`status`**: lists tracked servers for this worktree (`--all` for every worktree). Below the tracked table it shows an **untracked (outside devrun)** section: dev servers detected listening on a configured app's port band, or matching a configured app's launch signature, that the registry doesn't own — i.e. started outside `devrun up`. Read-only; reaping is a separate command.
+- **`reap`**: kills dev servers found running outside devrun (this worktree by default; `--all` reaches every worktree). It prints the matched process trees, then **requires an interactive terminal** and a confirmation before sending SIGTERM (escalating to SIGKILL). There is no `--yes`/`--force` bypass — with no terminal it refuses and kills nothing, so an agent (no PTY) can never reap. Detection is also available read-only to agents via the `ports.strays` MCP action; killing is not.
 
 ### `issue`: Issue Lifecycle
 

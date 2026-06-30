@@ -32,7 +32,7 @@ install together via `cargo install --path .`. Three library crates are members.
 | `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + Linear state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
 | `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks`/`devrun`/`issue` handlers) over the port + lock facades, the `devkit-ports::run` server-lifecycle facade, and the `devkit-issue` triage facade |
 | `src/bin/portm.rs` | CLI over the port registry |
-| `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`) |
+| `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`); `reap` kills servers started outside devrun |
 | `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
 | `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens), `doctor` |
@@ -61,6 +61,13 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   named scope flags `--all`/`--others`/`--holder` — so an agent (no PTY) cannot
   stop another worktree's servers, and a harness can deny those flags by name. The
   MCP `devrun.down` handler stays root-scoped and never gains a cross-holder arg.
+- **`devrun reap` is TTY-gated with no bypass, and never on MCP.** Reap kills
+  servers running outside the registry; it always requires an interactive
+  terminal (no `--yes`/`--force`/env path), so an agent without a PTY cannot
+  trigger it. Only read-only detection is exposed to agents — `devrun status`'s
+  untracked section, `devkit doctor`'s `devrun_strays` row, and the
+  `ports.strays` MCP action. No mutating reap/kill handler is ever added to the
+  MCP surface.
 - **The supervisor table — not the registry row — decides crash vs. stop.** A child the
   `devkitd` supervision thread reaps is a crash and is restarted (within the crash-loop
   budget); an intentional `Down` removes the key from the table *before* signalling the
