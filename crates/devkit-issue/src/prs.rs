@@ -98,6 +98,11 @@ struct RollupContext {
     name: String,
     status: String,
     conclusion: Option<String>,
+    /// When this CheckRun attempt began. Used to pick the latest attempt among
+    /// re-runs of the same name; absent on external StatusContexts (which carry
+    /// no duplicate names). RFC 3339 UTC, so lexicographic order is chronological.
+    #[serde(rename = "startedAt")]
+    started_at: Option<String>,
     context: String,
     state: String,
 }
@@ -282,10 +287,24 @@ fn check_verdict(pr: &PrNode, ignored: &[String]) -> Checks {
             };
         }
     };
+    // Collapse re-run attempts. GitHub's rollup returns every attempt of a
+    // CheckRun, so a stale CANCELLED or FAILURE run lingers beside the latest
+    // green one and would otherwise fail the column. Keep only the most recent
+    // attempt per name (by `startedAt`); external StatusContexts carry no
+    // timestamp but are already unique per name, so they pass through untouched.
+    let mut latest: Vec<&RollupContext> = Vec::new();
+    for c in contexts {
+        match latest.iter_mut().find(|e| e.name() == c.name()) {
+            Some(prev) if c.started_at > prev.started_at => *prev = c,
+            Some(_) => {}
+            None => latest.push(c),
+        }
+    }
+
     let mut failing = Vec::new();
     let mut running = false;
     let mut masked = 0;
-    for c in contexts {
+    for c in latest {
         let ignored = name_ignored(c.name(), ignored);
         match c.verdict() {
             "fail" if ignored => masked += 1,
@@ -497,7 +516,7 @@ author { login } \
 commits(last: 1) { nodes { commit { statusCheckRollup { state \
 contexts(first: 100) { nodes { \
 __typename \
-... on CheckRun { name status conclusion } \
+... on CheckRun { name status conclusion startedAt } \
 ... on StatusContext { context state } } } } } } } \
 reviews(last: 100) { nodes { author { login } state submittedAt } } \
 reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }";
@@ -778,6 +797,43 @@ mod tests {
         let ignored = vec!["vercel*".to_string()];
         assert_eq!(checks_cell(&check_verdict(&pr, &ignored)), "fail: test");
         assert_eq!(mine_action(&pr, &ignored), "fix CI -> merge");
+    }
+
+    // GitHub's rollup returns every attempt of a re-run check. A stale CANCELLED
+    // attempt superseded by a later SUCCESS of the same name must not poison the
+    // verdict: only the most recent attempt per name is judged. Here the lone
+    // genuine failure is an ignored Vercel deploy, so the PR reads mergeable.
+    #[test]
+    fn rerun_supersedes_cancelled_attempt() {
+        let pr = pr_with_contexts(
+            "FAILURE",
+            serde_json::json!([
+                {"name": "review gate", "status": "COMPLETED",
+                 "conclusion": "CANCELLED", "startedAt": "2026-06-30T10:00:00Z"},
+                {"name": "review gate", "status": "COMPLETED",
+                 "conclusion": "SUCCESS", "startedAt": "2026-06-30T10:05:00Z"},
+                {"context": "Vercel – hq", "state": "FAILURE"}
+            ]),
+        );
+        let ignored = vec!["Vercel*hq".to_string()];
+        assert_eq!(checks_cell(&check_verdict(&pr, &ignored)), "ok (1 ignored)");
+        assert_eq!(mine_action(&pr, &ignored), "MERGE");
+    }
+
+    // The latest attempt wins even when it regresses: a check that passed and was
+    // then re-run to failure reads red, not green.
+    #[test]
+    fn rerun_regression_reads_red() {
+        let pr = pr_with_contexts(
+            "FAILURE",
+            serde_json::json!([
+                {"name": "test", "status": "COMPLETED",
+                 "conclusion": "SUCCESS", "startedAt": "2026-06-30T10:00:00Z"},
+                {"name": "test", "status": "COMPLETED",
+                 "conclusion": "FAILURE", "startedAt": "2026-06-30T10:05:00Z"}
+            ]),
+        );
+        assert_eq!(checks_cell(&check_verdict(&pr, &[])), "fail: test");
     }
 
     // A StatusContext (external status) shape is classified by its `state`, and a
