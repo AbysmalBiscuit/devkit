@@ -33,6 +33,12 @@ pub fn actions() -> Vec<Action> {
             schema: prune_schema,
             handler: prune,
         },
+        Action {
+            name: "ports.strays",
+            summary: "List dev servers running outside the devrun registry (read-only).",
+            schema: strays_schema,
+            handler: strays,
+        },
     ]
 }
 
@@ -128,4 +134,37 @@ fn prune_schema() -> Value {
 fn prune(_ctx: &ServerCtx, _args: Value) -> Result<Value> {
     let freed = registry::prune()?;
     Ok(serde_json::json!({ "freed": freed }))
+}
+
+fn strays_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "root": { "type": "string", "description": "Repo/worktree path to resolve devkit.toml from." }
+        },
+        "required": ["root"],
+        "additionalProperties": false
+    })
+}
+
+#[derive(Deserialize)]
+struct StraysArgs {
+    root: String,
+}
+
+fn strays(_ctx: &ServerCtx, args: Value) -> Result<Value> {
+    let a: StraysArgs = serde_json::from_value(args).context("invalid ports.strays arguments")?;
+    let loaded = devkit_ports::load::load(None, std::path::Path::new(&a.root))
+        .context("loading devkit.toml for ports.strays")?;
+    let data = registry::snapshot()?;
+    let strays = devkit_ports::strays::scan(&loaded.config, &data);
+    Ok(serde_json::to_value(strays)?)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn strays_action_is_registered() {
+        assert!(super::actions().iter().any(|a| a.name == "ports.strays"));
+    }
 }

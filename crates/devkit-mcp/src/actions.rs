@@ -76,6 +76,7 @@ mod tests {
         assert!(names.contains(&"ports.alloc"));
         assert!(names.contains(&"ports.release"));
         assert!(names.contains(&"ports.prune"));
+        assert!(names.contains(&"ports.strays"));
     }
 
     #[test]
