@@ -84,17 +84,45 @@ pub fn scan_with(
     cfg: &Config,
     data: &Data,
     ports: &dyn PortProbe,
-    _procs: &dyn ProcTable,
+    procs: &dyn ProcTable,
 ) -> Vec<Stray> {
-    port_band_pass(cfg, data, ports)
+    let band = port_band_pass(cfg, data, ports);
+    let proc = process_pass(cfg, data, procs);
+    merge(band, proc)
+}
+
+/// Fold the two passes together: a port hit and a process hit on the same port
+/// collapse into one `Source::Both` row carrying the process's pid/holder/command.
+fn merge(band: Vec<Stray>, proc: Vec<Stray>) -> Vec<Stray> {
+    use std::collections::BTreeMap;
+    let mut by_port: BTreeMap<u16, Stray> = BTreeMap::new();
+    let mut portless: Vec<Stray> = Vec::new();
+    for s in proc {
+        match s.port {
+            Some(p) => {
+                by_port.insert(p, s);
+            }
+            None => portless.push(s),
+        }
+    }
+    for b in band {
+        let Some(p) = b.port else { continue };
+        by_port
+            .entry(p)
+            .and_modify(|existing| existing.source = Source::Both)
+            .or_insert(b);
+    }
+    by_port.into_values().chain(portless).collect()
 }
 
 /// Runtime/wrapper binaries to climb through to the launch root; never a shell.
+#[cfg(unix)]
 const WRAPPERS: &[&str] = &[
     "doppler", "bun", "bunx", "node", "uv", "uvx", "python", "python3",
 ];
 
 /// Index procs by pid, and compute the set of pids in any tracked server's tree.
+#[cfg(unix)]
 fn tracked_tree(data: &Data, procs: &[Proc]) -> std::collections::BTreeSet<u32> {
     use std::collections::{BTreeMap, BTreeSet};
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
@@ -115,9 +143,14 @@ fn tracked_tree(data: &Data, procs: &[Proc]) -> std::collections::BTreeSet<u32> 
 
 /// Climb from a matched leaf to the highest consecutive wrapper ancestor,
 /// stopping at a shell, Claude, the supervisor, or the process tree root.
+#[cfg(unix)]
 fn launch_root(start: u32, by_pid: &std::collections::BTreeMap<u32, Proc>) -> u32 {
     let mut cur = start;
+    let mut visited = std::collections::BTreeSet::new();
     loop {
+        if !visited.insert(cur) {
+            return cur;
+        }
         let Some(p) = by_pid.get(&cur) else {
             return cur;
         };
@@ -139,6 +172,7 @@ fn launch_root(start: u32, by_pid: &std::collections::BTreeMap<u32, Proc>) -> u3
 }
 
 /// Managed roots a stray's cwd must fall under (config-driven).
+#[cfg(unix)]
 fn managed_roots(cfg: &Config) -> Vec<String> {
     use crate::config::expand_tilde;
     let mut roots = Vec::new();
@@ -161,6 +195,7 @@ fn managed_roots(cfg: &Config) -> Vec<String> {
 
 /// Attribute a cwd to a worktree holder: prefer the longest known registry
 /// holder that prefixes it, else `worktree_root + first path segment`.
+#[cfg(unix)]
 fn attribute_holder(cwd: &str, known: &[String], roots: &[String]) -> Option<String> {
     if let Some(h) = known
         .iter()
@@ -182,10 +217,6 @@ fn attribute_holder(cwd: &str, known: &[String], roots: &[String]) -> Option<Str
     None
 }
 
-// Wired into `scan_with` by the merge pass; until then it is reachable only
-// from the unit tests, so the non-test lib build sees it (and its helpers) as
-// dead.
-#[allow(dead_code)]
 #[cfg(unix)]
 fn process_pass(cfg: &Config, data: &Data, procs: &dyn ProcTable) -> Vec<Stray> {
     use std::collections::{BTreeMap, BTreeSet};
@@ -220,10 +251,15 @@ fn process_pass(cfg: &Config, data: &Data, procs: &dyn ProcTable) -> Vec<Stray> 
         let Some((app, _)) = sigs.iter().find(|(_, s)| argv_matches(&p.argv, s)) else {
             continue;
         };
-        // A wrapper/shell's argv carries the downstream server's tokens, so it
-        // matches the signature too. Only a wrapper can be a launch root — the
-        // climb stops at a shell — so a non-wrapper match (a shell) is skipped;
-        // the real leaf (bun/node) collapses to the same root via the climb.
+        // Only treat wrapper-launched processes (doppler/bun/node/uv/…) as climb
+        // candidates. This drops two kinds of spurious matches: a shell whose
+        // `-c "…"` argv merely contains the server command, and any non-server
+        // process that happens to mention the signature words. The real chain
+        // still resolves — every devkit app launches via `doppler run --`, whose
+        // argv embeds the downstream command, so the doppler ancestor is always a
+        // valid candidate and the climb/dedup land on it. The deliberate
+        // narrowing: a bare binary launched with no wrapper is not attributed
+        // here (the port-band pass still surfaces it by port).
         let prog = p.argv.split_whitespace().next().unwrap_or("");
         let prog_base = prog.rsplit('/').next().unwrap_or(prog);
         if !WRAPPERS.contains(&prog_base) {
@@ -355,6 +391,7 @@ mod tests {
         assert!(strays.is_empty());
     }
 
+    #[cfg(unix)]
     fn proc(pid: u32, ppid: u32, argv: &str, cwd: &str) -> Proc {
         Proc {
             pid,
@@ -364,7 +401,9 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     struct Table(Vec<Proc>);
+    #[cfg(unix)]
     impl ProcTable for Table {
         fn snapshot(&self) -> Vec<Proc> {
             self.0.clone()
@@ -451,5 +490,25 @@ mod tests {
             "/home/u/other-project",
         )]);
         assert!(process_pass(&cfg, &data, &table).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn port_and_process_hits_on_same_port_merge_to_both() {
+        let mut cfg = Config::default();
+        cfg.defaults.stray_scan_width = 64;
+        cfg.defaults.worktree_root = "/home/u/Git/x".into();
+        cfg.apps.insert("api".into(), app(9100));
+        let data = Data::default();
+        let wt = "/home/u/Git/x/swe-1/apps/api";
+        let table = Table(vec![
+            proc(300, 1, "doppler run -- bun nitro dev --port 9105", wt),
+            proc(400, 300, "bun nitro dev --port 9105", wt),
+        ]);
+        let strays = scan_with(&cfg, &data, &Listening(vec![9105]), &table);
+        assert_eq!(strays.len(), 1);
+        assert_eq!(strays[0].port, Some(9105));
+        assert_eq!(strays[0].source, Source::Both);
+        assert_eq!(strays[0].pid, Some(300));
     }
 }
