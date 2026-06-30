@@ -681,18 +681,67 @@ fn cmd_down(cwd: &str, args: &DownArgs) -> Result<()> {
     Ok(())
 }
 
+/// Strays visible under a status scope: all of them with `--all`, else only
+/// those attributed to the current worktree (or with an unknown holder).
+fn strays_in_scope(
+    strays: &[devkit_ports::strays::Stray],
+    current: Option<&str>,
+) -> Vec<devkit_ports::strays::Stray> {
+    strays
+        .iter()
+        .filter(|s| match (current, s.holder.as_deref()) {
+            (None, _) => true, // --all
+            (Some(c), Some(h)) => h == c,
+            (Some(_), None) => true, // port-only, unknown holder
+        })
+        .cloned()
+        .collect()
+}
+
+/// Render the untracked-servers section, or an empty string if there are none.
+fn render_strays(strays: &[devkit_ports::strays::Stray]) -> String {
+    if strays.is_empty() {
+        return String::new();
+    }
+    let mut t = ui::table(&["PORT", "APP", "PID", "HOLDER", "SOURCE", "COMMAND"]);
+    for s in strays {
+        let holder = s
+            .holder
+            .as_deref()
+            .and_then(devkit_common::paths::leaf)
+            .or(s.holder.as_deref())
+            .unwrap_or("-");
+        t.add_row(vec![
+            s.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            s.app.clone().unwrap_or_else(|| "-".into()),
+            s.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            holder.to_string(),
+            format!("{:?}", s.source).to_lowercase(),
+            s.command.clone().unwrap_or_else(|| "-".into()),
+        ]);
+    }
+    format!("untracked (outside devrun):\n{t}")
+}
+
 fn cmd_status(cwd: &str, all: bool) -> Result<()> {
     let data = registry::snapshot()?;
-    if all {
-        println!("{}", registry::status_table(&data, None));
-    } else {
-        // Outside a git repo there's no worktree to scope to; show nothing.
-        match toplevel(cwd).ok() {
-            Some(h) => println!("{}", registry::status_table(&data, Some(&h))),
-            None => println!(
-                "{}",
-                registry::status_table(&registry::Data::default(), None)
-            ),
+    // Outside a git repo there's no worktree to scope to; show nothing tracked.
+    let current = if all { None } else { toplevel(cwd).ok() };
+    match (&current, all) {
+        (Some(h), _) => println!("{}", registry::status_table(&data, Some(h))),
+        (None, true) => println!("{}", registry::status_table(&data, None)),
+        (None, false) => println!(
+            "{}",
+            registry::status_table(&registry::Data::default(), None)
+        ),
+    }
+    // Untracked strays (best-effort; never fails status).
+    if let Ok(loaded) = load::load(None, Path::new(cwd)) {
+        let strays = devkit_ports::strays::scan(&loaded.config, &data);
+        let scoped = strays_in_scope(&strays, current.as_deref());
+        let rendered = render_strays(&scoped);
+        if !rendered.is_empty() {
+            println!("\n{rendered}");
         }
     }
     Ok(())
@@ -722,6 +771,44 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::apps_from_diff;
+
+    #[test]
+    fn scope_all_shows_every_stray() {
+        use super::strays_in_scope;
+        use devkit_ports::strays::{Source, Stray};
+        let stray = |port: u16, holder: Option<&str>| Stray {
+            port: Some(port),
+            pid: Some(1),
+            holder: holder.map(String::from),
+            app: Some("api".into()),
+            command: Some("doppler run -- bun nitro dev".into()),
+            source: Source::ProcessPattern,
+        };
+        let strays = vec![stray(9200, Some("/w1")), stray(9201, Some("/w2"))];
+        assert_eq!(strays_in_scope(&strays, None).len(), 2);
+    }
+
+    #[test]
+    fn scope_current_filters_to_this_worktree_plus_unknown() {
+        use super::strays_in_scope;
+        use devkit_ports::strays::{Source, Stray};
+        let stray = |port: u16, holder: Option<&str>| Stray {
+            port: Some(port),
+            pid: Some(1),
+            holder: holder.map(String::from),
+            app: Some("api".into()),
+            command: Some("doppler run -- bun nitro dev".into()),
+            source: Source::ProcessPattern,
+        };
+        let strays = vec![
+            stray(9200, Some("/w1")),
+            stray(9201, Some("/w2")),
+            stray(9202, None),
+        ];
+        let scoped = strays_in_scope(&strays, Some("/w1"));
+        assert_eq!(scoped.len(), 2); // /w1 + the unknown-holder one
+        assert!(scoped.iter().all(|s| s.holder.as_deref() != Some("/w2")));
+    }
 
     #[test]
     fn parse_age_handles_units() {
