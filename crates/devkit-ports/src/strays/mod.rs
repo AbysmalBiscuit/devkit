@@ -301,6 +301,7 @@ fn process_pass(_cfg: &Config, _data: &Data, _procs: &dyn ProcTable) -> Vec<Stra
 }
 
 /// Best-effort `--port N` / `-p N` extraction from a command line.
+#[cfg(unix)]
 fn port_from_argv(argv: &str) -> Option<u16> {
     let toks: Vec<&str> = argv.split_whitespace().collect();
     for (i, t) in toks.iter().enumerate() {
