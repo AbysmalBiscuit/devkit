@@ -6,6 +6,7 @@ use devkit_common::{linear, slack};
 #[derive(Debug, PartialEq, Eq)]
 enum Check {
     Ok(String),
+    Warn(String),
     Invalid(String),
     Unreachable,
     Unset(&'static str),
@@ -57,6 +58,28 @@ fn validate_slack(v: &str) -> Check {
     }
 }
 
+/// Severity of the "servers outside devrun" check by stray count.
+fn stray_check(count: usize) -> Check {
+    match count {
+        0 => Check::Ok("no servers running outside devrun".into()),
+        n => Check::Warn(format!(
+            "{n} server(s) running outside devrun — run `devrun reap`"
+        )),
+    }
+}
+
+/// Count strays for the current directory's config. Resilient: any error
+/// (no registry, no config) yields 0 so `doctor` never fails on this row.
+fn count_strays() -> usize {
+    let Ok(data) = devkit_ports::registry::snapshot() else {
+        return 0;
+    };
+    let Ok(loaded) = devkit_ports::load::load(None, std::path::Path::new(".")) else {
+        return 0;
+    };
+    devkit_ports::strays::scan(&loaded.config, &data).len()
+}
+
 fn gather(steps: &Steps) -> Vec<Row> {
     vec![
         Row {
@@ -83,6 +106,11 @@ fn gather(steps: &Steps) -> Vec<Row> {
                 None => Check::Unset(HINT_SLACK),
             },
         },
+        Row {
+            key: "devrun_strays",
+            source: Source::Unset,
+            check: stray_check(count_strays()),
+        },
     ]
 }
 
@@ -98,6 +126,7 @@ fn print_human(rows: &[Row]) {
     for r in rows {
         let (mark, detail) = match &r.check {
             Check::Ok(d) => ("✓", d.clone()),
+            Check::Warn(d) => ("⚠", d.clone()),
             Check::Invalid(d) => ("✗", d.clone()),
             Check::Unreachable => ("?", "unreachable".to_string()),
             Check::Unset(hint) => ("·", format!("unset — {hint}")),
@@ -112,6 +141,7 @@ fn print_json(rows: &[Row]) {
         .map(|r| {
             let (status, detail): (&str, Option<String>) = match &r.check {
                 Check::Ok(d) => ("ok", Some(d.clone())),
+                Check::Warn(d) => ("warn", Some(d.clone())),
                 Check::Invalid(d) => ("invalid", Some(d.clone())),
                 Check::Unreachable => ("unreachable", None),
                 Check::Unset(h) => ("unset", Some((*h).to_string())),
@@ -163,6 +193,12 @@ mod tests {
             row(Check::Invalid("bad".into())),
         ];
         assert_eq!(worst_exit(&rows), 1);
+    }
+
+    #[test]
+    fn stray_check_severity_by_count() {
+        assert!(matches!(stray_check(0), Check::Ok(_)));
+        assert!(matches!(stray_check(3), Check::Warn(_)));
     }
 
     #[test]
