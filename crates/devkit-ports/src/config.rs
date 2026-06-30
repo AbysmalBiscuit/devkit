@@ -465,6 +465,28 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         assert!(c.apps["api"].setup.is_empty());
     }
     #[test]
+    fn stray_scan_width_defaults_to_64() {
+        let c = Config::parse(SAMPLE).unwrap();
+        assert_eq!(c.defaults.stray_scan_width, 64);
+    }
+    #[test]
+    fn stray_scan_width_parses_override() {
+        let src = r#"
+[defaults]
+worktree_root = "~/Git/example"
+branch_prefix = "lev/"
+baseline_ref = "origin/staging"
+baseline_path = "~/Git/example/_baseline"
+doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
+stray_scan_width = 128
+[apps.api]
+base_port = 9100
+launch = ["nitro", "dev", "--port", "{port}"]
+"#;
+        let c = Config::parse(src).unwrap();
+        assert_eq!(c.defaults.stray_scan_width, 128);
+    }
+    #[test]
     fn parses_people_and_pr_base() {
         let src = r#"
 [defaults]
