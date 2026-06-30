@@ -4,6 +4,8 @@
 mod signature;
 pub use signature::{argv_matches, signature};
 
+pub mod os;
+
 use crate::config::Config;
 use crate::registry::Data;
 
@@ -77,6 +79,16 @@ fn port_band_pass(cfg: &Config, data: &Data, ports: &dyn PortProbe) -> Vec<Stray
         }
     }
     out
+}
+
+/// Production scan over the real OS seams.
+pub fn scan(cfg: &Config, data: &Data) -> Vec<Stray> {
+    scan_with(cfg, data, &os::RealPortProbe, &os::RealProcTable)
+}
+
+/// The live process table (used by `reap` to build kill trees).
+pub fn proc_table() -> Vec<Proc> {
+    os::RealProcTable.snapshot()
 }
 
 /// Core scan over injected OS seams. Pure given its inputs.

@@ -16,3 +16,6 @@ devkit-common.workspace = true
 
 [features]
 daemon = ["dep:interprocess", "devkit-common/daemon"]
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
