@@ -89,6 +89,10 @@ pub struct Defaults {
     /// triage output rather than hidden.
     #[serde(default)]
     pub ignored_checks: Vec<String>,
+    /// Width of each app's port-band scan window for stray detection:
+    /// ports `[base_port, base_port + stray_scan_width)`. Default 64.
+    #[serde(default = "default_stray_scan_width")]
+    pub stray_scan_width: u16,
 }
 
 fn default_apps_dir() -> String {
@@ -97,6 +101,10 @@ fn default_apps_dir() -> String {
 
 fn default_pr_base() -> String {
     "staging".to_string()
+}
+
+fn default_stray_scan_width() -> u16 {
+    64
 }
 
 /// A team member's handle mapping (Slack user-id, GitHub login, etc.).
@@ -178,7 +186,7 @@ impl Templates {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct AppConfig {
     pub base_port: u16,
     pub launch: Vec<String>,
