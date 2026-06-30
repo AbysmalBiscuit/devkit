@@ -149,15 +149,24 @@ pub struct ServerStatus {
     pub state: ServerState,
 }
 
-/// Classify a tracked server: listening → Ready; else live pid → Starting; else Crashed.
-fn server_state(port: u16, pid: Option<u32>) -> ServerState {
-    if registry::listening(port) {
+/// Classify from already-probed signals: listening → Ready; else live pid →
+/// Starting; else Crashed. Pure, so the mapping is testable without binding ports.
+fn classify(listening: bool, pid_alive: bool) -> ServerState {
+    if listening {
         ServerState::Ready
-    } else if pid.is_some_and(registry::pid_alive) {
+    } else if pid_alive {
         ServerState::Starting
     } else {
         ServerState::Crashed
     }
+}
+
+/// Classify a tracked server: listening → Ready; else live pid → Starting; else Crashed.
+fn server_state(port: u16, pid: Option<u32>) -> ServerState {
+    classify(
+        registry::listening(port),
+        pid.is_some_and(registry::pid_alive),
+    )
 }
 
 /// Structured per-server rows from a registry snapshot, optionally limited to one holder.
@@ -632,14 +641,20 @@ mod tests {
     }
 
     #[test]
-    fn server_rows_marks_a_pidless_unbound_entry_crashed() {
-        // Pick a definitely-free port by binding then dropping a listener.
-        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = l.local_addr().unwrap().port();
-        drop(l);
+    fn classify_maps_signals_to_state() {
+        // A pidless, unbound entry is crashed; a live pid without a bound port is
+        // still starting; a bound port is ready regardless of pid.
+        assert_eq!(classify(false, false), ServerState::Crashed);
+        assert_eq!(classify(false, true), ServerState::Starting);
+        assert_eq!(classify(true, false), ServerState::Ready);
+        assert_eq!(classify(true, true), ServerState::Ready);
+    }
+
+    #[test]
+    fn server_rows_filters_by_holder() {
         let mut data = Data::default();
         data.entries.insert(
-            port,
+            45123,
             crate::registry::Entry {
                 app: "web".into(),
                 holder: "/w".into(),
@@ -651,7 +666,6 @@ mod tests {
         );
         let rows = server_rows(&data, Some("/w"));
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].state, ServerState::Crashed);
         assert_eq!(rows[0].app, "web");
 
         // A different holder filter excludes it.
