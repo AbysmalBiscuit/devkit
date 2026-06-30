@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Config {
     pub defaults: Defaults,
     pub apps: HashMap<String, AppConfig>,
@@ -67,7 +67,7 @@ impl Default for DaemonConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Defaults {
     pub worktree_root: String,
     pub branch_prefix: String,
