@@ -178,7 +178,7 @@ the CI gate stays green.
 - `crates/devkit-ports/src/config.rs` — add the width default.
 - `src/bin/devrun/main.rs` — `status` untracked section; new `reap` subcommand + TTY gate.
 - `src/bin/devkit/doctor.rs` — stray-count check.
-- `crates/devkit-mcp/…` — read-only detection handler only; **no** reap handler.
+- `crates/devkit-mcp/…` — read-only detection handler (ships this iteration); **no** reap handler.
 
 ## Testing
 
@@ -191,8 +191,9 @@ tests poll for state, never sleep fixed intervals (Windows-runner rule).
 - reap = print rows + interactive-TTY confirmation; no `--yes` bypass; CLI-only, not on MCP.
 - Detection = port-band (cross-platform) **and** config-derived process scan (unix); union.
 - doctor integration included in this iteration.
-- Band width default 64, configurable.
+- Band width default 64, configurable as `defaults.stray_scan_width`.
+- Read-only MCP detection handler ships in this iteration.
 
 ## Open questions
 
-- Whether the read-only MCP detection handler ships in this iteration or a follow-up.
+None — all decisions resolved.
