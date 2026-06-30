@@ -7,6 +7,11 @@ const RUNTIMES: &[&str] = &[
     "bun", "bunx", "node", "uv", "uvx", "run", "python", "python3", "poetry", "pipenv",
 ];
 
+/// Generic script/subcommand names. When one of these is all that survives runtime
+/// stripping (e.g. `bun run dev`), the launch carries no framework word — too broad
+/// to match a process safely, so the signature is empty.
+const GENERIC: &[&str] = &["dev", "start", "serve", "develop", "watch"];
+
 /// The signature tokens for a launch command: the framework word, plus an
 /// optional bare subcommand (`dev`/`run`). Empty when nothing meaningful remains.
 ///
@@ -20,8 +25,8 @@ pub fn signature(launch: &[String]) -> Vec<String> {
     let mut words = cmd.iter().filter(|t| !t.starts_with('-') && *t != "{port}");
     let framework = words.find(|t| !RUNTIMES.contains(&t.as_str()));
     let framework = match framework {
-        Some(f) => f.clone(),
-        None => return Vec::new(),
+        Some(f) if !GENERIC.contains(&f.as_str()) => f.clone(),
+        _ => return Vec::new(),
     };
     let mut sig = vec![framework];
     if let Some(next) = words.next() {
@@ -131,6 +136,15 @@ mod tests {
             "{port}",
         ]);
         assert_eq!(signature(&launch), v(&["flask"]));
+    }
+
+    #[test]
+    fn generic_only_launch_yields_no_signature() {
+        // After stripping runtime launchers, only the generic script name is left
+        // (`bun run dev` → `dev`, `node start` → `start`) — too broad to match
+        // safely, so no signature. Port-band detection still covers these.
+        assert_eq!(signature(&v(&["bun", "run", "dev"])), Vec::<String>::new());
+        assert_eq!(signature(&v(&["node", "start"])), Vec::<String>::new());
     }
 
     #[test]
