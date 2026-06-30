@@ -1,6 +1,9 @@
 //! Read-only detection of dev servers running outside the port registry.
 //! Serializable, no rendering, no mutation — mirrors the `devkit-issue` facade.
 
+mod signature;
+pub use signature::{argv_matches, signature};
+
 use crate::config::Config;
 use crate::registry::Data;
 
