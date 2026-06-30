@@ -89,6 +89,12 @@ enum Cmd {
         #[arg(long)]
         all: bool,
     },
+    /// Kill dev servers running outside devrun. This worktree by default; `--all`
+    /// reaches every worktree. Requires an interactive terminal (no agent path).
+    Reap {
+        #[arg(long)]
+        all: bool,
+    },
     /// Print (or follow) the log for one app.
     Logs {
         app: String,
@@ -393,6 +399,7 @@ fn main() -> Result<()> {
             cmd_down(&cwd, &args)
         }
         Cmd::Status { all } => cmd_status(&cwd, *all),
+        Cmd::Reap { all } => cmd_reap(&cwd, *all),
         Cmd::Logs { app, role, follow } => {
             cmd_logs(&cwd, app, role.and_then(RoleSelector::filter), *follow)
         }
@@ -723,6 +730,18 @@ fn render_strays(strays: &[devkit_ports::strays::Stray]) -> String {
     format!("untracked (outside devrun):\n{t}")
 }
 
+/// Reap refuses to do anything destructive without an interactive terminal —
+/// the same gate that protects cross-worktree `down`. There is deliberately no
+/// flag that bypasses this, so an agent (no PTY) can never reap.
+fn reap_allowed(is_tty: bool) -> bool {
+    is_tty
+}
+
+/// Roots to kill from a scoped stray set: the resolved launch-root pids.
+fn reap_roots(strays: &[devkit_ports::strays::Stray]) -> Vec<u32> {
+    strays.iter().filter_map(|s| s.pid).collect()
+}
+
 fn cmd_status(cwd: &str, all: bool) -> Result<()> {
     let data = registry::snapshot()?;
     // Outside a git repo there's no worktree to scope to; show nothing tracked.
@@ -744,6 +763,36 @@ fn cmd_status(cwd: &str, all: bool) -> Result<()> {
             println!("\n{rendered}");
         }
     }
+    Ok(())
+}
+
+fn cmd_reap(cwd: &str, all: bool) -> Result<()> {
+    let data = registry::snapshot()?;
+    let loaded = load::load(None, Path::new(cwd))?;
+    let current = if all { None } else { Some(toplevel(cwd)?) };
+    let strays = devkit_ports::strays::scan(&loaded.config, &data);
+    let scoped = strays_in_scope(&strays, current.as_deref());
+    if scoped.is_empty() {
+        println!("no stray servers found");
+        return Ok(());
+    }
+    println!("{}", render_strays(&scoped));
+
+    if !reap_allowed(std::io::stdin().is_terminal()) {
+        anyhow::bail!("reap requires an interactive terminal");
+    }
+    let roots = reap_roots(&scoped);
+    if roots.is_empty() {
+        println!("no killable strays (port-only, no resolved pid) — investigate manually");
+        return Ok(());
+    }
+    if !confirm(&format!("Kill {} stray server(s)?", roots.len())) {
+        println!("nothing killed");
+        return Ok(());
+    }
+    let procs = devkit_ports::strays::proc_table();
+    let n = devkit_ports::strays::os::kill_tree(&roots, &procs);
+    println!("killed {n} process(es)");
     Ok(())
 }
 
@@ -771,6 +820,32 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::apps_from_diff;
+
+    #[test]
+    fn reap_refused_without_tty() {
+        use super::reap_allowed;
+        assert!(!reap_allowed(false));
+        assert!(reap_allowed(true));
+    }
+
+    #[test]
+    fn reap_roots_are_resolved_pids_only() {
+        use super::reap_roots;
+        use devkit_ports::strays::{Source, Stray};
+        let mk = |port: u16, pid: Option<u32>| Stray {
+            port: Some(port),
+            pid,
+            holder: Some("/w1".into()),
+            app: Some("api".into()),
+            command: Some("doppler run -- bun nitro dev".into()),
+            source: Source::ProcessPattern,
+        };
+        // s1 has a pid, s2 is port-only (no pid).
+        let roots = reap_roots(&[mk(9200, Some(1)), mk(9201, None)]);
+        assert_eq!(roots, vec![1]);
+        let roots2 = reap_roots(&[mk(9202, Some(42))]);
+        assert_eq!(roots2, vec![42]);
+    }
 
     #[test]
     fn scope_all_shows_every_stray() {
