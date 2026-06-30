@@ -89,6 +89,188 @@ pub fn scan_with(
     port_band_pass(cfg, data, ports)
 }
 
+/// Runtime/wrapper binaries to climb through to the launch root; never a shell.
+const WRAPPERS: &[&str] = &[
+    "doppler", "bun", "bunx", "node", "uv", "uvx", "python", "python3",
+];
+
+/// Index procs by pid, and compute the set of pids in any tracked server's tree.
+fn tracked_tree(data: &Data, procs: &[Proc]) -> std::collections::BTreeSet<u32> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for p in procs {
+        children.entry(p.ppid).or_default().push(p.pid);
+    }
+    let mut out = BTreeSet::new();
+    let mut stack: Vec<u32> = data.entries.values().filter_map(|e| e.pid).collect();
+    while let Some(pid) = stack.pop() {
+        if out.insert(pid)
+            && let Some(cs) = children.get(&pid)
+        {
+            stack.extend(cs.iter().copied());
+        }
+    }
+    out
+}
+
+/// Climb from a matched leaf to the highest consecutive wrapper ancestor,
+/// stopping at a shell, Claude, the supervisor, or the process tree root.
+fn launch_root(start: u32, by_pid: &std::collections::BTreeMap<u32, Proc>) -> u32 {
+    let mut cur = start;
+    loop {
+        let Some(p) = by_pid.get(&cur) else {
+            return cur;
+        };
+        let Some(parent) = by_pid.get(&p.ppid) else {
+            return cur;
+        };
+        let first = parent.argv.split_whitespace().next().unwrap_or("");
+        let base = first.rsplit('/').next().unwrap_or(first);
+        let is_wrapper = WRAPPERS.contains(&base);
+        let tainted = parent.argv.contains("claude")
+            || parent.argv.contains("shell-snapshots")
+            || parent.argv.contains("devkitd")
+            || parent.argv.contains("devrun");
+        if !is_wrapper || tainted {
+            return cur;
+        }
+        cur = p.ppid;
+    }
+}
+
+/// Managed roots a stray's cwd must fall under (config-driven).
+fn managed_roots(cfg: &Config) -> Vec<String> {
+    use crate::config::expand_tilde;
+    let mut roots = Vec::new();
+    if !cfg.defaults.worktree_root.is_empty() {
+        roots.push(
+            expand_tilde(&cfg.defaults.worktree_root)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    if !cfg.defaults.baseline_path.is_empty() {
+        roots.push(
+            expand_tilde(&cfg.defaults.baseline_path)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    roots
+}
+
+/// Attribute a cwd to a worktree holder: prefer the longest known registry
+/// holder that prefixes it, else `worktree_root + first path segment`.
+fn attribute_holder(cwd: &str, known: &[String], roots: &[String]) -> Option<String> {
+    if let Some(h) = known
+        .iter()
+        .filter(|h| cwd == h.as_str() || cwd.starts_with(&format!("{h}/")))
+        .max_by_key(|h| h.len())
+    {
+        return Some(h.clone());
+    }
+    for r in roots {
+        if let Some(rest) = cwd.strip_prefix(&format!("{r}/")) {
+            let seg = rest.split('/').next().unwrap_or("");
+            if !seg.is_empty() {
+                return Some(format!("{r}/{seg}"));
+            }
+        } else if cwd == r {
+            return Some(r.clone());
+        }
+    }
+    None
+}
+
+// Wired into `scan_with` by the merge pass; until then it is reachable only
+// from the unit tests, so the non-test lib build sees it (and its helpers) as
+// dead.
+#[allow(dead_code)]
+#[cfg(unix)]
+fn process_pass(cfg: &Config, data: &Data, procs: &dyn ProcTable) -> Vec<Stray> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let table = procs.snapshot();
+    let by_pid: BTreeMap<u32, Proc> = table.iter().map(|p| (p.pid, p.clone())).collect();
+    let tracked = tracked_tree(data, &table);
+    let roots = managed_roots(cfg);
+    let known: Vec<String> = data.entries.values().map(|e| e.holder.clone()).collect();
+    // (app name, signature) pairs.
+    let sigs: Vec<(String, Vec<String>)> = cfg
+        .apps
+        .iter()
+        .map(|(n, a)| (n.clone(), signature(&a.launch)))
+        .filter(|(_, s)| !s.is_empty())
+        .collect();
+
+    let mut out = Vec::new();
+    let mut seen_roots: BTreeSet<u32> = BTreeSet::new();
+    for p in &table {
+        if tracked.contains(&p.pid) {
+            continue;
+        }
+        let Some(cwd) = p.cwd.as_deref() else {
+            continue;
+        };
+        if !roots
+            .iter()
+            .any(|r| cwd == r.as_str() || cwd.starts_with(&format!("{r}/")))
+        {
+            continue;
+        }
+        let Some((app, _)) = sigs.iter().find(|(_, s)| argv_matches(&p.argv, s)) else {
+            continue;
+        };
+        // A wrapper/shell's argv carries the downstream server's tokens, so it
+        // matches the signature too. Only a wrapper can be a launch root — the
+        // climb stops at a shell — so a non-wrapper match (a shell) is skipped;
+        // the real leaf (bun/node) collapses to the same root via the climb.
+        let prog = p.argv.split_whitespace().next().unwrap_or("");
+        let prog_base = prog.rsplit('/').next().unwrap_or(prog);
+        if !WRAPPERS.contains(&prog_base) {
+            continue;
+        }
+        let root = launch_root(p.pid, &by_pid);
+        if tracked.contains(&root) || !seen_roots.insert(root) {
+            continue;
+        }
+        let root_proc = by_pid.get(&root).unwrap_or(p);
+        let port = port_from_argv(&root_proc.argv).or_else(|| port_from_argv(&p.argv));
+        out.push(Stray {
+            port,
+            pid: Some(root),
+            holder: attribute_holder(cwd, &known, &roots),
+            app: Some(app.clone()),
+            command: Some(root_proc.argv.clone()),
+            source: Source::ProcessPattern,
+        });
+    }
+    out
+}
+
+#[cfg(not(unix))]
+fn process_pass(_cfg: &Config, _data: &Data, _procs: &dyn ProcTable) -> Vec<Stray> {
+    Vec::new()
+}
+
+/// Best-effort `--port N` / `-p N` extraction from a command line.
+fn port_from_argv(argv: &str) -> Option<u16> {
+    let toks: Vec<&str> = argv.split_whitespace().collect();
+    for (i, t) in toks.iter().enumerate() {
+        if (*t == "--port" || *t == "-p")
+            && let Some(v) = toks.get(i + 1).and_then(|v| v.parse::<u16>().ok())
+        {
+            return Some(v);
+        }
+        if let Some(v) = t
+            .strip_prefix("--port=")
+            .and_then(|v| v.parse::<u16>().ok())
+        {
+            return Some(v);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +353,103 @@ mod tests {
         );
         let strays = scan_with(&cfg, &data, &Listening(vec![9105]), &NoProcs);
         assert!(strays.is_empty());
+    }
+
+    fn proc(pid: u32, ppid: u32, argv: &str, cwd: &str) -> Proc {
+        Proc {
+            pid,
+            ppid,
+            argv: argv.into(),
+            cwd: Some(cwd.into()),
+        }
+    }
+
+    struct Table(Vec<Proc>);
+    impl ProcTable for Table {
+        fn snapshot(&self) -> Vec<Proc> {
+            self.0.clone()
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn climbs_to_doppler_root_and_attributes_holder() {
+        let mut cfg = Config::default();
+        cfg.defaults.stray_scan_width = 64;
+        cfg.defaults.worktree_root = "/home/u/Git/x".into();
+        cfg.apps.insert("api".into(), app(9100));
+        let data = Data::default();
+        let wt = "/home/u/Git/x/swe-1/apps/api";
+        let table = Table(vec![
+            proc(100, 1, "claude", "/home/u"),
+            proc(
+                200,
+                100,
+                "/bin/bash -c eval doppler run -- bun nitro dev --port 9200",
+                wt,
+            ),
+            proc(
+                300,
+                200,
+                "doppler run -p api-foundry -c dev_local -- bun nitro dev --port 9200",
+                wt,
+            ),
+            proc(400, 300, "bun nitro dev --port 9200", wt),
+            proc(
+                500,
+                400,
+                "node /home/u/Git/x/swe-1/apps/api/node_modules/.bin/nitro dev --port 9200",
+                wt,
+            ),
+        ]);
+        let strays = process_pass(&cfg, &data, &table);
+        assert_eq!(strays.len(), 1);
+        let s = &strays[0];
+        assert_eq!(s.pid, Some(300)); // doppler root, not bash, not claude
+        assert_eq!(s.port, Some(9200));
+        assert_eq!(s.holder.as_deref(), Some("/home/u/Git/x/swe-1"));
+        assert_eq!(s.app.as_deref(), Some("api"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tracked_server_tree_is_skipped() {
+        let mut cfg = Config::default();
+        cfg.defaults.worktree_root = "/home/u/Git/x".into();
+        cfg.apps.insert("api".into(), app(9100));
+        let mut data = Data::default();
+        data.entries.insert(
+            9100,
+            Entry {
+                app: "api".into(),
+                holder: "/home/u/Git/x/swe-1".into(),
+                role: Role::Issue,
+                pid: Some(300),
+                logfile: None,
+                ts: 0,
+            },
+        );
+        let wt = "/home/u/Git/x/swe-1/apps/api";
+        let table = Table(vec![
+            proc(300, 1, "doppler run -- bun nitro dev --port 9100", wt),
+            proc(400, 300, "bun nitro dev --port 9100", wt),
+        ]);
+        assert!(process_pass(&cfg, &data, &table).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn server_outside_managed_root_is_ignored() {
+        let mut cfg = Config::default();
+        cfg.defaults.worktree_root = "/home/u/Git/x".into();
+        cfg.apps.insert("api".into(), app(9100));
+        let data = Data::default();
+        let table = Table(vec![proc(
+            300,
+            1,
+            "doppler run -- bun nitro dev --port 9200",
+            "/home/u/other-project",
+        )]);
+        assert!(process_pass(&cfg, &data, &table).is_empty());
     }
 }
