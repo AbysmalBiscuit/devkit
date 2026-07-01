@@ -6,7 +6,5 @@ version = "0.7.0" # x-release-please-version
 [dependencies]
 anyhow.workspace = true
 serde = { workspace = true }
-devkit-common.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true
+devkit-common.workspace = true

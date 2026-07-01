@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, gh_json, git};
 use devkit_common::gitfetch;
+use devkit_common::github;
 use devkit_common::linear::{self, LinearIssueRef};
 use devkit_common::progress::Steps;
 use devkit_ports::config::expand_tilde;
@@ -110,6 +111,14 @@ struct PrMeta {
 /// is `Ok(false)`; a real tool failure (gh missing, unauthenticated, network
 /// down, bad cwd) propagates as `Err` rather than masquerading as absence.
 fn pr_exists(n: u64, repo: &str) -> Result<bool> {
+    // Direct HTTP resolves existence from a 200/404; a clean 404 is `Ok(false)`.
+    // Any HTTP failure (no token, transport) yields `None` → fall back to `gh`.
+    if let Some(exists) = github::repo_slug(repo)
+        .ok()
+        .and_then(|slug| github::pr_exists(&slug, n).ok())
+    {
+        return Ok(exists);
+    }
     match capture(
         "gh",
         &["pr", "view", &n.to_string(), "--json", "number"],
@@ -129,6 +138,31 @@ fn pr_exists(n: u64, repo: &str) -> Result<bool> {
             }
         }
     }
+}
+
+/// PR number/title/head-branch, over direct HTTP when a token is available and
+/// falling back to `gh pr view` otherwise.
+fn fetch_pr_meta(n: u64, cwd: &str) -> Result<PrMeta> {
+    if let Some(m) = github::repo_slug(cwd)
+        .ok()
+        .and_then(|slug| github::pr_meta(&slug, n).ok())
+    {
+        return Ok(PrMeta {
+            number: m.number,
+            title: m.title,
+            head_ref_name: m.head_ref_name,
+        });
+    }
+    gh_json(
+        &[
+            "pr",
+            "view",
+            &n.to_string(),
+            "--json",
+            "number,title,headRefName",
+        ],
+        cwd,
+    )
 }
 
 /// Turn a chosen Linear issue into a `Resolved`, erroring if it has no PR.
@@ -278,16 +312,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
 
     let meta: PrMeta = steps
         .during(&format!("Fetching PR #{}…", resolved.pr_number), || {
-            gh_json(
-                &[
-                    "pr",
-                    "view",
-                    &resolved.pr_number.to_string(),
-                    "--json",
-                    "number,title,headRefName",
-                ],
-                monorepo_s,
-            )
+            fetch_pr_meta(resolved.pr_number, monorepo_s)
         })
         .with_context(|| format!("fetching PR #{}", resolved.pr_number))?;
 

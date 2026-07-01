@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use devkit_common::cmd::{capture, gh_json, git};
+use devkit_common::github;
 use devkit_common::progress::Steps;
 use devkit_ports::config::Person;
 use serde::Deserialize;
@@ -79,6 +80,59 @@ pub(crate) fn targets_from_logins(
     (targets, warnings)
 }
 
+/// Logins currently requested as reviewers on PR `pr`, over direct HTTP when a
+/// token is available, else `gh pr view --json reviewRequests`.
+fn requested_reviewer_logins(pr: u64, cwd: &str) -> Result<Vec<String>> {
+    if let Some(logins) = github::repo_slug(cwd)
+        .ok()
+        .filter(|_| github::token().is_some())
+        .and_then(|slug| github::requested_reviewers(&slug, pr).ok())
+    {
+        return Ok(logins);
+    }
+    let view: ReviewRequestsView = gh_json(
+        &["pr", "view", &pr.to_string(), "--json", "reviewRequests"],
+        cwd,
+    )?;
+    Ok(view
+        .review_requests
+        .into_iter()
+        .filter_map(|r| r.login)
+        .collect())
+}
+
+/// The existing PR for head branch `branch` (number/state/url), over direct HTTP
+/// when possible else `gh pr list`. `Ok(None)` means no PR.
+fn existing_pr(branch: &str, cwd: &str) -> Result<Option<PrView>> {
+    if let Some(found) = github::repo_slug(cwd)
+        .ok()
+        .filter(|_| github::token().is_some())
+        .and_then(|slug| github::pr_by_head(&slug, branch).ok())
+    {
+        return Ok(found.map(|p| PrView {
+            number: p.number,
+            state: p.state,
+            url: p.url,
+        }));
+    }
+    let v: Vec<PrView> = gh_json(
+        &[
+            "pr",
+            "list",
+            "--head",
+            branch,
+            "--state",
+            "all",
+            "--json",
+            "number,state,url",
+            "--limit",
+            "1",
+        ],
+        cwd,
+    )?;
+    Ok(v.into_iter().next())
+}
+
 /// Notify-targets on the AddReviewer path: explicit `--to`, else the PR's
 /// existing human reviewers (reverse-looked-up).
 fn resolve_request_targets(
@@ -90,14 +144,8 @@ fn resolve_request_targets(
     if !explicit.is_empty() {
         return Ok(explicit.to_vec());
     }
-    let view: ReviewRequestsView = gh_json(
-        &["pr", "view", &pr.to_string(), "--json", "reviewRequests"],
-        cwd,
-    )?;
-    let logins: Vec<String> = view
-        .review_requests
+    let logins: Vec<String> = requested_reviewer_logins(pr, cwd)?
         .into_iter()
-        .filter_map(|r| r.login)
         .filter(|l| is_human_login(l))
         .collect();
     if logins.is_empty() {
@@ -170,26 +218,8 @@ pub fn run(args: Args) -> Result<()> {
         missing_at,
     )?;
 
-    let existing: Option<PrView> = steps
-        .during("Looking up existing PR…", || {
-            gh_json::<Vec<PrView>>(
-                &[
-                    "pr",
-                    "list",
-                    "--head",
-                    &branch,
-                    "--state",
-                    "all",
-                    "--json",
-                    "number,state,url",
-                    "--limit",
-                    "1",
-                ],
-                &start,
-            )
-        })?
-        .into_iter()
-        .next();
+    let existing: Option<PrView> =
+        steps.during("Looking up existing PR…", || existing_pr(&branch, &start))?;
 
     let (pr_url, targets) = match action_for(existing.as_ref().map(|p| p.state.as_str())) {
         PrAction::Stop(reason) => bail!("{reason}"),

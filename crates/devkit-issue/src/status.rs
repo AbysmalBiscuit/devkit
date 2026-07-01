@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_json, git};
+use devkit_common::github;
 use devkit_common::linear::{self, LinearState};
 use devkit_common::worktree;
 use serde::{Deserialize, Serialize};
@@ -185,6 +186,9 @@ pub fn fetch_prs(d: &Discovered) -> Result<Prs> {
     if d.rows.is_empty() {
         return Ok(Prs(Vec::new()));
     }
+    if let Some(prs) = fetch_prs_http(&d.main_path) {
+        return Ok(Prs(prs));
+    }
     let prs: Vec<Pr> = gh_json(
         &[
             "pr",
@@ -199,6 +203,24 @@ pub fn fetch_prs(d: &Discovered) -> Result<Prs> {
         &d.main_path,
     )?;
     Ok(Prs(prs))
+}
+
+/// The PR list over direct HTTP; `None` on no token / parse / transport failure,
+/// so [`fetch_prs`] falls back to `gh`.
+fn fetch_prs_http(cwd: &str) -> Option<Vec<Pr>> {
+    let slug = github::repo_slug(cwd).ok()?;
+    let briefs = github::list_prs(&slug, 500).ok()?;
+    Some(
+        briefs
+            .into_iter()
+            .map(|b| Pr {
+                number: b.number,
+                state: b.state,
+                url: b.url,
+                head_ref_name: b.head_ref_name,
+            })
+            .collect(),
+    )
 }
 
 /// Attach dirty flags (in row order), best PR, Linear state, and the finished

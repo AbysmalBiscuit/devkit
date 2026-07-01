@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_json, git};
+use devkit_common::github;
 use devkit_common::progress::Steps;
 use devkit_ports::config::Person;
 use serde::Deserialize;
@@ -37,6 +38,46 @@ struct Author {
     login: Option<String>,
 }
 
+/// PR number for head branch `b`, over direct HTTP when a token is available,
+/// else `gh pr list`. `Ok(None)` means no PR (whichever path answered).
+fn branch_pr_number(b: &str, cwd: &str) -> Result<Option<u64>> {
+    if let Some(found) = github::repo_slug(cwd)
+        .ok()
+        .filter(|_| github::token().is_some())
+        .and_then(|slug| github::pr_by_head(&slug, b).ok())
+    {
+        return Ok(found.map(|p| p.number));
+    }
+    let v: Vec<PrLite> = gh_json(
+        &[
+            "pr", "list", "--head", b, "--state", "all", "--json", "number", "--limit", "1",
+        ],
+        cwd,
+    )?;
+    Ok(v.into_iter().next().map(|p| p.number))
+}
+
+/// URL/title/author for PR `n`, over direct HTTP when possible else `gh pr view`.
+fn fetch_pr_full(n: u64, cwd: &str) -> Result<PrFull> {
+    if let Some(f) = github::repo_slug(cwd)
+        .ok()
+        .filter(|_| github::token().is_some())
+        .and_then(|slug| github::pr_full(&slug, n).ok())
+    {
+        return Ok(PrFull {
+            url: f.url,
+            title: f.title,
+            author: Author {
+                login: f.author_login,
+            },
+        });
+    }
+    gh_json(
+        &["pr", "view", &n.to_string(), "--json", "url,title,author"],
+        cwd,
+    )
+}
+
 /// Choose the PR number: explicit `--pr` wins, else the worktree branch's PR.
 pub(crate) fn resolve_pr(branch_pr: Option<u64>, pr_flag: Option<u64>) -> Result<u64> {
     pr_flag
@@ -71,17 +112,10 @@ pub fn run(args: Args) -> Result<()> {
     let branch_pr = branch.as_deref().and_then(|b| {
         steps
             .during("Looking up PR for branch…", || {
-                gh_json::<Vec<PrLite>>(
-                    &[
-                        "pr", "list", "--head", b, "--state", "all", "--json", "number", "--limit",
-                        "1",
-                    ],
-                    &start,
-                )
+                branch_pr_number(b, &start)
             })
             .ok()
-            .and_then(|v| v.into_iter().next())
-            .map(|p| p.number)
+            .flatten()
     });
     let number = resolve_pr(branch_pr, args.pr)?;
 
@@ -90,16 +124,7 @@ pub fn run(args: Args) -> Result<()> {
         .and_then(|top| crate::record::read(std::path::Path::new(top.trim())));
 
     let view: PrFull = steps.during(&format!("Fetching PR #{number}…"), || {
-        gh_json(
-            &[
-                "pr",
-                "view",
-                &number.to_string(),
-                "--json",
-                "url,title,author",
-            ],
-            &start,
-        )
+        fetch_pr_full(number, &start)
     })?;
     let author_login = view.author.login;
 

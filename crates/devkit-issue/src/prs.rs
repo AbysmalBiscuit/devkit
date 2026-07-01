@@ -1,5 +1,6 @@
 use anyhow::Result;
 use devkit_common::cmd::gh_json;
+use devkit_common::github;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -615,13 +616,29 @@ pub struct PrsReport {
     pub reviews: Vec<ReviewPrView>,
 }
 
-/// Resolve `owner/name`. Returns `repo` as-is when given, else asks `gh`.
+/// Resolve `owner/name`. Returns `repo` as-is when given, else reads it from the
+/// `origin` remote URL (no spawn), falling back to `gh repo view`.
 pub fn resolve_repo(repo: Option<&str>, cwd: &str) -> Result<String> {
     if let Some(r) = repo {
         return Ok(r.to_string());
     }
+    if let Ok(slug) = github::repo_slug(cwd) {
+        return Ok(slug);
+    }
     let info: RepoInfo = gh_json(&["repo", "view", "--json", "nameWithOwner"], cwd)?;
     Ok(info.name_with_owner)
+}
+
+/// One PR-search GraphQL round trip over direct HTTP, falling back to
+/// `gh api graphql` when no token is configured or the HTTP path fails.
+fn fetch_graphql(query: &str, root: &str) -> Result<GqlResp> {
+    if let Ok(v) = github::graphql(query)
+        && let Ok(resp) = serde_json::from_value::<GqlResp>(v)
+    {
+        return Ok(resp);
+    }
+    let arg = format!("query={query}");
+    gh_json(&["api", "graphql", "-f", &arg], root)
 }
 
 /// Fetch and classify the caller's PRs in a single GraphQL round-trip. Neither
@@ -640,8 +657,7 @@ pub fn gather(
         None => resolve_repo(None, root)?,
     };
     let query = build_query(&repo);
-    let arg = format!("query={query}");
-    let resp: GqlResp = gh_json(&["api", "graphql", "-f", &arg], root)?;
+    let resp = fetch_graphql(&query, root)?;
     Ok(classify(resp.data, want_mine, want_reviews, ignored_checks))
 }
 
