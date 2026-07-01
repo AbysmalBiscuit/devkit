@@ -120,21 +120,31 @@ pub fn load() -> Result<Secrets> {
     load_from(&secrets_path())
 }
 
+/// The default-path secrets file, parsed once per process. Read paths
+/// (`resolve`/`source`) hit this instead of re-reading and re-parsing the file
+/// on every lookup — a single command resolves several credentials. Environment
+/// variables are still read live per call, so a shell export always wins;
+/// `store` writes through `load_from`, so nothing reads a value it just wrote.
+fn cached() -> &'static Secrets {
+    static CACHE: std::sync::OnceLock<Secrets> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| load().unwrap_or_default())
+}
+
 /// Resolve a credential: `$<env_key>` → `secrets.toml[<lowercased key>]` → `None`.
 pub fn resolve(env_key: &str) -> Option<String> {
     let env_val = std::env::var(env_key).ok();
-    let file_val = load()
-        .ok()
-        .and_then(|s| s.get(&env_key.to_ascii_lowercase()).map(str::to_string));
+    let file_val = cached()
+        .get(&env_key.to_ascii_lowercase())
+        .map(str::to_string);
     pick(env_val, file_val)
 }
 
 /// Where `env_key` currently resolves from.
 pub fn source(env_key: &str) -> Source {
     let env_val = std::env::var(env_key).ok();
-    let file_val = load()
-        .ok()
-        .and_then(|s| s.get(&env_key.to_ascii_lowercase()).map(str::to_string));
+    let file_val = cached()
+        .get(&env_key.to_ascii_lowercase())
+        .map(str::to_string);
     source_of(env_val, file_val)
 }
 
