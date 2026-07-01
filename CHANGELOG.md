@@ -1,5 +1,69 @@
 # Changelog
 
+## [0.8.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.7.0...v0.8.0) (2026-07-01)
+
+
+### Features
+
+* **common:** add shared progress Steps helper ([eee20a0](https://github.com/AbysmalBiscuit/devkit/commit/eee20a0d23851b52e8eed0dad05882facd422da2))
+* **config:** add checkout_worktree_dir template ([ef0bfaf](https://github.com/AbysmalBiscuit/devkit/commit/ef0bfaf1b706e7319cdc97c2aa229ba49361fef8))
+* **config:** add defaults.worktree_include ([12704f4](https://github.com/AbysmalBiscuit/devkit/commit/12704f4a376ee9e9d280df9532d8bd30b6c3de17))
+* **config:** rename slack template to review_request, add review_finish ([dd3e0be](https://github.com/AbysmalBiscuit/devkit/commit/dd3e0be6859b8d04b22621b0f1dbf6a89ba80816))
+* **devkit:** doctor warns about servers outside devrun ([7e29275](https://github.com/AbysmalBiscuit/devkit/commit/7e29275adaea163435beb947ab11ef19fd2afc3a))
+* **devkit:** show progress spinners during auth and doctor ([94b5a44](https://github.com/AbysmalBiscuit/devkit/commit/94b5a4470e0e92c727bb942c9acabc58e7c7d700))
+* **devrun:** add TTY-gated reap for untracked servers ([f4132cf](https://github.com/AbysmalBiscuit/devkit/commit/f4132cf4e8ccc7c4ad5270d09ff31d828c5f6606))
+* **devrun:** show progress spinners during up ([41cb90e](https://github.com/AbysmalBiscuit/devkit/commit/41cb90ed0ff14e0ce21d4e9afb8d0a4811dc0d6f))
+* **devrun:** show untracked strays in status ([5c22eee](https://github.com/AbysmalBiscuit/devkit/commit/5c22eeee1149c58227afbc77a64962e91e4cd59c))
+* **issue:** add checkout-pr identifier resolution ([f1750e5](https://github.com/AbysmalBiscuit/devkit/commit/f1750e54705655616b8466f52c5d72248de18c60))
+* **issue:** add info subcommand ([e44d016](https://github.com/AbysmalBiscuit/devkit/commit/e44d016e40651180ce7eff172b22a242bfde6714))
+* **issue:** add network-free gather_local ([c28b37e](https://github.com/AbysmalBiscuit/devkit/commit/c28b37e3859ae4f10a0e5c127873ec2a74f4c41f))
+* **issue:** add per-worktree pr cache ([b1b013d](https://github.com/AbysmalBiscuit/devkit/commit/b1b013df96352d8692ee7793c583886f10b3ab38))
+* **issue:** add review finish to Slack the PR author ([3e2b025](https://github.com/AbysmalBiscuit/devkit/commit/3e2b0251168187d3fdeec7eaeb175c043cea07ff))
+* **issue:** backfill local files on checkout-pr ([54b191d](https://github.com/AbysmalBiscuit/devkit/commit/54b191dca935e70dbe919fdefbdab0f693c75e50))
+* **issue:** backfill local files on setup ([2f8baa9](https://github.com/AbysmalBiscuit/devkit/commit/2f8baa9031033907bb87008b42011513895cd97d))
+* **issue:** create worktree and check out PR branch ([4054c21](https://github.com/AbysmalBiscuit/devkit/commit/4054c2178803615428107c4a091b610bf923e013))
+* **issue:** keep .devkit/ untracked with a self-ignore file ([6ccb6f0](https://github.com/AbysmalBiscuit/devkit/commit/6ccb6f06577add5371cb50bd21afd740f6ed6c40))
+* **issue:** rework review request with multi-target --to and --arg ([7b956d4](https://github.com/AbysmalBiscuit/devkit/commit/7b956d407edd96504fc08efabca25132b3af80dd))
+* **issue:** run per-app prep on checkout-pr --setup ([4d773cf](https://github.com/AbysmalBiscuit/devkit/commit/4d773cf209cf3344538edee711e3d80f68e2c4ce))
+* **issue:** show progress spinners during checkout-pr ([dd68bf8](https://github.com/AbysmalBiscuit/devkit/commit/dd68bf8fc2fbde3df8eab1fdc45bf3884912bb43))
+* **issue:** show progress spinners during info and end ([8612877](https://github.com/AbysmalBiscuit/devkit/commit/86128779b79faf1916204cf12bd05820305d528a))
+* **issue:** show progress spinners during review request and finish ([786cb9e](https://github.com/AbysmalBiscuit/devkit/commit/786cb9ee696edbadfacbdf6dcccd697a09e44651))
+* **issue:** show progress spinners during setup ([b418284](https://github.com/AbysmalBiscuit/devkit/commit/b4182844366362d4e2a291efa6507e6dbf285c69))
+* **linear:** resolve issue to PR and look up by number ([febbe84](https://github.com/AbysmalBiscuit/devkit/commit/febbe840fcf49ea7d2de744a4f4e7bb28f6522f3))
+* **mcp:** expose read-only ports.strays detection ([9bd7666](https://github.com/AbysmalBiscuit/devkit/commit/9bd766666883d415725ed7dc77e23f5c822a8513))
+* **ports:** add strays facade skeleton and data model ([8f99f4a](https://github.com/AbysmalBiscuit/devkit/commit/8f99f4a53861395a7664b62672da8d1c7834c358))
+* **ports:** derive dev-server signatures from launch argv ([12bb0e4](https://github.com/AbysmalBiscuit/devkit/commit/12bb0e46805a0968341b8a73121a8d7b2989846e))
+* **ports:** merge port and process stray passes ([14e08ab](https://github.com/AbysmalBiscuit/devkit/commit/14e08abc72c292dc8e62c16e020f4a865c986c91))
+* **ports:** port-band stray detection pass ([0fa2cf1](https://github.com/AbysmalBiscuit/devkit/commit/0fa2cf1627010e5e2c5562cbf1fd734acc585740))
+* **ports:** process-table stray pass with launch-root climb ([2c97bba](https://github.com/AbysmalBiscuit/devkit/commit/2c97bba0804807ab06f8e180e3883c66af6aed82))
+* **ports:** real /proc and port-probe seams with kill_tree ([5ba435c](https://github.com/AbysmalBiscuit/devkit/commit/5ba435c470206be7341914a2b375840389a38afc))
+* **worktree:** add copy_includes backfill helper ([fe24372](https://github.com/AbysmalBiscuit/devkit/commit/fe2437254610c741cca0256d133ab85884ba942c))
+
+
+### Bug Fixes
+
+* **devrun:** name stray source in snake_case ([cd25495](https://github.com/AbysmalBiscuit/devkit/commit/cd25495bb3417471c0d5bb3ac2044c27ac9eef06))
+* **issue:** blank linear/verdict in cache-only info ([88a4c7c](https://github.com/AbysmalBiscuit/devkit/commit/88a4c7ce09623e59392e3bb2af2fcbb8e1f4bf6b))
+* **issue:** clean up orphan worktree on checkout failure ([e70598f](https://github.com/AbysmalBiscuit/devkit/commit/e70598f7d191c8fa333ab14b7cc649b85e49ef80))
+* **issue:** include branch and issue record in review finish context ([49e694c](https://github.com/AbysmalBiscuit/devkit/commit/49e694c8d8e794aae25154ec2509d8e66bd81a0e))
+* **issue:** judge only latest re-run check attempt ([43a9c08](https://github.com/AbysmalBiscuit/devkit/commit/43a9c0849e4c075c8a143e401f8b8e7acdd1ab98))
+* **issue:** report accurate PR review and check status ([9b6f0cd](https://github.com/AbysmalBiscuit/devkit/commit/9b6f0cd20a5a430c15f177493660f155247ebd17))
+* **issue:** report on the current dir in info ([5c6972e](https://github.com/AbysmalBiscuit/devkit/commit/5c6972ed8fc9b2b46b92639b0f2947da89b774ab))
+* **issue:** tolerate null submittedAt in pr reviews ([00b4a48](https://github.com/AbysmalBiscuit/devkit/commit/00b4a480171f939e488ce6ea83c3ad442c9894e1))
+* **ports:** drop generic-only launch signatures ([161d8bf](https://github.com/AbysmalBiscuit/devkit/commit/161d8bf54732306bf256d67b01da59e9a53705fb))
+* **ports:** gate port_from_argv to unix ([fcadbba](https://github.com/AbysmalBiscuit/devkit/commit/fcadbbab77d60ae75d2674e1eddfd13a10533cec))
+
+
+### Performance Improvements
+
+* **devrun:** skip baseline reset when head at ref ([318e71b](https://github.com/AbysmalBiscuit/devkit/commit/318e71b73aa2478b657fa045f2b3bc8d3a0fdd2d))
+* **fetch:** gate git fetch on a freshness TTL ([6048324](https://github.com/AbysmalBiscuit/devkit/commit/6048324e41a2704e81acdde15903d0159c598f9f))
+* **github:** read PRs over direct HTTP instead of gh ([5df12b4](https://github.com/AbysmalBiscuit/devkit/commit/5df12b40d48c551d402c814023783d5421e4ad40))
+* **issue:** cut per-worktree git cost in info and status ([b0abbce](https://github.com/AbysmalBiscuit/devkit/commit/b0abbce4080958952e655a12a62457417e6a83c1))
+* **issue:** parallelize dashboard pr fetches ([b011aa3](https://github.com/AbysmalBiscuit/devkit/commit/b011aa375cfedc1e684eabf5d88b5e1de815fa99))
+* **issue:** parallelize status gather fan-out ([610ee5b](https://github.com/AbysmalBiscuit/devkit/commit/610ee5ba9a9a2499a8533db9332e41ebf16bb07e))
+* **secrets:** cache secrets file per process ([33ebf38](https://github.com/AbysmalBiscuit/devkit/commit/33ebf38125623feda3e70a5710d5fee2ebe755a4))
+
 ## [0.7.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.6.0...v0.7.0) (2026-06-24)
 
 
