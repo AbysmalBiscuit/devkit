@@ -93,6 +93,13 @@ pub struct Defaults {
     /// ports `[base_port, base_port + stray_scan_width)`. Default 64.
     #[serde(default = "default_stray_scan_width")]
     pub stray_scan_width: u16,
+    /// Glob patterns (relative to the monorepo root) for untracked local files to
+    /// copy into a newly created worktree. Each match is copied to the same
+    /// relative path; a match that is a directory (or a pattern ending in `/`) is
+    /// copied recursively. Existing destinations are never clobbered. Empty by
+    /// default — the backfill is opt-in.
+    #[serde(default)]
+    pub worktree_include: Vec<String>,
 }
 
 fn default_apps_dir() -> String {
@@ -431,6 +438,38 @@ launch = ["doppler", "run", "-c", "dev_local", "--", "nitro", "dev", "--port", "
 url_env = "FOUNDRY_API_BASE_URL"
 static_env = { SUPABASE_JWT_SECRET = "s" }
 "#;
+    #[test]
+    fn worktree_include_parses_and_defaults_empty() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [defaults]
+            worktree_root = "/w"
+            branch_prefix = "you/"
+            baseline_ref = "origin/staging"
+            baseline_path = "/b"
+            worktree_include = ["apps/*/.env.local", ".tool-versions"]
+            [apps]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.defaults.worktree_include,
+            vec!["apps/*/.env.local".to_string(), ".tool-versions".to_string()]
+        );
+
+        let bare: Config = toml::from_str(
+            r#"
+            [defaults]
+            worktree_root = "/w"
+            branch_prefix = "you/"
+            baseline_ref = "origin/staging"
+            baseline_path = "/b"
+            [apps]
+            "#,
+        )
+        .unwrap();
+        assert!(bare.defaults.worktree_include.is_empty());
+    }
     #[test]
     fn parses_sample() {
         let c = Config::parse(SAMPLE).unwrap();
