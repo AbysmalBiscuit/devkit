@@ -112,10 +112,21 @@ pub fn pr_timeline(
         )
         .unwrap_or_default()
     };
-    let mut prs = fetch("author:@me");
-    if all_roles {
-        prs.extend(fetch("reviewed-by:@me"));
-    }
+    let prs = if all_roles {
+        // The two GitHub queries are independent round trips; run them together.
+        let (mut authored, reviewed) = std::thread::scope(|s| {
+            let at = s.spawn(|| fetch("author:@me"));
+            let rt = s.spawn(|| fetch("reviewed-by:@me"));
+            (
+                at.join().expect("author PR thread panicked"),
+                rt.join().expect("reviewed PR thread panicked"),
+            )
+        });
+        authored.extend(reviewed);
+        authored
+    } else {
+        fetch("author:@me")
+    };
     let opened: Vec<DateTime<Utc>> = prs
         .iter()
         .filter_map(|p| p.created_at.as_deref().and_then(parse_ts))
