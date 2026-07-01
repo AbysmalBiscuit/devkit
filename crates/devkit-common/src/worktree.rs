@@ -151,7 +151,11 @@ fn copy_file(src: &Path, dst: &Path, copied: &mut usize, warnings: &mut Vec<Stri
     }
     match std::fs::copy(src, dst) {
         Ok(_) => *copied += 1,
-        Err(e) => warnings.push(format!("copying {} -> {}: {e}", src.display(), dst.display())),
+        Err(e) => warnings.push(format!(
+            "copying {} -> {}: {e}",
+            src.display(),
+            dst.display()
+        )),
     }
 }
 
@@ -203,11 +207,7 @@ mod tests {
     use std::fs;
 
     fn tmp(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "devkit-incl-{}-{}",
-            std::process::id(),
-            tag
-        ));
+        let p = std::env::temp_dir().join(format!("devkit-incl-{}-{}", std::process::id(), tag));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p
@@ -225,8 +225,7 @@ mod tests {
         let dst = base.join("dst");
         write(&src.join("apps/web/.env.local"), "SECRET=1");
 
-        let (n, warnings) =
-            copy_includes(&src, &dst, &["apps/*/.env.local".to_string()]);
+        let (n, warnings) = copy_includes(&src, &dst, &["apps/*/.env.local".to_string()]);
 
         assert_eq!(n, 1);
         assert!(warnings.is_empty());
@@ -258,8 +257,7 @@ mod tests {
         write(&src.join(".claude/hooks/sub/post.sh"), "echo post");
 
         // Trailing slash must behave like the bare directory.
-        let (n, warnings) =
-            copy_includes(&src, &dst, &[".claude/hooks/".to_string()]);
+        let (n, warnings) = copy_includes(&src, &dst, &[".claude/hooks/".to_string()]);
 
         assert_eq!(n, 2);
         assert!(warnings.is_empty());
@@ -280,8 +278,7 @@ mod tests {
         let dst = base.join("dst");
         fs::create_dir_all(&src).unwrap();
 
-        let (n, warnings) =
-            copy_includes(&src, &dst, &["does/not/exist".to_string()]);
+        let (n, warnings) = copy_includes(&src, &dst, &["does/not/exist".to_string()]);
 
         assert_eq!(n, 0);
         assert!(warnings.is_empty());
@@ -295,8 +292,7 @@ mod tests {
         write(&src.join(".tool-versions"), "node 20");
         write(&dst.join(".tool-versions"), "KEEP ME");
 
-        let (n, _) =
-            copy_includes(&src, &dst, &[".tool-versions".to_string()]);
+        let (n, _) = copy_includes(&src, &dst, &[".tool-versions".to_string()]);
 
         assert_eq!(n, 0);
         assert_eq!(

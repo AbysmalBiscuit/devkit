@@ -454,7 +454,10 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         .unwrap();
         assert_eq!(
             cfg.defaults.worktree_include,
-            vec!["apps/*/.env.local".to_string(), ".tool-versions".to_string()]
+            vec![
+                "apps/*/.env.local".to_string(),
+                ".tool-versions".to_string()
+            ]
         );
 
         let bare: Config = toml::from_str(
