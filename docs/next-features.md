@@ -8,7 +8,10 @@ future implementation starts from the analysis rather than from scratch.
 
 ## Explore `gix` (gitoxide) for git operations
 
-**Status:** DEFERRED — shelling out to the `git` CLI stays the default for now.
+**Status:** OPEN — prototyped and benchmarked 2026-07-01; **no solution
+adopted** (decision pending). Shelling out to the `git` CLI stays the default.
+A working reads-only prototype exists on the unmerged branch `perf/gix-reads`
+(worktree `../devkit-worktrees/gix-reads`); the findings from it are below.
 **Want:** evaluate replacing the `git` subprocess calls in
 `devkit-common::cmd` (and the per-worktree `status`/`worktree list`/`rev-parse`
 reads behind `devkit-issue::status`) with the pure-Rust `gix` crate, to drop
@@ -26,20 +29,76 @@ we get *for free* by shelling out, since the CLI honors the user's git config
 `issue status` is network-bound (`gh` + Linear), not git-bound, so a git library
 cannot move the headline number.
 
+**Prototype findings (2026-07-01, branch `perf/gix-reads`).** Built a working
+`gix` reads-only port — a `devkit-common::git` module with typed reads
+(`toplevel`, `current_branch`, `branch_exists`, `common_dir`, `resolve`,
+`config_get`, `global_config_get`, `remote_url`, and a structured `discover`
+replacing the `worktree list --porcelain` parser), ~17 read call sites migrated,
+mutations + `fetch`/`push`/`gh` left shelled. Full gate green (clippy, fmt,
+tests). Then measured, which surfaced two decisive facts:
+
+- **`status` regresses hard and was reverted.** In-process `is_dirty` vs. a
+  warm shelled `git status --porcelain` on a synthetic clean tree: **24 ms vs.
+  2.8 ms at 2k files, 114 ms vs. 6.4 ms at 10k files** — `gix` is 8–18× slower
+  because it re-walks the whole tree every call while the CLI uses
+  `core.untrackedCache`. Confirms the thesis above; the 3 dirty-check sites stay
+  shelled.
+- **The cheap reads *are* faster in-process, but the absolute win is tiny.**
+  `resolve HEAD` 0.12 ms vs. 1.16 ms; `current_branch` 0.10 ms vs. 1.15 ms
+  (~10–12× faster) — but that is ~1 ms saved per call, and an interactive command
+  issues only a handful. Not a headline mover.
+- **Dependency cost is the real sticking point.** Even trimmed to
+  `features = ["revision", "sha1"]` (`default-features = false`), `gix` pulls in
+  **95 new crates** (~1180 `Cargo.lock` lines). That cost is fixed the moment you
+  depend on `gix` *at all* — porting fewer functions does not reduce it. So it is
+  effectively all-or-nothing. `gix` is pure-Rust (no C toolchain, cleanest Windows
+  CI); `git2` would be ~10 crates but a vendored `libgit2` C build needing a C
+  toolchain on all three CI OSes. Neither is lighter on both axes.
+
+**Undecided:** the cost/benefit is poor on today's usage — 95 crates for a
+sub-millisecond-per-call read speedup plus a modest structured-worktree-list
+maintainability nicety. Left open rather than adopted; revisit if future work
+would lean on an in-process git library more heavily (justifying the fixed dep
+cost), or if the structured/typed reads become worth it for their own sake.
+
 **What it would take / open questions for when this is picked up:**
-- Benchmark `gix status` against the warm-cache CLI on a large monorepo before
-  committing — `libgit2`/`git2` status is frequently *slower* than the CLI for
-  exactly this reason (no untracked-cache/fsmonitor), and `gix`'s status API is
-  still maturing. The win must be demonstrated, not assumed.
-- A swap must preserve the user's git config optimizations or it regresses.
-- Cross-platform parity matters: CI runs ubuntu/macos/windows; `gix` behavior on
-  Windows working trees needs verification.
-- Smaller, lower-risk entry points than `status`: `gix` for `worktree list` and
-  `rev-parse`-style ref reads (structured, no porcelain parsing) where
-  correctness — not speed — is the draw.
+- `gix status` vs. warm-cache CLI is now benchmarked (see findings above): it
+  regresses 8–18×, so any future adoption must keep `status` shelled — the
+  demonstrated loss, not an assumption.
+- The reverse also held: `worktree list` and `rev-parse`-style ref reads are the
+  low-risk wins (structured, no porcelain parsing, faster) — but see the fixed
+  95-crate dependency cost, which is the actual blocker, not the code.
+- Cross-platform parity still needs checking beyond the Linux prototype: CI runs
+  ubuntu/macos/windows; `gix` behavior on Windows working trees is unverified.
 - Adjacent CLI win intentionally *not* taken: `--no-optional-locks` on the
   read-only status calls conflicts with `core.untrackedCache` (it suppresses the
   index write that persists the cache), so untracked-cache was preferred.
+
+### `gix` reads-only port — `diff --stat` and `log --format` left shelled
+
+**Status:** DEFERRED — excluded from the scope of a `gix` reads-only port
+(`rev-parse`, `status`→dirty, `config`, `remote get-url`, `show-ref`,
+`worktree list`). These two reads stay on the `git` CLI because `gix` has no
+equivalent one-liner and reproducing git's text output is high-effort,
+high-fidelity-risk work for two cold, once-per-command sites where the spawn
+cost is irrelevant.
+
+- **`git diff <ref>...HEAD --stat`** (`src/bin/devrun/main.rs:442`, display-only
+  diffstat). The `...` (three-dot) form diffs from `merge-base(ref, HEAD)`, so it
+  needs a merge-base + tree-to-tree diff, then a **per-file blob diff** (via
+  `gix_diff`/`imara-diff`) to get the `+X −Y` line counts (tree diff only names
+  the changed files). Then git's diffstat text is reproduced by hand: column
+  alignment, the width-scaled `+++---` bar, and the summary line with correct
+  pluralization (`1 file changed` vs `2 files changed`,
+  `insertion(+)`/`insertions(+)`). ~80–100 lines, the highest fidelity risk in
+  the whole port, for zero measurable perf.
+- **`git log --author=<a> --format=%aI`** (`src/bin/issue/dashboard/data.rs:179`,
+  author-timeline analytics). A `gix` revwalk from HEAD reading `commit.author()`
+  is straightforward (~20–30 lines), but two fidelity hazards remain: git's
+  `--author` is a case-insensitive regex over `"Name <email>"` (a `gix` port
+  approximates with substring/case-fold matching — close but not identical), and
+  `%aI` strict-ISO-8601-with-offset formatting must match git's rendering exactly.
+  Borderline-portable; deferred with `diff` since the win is nil.
 
 ---
 
