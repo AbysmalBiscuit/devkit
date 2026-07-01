@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, gh_json, git};
+use devkit_common::gitfetch;
 use devkit_common::linear::{self, LinearIssueRef};
 use devkit_common::progress::Steps;
 use devkit_ports::config::expand_tilde;
@@ -317,7 +318,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let worktree_s = worktree.to_str().context("worktree path not UTF-8")?;
 
     steps.during("Fetching from origin…", || {
-        git(&["fetch", "origin"], monorepo_s)
+        gitfetch::fetch("origin", monorepo_s)
     })?;
     steps.during("Creating worktree…", || {
         git(

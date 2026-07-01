@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, git};
+use devkit_common::gitfetch;
 use devkit_common::progress::Steps;
 use devkit_ports::config::{PrepFile, expand_tilde};
 use devkit_ports::load;
@@ -157,7 +158,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let total = 2 + usize::from(!args.apps.is_empty());
     let steps = Steps::with_total(total);
     steps.during("Fetching from origin…", || {
-        git(&["fetch", "origin"], monorepo_s)
+        gitfetch::fetch("origin", monorepo_s)
     })?;
     if git(
         &["rev-parse", "--verify", &format!("refs/heads/{branch}")],

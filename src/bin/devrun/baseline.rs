@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use devkit_common::cmd::git;
+use devkit_common::gitfetch;
 use std::path::Path;
 
 /// Ensure `path` is a worktree at a fresh `git_ref` (e.g. origin/staging).
@@ -8,7 +9,7 @@ use std::path::Path;
 pub fn ensure_fresh(main_repo: &str, path: &str, git_ref: &str) -> Result<()> {
     let (remote, _) = git_ref.split_once('/').unwrap_or(("origin", git_ref));
     if !Path::new(path).exists() {
-        git(&["fetch", remote], main_repo)?;
+        gitfetch::fetch(remote, main_repo)?;
         git(&["worktree", "add", "--detach", path, git_ref], main_repo)?;
         return Ok(());
     }
@@ -18,7 +19,7 @@ pub fn ensure_fresh(main_repo: &str, path: &str, git_ref: &str) -> Result<()> {
             "baseline worktree {path} is dirty — refusing to reset --hard. Clean it or remove it."
         );
     }
-    git(&["fetch", remote], path)?;
+    gitfetch::fetch(remote, path)?;
     if head_at(path, git_ref) {
         return Ok(());
     }

@@ -1,6 +1,7 @@
 pub mod cmd;
 #[cfg(feature = "daemon")]
 pub mod daemon;
+pub mod gitfetch;
 pub mod linear;
 pub mod paths;
 pub mod progress;
