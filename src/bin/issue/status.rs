@@ -39,21 +39,20 @@ pub fn gather_with_bars(start: &str, ids: &[String]) -> Result<StatusReport> {
     let (dirty, prs, linear, ws) = std::thread::scope(|s| {
         let b2 = bar2.clone();
         let dt = s.spawn(move || {
-            paths
-                .iter()
-                .map(|p| {
-                    let d = st::dirty_of(p);
-                    b2.inc(1);
-                    d
-                })
-                .collect::<Vec<bool>>()
+            let d = st::dirty_many(&paths);
+            b2.inc(m as u64);
+            d
         });
         let pt = s.spawn(|| st::fetch_prs(&disco));
         let lt = s.spawn(|| {
-            (
-                linear::states(&ids_v, key.as_deref()),
-                linear::workspace_url_key(),
-            )
+            std::thread::scope(|s2| {
+                let stt = s2.spawn(|| linear::states(&ids_v, key.as_deref()));
+                let wst = s2.spawn(linear::workspace_url_key);
+                (
+                    stt.join().expect("linear states thread panicked"),
+                    wst.join().expect("linear url-key thread panicked"),
+                )
+            })
         });
         let dirty = dt.join().expect("dirty thread panicked");
         let prs = pt.join().expect("prs thread panicked")?;
