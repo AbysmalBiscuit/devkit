@@ -363,6 +363,8 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         Ok(issue)
     })?;
 
+    crate::setup::backfill_includes(monorepo_s, &worktree, &cfg.defaults.worktree_include);
+
     if args.setup {
         let setup_ctx = serde_json::json!({
             "prefix": cfg.defaults.branch_prefix,
