@@ -93,6 +93,20 @@ pub(crate) fn prep_apps(
     Ok(())
 }
 
+/// Copy the configured `worktree_include` globs from the monorepo into a freshly
+/// created worktree, printing each fail-open warning to stderr. A no-op when the
+/// include list is empty.
+pub fn backfill_includes(monorepo: &str, worktree: &std::path::Path, patterns: &[String]) {
+    if patterns.is_empty() {
+        return;
+    }
+    let (_copied, warnings) =
+        devkit_common::worktree::copy_includes(std::path::Path::new(monorepo), worktree, patterns);
+    for w in warnings {
+        eprintln!("warning: {w}");
+    }
+}
+
 pub fn run(args: SetupArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
@@ -180,6 +194,8 @@ pub fn run(args: SetupArgs) -> Result<()> {
     {
         eprintln!("warning: could not update global gitignore: {e:#}");
     }
+
+    backfill_includes(monorepo_s, &worktree, &cfg.defaults.worktree_include);
 
     // Per-app bootstrap: write the app's configured prep files, then run its
     // setup commands in its directory. Everything project-specific — filenames,
