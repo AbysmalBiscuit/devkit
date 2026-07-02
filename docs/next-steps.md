@@ -44,12 +44,14 @@ Deferred follow-ups:
   the facade. Still deferred: the mutating `issue.review` (push/PR/Slack) and
   `issue.end` (worktree removal) actions, which need confirm-gating; and
   `issue setup`/`issue dashboard`, which are not request/response fits.
-- **Live MCP registration for Codex and Cursor (manual verification pending).**
+- **Live MCP registration for Codex and Cursor (Cursor pending).**
   Registration configs ship for all three hosts (`.mcp.json`, `.cursor/mcp.json`,
   `.codex/config.toml`), each pointing at `devkit-mcp`. Claude Code is confirmed
   live — it connects and both tools are callable (`devkit_describe`/`devkit_call`).
-  Codex and Cursor are **not yet verified in a running host** (neither was available
-  when the configs were added). When one is, verify end-to-end:
+  Codex registers the server via the installed plugin (`codex mcp list` shows
+  `devkit` enabled, 2026-07-02), though an in-session `tools/call` has not been
+  exercised. Cursor is **not yet verified in a running host**. When it is,
+  verify end-to-end:
     1. `cargo install --path .` so `devkit-mcp` is on `PATH`.
     2. Open the host in this repo (Codex: trust the project); run `/mcp` (Codex) or
        check Settings → MCP (Cursor) and confirm `devkit` lists both tools.
@@ -67,8 +69,37 @@ Deferred follow-ups:
 
 ## Verify multi-agent plugin packaging
 
-The packaging is shipped. Codex is verified end-to-end (2026-06-24); Claude and
-Cursor still need a live test.
+The packaging is shipped. Each host resolves its own marketplace manifest —
+`.claude-plugin/marketplace.json` (Claude Code), `.agents/plugins/marketplace.json`
+(Codex, native schema with `policy`/`category`), `.cursor-plugin/marketplace.json`
+(Cursor, unverified location) — so `<host> plugin marketplace add
+AbysmalBiscuit/devkit` followed by the host's install verb
+(`claude plugin install devkit@devkit` / `codex plugin add devkit@devkit`)
+works from a public clone; Cursor installs from its Customize panel or a team
+marketplace import instead (no git-repo CLI install). See the README's
+"Installing for coding agents" for the user-facing steps. Codex is verified
+end-to-end (2026-06-24, re-verified 2026-07-02 against the native manifest);
+Claude and Cursor still need a live test.
+
+- **Codex marketplace manifest location — VERIFIED 2026-07-02 (Codex v0.142.0).**
+  Codex reads `.agents/plugins/marketplace.json` (preferred, its native schema)
+  and falls back to `.claude-plugin/marketplace.json`; a manifest at
+  `.codex-plugin/marketplace.json` is **not** a supported location ("marketplace
+  root does not contain a supported manifest" when it's the only one). Plugin
+  `source.path` resolves relative to the marketplace root, not the manifest
+  directory. The plugin manifest, by contrast, *does* live at
+  `.codex-plugin/plugin.json` (the curated `linear` plugin uses the same layout).
+  Verified end-to-end with a renamed copy: `codex plugin marketplace add <dir>`
+  picked the `.agents` manifest over the `.claude-plugin` one, and
+  `codex plugin add devkit@<marketplace>` installed 0.8.0 cleanly.
+- **Codex plugin manifest carries the MCP server — VERIFIED 2026-07-02.**
+  `"mcpServers": "./.mcp.json"` in `.codex-plugin/plugin.json` (same field as
+  Claude's manifest and the curated `linear` plugin) registers the server on
+  install: `codex mcp list` shows `devkit → devkit-mcp` enabled, with no
+  `mcp_servers` entry in `~/.codex/config.toml`. Isolated by installing a copy
+  with `.claude-plugin/` deleted and the server renamed. The same field was
+  added to `.cursor-plugin/plugin.json` on the assumption Cursor follows the
+  shared schema — unverified until the Cursor live test.
 
 - **Codex install — VERIFIED 2026-06-24.** From the now-public repo,
   `codex plugin marketplace add AbysmalBiscuit/devkit` then
@@ -91,15 +122,20 @@ Cursor still need a live test.
 - **Claude marketplace install — NOT DONE (ready).** The repo is public; a fresh
   clone resolves `.claude-plugin/marketplace.json` (`source: "./"`) and
   `skills/using-devkit/SKILL.md`. Remaining is the live smoke test only a fresh
-  Claude Code session can run: `/plugin marketplace add AbysmalBiscuit/devkit` then
-  `/plugin install devkit`, confirm `using-devkit` resolves.
+  Claude Code session can run: `claude plugin marketplace add AbysmalBiscuit/devkit`
+  then `claude plugin install devkit@devkit` (or the same arguments via `/plugin`
+  in a session), confirm `using-devkit` resolves.
 - **Cursor install — NOT DONE.** Cursor is not installed on the dev machine, so
   the SessionStart context injection (`additional_context` envelope from
   `hooks/announce-skill`) has not been exercised in a running Cursor host. Install
   the plugin in Cursor, start a session, and confirm the "A 'using-devkit' skill is
   available" notice appears (or that Cursor registers the skill natively, as Codex
   does). On Windows, confirm `run-hook.cmd` locates Git Bash. If the envelope is
-  rejected, adjust `hooks/announce-skill`.
+  rejected, adjust `hooks/announce-skill`. Also confirm which marketplace manifest
+  Cursor's "Import from Repo" reads — `.cursor-plugin/marketplace.json` ships on
+  the assumption it mirrors the `.cursor-plugin/plugin.json` convention, but the
+  location is unverified (Codex, for comparison, ignores `.codex-plugin/` for the
+  marketplace manifest and wants `.agents/plugins/`).
 - **Cursor hook command path resolution — NOT DONE (depends on the Cursor test).**
   `hooks/hooks-cursor.json` invokes the runner as the relative `./hooks/run-hook.cmd`
   (matching the obra/superpowers reference), whereas `hooks/hooks-codex.json` uses

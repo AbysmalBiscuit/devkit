@@ -195,17 +195,91 @@ with each one's PR state, Linear state, and a finished/not-finished verdict;
 optional `repo`). Both return structured JSON with the verdicts and next-action
 labels pre-computed. They never mutate; `issue review`/`issue end` stay CLI-only.
 
-Install with `cargo install --path .` (it builds alongside the other binaries),
-then register it with your agent. The repo ships project-scoped registration for
-three hosts, each pointing at the `devkit-mcp` command on your `PATH`:
+See [Installing for coding agents](#installing-for-coding-agents) below for how
+to register it — either bundled in the devkit plugin or as a standalone MCP
+server, per host.
 
-- **Claude Code**: `.mcp.json` (also referenced by the bundled plugin manifest).
-- **Cursor**: `.cursor/mcp.json` (same `mcpServers` shape).
-- **Codex**: `.codex/config.toml` (`[mcp_servers.devkit]`; project MCP servers
-  load only in trusted projects).
+## Installing for coding agents
 
-After installing, open the host in this repo and confirm `devkit_describe` and
-`devkit_call` appear (`/mcp` lists active servers in Claude Code and Codex).
+devkit ships two things for agents:
+
+- a **plugin** — the `using-devkit` skill, session-start hooks, and the
+  `devkit-mcp` server, bundled together; and
+- the **`devkit-mcp` server on its own**, for hosts without a plugin system.
+
+Either way the binaries must be on your `PATH` first — the plugin's MCP entry and
+every config below invoke `devkit-mcp` by name (see [Install](#install) for
+feature flags):
+
+```sh
+cargo install --path .
+```
+
+### Claude Code
+
+Installing the plugin registers the skill, the hooks, and the MCP server in one
+step — the plugin manifest points at `.mcp.json`, so enabling the plugin starts
+the server automatically.
+
+From the terminal:
+
+```sh
+claude plugin marketplace add AbysmalBiscuit/devkit   # or a local path to this repo
+claude plugin install devkit@devkit
+```
+
+Or in a session, same arguments (`/plugin` alone opens the interactive browser):
+
+```
+/plugin marketplace add AbysmalBiscuit/devkit
+/plugin install devkit@devkit
+```
+
+Restart Claude Code so the hooks load, then run `/mcp` to confirm the `devkit`
+server is active and `devkit_describe`/`devkit_call` are listed.
+
+**MCP server only** (no skill/hooks): the repo ships `.mcp.json` at the root, so
+opening this repo in Claude Code registers the `devkit` server project-scoped.
+
+### Codex
+
+From the terminal:
+
+```sh
+codex plugin marketplace add AbysmalBiscuit/devkit    # or a local path / git URL
+codex plugin add devkit@devkit
+```
+
+Codex registers the `using-devkit` skill natively from the plugin manifest, so
+it is announced in every fresh session, and starts the bundled `devkit` MCP
+server. Confirm with `codex plugin list` and `codex mcp list`.
+
+**MCP server only** (no skill/hooks): the repo ships `.codex/config.toml` with
+`[mcp_servers.devkit]`, registering it project-scoped. Project MCP servers load
+only in trusted projects, so trust this repo when Codex prompts.
+
+### Cursor
+
+Cursor has no git-repo plugin install from the CLI. Install the plugin from the
+**Customize** panel in the sidebar, or, for a team, from Dashboard → Plugins →
+Team Marketplaces → Add Marketplace → **Import from Repo**
+(`AbysmalBiscuit/devkit`). For local development, symlink the checkout:
+
+```sh
+ln -s "$(pwd)" ~/.cursor/plugins/local/devkit
+```
+
+**MCP server only** (no skill/hooks): the repo ships `.cursor/mcp.json` (same
+`mcpServers` shape as Claude Code's), registering it project-scoped.
+
+### Other agents (Zed, generic MCP clients)
+
+No plugin manifest exists for these. Register `devkit-mcp` as a stdio MCP server
+in the host's own config — the command is just `devkit-mcp` (on `PATH` after
+`cargo install`) — and point the agent at `AGENTS.md` for context. Zed reads
+`AGENTS.md` directly.
+
+After wiring up any host, confirm `devkit_describe` and `devkit_call` appear.
 
 ## Configuration
 
