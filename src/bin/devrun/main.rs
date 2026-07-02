@@ -836,6 +836,9 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
             .arg(&log)
             .status()
             .with_context(|| "running `tail -f`")?;
+        // `tail -f` blocks until interrupted; exit with its status directly.
+        // This bypasses the timing guard's Drop, but a --follow session is a
+        // single snapshot then an indefinite block, not a timing target.
         std::process::exit(status.code().unwrap_or(1));
     }
     println!("{}", run::read_log(&holder, app, role, 200)?);
