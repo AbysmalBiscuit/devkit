@@ -62,6 +62,7 @@ fn bearer() -> Result<String> {
 /// POST a raw GraphQL query to `api.github.com/graphql`. The response envelope
 /// is returned whole (`{ "data": … }`); a non-empty `errors` array is an error.
 pub fn graphql(query: &str) -> Result<Value> {
+    let _span = crate::timing::io_span("github graphql", "graphql").entered();
     let v: Value = agent()
         .post(&format!("{API}/graphql"))
         .set("Authorization", &bearer()?)
@@ -83,6 +84,7 @@ pub fn graphql(query: &str) -> Result<Value> {
 /// GET `{API}{path}`. `Ok(Some(json))` on 2xx, `Ok(None)` on 404 (a clean
 /// "absent" the caller can act on), `Err` on any other status or transport error.
 pub fn rest_get_opt(path: &str) -> Result<Option<Value>> {
+    let _span = crate::timing::io_span("github REST", path).entered();
     let resp = agent()
         .get(&format!("{API}{path}"))
         .set("Authorization", &bearer()?)

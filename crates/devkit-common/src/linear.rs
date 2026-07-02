@@ -110,7 +110,7 @@ pub fn issues_by_number(n: u64, key: &str) -> Result<Vec<LinearIssueRef>> {
 /// the raw `ureq` error so `validate` can downcast to distinguish an unreachable
 /// host from a rejected key.
 fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value> {
-    let _ = detail; // consumed by the timing span added in a later task
+    let _span = crate::timing::io_span("linear graphql", detail).entered();
     let v: serde_json::Value = ureq::post("https://api.linear.app/graphql")
         .set("Authorization", key)
         .send_json(body)?

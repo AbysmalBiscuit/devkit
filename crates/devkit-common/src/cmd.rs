@@ -3,6 +3,7 @@ use std::process::Command;
 
 /// Run a command, capture stdout; error includes stderr on non-zero exit.
 pub fn capture(program: &str, args: &[&str], cwd: Option<&str>) -> Result<String> {
+    let _span = crate::timing::subprocess_span(program, args).entered();
     let mut c = Command::new(program);
     c.args(args);
     if let Some(d) = cwd {
