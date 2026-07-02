@@ -70,7 +70,7 @@ pub fn parse_issue_pr(resp: &serde_json::Value) -> (Option<LinearPr>, String) {
 /// Resolve a Linear id to its attached GitHub PR + the issue title.
 pub fn issue_pr(id: &str, key: &str) -> Result<(Option<LinearPr>, String)> {
     let query = issue_pr_query(id).context("not a TEAM-NUMBER Linear id")?;
-    let resp = post_graphql(&query, key)?;
+    let resp = post_graphql(&query, key, "issue_pr")?;
     Ok(parse_issue_pr(&resp))
 }
 
@@ -100,15 +100,26 @@ pub fn parse_number_candidates(resp: &serde_json::Value) -> Vec<LinearIssueRef> 
 
 /// Look up every Linear issue whose number is `n`, across all teams.
 pub fn issues_by_number(n: u64, key: &str) -> Result<Vec<LinearIssueRef>> {
-    let resp = post_graphql(&issues_by_number_query(n), key)?;
+    let resp = post_graphql(&issues_by_number_query(n), key, "issues_by_number")?;
     Ok(parse_number_candidates(&resp))
 }
 
-fn post_graphql(query: &str, key: &str) -> Result<serde_json::Value> {
+/// The single transport for every Linear GraphQL call: POST the body, decode the
+/// JSON envelope. `detail` labels the call for timing (see [`crate::timing`]).
+/// GraphQL-level error interpretation stays with each caller — this preserves
+/// the raw `ureq` error so `validate` can downcast to distinguish an unreachable
+/// host from a rejected key.
+fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value> {
+    let _ = detail; // consumed by the timing span added in a later task
     let v: serde_json::Value = ureq::post("https://api.linear.app/graphql")
         .set("Authorization", key)
-        .send_json(ureq::json!({ "query": query }))?
+        .send_json(body)?
         .into_json()?;
+    Ok(v)
+}
+
+fn post_graphql(query: &str, key: &str, detail: &str) -> Result<serde_json::Value> {
+    let v = send(ureq::json!({ "query": query }), key, detail)?;
     if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
         && !errors.is_empty()
     {
@@ -125,12 +136,13 @@ fn post_graphql(query: &str, key: &str) -> Result<serde_json::Value> {
 /// error is preserved as the top-level error (no `.context`) so a caller can
 /// downcast it to distinguish an unreachable host from a rejected key.
 pub fn validate(key: &str) -> Result<LinearIdentity> {
-    let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
-        .set("Authorization", key)
-        .send_json(ureq::json!({
+    let resp = send(
+        ureq::json!({
             "query": "query { viewer { email } organization { urlKey name } }"
-        }))?
-        .into_json()?;
+        }),
+        key,
+        "validate",
+    )?;
     parse_identity(&resp)
 }
 
@@ -201,10 +213,11 @@ pub fn workspace_url_key() -> Option<String> {
 }
 
 fn fetch_url_key(key: &str) -> Result<Option<String>> {
-    let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
-        .set("Authorization", key)
-        .send_json(ureq::json!({ "query": "query { organization { urlKey } }" }))?
-        .into_json()?;
+    let resp = send(
+        ureq::json!({ "query": "query { organization { urlKey } }" }),
+        key,
+        "workspace_url_key",
+    )?;
     Ok(resp["data"]["organization"]["urlKey"]
         .as_str()
         .map(String::from))
@@ -215,10 +228,7 @@ fn fetch(
     aliases: &HashMap<String, String>,
     key: &str,
 ) -> Result<HashMap<String, LinearState>> {
-    let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
-        .set("Authorization", key)
-        .send_json(ureq::json!({ "query": query }))?
-        .into_json()?;
+    let resp = send(ureq::json!({ "query": query }), key, "states")?;
     let mut out = HashMap::new();
     if let Some(data) = resp.get("data").and_then(|d| d.as_object()) {
         for (alias, block) in data {
@@ -287,10 +297,11 @@ pub fn assigned_issue_history_with_progress(
     let mut out = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
-            .set("Authorization", key)
-            .send_json(ureq::json!({ "query": assigned_query(after.as_deref()) }))?
-            .into_json()?;
+        let resp = send(
+            ureq::json!({ "query": assigned_query(after.as_deref()) }),
+            key,
+            "assigned_history",
+        )?;
         let block = &resp["data"]["issues"];
         if let Some(nodes) = block["nodes"].as_array() {
             for n in nodes {
@@ -327,10 +338,11 @@ pub fn assigned_issue_history_with_progress(
 
 /// createdAt of my Linear account — the timeline origin.
 pub fn viewer_created_at(key: &str) -> Result<String> {
-    let resp: serde_json::Value = ureq::post("https://api.linear.app/graphql")
-        .set("Authorization", key)
-        .send_json(ureq::json!({ "query": "query { viewer { createdAt } }" }))?
-        .into_json()?;
+    let resp = send(
+        ureq::json!({ "query": "query { viewer { createdAt } }" }),
+        key,
+        "viewer",
+    )?;
     resp["data"]["viewer"]["createdAt"]
         .as_str()
         .map(String::from)
