@@ -126,6 +126,11 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   `lockm`) stay in their own binaries; `config` stays on `devrun`. Token reads
   resolve through `devkit-common::secrets` (env → `secrets.toml`), never from
   `config.toml`.
+- **Timing:** `issue`/`devrun` accept `--timing[=trace]` / `--timing-log <FILE>`
+  (or `DEVKIT_TIMING`). Timing wraps the shared IO primitives (`cmd::capture`,
+  `github`, `linear::send`, `slack`) via `devkit-common::timing`; a global tracing
+  layer aggregates flat spans by op and prints a stderr summary on exit. `devkitd`
+  carries the same spans but has no activation flag yet.
 
 ## Worktrees
 

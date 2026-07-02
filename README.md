@@ -102,6 +102,25 @@ issue review finish --pr 1234 --to lev                # from anywhere, explicit 
 
 Templates: `review_request` and `review_finish` under `[templates]`. Per-recipient render fields: `name` (alias or channel), `slack_id` (user id, empty for channels), plus `pr_url`, `pr_title`, `input` (and `author` for finish).
 
+### Timing (`--timing`)
+
+`issue` and `devrun` accept a global `--timing` flag that prints a per-operation
+breakdown of subprocess and network IO to stderr on exit:
+
+- `--timing` (or `--timing=summary`) — a table of ops (`git fetch`, `github REST`,
+  `linear graphql`, …) with count / total / max / p50, plus a headline showing
+  wall time, IO-busy time, serial sum, and the concurrency factor the parallel
+  fan-outs achieve.
+- `--timing=trace` — additionally lists every op with its start offset, thread,
+  and full command line.
+- `--timing-log <FILE>` — streams one JSON record per op (`op`, `detail`,
+  `start_ms`, `dur_ms`, `thread`) for comparing runs.
+
+`DEVKIT_TIMING=summary|trace` enables the summary/trace form without the flag.
+stdout (tables, `--json`) is never affected. Example:
+
+    issue status --timing
+
 ### `lockm`: File Locks
 
 Advisory locks on paths so parallel sessions sharing one checkout (where per-session
