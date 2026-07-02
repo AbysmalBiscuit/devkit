@@ -15,6 +15,24 @@ use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
+/// `--timing` verbosity, parsed by clap. `--timing` alone = summary,
+/// `--timing=trace` = per-op detail.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum TimingFlag {
+    Summary,
+    Trace,
+}
+
+/// Resolve the timing mode: the flag wins; otherwise fall back to `DEVKIT_TIMING`.
+fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
+    use devkit_common::timing::Mode;
+    match flag {
+        Some(TimingFlag::Summary) => Mode::Summary,
+        Some(TimingFlag::Trace) => Mode::Trace,
+        None => devkit_common::timing::mode_from_env(),
+    }
+}
+
 #[derive(Parser)]
 #[command(about = "Run local dev servers for an issue worktree (with optional baseline A/B)")]
 struct Cli {
@@ -22,6 +40,12 @@ struct Cli {
     dir: Option<String>,
     #[arg(long, global = true)]
     config: Option<String>,
+    /// Print IO timing to stderr. `--timing` = summary, `--timing=trace` = per-op.
+    #[arg(long, global = true, value_name = "MODE", num_args = 0..=1, default_missing_value = "summary")]
+    timing: Option<TimingFlag>,
+    /// Write one JSON record per timed IO op to FILE.
+    #[arg(long = "timing-log", global = true, value_name = "FILE")]
+    timing_log: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -343,6 +367,7 @@ fn main() -> Result<()> {
     devkit_common::report::install_panic_hook("devrun");
     devkit_common::paths::migrate_legacy_state();
     let cli = Cli::parse();
+    let _timing = devkit_common::timing::init(timing_mode(cli.timing), cli.timing_log.clone());
     let cwd = cwd_of(&cli);
     match &cli.cmd {
         Cmd::Up {
