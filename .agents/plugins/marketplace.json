@@ -1,0 +1,15 @@
+{
+  "name": "devkit",
+  "interface": {
+    "displayName": "devkit"
+  },
+  "plugins": [
+    {
+      "name": "devkit",
+      "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle",
+      "source": { "source": "local", "path": "./" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Coding"
+    }
+  ]
+}

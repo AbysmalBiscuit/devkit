@@ -1,0 +1,14 @@
+{
+  "name": "devkit",
+  "owner": { "name": "Lev Velykoivanenko" },
+  "metadata": {
+    "description": "devkit local-dev coordination plugin"
+  },
+  "plugins": [
+    {
+      "name": "devkit",
+      "source": ".",
+      "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle"
+    }
+  ]
+}

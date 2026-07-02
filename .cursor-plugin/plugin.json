@@ -17,5 +17,6 @@
     "worktrees"
   ],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks-cursor.json"
+  "hooks": "./hooks/hooks-cursor.json",
+  "mcpServers": "./.mcp.json"
 }

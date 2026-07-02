@@ -17,6 +17,7 @@
   ],
   "skills": "./skills/",
   "hooks": "./hooks/hooks-codex.json",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "devkit",
     "shortDescription": "Local-dev coordination: file locks, ports, dev servers, issue lifecycle",
