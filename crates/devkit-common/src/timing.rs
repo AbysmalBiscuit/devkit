@@ -435,10 +435,12 @@ pub fn init(mode: Mode, log: Option<PathBuf>) -> Guard {
         records: Mutex::new(Vec::new()),
         log,
     });
-    // Best-effort: if a global default is somehow already set, timing is simply
-    // inert rather than a hard error.
     let subscriber = tracing_subscriber::registry().with(TimingLayer(collector.clone()));
     if tracing::subscriber::set_global_default(subscriber).is_err() {
+        // Another tracing subscriber owns the global default, so timing cannot
+        // hook the spans. Warn rather than vanish silently — a requested
+        // `--timing` that produces no output is otherwise baffling.
+        eprintln!("warning: timing disabled — a tracing subscriber is already installed");
         return Guard { collector: None };
     }
     Guard {
