@@ -13,5 +13,6 @@ pub mod store;
 pub mod supervise;
 pub mod sys;
 pub mod template;
+pub mod timing;
 pub mod ui;
 pub mod worktree;

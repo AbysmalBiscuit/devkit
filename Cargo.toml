@@ -78,6 +78,8 @@ indicatif = "0.17"
 supports-hyperlinks = "3"
 ureq = { version = "2", features = ["json"] }
 rpassword = "7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry"] }
 devkit-common = { path = "crates/devkit-common" }
 devkit-ports = { path = "crates/devkit-ports" }
 devkit-locks = { path = "crates/devkit-locks" }

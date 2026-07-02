@@ -16,6 +16,8 @@ indicatif.workspace = true
 supports-hyperlinks.workspace = true
 ureq.workspace = true
 minijinja.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 interprocess = { workspace = true, optional = true }
 
 [features]
