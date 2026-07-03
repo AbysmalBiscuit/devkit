@@ -93,17 +93,28 @@ impl LiveLines {
         pb
     }
 
-    /// Erase the whole block (lines and status bars) from the terminal. Also
-    /// finishes any status spinners/bars handed out, so nothing repaints after
-    /// the block is erased — an unfinished steady-tick bar would otherwise
-    /// redraw itself within its tick interval.
+    /// Erase the whole block (lines and status bars) from the terminal and
+    /// retire it — no bar draws again afterwards. Every bar must end up
+    /// finished: an unfinished steady-tick status bar would repaint within
+    /// its tick interval, and an unfinished line bar would repaint on drop
+    /// (indicatif finishes a dropped bar with `AndLeave`, redrawing the
+    /// region) — below whatever the caller printed to stdout in between.
     pub fn clear(&self) {
+        // Status bars first: finishing stops their tick thread, so nothing
+        // can redraw between the screen wipe and the teardown below.
         for weak in self.status.borrow_mut().drain(..) {
             if let Some(pb) = weak.upgrade() {
                 pb.finish_and_clear();
             }
         }
         let _ = self.mp.clear();
+        // Finishing a line bar forces a region redraw; hide the target first
+        // so retiring them cannot repaint the just-erased block.
+        self.mp
+            .set_draw_target(indicatif::ProgressDrawTarget::hidden());
+        for pb in &self.lines {
+            pb.finish_and_clear();
+        }
     }
 }
 
@@ -338,5 +349,33 @@ mod tests {
         lt.redraw();
         lt.tick();
         lt.finish();
+    }
+
+    // Dropping an unfinished indicatif bar finishes it with `AndLeave`, which
+    // redraws the region — so a line bar still unfinished after clear() would
+    // repaint the block when the LiveLines drops, *after* the caller has
+    // printed its final stdout output. clear() must retire every line bar.
+    #[test]
+    fn clear_retires_line_bars_so_drop_cannot_repaint() {
+        use indicatif::{InMemoryTerm, ProgressDrawTarget};
+        let term = InMemoryTerm::new(24, 100);
+        let mut ll = LiveLines::over(MultiProgress::with_draw_target(
+            ProgressDrawTarget::term_like(Box::new(term.clone())),
+        ));
+        ll.set_lines(&["one".into(), "two".into()]);
+        let _sp = ll.spinner("working…");
+        assert!(term.contents().contains("one"));
+        ll.clear();
+        assert_eq!(term.contents(), "");
+        // The final screen ends up blank either way (each drop's repaint is
+        // erased by the next); the bug is the churn itself, so assert nothing
+        // is *written* after the clear, not just that the end state is empty.
+        let _ = term.moves_since_last_check();
+        drop(ll);
+        assert_eq!(
+            term.moves_since_last_check(),
+            "",
+            "drop repainted the cleared block"
+        );
     }
 }

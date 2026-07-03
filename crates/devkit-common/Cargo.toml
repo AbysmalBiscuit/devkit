@@ -24,6 +24,11 @@ interprocess = { workspace = true, optional = true }
 [features]
 daemon = ["dep:interprocess"]
 
+[dev-dependencies]
+# InMemoryTerm: lets tests drive a visible (non-hidden) MultiProgress and
+# assert what actually reaches the terminal.
+indicatif = { workspace = true, features = ["in_memory"] }
+
 # Unix process primitives (signals, sessions); unavailable on Windows.
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
