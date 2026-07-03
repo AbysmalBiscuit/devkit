@@ -3,6 +3,41 @@ use std::cell::Cell;
 use std::io::IsTerminal;
 use std::time::Duration;
 
+/// A `MultiProgress` drawing to stderr, or fully hidden when stderr is not a
+/// terminal — so pipes, redirects, MCP, and tests produce no live output.
+pub(crate) fn tty_multi() -> MultiProgress {
+    if std::io::stderr().is_terminal() {
+        MultiProgress::new()
+    } else {
+        MultiProgress::with_draw_target(ProgressDrawTarget::hidden())
+    }
+}
+
+/// Add an indeterminate spinner bar to `mp` with the shared house style.
+pub(crate) fn add_spinner(mp: &MultiProgress, msg: &str) -> ProgressBar {
+    let pb = mp.add(ProgressBar::new_spinner());
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.cyan} {wide_msg}").expect("valid spinner template"),
+    );
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb.set_message(msg.to_string());
+    pb
+}
+
+/// Add a determinate fill bar of length `len` to `mp` with the shared house
+/// style.
+pub(crate) fn add_bar(mp: &MultiProgress, msg: &str, len: u64) -> ProgressBar {
+    let pb = mp.add(ProgressBar::new(len));
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.cyan} {wide_msg} [{bar:20.cyan/dim}] {pos}/{len}")
+            .expect("valid bar template")
+            .progress_chars("=>-"),
+    );
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb.set_message(msg.to_string());
+    pb
+}
+
 /// A group of progress bars sharing one [`MultiProgress`]. Each bar animates on
 /// stderr; the whole group is hidden when stderr is not a terminal, so pipes,
 /// redirects, MCP, and tests produce no progress output.
@@ -37,11 +72,7 @@ impl Steps {
     }
 
     fn target() -> MultiProgress {
-        if std::io::stderr().is_terminal() {
-            MultiProgress::new()
-        } else {
-            MultiProgress::with_draw_target(ProgressDrawTarget::hidden())
-        }
+        tty_multi()
     }
 
     /// In numbered mode, prefix `[i/total] ` and advance the counter; otherwise
@@ -61,29 +92,12 @@ impl Steps {
     /// message is used verbatim — embed any prefix yourself. Used directly for
     /// concurrent displays that show several bars at once.
     pub fn spinner(&self, msg: &str) -> ProgressBar {
-        let pb = self.mp.add(ProgressBar::new_spinner());
-        pb.set_style(
-            ProgressStyle::with_template("{spinner:.cyan} {wide_msg}")
-                .expect("valid spinner template"),
-        );
-        pb.enable_steady_tick(Duration::from_millis(80));
-        pb.set_message(msg.to_string());
-        pb
+        add_spinner(&self.mp, msg)
     }
 
     /// A determinate fill bar for a loop over a known count (`len`).
     pub fn bar(&self, msg: &str, len: u64) -> ProgressBar {
-        let pb = self.mp.add(ProgressBar::new(len));
-        pb.set_style(
-            ProgressStyle::with_template(
-                "{spinner:.cyan} {wide_msg} [{bar:20.cyan/dim}] {pos}/{len}",
-            )
-            .expect("valid bar template")
-            .progress_chars("=>-"),
-        );
-        pb.enable_steady_tick(Duration::from_millis(80));
-        pb.set_message(msg.to_string());
-        pb
+        add_bar(&self.mp, msg, len)
     }
 
     /// Run `f` under a spinner (auto-numbered in numbered mode), clearing the
