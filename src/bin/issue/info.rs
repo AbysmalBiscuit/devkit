@@ -1,9 +1,21 @@
 use crate::triage::render;
 use anyhow::Result;
 use devkit_common::cmd::git;
-use devkit_common::progress::Steps;
+use devkit_common::linear::LinearState;
+use devkit_common::livetable::{Cell, LiveTable};
 use devkit_issue::status::{self as st, IssueWorktree, StatusReport};
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::mpsc;
+use std::time::Duration;
+
+/// One source's report to the live-table event loop: the row's PRs, its
+/// Linear state, or the workspace URL key.
+enum Update {
+    Prs(Result<st::Prs>),
+    Linear(HashMap<String, LinearState>),
+    Workspace(Option<String>),
+}
 
 /// Index of the worktree the command targets: the one matching `selector`, or —
 /// when `selector` is `None` — the one whose path equals `current_top`.
@@ -63,7 +75,6 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
     };
 
     let mut linear_workspace = None;
-    let steps = Steps::new();
     if cache_only {
         if let Some(pr) = crate::info_cache::read(Path::new(&row.worktree)) {
             apply_cached_pr(&mut row, pr);
@@ -75,30 +86,8 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
             row.reason_not_finished = reason;
         }
     } else if discovered {
-        // Live: one `gh pr list` plus a single-id Linear lookup, scoped to this
-        // row — not the whole worktree set.
-        steps
-            .during("Fetching PR status…", || st::fetch_prs(&d))?
-            .apply_best(&mut row);
-        if row.issue_id != "UNKNOWN" {
-            let linear = steps.during("Fetching Linear status…", || {
-                devkit_common::linear::states(
-                    std::slice::from_ref(&row.issue_id),
-                    devkit_common::secrets::resolve("LINEAR_API_KEY").as_deref(),
-                )
-            });
-            if let Some(s) = linear.get(&row.issue_id) {
-                row.linear_kind = Some(s.kind.clone());
-                row.linear_name = Some(s.name.clone());
-            }
-        }
-        let reason = st::reason_not_finished(&row, has_key, false);
-        row.finished = reason.is_none();
-        row.reason_not_finished = reason;
-        linear_workspace = steps.during(
-            "Resolving Linear workspace…",
-            devkit_common::linear::workspace_url_key,
-        );
+        linear_workspace = live_enrich(&mut row, &d, has_key)?;
+
         if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
             // pr_number and pr_url are set together, so both-Some is the normal
             // PR case; a PR-less row simply leaves the cache untouched.
@@ -114,6 +103,7 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
     } else {
         // Live, but the target is the main clone (no associated PR/Linear): only
         // the workspace link is worth resolving for rendering.
+        let steps = devkit_common::progress::Steps::new();
         linear_workspace = steps.during(
             "Resolving Linear workspace…",
             devkit_common::linear::workspace_url_key,
@@ -132,6 +122,109 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
         render(&one, cache_only);
     }
     Ok(())
+}
+
+/// Enrich one discovered row live: one `gh pr list`, a single-id Linear
+/// lookup, and the workspace key — all concurrent, filling a one-row live
+/// table as each lands. Returns the resolved Linear workspace URL key.
+fn live_enrich(
+    row: &mut IssueWorktree,
+    d: &st::Discovered,
+    has_key: bool,
+) -> Result<Option<String>> {
+    let mut lt = LiveTable::new("ISSUE WORKTREES", &crate::triage::HEADERS, 1);
+    lt.set(0, 0, Cell::Ready(crate::triage::issue_cell(row, None)));
+    lt.set(0, 1, Cell::Ready(crate::triage::branch_cell(&row.branch)));
+    lt.set(0, 2, Cell::Ready(crate::triage::tree_cell(row.dirty)));
+    let want_linear = row.issue_id != "UNKNOWN";
+    if !want_linear {
+        // No Linear fetch reports for an UNKNOWN id, so render the same dim
+        // cell the final table shows instead of a spinner that never resolves.
+        lt.set(0, 4, Cell::Ready(crate::triage::linear_cell(row, has_key)));
+    }
+    lt.redraw();
+
+    let mut linear_workspace = None;
+    let looped: Result<()> = std::thread::scope(|s| {
+        let (tx, rx) = mpsc::channel::<Update>();
+        {
+            let tx = tx.clone();
+            s.spawn(move || {
+                let _ = tx.send(Update::Prs(st::fetch_prs(d)));
+            });
+        }
+        if want_linear {
+            let tx = tx.clone();
+            let id = row.issue_id.clone();
+            s.spawn(move || {
+                let states = devkit_common::linear::states(
+                    std::slice::from_ref(&id),
+                    devkit_common::secrets::resolve("LINEAR_API_KEY").as_deref(),
+                );
+                let _ = tx.send(Update::Linear(states));
+            });
+        }
+        {
+            let tx = tx.clone();
+            s.spawn(move || {
+                let _ = tx.send(Update::Workspace(devkit_common::linear::workspace_url_key()));
+            });
+        }
+        drop(tx);
+
+        let mut got_prs = false;
+        let mut got_linear = !want_linear;
+        let mut got_ws = false;
+        // A steady sub-100ms stream of updates would starve the Timeout arm,
+        // freezing Pending-cell spinner frames; advance the frame from the
+        // update path too once 100ms have passed since the last tick.
+        let mut last_tick = std::time::Instant::now();
+        while !(got_prs && got_linear && got_ws) {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Update::Prs(res)) => {
+                    res?.apply_best(row);
+                    got_prs = true;
+                    lt.set(0, 3, Cell::Ready(crate::triage::pr_cell(row)));
+                }
+                Ok(Update::Linear(states)) => {
+                    if let Some(s) = states.get(&row.issue_id) {
+                        row.linear_kind = Some(s.kind.clone());
+                        row.linear_name = Some(s.name.clone());
+                    }
+                    got_linear = true;
+                    lt.set(0, 4, Cell::Ready(crate::triage::linear_cell(row, has_key)));
+                }
+                Ok(Update::Workspace(ws)) => {
+                    got_ws = true;
+                    linear_workspace = ws;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    lt.tick();
+                    last_tick = std::time::Instant::now();
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if got_prs && got_linear {
+                let reason = st::reason_not_finished(row, has_key, false);
+                row.finished = reason.is_none();
+                row.reason_not_finished = reason;
+                lt.set(0, 5, Cell::Ready(crate::triage::verdict_cell(row, false)));
+            }
+            if last_tick.elapsed() >= Duration::from_millis(100) {
+                lt.tick();
+                last_tick = std::time::Instant::now();
+            } else {
+                lt.redraw();
+            }
+        }
+        Ok(())
+    });
+    // Clear the live block before any error renders, so the anyhow report is
+    // not printed under a half-drawn region.
+    lt.finish();
+    looped?;
+    Ok(linear_workspace)
 }
 
 /// Build a row for the worktree at `top` straight from git, for the current-dir
