@@ -42,15 +42,22 @@ pub(crate) fn add_bar(mp: &MultiProgress, msg: &str, len: u64) -> ProgressBar {
 /// stderr; the whole group is hidden when stderr is not a terminal, so pipes,
 /// redirects, MCP, and tests produce no progress output.
 ///
-/// Two display modes:
-/// - [`Steps::new`] is unnumbered — for concurrent displays where several
-///   [`Steps::spinner`] bars animate at once, or for branchy/prompt-interleaved
-///   flows where a fixed `[i/N]` count would be misleading.
-/// - [`Steps::with_total`] numbers each [`Steps::during`] step `[i/total]`.
+/// Two orthogonal display axes:
+/// - Numbering: [`Steps::new`] is unnumbered — for concurrent displays where
+///   several [`Steps::spinner`] bars animate at once, or for
+///   branchy/prompt-interleaved flows where a fixed `[i/N]` count would be
+///   misleading. [`Steps::with_total`] numbers each [`Steps::during`] step
+///   `[i/total]`.
+/// - Persistence: by default steps are transient — each step's spinner is
+///   cleared when it settles, leaving no trace. [`Steps::persistent`] /
+///   [`Steps::persistent_with_total`] instead leave each settled step on
+///   screen as a numbered `✓`/`✗` line, so a multi-step command keeps a
+///   scrollback record of what it did.
 pub struct Steps {
     mp: MultiProgress,
     total: Option<usize>,
     n: Cell<usize>,
+    persist: bool,
 }
 
 impl Steps {
@@ -59,6 +66,7 @@ impl Steps {
             mp: Self::target(),
             total: None,
             n: Cell::new(0),
+            persist: false,
         }
     }
 
@@ -68,6 +76,29 @@ impl Steps {
             mp: Self::target(),
             total: Some(total),
             n: Cell::new(0),
+            persist: false,
+        }
+    }
+
+    /// Persistent step-log mode: each completed [`Steps::during`] step stays on
+    /// screen as a numbered `✓ n. msg (elapsed)` line instead of clearing, so
+    /// a multi-step command leaves a record of what it did.
+    pub fn persistent() -> Steps {
+        Steps {
+            mp: Self::target(),
+            total: None,
+            n: Cell::new(0),
+            persist: true,
+        }
+    }
+
+    /// Persistent mode with `[i/total]` numbering.
+    pub fn persistent_with_total(total: usize) -> Steps {
+        Steps {
+            mp: Self::target(),
+            total: Some(total),
+            n: Cell::new(0),
+            persist: true,
         }
     }
 
@@ -75,14 +106,19 @@ impl Steps {
         tty_multi()
     }
 
-    /// In numbered mode, prefix `[i/total] ` and advance the counter; otherwise
+    /// In numbered mode, prefix `[i/total] ` and advance the counter. In
+    /// persistent unnumbered mode, prefix a plain `n. ` ordinal. Otherwise
     /// pass the message through unchanged.
     fn label(&self, msg: &str) -> String {
+        let i = self.n.get() + 1;
         match self.total {
             Some(total) => {
-                let i = self.n.get() + 1;
                 self.n.set(i);
                 format!("[{i}/{total}] {msg}")
+            }
+            None if self.persist => {
+                self.n.set(i);
+                format!("{i}. {msg}")
             }
             None => msg.to_string(),
         }
@@ -100,21 +136,73 @@ impl Steps {
         add_bar(&self.mp, msg, len)
     }
 
-    /// Run `f` under a spinner (auto-numbered in numbered mode), clearing the
-    /// bar before returning — so the spinner never stays live across a `?`, a
-    /// stdin prompt, or stdout output. The closure's return value (often a
-    /// `Result`) is returned unchanged so callers can `?` it after the clear.
+    /// Run `f` under a spinner (auto-numbered in numbered mode). Transient
+    /// mode clears the bar before returning — so the spinner never stays live
+    /// across a `?`, a stdin prompt, or stdout output. Persistent mode prints
+    /// the settled `✓` line into scrollback instead; the bar itself is still
+    /// cleared, so no bar is ever active across a prompt in either mode.
+    ///
+    /// Every completion counts as success here — the persistent log line is
+    /// always `✓`, regardless of what `f` returned. A closure returning
+    /// `anyhow::Result` belongs in [`Steps::during_result`], which marks the
+    /// step `✗` on error instead of logging a failure as succeeded.
     pub fn during<T>(&self, msg: &str, f: impl FnOnce() -> T) -> T {
-        let pb = self.spinner(&self.label(msg));
+        let label = self.label(msg);
+        let pb = self.spinner(&label);
         let out = f();
-        pb.finish_and_clear();
+        self.settle(&pb, &label, true);
         out
+    }
+
+    /// [`Steps::during`] for fallible steps: in persistent mode the settled
+    /// line is `✗` when the closure errors, so the failed step stays
+    /// identifiable in the log.
+    pub fn during_result<T>(
+        &self,
+        msg: &str,
+        f: impl FnOnce() -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let label = self.label(msg);
+        let pb = self.spinner(&label);
+        let out = f();
+        self.settle(&pb, &label, out.is_ok());
+        out
+    }
+
+    /// End a step's bar: persistent mode leaves a `✓/✗` line in scrollback
+    /// (via the group's println, discarded when hidden), transient mode just
+    /// clears. The bar is always cleared so prompts and stdout stay clean.
+    fn settle(&self, pb: &ProgressBar, label: &str, ok: bool) {
+        let line = self.persist.then(|| finish_line(ok, label, pb.elapsed()));
+        pb.finish_and_clear();
+        if let Some(line) = line {
+            let _ = self.mp.println(line);
+        }
     }
 
     /// Clear every bar in the group (call once all work is done).
     pub fn clear(&self) {
         let _ = self.mp.clear();
     }
+}
+
+/// `312ms` under a second, `1.2s` from there up.
+fn fmt_elapsed(d: Duration) -> String {
+    if d < Duration::from_secs(1) {
+        format!("{}ms", d.as_millis())
+    } else {
+        format!("{:.1}s", d.as_secs_f64())
+    }
+}
+
+/// The persistent line a settled step leaves behind.
+fn finish_line(ok: bool, label: &str, elapsed: Duration) -> String {
+    let mark = if ok {
+        crate::ui::green("✓")
+    } else {
+        crate::ui::red("✗")
+    };
+    format!("{mark} {label} ({})", fmt_elapsed(elapsed))
 }
 
 impl Default for Steps {
@@ -157,5 +245,48 @@ mod tests {
         let steps = Steps::new();
         assert_eq!(steps.label("a"), "a");
         assert_eq!(steps.label("b"), "b");
+    }
+
+    #[test]
+    fn persistent_mode_numbers_steps() {
+        let steps = Steps::persistent();
+        assert_eq!(steps.label("a"), "1. a");
+        assert_eq!(steps.label("b"), "2. b");
+        let steps = Steps::persistent_with_total(2);
+        assert_eq!(steps.label("a"), "[1/2] a");
+    }
+
+    #[test]
+    fn finish_line_marks_ok_and_err() {
+        // Off-TTY colours pass through, so the glyph and text are plain.
+        let d = Duration::from_millis(312);
+        assert_eq!(finish_line(true, "1. foo", d), "✓ 1. foo (312ms)");
+        assert_eq!(finish_line(false, "2. bar", d), "✗ 2. bar (312ms)");
+    }
+
+    #[test]
+    fn fmt_elapsed_units() {
+        assert_eq!(fmt_elapsed(Duration::from_millis(312)), "312ms");
+        assert_eq!(fmt_elapsed(Duration::from_millis(999)), "999ms");
+        assert_eq!(fmt_elapsed(Duration::from_millis(1000)), "1.0s");
+        assert_eq!(fmt_elapsed(Duration::from_millis(1200)), "1.2s");
+    }
+
+    #[test]
+    fn during_result_passes_values_and_errors() {
+        let steps = Steps::persistent();
+        assert_eq!(steps.during_result("ok", || Ok(41 + 1)).unwrap(), 42);
+        // Turbofish is unavailable next to impl-Trait params; annotate the
+        // closure's return type instead.
+        let failing = || -> anyhow::Result<()> { Err(anyhow::anyhow!("boom")) };
+        assert!(steps.during_result("fail", failing).is_err());
+    }
+
+    #[test]
+    fn persistent_bars_hidden_off_tty() {
+        let steps = Steps::persistent();
+        assert!(steps.spinner("working…").is_hidden());
+        steps.during("quiet", || ());
+        steps.clear();
     }
 }
