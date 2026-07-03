@@ -123,16 +123,17 @@ fn next_snapshot(
     }
 }
 
-fn mine_table(
+/// Build the "MY OPEN PRs" table body plus the diff map for the next
+/// snapshot. Pure — no printing — so both the final render and the stale
+/// (last-run) render can share it; the stale path passes an empty `prev`.
+fn mine_table_build(
     prs: &[MinePrView],
     url_key: Option<&str>,
     prev: &BTreeMap<String, BTreeMap<String, String>>,
-) -> BTreeMap<String, BTreeMap<String, String>> {
-    println!("{}", ui::bold_cyan("MY OPEN PRs"));
+) -> (String, BTreeMap<String, BTreeMap<String, String>>) {
     let mut cur = BTreeMap::new();
     if prs.is_empty() {
-        println!("  {}", ui::dim("(none)"));
-        return cur;
+        return (format!("  {}", ui::dim("(none)")), cur);
     }
     let mut t = ui::table(&["PR", "ISSUE", "REVIEW", "CHECK", "ACTION"]);
     for pr in prs {
@@ -157,19 +158,29 @@ fn mine_table(
             ]),
         );
     }
-    println!("{t}");
+    (t.to_string(), cur)
+}
+
+fn mine_table(
+    prs: &[MinePrView],
+    url_key: Option<&str>,
+    prev: &BTreeMap<String, BTreeMap<String, String>>,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    println!("{}", ui::bold_cyan("MY OPEN PRs"));
+    let (body, cur) = mine_table_build(prs, url_key, prev);
+    println!("{body}");
     cur
 }
 
-fn reviews_table(
+/// Build the "PRs AWAITING MY REVIEW" table body plus the diff map for the
+/// next snapshot. Pure — see [`mine_table_build`].
+fn reviews_table_build(
     rows: &[ReviewPrView],
     prev: &BTreeMap<String, BTreeMap<String, String>>,
-) -> BTreeMap<String, BTreeMap<String, String>> {
-    println!("\n{}", ui::bold_cyan("PRs AWAITING MY REVIEW"));
+) -> (String, BTreeMap<String, BTreeMap<String, String>>) {
     let mut cur = BTreeMap::new();
     if rows.is_empty() {
-        println!("  {}", ui::dim("(none)"));
-        return cur;
+        return (format!("  {}", ui::dim("(none)")), cur);
     }
     let mut t = ui::table(&["PR", "AUTHOR", "MY VOTE", "ACTION"]);
     for pr in rows {
@@ -188,8 +199,115 @@ fn reviews_table(
             BTreeMap::from([("vote".to_string(), vote), ("action".to_string(), action)]),
         );
     }
-    println!("{t}");
+    (t.to_string(), cur)
+}
+
+fn reviews_table(
+    rows: &[ReviewPrView],
+    prev: &BTreeMap<String, BTreeMap<String, String>>,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    println!("\n{}", ui::bold_cyan("PRs AWAITING MY REVIEW"));
+    let (body, cur) = reviews_table_build(rows, prev);
+    println!("{body}");
     cur
+}
+
+/// The animated first line of the stale-while-revalidate block. `frame` picks
+/// the spinner glyph.
+fn stale_banner(frame: usize) -> String {
+    use devkit_common::livetable::FRAMES;
+    format!(
+        "{} {}",
+        ui::cyan(FRAMES[frame % FRAMES.len()]),
+        ui::dim("as of last run — refreshing…"),
+    )
+}
+
+/// The stale-while-revalidate body: last run's tables, every line dimmed.
+/// Pure, and built once per run — only the banner line above it animates.
+/// `dim_all` keeps painted cells dim past their own SGR resets, and the
+/// titles use plain dim (not bold cyan) so terminals don't have to resolve
+/// bold-over-faint.
+fn stale_body(
+    prev_mine: &[MinePrView],
+    prev_reviews: &[ReviewPrView],
+    want_mine: bool,
+    want_reviews: bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let empty = BTreeMap::new();
+    if want_mine {
+        out.push(ui::dim("MY OPEN PRs"));
+        let (body, _) = mine_table_build(prev_mine, None, &empty);
+        out.extend(body.lines().map(ui::dim_all));
+    }
+    if want_reviews {
+        out.push(ui::dim("PRs AWAITING MY REVIEW"));
+        let (body, _) = reviews_table_build(prev_reviews, &empty);
+        out.extend(body.lines().map(ui::dim_all));
+    }
+    out
+}
+
+/// Fetch the PR report and the Linear workspace URL key concurrently.
+/// `on_tick` runs on a ~100ms cadence while waiting, driving the caller's
+/// live render.
+fn fetch_report(
+    resolved: &str,
+    mine: bool,
+    reviews: bool,
+    ignored_checks: &[String],
+    mut on_tick: impl FnMut(),
+) -> Result<(Option<String>, devkit_issue::prs::PrsReport)> {
+    enum Update {
+        Fetched(Result<devkit_issue::prs::PrsReport>),
+        Workspace(Option<String>),
+    }
+    std::thread::scope(|s| {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let (tx, rx) = mpsc::channel::<Update>();
+        {
+            let tx = tx.clone();
+            s.spawn(move || {
+                let _ = tx.send(Update::Workspace(devkit_common::linear::workspace_url_key()));
+            });
+        }
+        {
+            let tx = tx.clone();
+            s.spawn(move || {
+                let _ = tx.send(Update::Fetched(devkit_issue::prs::gather(
+                    ".",
+                    mine,
+                    reviews,
+                    Some(resolved),
+                    ignored_checks,
+                )));
+            });
+        }
+        drop(tx);
+        let mut url_key: Option<String> = None;
+        let mut report: Option<devkit_issue::prs::PrsReport> = None;
+        // The explicit got_ws flag matters: a `None` workspace key is a
+        // legitimate answer (no Linear configured), so `url_key.is_none()`
+        // cannot mean "still waiting".
+        let mut got_ws = false;
+        while !got_ws || report.is_none() {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Update::Fetched(res)) => report = Some(res?),
+                Ok(Update::Workspace(ws)) => {
+                    got_ws = true;
+                    url_key = ws;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => on_tick(),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        match report {
+            Some(r) => Ok((url_key, r)),
+            None => anyhow::bail!("PR fetch ended without a result"),
+        }
+    })
 }
 
 // Entry point -------------------------------------------------------------------
@@ -210,33 +328,53 @@ pub fn run(
         .map(|l| l.config.defaults.ignored_checks)
         .unwrap_or_default();
 
-    let steps = devkit_common::progress::Steps::new();
-    let _b1 = steps.spinner("[1/2] Resolving Linear workspace…");
-    let _b2 = steps.spinner("[2/2] Fetching PRs from GitHub…");
-
-    let (url_key, report, repo_key) = std::thread::scope(|s| {
-        let linear_t = s.spawn(devkit_common::linear::workspace_url_key);
-        let ignored_checks = &ignored_checks;
-        let github_t = s.spawn(move || -> Result<_> {
-            let resolved = devkit_issue::prs::resolve_repo(repo.as_deref(), ".")?;
-            let report =
-                devkit_issue::prs::gather(".", mine, reviews, Some(&resolved), ignored_checks)?;
-            let repo_key = if no_cache { None } else { Some(resolved) };
-            Ok((report, repo_key))
-        });
-        let url_key = linear_t.join().expect("linear thread panicked");
-        let (report, repo_key) = github_t.join().expect("github thread panicked")?;
-        Ok::<_, anyhow::Error>((url_key, report, repo_key))
-    })?;
-
-    steps.clear();
-
+    // Resolve the repo up front: the snapshot cache is keyed by it and the
+    // stale table must render before the fetch starts.
+    let resolved = devkit_issue::prs::resolve_repo(repo.as_deref(), ".")?;
+    let repo_key = if no_cache {
+        None
+    } else {
+        Some(resolved.clone())
+    };
     let path = repo_key.as_ref().map(|r| cache_path(r));
     let Snapshot {
         mine: prev_mine,
         reviews: prev_reviews,
         mut diff,
     } = path.as_deref().map(load_snapshot).unwrap_or_default();
+
+    // Stale-while-revalidate: last run's rows render immediately, dimmed under
+    // a refreshing banner, and are cleared when fresh data lands. With no
+    // usable snapshot, a plain fetch spinner shows instead. The body is built
+    // once; each tick swaps only the banner line.
+    let mut live = devkit_common::livetable::LiveLines::new();
+    let have_stale =
+        (want_mine && !prev_mine.is_empty()) || (want_reviews && !prev_reviews.is_empty());
+    let mut block: Vec<String> = Vec::new();
+    if have_stale {
+        block.push(stale_banner(0));
+        block.extend(stale_body(
+            &prev_mine,
+            &prev_reviews,
+            want_mine,
+            want_reviews,
+        ));
+        live.set_lines(&block);
+    }
+    let _fetch_spin = (!have_stale).then(|| live.spinner("Fetching PRs from GitHub…"));
+
+    let mut frame = 0usize;
+    let fetched = fetch_report(&resolved, mine, reviews, &ignored_checks, || {
+        if have_stale {
+            frame += 1;
+            block[0] = stale_banner(frame);
+            live.set_lines(&block);
+        }
+    });
+    // Clear the stale block (and finish the spinner) before any fetch error
+    // renders, so the anyhow report is not printed under a half-drawn region.
+    live.clear();
+    let (url_key, report) = fetched?;
 
     if want_mine {
         let prev = diff.get("mine").cloned().unwrap_or_default();
@@ -283,6 +421,34 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mine_view(n: u64, action: &str) -> MinePrView {
+        MinePrView {
+            number: n,
+            url: format!("https://x/{n}"),
+            issue_id: "-".into(),
+            review_state: "none".into(),
+            check_state: "ok".into(),
+            action: action.into(),
+        }
+    }
+
+    #[test]
+    fn mine_table_build_renders_and_collects() {
+        let (body, cur) = mine_table_build(&[mine_view(12, "MERGE")], None, &BTreeMap::new());
+        assert!(body.contains("#12"), "{body}");
+        assert!(body.contains("MERGE"), "{body}");
+        assert_eq!(cur["12"]["action"], "MERGE");
+    }
+
+    #[test]
+    fn stale_block_has_banner_and_rows() {
+        assert!(stale_banner(0).contains("as of last run"));
+        let lines = stale_body(&[mine_view(12, "MERGE")], &[], true, true);
+        assert!(lines.iter().any(|l| l.contains("#12")));
+        assert!(lines.iter().any(|l| l.contains("(none)"))); // empty reviews
+    }
+
     #[test]
     fn diff_cell_shows_change() {
         // Tests are not a tty, so colour/strike helpers pass text through and the

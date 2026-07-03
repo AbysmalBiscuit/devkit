@@ -103,6 +103,24 @@ pub fn dim(s: &str) -> String {
     paint(s, Style::new().dimmed())
 }
 
+/// `s` dimmed even when it embeds styled spans. A painted span ends in an SGR
+/// reset, which would cancel a plain outer dim for the rest of the line; here
+/// dim is re-asserted after every embedded reset so the whole line stays dim.
+pub fn dim_all(s: &str) -> String {
+    dim_all_styled(color_enabled(), s)
+}
+
+/// Render the re-asserting dim when `enabled`, else pass `s` through. Split
+/// from `dim_all` so the re-assertion is testable without a terminal — the
+/// same seam as `link_styled`.
+fn dim_all_styled(enabled: bool, s: &str) -> String {
+    if enabled {
+        format!("\x1b[2m{}\x1b[0m", s.replace("\x1b[0m", "\x1b[0m\x1b[2m"))
+    } else {
+        s.to_string()
+    }
+}
+
 /// `s` in bold green — the headline "FINISHED" verdict.
 pub fn bold_green(s: &str) -> String {
     paint(
@@ -201,6 +219,23 @@ mod tests {
         assert_eq!(bold_green("FINISHED"), "FINISHED");
         assert_eq!(bold_cyan("TITLE"), "TITLE");
         assert_eq!(dim_strike("old"), "old");
+    }
+
+    #[test]
+    fn dim_all_reasserts_dim_after_embedded_resets() {
+        // An embedded span's own reset must not cancel the outer dim for the
+        // rest of the line.
+        assert_eq!(
+            dim_all_styled(true, "a \x1b[32mok\x1b[0m b"),
+            "\x1b[2ma \x1b[32mok\x1b[0m\x1b[2m b\x1b[0m"
+        );
+        // Colour off: passthrough, like every other colour helper — and the
+        // public entry point is off-tty in tests.
+        assert_eq!(
+            dim_all_styled(false, "a \x1b[32mok\x1b[0m b"),
+            "a \x1b[32mok\x1b[0m b"
+        );
+        assert_eq!(dim_all("x"), "x");
     }
 
     #[test]
