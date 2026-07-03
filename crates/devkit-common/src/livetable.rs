@@ -113,47 +113,6 @@ impl Default for LiveLines {
     }
 }
 
-/// Drive a live render from a channel of source messages. `on_msg` handles
-/// each message and returns `Ok(true)` once all sources have reported;
-/// `on_tick` runs on a ~100ms cadence for the animation. A steady sub-100ms
-/// message stream cannot starve the animation: `on_tick` also runs on the
-/// message path once 100ms have elapsed since the last tick. Returns when
-/// done, on channel disconnect, or on the first `on_msg` error (the caller
-/// clears its live block before propagating).
-///
-/// [`LiveTable::drive`] keeps its own copy of this loop: its message path
-/// must choose tick-or-redraw on the same `&mut LiveTable`, which does not
-/// split into this function's two independent closures.
-pub fn drive<M>(
-    rx: &std::sync::mpsc::Receiver<M>,
-    mut on_msg: impl FnMut(M) -> anyhow::Result<bool>,
-    mut on_tick: impl FnMut(),
-) -> anyhow::Result<()> {
-    use std::sync::mpsc::RecvTimeoutError;
-    use std::time::{Duration, Instant};
-
-    let mut last_tick = Instant::now();
-    loop {
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(msg) => {
-                let done = on_msg(msg)?;
-                if last_tick.elapsed() >= Duration::from_millis(100) {
-                    on_tick();
-                    last_tick = Instant::now();
-                }
-                if done {
-                    return Ok(());
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                on_tick();
-                last_tick = Instant::now();
-            }
-            Err(RecvTimeoutError::Disconnected) => return Ok(()),
-        }
-    }
-}
-
 /// Render a titled table block to plain lines. Pure — tests snapshot it
 /// without a terminal. `frame` picks the glyph for `Pending` cells.
 pub fn render_lines(
@@ -248,8 +207,7 @@ impl LiveTable {
     /// also advances on the message path once 100ms have elapsed since the
     /// last advance. Returns when done, on channel disconnect, or on the
     /// first `on_msg` error (the caller clears the block via [`Self::finish`]
-    /// before propagating). Same loop shape as the free [`drive`]; see there
-    /// for why this copy stays separate.
+    /// before propagating).
     pub fn drive<M>(
         &mut self,
         rx: &std::sync::mpsc::Receiver<M>,
@@ -329,20 +287,17 @@ mod tests {
         let (tx, rx) = mpsc::channel::<u32>();
         tx.send(1).unwrap();
         tx.send(2).unwrap();
+        let mut lt = LiveTable::new("T", &["A"], 1);
         let mut seen = Vec::new();
-        drive(
-            &rx,
-            |m| {
-                seen.push(m);
-                Ok(m == 2)
-            },
-            || {},
-        )
+        lt.drive(&rx, |_, m| {
+            seen.push(m);
+            Ok(m == 2)
+        })
         .unwrap();
         assert_eq!(seen, [1, 2]);
         // A disconnected channel ends the loop cleanly instead of erroring.
         drop(tx);
-        drive(&rx, |_: u32| Ok(false), || {}).unwrap();
+        lt.drive(&rx, |_, _: u32| Ok(false)).unwrap();
     }
 
     #[test]
@@ -350,7 +305,8 @@ mod tests {
         use std::sync::mpsc;
         let (tx, rx) = mpsc::channel::<u32>();
         tx.send(1).unwrap();
-        let err = drive(&rx, |_| anyhow::bail!("boom"), || {}).unwrap_err();
+        let mut lt = LiveTable::new("T", &["A"], 1);
+        let err = lt.drive(&rx, |_, _| anyhow::bail!("boom")).unwrap_err();
         assert_eq!(err.to_string(), "boom");
     }
 
