@@ -75,6 +75,9 @@ windows-sys = { version = "0.59", features = [
 comfy-table = { version = "7", features = ["custom_styling"] }
 anstyle = "1"
 indicatif = "0.17"
+# Same 0.15 line indicatif resolves to: progress code sets this crate's global
+# colour flag, which only works if both link the same console build.
+console = "0.15"
 supports-hyperlinks = "3"
 ureq = { version = "2", features = ["json"] }
 rpassword = "7"

@@ -6,6 +6,11 @@ use std::time::Duration;
 /// A `MultiProgress` drawing to stderr, or fully hidden when stderr is not a
 /// terminal — so pipes, redirects, MCP, and tests produce no live output.
 pub(crate) fn tty_multi() -> MultiProgress {
+    // indicatif's template colours ({spinner:.cyan}) render through console's
+    // process-wide colour flag, which auto-detects on *stdout*. Every bar
+    // here draws on stderr, so align the flag with the stderr decision:
+    // `cmd > file` keeps a coloured spinner, and NO_COLOR still disables it.
+    console::set_colors_enabled(crate::ui::color_enabled_on(crate::ui::Stream::Stderr));
     if std::io::stderr().is_terminal() {
         MultiProgress::new()
     } else {

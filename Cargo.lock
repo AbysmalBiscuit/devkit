@@ -266,6 +266,7 @@ dependencies = [
  "anstyle",
  "anyhow",
  "comfy-table",
+ "console 0.15.11",
  "fd-lock",
  "glob",
  "indicatif",

@@ -74,7 +74,7 @@ pub enum Stream {
 /// otherwise colour is emitted only when that stream is a real terminal.
 /// Piped output therefore stays plain by default, which also keeps
 /// rendered-table tests deterministic.
-fn color_enabled_on(stream: Stream) -> bool {
+pub(crate) fn color_enabled_on(stream: Stream) -> bool {
     if std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
         return false;
     }
