@@ -264,9 +264,7 @@ fn fetch_report(
         Workspace(Option<String>),
     }
     std::thread::scope(|s| {
-        use std::sync::mpsc;
-        use std::time::Duration;
-        let (tx, rx) = mpsc::channel::<Update>();
+        let (tx, rx) = std::sync::mpsc::channel::<Update>();
         {
             let tx = tx.clone();
             s.spawn(move || {
@@ -292,17 +290,20 @@ fn fetch_report(
         // legitimate answer (no Linear configured), so `url_key.is_none()`
         // cannot mean "still waiting".
         let mut got_ws = false;
-        while !got_ws || report.is_none() {
-            match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(Update::Fetched(res)) => report = Some(res?),
-                Ok(Update::Workspace(ws)) => {
-                    got_ws = true;
-                    url_key = ws;
+        devkit_common::livetable::drive(
+            &rx,
+            |msg| {
+                match msg {
+                    Update::Fetched(res) => report = Some(res?),
+                    Update::Workspace(ws) => {
+                        got_ws = true;
+                        url_key = ws;
+                    }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => on_tick(),
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
+                Ok(got_ws && report.is_some())
+            },
+            &mut on_tick,
+        )?;
         match report {
             Some(r) => Ok((url_key, r)),
             None => anyhow::bail!("PR fetch ended without a result"),
