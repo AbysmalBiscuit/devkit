@@ -65,6 +65,22 @@ pub struct Discovered {
 }
 
 impl Discovered {
+    /// Assemble a `Discovered` from pre-built rows, bypassing filesystem
+    /// discovery. A seam for tests of callers that re-orchestrate the gather
+    /// (e.g. the CLI's live table); real callers use [`discover`].
+    #[doc(hidden)]
+    pub fn from_parts(
+        rows: Vec<IssueWorktree>,
+        main_path: String,
+        issue_ids: Vec<String>,
+    ) -> Discovered {
+        Discovered {
+            rows,
+            main_path,
+            issue_ids,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }

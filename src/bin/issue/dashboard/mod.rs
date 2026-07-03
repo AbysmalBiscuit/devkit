@@ -22,7 +22,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
 
     // At-a-glance: worktree triage, then my PRs + PRs awaiting my review.
-    let report = crate::status::gather_with_bars(&start, &[])?;
+    let report = crate::status::gather_live(&start, &[])?;
     triage::render(&report, false);
     println!();
     // The PR tables are a secondary panel; if gh is unavailable the rest of the
