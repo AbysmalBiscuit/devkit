@@ -2,19 +2,22 @@
 
 Draw the triage table the moment its structure is known, fill cells in as each
 data source lands, and keep the final stdout output byte-identical to today.
+Also make step-driven commands print a persistent numbered step log instead of
+overwriting one spinner line.
 
-## Status of this spec
+## Decisions (confirmed with the user)
 
-Brainstormed with timing data but **scope decisions are assumed, not
-confirmed** — the user was away for the clarifying questions. Assumptions,
-each marked inline where it bites:
-
-- **A1 (scope):** `issue` (status) and `issue info` get live rendering;
-  `issue prs` gets stale-while-revalidate as a phase-2 follow-up.
-- **A2 (pending look):** v1 pending cells are a dim `…`; animated in-cell
-  spinners are a later polish pass on the same widget.
-- **A3 (output contract):** the live table animates on stderr and is cleared;
-  the final table prints to stdout exactly as today.
+- **D1 (scope):** `issue` (status), `issue info`, *and* `issue prs` — all
+  now. `prs` uses stale-while-revalidate with stale rows rendered dim.
+- **D2 (pending look):** animated in-cell spinners from v1 (braille frames,
+  ticker-driven), not static placeholders.
+- **D3 (output contract):** the live table animates on stderr and is cleared;
+  the final table prints to stdout exactly as today. OSC8 links render fine
+  in the live stderr table too — terminals hyperlink by bytes, not stream —
+  but stdout is what redirects/pipes/MCP capture, so it stays the contract.
+- **D4 (step log):** step-driven commands (`issue checkout-pr`, `setup`,
+  `review`, `end`) keep completed steps on screen as numbered `✓` lines
+  instead of clearing each spinner.
 
 ## Problem
 
@@ -41,18 +44,19 @@ Mid-flight (stderr, TTY only):
 ```
 ISSUE WORKTREES
  ISSUE     BRANCH                        TREE   PR          LINEAR     VERDICT
- DBI-1058  lev/dbi-1058-labos-scheduler  clean  OPEN #3512  …          …
- DBI-1102  lev/dbi-1102-fix-foo          …      MERGED #9   …          …
-⠋ Checking 12 worktrees [=====>      ] 5/12
-⠋ Fetching Linear states…
+ DBI-1058  lev/dbi-1058-labos-scheduler  clean  OPEN #3512  ⠹          ⠹
+ DBI-1102  lev/dbi-1102-fix-foo          ⠹      MERGED #9   ⠹          ⠹
+⠹ Checking 12 worktrees [=====>      ] 5/12
+⠹ Fetching Linear states…
 ✓ PRs fetched
 ```
 
-Cells pop in per source: TREE cells fill one by one as the dirty fan-out
-streams, PR fills as one column when `gh pr list` lands, LINEAR likewise, and
-each row's VERDICT appears when its three inputs are complete. When all
-sources are done the stderr block clears and the final table prints to stdout
-— byte-identical to the current output (A3).
+Pending cells animate a braille spinner frame (D2); a ~100ms ticker rotates
+the frame and redraws. Cells pop in per source: TREE cells fill one by one as
+the dirty fan-out streams, PR fills as one column when `gh pr list` lands,
+LINEAR likewise, and each row's VERDICT appears when its three inputs are
+complete. When all sources are done the stderr block clears and the final
+table prints to stdout — byte-identical to the current output (D3).
 
 Off-TTY (pipes, MCP, tests): no live rendering at all; behavior and output
 are unchanged.
@@ -83,7 +87,11 @@ A live-updating table block over `indicatif::MultiProgress`, following the
 `progress::Steps` conventions: stderr, hidden when stderr is not a terminal.
 
 ```rust
-pub enum Cell { Ready(String), Pending }   // Pending renders dim "…" (A2)
+pub enum Cell {
+    Ready(String),
+    Stale(String),  // prs SWR: last-run value, rendered dim (D1)
+    Pending,        // renders the current braille spinner frame (D2)
+}
 
 pub struct LiveTable { /* headers, title, rows, MultiProgress, line bars */ }
 
@@ -107,10 +115,12 @@ Mechanics:
   several lines in a narrow terminal, so the mapping is *lines*, not rows.
 - Status spinners/bars join the same `MultiProgress` after the table lines,
   giving the "indicatif stuff under the table" layout for free.
-- Redraws happen only when data arrives (≤ ~4 relayouts per run). Column
-  widths may shift between redraws as `…` becomes real content; accepted —
-  the table converges within a few seconds. A ticker-driven in-cell spinner
-  animation (A2 follow-up) plugs into the same `redraw`.
+- A ~100ms ticker thread advances the shared spinner frame and calls
+  `redraw` while any cell is `Pending` (D2); it stops when the last pending
+  cell resolves. Data arrivals also trigger an immediate redraw. Column
+  widths may shift when a 1-glyph spinner becomes real content; accepted —
+  the table converges within a few seconds, and `Dynamic` arrangement
+  re-measures every redraw anyway.
 - Off-TTY the `MultiProgress` is hidden (same check as `Steps::target`);
   every method is a cheap no-op on the drawing side, so call sites need no
   branching.
@@ -140,7 +150,7 @@ enum Update {
 - On completion: `finish()` the live table, run the existing
   `assemble`-equivalent finalization, and print via `triage::render` to
   stdout, plus the existing "N finished" / no-key footers. stdout is
-  byte-identical to today (A3).
+  byte-identical to today (D3).
 - The library `st::gather` (MCP, dashboard) and `--json` paths are untouched.
 
 **Error handling:** a `gh` failure currently fails the whole command; keep
@@ -159,16 +169,53 @@ Two changes:
   (ISSUE/BRANCH/TREE known locally), PR/LINEAR/VERDICT pending, filled as
   the two fetches land. `--cache-only` and `--json` skip the live path.
 
-### 5. Phase 2 (separate spec/plan): `issue prs` stale-while-revalidate
+### 5. `issue prs` — stale-while-revalidate
 
 One GraphQL query supplies the whole table, so nothing can fill
-progressively. Instead: render the previous run's snapshot (the diff cache
-at `~/.cache/devkit/pr-status/<repo>.json` already stores it) immediately,
-dimmed under an unmissable `as of last run — refreshing ⠋` banner, then
-overwrite with fresh data; the existing `old → new` diff cells then show
-what changed while you watched. Deliberately deferred: showing stale PR
-state has a real act-on-stale-data risk and deserves its own design pass.
-The cache would need to grow from diff-keys to full row snapshots.
+progressively. Instead: render the previous run's snapshot immediately with
+every cell `Cell::Stale` — dim (D1) under an `as of last run — refreshing ⠋`
+banner — then overwrite with fresh data when the fetch lands; the existing
+`old → new` diff cells then show exactly what changed while you watched.
+
+- The diff cache at `~/.cache/devkit/pr-status/<repo>.json` currently stores
+  only the diffed fields (`review`/`check`/`action` keyed by PR number); it
+  grows to full row snapshots (`MinePrView`/`ReviewPrView` serialized) so
+  the stale table has PR numbers, URLs, authors, and issue ids to render.
+  Old-format caches deserialize as absent → first run after upgrade simply
+  has no stale table, same as `--no-cache`.
+- A PR present in the cache but gone from fresh results disappears at
+  overwrite; new PRs appear. No tombstone rendering.
+- `--no-cache` skips the stale render as well as the diff.
+- Dim is the staleness affordance: dim rows + the banner mean "read-only
+  until it settles". The fresh overwrite restores normal colours.
+
+### 6. Persistent step log for step-driven commands
+
+`issue checkout-pr` (also `setup`, `review`, `end`) runs each step through
+`Steps::during`, which `finish_and_clear`s the spinner — the user watches a
+single line overwrite itself and ends with no record of what happened.
+Change: a persist mode on `Steps` where a completed step stays on screen as
+a numbered line, and the next step's spinner appears below it:
+
+```
+✓ 1. Resolving Linear issue ENG-123 (312ms)
+✓ 2. Fetching PR #3512 (1.2s)
+⠋ 3. Creating worktree…
+```
+
+- `Steps::persistent()` (and `persistent_with_total(n)`) construct the mode;
+  `during` then ends with `finish_with_message` (`✓ n. msg (elapsed)`)
+  instead of clearing. Finished bars are plain flushed lines in indicatif,
+  so stdin prompts and stdout output between steps still work — no bar is
+  *active* across a prompt, which is the property the old clearing behavior
+  existed to protect.
+- On a step that returns an error the bar finishes as `✗ n. msg` before the
+  error propagates, so the failed step is identifiable in the log.
+- Off-TTY behavior is unchanged: hidden entirely (pipes/MCP/tests see no
+  step noise). The step log is a TTY affordance, not output.
+- Call sites opt in by constructor choice; `Steps::new` keeps the clearing
+  behavior for flows that genuinely want a transient spinner (e.g. the
+  concurrent bars in `status` that the live table replaces anyway).
 
 ## Testing
 
@@ -182,7 +229,11 @@ The cache would need to grow from diff-keys to full row snapshots.
   (PR-first, Linear-first, dirty interleaved).
 - `dirty_stream`: results match `dirty_many` on the same paths; callbacks
   arrive exactly once per path. Poll, don't sleep (Windows CI rule).
-- Existing rendered-table tests must pass unchanged — that is the A3
+- `prs` snapshot cache: round-trip serialization; old-format cache
+  deserializes as absent (no stale table) rather than erroring.
+- Persistent `Steps`: off-TTY bars stay hidden (existing invariant test
+  pattern); numbered labels advance; error path finishes `✗`.
+- Existing rendered-table tests must pass unchanged — that is the D3
   contract check.
 
 ## Non-goals
@@ -196,18 +247,14 @@ The cache would need to grow from diff-keys to full row snapshots.
 ## Phasing
 
 1. Extract cell formatters (pure refactor, tests).
-2. `LiveTable` widget in `devkit-common` with snapshot tests.
+2. `LiveTable` widget in `devkit-common` (cells, ticker animation, status
+   lines) with snapshot tests.
 3. Wire `issue` status: `Update` channel + `dirty_stream`.
 4. Parallelize + wire `issue info`.
-5. Polish: in-cell spinner animation (ticker in `LiveTable`).
-6. Phase 2: `issue prs` stale-while-revalidate (own design).
+5. `issue prs`: snapshot cache upgrade + stale-while-revalidate render.
+6. Persistent step-log mode on `Steps`; adopt in `checkout-pr`, `setup`,
+   `review`, `end`.
 
 ## Unresolved questions
 
-1. Confirm A1–A3 (scope, pending-cell look, stdout contract).
-2. `issue prs` SWR: is showing last-run PR state for ~5s acceptable given
-   merge decisions may be made from it?
-3. Is `issue info` worth the live table at all (single row), or only the
-   parallelization?
-4. Should the in-cell spinner polish (phase 5) happen at all, or is dim `…`
-   the end state?
+None — D1–D4 confirmed 2026-07-03.
