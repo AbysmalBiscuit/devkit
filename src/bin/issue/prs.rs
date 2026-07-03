@@ -161,15 +161,57 @@ fn mine_table_build(
     (t.to_string(), cur)
 }
 
-fn mine_table(
-    prs: &[MinePrView],
+/// The colour legend and diff hint shown under the tables when any fetched
+/// section has rows.
+fn legend_lines() -> [String; 2] {
+    [
+        format!(
+            "{} {} (REVIEW NEEDED · address changes · fix CI) · {} (MERGE · done) · {} (awaiting author fixes) · {}",
+            ui::dim("ACTION colour:"),
+            ui::red("needs you"),
+            ui::green("ready to land"),
+            ui::yellow("waiting on author"),
+            ui::dim("passive (awaiting review · draft)"),
+        ),
+        ui::dim("old → new in a cell = value changed since the last run."),
+    ]
+}
+
+/// Build every stdout line of the final render, in print order, plus the
+/// updated diff map for the next snapshot. Pure — and the layout contract
+/// for the stale block: [`stale_body`] must produce the same line count for
+/// the same rows, or the swap from stale to fresh shifts the screen by the
+/// difference instead of replacing the block in place.
+fn final_lines(
+    report: &devkit_issue::prs::PrsReport,
     url_key: Option<&str>,
-    prev: &BTreeMap<String, BTreeMap<String, String>>,
-) -> BTreeMap<String, BTreeMap<String, String>> {
-    println!("{}", ui::bold_cyan("MY OPEN PRs"));
-    let (body, cur) = mine_table_build(prs, url_key, prev);
-    println!("{body}");
-    cur
+    mut diff: DiffMap,
+    want_mine: bool,
+    want_reviews: bool,
+) -> (Vec<String>, DiffMap) {
+    let mut out = Vec::new();
+    if want_mine {
+        let prev = diff.get("mine").cloned().unwrap_or_default();
+        out.push(ui::bold_cyan("MY OPEN PRs"));
+        let (body, cur) = mine_table_build(&report.mine, url_key, &prev);
+        out.extend(body.lines().map(String::from));
+        diff.insert("mine".to_string(), cur);
+    }
+    if want_reviews {
+        let prev = diff.get("reviews").cloned().unwrap_or_default();
+        out.push(String::new());
+        out.push(ui::bold_cyan("PRs AWAITING MY REVIEW"));
+        let (body, cur) = reviews_table_build(&report.reviews, &prev);
+        out.extend(body.lines().map(String::from));
+        diff.insert("reviews".to_string(), cur);
+    }
+    if (want_mine && !report.mine.is_empty()) || (want_reviews && !report.reviews.is_empty()) {
+        let [legend, hint] = legend_lines();
+        out.push(String::new());
+        out.push(legend);
+        out.push(hint);
+    }
+    (out, diff)
 }
 
 /// Build the "PRs AWAITING MY REVIEW" table body plus the diff map for the
@@ -202,28 +244,16 @@ fn reviews_table_build(
     (t.to_string(), cur)
 }
 
-fn reviews_table(
-    rows: &[ReviewPrView],
-    prev: &BTreeMap<String, BTreeMap<String, String>>,
-) -> BTreeMap<String, BTreeMap<String, String>> {
-    println!("\n{}", ui::bold_cyan("PRs AWAITING MY REVIEW"));
-    let (body, cur) = reviews_table_build(rows, prev);
-    println!("{body}");
-    cur
-}
-
-/// The static first line of the stale-while-revalidate block; the fetch
-/// spinner animates below the block instead.
-fn stale_banner() -> String {
-    ui::Paint::on(ui::Stream::Stderr).dim("as of last run")
-}
-
-/// The stale-while-revalidate body: last run's tables, every line dimmed.
+/// The stale-while-revalidate block: last run's tables, every line dimmed.
 /// Pure, and built once per run — the whole block is static while the fetch
 /// spinner below it animates. The block draws on stderr, so the dim keys off
 /// that stream. `dim_all` keeps painted cells dim past their own SGR resets,
 /// and the titles use plain dim (not bold cyan) so terminals don't have to
 /// resolve bold-over-faint.
+///
+/// Layout contract: line-for-line parallel to [`final_lines`] — same line
+/// count for the same rows — so the fresh render lands exactly where the
+/// block was and the screen does not shift at the swap.
 fn stale_body(
     prev_mine: &[MinePrView],
     prev_reviews: &[ReviewPrView],
@@ -239,9 +269,16 @@ fn stale_body(
         out.extend(body.lines().map(|l| paint.dim_all(l)));
     }
     if want_reviews {
+        out.push(String::new());
         out.push(paint.dim("PRs AWAITING MY REVIEW"));
         let (body, _) = reviews_table_build(prev_reviews, &empty);
         out.extend(body.lines().map(|l| paint.dim_all(l)));
+    }
+    if (want_mine && !prev_mine.is_empty()) || (want_reviews && !prev_reviews.is_empty()) {
+        let [legend, hint] = legend_lines();
+        out.push(String::new());
+        out.push(paint.dim_all(&legend));
+        out.push(paint.dim_all(&hint));
     }
     out
 }
@@ -332,28 +369,32 @@ pub fn run(
     let Snapshot {
         mine: prev_mine,
         reviews: prev_reviews,
-        mut diff,
+        diff,
     } = path.as_deref().map(load_snapshot).unwrap_or_default();
 
-    // Stale-while-revalidate: last run's rows render immediately, dimmed under
-    // an "as of last run" banner, and are cleared when fresh data lands. The
-    // fetch spinner animates below the block — or alone when there is no
-    // usable snapshot — matching the status-lines-under-the-table layout of
-    // the live triage table.
+    // Stale-while-revalidate: last run's rows render immediately, dimmed, and
+    // the fresh render replaces them in place when it lands. The fetch spinner
+    // animates below the block — or alone when there is no usable snapshot —
+    // matching the status-lines-under-the-table layout of the live triage
+    // table.
     let mut live = devkit_common::livetable::LiveLines::new();
     let have_stale =
         (want_mine && !prev_mine.is_empty()) || (want_reviews && !prev_reviews.is_empty());
-    if have_stale {
-        let mut block = vec![stale_banner()];
-        block.extend(stale_body(
+    let spin_msg = if have_stale {
+        live.set_lines(&stale_body(
             &prev_mine,
             &prev_reviews,
             want_mine,
             want_reviews,
         ));
-        live.set_lines(&block);
-    }
-    let _fetch_spin = live.spinner("Fetching PRs from GitHub…");
+        format!(
+            "Fetching PRs from GitHub… {}",
+            ui::Paint::on(ui::Stream::Stderr).dim("(table is as of the last run)")
+        )
+    } else {
+        "Fetching PRs from GitHub…".to_string()
+    };
+    let _fetch_spin = live.spinner(&spin_msg);
 
     let fetched = fetch_report(&resolved, mine, reviews, &ignored_checks);
     // Clear the stale block (and finish the spinner) before any fetch error
@@ -361,30 +402,9 @@ pub fn run(
     live.clear();
     let (url_key, report) = fetched?;
 
-    if want_mine {
-        let prev = diff.get("mine").cloned().unwrap_or_default();
-        let cur = mine_table(&report.mine, url_key.as_deref(), &prev);
-        diff.insert("mine".to_string(), cur);
-    }
-    if want_reviews {
-        let prev = diff.get("reviews").cloned().unwrap_or_default();
-        let cur = reviews_table(&report.reviews, &prev);
-        diff.insert("reviews".to_string(), cur);
-    }
-
-    if (want_mine && !report.mine.is_empty()) || (want_reviews && !report.reviews.is_empty()) {
-        println!(
-            "\n{} {} (REVIEW NEEDED · address changes · fix CI) · {} (MERGE · done) · {} (awaiting author fixes) · {}",
-            ui::dim("ACTION colour:"),
-            ui::red("needs you"),
-            ui::green("ready to land"),
-            ui::yellow("waiting on author"),
-            ui::dim("passive (awaiting review · draft)"),
-        );
-        println!(
-            "{}",
-            ui::dim("old → new in a cell = value changed since the last run.")
-        );
+    let (lines, diff) = final_lines(&report, url_key.as_deref(), diff, want_mine, want_reviews);
+    for l in &lines {
+        println!("{l}");
     }
 
     if let Some(p) = &path {
@@ -426,12 +446,51 @@ mod tests {
         assert_eq!(cur["12"]["action"], "MERGE");
     }
 
+    fn review_view(n: u64, action: &str) -> ReviewPrView {
+        ReviewPrView {
+            number: n,
+            url: format!("https://x/{n}"),
+            author: "alice".into(),
+            my_vote: "-".into(),
+            action: action.into(),
+        }
+    }
+
     #[test]
-    fn stale_block_has_banner_and_rows() {
-        assert!(stale_banner().contains("as of last run"));
+    fn stale_block_has_rows_and_legend() {
         let lines = stale_body(&[mine_view(12, "MERGE")], &[], true, true);
         assert!(lines.iter().any(|l| l.contains("#12")));
         assert!(lines.iter().any(|l| l.contains("(none)"))); // empty reviews
+        assert!(lines.iter().any(|l| l.contains("ACTION colour:")));
+    }
+
+    // The layout contract behind the in-place swap: for the same rows, the
+    // stale block and the final render must have the same line count, or the
+    // screen shifts by the difference when the fresh tables land.
+    #[test]
+    fn stale_block_aligns_with_final_render() {
+        let mine = vec![mine_view(12, "MERGE"), mine_view(13, "fix CI")];
+        let reviews = vec![review_view(9, "REVIEW NEEDED")];
+        let report = devkit_issue::prs::PrsReport {
+            mine: mine.clone(),
+            reviews: reviews.clone(),
+        };
+        for (want_mine, want_reviews) in [(true, true), (true, false), (false, true)] {
+            let (fresh, _) = final_lines(&report, None, DiffMap::new(), want_mine, want_reviews);
+            let stale = stale_body(&mine, &reviews, want_mine, want_reviews);
+            assert_eq!(
+                stale.len(),
+                fresh.len(),
+                "stale/fresh line counts diverge for mine={want_mine} reviews={want_reviews}"
+            );
+        }
+        // Empty sections render a `(none)` line on both sides.
+        let report = devkit_issue::prs::PrsReport {
+            mine: vec![],
+            reviews: vec![],
+        };
+        let (fresh, _) = final_lines(&report, None, DiffMap::new(), true, true);
+        assert_eq!(stale_body(&[], &[], true, true).len(), fresh.len());
     }
 
     #[test]
