@@ -34,8 +34,20 @@ pub struct LiveLines {
 
 impl LiveLines {
     pub fn new() -> LiveLines {
+        Self::over(tty_multi())
+    }
+
+    /// A block that never draws, even on a TTY — for callers that run the same
+    /// update loop but must not render (e.g. machine-readable output modes).
+    pub fn hidden() -> LiveLines {
+        Self::over(MultiProgress::with_draw_target(
+            indicatif::ProgressDrawTarget::hidden(),
+        ))
+    }
+
+    fn over(mp: MultiProgress) -> LiveLines {
         LiveLines {
-            mp: tty_multi(),
+            mp,
             lines: Vec::new(),
             status: RefCell::new(Vec::new()),
         }
@@ -179,9 +191,19 @@ pub struct LiveTable {
 impl LiveTable {
     /// `nrows` rows of all-`Pending` cells under `headers`.
     pub fn new(title: &str, headers: &[&str], nrows: usize) -> LiveTable {
+        Self::over(LiveLines::new(), title, headers, nrows)
+    }
+
+    /// Like [`LiveTable::new`] but never draws, even on a TTY — the update
+    /// loop still runs for callers that must not render (e.g. `--json`).
+    pub fn hidden(title: &str, headers: &[&str], nrows: usize) -> LiveTable {
+        Self::over(LiveLines::hidden(), title, headers, nrows)
+    }
+
+    fn over(lines: LiveLines, title: &str, headers: &[&str], nrows: usize) -> LiveTable {
         let cols = headers.len();
         LiveTable {
-            lines: LiveLines::new(),
+            lines,
             title: title.to_string(),
             headers: headers.iter().map(|s| s.to_string()).collect(),
             rows: (0..nrows)

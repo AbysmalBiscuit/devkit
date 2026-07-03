@@ -85,7 +85,7 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
             row.reason_not_finished = reason;
         }
     } else if discovered {
-        linear_workspace = live_enrich(&mut row, &d, has_key)?;
+        linear_workspace = live_enrich(&mut row, &d, has_key, !json)?;
 
         if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
             // pr_number and pr_url are set together, so both-Some is the normal
@@ -125,13 +125,20 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
 
 /// Enrich one discovered row live: one `gh pr list`, a single-id Linear
 /// lookup, and the workspace key — all concurrent, filling a one-row live
-/// table as each lands. Returns the resolved Linear workspace URL key.
+/// table as each lands. `render: false` keeps the concurrent fetches but
+/// draws nothing (`--json` must not animate). Returns the resolved Linear
+/// workspace URL key.
 fn live_enrich(
     row: &mut IssueWorktree,
     d: &st::Discovered,
     has_key: bool,
+    render: bool,
 ) -> Result<Option<String>> {
-    let mut lt = LiveTable::new("ISSUE WORKTREES", &crate::triage::HEADERS, 1);
+    let mut lt = if render {
+        LiveTable::new("ISSUE WORKTREES", &crate::triage::HEADERS, 1)
+    } else {
+        LiveTable::hidden("ISSUE WORKTREES", &crate::triage::HEADERS, 1)
+    };
     lt.set(0, 0, Cell::Ready(crate::triage::issue_cell(row, None)));
     lt.set(0, 1, Cell::Ready(crate::triage::branch_cell(&row.branch)));
     lt.set(0, 2, Cell::Ready(crate::triage::tree_cell(row.dirty)));
