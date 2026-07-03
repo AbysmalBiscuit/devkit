@@ -591,7 +591,9 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
 
 // views + gather ----------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize)]
+/// Persisted in the CLI's pr-status snapshot cache; a new field needs
+/// `#[serde(default)]` or old caches read as empty.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MinePrView {
     pub number: u64,
     pub url: String,
@@ -601,7 +603,9 @@ pub struct MinePrView {
     pub action: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Persisted in the CLI's pr-status snapshot cache; a new field needs
+/// `#[serde(default)]` or old caches read as empty.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewPrView {
     pub number: u64,
     pub url: String,
