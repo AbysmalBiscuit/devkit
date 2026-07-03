@@ -73,6 +73,8 @@ issue review finish  [<body>] [--pr <number>] [--to <alias|#channel>] [--arg k=v
 - **`dashboard`**: the triage + PR tables, plus terminal timelines of your Linear issues by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). The timeline fetches (Linear + GitHub) are cached under `~/.cache/devkit/dashboard` for a few minutes so reruns are fast; the live triage/PR panel is never cached. `--no-plots` shows only the tables; `--no-cache` forces a fresh fetch.
 - **`review`**: two subcommands — `review request` (push, open/reuse PR, add GitHub reviewers, Slack them) and `review finish` (Slack the PR author when you are done reviewing). See below.
 
+On a TTY, `issue` and `issue info` draw the triage table immediately and fill in each cell with an animated braille spinner as git, GitHub, and Linear data land. `issue prs` shows the previous run's tables dimmed under a "refreshing…" banner while it fetches fresh data (stale-while-revalidate), then swaps in the new tables. The step-driven commands (`checkout-pr`, `setup`, `end`, `review`) keep every completed step on screen as a numbered `✓` log line with its elapsed time. All of this live rendering goes to stderr and is TTY-gated — stdout, piped output, and redirected output are unaffected.
+
 ### `issue review request`
 
 Push the branch, open or reuse the PR, request review on GitHub, and Slack the reviewers.
