@@ -326,7 +326,10 @@ mod tests {
         // Colour off: passthrough, like every other colour helper — and the
         // public entry point is off-tty in tests.
         let off = Paint { enabled: false };
-        assert_eq!(off.dim_all("a \x1b[32mok\x1b[0m b"), "a \x1b[32mok\x1b[0m b");
+        assert_eq!(
+            off.dim_all("a \x1b[32mok\x1b[0m b"),
+            "a \x1b[32mok\x1b[0m b"
+        );
         assert_eq!(dim_all("x"), "x");
     }
 

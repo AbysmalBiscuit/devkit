@@ -201,7 +201,11 @@ fn fmt_elapsed(d: Duration) -> String {
 /// the mark's colour keys off that stream, not stdout.
 fn finish_line(ok: bool, label: &str, elapsed: Duration) -> String {
     let paint = crate::ui::Paint::on(crate::ui::Stream::Stderr);
-    let mark = if ok { paint.green("✓") } else { paint.red("✗") };
+    let mark = if ok {
+        paint.green("✓")
+    } else {
+        paint.red("✗")
+    };
     format!("{mark} {label} ({})", fmt_elapsed(elapsed))
 }
 
