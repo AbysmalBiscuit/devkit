@@ -801,7 +801,13 @@ mod tests {
 
     #[test]
     fn bring_down_releases_a_pidless_reservation() {
-        let holder = format!("/down-test-{}", std::process::id());
+        // A real holder dir: prune judges a reservation dead the moment its
+        // holder path is gone (grace applies only after that check), so a
+        // nonexistent holder lets a concurrent test's prune free this row
+        // before bring_down runs.
+        let holderdir = std::env::temp_dir().join(format!("down-test-{}", std::process::id()));
+        std::fs::create_dir_all(&holderdir).unwrap();
+        let holder = holderdir.to_str().unwrap().to_string();
         registry::alloc(&holder, &[("web".to_string(), 7000)], Role::Issue).unwrap();
         let out = bring_down(&holder, None).unwrap();
         assert_eq!(out.stopped, 0, "no pid recorded, nothing to stop");
@@ -809,6 +815,7 @@ mod tests {
         // Idempotent: a second down frees nothing.
         let again = bring_down(&holder, None).unwrap();
         assert!(again.freed.is_empty());
+        let _ = std::fs::remove_dir_all(&holderdir);
     }
 
     #[test]
