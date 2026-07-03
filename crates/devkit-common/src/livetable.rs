@@ -176,6 +176,46 @@ impl LiveTable {
         self.lines.bar(msg, len)
     }
 
+    /// Drive the table from a channel of source messages. Calls `on_msg` for
+    /// each message; `on_msg` returns `Ok(true)` once all sources have
+    /// reported. A 100ms receive timeout advances the spinner frame, and a
+    /// steady sub-100ms message stream cannot starve the animation: the frame
+    /// also advances on the message path once 100ms have elapsed since the
+    /// last advance. Returns when done, on channel disconnect, or on the
+    /// first `on_msg` error (the caller clears the block via [`Self::finish`]
+    /// before propagating).
+    pub fn drive<M>(
+        &mut self,
+        rx: &std::sync::mpsc::Receiver<M>,
+        mut on_msg: impl FnMut(&mut LiveTable, M) -> anyhow::Result<bool>,
+    ) -> anyhow::Result<()> {
+        use std::sync::mpsc::RecvTimeoutError;
+        use std::time::{Duration, Instant};
+
+        let mut last_tick = Instant::now();
+        loop {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(msg) => {
+                    let done = on_msg(self, msg)?;
+                    if last_tick.elapsed() >= Duration::from_millis(100) {
+                        self.tick();
+                        last_tick = Instant::now();
+                    } else {
+                        self.redraw();
+                    }
+                    if done {
+                        return Ok(());
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    self.tick();
+                    last_tick = Instant::now();
+                }
+                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            }
+        }
+    }
+
     /// Erase the live block; the caller prints the final table to stdout.
     pub fn finish(self) {
         self.lines.clear();

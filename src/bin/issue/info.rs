@@ -7,7 +7,6 @@ use devkit_issue::status::{self as st, IssueWorktree, StatusReport};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc;
-use std::time::Duration;
 
 /// One source's report to the live-table event loop: the row's PRs, its
 /// Linear state, or the workspace URL key.
@@ -175,18 +174,14 @@ fn live_enrich(
         let mut got_prs = false;
         let mut got_linear = !want_linear;
         let mut got_ws = false;
-        // A steady sub-100ms stream of updates would starve the Timeout arm,
-        // freezing Pending-cell spinner frames; advance the frame from the
-        // update path too once 100ms have passed since the last tick.
-        let mut last_tick = std::time::Instant::now();
-        while !(got_prs && got_linear && got_ws) {
-            match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(Update::Prs(res)) => {
+        lt.drive(&rx, |lt, msg| {
+            match msg {
+                Update::Prs(res) => {
                     res?.apply_best(row);
                     got_prs = true;
                     lt.set(0, 3, Cell::Ready(crate::triage::pr_cell(row)));
                 }
-                Ok(Update::Linear(states)) => {
+                Update::Linear(states) => {
                     if let Some(s) = states.get(&row.issue_id) {
                         row.linear_kind = Some(s.kind.clone());
                         row.linear_name = Some(s.name.clone());
@@ -194,16 +189,10 @@ fn live_enrich(
                     got_linear = true;
                     lt.set(0, 4, Cell::Ready(crate::triage::linear_cell(row, has_key)));
                 }
-                Ok(Update::Workspace(ws)) => {
+                Update::Workspace(ws) => {
                     got_ws = true;
                     linear_workspace = ws;
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    lt.tick();
-                    last_tick = std::time::Instant::now();
-                    continue;
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
             if got_prs && got_linear {
                 let reason = st::reason_not_finished(row, has_key, false);
@@ -211,14 +200,8 @@ fn live_enrich(
                 row.reason_not_finished = reason;
                 lt.set(0, 5, Cell::Ready(crate::triage::verdict_cell(row, false)));
             }
-            if last_tick.elapsed() >= Duration::from_millis(100) {
-                lt.tick();
-                last_tick = std::time::Instant::now();
-            } else {
-                lt.redraw();
-            }
-        }
-        Ok(())
+            Ok(got_prs && got_linear && got_ws)
+        })
     });
     // Clear the live block before any error renders, so the anyhow report is
     // not printed under a half-drawn region.

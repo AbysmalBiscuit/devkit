@@ -5,7 +5,6 @@ use devkit_common::{linear, ui};
 use devkit_issue::status::{self as st, IssueWorktree, StatusReport};
 use std::collections::HashMap;
 use std::sync::mpsc;
-use std::time::Duration;
 
 pub(crate) const COL_TREE: usize = 2;
 pub(crate) const COL_PR: usize = 3;
@@ -217,42 +216,26 @@ pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
         }
         drop(tx);
 
-        // A steady sub-100ms stream of updates would starve the Timeout arm,
-        // freezing Pending-cell spinner frames; advance the frame from the
-        // update path too once 100ms have passed since the last tick.
-        let mut last_tick = std::time::Instant::now();
-        while !state.done() {
-            let writes = match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(Update::Dirty(i, dirty)) => {
+        lt.drive(&rx, |lt, msg| {
+            let writes = match msg {
+                Update::Dirty(i, dirty) => {
                     dirty_bar.inc(1);
                     state.apply_dirty(i, dirty)
                 }
-                Ok(Update::Prs(res)) => {
+                Update::Prs(res) => {
                     prs_spin.finish_and_clear();
                     state.apply_prs(res?)
                 }
-                Ok(Update::Linear(states, ws)) => {
+                Update::Linear(states, ws) => {
                     linear_spin.finish_and_clear();
                     state.apply_linear(states, ws)
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    lt.tick();
-                    last_tick = std::time::Instant::now();
-                    continue;
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
             for (i, col, content) in writes {
                 lt.set(disp[i], col, Cell::Ready(content));
             }
-            if last_tick.elapsed() >= Duration::from_millis(100) {
-                lt.tick();
-                last_tick = std::time::Instant::now();
-            } else {
-                lt.redraw();
-            }
-        }
-        Ok(())
+            Ok(state.done())
+        })
     });
     // Clear the live block before any error renders, so the anyhow report is
     // not printed under a half-drawn region.
