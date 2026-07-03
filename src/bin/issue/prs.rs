@@ -212,22 +212,17 @@ fn reviews_table(
     cur
 }
 
-/// The animated first line of the stale-while-revalidate block. `frame` picks
-/// the spinner glyph.
-fn stale_banner(frame: usize) -> String {
-    use devkit_common::livetable::FRAMES;
-    format!(
-        "{} {}",
-        ui::cyan(FRAMES[frame % FRAMES.len()]),
-        ui::dim("as of last run — refreshing…"),
-    )
+/// The static first line of the stale-while-revalidate block; the fetch
+/// spinner animates below the block instead.
+fn stale_banner() -> String {
+    ui::dim("as of last run")
 }
 
 /// The stale-while-revalidate body: last run's tables, every line dimmed.
-/// Pure, and built once per run — only the banner line above it animates.
-/// `dim_all` keeps painted cells dim past their own SGR resets, and the
-/// titles use plain dim (not bold cyan) so terminals don't have to resolve
-/// bold-over-faint.
+/// Pure, and built once per run — the whole block is static while the fetch
+/// spinner below it animates. `dim_all` keeps painted cells dim past their
+/// own SGR resets, and the titles use plain dim (not bold cyan) so terminals
+/// don't have to resolve bold-over-faint.
 fn stale_body(
     prev_mine: &[MinePrView],
     prev_reviews: &[ReviewPrView],
@@ -250,14 +245,11 @@ fn stale_body(
 }
 
 /// Fetch the PR report and the Linear workspace URL key concurrently.
-/// `on_tick` runs on a ~100ms cadence while waiting, driving the caller's
-/// live render.
 fn fetch_report(
     resolved: &str,
     mine: bool,
     reviews: bool,
     ignored_checks: &[String],
-    mut on_tick: impl FnMut(),
 ) -> Result<(Option<String>, devkit_issue::prs::PrsReport)> {
     enum Update {
         Fetched(Result<devkit_issue::prs::PrsReport>),
@@ -290,20 +282,17 @@ fn fetch_report(
         // legitimate answer (no Linear configured), so `url_key.is_none()`
         // cannot mean "still waiting".
         let mut got_ws = false;
-        devkit_common::livetable::drive(
-            &rx,
-            |msg| {
-                match msg {
-                    Update::Fetched(res) => report = Some(res?),
-                    Update::Workspace(ws) => {
-                        got_ws = true;
-                        url_key = ws;
-                    }
+        while !(got_ws && report.is_some()) {
+            match rx.recv() {
+                Ok(Update::Fetched(res)) => report = Some(res?),
+                Ok(Update::Workspace(ws)) => {
+                    got_ws = true;
+                    url_key = ws;
                 }
-                Ok(got_ws && report.is_some())
-            },
-            &mut on_tick,
-        )?;
+                // All senders gone: fall through to the report check.
+                Err(_) => break,
+            }
+        }
         match report {
             Some(r) => Ok((url_key, r)),
             None => anyhow::bail!("PR fetch ended without a result"),
@@ -345,15 +334,15 @@ pub fn run(
     } = path.as_deref().map(load_snapshot).unwrap_or_default();
 
     // Stale-while-revalidate: last run's rows render immediately, dimmed under
-    // a refreshing banner, and are cleared when fresh data lands. With no
-    // usable snapshot, a plain fetch spinner shows instead. The body is built
-    // once; each tick swaps only the banner line.
+    // an "as of last run" banner, and are cleared when fresh data lands. The
+    // fetch spinner animates below the block — or alone when there is no
+    // usable snapshot — matching the status-lines-under-the-table layout of
+    // the live triage table.
     let mut live = devkit_common::livetable::LiveLines::new();
     let have_stale =
         (want_mine && !prev_mine.is_empty()) || (want_reviews && !prev_reviews.is_empty());
-    let mut block: Vec<String> = Vec::new();
     if have_stale {
-        block.push(stale_banner(0));
+        let mut block = vec![stale_banner()];
         block.extend(stale_body(
             &prev_mine,
             &prev_reviews,
@@ -362,16 +351,9 @@ pub fn run(
         ));
         live.set_lines(&block);
     }
-    let _fetch_spin = (!have_stale).then(|| live.spinner("Fetching PRs from GitHub…"));
+    let _fetch_spin = live.spinner("Fetching PRs from GitHub…");
 
-    let mut frame = 0usize;
-    let fetched = fetch_report(&resolved, mine, reviews, &ignored_checks, || {
-        if have_stale {
-            frame += 1;
-            block[0] = stale_banner(frame);
-            live.set_lines(&block);
-        }
-    });
+    let fetched = fetch_report(&resolved, mine, reviews, &ignored_checks);
     // Clear the stale block (and finish the spinner) before any fetch error
     // renders, so the anyhow report is not printed under a half-drawn region.
     live.clear();
@@ -444,7 +426,7 @@ mod tests {
 
     #[test]
     fn stale_block_has_banner_and_rows() {
-        assert!(stale_banner(0).contains("as of last run"));
+        assert!(stale_banner().contains("as of last run"));
         let lines = stale_body(&[mine_view(12, "MERGE")], &[], true, true);
         assert!(lines.iter().any(|l| l.contains("#12")));
         assert!(lines.iter().any(|l| l.contains("(none)"))); // empty reviews
