@@ -37,57 +37,47 @@ fn confirm(label: &str) -> bool {
     matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-enum CleanupError {
-    Dirty,
-    Other(anyhow::Error),
+/// Sentinel error for a worktree refused because it has uncommitted changes;
+/// the caller downcasts to it to suggest `--force` instead of a generic failure.
+#[derive(Debug)]
+struct Dirty;
+
+impl std::fmt::Display for Dirty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "dirty")
+    }
 }
+
+impl std::error::Error for Dirty {}
 
 /// Remove a finished worktree, delete its branch, and remove its ISSUE_*<id>*.md
 /// files in the parent of the main repo. Refuses if cwd is inside the worktree, or
 /// (without `force`) if the tree is dirty.
-fn cleanup(
-    worktree_path: &str,
-    issue_id: &str,
-    force: bool,
-) -> std::result::Result<(), CleanupError> {
-    let wt = std::fs::canonicalize(worktree_path).map_err(|e| CleanupError::Other(e.into()))?;
+fn cleanup(worktree_path: &str, issue_id: &str, force: bool) -> Result<()> {
+    let wt = std::fs::canonicalize(worktree_path)?;
     let wt_s = wt.to_string_lossy().into_owned();
-    let cwd = std::env::current_dir().map_err(|e| CleanupError::Other(e.into()))?;
+    let cwd = std::env::current_dir()?;
     let cwd_c = std::fs::canonicalize(&cwd).unwrap_or(cwd);
     if cwd_c == wt || cwd_c.starts_with(&wt) {
-        return Err(CleanupError::Other(anyhow::anyhow!(
-            "cd out of {wt_s} before removing it"
-        )));
+        anyhow::bail!("cd out of {wt_s} before removing it");
     }
-    let dirty = !git(&["status", "--porcelain"], &wt_s)
-        .map_err(CleanupError::Other)?
-        .trim()
-        .is_empty();
+    let dirty = !git(&["status", "--porcelain"], &wt_s)?.trim().is_empty();
     if dirty && !force {
-        return Err(CleanupError::Dirty);
+        return Err(Dirty.into());
     }
 
     let common = git(
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         &wt_s,
-    )
-    .map_err(CleanupError::Other)?
+    )?
     .trim()
     .to_string();
     let main = Path::new(&common)
         .parent()
-        .context("git-common-dir has no parent")
-        .map_err(CleanupError::Other)?;
-    let parent = main
-        .parent()
-        .context("main repo has no parent")
-        .map_err(CleanupError::Other)?;
-    let main_s = main
-        .to_str()
-        .context("main path not UTF-8")
-        .map_err(CleanupError::Other)?;
-    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &wt_s)
-        .map_err(CleanupError::Other)?
+        .context("git-common-dir has no parent")?;
+    let parent = main.parent().context("main repo has no parent")?;
+    let main_s = main.to_str().context("main path not UTF-8")?;
+    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &wt_s)?
         .trim()
         .to_string();
 
@@ -96,7 +86,7 @@ fn cleanup(
         rm.push("--force");
     }
     rm.push(wt_s.as_str());
-    git(&rm, main_s).map_err(CleanupError::Other)?;
+    git(&rm, main_s)?;
     let _ = git(&["worktree", "prune"], main_s);
 
     if git(
@@ -132,13 +122,14 @@ pub fn run(
     pr_only: bool,
     clean_worktree: bool,
 ) -> Result<()> {
-    let steps = Steps::new();
+    let steps = Steps::persistent();
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
-        let report = steps.during("Fetching PR + Linear status…", || gather(start, &[]))?;
+        let report =
+            steps.during_result("Fetching PR + Linear status…", || gather(start, &[]))?;
         render(&report, false);
         let t = select_explicit(&report.worktrees, ids);
         if t.is_empty() {
@@ -151,7 +142,8 @@ pub fn run(
         );
         t
     } else {
-        let report = steps.during("Fetching PR + Linear status…", || gather(start, ids))?;
+        let report =
+            steps.during_result("Fetching PR + Linear status…", || gather(start, ids))?;
         render(&report, false);
         if pr_only {
             println!("--pr-only: Linear 'Done' gate skipped.");
@@ -183,14 +175,17 @@ pub fn run(
             println!("    skipped");
             continue;
         }
-        match steps.during(&format!("Removing {label}…"), || {
+        match steps.during_result(&format!("Removing {label}…"), || {
             cleanup(&row.worktree, &row.issue_id, force)
         }) {
             Ok(()) => removed += 1,
-            Err(CleanupError::Dirty) => {
-                eprintln!("    {label} is dirty — rerun with --force to discard.")
+            Err(e) => {
+                if e.downcast_ref::<Dirty>().is_some() {
+                    eprintln!("    {label} is dirty — rerun with --force to discard.")
+                } else {
+                    eprintln!("    cleanup failed for {label}: {e}")
+                }
             }
-            Err(CleanupError::Other(e)) => eprintln!("    cleanup failed for {label}: {e}"),
         }
     }
     println!("\nRemoved {removed} of {total}.");

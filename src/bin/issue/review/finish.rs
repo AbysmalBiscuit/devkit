@@ -104,14 +104,14 @@ pub fn run(args: Args) -> Result<()> {
     let mut vars = tmpls.variables.clone();
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
 
-    let steps = Steps::new();
+    let steps = Steps::persistent();
     // PR from the current branch (best effort), unless --pr is given.
     let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)
         .ok()
         .map(|b| b.trim().to_string());
     let branch_pr = branch.as_deref().and_then(|b| {
         steps
-            .during("Looking up PR for branch…", || {
+            .during_result("Looking up PR for branch…", || {
                 branch_pr_number(b, &start)
             })
             .ok()
@@ -123,7 +123,7 @@ pub fn run(args: Args) -> Result<()> {
         .ok()
         .and_then(|top| crate::record::read(std::path::Path::new(top.trim())));
 
-    let view: PrFull = steps.during(&format!("Fetching PR #{number}…"), || {
+    let view: PrFull = steps.during_result(&format!("Fetching PR #{number}…"), || {
         fetch_pr_full(number, &start)
     })?;
     let author_login = view.author.login;

@@ -178,10 +178,10 @@ pub fn run(args: Args) -> Result<()> {
         .to_string();
     guard_branch(&branch)?;
 
-    let steps = Steps::new();
+    let steps = Steps::persistent();
     if !args.no_push {
         steps
-            .during("Pushing branch…", || {
+            .during_result("Pushing branch…", || {
                 git(&["push", "-u", "origin", &branch], &start)
             })
             .context("git push failed (refusing to force-push)")?;
@@ -219,13 +219,13 @@ pub fn run(args: Args) -> Result<()> {
     )?;
 
     let existing: Option<PrView> =
-        steps.during("Looking up existing PR…", || existing_pr(&branch, &start))?;
+        steps.during_result("Looking up existing PR…", || existing_pr(&branch, &start))?;
 
     let (pr_url, targets) = match action_for(existing.as_ref().map(|p| p.state.as_str())) {
         PrAction::Stop(reason) => bail!("{reason}"),
         PrAction::AddReviewer => {
             let pr = existing.expect("AddReviewer implies an existing PR");
-            let targets = steps.during("Resolving reviewers…", || {
+            let targets = steps.during_result("Resolving reviewers…", || {
                 resolve_request_targets(&explicit, pr.number, &start, people)
             })?;
             let (logins, warnings) = reviewer_logins(&targets);
@@ -234,7 +234,7 @@ pub fn run(args: Args) -> Result<()> {
             }
             if !logins.is_empty() {
                 steps
-                    .during("Adding reviewers…", || {
+                    .during_result("Adding reviewers…", || {
                         capture(
                             "gh",
                             &[
@@ -296,7 +296,7 @@ pub fn run(args: Args) -> Result<()> {
                 gh_args.push(&joined);
             }
             let out = steps
-                .during("Creating PR…", || capture("gh", &gh_args, Some(&start)))
+                .during_result("Creating PR…", || capture("gh", &gh_args, Some(&start)))
                 .context("gh pr create failed")?;
             let url = out
                 .lines()

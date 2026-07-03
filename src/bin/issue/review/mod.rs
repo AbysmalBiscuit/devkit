@@ -195,7 +195,7 @@ pub(crate) fn deliver(
         let text = render_review(tmpl, key, &ctx, vars, missing_at)?;
         match &token {
             Some(tok) => {
-                steps.during(&format!("Notifying {} on Slack…", t.name), || {
+                steps.during_result(&format!("Notifying {} on Slack…", t.name), || {
                     slack::post_message(tok, &t.channel, &text)
                 })?;
                 println!("Sent to {} ({})", t.name, t.channel);

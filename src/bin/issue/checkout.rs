@@ -186,7 +186,7 @@ fn resolve(target: &str, key: Option<&str>, repo: &str, steps: &Steps) -> Result
         }),
         Ident::Linear(id) => {
             let key = key.context("Linear id given but LINEAR_API_KEY is not set")?;
-            steps.during(&format!("Resolving Linear issue {id}…"), || {
+            steps.during_result(&format!("Resolving Linear issue {id}…"), || {
                 resolve_linear(&id, None, key)
             })
         }
@@ -200,7 +200,7 @@ fn resolve(target: &str, key: Option<&str>, repo: &str, steps: &Steps) -> Result
                 });
             };
             // Probe both sides under a spinner; clear it before any prompt.
-            let (exists, candidates) = steps.during(&format!("Resolving {n}…"), || {
+            let (exists, candidates) = steps.during_result(&format!("Resolving {n}…"), || {
                 let exists = pr_exists(n, repo)?;
                 let candidates = linear::issues_by_number(n, key)?;
                 Ok::<_, anyhow::Error>((exists, candidates))
@@ -307,11 +307,11 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
 
     let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
-    let steps = Steps::new();
+    let steps = Steps::persistent();
     let resolved = resolve(&args.target, key.as_deref(), monorepo_s, &steps)?;
 
     let meta: PrMeta = steps
-        .during(&format!("Fetching PR #{}…", resolved.pr_number), || {
+        .during_result(&format!("Fetching PR #{}…", resolved.pr_number), || {
             fetch_pr_meta(resolved.pr_number, monorepo_s)
         })
         .with_context(|| format!("fetching PR #{}", resolved.pr_number))?;
@@ -342,10 +342,10 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     );
     let worktree_s = worktree.to_str().context("worktree path not UTF-8")?;
 
-    steps.during("Fetching from origin…", || {
+    steps.during_result("Fetching from origin…", || {
         gitfetch::fetch("origin", monorepo_s)
     })?;
-    steps.during("Creating worktree…", || {
+    steps.during_result("Creating worktree…", || {
         git(
             &[
                 "worktree",
@@ -364,7 +364,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     // worktree or with nothing.
     let issue = with_cleanup(&worktree, monorepo_s, || {
         steps
-            .during(&format!("Checking out PR #{}…", meta.number), || {
+            .during_result(&format!("Checking out PR #{}…", meta.number), || {
                 capture(
                     "gh",
                     &["pr", "checkout", &meta.number.to_string()],
@@ -398,7 +398,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             "slug": slugify(&meta.title),
             "apps": args.apps,
         });
-        steps.during("Preparing apps…", || {
+        steps.during_result("Preparing apps…", || {
             crate::setup::prep_apps(
                 &worktree,
                 &meta.head_ref_name,

@@ -156,8 +156,8 @@ pub fn run(args: SetupArgs) -> Result<()> {
     );
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
     let total = 2 + usize::from(!args.apps.is_empty());
-    let steps = Steps::with_total(total);
-    steps.during("Fetching from origin…", || {
+    let steps = Steps::persistent_with_total(total);
+    steps.during_result("Fetching from origin…", || {
         gitfetch::fetch("origin", monorepo_s)
     })?;
     if git(
@@ -168,7 +168,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     {
         anyhow::bail!("branch {branch} already exists — let /issue-setup decide how to proceed");
     }
-    steps.during("Creating worktree…", || {
+    steps.during_result("Creating worktree…", || {
         git(
             &[
                 "worktree",
@@ -204,7 +204,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     if args.apps.is_empty() {
         prep_apps(&worktree, &branch, &args.apps, catalog, &ctx, vars)?;
     } else {
-        steps.during("Preparing apps…", || {
+        steps.during_result("Preparing apps…", || {
             prep_apps(&worktree, &branch, &args.apps, catalog, &ctx, vars)
         })?;
     }
