@@ -89,6 +89,12 @@ impl Discovered {
 pub struct Prs(Vec<Pr>);
 
 impl Prs {
+    /// An empty PR list, built without any network call. Used when there are
+    /// no worktrees and by tests of code that consumes a `Prs`.
+    pub fn empty() -> Prs {
+        Prs(Vec::new())
+    }
+
     /// Overlay the best PR for `row`'s branch onto it, leaving the row untouched
     /// when the branch is detached or has no PR. Same rule `assemble` applies
     /// per row, exposed so a single-worktree caller can enrich one row.
@@ -157,10 +163,21 @@ pub fn dirty_of(path: &str) -> bool {
 /// `dirty_of` for many worktrees, run on a bounded thread pool with order
 /// preserved. Each check is an independent, I/O-bound `git status` walk, so
 /// fanning them across cores turns N serial walks into roughly one walk's
-/// latency. Contiguous chunks keep the output aligned with `paths`.
+/// latency. The batch form of [`dirty_stream`]: results land in a slot per
+/// input index, keeping the output aligned with `paths`.
 pub fn dirty_many(paths: &[String]) -> Vec<bool> {
-    if paths.len() <= 1 {
-        return paths.iter().map(|p| dirty_of(p)).collect();
+    let out = std::sync::Mutex::new(vec![false; paths.len()]);
+    dirty_stream(paths, |i, d| out.lock().unwrap()[i] = d);
+    out.into_inner().unwrap()
+}
+
+/// `dirty_of` for many worktrees, reporting each result as soon as it is
+/// known. `report(i, dirty)` is invoked exactly once per input index, from
+/// worker threads on a bounded pool over contiguous chunks; callers that
+/// want the batch form should keep using [`dirty_many`].
+pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clone) {
+    if paths.is_empty() {
+        return;
     }
     let width = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -169,22 +186,22 @@ pub fn dirty_many(paths: &[String]) -> Vec<bool> {
         .min(paths.len());
     let chunk = paths.len().div_ceil(width);
     std::thread::scope(|s| {
-        let handles: Vec<_> = paths
-            .chunks(chunk)
-            .map(|c| s.spawn(|| c.iter().map(|p| dirty_of(p)).collect::<Vec<bool>>()))
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().expect("dirty worker panicked"))
-            .collect()
-    })
+        for (ci, c) in paths.chunks(chunk).enumerate() {
+            let report = report.clone();
+            s.spawn(move || {
+                for (j, p) in c.iter().enumerate() {
+                    report(ci * chunk + j, dirty_of(p));
+                }
+            });
+        }
+    });
 }
 
 /// The single `gh pr list` round-trip for every worktree PR. Skips the call
 /// entirely when there are no worktrees.
 pub fn fetch_prs(d: &Discovered) -> Result<Prs> {
     if d.rows.is_empty() {
-        return Ok(Prs(Vec::new()));
+        return Ok(Prs::empty());
     }
     if let Some(prs) = fetch_prs_http(&d.main_path) {
         return Ok(Prs(prs));
@@ -564,5 +581,56 @@ mod tests {
             reason_not_finished(&wt("ENG-4", "MERGED", false, None), true, false).as_deref(),
             Some("Linear unknown")
         );
+    }
+
+    #[test]
+    fn prs_empty_leaves_row_untouched() {
+        let mut r = wt("ENG-1", "NO_PR", false, None);
+        r.pr_number = None;
+        Prs::empty().apply_best(&mut r);
+        assert_eq!(r.pr_number, None);
+        assert_eq!(r.pr_state, "NO_PR");
+    }
+
+    // dirty_stream must report each index exactly once with the same result
+    // dirty_many computes. Plain (non-git) dirs make dirty_of return false;
+    // one dir is a git repo with an untracked file, so exactly one index is
+    // true and the value comparison catches wrong-value or wrong-index bugs.
+    #[test]
+    fn dirty_stream_reports_every_index_once() {
+        use std::sync::Mutex;
+        let base = std::env::temp_dir().join(format!("devkit-dstream-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let paths: Vec<String> = (0..7)
+            .map(|i| {
+                let p = base.join(format!("d{i}"));
+                std::fs::create_dir_all(&p).unwrap();
+                p.to_string_lossy().into_owned()
+            })
+            .collect();
+        // A repo with an untracked file: `git status --porcelain` is non-empty.
+        git(&["init", "-q", "-b", "main"], &paths[3]).unwrap();
+        std::fs::write(std::path::Path::new(&paths[3]).join("f"), "x").unwrap();
+
+        let got: Mutex<Vec<Option<bool>>> = Mutex::new(vec![None; paths.len()]);
+        dirty_stream(&paths, |i, d| {
+            let mut g = got.lock().unwrap();
+            assert!(g[i].is_none(), "index {i} reported twice");
+            g[i] = Some(d);
+        });
+        let got = got.into_inner().unwrap();
+        let want = dirty_many(&paths);
+        assert_eq!(
+            want,
+            vec![false, false, false, true, false, false, false],
+            "only the repo with the untracked file is dirty"
+        );
+        assert_eq!(
+            got.into_iter()
+                .map(|o| o.expect("index missing"))
+                .collect::<Vec<_>>(),
+            want
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
