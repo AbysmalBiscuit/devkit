@@ -186,12 +186,14 @@ impl Steps {
     }
 }
 
-/// `312ms` under a second, `1.2s` from there up.
+/// `312ms` under a second, `1.2s` under a minute, `1m 12s` from there up.
 fn fmt_elapsed(d: Duration) -> String {
     if d < Duration::from_secs(1) {
         format!("{}ms", d.as_millis())
-    } else {
+    } else if d < Duration::from_secs(60) {
         format!("{:.1}s", d.as_secs_f64())
+    } else {
+        format!("{}m {}s", d.as_secs() / 60, d.as_secs() % 60)
     }
 }
 
@@ -268,6 +270,10 @@ mod tests {
         assert_eq!(fmt_elapsed(Duration::from_millis(999)), "999ms");
         assert_eq!(fmt_elapsed(Duration::from_millis(1000)), "1.0s");
         assert_eq!(fmt_elapsed(Duration::from_millis(1200)), "1.2s");
+        assert_eq!(fmt_elapsed(Duration::from_millis(59_940)), "59.9s");
+        assert_eq!(fmt_elapsed(Duration::from_millis(60_000)), "1m 0s");
+        assert_eq!(fmt_elapsed(Duration::from_millis(72_500)), "1m 12s");
+        assert_eq!(fmt_elapsed(Duration::from_secs(125)), "2m 5s");
     }
 
     #[test]
