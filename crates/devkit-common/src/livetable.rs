@@ -115,24 +115,29 @@ impl Default for LiveLines {
 
 /// Render a titled table block to plain lines. Pure — tests snapshot it
 /// without a terminal. `frame` picks the glyph for `Pending` cells.
+///
+/// The block draws on stderr, so its chrome (title, headers, width, stale
+/// dim, spinner frame) styles for that stream; `Ready` content arrives
+/// pre-styled by the caller for the final stdout render and is used as-is.
 pub fn render_lines(
     title: &str,
     headers: &[String],
     rows: &[Vec<Cell>],
     frame: usize,
 ) -> Vec<String> {
+    let paint = ui::Paint::on(ui::Stream::Stderr);
     let hdrs: Vec<&str> = headers.iter().map(|s| s.as_str()).collect();
-    let mut t = ui::table(&hdrs);
+    let mut t = ui::table_on(ui::Stream::Stderr, &hdrs);
     for row in rows {
         t.add_row(row.iter().map(|c| match c {
             Cell::Ready(s) => s.clone(),
             // dim_all, not dim: styled content carries its own SGR resets,
             // which would cancel a single leading dim mid-cell.
-            Cell::Stale(s) => ui::dim_all(s),
-            Cell::Pending => ui::cyan(FRAMES[frame % FRAMES.len()]),
+            Cell::Stale(s) => paint.dim_all(s),
+            Cell::Pending => paint.cyan(FRAMES[frame % FRAMES.len()]),
         }));
     }
-    let mut out = vec![ui::bold_cyan(title)];
+    let mut out = vec![paint.bold_cyan(title)];
     out.extend(t.to_string().lines().map(String::from));
     out
 }

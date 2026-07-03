@@ -195,13 +195,11 @@ fn fmt_elapsed(d: Duration) -> String {
     }
 }
 
-/// The persistent line a settled step leaves behind.
+/// The persistent line a settled step leaves behind. It prints on stderr, so
+/// the mark's colour keys off that stream, not stdout.
 fn finish_line(ok: bool, label: &str, elapsed: Duration) -> String {
-    let mark = if ok {
-        crate::ui::green("✓")
-    } else {
-        crate::ui::red("✗")
-    };
+    let paint = crate::ui::Paint::on(crate::ui::Stream::Stderr);
+    let mark = if ok { paint.green("✓") } else { paint.red("✗") };
     format!("{mark} {label} ({})", fmt_elapsed(elapsed))
 }
 

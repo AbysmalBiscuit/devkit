@@ -8,11 +8,18 @@ use std::io::IsTerminal;
 /// `custom_styling` strips embedded OSC 8 hyperlink and ANSI colour escapes — so
 /// styled, linked cells still wrap correctly instead of overflowing the screen.
 pub fn table(headers: &[&str]) -> Table {
+    table_on(Stream::Stdout, headers)
+}
+
+/// [`table`] sized and coloured for `stream` — the live stderr block sizes
+/// and styles to stderr's terminal even when stdout is redirected.
+pub fn table_on(stream: Stream, headers: &[&str]) -> Table {
+    let paint = Paint::on(stream);
     let mut t = Table::new();
     t.load_preset(NOTHING);
     t.set_content_arrangement(ContentArrangement::Dynamic);
-    t.set_width(term_width().min(u16::MAX as usize) as u16);
-    t.set_header(headers.iter().map(|h| dim(h)));
+    t.set_width(term_width_on(stream).min(u16::MAX as usize) as u16);
+    t.set_header(headers.iter().map(|h| paint.dim(h)));
     t
 }
 
@@ -52,100 +59,181 @@ pub fn truncate(s: &str, max: usize) -> String {
 
 // --- colour --------------------------------------------------------------------
 
-/// Whether to emit ANSI colour. `NO_COLOR` (https://no-color.org) always wins;
-/// `FORCE_COLOR` opts in even when piped (e.g. into `less -R`); otherwise colour
-/// is emitted only to a real terminal. Piped output therefore stays plain by
-/// default, which also keeps rendered-table tests deterministic.
-fn color_enabled() -> bool {
+/// An output stream that colour and width decisions key off. Final rendered
+/// output goes to stdout; live blocks (step logs, live tables) draw on
+/// stderr. Each judges TTY-ness on its own stream, so `cmd > file` keeps the
+/// live stderr block styled without leaking ANSI into the redirected stdout.
+#[derive(Clone, Copy)]
+pub enum Stream {
+    Stdout,
+    Stderr,
+}
+
+/// Whether to emit ANSI colour on `stream`. `NO_COLOR` (https://no-color.org)
+/// always wins; `FORCE_COLOR` opts in even when piped (e.g. into `less -R`);
+/// otherwise colour is emitted only when that stream is a real terminal.
+/// Piped output therefore stays plain by default, which also keeps
+/// rendered-table tests deterministic.
+fn color_enabled_on(stream: Stream) -> bool {
     if std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
         return false;
     }
     if std::env::var_os("FORCE_COLOR").is_some_and(|v| !v.is_empty()) {
         return true;
     }
-    std::io::stdout().is_terminal()
-}
-
-fn paint(s: &str, style: Style) -> String {
-    if color_enabled() {
-        format!("{}{s}{}", style.render(), style.render_reset())
-    } else {
-        s.to_string()
+    match stream {
+        Stream::Stdout => std::io::stdout().is_terminal(),
+        Stream::Stderr => std::io::stderr().is_terminal(),
     }
 }
 
-fn fg(s: &str, color: AnsiColor) -> String {
-    paint(s, Style::new().fg_color(Some(color.into())))
+/// Colour helpers keyed to one [`Stream`]. The free helpers (`green`, `dim`,
+/// …) paint for stdout — the final rendered output; anything drawn live on
+/// stderr styles through `Paint::on(Stream::Stderr)`.
+#[derive(Clone, Copy)]
+pub struct Paint {
+    enabled: bool,
+}
+
+impl Paint {
+    pub fn on(stream: Stream) -> Paint {
+        Paint {
+            enabled: color_enabled_on(stream),
+        }
+    }
+
+    fn paint(&self, s: &str, style: Style) -> String {
+        if self.enabled {
+            format!("{}{s}{}", style.render(), style.render_reset())
+        } else {
+            s.to_string()
+        }
+    }
+
+    fn fg(&self, s: &str, color: AnsiColor) -> String {
+        self.paint(s, Style::new().fg_color(Some(color.into())))
+    }
+
+    /// `s` in green — merged PRs, completed issues, ready-to-land actions.
+    pub fn green(&self, s: &str) -> String {
+        self.fg(s, AnsiColor::Green)
+    }
+
+    /// `s` in yellow — in-progress states and "waiting on the other side"
+    /// actions.
+    pub fn yellow(&self, s: &str) -> String {
+        self.fg(s, AnsiColor::Yellow)
+    }
+
+    /// `s` in red — closed/failed states and actions that need you now.
+    pub fn red(&self, s: &str) -> String {
+        self.fg(s, AnsiColor::Red)
+    }
+
+    /// `s` in cyan — identifiers (issue ids).
+    pub fn cyan(&self, s: &str) -> String {
+        self.fg(s, AnsiColor::Cyan)
+    }
+
+    /// `s` dimmed — passive/secondary values.
+    pub fn dim(&self, s: &str) -> String {
+        self.paint(s, Style::new().dimmed())
+    }
+
+    /// `s` dimmed even when it embeds styled spans. A painted span ends in an
+    /// SGR reset, which would cancel a plain outer dim for the rest of the
+    /// line; here dim is re-asserted after every embedded reset so the whole
+    /// line stays dim.
+    pub fn dim_all(&self, s: &str) -> String {
+        if self.enabled {
+            format!("\x1b[2m{}\x1b[0m", s.replace("\x1b[0m", "\x1b[0m\x1b[2m"))
+        } else {
+            s.to_string()
+        }
+    }
+
+    /// `s` in bold green — the headline "FINISHED" verdict.
+    pub fn bold_green(&self, s: &str) -> String {
+        self.paint(
+            s,
+            Style::new().bold().fg_color(Some(AnsiColor::Green.into())),
+        )
+    }
+
+    /// `s` in bold cyan — section titles above each table.
+    pub fn bold_cyan(&self, s: &str) -> String {
+        self.paint(
+            s,
+            Style::new().bold().fg_color(Some(AnsiColor::Cyan.into())),
+        )
+    }
+
+    /// `s` dimmed and struck through — the superseded half of an `old → new`
+    /// diff.
+    pub fn dim_strike(&self, s: &str) -> String {
+        self.paint(s, Style::new().dimmed().strikethrough())
+    }
+}
+
+fn stdout_paint() -> Paint {
+    Paint::on(Stream::Stdout)
 }
 
 /// `s` in green — merged PRs, completed issues, ready-to-land actions.
 pub fn green(s: &str) -> String {
-    fg(s, AnsiColor::Green)
+    stdout_paint().green(s)
 }
 
 /// `s` in yellow — in-progress states and "waiting on the other side" actions.
 pub fn yellow(s: &str) -> String {
-    fg(s, AnsiColor::Yellow)
+    stdout_paint().yellow(s)
 }
 
 /// `s` in red — closed/failed states and actions that need you now.
 pub fn red(s: &str) -> String {
-    fg(s, AnsiColor::Red)
+    stdout_paint().red(s)
 }
 
 /// `s` in cyan — identifiers (issue ids).
 pub fn cyan(s: &str) -> String {
-    fg(s, AnsiColor::Cyan)
+    stdout_paint().cyan(s)
 }
 
 /// `s` dimmed — passive/secondary values.
 pub fn dim(s: &str) -> String {
-    paint(s, Style::new().dimmed())
+    stdout_paint().dim(s)
 }
 
-/// `s` dimmed even when it embeds styled spans. A painted span ends in an SGR
-/// reset, which would cancel a plain outer dim for the rest of the line; here
-/// dim is re-asserted after every embedded reset so the whole line stays dim.
+/// `s` dimmed even when it embeds styled spans; see [`Paint::dim_all`].
 pub fn dim_all(s: &str) -> String {
-    dim_all_styled(color_enabled(), s)
-}
-
-/// Render the re-asserting dim when `enabled`, else pass `s` through. Split
-/// from `dim_all` so the re-assertion is testable without a terminal — the
-/// same seam as `link_styled`.
-fn dim_all_styled(enabled: bool, s: &str) -> String {
-    if enabled {
-        format!("\x1b[2m{}\x1b[0m", s.replace("\x1b[0m", "\x1b[0m\x1b[2m"))
-    } else {
-        s.to_string()
-    }
+    stdout_paint().dim_all(s)
 }
 
 /// `s` in bold green — the headline "FINISHED" verdict.
 pub fn bold_green(s: &str) -> String {
-    paint(
-        s,
-        Style::new().bold().fg_color(Some(AnsiColor::Green.into())),
-    )
+    stdout_paint().bold_green(s)
 }
 
 /// `s` in bold cyan — section titles above each table.
 pub fn bold_cyan(s: &str) -> String {
-    paint(
-        s,
-        Style::new().bold().fg_color(Some(AnsiColor::Cyan.into())),
-    )
+    stdout_paint().bold_cyan(s)
 }
 
 /// `s` dimmed and struck through — the superseded half of an `old → new` diff.
 pub fn dim_strike(s: &str) -> String {
-    paint(s, Style::new().dimmed().strikethrough())
+    stdout_paint().dim_strike(s)
 }
 
 // --- terminal width ------------------------------------------------------------
 
-/// Terminal width: `$COLUMNS`, else `TIOCGWINSZ`, else 100.
+/// Terminal width of stdout: `$COLUMNS`, else `TIOCGWINSZ`, else 100.
 pub fn term_width() -> usize {
+    term_width_on(Stream::Stdout)
+}
+
+/// Terminal width of `stream`: `$COLUMNS`, else `TIOCGWINSZ` on that stream's
+/// fd, else 100.
+pub fn term_width_on(stream: Stream) -> usize {
     if let Ok(c) = std::env::var("COLUMNS")
         && let Ok(n) = c.trim().parse::<usize>()
         && n > 0
@@ -161,13 +249,18 @@ pub fn term_width() -> usize {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        let fd = std::io::stdout().as_raw_fd();
+        let fd = match stream {
+            Stream::Stdout => std::io::stdout().as_raw_fd(),
+            Stream::Stderr => std::io::stderr().as_raw_fd(),
+        };
         // SAFETY: ws is a plain POD struct sized for struct winsize; TIOCGWINSZ fills it.
         let rc = unsafe { ioctl_winsize(fd, &mut ws) };
         if rc == 0 && ws.ws_col > 0 {
             return ws.ws_col as usize;
         }
     }
+    #[cfg(not(unix))]
+    let _ = stream;
     100
 }
 
@@ -225,17 +318,27 @@ mod tests {
     fn dim_all_reasserts_dim_after_embedded_resets() {
         // An embedded span's own reset must not cancel the outer dim for the
         // rest of the line.
+        let on = Paint { enabled: true };
         assert_eq!(
-            dim_all_styled(true, "a \x1b[32mok\x1b[0m b"),
+            on.dim_all("a \x1b[32mok\x1b[0m b"),
             "\x1b[2ma \x1b[32mok\x1b[0m\x1b[2m b\x1b[0m"
         );
         // Colour off: passthrough, like every other colour helper — and the
         // public entry point is off-tty in tests.
-        assert_eq!(
-            dim_all_styled(false, "a \x1b[32mok\x1b[0m b"),
-            "a \x1b[32mok\x1b[0m b"
-        );
+        let off = Paint { enabled: false };
+        assert_eq!(off.dim_all("a \x1b[32mok\x1b[0m b"), "a \x1b[32mok\x1b[0m b");
         assert_eq!(dim_all("x"), "x");
+    }
+
+    #[test]
+    fn paint_styles_when_enabled() {
+        // An enabled Paint (a stream that is a terminal) emits SGR codes; a
+        // disabled one passes through, whatever stream it came from.
+        let on = Paint { enabled: true };
+        assert_eq!(on.green("ok"), "\x1b[32mok\x1b[0m");
+        assert_eq!(on.dim("x"), "\x1b[2mx\x1b[0m");
+        let off = Paint { enabled: false };
+        assert_eq!(off.green("ok"), "ok");
     }
 
     #[test]

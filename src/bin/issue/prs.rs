@@ -215,31 +215,33 @@ fn reviews_table(
 /// The static first line of the stale-while-revalidate block; the fetch
 /// spinner animates below the block instead.
 fn stale_banner() -> String {
-    ui::dim("as of last run")
+    ui::Paint::on(ui::Stream::Stderr).dim("as of last run")
 }
 
 /// The stale-while-revalidate body: last run's tables, every line dimmed.
 /// Pure, and built once per run — the whole block is static while the fetch
-/// spinner below it animates. `dim_all` keeps painted cells dim past their
-/// own SGR resets, and the titles use plain dim (not bold cyan) so terminals
-/// don't have to resolve bold-over-faint.
+/// spinner below it animates. The block draws on stderr, so the dim keys off
+/// that stream. `dim_all` keeps painted cells dim past their own SGR resets,
+/// and the titles use plain dim (not bold cyan) so terminals don't have to
+/// resolve bold-over-faint.
 fn stale_body(
     prev_mine: &[MinePrView],
     prev_reviews: &[ReviewPrView],
     want_mine: bool,
     want_reviews: bool,
 ) -> Vec<String> {
+    let paint = ui::Paint::on(ui::Stream::Stderr);
     let mut out = Vec::new();
     let empty = BTreeMap::new();
     if want_mine {
-        out.push(ui::dim("MY OPEN PRs"));
+        out.push(paint.dim("MY OPEN PRs"));
         let (body, _) = mine_table_build(prev_mine, None, &empty);
-        out.extend(body.lines().map(ui::dim_all));
+        out.extend(body.lines().map(|l| paint.dim_all(l)));
     }
     if want_reviews {
-        out.push(ui::dim("PRs AWAITING MY REVIEW"));
+        out.push(paint.dim("PRs AWAITING MY REVIEW"));
         let (body, _) = reviews_table_build(prev_reviews, &empty);
-        out.extend(body.lines().map(ui::dim_all));
+        out.extend(body.lines().map(|l| paint.dim_all(l)));
     }
     out
 }
