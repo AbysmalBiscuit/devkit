@@ -155,7 +155,9 @@ pub fn render_lines(
     for row in rows {
         t.add_row(row.iter().map(|c| match c {
             Cell::Ready(s) => s.clone(),
-            Cell::Stale(s) => ui::dim(s),
+            // dim_all, not dim: styled content carries its own SGR resets,
+            // which would cancel a single leading dim mid-cell.
+            Cell::Stale(s) => ui::dim_all(s),
             Cell::Pending => ui::cyan(FRAMES[frame % FRAMES.len()]),
         }));
     }
