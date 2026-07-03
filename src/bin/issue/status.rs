@@ -141,6 +141,22 @@ enum Update {
     Linear(HashMap<String, linear::LinearState>, Option<String>),
 }
 
+/// The single status line under the live table; sources drop out of the
+/// message as they land. One line, not one per source: every status row the
+/// block allocates scrolls the screen and stays scrolled after the row is
+/// gone, so the block's footprint beyond the table is kept to the one line
+/// the shell prompt will overwrite.
+fn progress_msg(prs_done: bool, linear_done: bool) -> String {
+    let mut parts = vec!["Checking worktrees"];
+    if !prs_done {
+        parts.push("fetching PRs");
+    }
+    if !linear_done {
+        parts.push("fetching Linear");
+    }
+    parts.join(" · ")
+}
+
 /// Discover worktrees, then draw the triage table immediately — ISSUE/BRANCH
 /// known, other cells as spinners — and fill it as each source lands. The
 /// live block animates on stderr and is cleared; the returned report renders
@@ -174,9 +190,7 @@ pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
         lt.set(disp[i], 1, Cell::Ready(triage::branch_cell(&row.branch)));
     }
     lt.redraw();
-    let dirty_bar = lt.bar(&format!("Checking {m} worktrees"), m as u64);
-    let prs_spin = lt.spinner("Fetching PRs from GitHub…");
-    let linear_spin = lt.spinner("Fetching Linear states…");
+    let progress = lt.bar(&progress_msg(false, false), m as u64);
 
     let mut state = LiveState::new(d.rows().to_vec(), has_key);
 
@@ -216,18 +230,22 @@ pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
         }
         drop(tx);
 
+        let mut prs_done = false;
+        let mut linear_done = false;
         lt.drive(&rx, |lt, msg| {
             let writes = match msg {
                 Update::Dirty(i, dirty) => {
-                    dirty_bar.inc(1);
+                    progress.inc(1);
                     state.apply_dirty(i, dirty)
                 }
                 Update::Prs(res) => {
-                    prs_spin.finish_and_clear();
+                    prs_done = true;
+                    progress.set_message(progress_msg(prs_done, linear_done));
                     state.apply_prs(res?)
                 }
                 Update::Linear(states, ws) => {
-                    linear_spin.finish_and_clear();
+                    linear_done = true;
+                    progress.set_message(progress_msg(prs_done, linear_done));
                     state.apply_linear(states, ws)
                 }
             };
@@ -285,6 +303,23 @@ mod tests {
             finished: false,
             reason_not_finished: None,
         }
+    }
+
+    #[test]
+    fn progress_msg_drops_sources_as_they_land() {
+        assert_eq!(
+            progress_msg(false, false),
+            "Checking worktrees · fetching PRs · fetching Linear"
+        );
+        assert_eq!(
+            progress_msg(true, false),
+            "Checking worktrees · fetching Linear"
+        );
+        assert_eq!(
+            progress_msg(false, true),
+            "Checking worktrees · fetching PRs"
+        );
+        assert_eq!(progress_msg(true, true), "Checking worktrees");
     }
 
     #[test]
