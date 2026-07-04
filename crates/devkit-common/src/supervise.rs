@@ -244,10 +244,20 @@ mod tests {
         );
         let env = BTreeMap::new();
         let pid = spawn_detached(&argv, ".", &env, &tmp, None).unwrap();
-        assert!(
-            wait_ready(port, Duration::from_secs(10)),
-            "server never came up"
-        );
+        let ready = wait_ready(port, Duration::from_secs(10));
+        // On failure the interpreter and its captured stdout+stderr are the only
+        // clue to why it never bound (missing module, port conflict, a slow uv
+        // cold-start); the bare assertion discarded both.
+        if !ready {
+            let log = tail(&tmp, 50);
+            stop(pid);
+            let _ = fs::remove_file(&tmp);
+            panic!(
+                "server never came up on 127.0.0.1:{port} within 10s\n\
+                 interpreter: {argv:?}\n\
+                 captured output:\n{log}"
+            );
+        }
         stop(pid);
         let _ = fs::remove_file(&tmp);
     }
