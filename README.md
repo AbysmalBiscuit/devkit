@@ -348,19 +348,50 @@ An undefined variable is an error (strict mode), so typos surface immediately.
 
 ## Install
 
-Install all six binaries (`portm`, `devrun`, `issue`, `lockm`, `devkit`, `devkitd`)
-into `~/.cargo/bin` with one command:
+### Prebuilt binaries (no Rust toolchain)
+
+The quickest path — the [dist](https://opensource.axo.dev/cargo-dist/)-generated
+installer downloads the matching binaries from the latest GitHub release,
+verifies checksums, and puts them on your `PATH`:
+
+```sh
+# Linux / macOS / WSL
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-installer.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-installer.ps1 | iex
+```
+
+Pin a specific release by swapping `latest/download` for `download/v0.8.0`.
+Prebuilt targets are Linux x86_64 (gnu + musl) and arm64, macOS x86_64 and
+arm64, and Windows x86_64 and arm64. Upgrade in place later with `devkit-update`.
+
+The installer places only the binaries. To use devkit inside a coding agent,
+register the plugin afterward — see
+[Installing for coding agents](#installing-for-coding-agents).
+
+### From source
+
+Install all binaries (`portm`, `devrun`, `issue`, `lockm`, `devkit`,
+`devkit-mcp`, `devkitd`) into `~/.cargo/bin` with one command — from a clone:
 
 ```sh
 cargo install --path .
+```
+
+or straight from GitHub without cloning:
+
+```sh
+cargo install --git https://github.com/AbysmalBiscuit/devkit --force
 ```
 
 This builds with default features, which include the `devkitd` supervisor daemon.
 `devkitd` serves both the port registry (`ports.sock`) and the lock registry
 (`locks.sock`) from memory, writing through to the files, and is used by
 `devrun up --supervise`. To skip the daemon, build a lean set with
-`cargo install --path . --no-default-features` (omits `devkitd` and `devrun`'s
-`--supervise` support).
+`--no-default-features` (omits `devkitd` and `devrun`'s `--supervise` support).
 
 Or just build into `target/release` without installing:
 

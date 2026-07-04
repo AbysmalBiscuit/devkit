@@ -9,60 +9,21 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Maintains the release PR and, on merge, creates the tag + GitHub Release.
+  # Binaries are built and uploaded to that release by the separate `release`
+  # workflow (cargo-dist), triggered by the tag push. The tag is pushed with a
+  # PAT (RELEASE_PLEASE_TOKEN), not GITHUB_TOKEN, so the tag-push event actually
+  # fires that workflow — a GITHUB_TOKEN push would not trigger it.
   release-please:
     name: release-please
     runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
           # A PAT (not the default GITHUB_TOKEN) so the release PR is attributed
-          # to a real identity; pushes from GITHUB_TOKEN do not trigger CI, which
-          # leaves the release PR's checks stuck awaiting manual approval.
+          # to a real identity and the tag push triggers the release workflow;
+          # pushes from GITHUB_TOKEN do not trigger CI.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-
-  # Builds run in the same workflow as release-please on purpose: a release
-  # created with GITHUB_TOKEN does not emit a `release` event, so a separate
-  # release-triggered workflow would never fire.
-  build:
-    name: build ${{ matrix.target }}
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-          # Build-only: no native ARM64 Windows runner exists to test the
-          # artifact, so it compiles but is not published.
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
-            dry-run: true
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
-      - uses: taiki-e/upload-rust-binary-action@v1
-        with:
-          bin: portm,devrun,issue,lockm,devkitd
-          target: ${{ matrix.target }}
-          archive: devkit-$tag-$target
-          checksum: sha256
-          dry-run: ${{ matrix.dry-run || false }}
-          ref: refs/tags/${{ needs.release-please.outputs.tag_name }}
-          token: ${{ secrets.GITHUB_TOKEN }}

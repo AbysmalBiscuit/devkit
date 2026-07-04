@@ -4,6 +4,7 @@ description = "Local development coordination tools: portm, lockm, devrun, issue
 edition.workspace = true
 version = "0.8.0" # x-release-please-version
 license = "GPL-3.0-or-later"
+repository = "https://github.com/AbysmalBiscuit/devkit"
 
 # The supervisor daemon needs the port-registry daemon backend; gate its bin on
 # the feature so `--no-default-features` builds still produce the other tools.
@@ -95,3 +96,8 @@ lto = "thin"         # cross-crate inlining across the workspace libs
 codegen-units = 1    # better optimization at the cost of compile time
 panic = "abort"      # no bin catches panics; drops unwind tables, shrinks the binary
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
