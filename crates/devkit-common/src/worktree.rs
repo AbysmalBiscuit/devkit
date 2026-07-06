@@ -44,7 +44,10 @@ pub fn issue_id_of(branch: &str, path: &std::path::Path) -> String {
     "UNKNOWN".into()
 }
 
-/// The first letters-dash-digits run in `s` (e.g. `eng-1234`), if any.
+/// The first letters-dash-digits run in `s` (e.g. `eng-1234`), if any. A
+/// `pr-<number>` run is the PR-checkout number marker, not an issue id, so it is
+/// skipped in favour of a real id later in the string (e.g. the trailing
+/// `swe-8603` in `pr-3255-…-swe-8603`).
 pub fn find_id(s: &str) -> Option<String> {
     // first run of letters-dash-digits, e.g. eng-1234
     let bytes = s.as_bytes();
@@ -63,7 +66,11 @@ pub fn find_id(s: &str) -> Option<String> {
                     i += 1;
                 }
                 if i > ds {
-                    return Some(format!("{}-{}", &s[start..dash], &s[ds..i]));
+                    let key = &s[start..dash];
+                    if key.eq_ignore_ascii_case("pr") {
+                        continue; // PR-number marker, keep scanning for the id
+                    }
+                    return Some(format!("{}-{}", key, &s[ds..i]));
                 }
             }
         } else {
@@ -202,6 +209,32 @@ mod tests {
         assert_eq!(issue_id_of("lev/eng-1234-fix", Path::new("/x")), "ENG-1234");
         assert_eq!(issue_id_of("DETACHED", Path::new("/x/abc-9")), "ABC-9");
         assert_eq!(issue_id_of("main", Path::new("/x/scratch")), "UNKNOWN");
+    }
+
+    #[test]
+    fn skips_pr_number_marker() {
+        // A `pr-<number>` PR-checkout marker is the PR number, not an issue id:
+        // skip it and return the real id that follows.
+        assert_eq!(
+            find_id("pr-3255-feat-api-migrate-view-v2-to-kysely-u11-swe-8603").as_deref(),
+            Some("swe-8603")
+        );
+        assert_eq!(
+            issue_id_of(
+                "pr-3255-feat-api-migrate-view-v2-to-kysely-u11-swe-8603",
+                Path::new("/x")
+            ),
+            "SWE-8603"
+        );
+        // Normal worktree branch still resolves from its leading id.
+        assert_eq!(
+            find_id("swe-9959-optimize-tasks-list-payload").as_deref(),
+            Some("swe-9959")
+        );
+        // A PR marker with no trailing id yields no issue id (PR number is
+        // surfaced separately, never as the issue id).
+        assert_eq!(find_id("pr-3255-feat-only"), None);
+        assert_eq!(find_id("PR-42"), None);
     }
 
     use std::fs;
