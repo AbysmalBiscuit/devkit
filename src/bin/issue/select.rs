@@ -2,7 +2,8 @@ use devkit_issue::status::IssueWorktree;
 use std::path::Path;
 
 /// True when `sel` names this worktree by issue id, branch, worktree basename,
-/// or full path (all compared case-insensitively).
+/// full path (all compared case-insensitively), or the PR number (`3124` or
+/// `#3124`).
 pub fn matches(row: &IssueWorktree, sel: &str) -> bool {
     let s = sel.to_lowercase();
     let base = Path::new(&row.worktree)
@@ -10,13 +11,18 @@ pub fn matches(row: &IssueWorktree, sel: &str) -> bool {
         .and_then(|x| x.to_str())
         .unwrap_or("")
         .to_lowercase();
-    [
+    if [
         row.issue_id.to_lowercase(),
         row.branch.to_lowercase(),
         base,
         row.worktree.to_lowercase(),
     ]
     .contains(&s)
+    {
+        return true;
+    }
+    row.pr_number
+        .is_some_and(|pr| s.strip_prefix('#').unwrap_or(&s) == pr.to_string())
 }
 
 #[cfg(test)]
@@ -52,5 +58,26 @@ mod tests {
     #[test]
     fn rejects_non_match() {
         assert!(!matches(&row(), "eng-8"));
+    }
+
+    #[test]
+    fn matches_by_pr_number() {
+        let r = IssueWorktree {
+            pr_number: Some(3124),
+            ..row()
+        };
+        assert!(matches(&r, "3124"));
+        assert!(matches(&r, "#3124"));
+    }
+
+    #[test]
+    fn rejects_wrong_pr_number_and_pr_when_absent() {
+        let r = IssueWorktree {
+            pr_number: Some(3124),
+            ..row()
+        };
+        assert!(!matches(&r, "3125"));
+        // A row with no PR never matches a bare number.
+        assert!(!matches(&row(), "3124"));
     }
 }
