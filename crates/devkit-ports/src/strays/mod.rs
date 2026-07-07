@@ -195,6 +195,34 @@ fn launch_root(start: u32, by_pid: &std::collections::BTreeMap<u32, Proc>) -> u3
     }
 }
 
+/// Climb from a directly-launched leaf (a bare binary such as chrome, not a
+/// wrapper) to the top of its same-binary process tree: the highest consecutive
+/// ancestor whose program basename equals `base`. Stops at the launcher (a
+/// different binary — the MCP/node parent), so the returned root's subtree is
+/// the whole app, not its parent.
+#[cfg(unix)]
+fn direct_root(start: u32, base: &str, by_pid: &std::collections::BTreeMap<u32, Proc>) -> u32 {
+    let mut cur = start;
+    let mut visited = std::collections::BTreeSet::new();
+    loop {
+        if !visited.insert(cur) {
+            return cur;
+        }
+        let Some(p) = by_pid.get(&cur) else {
+            return cur;
+        };
+        let Some(parent) = by_pid.get(&p.ppid) else {
+            return cur;
+        };
+        let first = parent.argv.split_whitespace().next().unwrap_or("");
+        let pbase = first.rsplit('/').next().unwrap_or(first);
+        if pbase != base {
+            return cur;
+        }
+        cur = p.ppid;
+    }
+}
+
 /// Managed roots a stray's cwd must fall under (config-driven).
 #[cfg(unix)]
 fn managed_roots(cfg: &Config) -> Vec<String> {
@@ -272,24 +300,31 @@ fn process_pass(cfg: &Config, data: &Data, procs: &dyn ProcTable) -> Vec<Stray> 
         {
             continue;
         }
-        let Some((app, _)) = sigs.iter().find(|(_, s)| argv_matches(&p.argv, s)) else {
+        let Some((app, sig)) = sigs.iter().find(|(_, s)| argv_matches(&p.argv, s)) else {
             continue;
         };
-        // Only treat wrapper-launched processes (doppler/bun/node/uv/…) as climb
-        // candidates. This drops two kinds of spurious matches: a shell whose
-        // `-c "…"` argv merely contains the server command, and any non-server
-        // process that happens to mention the signature words. The real chain
-        // still resolves — every devkit app launches via `doppler run --`, whose
-        // argv embeds the downstream command, so the doppler ancestor is always a
-        // valid candidate and the climb/dedup land on it. The deliberate
-        // narrowing: a bare binary launched with no wrapper is not attributed
-        // here (the port-band pass still surfaces it by port).
+        // A wrapper-launched process (doppler/bun/node/uv/…) climbs to its launch
+        // root. A non-wrapper match is attributed only when the process's *own*
+        // program is the signature's launch target — a bare binary launched
+        // directly (e.g. chrome, whose signature is its absolute path). This still
+        // drops the two spurious cases: a shell whose `-c "…"` argv merely embeds
+        // the server command, and any process that only mentions the signature
+        // words downstream — in both, the first argv word is not the framework
+        // binary, so `argv_matches(prog, …)` fails.
         let prog = p.argv.split_whitespace().next().unwrap_or("");
         let prog_base = prog.rsplit('/').next().unwrap_or(prog);
-        if !WRAPPERS.contains(&prog_base) {
+        let is_wrapper = WRAPPERS.contains(&prog_base);
+        if !is_wrapper && !argv_matches(prog, &sig[..1]) {
             continue;
         }
-        let root = launch_root(p.pid, &by_pid);
+        // Wrapper: climb runtime ancestors to the launch root. Bare binary: climb
+        // same-binary ancestors to the top of the process tree (a renderer leaf
+        // resolves up to the main browser), so the reaped subtree is the whole app.
+        let root = if is_wrapper {
+            launch_root(p.pid, &by_pid)
+        } else {
+            direct_root(p.pid, prog_base, &by_pid)
+        };
         if tracked.contains(&root) || !seen_roots.insert(root) {
             continue;
         }
@@ -481,6 +516,53 @@ mod tests {
         assert_eq!(s.port, Some(9200));
         assert_eq!(s.holder.as_deref(), Some("/home/u/Git/x/swe-1"));
         assert_eq!(s.app.as_deref(), Some("api"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reaps_a_bare_binary_launch_climbing_to_the_tree_top() {
+        // An app whose launch is a bare binary (no wrapper, e.g. chrome) is not
+        // reachable through the doppler/bun/node climb. Its own process is the
+        // launch target: attribute it and climb through same-binary ancestors so
+        // the reaped root is the top of the browser tree, not a renderer leaf.
+        let mut cfg = Config::default();
+        cfg.defaults.worktree_root = "/home/u/Git/x".into();
+        cfg.apps.insert(
+            "chrome".into(),
+            AppConfig {
+                base_port: 5000,
+                launch: vec!["/opt/google/chrome/chrome".into()],
+                ..AppConfig::default()
+            },
+        );
+        let data = Data::default();
+        let wt = "/home/u/Git/x/swe-1";
+        let table = Table(vec![
+            // The MCP launcher (a node wrapper) lives outside the worktree.
+            proc(100, 1, "node /home/u/.mcp/chrome-devtools.js", "/home/u"),
+            proc(
+                200,
+                100,
+                "/opt/google/chrome/chrome --user-data-dir=/tmp/p",
+                wt,
+            ),
+            proc(300, 200, "/opt/google/chrome/chrome --type=zygote", wt),
+            proc(400, 200, "/opt/google/chrome/chrome --type=renderer", wt),
+            // crashpad's argv0 differs, so it never matches the signature; it dies
+            // as a subtree member when the root is killed.
+            proc(
+                500,
+                200,
+                "/opt/google/chrome/chrome_crashpad_handler --monitor",
+                wt,
+            ),
+        ]);
+        let strays = process_pass(&cfg, &data, &table);
+        assert_eq!(strays.len(), 1);
+        let s = &strays[0];
+        assert_eq!(s.pid, Some(200)); // top browser process, not a renderer leaf
+        assert_eq!(s.app.as_deref(), Some("chrome"));
+        assert_eq!(s.holder.as_deref(), Some("/home/u/Git/x/swe-1"));
     }
 
     #[cfg(unix)]
