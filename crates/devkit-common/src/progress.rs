@@ -1,6 +1,6 @@
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use std::cell::Cell;
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// A `MultiProgress` drawing to stderr, or fully hidden when stderr is not a
@@ -61,16 +61,24 @@ pub(crate) fn add_bar(mp: &MultiProgress, msg: &str, len: u64) -> ProgressBar {
 pub struct Steps {
     mp: MultiProgress,
     total: Option<usize>,
-    n: Cell<usize>,
+    n: AtomicUsize,
     persist: bool,
 }
+
+// `Steps` must stay `Send + Sync` so scoped worker threads can share one
+// `&Steps` — `issue end` dispatches concurrent removals, each drawing its own
+// bar through the shared `MultiProgress`.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Steps>();
+};
 
 impl Steps {
     pub fn new() -> Steps {
         Steps {
             mp: Self::target(),
             total: None,
-            n: Cell::new(0),
+            n: AtomicUsize::new(0),
             persist: false,
         }
     }
@@ -80,7 +88,7 @@ impl Steps {
         Steps {
             mp: Self::target(),
             total: Some(total),
-            n: Cell::new(0),
+            n: AtomicUsize::new(0),
             persist: false,
         }
     }
@@ -92,7 +100,7 @@ impl Steps {
         Steps {
             mp: Self::target(),
             total: None,
-            n: Cell::new(0),
+            n: AtomicUsize::new(0),
             persist: true,
         }
     }
@@ -102,7 +110,7 @@ impl Steps {
         Steps {
             mp: Self::target(),
             total: Some(total),
-            n: Cell::new(0),
+            n: AtomicUsize::new(0),
             persist: true,
         }
     }
@@ -115,14 +123,13 @@ impl Steps {
     /// persistent unnumbered mode, prefix a plain `n. ` ordinal. Otherwise
     /// pass the message through unchanged.
     fn label(&self, msg: &str) -> String {
-        let i = self.n.get() + 1;
         match self.total {
             Some(total) => {
-                self.n.set(i);
+                let i = self.n.fetch_add(1, Ordering::Relaxed) + 1;
                 format!("[{i}/{total}] {msg}")
             }
             None if self.persist => {
-                self.n.set(i);
+                let i = self.n.fetch_add(1, Ordering::Relaxed) + 1;
                 format!("{i}. {msg}")
             }
             None => msg.to_string(),
@@ -188,6 +195,13 @@ impl Steps {
     /// Clear every bar in the group (call once all work is done).
     pub fn clear(&self) {
         let _ = self.mp.clear();
+    }
+
+    /// Run `f` with every bar in the group hidden, then redraw them. Use around
+    /// a stdin prompt or any stdout write that would otherwise be torn by a live
+    /// bar redrawing on stderr.
+    pub fn suspend<T>(&self, f: impl FnOnce() -> T) -> T {
+        self.mp.suspend(f)
     }
 }
 
@@ -300,6 +314,29 @@ mod tests {
         let steps = Steps::persistent();
         assert!(steps.spinner("working…").is_hidden());
         steps.during("quiet", || ());
+        steps.clear();
+    }
+
+    #[test]
+    fn during_result_runs_concurrently_across_threads() {
+        let steps = Steps::persistent();
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for i in 0..8 {
+                let steps = &steps;
+                let done = &done;
+                s.spawn(move || {
+                    let out: anyhow::Result<usize> =
+                        steps.during_result(&format!("task {i}"), || Ok(i));
+                    assert_eq!(out.unwrap(), i);
+                    done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                });
+            }
+        });
+        assert_eq!(done.load(std::sync::atomic::Ordering::Relaxed), 8);
+        // The ordinal advanced exactly once per step regardless of interleaving:
+        // 8 steps ran, so the next label is the 9th.
+        assert_eq!(steps.label("next"), "9. next");
         steps.clear();
     }
 }
