@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.9.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.8.0...v0.9.0) (2026-07-07)
+
+
+### Features
+
+* add --timing / --timing-log to issue and devrun ([dd83435](https://github.com/AbysmalBiscuit/devkit/commit/dd834357484933b1d5758ecc30e60b2edefcdd98))
+* **common:** add LiveLines and LiveTable stderr widgets ([510f5e1](https://github.com/AbysmalBiscuit/devkit/commit/510f5e1fb73fb2f1d8af78eee4e57426be9a3692))
+* **common:** add minutes tier to step elapsed times ([9b23aed](https://github.com/AbysmalBiscuit/devkit/commit/9b23aeda942017f6a83709979c91ec30dc3c080b))
+* **common:** persistent step-log mode for Steps ([6bc4e9e](https://github.com/AbysmalBiscuit/devkit/commit/6bc4e9e6f8749ac3573cdbede45b13290f9f9052))
+* **issue:** add Prs::empty and streaming dirty checks ([50dd69d](https://github.com/AbysmalBiscuit/devkit/commit/50dd69d1b67d652351cd215b76bee89bbb1e0f0d))
+* **issue:** live-fill the status triage table ([bd7bf5f](https://github.com/AbysmalBiscuit/devkit/commit/bd7bf5fd1135e491b71008a2ca22debd726f4936))
+* **issue:** make step logs persistent ([210358b](https://github.com/AbysmalBiscuit/devkit/commit/210358ba50963c9ec7ed695f4c7cc4041ce9b87c))
+* **issue:** move the prs refresh spinner below the block ([b6db66d](https://github.com/AbysmalBiscuit/devkit/commit/b6db66d54fcfe45c4a41b1e44553b7cdf8b456cf))
+* **issue:** parallel fetches and live table for info ([662271a](https://github.com/AbysmalBiscuit/devkit/commit/662271a3819daa7b7842e9b276a7ff7a07ec391e))
+* **issue:** stale-while-revalidate render for prs ([750ab57](https://github.com/AbysmalBiscuit/devkit/commit/750ab57da8289f639e34e6fed82197e41392f879))
+* **issue:** store full pr rows in the prs snapshot cache ([3ea4080](https://github.com/AbysmalBiscuit/devkit/commit/3ea4080f50c799a8ca5762eb98e2e7029a4e3479))
+* **plugin:** ship per-host marketplace manifests ([cba0f66](https://github.com/AbysmalBiscuit/devkit/commit/cba0f66f6a804d40b31575d91464bd58e69e3ccb))
+* **strays:** reap bare-binary launches like chrome ([0acc9d9](https://github.com/AbysmalBiscuit/devkit/commit/0acc9d972272935067810c6a522defd04158b6e7))
+* **timing:** add tracing-based IO timing collector ([9cdf495](https://github.com/AbysmalBiscuit/devkit/commit/9cdf495ddff336fbc1ed8d9ab4ec3705dc85036d))
+* **timing:** instrument subprocess and http primitives ([0300c60](https://github.com/AbysmalBiscuit/devkit/commit/0300c609048fe72439942bfe20092b4015d5ac4f))
+
+
+### Bug Fixes
+
+* **common:** colour indicatif bars by stderr, not stdout ([c0ab6e5](https://github.com/AbysmalBiscuit/devkit/commit/c0ab6e5073af031d0255636d632e05af40cd652c))
+* **common:** dim stale cells with dim_all ([7c32303](https://github.com/AbysmalBiscuit/devkit/commit/7c32303cf10cc9ffb47f4acdd8f0e354424a6232))
+* **common:** key live styling to the stream it draws on ([21918b0](https://github.com/AbysmalBiscuit/devkit/commit/21918b05a2a5aebb8abc8d789271607647f1981a))
+* **common:** retire line bars on live block clear ([696a317](https://github.com/AbysmalBiscuit/devkit/commit/696a31739a10335b87a4e2da6dd606c711bc91ef))
+* **issue:** collapse status bars into one row ([7130fe1](https://github.com/AbysmalBiscuit/devkit/commit/7130fe1eed0a52ad9b616d6115076f792dd8e42a))
+* **issue:** match worktree selector by pr number ([e838353](https://github.com/AbysmalBiscuit/devkit/commit/e8383535d518d5802fbf51f98223b3084db7bdb2))
+* **issue:** skip live rendering for info --json ([fcc8d7d](https://github.com/AbysmalBiscuit/devkit/commit/fcc8d7d522da7530c0f425705d9634020951168d))
+* **issue:** swap prs stale block for fresh tables in place ([5a17eac](https://github.com/AbysmalBiscuit/devkit/commit/5a17eac60c3185388a41adbf3d70d3a105445c90))
+* **ports:** use a real holder dir in the pidless down test ([84b1dab](https://github.com/AbysmalBiscuit/devkit/commit/84b1dabcbbbf4814ec227592b62b0c652b75c7e5))
+* **timing:** warn when a subscriber blocks install ([e049f8c](https://github.com/AbysmalBiscuit/devkit/commit/e049f8c1f2e8cb8f91dfbe74e9acd542cb45a34c))
+* **worktree:** skip pr-number marker in issue id parse ([09d6fb4](https://github.com/AbysmalBiscuit/devkit/commit/09d6fb441311546660940d5e00ceeebf4d89ca9f))
+
 ## [0.8.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.7.0...v0.8.0) (2026-07-01)
 
 
