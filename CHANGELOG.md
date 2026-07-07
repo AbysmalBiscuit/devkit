@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/AbysmalBiscuit/devkit/compare/v0.9.0...v0.9.1) (2026-07-07)
+
+
+### Miscellaneous Chores
+
+* release 0.9.1 ([b08866e](https://github.com/AbysmalBiscuit/devkit/commit/b08866e40a5d55e7f523a24c1c028d4080136c5c))
+
 ## [0.9.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.8.0...v0.9.0) (2026-07-07)
 
 
