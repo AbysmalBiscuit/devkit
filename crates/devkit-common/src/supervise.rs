@@ -237,10 +237,23 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         drop(l);
         let mut argv = py;
+        // Bind to 127.0.0.1 explicitly: `probe_port` connects to IPv4 localhost,
+        // but http.server's default DualStackServer binds to `::`, which an IPv4
+        // connect does not reliably reach on macOS — the server comes up yet the
+        // probe never connects. `-u` unbuffers stdout so the "Serving HTTP …" line
+        // (or any error) reaches the log before the process is killed, instead of
+        // dying in a block buffer and leaving the failure diagnostic empty.
         argv.extend(
-            ["-m", "http.server", &port.to_string()]
-                .into_iter()
-                .map(|s| s.to_string()),
+            [
+                "-u",
+                "-m",
+                "http.server",
+                "--bind",
+                "127.0.0.1",
+                &port.to_string(),
+            ]
+            .into_iter()
+            .map(|s| s.to_string()),
         );
         let env = BTreeMap::new();
         let pid = spawn_detached(&argv, ".", &env, &tmp, None).unwrap();
