@@ -335,6 +335,16 @@ fn checks_cell(c: &Checks) -> String {
     }
 }
 
+/// True when someone is actually expected to review: branch protection
+/// requires a review (`REVIEW_REQUIRED`), or a reviewer sits in the pending
+/// request list (including CODEOWNERS auto-requests). Submitted `COMMENTED`
+/// reviews don't count — bots comment on every PR, and a comment obliges
+/// nobody. Standing decisions are handled by `approved`/`changes_requested`
+/// before callers consult this predicate.
+fn review_in_flight(pr: &PrNode) -> bool {
+    pr.review_decision.as_deref() == Some("REVIEW_REQUIRED") || !pr.review_requests.nodes.is_empty()
+}
+
 fn review_text(pr: &PrNode) -> &'static str {
     if changes_requested(pr) {
         return "changes";
@@ -342,15 +352,13 @@ fn review_text(pr: &PrNode) -> &'static str {
     if approved(pr) {
         return "approved";
     }
-    match pr.review_decision.as_deref() {
-        Some("REVIEW_REQUIRED") => "awaiting",
-        _ => {
-            if pr.reviews.nodes.is_empty() {
-                "awaiting"
-            } else {
-                "commented"
-            }
-        }
+    if review_in_flight(pr) {
+        return "awaiting";
+    }
+    if pr.reviews.nodes.is_empty() {
+        "not requested"
+    } else {
+        "commented"
     }
 }
 
@@ -439,8 +447,14 @@ fn mine_action(pr: &PrNode, ignored: &[String]) -> String {
         } else {
             "MERGE".into()
         }
-    } else {
+    } else if review_in_flight(pr) {
         format!("awaiting review{}", if conflict { "; rebase" } else { "" })
+    } else if conflict {
+        "rebase -> merge (unreviewed)".into()
+    } else if matches!(check_verdict(pr, ignored), Checks::Fail(_)) {
+        "fix CI -> merge (unreviewed)".into()
+    } else {
+        "MERGE (unreviewed)".into()
     }
 }
 
@@ -960,6 +974,112 @@ mod tests {
         );
     }
 
+    /// Null-decision node (repo requires no reviews): `requested` controls the
+    /// pending reviewRequests list, `reviews` the submitted review list.
+    fn no_decision_node(
+        mergeable: &str,
+        rollup: &str,
+        requested: bool,
+        reviews: serde_json::Value,
+    ) -> PrNode {
+        let requests = if requested {
+            serde_json::json!({"nodes": [{"requestedReviewer": {"login": "human"}}]})
+        } else {
+            serde_json::json!({"nodes": []})
+        };
+        node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": false,
+            "reviewDecision": null, "mergeable": mergeable,
+            "author": {"login": "me"},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": rollup}}}]},
+            "reviews": reviews, "reviewRequests": requests
+        }))
+    }
+
+    // No review required, requested, or submitted: nothing is in flight, so the
+    // PR is not "awaiting" anything — it is mergeable now, flagged unreviewed.
+    #[test]
+    fn unrequested_pr_reads_merge_unreviewed() {
+        let pr = no_decision_node(
+            "MERGEABLE",
+            "SUCCESS",
+            false,
+            serde_json::json!({"nodes": []}),
+        );
+        assert_eq!(review_text(&pr), "not requested");
+        assert_eq!(mine_action(&pr, &[]), "MERGE (unreviewed)");
+    }
+
+    // The unreviewed arm carries the same CI/conflict gating as the approved
+    // arm, so "merge" is never claimed while something blocks it.
+    #[test]
+    fn unrequested_pr_with_failing_ci() {
+        let pr = no_decision_node(
+            "MERGEABLE",
+            "FAILURE",
+            false,
+            serde_json::json!({"nodes": []}),
+        );
+        assert_eq!(mine_action(&pr, &[]), "fix CI -> merge (unreviewed)");
+    }
+    #[test]
+    fn unrequested_pr_with_conflict() {
+        let pr = no_decision_node(
+            "CONFLICTING",
+            "SUCCESS",
+            false,
+            serde_json::json!({"nodes": []}),
+        );
+        assert_eq!(mine_action(&pr, &[]), "rebase -> merge (unreviewed)");
+    }
+
+    // A pending review request means someone is expected to review: the wait
+    // is real even though the repo requires no review.
+    #[test]
+    fn pending_request_still_awaits_review() {
+        let pr = no_decision_node(
+            "MERGEABLE",
+            "SUCCESS",
+            true,
+            serde_json::json!({"nodes": []}),
+        );
+        assert_eq!(review_text(&pr), "awaiting");
+        assert_eq!(mine_action(&pr, &[]), "awaiting review");
+    }
+
+    // Branch protection requiring a review blocks the merge, so the PR stays
+    // "awaiting review" even with no named reviewer.
+    #[test]
+    fn review_required_still_awaits_review() {
+        let pr = mine_node(Some("REVIEW_REQUIRED"), "MERGEABLE", false, Some("SUCCESS"));
+        assert_eq!(review_text(&pr), "awaiting");
+        assert_eq!(mine_action(&pr, &[]), "awaiting review");
+    }
+
+    // A bot's COMMENTED review is not a review in flight: the REVIEW column
+    // still reports the comment, but the action stays mergeable.
+    #[test]
+    fn bot_comment_does_not_mask_unrequested() {
+        let reviews = serde_json::json!({"nodes": [
+            {"author": {"login": "greptile-apps"}, "state": "COMMENTED", "submittedAt": "2026-07-01T10:00:00Z"}
+        ]});
+        let pr = no_decision_node("MERGEABLE", "SUCCESS", false, reviews);
+        assert_eq!(review_text(&pr), "commented");
+        assert_eq!(mine_action(&pr, &[]), "MERGE (unreviewed)");
+    }
+
+    // With a reviewer pending AND a stray bot comment, the in-flight request
+    // wins: "awaiting", not "commented".
+    #[test]
+    fn pending_request_wins_over_comment() {
+        let reviews = serde_json::json!({"nodes": [
+            {"author": {"login": "greptile-apps"}, "state": "COMMENTED", "submittedAt": "2026-07-01T10:00:00Z"}
+        ]});
+        let pr = no_decision_node("MERGEABLE", "SUCCESS", true, reviews);
+        assert_eq!(review_text(&pr), "awaiting");
+        assert_eq!(mine_action(&pr, &[]), "awaiting review");
+    }
+
     // A change request from a non-required reviewer (or bot) that GitHub does not
     // surface in `reviewDecision` still shows as "changes" / "address changes".
     #[test]
@@ -1032,7 +1152,10 @@ mod tests {
             review_text(&mine_node(Some("CHANGES_REQUESTED"), "x", false, None)),
             "changes"
         );
-        assert_eq!(review_text(&mine_node(None, "x", false, None)), "awaiting");
+        assert_eq!(
+            review_text(&mine_node(None, "x", false, None)),
+            "not requested"
+        );
     }
     #[test]
     fn reviewer_state_requested_needs_review() {
