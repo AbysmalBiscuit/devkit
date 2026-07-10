@@ -37,6 +37,7 @@ devkit-ports.workspace = true
 devkit-locks.workspace = true
 devkit-issue.workspace = true
 devkit-mcp.workspace = true
+devkit-docs.workspace = true
 
 # Used only by the Unix-only supervision integration test (POSIX signals).
 [target.'cfg(unix)'.dev-dependencies]
@@ -44,7 +45,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp"]
+members = ["crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs"]
 
 [workspace.package]
 edition = "2024"
@@ -89,6 +90,8 @@ devkit-ports = { path = "crates/devkit-ports" }
 devkit-locks = { path = "crates/devkit-locks" }
 devkit-issue = { path = "crates/devkit-issue" }
 devkit-mcp = { path = "crates/devkit-mcp" }
+toml_edit = { version = "0.22", features = ["serde"] }
+devkit-docs = { path = "crates/devkit-docs" }
 
 [profile.release]
 opt-level = 3        # tools do little compute; keep the registry/diff hot paths fast

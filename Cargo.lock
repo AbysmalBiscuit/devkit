@@ -242,6 +242,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "devkit-common",
+ "devkit-docs",
  "devkit-issue",
  "devkit-locks",
  "devkit-mcp",
@@ -281,6 +282,21 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "devkit-docs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "devkit-common",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "toml",
+ "toml_edit",
+ "ureq",
 ]
 
 [[package]]
