@@ -129,7 +129,10 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
         Ok(s) => {
             toml::from_str(&s).with_context(|| format!("parsing {}", global_path.display()))?
         }
-        Err(_) => DocsManifest::default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocsManifest::default(),
+        Err(e) => {
+            return Err(e).with_context(|| format!("reading {}", global_path.display()));
+        }
     };
 
     // Collect devkit.toml [docs] layers deepest-first, then apply shallowest-first.
