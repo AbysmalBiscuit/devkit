@@ -23,11 +23,20 @@ live behind a trait so tests stub them.
 
 ### Manifest
 
-Two TOML files, merged by lib `name` (project overrides/extends global),
-discovered with the same walk-up convention as existing devkit config:
+Two sources, merged by lib `name` (project overrides/extends global):
 
-- global: `~/.config/devkit/docs.toml`
-- per-project: `.devkit/docs.toml` (committed, so teammates share the lib set)
+- global: `~/.config/devkit/docs.toml` — docm-owned, machine-written, uses
+  top-level `[[libs]]` entries.
+- per-project: a `[docs]` section (`[[docs.libs]]` entries, same fields) in
+  the project's `devkit.toml`, found by the same walk-up-from-CWD convention
+  as existing config discovery. Committed by definition, so teammates share
+  the lib set. (`.devkit/` is unsuitable: everything written there is
+  self-gitignored and structurally deleted with the worktree.)
+
+`docm add --project` edits the nearest `devkit.toml` via `toml_edit` so
+hand-written comments and formatting survive. A project entry may be
+partial — every field except `name` is optional and overrides the global
+entry field-by-field (e.g. pin only `ref` while inheriting `repo`).
 
 ```toml
 [[libs]]
@@ -117,7 +126,8 @@ docm prune [--yes]
 docm completions <shell>
 ```
 
-`--project` targets `.devkit/docs.toml` instead of the global manifest.
+`--project` targets the nearest `devkit.toml`'s `[docs]` section instead of
+the global manifest.
 `devkit doctor` gains a `docs` row: cache size and unreferenced worktrees.
 
 ### The `devkit:docs` skill
@@ -177,3 +187,6 @@ fetches blobs and may take seconds. The skill description triggers on
 5. v1 ecosystems: Rust, JS/TS, Python lockfiles + manual-ref git entries.
 6. Reclamation is reference-based via `registry.json` (holder = project root
    path), not mtime-based.
+7. The project overlay lives in `devkit.toml`'s `[docs]` section, not
+   `.devkit/docs.toml` — `.devkit/` is structurally gitignored (self-ignoring
+   `.gitignore`, global git excludes), so nothing there can be committed.
