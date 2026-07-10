@@ -166,7 +166,7 @@ fn mine_table_build(
 fn legend_lines() -> [String; 2] {
     [
         format!(
-            "{} {} (REVIEW NEEDED · address changes · fix CI) · {} (MERGE · done) · {} (awaiting author fixes) · {}",
+            "{} {} (REVIEW NEEDED · address changes · fix CI) · {} (MERGE · MERGE (unreviewed) · done) · {} (awaiting author fixes) · {}",
             ui::dim("ACTION colour:"),
             ui::red("needs you"),
             ui::green("ready to land"),
