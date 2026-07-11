@@ -6,3 +6,69 @@ pub mod manifest;
 pub mod refs;
 pub mod resolve;
 pub mod tags;
+
+use std::path::Path;
+
+pub struct DocsDoctor {
+    pub libs: usize,
+    pub bytes: u64,
+    pub unreferenced: usize,
+}
+
+/// Cheap health summary for `devkit doctor`: lib count, cache size, and
+/// version worktrees no registry row references.
+pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
+    let mut out = DocsDoctor {
+        libs: 0,
+        bytes: cache::dir_size(cache_root),
+        unreferenced: 0,
+    };
+    let data = refs::RefStore::at(cache_root).snapshot();
+    let referenced: std::collections::BTreeSet<(String, String)> = data
+        .rows
+        .iter()
+        .map(|r| (r.lib.clone(), r.version.clone()))
+        .collect();
+    let Ok(rd) = std::fs::read_dir(cache_root) else {
+        return out;
+    };
+    for e in rd.flatten() {
+        if !e.path().is_dir() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        out.libs += 1;
+        for (wt, _) in cache::LibCache::new(cache_root, &name).version_worktrees() {
+            if wt != "default" && !referenced.contains(&(name.clone(), wt)) {
+                out.unreferenced += 1;
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doctor_summary_counts_libs_and_unreferenced_worktrees() {
+        let root = std::env::temp_dir().join(format!("devkit-docs-dr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // One lib with a referenced worktree, an unreferenced one, and default.
+        for wt in ["1.0.0", "2.0.0", "default", "repo.git"] {
+            std::fs::create_dir_all(root.join("tokio").join(wt)).unwrap();
+        }
+        std::fs::write(root.join("tokio/1.0.0/f"), "x").unwrap();
+        refs::RefStore::at(&root)
+            .commit(|d| {
+                d.record("/some/project", "tokio", "1.0.0");
+                Ok(())
+            })
+            .unwrap();
+        let s = doctor_summary(&root);
+        assert_eq!(s.libs, 1);
+        assert_eq!(s.unreferenced, 1); // 2.0.0 (default + repo.git exempt)
+        assert!(s.bytes > 0);
+    }
+}

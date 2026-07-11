@@ -80,6 +80,25 @@ fn count_strays() -> usize {
     devkit_ports::strays::scan(&loaded.config, &data).len()
 }
 
+fn docs_cache_check() -> Check {
+    let root = devkit_common::paths::cache_dir().join("docs");
+    if !root.is_dir() {
+        return Check::Ok("empty".into());
+    }
+    let s = devkit_docs::doctor_summary(&root);
+    let msg = format!(
+        "{} libs, {} MiB, {} unreferenced checkouts",
+        s.libs,
+        s.bytes / (1024 * 1024),
+        s.unreferenced
+    );
+    if s.unreferenced > 0 {
+        Check::Warn(format!("{msg} — run `docm prune`"))
+    } else {
+        Check::Ok(msg)
+    }
+}
+
 fn gather(steps: &Steps) -> Vec<Row> {
     vec![
         Row {
@@ -110,6 +129,11 @@ fn gather(steps: &Steps) -> Vec<Row> {
             key: "devrun_strays",
             source: Source::Unset,
             check: stray_check(count_strays()),
+        },
+        Row {
+            key: "docs_cache",
+            source: Source::Unset,
+            check: docs_cache_check(),
         },
     ]
 }
