@@ -419,7 +419,11 @@ fn current_version(entry: &LibEntry, project: &Path) -> Option<String> {
 }
 
 fn confirm(prompt: &str) -> Result<bool> {
-    use std::io::Write;
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        eprintln!("docm: not a terminal; skipping (pass --yes to delete non-interactively)");
+        return Ok(false);
+    }
     print!("{prompt}");
     std::io::stdout().flush()?;
     let mut s = String::new();
