@@ -166,7 +166,7 @@ devkit completions <shell>
 - **`doctor`**: one row per credential — source (`env`/`file`/`unset`) and live
   validity. Exits non-zero only when a credential that *is* set fails validation.
 
-## docm
+### `docm`: Library Docs
 
 Version-correct local library checkouts backing the `devkit:docs` skill.
 Register a library once; every lookup resolves the version the current
@@ -444,6 +444,8 @@ issue completions bash > ~/.local/share/bash-completion/completions/issue
 | Server logs | `~/.local/state/devkit/logs/` |
 | File-lock registry | `~/.local/state/devkit/locks.json` |
 | PR diff cache (`issue prs`) | `$XDG_CACHE_HOME/devkit/pr-status/` (or `~/.cache/devkit/pr-status/`) |
+| Docs library manifest | `~/.config/devkit/docs.toml` |
+| Docs library checkouts | `~/.cache/devkit/docs/` |
 
 The state home honors `$XDG_STATE_HOME` (default `~/.local/state`). A legacy
 `~/.claude/state/devkit` home is migrated automatically on first run.
