@@ -82,3 +82,44 @@ fn prune_preserves_other_projects_overlay_lib() {
             .contains(&("libX".to_string(), "1.0.0".to_string()))
     );
 }
+
+// Regression: a LIVE project whose devkit.toml fails to parse must not have
+// its checkouts silently reclaimed — a read/parse error is not "unreferenced".
+#[test]
+fn prune_keeps_rows_for_a_project_with_an_unreadable_manifest() {
+    let tmp = unique_tmp("brokenmanifest");
+    let cache_root = tmp.join("cache");
+    for p in ["libZ/1.0.0", "libZ/default"] {
+        std::fs::create_dir_all(cache_root.join(p)).unwrap();
+    }
+    let global = tmp.join("docs.toml");
+    std::fs::write(&global, "").unwrap();
+    // Live project B with a MALFORMED devkit.toml.
+    let proj_b = tmp.join("B");
+    std::fs::create_dir_all(&proj_b).unwrap();
+    std::fs::write(proj_b.join("devkit.toml"), "this = = not valid toml [[[").unwrap();
+    let store = RefStore::at(&cache_root);
+    store
+        .commit(|d| {
+            d.record(proj_b.to_str().unwrap(), "libZ", "1.0.0");
+            Ok(())
+        })
+        .unwrap();
+
+    let libs: BTreeSet<String> = BTreeSet::new();
+    let snapshot = store.snapshot();
+    let plan = refs::plan_for_cache(&cache_root, &snapshot, &libs, Some(&global)).unwrap();
+
+    assert!(
+        !plan
+            .delete
+            .contains(&("libZ".to_string(), "1.0.0".to_string())),
+        "a live project's worktree was deleted because its manifest failed to parse: {:?}",
+        plan.delete
+    );
+    assert!(
+        plan.keep
+            .iter()
+            .any(|r| r.lib == "libZ" && r.version == "1.0.0")
+    );
+}

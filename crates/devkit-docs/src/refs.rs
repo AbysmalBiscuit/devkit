@@ -198,9 +198,25 @@ pub fn plan_for_cache(
     }
     Ok(plan(snapshot, &worktrees, manifest_libs, |project, lib| {
         let proj = Path::new(project);
-        let disc = manifest::discover(proj, global).ok()?;
-        let entry = disc.manifest.libs.iter().find(|l| l.name == lib)?;
-        current_version(entry, proj)
+        match manifest::discover(proj, global) {
+            Ok(disc) => {
+                let entry = disc.manifest.libs.iter().find(|l| l.name == lib)?;
+                current_version(entry, proj)
+            }
+            Err(e) => {
+                // A live project whose manifest can't be read is not evidence it
+                // stopped referencing the lib. Keep the existing reference (so
+                // its checkout is never silently reclaimed) and warn.
+                eprintln!(
+                    "docm: cannot read {project}'s manifest ({e}); keeping its {lib} checkout"
+                );
+                snapshot
+                    .rows
+                    .iter()
+                    .find(|r| r.project == project && r.lib == lib)
+                    .map(|r| r.version.clone())
+            }
+        }
     }))
 }
 
