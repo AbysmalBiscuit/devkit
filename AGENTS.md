@@ -31,15 +31,17 @@ install together via `cargo install --path .`. Three library crates are members.
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
 | `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + Linear state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
 | `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks`/`devrun`/`issue` handlers) over the port + lock facades, the `devkit-ports::run` server-lifecycle facade, and the `devkit-issue` triage facade |
+| `crates/devkit-docs` | lib: version-correct library checkouts — manifest (global `docs.toml` + `devkit.toml` `[docs]`), lockfile→tag resolution, bare-clone cache with per-version worktrees, flock'd reference registry with reference-based prune |
 | `src/bin/portm.rs` | CLI over the port registry |
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`); `reap` kills servers started outside devrun |
 | `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
 | `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens), `doctor` |
+| `src/bin/docm.rs` | CLI over the docs cache: `add`, `rm`, `list`, `sync`, `path`, `info`, `prune` |
 | `src/bin/devkit-mcp` | meta-MCP stdio server exposing the port + lock facades to coding agents |
 | `src/bin/devkitd` | supervisor daemon serving both the port registry (`ports.sock`) and the lock registry (`locks.sock`), authoritative in memory, write-through to the files, gated by `devkitd.lock`; bin gated by the `daemon` feature (on by default) |
 
-The five user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`, `devkit`) each
+The six user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`, `devkit`, `docm`) each
 expose a `completions <shell>` subcommand via `clap_complete`.
 
 ## Invariants (do not break)

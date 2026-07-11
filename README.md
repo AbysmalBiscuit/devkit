@@ -166,6 +166,29 @@ devkit completions <shell>
 - **`doctor`**: one row per credential — source (`env`/`file`/`unset`) and live
   validity. Exits non-zero only when a credential that *is* set fails validation.
 
+## docm
+
+Version-correct local library checkouts backing the `devkit:docs` skill.
+Register a library once; every lookup resolves the version the current
+project's lockfile pins and materializes a detached worktree for it under
+`~/.cache/devkit/docs/`.
+
+```sh
+docm add tokio                    # registry lookup (crates.io/npm/PyPI)
+docm add https://github.com/godotengine/godot --ref 4.3-stable
+docm add react --project          # write to this repo's devkit.toml [docs]
+docm info tokio                   # path + version + layout map + notes
+docm path tokio                   # just the checkout path
+docm sync                         # fetch clones, move default worktrees
+docm prune                        # drop checkouts no live project references
+```
+
+Global manifest: `~/.config/devkit/docs.toml`. Per-project overlay:
+`[[docs.libs]]` entries in `devkit.toml` (same fields; partial entries
+override the global entry field-by-field). Resolution: manual `ref` pin →
+lockfile version (`Cargo.lock`, `pnpm-lock.yaml`, `package-lock.json`,
+`uv.lock`) → git tag → default branch fallback.
+
 ## devkit-mcp (MCP server)
 
 `devkit-mcp` exposes devkit's port and file-lock coordination to MCP-capable
