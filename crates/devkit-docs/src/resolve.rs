@@ -95,12 +95,14 @@ pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Reso
                 }
             }
             None => {
-                if eco != Ecosystem::Git {
-                    warnings.push(format!(
+                warnings.push(if eco == Ecosystem::Git {
+                    format!("no ref pinned for {}; using the default branch", entry.name)
+                } else {
+                    format!(
                         "no lockfile pins {}; using the default branch",
                         entry.package_name()
-                    ));
-                }
+                    )
+                });
                 let (w, ver, p) = default_worktree(&lib)?;
                 (w, ver, p, project_root(start))
             }

@@ -100,3 +100,64 @@ fn layout_override_applies_and_meta_caches_detection() {
     // meta stores the DETECTED layout (docs), not the override.
     assert_eq!(meta.layouts["default"].docs_dir.as_deref(), Some("docs"));
 }
+
+#[test]
+fn git_ecosystem_without_ref_falls_back_to_default_with_warning() {
+    let tmp = unique_tmp("resolve-git");
+    let repo = fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let entry = LibEntry {
+        name: "mylib".into(),
+        ecosystem: Some(Ecosystem::Git),
+        repo: Some(repo),
+        ..Default::default()
+    };
+    let r = resolve(&entry, &project, &cache_root).unwrap();
+    assert_eq!(r.worktree, "default");
+    assert_eq!(r.version, "main");
+    assert_eq!(
+        r.warnings.len(),
+        1,
+        "git fallback must warn: {:?}",
+        r.warnings
+    );
+    assert!(r.warnings[0].contains("no ref pinned"));
+}
+
+#[test]
+fn lockfile_resolved_from_subdir_records_lockfile_holding_dir() {
+    let tmp = unique_tmp("resolve-subdir");
+    let repo = fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("proj");
+    let deep = project.join("crates/app/src");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    let entry = LibEntry {
+        name: "mylib".into(),
+        ecosystem: Some(Ecosystem::Rust),
+        repo: Some(repo),
+        ..Default::default()
+    };
+    // Resolve starting DEEP below the lockfile dir; there is no devkit.toml
+    // anywhere, so project_root(start) would be `deep`, distinct from the
+    // lockfile's holding dir `project`.
+    let r = resolve(&entry, &deep, &cache_root).unwrap();
+    assert_eq!(r.worktree, "1.0.0");
+
+    let data = RefStore::at(&cache_root).snapshot();
+    assert_eq!(data.rows.len(), 1);
+    assert_eq!(
+        data.rows[0].project,
+        project.to_string_lossy(),
+        "reference must be attributed to the lockfile's holding dir, not the start dir"
+    );
+}
