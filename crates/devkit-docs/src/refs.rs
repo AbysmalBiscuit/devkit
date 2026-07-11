@@ -5,6 +5,9 @@
 //! file. A holder is live iff its project root path still exists (the same
 //! model as the ports registry).
 
+use crate::cache;
+use crate::lockfiles;
+use crate::manifest;
 use anyhow::Result;
 use devkit_common::store::{self, Document};
 use serde::{Deserialize, Serialize};
@@ -153,6 +156,76 @@ pub fn plan(
     }
 }
 
+/// What a live project pins for `entry` right now: a `ref`/git entry → the
+/// `default` worktree; otherwise the highest lockfile version, or None when no
+/// lockfile pins it.
+pub fn current_version(entry: &manifest::LibEntry, project: &Path) -> Option<String> {
+    use manifest::Ecosystem;
+    if entry.r#ref.is_some() {
+        return Some("default".into());
+    }
+    let eco = entry.ecosystem?;
+    if eco == Ecosystem::Git {
+        return Some("default".into());
+    }
+    let (_, versions) = lockfiles::find_version(project, eco, &entry.package_name())?;
+    lockfiles::highest(versions)
+}
+
+/// Build a prune plan for a whole cache root, re-discovering each referenced
+/// project's own manifest so a lib registered only in another project's
+/// `[docs]` overlay is never treated as unreferenced. `manifest_libs` is the
+/// invoking CWD's lib set (used only for whole-lib removability). `global` is
+/// the global-manifest path override (None = the default `~/.config/devkit/docs.toml`).
+pub fn plan_for_cache(
+    cache_root: &Path,
+    snapshot: &Data,
+    manifest_libs: &BTreeSet<String>,
+    global: Option<&Path>,
+) -> anyhow::Result<PrunePlan> {
+    let mut worktrees: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for e in std::fs::read_dir(cache_root)?.flatten() {
+        if !e.path().is_dir() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        let dirs = cache::LibCache::new(cache_root, &name)
+            .version_worktrees()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        worktrees.insert(name, dirs);
+    }
+    Ok(plan(snapshot, &worktrees, manifest_libs, |project, lib| {
+        let proj = Path::new(project);
+        let disc = manifest::discover(proj, global).ok()?;
+        let entry = disc.manifest.libs.iter().find(|l| l.name == lib)?;
+        current_version(entry, proj)
+    }))
+}
+
+/// Apply a prune plan to the freshly-locked registry without clobbering rows a
+/// concurrent resolve added after `snapshot` was taken. Drops exactly the rows
+/// that were in `snapshot` but not in `keep`; retargets kept rows to the plan's
+/// versions; leaves rows unknown to `snapshot` untouched.
+pub fn reconcile(current: &mut Data, snapshot: &Data, keep: &[RefRow]) {
+    use std::collections::HashSet;
+    let key = |r: &RefRow| (r.project.clone(), r.lib.clone());
+    let snapshot_keys: HashSet<(String, String)> = snapshot.rows.iter().map(key).collect();
+    let keep_keys: HashSet<(String, String)> = keep.iter().map(key).collect();
+    current
+        .rows
+        .retain(|r| !snapshot_keys.contains(&key(r)) || keep_keys.contains(&key(r)));
+    for r in current.rows.iter_mut() {
+        if let Some(k) = keep
+            .iter()
+            .find(|k| k.project == r.project && k.lib == r.lib)
+        {
+            r.version = k.version.clone();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +302,64 @@ mod tests {
             ]
         ); // "default" never deleted; 1.1.0 referenced
         assert_eq!(p.removable_libs, vec!["legacy".to_string()]);
+    }
+
+    #[test]
+    fn reconcile_preserves_a_concurrently_added_row() {
+        let mut snapshot = Data::default();
+        snapshot.record("/A", "libX", "1.0.0");
+        let keep = snapshot.rows.clone(); // plan kept the only snapshot row
+
+        // Freshly-locked data: the snapshot row plus one a concurrent
+        // resolve recorded after the snapshot was taken.
+        let mut current = Data::default();
+        current.record("/A", "libX", "1.0.0");
+        current.record("/C", "libZ", "3.0.0");
+
+        reconcile(&mut current, &snapshot, &keep);
+
+        assert!(
+            current
+                .rows
+                .iter()
+                .any(|r| r.project == "/C" && r.lib == "libZ" && r.version == "3.0.0"),
+            "concurrently-added row was dropped: {:?}",
+            current.rows
+        );
+        assert!(
+            current
+                .rows
+                .iter()
+                .any(|r| r.project == "/A" && r.lib == "libX" && r.version == "1.0.0")
+        );
+        assert_eq!(current.rows.len(), 2);
+    }
+
+    #[test]
+    fn reconcile_drops_a_dead_row_but_keeps_live() {
+        let mut snapshot = Data::default();
+        snapshot.record("/A", "libX", "1.0.0");
+        snapshot.record("/DEAD", "libW", "9.0.0");
+        // plan only kept the live row
+        let keep = vec![snapshot.rows[0].clone()];
+
+        let mut current = Data::default();
+        current.record("/A", "libX", "1.0.0");
+        current.record("/DEAD", "libW", "9.0.0");
+
+        reconcile(&mut current, &snapshot, &keep);
+
+        assert!(
+            !current.rows.iter().any(|r| r.project == "/DEAD"),
+            "dead row survived reconcile: {:?}",
+            current.rows
+        );
+        assert!(
+            current
+                .rows
+                .iter()
+                .any(|r| r.project == "/A" && r.lib == "libX" && r.version == "1.0.0")
+        );
+        assert_eq!(current.rows.len(), 1);
     }
 }

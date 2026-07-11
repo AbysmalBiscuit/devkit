@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use devkit_docs::manifest::{self, Discovered, Ecosystem, LibEntry};
-use devkit_docs::{cache, lockfiles, lookup, refs, resolve};
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use devkit_docs::{cache, lookup, refs, resolve};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -354,27 +354,10 @@ fn cmd_prune(yes: bool) -> Result<()> {
         return Ok(());
     }
     let store = refs::RefStore::at(&root);
-    let data = store.snapshot();
-
-    let mut worktrees: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for e in std::fs::read_dir(&root)?.flatten() {
-        if !e.path().is_dir() {
-            continue;
-        }
-        let name = e.file_name().to_string_lossy().into_owned();
-        let dirs = cache::LibCache::new(&root, &name)
-            .version_worktrees()
-            .into_iter()
-            .map(|(n, _)| n)
-            .collect();
-        worktrees.insert(name, dirs);
-    }
+    let snapshot = store.snapshot();
     let manifest_libs: BTreeSet<String> = d.manifest.libs.iter().map(|l| l.name.clone()).collect();
 
-    let plan = refs::plan(&data, &worktrees, &manifest_libs, |project, lib| {
-        let entry = d.manifest.libs.iter().find(|l| l.name == lib)?;
-        current_version(entry, Path::new(project))
-    });
+    let plan = refs::plan_for_cache(&root, &snapshot, &manifest_libs, None)?;
 
     for (lib, wt) in &plan.delete {
         cache::LibCache::new(&root, lib).remove_worktree(wt)?;
@@ -393,29 +376,17 @@ fn cmd_prune(yes: bool) -> Result<()> {
             }
         }
     }
-    // A resolution racing this rewrite re-records itself on its next lookup,
-    // so replacing rows with the plan's survivors is safe.
+    // Reconcile against the freshly-locked data rather than blind-overwriting
+    // with the pre-lock snapshot's survivors, so a resolve that raced the
+    // snapshot isn't lost.
     store.commit(|data| {
-        data.rows = plan.keep.clone();
+        refs::reconcile(data, &snapshot, &plan.keep);
         Ok(())
     })?;
     if plan.delete.is_empty() && plan.removable_libs.is_empty() {
         println!("nothing to prune");
     }
     Ok(())
-}
-
-/// What a live project pins right now; `None` = it no longer references the lib.
-fn current_version(entry: &LibEntry, project: &Path) -> Option<String> {
-    if entry.r#ref.is_some() {
-        return Some("default".into());
-    }
-    let eco = entry.ecosystem?;
-    if eco == Ecosystem::Git {
-        return Some("default".into());
-    }
-    let (_, versions) = lockfiles::find_version(project, eco, &entry.package_name())?;
-    lockfiles::highest(versions)
 }
 
 fn confirm(prompt: &str) -> Result<bool> {
