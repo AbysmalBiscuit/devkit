@@ -176,6 +176,116 @@ fn docs_layer(path: &Path) -> Result<Option<DocsManifest>> {
     }
 }
 
+pub fn load_global(path: &Path) -> Result<DocsManifest> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => toml::from_str(&s).with_context(|| format!("parsing {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DocsManifest::default()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+/// The global file is docm-owned and machine-written — a full serialize is fine.
+pub fn upsert_global(path: &Path, entry: &LibEntry) -> Result<()> {
+    let mut m = load_global(path)?;
+    match m.libs.iter_mut().find(|l| l.name == entry.name) {
+        Some(l) => *l = entry.clone(),
+        None => m.libs.push(entry.clone()),
+    }
+    write_global(path, &m)
+}
+
+pub fn remove_global(path: &Path, name: &str) -> Result<bool> {
+    let mut m = load_global(path)?;
+    let before = m.libs.len();
+    m.libs.retain(|l| l.name != name);
+    let removed = m.libs.len() != before;
+    if removed {
+        write_global(path, &m)?;
+    }
+    Ok(removed)
+}
+
+fn write_global(path: &Path, m: &DocsManifest) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, toml::to_string_pretty(m)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// devkit.toml is hand-maintained — edit via toml_edit so comments and
+/// formatting survive.
+pub fn upsert_project(devkit_toml: &Path, entry: &LibEntry) -> Result<()> {
+    let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(devkit_toml)
+        .with_context(|| format!("reading {}", devkit_toml.display()))?
+        .parse()
+        .with_context(|| format!("parsing {}", devkit_toml.display()))?;
+    let tbl = toml_edit::ser::to_document(entry)
+        .context("serializing lib entry")?
+        .as_table()
+        .clone();
+    let root = doc.as_table_mut();
+    let docs = root
+        .entry("docs")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    let docs_tbl = docs
+        .as_table_mut()
+        .context("[docs] in devkit.toml is not a table")?;
+    docs_tbl.set_implicit(true); // no bare [docs] header, just [[docs.libs]]
+    let libs = docs_tbl
+        .entry("libs")
+        .or_insert(toml_edit::Item::ArrayOfTables(
+            toml_edit::ArrayOfTables::new(),
+        ));
+    let arr = libs
+        .as_array_of_tables_mut()
+        .context("docs.libs in devkit.toml is not an array of tables")?;
+    // Collect tables, update or append, then rebuild array
+    let mut tables: Vec<toml_edit::Table> = arr.iter().cloned().collect();
+    let mut found = false;
+    for t in &mut tables {
+        if t.get("name").and_then(|v| v.as_str()) == Some(entry.name.as_str()) {
+            *t = tbl.clone();
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        tables.push(tbl.clone());
+    }
+    // Clear and rebuild
+    arr.clear();
+    for t in tables {
+        arr.push(t);
+    }
+    std::fs::write(devkit_toml, doc.to_string())
+        .with_context(|| format!("writing {}", devkit_toml.display()))?;
+    Ok(())
+}
+
+pub fn remove_project(devkit_toml: &Path, name: &str) -> Result<bool> {
+    let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(devkit_toml)
+        .with_context(|| format!("reading {}", devkit_toml.display()))?
+        .parse()
+        .with_context(|| format!("parsing {}", devkit_toml.display()))?;
+    let Some(arr) = doc
+        .get_mut("docs")
+        .and_then(|d| d.get_mut("libs"))
+        .and_then(|l| l.as_array_of_tables_mut())
+    else {
+        return Ok(false);
+    };
+    let before = arr.len();
+    arr.retain(|t| t.get("name").and_then(|v| v.as_str()) != Some(name));
+    let removed = arr.len() != before;
+    if removed {
+        std::fs::write(devkit_toml, doc.to_string())
+            .with_context(|| format!("writing {}", devkit_toml.display()))?;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +367,60 @@ mod tests {
         let d = discover(&root, Some(&root.join("missing.toml"))).unwrap();
         assert!(d.manifest.libs.is_empty());
         assert_eq!(d.project_devkit_toml, None);
+    }
+
+    #[test]
+    fn upsert_global_creates_replaces_and_remove_deletes() {
+        let root = unique_tmp("global");
+        let path = root.join("docs.toml");
+        let e = LibEntry {
+            name: "tokio".into(),
+            ecosystem: Some(Ecosystem::Rust),
+            repo: Some("u1".into()),
+            ..Default::default()
+        };
+        upsert_global(&path, &e).unwrap();
+        let e2 = LibEntry {
+            repo: Some("u2".into()),
+            ..e.clone()
+        };
+        upsert_global(&path, &e2).unwrap();
+        let m = load_global(&path).unwrap();
+        assert_eq!(m.libs.len(), 1);
+        assert_eq!(m.libs[0].repo.as_deref(), Some("u2"));
+        assert!(remove_global(&path, "tokio").unwrap());
+        assert!(!remove_global(&path, "tokio").unwrap());
+        assert!(load_global(&path).unwrap().libs.is_empty());
+    }
+
+    #[test]
+    fn upsert_project_preserves_comments_and_replaces_by_name() {
+        let root = unique_tmp("project");
+        let path = root.join("devkit.toml");
+        std::fs::write(&path, "# keep me\n[defaults]\napps_dir = 'apps' # inline\n").unwrap();
+        let e = LibEntry {
+            name: "react".into(),
+            ecosystem: Some(Ecosystem::Js),
+            repo: Some("r1".into()),
+            ..Default::default()
+        };
+        upsert_project(&path, &e).unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("# keep me") && s.contains("# inline"));
+        assert!(s.contains("[[docs.libs]]"));
+
+        let e2 = LibEntry {
+            repo: Some("r2".into()),
+            ..e
+        };
+        upsert_project(&path, &e2).unwrap();
+        let d = discover(path.parent().unwrap(), Some(&root.join("nope.toml"))).unwrap();
+        assert_eq!(d.manifest.libs.len(), 1);
+        assert_eq!(d.manifest.libs[0].repo.as_deref(), Some("r2"));
+
+        assert!(remove_project(&path, "react").unwrap());
+        assert!(!remove_project(&path, "react").unwrap());
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("# keep me")); // untouched content survives removal too
     }
 }
