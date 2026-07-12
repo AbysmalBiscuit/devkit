@@ -143,13 +143,12 @@ pub fn slug_from_remote_url(url: &str) -> Option<String> {
     } else if let Some(r) = u.strip_prefix("ssh://") {
         // ssh://git@github.com/owner/repo(.git)
         r.split_once('/').map(|(_, p)| p)?
-    } else if let Some(r) = u
-        .strip_prefix("https://")
-        .or_else(|| u.strip_prefix("http://"))
-    {
-        r.split_once('/').map(|(_, p)| p)?
     } else {
-        return None;
+        // https://github.com/owner/repo(.git)
+        let r = u
+            .strip_prefix("https://")
+            .or_else(|| u.strip_prefix("http://"))?;
+        r.split_once('/').map(|(_, p)| p)?
     };
     let rest = rest.strip_suffix('/').unwrap_or(rest);
     let rest = rest.strip_suffix(".git").unwrap_or(rest);
