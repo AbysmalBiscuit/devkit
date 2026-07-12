@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.10.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.9.1...v0.10.0) (2026-07-12)
+
+
+### Features
+
+* **devkit:** report docs cache health in doctor ([cacf08c](https://github.com/AbysmalBiscuit/devkit/commit/cacf08c855e754338f647fd854e002658c7cd531))
+* **docs:** add devkit-docs crate with manifest model ([baa3a5f](https://github.com/AbysmalBiscuit/devkit/commit/baa3a5f6749234aee675eff98ab6a9c5f39f820f))
+* **docs:** add docm CLI ([d7993a0](https://github.com/AbysmalBiscuit/devkit/commit/d7993a0f381228388198702661f77699bfdb51dc))
+* **docs:** add flock'd reference registry with prune plan ([026c6d0](https://github.com/AbysmalBiscuit/devkit/commit/026c6d0fc53e99317521ce0f5ab56dde1c52837e))
+* **docs:** detect checkout docs/src layout ([04f273d](https://github.com/AbysmalBiscuit/devkit/commit/04f273d1460d07a0dcc42c9fc21119a7a33eacb3))
+* **docs:** manage bare clones and version worktrees ([e1ab7bb](https://github.com/AbysmalBiscuit/devkit/commit/e1ab7bb2041b73e660b57f72d08c59dfa1abebe2))
+* **docs:** parse Cargo, uv, npm, and pnpm lockfiles ([27c51e2](https://github.com/AbysmalBiscuit/devkit/commit/27c51e294531d6ad73cc93513705ba01e35aa7bd))
+* **docs:** probe version-to-tag patterns ([e6f6115](https://github.com/AbysmalBiscuit/devkit/commit/e6f61156acb812ddae86e80683b242d36cdc5737))
+* **docs:** resolve entries to version-correct checkouts ([722c83e](https://github.com/AbysmalBiscuit/devkit/commit/722c83e61bce875085cc1c4b90b775b75ab6e612))
+* **docs:** resolve repo urls from package registries ([74b8f7e](https://github.com/AbysmalBiscuit/devkit/commit/74b8f7e09fc2613ce82f0032c9017d867f6ba3cd))
+* **docs:** ship devkit:docs skill and document docm ([d0fb15d](https://github.com/AbysmalBiscuit/devkit/commit/d0fb15df36e5c70afa16a034134cbca9a7898bd3))
+* **docs:** write global and project manifest entries ([a25123e](https://github.com/AbysmalBiscuit/devkit/commit/a25123e960f972988703149896fc7fa4be0b5fa8))
+* **issue:** add MERGE (unreviewed) to prs action legend ([1c45857](https://github.com/AbysmalBiscuit/devkit/commit/1c45857259c038bfb57ef43bd8334825b402aedb))
+* **issue:** distinguish unrequested review from awaiting in prs ([b3f2a01](https://github.com/AbysmalBiscuit/devkit/commit/b3f2a017f07dfe80f4a9305792c4414f1a7c2605))
+* **issue:** run issue end removals in parallel background tasks ([b8c67d0](https://github.com/AbysmalBiscuit/devkit/commit/b8c67d0f4fcf8249f5591e563ae4b6f9d14510b9))
+* **progress:** make Steps thread-safe and add suspend ([97fe68f](https://github.com/AbysmalBiscuit/devkit/commit/97fe68f4aa78672f7dcdf4dd286e1e9f5d996029))
+
+
+### Bug Fixes
+
+* **common:** use ? in remote-url slug parse tail ([52d28c8](https://github.com/AbysmalBiscuit/devkit/commit/52d28c8e5f134a2eaa80fa18184bfc1997785db5))
+* **docs:** keep prune references when a project's manifest fails to parse ([6478493](https://github.com/AbysmalBiscuit/devkit/commit/6478493494b44ffb5c5ee149fd161d48cfc04a69))
+* **docs:** propagate non-NotFound errors reading global manifest ([735bcb9](https://github.com/AbysmalBiscuit/devkit/commit/735bcb9775ff6c7400a09a9ee851d850c5f97311))
+* **docs:** scope prune to each project's manifest and reconcile registry writes ([80a689a](https://github.com/AbysmalBiscuit/devkit/commit/80a689a4d64bb3a47c825171f12e180a59c74e17))
+* **docs:** skip docm prune confirm prompt when stdin is not a tty ([5ada55d](https://github.com/AbysmalBiscuit/devkit/commit/5ada55d1597968661d5034ccfb4179f3d91c6341))
+* **docs:** warn on git default-branch fallback and cover ref attribution ([f9545cb](https://github.com/AbysmalBiscuit/devkit/commit/f9545cbb364e0bf8fab1ddb5881a0e91963d1047))
+
 ## [0.9.1](https://github.com/AbysmalBiscuit/devkit/compare/v0.9.0...v0.9.1) (2026-07-07)
 
 
