@@ -36,15 +36,33 @@ pub fn pr_number_from_url(url: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
+/// Split a `TEAM-NUMBER` id into its uppercased team key and issue number, or
+/// None when it is not a Linear id.
+///
+/// Both parts are spliced into GraphQL literals, so this is also the gate that
+/// keeps a query well-formed: the team key must be alphanumeric (no quote to
+/// break out of the string), and the number must be a canonical `Int` — a
+/// leading zero (`number: { eq: 01 }`, from a branch like `env-config-01`) is a
+/// syntax error that Linear rejects with a 500, taking every other alias in a
+/// batched query down with it.
+fn parse_id(id: &str) -> Option<(String, u64)> {
+    let (team, num) = id.split_once('-')?;
+    if !team.starts_with(|c: char| c.is_ascii_alphabetic())
+        || !team.chars().all(|c| c.is_ascii_alphanumeric())
+        || num.starts_with('0')
+    {
+        return None;
+    }
+    Some((team.to_uppercase(), num.parse().ok()?))
+}
+
 /// GraphQL fetching one issue's title + GitHub PR attachments. Returns None
 /// for ids that are not in `TEAM-NUMBER` form.
 pub fn issue_pr_query(id: &str) -> Option<String> {
-    let (team, num) = id.split_once('-')?;
+    let (team, num) = parse_id(id)?;
     Some(format!(
-        "query {{ issues(filter: {{ team: {{ key: {{ eq: \"{}\" }} }}, number: {{ eq: {} }} }}) \
+        "query {{ issues(filter: {{ team: {{ key: {{ eq: \"{team}\" }} }}, number: {{ eq: {num} }} }}) \
          {{ nodes {{ title attachments {{ nodes {{ url }} }} }} }} }}",
-        team.to_uppercase(),
-        num
     ))
 }
 
@@ -167,16 +185,21 @@ fn parse_identity(resp: &serde_json::Value) -> Result<LinearIdentity> {
 }
 
 /// Build the batched GraphQL query for the given `ENG-1234` ids. Pure → testable.
+///
+/// Ids that are not Linear ids (see [`parse_id`]) are dropped: every alias rides
+/// in one request, so one malformed alias would cost the states of all the others.
+/// A dropped id simply has no entry in the response map — its state is unknown.
 pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> {
     let mut aliases = HashMap::new();
     let mut parts = Vec::new();
-    for (idx, id) in ids.iter().enumerate() {
-        let (team, num) = id.split_once('-')?;
-        let alias = format!("i{idx}");
+    for id in ids {
+        let Some((team, num)) = parse_id(id) else {
+            continue;
+        };
+        let alias = format!("i{}", parts.len());
         aliases.insert(alias.clone(), id.clone());
         parts.push(format!(
-            "{alias}: issues(filter: {{ team: {{ key: {{ eq: \"{}\" }} }}, number: {{ eq: {} }} }}) {{ nodes {{ identifier state {{ type name }} }} }}",
-            team.to_uppercase(), num
+            "{alias}: issues(filter: {{ team: {{ key: {{ eq: \"{team}\" }} }}, number: {{ eq: {num} }} }}) {{ nodes {{ identifier state {{ type name }} }} }}",
         ));
     }
     if parts.is_empty() {
@@ -362,6 +385,28 @@ mod tests {
     #[test]
     fn empty_ids_no_query() {
         assert!(build_query(&[]).is_none());
+    }
+    #[test]
+    fn leading_zero_id_is_dropped_not_spliced() {
+        let (q, a) = build_query(&["CONFIG-01".into(), "ENG-7".into()]).unwrap();
+        assert!(!q.contains("eq: 01"), "leading zero is invalid GraphQL Int");
+        assert!(q.contains("number: { eq: 7 }"));
+        assert_eq!(a.len(), 1);
+        assert!(a.values().all(|id| id == "ENG-7"));
+    }
+    #[test]
+    fn unparseable_id_does_not_poison_the_batch() {
+        let (q, a) = build_query(&["nodash".into(), "ENG-7".into(), "X-".into()]).unwrap();
+        assert!(q.contains("number: { eq: 7 }"));
+        assert_eq!(a.len(), 1);
+    }
+    #[test]
+    fn all_ids_unparseable_no_query() {
+        assert!(build_query(&["UNKNOWN".into(), "CONFIG-01".into()]).is_none());
+    }
+    #[test]
+    fn issue_pr_query_rejects_leading_zero() {
+        assert!(issue_pr_query("CONFIG-01").is_none());
     }
     #[test]
     fn assigned_query_paginates() {
