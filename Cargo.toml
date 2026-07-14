@@ -39,6 +39,9 @@ devkit-issue.workspace = true
 devkit-mcp.workspace = true
 devkit-docs.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+
 # Used only by the Unix-only supervision integration test (POSIX signals).
 [target.'cfg(unix)'.dev-dependencies]
 nix.workspace = true

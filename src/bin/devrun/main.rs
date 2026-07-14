@@ -134,6 +134,15 @@ enum Cmd {
     },
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
     Completions { shell: Shell },
+    /// Run a canned task from `[tasks]` (no name: list the configured tasks).
+    Task {
+        name: Option<String>,
+        #[arg(long = "env", value_name = "K=V")]
+        env: Vec<String>,
+        /// Print the rendered plan (cwd, argv, env, resolved ports) without executing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -441,7 +450,92 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
+        Cmd::Task { name, env, dry_run } => cmd_task(&cli, &cwd, name.as_deref(), env, *dry_run),
     }
+}
+
+fn cmd_task(
+    cli: &Cli,
+    cwd: &str,
+    name: Option<&str>,
+    env_pairs: &[String],
+    dry_run: bool,
+) -> Result<()> {
+    use devkit_ports::task::{self, Resolved, SeqItem};
+
+    let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
+    let Some(name) = name else {
+        let rows = task::list(&loaded.config);
+        if rows.is_empty() {
+            println!("no tasks configured (add [tasks.<name>] to devkit.toml)");
+            return Ok(());
+        }
+        let mut t = ui::table(&["NAME", "KIND", "APP", "DESCRIPTION"]);
+        for r in rows {
+            t.add_row(vec![r.name, r.kind.to_string(), r.app, r.description]);
+        }
+        print!("{t}");
+        return Ok(());
+    };
+
+    let user = parse_user_env(env_pairs, None)?;
+    let root = toplevel(cwd)?;
+    let resolved = task::resolve(
+        &loaded.config,
+        &loaded.catalog,
+        Path::new(&root),
+        &root,
+        name,
+        &user,
+    )?;
+    match resolved {
+        Resolved::Command(plan) => run_task_step(&plan, dry_run),
+        Resolved::Sequence(items) => {
+            for item in &items {
+                match item {
+                    SeqItem::Run(plan) => run_task_step(plan, dry_run)?,
+                    SeqItem::Up(app) => {
+                        if dry_run {
+                            println!("up {app}");
+                        } else {
+                            cmd_up(
+                                cli,
+                                cwd,
+                                std::slice::from_ref(app),
+                                RoleSelector::Issue,
+                                &[],
+                                None,
+                                UpFlags {
+                                    dry_run: false,
+                                    supervise: false,
+                                },
+                            )?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Print or execute one command step. A non-zero child exits the process with
+/// the child's code, so a sequence stops at its first failure.
+fn run_task_step(plan: &devkit_ports::task::CommandPlan, dry_run: bool) -> Result<()> {
+    if dry_run {
+        println!("[{}]", plan.name);
+        println!("  cwd:  {}", plan.cwd.display());
+        println!("  argv: {}", plan.argv.join(" "));
+        let envs: Vec<String> = plan.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        println!("  env:  {}", envs.join(" "));
+        return Ok(());
+    }
+    eprintln!("→ {}: {}", plan.name, plan.argv.join(" "));
+    let status = devkit_ports::task::exec(plan)?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
 }
 
 fn cmd_up(
