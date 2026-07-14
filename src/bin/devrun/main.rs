@@ -495,22 +495,18 @@ fn cmd_task(
                 match item {
                     SeqItem::Run(plan) => run_task_step(plan, dry_run)?,
                     SeqItem::Up(app) => {
-                        if dry_run {
-                            println!("up {app}");
-                        } else {
-                            cmd_up(
-                                cli,
-                                cwd,
-                                std::slice::from_ref(app),
-                                RoleSelector::Issue,
-                                &[],
-                                None,
-                                UpFlags {
-                                    dry_run: false,
-                                    supervise: false,
-                                },
-                            )?;
-                        }
+                        cmd_up(
+                            cli,
+                            cwd,
+                            std::slice::from_ref(app),
+                            RoleSelector::Issue,
+                            &[],
+                            None,
+                            UpFlags {
+                                dry_run,
+                                supervise: false,
+                            },
+                        )?;
                     }
                 }
             }

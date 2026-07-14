@@ -47,6 +47,9 @@ run = ["git", "--url=http://localhost:{{ ports['api'] }}", "version"]
 
 [tasks.fail]
 run = ["git", "definitely-not-a-subcommand"]
+
+[tasks.seq]
+steps = [{ up = "api" }, { task = "hello" }]
 "#,
     )
     .expect("write devkit.toml");
@@ -96,6 +99,43 @@ fn task_dry_run_renders_allocated_port() {
     assert!(
         !stdout.contains("{{"),
         "no unrendered templates in dry-run: {stdout}"
+    );
+}
+
+#[test]
+fn task_seq_dry_run_renders_up_step_plan() {
+    let dir = setup();
+    let out = run_in(dir.path(), &["task", "seq", "--dry-run"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !stdout.contains("up api\n") && !stdout.trim_end().ends_with("up api"),
+        "up step must render its full plan, not a bare `up api` line: {stdout}"
+    );
+    // `cmd_up`'s dry-run block is the only place that prints a `log:` line
+    // (`run_task_step`'s dry-run branch prints only cwd/argv/env), so its
+    // presence proves the up step went through the same rendering as
+    // `up --dry-run` rather than the old one-line summary.
+    assert!(
+        stdout.contains("[issue] api :") && stdout.contains("log:"),
+        "up step must render the same [role] app :port / cwd / argv / env / log \
+         plan that `up --dry-run` prints: {stdout}"
+    );
+    assert!(
+        stdout.contains("argv: git version"),
+        "up step's rendered argv missing: {stdout}"
+    );
+    assert!(
+        !stdout.contains("{{"),
+        "no unrendered templates in dry-run: {stdout}"
+    );
+
+    // Sanity: dry-run never executes; `run_task_step`'s real-run branch is the
+    // only place that prints an exec-marker line.
+    assert!(
+        !stdout.contains("→ "),
+        "dry-run must not execute steps: {stdout}"
     );
 }
 
