@@ -1080,11 +1080,23 @@ mod tests {
 
         let tmp = std::env::temp_dir().join(format!("devrun-run-{}.log", std::process::id()));
         let mut argv = py;
-        argv.extend(
-            ["-m", "http.server", &port.to_string()]
-                .into_iter()
-                .map(|s| s.to_string()),
-        );
+        // Inline accept-loop listener rather than `-m http.server`: http.server's
+        // `server_bind` resolves the bound address with `socket.getfqdn()`, a
+        // reverse-DNS lookup that stalls ~35s on hosts without reverse resolution
+        // (macOS GitHub runners) — past this test's 10s readiness poll. The poll
+        // only needs a TCP accept on IPv4 loopback.
+        argv.extend([
+            "-u".to_string(),
+            "-c".to_string(),
+            format!(
+                "import socket\n\
+                 s = socket.socket()\n\
+                 s.bind((\"127.0.0.1\", {port}))\n\
+                 s.listen(16)\n\
+                 print(\"listening on\", {port}, flush=True)\n\
+                 while True: s.accept()[0].close()\n"
+            ),
+        ]);
         let plan = LaunchPlan {
             app: "web".into(),
             port,

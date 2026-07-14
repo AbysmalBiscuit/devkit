@@ -75,3 +75,6 @@ jobs:
 
       - name: actual failing test
         run: cargo test -p devkit-common --lib supervise -- --nocapture
+
+      - name: sibling launch test
+        run: cargo test -p devkit-ports --lib launch_non_blocking -- --nocapture
