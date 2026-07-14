@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.11.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.10.0...v0.11.0) (2026-07-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **docs:** docm checkouts now live under ~/.local/share/devkit/docs; paths printed by earlier docm versions are stale after the first run.
+* **ports:** render launch argv and static_env with minijinja
+
+### Features
+
+* **common:** add port-context template render and discovery ([76034ca](https://github.com/AbysmalBiscuit/devkit/commit/76034ca913044b5eb03ef509f27891b0a24d539f))
+* **devrun:** add task subcommand for canned oneshots ([4be3c6a](https://github.com/AbysmalBiscuit/devkit/commit/4be3c6aeed7b1008b6a2dae87fe15640d4c4de62))
+* **docs:** move the checkout store to the XDG data home ([952305a](https://github.com/AbysmalBiscuit/devkit/commit/952305a5bc8d7b4f8e0933c8764cad88fe73d55b))
+* **docs:** resolve js versions from bun.lock ([f108e2c](https://github.com/AbysmalBiscuit/devkit/commit/f108e2cc798126898a4fd9f95e515194d1ee774e))
+* **ports:** parse [tasks] config table ([1f73e90](https://github.com/AbysmalBiscuit/devkit/commit/1f73e9034eb5387069a74d7adc8f5ed2cfbfdd35))
+* **ports:** render launch argv and static_env with minijinja ([f2f46af](https://github.com/AbysmalBiscuit/devkit/commit/f2f46af004b2e2164eefa9babb8c6522fb78285b))
+* **ports:** resolve and exec canned tasks ([51e496c](https://github.com/AbysmalBiscuit/devkit/commit/51e496c285d0e5fcf52296cf0b469827e0527a97))
+* **skills:** inject live registry into docs skill ([62c4f68](https://github.com/AbysmalBiscuit/devkit/commit/62c4f6882e87c7aa0f127503377a027ec9fe4ee9))
+
+
+### Bug Fixes
+
+* **common:** use truthy placeholder in port discovery ([76f4651](https://github.com/AbysmalBiscuit/devkit/commit/76f46517ca05aaa61847746823803a41a5ed8396))
+* **devkitd:** make second supervise of live server a no-op ([09a6d21](https://github.com/AbysmalBiscuit/devkit/commit/09a6d21cbaea9204f3add2deb67e0a82cd36b867))
+* **devrun:** render up plans in task --dry-run ([513c366](https://github.com/AbysmalBiscuit/devkit/commit/513c366ba988e484b6cf01b7258df374ac3f3522))
+* **devrun:** report a live server instead of respawning on up ([e292028](https://github.com/AbysmalBiscuit/devkit/commit/e2920289e44de89246eaa4c3a9c18e856fcafb7e))
+* **linear:** reject non-Int issue numbers in graphql queries ([ccee132](https://github.com/AbysmalBiscuit/devkit/commit/ccee132611d661885c9bdd879e737bb4b56a8f3d))
+
 ## [0.10.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.9.1...v0.10.0) (2026-07-12)
 
 
