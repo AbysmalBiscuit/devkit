@@ -14,6 +14,7 @@ pub fn versions_in_dir(dir: &Path, eco: Ecosystem, package: &str) -> Vec<String>
         Ecosystem::Js => {
             let mut v = npm_versions(&dir.join("package-lock.json"), package);
             v.extend(pnpm_versions(&dir.join("pnpm-lock.yaml"), package));
+            v.extend(bun_versions(&dir.join("bun.lock"), package));
             v
         }
         Ecosystem::Git => Vec::new(),
@@ -126,6 +127,64 @@ fn pnpm_versions(path: &Path, package: &str) -> Vec<String> {
     out
 }
 
+/// bun.lock `packages` map: each value is an array whose first element is the
+/// resolved `name@version` spec. The spec — not the map key — identifies the
+/// package: a key like `parent/kysely` is a nested copy of `kysely`, while
+/// `@scope/kysely` is a different package, and only the spec tells them apart.
+fn bun_versions(path: &Path, package: &str) -> Vec<String> {
+    let Ok(s) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&strip_trailing_commas(&s)) else {
+        return Vec::new();
+    };
+    let Some(pkgs) = v.get("packages").and_then(|p| p.as_object()) else {
+        return Vec::new();
+    };
+    pkgs.values()
+        .filter_map(|e| e.get(0).and_then(|x| x.as_str()))
+        .filter_map(|spec| spec.rsplit_once('@').filter(|(n, _)| !n.is_empty()))
+        .filter(|(name, _)| *name == package)
+        .map(|(_, ver)| ver.to_string())
+        .collect()
+}
+
+/// bun writes its lockfile as JSONC, but the only JSONC feature its writer
+/// emits is trailing commas — drop them (outside strings) so serde_json can
+/// parse the rest.
+fn strip_trailing_commas(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let (mut in_str, mut escaped) = (false, false);
+    for c in s.chars() {
+        if in_str {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_str = true;
+                out.push(c);
+            }
+            '}' | ']' => {
+                let trimmed = out.trim_end().len();
+                if out[..trimmed].ends_with(',') {
+                    out.truncate(trimmed - 1);
+                }
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +205,24 @@ mod tests {
         "node_modules/foo/node_modules/react": { "version": "17.0.2" } } }"#;
     const PNPM_V9: &str = "lockfileVersion: '9.0'\npackages:\n  react@18.3.1:\n    resolution: {integrity: sha512-x}\n  '@types/node@20.12.0':\n    resolution: {integrity: sha512-y}\n";
     const PNPM_V6: &str = "lockfileVersion: '6.0'\npackages:\n  /react@18.2.0(scheduler@0.23.0):\n    resolution: {integrity: sha512-z}\n";
+    const BUN_LOCK: &str = r#"{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "app",
+      "dependencies": {
+        "kysely": "^0.28.11",
+      },
+    },
+  },
+  "packages": {
+    "kysely": ["kysely@0.28.17", "", {}, "sha512-x"],
+    "@types/node": ["@types/node@20.12.0", "", {}, "sha512-y"],
+    "@app/portal/kysely": ["kysely@0.28.14", "", {}, "sha512-z"],
+    "@scope/kysely": ["@scope/kysely@9.9.9", "", {}, "sha512-w"],
+  },
+}"#;
 
     #[test]
     fn cargo_lock_versions() {
@@ -189,6 +266,24 @@ mod tests {
         let d6 = unique_tmp("pnpm6");
         std::fs::write(d6.join("pnpm-lock.yaml"), PNPM_V6).unwrap();
         assert_eq!(versions_in_dir(&d6, Ecosystem::Js, "react"), vec!["18.2.0"]);
+    }
+
+    #[test]
+    fn bun_lock_collects_all_copies_despite_trailing_commas() {
+        let d = unique_tmp("bun");
+        std::fs::write(d.join("bun.lock"), BUN_LOCK).unwrap();
+        let mut v = versions_in_dir(&d, Ecosystem::Js, "kysely");
+        v.sort();
+        assert_eq!(v, vec!["0.28.14", "0.28.17"]);
+        assert_eq!(
+            versions_in_dir(&d, Ecosystem::Js, "@types/node"),
+            vec!["20.12.0"]
+        );
+        assert_eq!(
+            versions_in_dir(&d, Ecosystem::Js, "@scope/kysely"),
+            vec!["9.9.9"]
+        );
+        assert!(versions_in_dir(&d, Ecosystem::Js, "absent").is_empty());
     }
 
     #[test]

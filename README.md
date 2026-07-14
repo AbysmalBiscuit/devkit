@@ -189,7 +189,7 @@ Global manifest: `~/.config/devkit/docs.toml`. Per-project overlay:
 `[[docs.libs]]` entries in `devkit.toml` (same fields; partial entries
 override the global entry field-by-field). Resolution: manual `ref` pin →
 lockfile version (`Cargo.lock`, `pnpm-lock.yaml`, `package-lock.json`,
-`uv.lock`) → git tag → default branch fallback.
+`bun.lock`, `uv.lock`) → git tag → default branch fallback.
 
 ## devkit-mcp (MCP server)
 
