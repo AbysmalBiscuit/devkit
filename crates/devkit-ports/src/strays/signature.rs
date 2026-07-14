@@ -16,7 +16,8 @@ const GENERIC: &[&str] = &["dev", "start", "serve", "develop", "watch"];
 /// optional bare subcommand (`dev`/`run`). Empty when nothing meaningful remains.
 ///
 /// Drops the doppler wrapper (everything up to and including the last `--`),
-/// then flags, the `{port}` placeholder, and leading runtime launchers.
+/// then flags, the `{port}` placeholder, minijinja `{{ ... }}` placeholders,
+/// and leading runtime launchers.
 pub fn signature(launch: &[String]) -> Vec<String> {
     let cmd: &[String] = match launch.iter().rposition(|t| t == "--") {
         Some(i) => &launch[i + 1..],
@@ -151,7 +152,10 @@ mod tests {
 
     #[test]
     fn drops_minijinja_placeholders() {
-        let launch = v(&["nitro", "dev", "--port", "{{ port }}"]);
+        // A placeholder sitting where the bare subcommand would be must be
+        // skipped, not mistaken for it; the trailing placeholder must also
+        // still be dropped.
+        let launch = v(&["nitro", "{{ app_name }}", "dev", "--port", "{{ port }}"]);
         assert_eq!(signature(&launch), v(&["nitro", "dev"]));
     }
 

@@ -1152,6 +1152,80 @@ mod tests {
     }
 
     #[test]
+    fn resolve_ports_includes_an_app_referenced_via_ports_template() {
+        // A real holder dir: prune judges a reservation dead the moment its
+        // holder path is gone, so a nonexistent holder would let a concurrent
+        // test's prune free these rows before the assertions run.
+        let holderdir =
+            std::env::temp_dir().join(format!("resolve-ports-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&holderdir).unwrap();
+        let holder = holderdir.to_str().unwrap().to_string();
+
+        let mut catalog = HashMap::new();
+        let mut primary = test_app(
+            &["nitro", "dev", "--port", "{{ port }}"],
+            &[(
+                "PEER_URL",
+                "http://localhost:{{ ports['resolve-ports-secondary'] }}",
+            )],
+        );
+        primary.base_port = 48210;
+        catalog.insert("resolve-ports-primary".to_string(), primary);
+        let mut secondary = test_app(&["nitro", "dev", "--port", "{{ port }}"], &[]);
+        secondary.base_port = 48310;
+        catalog.insert("resolve-ports-secondary".to_string(), secondary);
+
+        let ports = resolve_ports(
+            &catalog,
+            &["resolve-ports-primary".to_string()],
+            &holder,
+            Role::Issue,
+            &BTreeMap::new(),
+        )
+        .expect("selected app plus its referenced app resolve");
+
+        assert_eq!(
+            ports.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "resolve-ports-primary".to_string(),
+                "resolve-ports-secondary".to_string()
+            ],
+            "both the selected app and the app it references via ports[...] must be allocated"
+        );
+
+        let _ = registry::release(&holder, None);
+        let _ = std::fs::remove_dir_all(&holderdir);
+    }
+
+    #[test]
+    fn resolve_ports_rejects_a_reference_to_an_unknown_app() {
+        let mut catalog = HashMap::new();
+        let mut selected = test_app(
+            &["nitro", "dev", "--port", "{{ port }}"],
+            &[(
+                "PEER_URL",
+                "http://localhost:{{ ports['resolve-ports-ghost'] }}",
+            )],
+        );
+        selected.base_port = 48410;
+        catalog.insert("resolve-ports-selected".to_string(), selected);
+
+        let err = resolve_ports(
+            &catalog,
+            &["resolve-ports-selected".to_string()],
+            "/wt",
+            Role::Issue,
+            &BTreeMap::new(),
+        )
+        .expect_err("a ports[...] reference to an app absent from the catalog must error");
+
+        assert!(
+            format!("{err:#}").contains("resolve-ports-ghost"),
+            "error must name the unknown app: {err:#}"
+        );
+    }
+
+    #[test]
     fn existing_server_ignores_pidless_reservation_and_foreign_rows() {
         let mut data = Data::default();
         let me = std::process::id();
