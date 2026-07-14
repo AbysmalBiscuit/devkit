@@ -81,28 +81,31 @@ fn doppler_scoped_config(cwd: &Path) -> Option<String> {
     (!t.is_empty()).then(|| t.to_string())
 }
 
-/// Refuse a launch that would run Doppler against the `prd` config. A launch
-/// whose program is not `doppler` is unguarded. For a Doppler launch the config
+/// Refuse to run a Doppler invocation against the `prd` config. `label` names
+/// the app or task in the error. A non-doppler `argv` is unguarded. The config
 /// is resolved in Doppler's own precedence order — explicit flag, then
-/// `DOPPLER_CONFIG`, then the local scope — and a launch whose config resolves to
-/// `prd`, or cannot be resolved at all, is rejected (fail-safe).
-pub fn assert_not_prd(plan: &LaunchPlan) -> Result<()> {
-    let prog = plan.argv.first().map(String::as_str).unwrap_or_default();
+/// `DOPPLER_CONFIG`, then the local scope for `cwd` — and an invocation whose
+/// config resolves to `prd`, or cannot be resolved at all, is rejected
+/// (fail-safe).
+pub fn assert_not_prd(
+    label: &str,
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<()> {
+    let prog = argv.first().map(String::as_str).unwrap_or_default();
     if Path::new(prog).file_name().and_then(|s| s.to_str()) != Some("doppler") {
         return Ok(());
     }
-    let config =
-        config_from_argv_env(&plan.argv, &plan.env).or_else(|| doppler_scoped_config(&plan.cwd));
+    let config = config_from_argv_env(argv, env).or_else(|| doppler_scoped_config(cwd));
     match config.as_deref() {
         Some("prd") => anyhow::bail!(
-            "refusing to launch `{}`: doppler config resolves to `prd` (production secrets)",
-            plan.app
+            "refusing to launch `{label}`: doppler config resolves to `prd` (production secrets)"
         ),
         Some(_) => Ok(()),
         None => anyhow::bail!(
-            "refusing to launch `{}`: cannot determine its doppler config (no -c/--config, \
-             no DOPPLER_CONFIG, no local scope). Add an explicit `-c <config>` to its launch.",
-            plan.app
+            "refusing to launch `{label}`: cannot determine its doppler config (no -c/--config, \
+             no DOPPLER_CONFIG, no local scope). Add an explicit `-c <config>` to its launch."
         ),
     }
 }
@@ -462,7 +465,7 @@ pub fn launch(
     wait: bool,
 ) -> Result<Vec<ServerStatus>> {
     for p in plans {
-        assert_not_prd(p)?;
+        assert_not_prd(&p.app, &p.argv, &p.env, &p.cwd)?;
     }
     #[cfg(feature = "daemon")]
     if supervise_daemon {
@@ -688,34 +691,58 @@ mod tests {
 
     #[test]
     fn guard_rejects_prd_and_unresolvable_doppler() {
-        let plan = |argv: &[&str], env: BTreeMap<String, String>| LaunchPlan {
-            app: "web".into(),
-            port: 1,
-            argv: argv.iter().map(|s| s.to_string()).collect(),
-            cwd: std::path::PathBuf::from("/nonexistent-app-dir"),
-            env,
-            log: std::path::PathBuf::from("/dev/null"),
-        };
         // explicit prd → reject
         assert!(
-            assert_not_prd(&plan(
-                &["doppler", "run", "-c", "prd", "--", "x"],
-                BTreeMap::new()
-            ))
+            assert_not_prd(
+                "web",
+                &["doppler", "run", "-c", "prd", "--", "x"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+                &BTreeMap::new(),
+                std::path::Path::new("/nonexistent-app-dir"),
+            )
             .is_err()
         );
         // explicit safe config → ok
         assert!(
-            assert_not_prd(&plan(
-                &["doppler", "run", "-c", "dev", "--", "x"],
-                BTreeMap::new()
-            ))
+            assert_not_prd(
+                "web",
+                &["doppler", "run", "-c", "dev", "--", "x"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+                &BTreeMap::new(),
+                std::path::Path::new("/nonexistent-app-dir"),
+            )
             .is_ok()
         );
         // non-doppler launch → ok (unguarded)
-        assert!(assert_not_prd(&plan(&["next", "dev"], BTreeMap::new())).is_ok());
+        assert!(
+            assert_not_prd(
+                "web",
+                &["next", "dev"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+                &BTreeMap::new(),
+                std::path::Path::new("/nonexistent-app-dir"),
+            )
+            .is_ok()
+        );
         // doppler launch with no flag/env, cwd has no scope → unresolvable → reject
-        assert!(assert_not_prd(&plan(&["doppler", "run", "--", "x"], BTreeMap::new())).is_err());
+        assert!(
+            assert_not_prd(
+                "web",
+                &["doppler", "run", "--", "x"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+                &BTreeMap::new(),
+                std::path::Path::new("/nonexistent-app-dir"),
+            )
+            .is_err()
+        );
     }
 
     #[test]
