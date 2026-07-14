@@ -5,7 +5,7 @@ use crate::Daemon;
 use crate::supervisor::{Key, Launch};
 use devkit_common::supervise;
 use devkit_ports::daemon::proto::{PROTO, Request, Response};
-use devkit_ports::registry::{self, Role};
+use devkit_ports::registry::{self, Role, Store};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -123,6 +123,24 @@ fn supervise_app(
     let Some(port) = port else {
         return Response::Err("alloc returned no port".into());
     };
+
+    // A live server already tracked for this key is reported, not respawned:
+    // the duplicate would fail to bind, and insert_owned would repoint the
+    // supervision table at the doomed pid while the real server keeps running.
+    match daemon.port_store().snapshot() {
+        Ok(snap) => {
+            if let Some(e) = snap.entries.get(&port)
+                && e.holder == holder
+                && e.app == app
+                && e.role == role
+                && let Some(pid) = e.pid
+                && registry::pid_alive(pid)
+            {
+                return Response::Supervised(vec![(port, registry::listening(port))]);
+            }
+        }
+        Err(e) => return Response::Err(format!("{e:#}")),
+    }
 
     let key = Key {
         holder: holder.clone(),

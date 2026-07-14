@@ -607,6 +607,48 @@ fn cap_requested_without_delegation_falls_back() {
     h.shutdown();
 }
 
+/// A second Supervise for a key whose server is alive is a no-op: same port,
+/// ready, and the pid in ports.json does not change (no duplicate spawn).
+#[test]
+fn second_supervise_of_live_server_is_noop() {
+    let mut h = Harness::start();
+    let port = common::free_port();
+    let holder = h.home.to_str().unwrap().to_string();
+    let req = Request::Supervise {
+        holder: holder.clone(),
+        app: "api".into(),
+        role: Role::Issue,
+        argv: vec![
+            "python3".into(),
+            "-m".into(),
+            "http.server".into(),
+            port.to_string(),
+        ],
+        cwd: ".".into(),
+        env: BTreeMap::new(),
+        logfile: h.home.join("noop.log"),
+        base_port: port,
+    };
+
+    let first = h.request(&req);
+    assert!(
+        matches!(&first, Response::Supervised(v) if v.first().map(|(_, r)| *r) == Some(true)),
+        "first supervise did not become ready: {first:?}"
+    );
+    let pid1 = pid_in_ports_json(&h.ports_json(), "api").expect("no pid after first supervise");
+
+    let second = h.request(&req);
+    assert!(
+        matches!(&second, Response::Supervised(v) if v.first() == Some(&(port, true))),
+        "second supervise must report the live server: {second:?}"
+    );
+    let pid2 = pid_in_ports_json(&h.ports_json(), "api").expect("no pid after second supervise");
+    assert_eq!(pid2, pid1, "second supervise must not respawn");
+
+    h.request(&Request::Down { holder, role: None });
+    h.shutdown();
+}
+
 /// After a clean `Down`, the supervision thread must NOT restart the server —
 /// `Down` removes the key from the supervisor table before stopping the child,
 /// so the exit is never reaped as a crash.
