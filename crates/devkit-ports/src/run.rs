@@ -14,14 +14,6 @@ use crate::apps::App;
 use crate::registry::{self, Data, Role};
 use devkit_common::{paths, supervise};
 
-/// Resolve `{port}` in the launch argv.
-pub fn launch_argv(app: &App, port: u16) -> Vec<String> {
-    app.launch
-        .iter()
-        .map(|a| a.replace("{port}", &port.to_string()))
-        .collect()
-}
-
 /// Env layering (low→high): static_env → url-wiring → user overrides.
 /// `provider_port` is the port of the URL-providing app (the API), if it shares the run.
 pub fn env_for(
@@ -229,6 +221,42 @@ pub struct LaunchPlan {
     pub log: PathBuf,
 }
 
+/// Ports one (role, holder) group needs: each selected app's own port plus
+/// every app referenced via `ports[...]` in the group's launch argv and
+/// static_env templates. One `registry::alloc` covers them all, so a
+/// reference to an app that isn't running writes the normal pid-less
+/// reservation a later `up` claims.
+pub fn resolve_ports(
+    catalog: &HashMap<String, App>,
+    apps: &[String],
+    holder: &str,
+    role: Role,
+    variables: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, u16>> {
+    let mut names: Vec<String> = apps.to_vec();
+    for a in apps {
+        let app = &catalog[a];
+        let mut templates: Vec<&str> = app.launch.iter().map(String::as_str).collect();
+        templates.extend(app.static_env.values().map(String::as_str));
+        let refs = devkit_common::template::referenced_ports(&templates, variables)
+            .with_context(|| format!("scanning templates of app `{a}`"))?;
+        for r in refs.apps {
+            anyhow::ensure!(
+                catalog.contains_key(&r),
+                "app `{a}` references unknown app `{r}` via ports[...]"
+            );
+            if !names.contains(&r) {
+                names.push(r);
+            }
+        }
+    }
+    let reqs: Vec<(String, u16)> = names
+        .iter()
+        .map(|n| (n.clone(), catalog[n].base_port))
+        .collect();
+    Ok(registry::alloc(holder, &reqs, role)?.into_iter().collect())
+}
+
 /// Build a launch plan per app for one (role, holder) group. `ports` maps each app
 /// to its allocated port; `provider` names the URL-providing app if it shares the run.
 #[allow(clippy::too_many_arguments)]
@@ -240,15 +268,34 @@ pub fn plan_group(
     base_dir: &Path,
     role: Role,
     user_env: &BTreeMap<String, String>,
-) -> Vec<LaunchPlan> {
+    variables: &BTreeMap<String, String>,
+) -> Result<Vec<LaunchPlan>> {
+    use devkit_common::template::render_launch;
     let provider_port = provider.and_then(|p| ports.get(p).copied());
     let mut plans = Vec::with_capacity(apps.len());
     for a in apps {
         let app = &catalog[a];
         let port = ports[a];
-        let argv = launch_argv(app, port);
+        let argv = app
+            .launch
+            .iter()
+            .map(|t| render_launch(t, Some(port), ports, variables))
+            .collect::<Result<Vec<_>>>()
+            .with_context(|| format!("rendering launch argv of `{a}`"))?;
+        let mut rendered = app.clone();
+        rendered.static_env = app
+            .static_env
+            .iter()
+            .map(|(k, v)| {
+                Ok((
+                    k.clone(),
+                    render_launch(v, Some(port), ports, variables)
+                        .with_context(|| format!("rendering static_env `{k}` of `{a}`"))?,
+                ))
+            })
+            .collect::<Result<_>>()?;
         let cwd = base_dir.join(&app.path);
-        let env = env_for(app, provider_port, user_env);
+        let env = env_for(&rendered, provider_port, user_env);
         let log = paths::logs_dir()
             .join(holder_slug(base_dir.to_str().unwrap_or("wt")))
             .join(format!("{}-{}.log", role.as_str(), a));
@@ -261,7 +308,7 @@ pub fn plan_group(
             log,
         });
     }
-    plans
+    Ok(plans)
 }
 
 /// Result of stopping + releasing a holder's servers.
@@ -553,7 +600,12 @@ mod tests {
             name: name.into(),
             base_port: 1,
             path: "apps/x".into(),
-            launch: vec!["next".into(), "dev".into(), "-p".into(), "{port}".into()],
+            launch: vec![
+                "next".into(),
+                "dev".into(),
+                "-p".into(),
+                "{{ port }}".into(),
+            ],
             url_env: url_env.map(Into::into),
             provides_url: false,
             static_env: HashMap::new(),
@@ -674,12 +726,71 @@ mod tests {
         assert_eq!(e["FOUNDRY_API_BASE_URL"], "http://x");
     }
 
+    fn test_app(launch: &[&str], static_env: &[(&str, &str)]) -> App {
+        App {
+            name: "api".into(),
+            base_port: 9100,
+            path: "apps/api".into(),
+            launch: launch.iter().map(|s| s.to_string()).collect(),
+            url_env: None,
+            provides_url: false,
+            static_env: static_env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            prep_files: vec![],
+            setup: vec![],
+        }
+    }
+
     #[test]
-    fn launch_substitutes_port() {
-        assert_eq!(
-            launch_argv(&app("lab-os", None), 4103),
-            vec!["next", "dev", "-p", "4103"]
+    fn plan_group_renders_argv_and_static_env() {
+        let mut catalog = HashMap::new();
+        catalog.insert(
+            "api".to_string(),
+            test_app(
+                &["nitro", "dev", "--port", "{{ port }}"],
+                &[("PEER", "http://localhost:{{ ports['api-prod'] }}")],
+            ),
         );
+        let ports: BTreeMap<String, u16> =
+            [("api".to_string(), 9100), ("api-prod".to_string(), 9101)].into();
+        let plans = plan_group(
+            &catalog,
+            &["api".to_string()],
+            &ports,
+            None,
+            Path::new("/wt"),
+            Role::Issue,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(plans[0].argv, vec!["nitro", "dev", "--port", "9100"]);
+        assert_eq!(plans[0].env["PEER"], "http://localhost:9101");
+    }
+
+    #[test]
+    fn plan_group_rejects_leftover_brace_port() {
+        let mut catalog = HashMap::new();
+        catalog.insert(
+            "api".to_string(),
+            test_app(&["nitro", "--port", "{port}"], &[]),
+        );
+        let ports: BTreeMap<String, u16> = [("api".to_string(), 9100)].into();
+        let err = plan_group(
+            &catalog,
+            &["api".to_string()],
+            &ports,
+            None,
+            Path::new("/wt"),
+            Role::Issue,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        // {:#} prints the whole context chain; the hint lives in the root cause.
+        assert!(format!("{err:#}").contains("retired"), "got: {err:#}");
     }
 
     #[test]
@@ -753,7 +864,9 @@ mod tests {
             std::path::Path::new("/root"),
             Role::Issue,
             &BTreeMap::new(),
-        );
+            &BTreeMap::new(),
+        )
+        .unwrap();
         assert_eq!(plans.len(), 1);
         let p = &plans[0];
         assert_eq!(p.app, "web");

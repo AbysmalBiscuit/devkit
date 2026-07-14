@@ -397,7 +397,7 @@ mod tests {
                 "nitro".into(),
                 "dev".into(),
                 "--port".into(),
-                "{port}".into(),
+                "{{ port }}".into(),
             ],
             ..AppConfig::default()
         }

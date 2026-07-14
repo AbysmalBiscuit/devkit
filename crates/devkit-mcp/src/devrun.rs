@@ -76,13 +76,8 @@ fn up(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     run::ensure_provider(catalog, &mut apps);
 
     let user = a.env.unwrap_or_default();
-    let reqs: Vec<(String, u16)> = apps
-        .iter()
-        .map(|x| (x.clone(), catalog[x].base_port))
-        .collect();
-    let ports: BTreeMap<String, u16> = registry::alloc(&a.root, &reqs, Role::Issue)?
-        .into_iter()
-        .collect();
+    let vars = &loaded.config.templates.variables;
+    let ports = run::resolve_ports(catalog, &apps, &a.root, Role::Issue, vars)?;
     let provider = catalog
         .iter()
         .find(|(_, ap)| ap.provides_url)
@@ -95,7 +90,8 @@ fn up(_ctx: &ServerCtx, args: Value) -> Result<Value> {
         Path::new(&a.root),
         Role::Issue,
         &user,
-    );
+        vars,
+    )?;
     let statuses = run::launch(&plans, &a.root, Role::Issue, run::daemon_running(), false)?;
     Ok(serde_json::json!({
         "servers": serde_json::to_value(&statuses)?,

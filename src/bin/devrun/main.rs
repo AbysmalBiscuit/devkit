@@ -525,13 +525,8 @@ fn cmd_up(
 
     let mut rows: Vec<Row> = Vec::new();
     for (grp_role, holder, base_dir) in &groups {
-        let reqs: Vec<(String, u16)> = apps
-            .iter()
-            .map(|a| (a.clone(), catalog[a].base_port))
-            .collect();
-        let ports: BTreeMap<String, u16> = registry::alloc(holder, &reqs, *grp_role)?
-            .into_iter()
-            .collect();
+        let ports =
+            run::resolve_ports(catalog, &apps, holder, *grp_role, &cfg.templates.variables)?;
         let plans = run::plan_group(
             catalog,
             &apps,
@@ -540,7 +535,8 @@ fn cmd_up(
             base_dir,
             *grp_role,
             &user,
-        );
+            &cfg.templates.variables,
+        )?;
 
         if dry_run {
             for p in &plans {

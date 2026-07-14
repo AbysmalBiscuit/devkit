@@ -22,7 +22,9 @@ pub fn signature(launch: &[String]) -> Vec<String> {
         Some(i) => &launch[i + 1..],
         None => launch,
     };
-    let mut words = cmd.iter().filter(|t| !t.starts_with('-') && *t != "{port}");
+    let mut words = cmd
+        .iter()
+        .filter(|t| !t.starts_with('-') && *t != "{port}" && !t.contains("{{"));
     let framework = words.find(|t| !RUNTIMES.contains(&t.as_str()));
     let framework = match framework {
         Some(f) if !GENERIC.contains(&f.as_str()) => f.clone(),
@@ -145,6 +147,12 @@ mod tests {
         // safely, so no signature. Port-band detection still covers these.
         assert_eq!(signature(&v(&["bun", "run", "dev"])), Vec::<String>::new());
         assert_eq!(signature(&v(&["node", "start"])), Vec::<String>::new());
+    }
+
+    #[test]
+    fn drops_minijinja_placeholders() {
+        let launch = v(&["nitro", "dev", "--port", "{{ port }}"]);
+        assert_eq!(signature(&launch), v(&["nitro", "dev"]));
     }
 
     #[test]

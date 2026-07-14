@@ -434,7 +434,7 @@ baseline_path = "~/Git/example/_baseline"
 doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
 [apps.api]
 base_port = 9100
-launch = ["doppler", "run", "-c", "dev_local", "--", "nitro", "dev", "--port", "{port}"]
+launch = ["doppler", "run", "-c", "dev_local", "--", "nitro", "dev", "--port", "{{ port }}"]
 url_env = "FOUNDRY_API_BASE_URL"
 static_env = { SUPABASE_JWT_SECRET = "s" }
 "#;
@@ -523,7 +523,7 @@ doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
 stray_scan_width = 128
 [apps.api]
 base_port = 9100
-launch = ["nitro", "dev", "--port", "{port}"]
+launch = ["nitro", "dev", "--port", "{{ port }}"]
 "#;
         let c = Config::parse(src).unwrap();
         assert_eq!(c.defaults.stray_scan_width, 128);
@@ -540,7 +540,7 @@ doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
 pr_base = "staging"
 [apps.api]
 base_port = 9100
-launch = ["nitro", "dev", "--port", "{port}"]
+launch = ["nitro", "dev", "--port", "{{ port }}"]
 [people.igor]
 slack = "U0XXXXXXXXX"
 github = "exampleuser"
@@ -569,7 +569,7 @@ baseline_path = "~/Git/example/_baseline"
 ignored_checks = ["vercel*", "*Preview*"]
 [apps.api]
 base_port = 9100
-launch = ["nitro", "dev", "--port", "{port}"]
+launch = ["nitro", "dev", "--port", "{{ port }}"]
 "#;
         let c = Config::parse(src).unwrap();
         assert_eq!(c.defaults.ignored_checks, vec!["vercel*", "*Preview*"]);
