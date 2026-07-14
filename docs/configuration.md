@@ -59,7 +59,7 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 | Key | Required | Meaning |
 |---|---|---|
 | `base_port` | yes | Base port; per-worktree ports are allocated from here via the registry. |
-| `launch` | yes | The complete launch command, run verbatim. `{port}` is substituted with the allocated port. Write the whole invocation here, including any `doppler run -c <config> --` wrapper and `--preserve-env=…` flags the app needs. |
+| `launch` | yes | The complete launch command, run verbatim. `{{ port }}` is substituted with the allocated port. Write the whole invocation here, including any `doppler run -c <config> --` wrapper and `--preserve-env=…` flags the app needs. |
 | `path` | no | App subdirectory (relative to the repo) when it differs from `<name>`. |
 | `url_env` | no | Env var that receives the app's URL. |
 | `provides_url` | no | `true` marks the one app whose URL other apps consume. Exactly one app should set this. |
@@ -69,7 +69,22 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 
 devkit runs `launch` exactly as written — it builds no command prefix. To use
 Doppler, wrap the command yourself, e.g.
-`launch = ["doppler","run","-c","dev_local","--","nitro","dev","--port","{port}"]`.
+`launch = ["doppler","run","-c","dev_local","--","nitro","dev","--port","{{ port }}"]`.
+
+Launch argv and `static_env` values are minijinja templates rendered per
+launch with strict undefined handling:
+
+- `{{ port }}` — the app's own allocated port.
+- `{{ ports['other-app'] }}` — another app's port in this worktree, resolved
+  from the port registry. Referencing an app that isn't running writes a
+  normal pid-less reservation which a later `devrun up other-app` claims, so
+  a consumer can bake the port before the server exists. A typo'd app name
+  is a hard error.
+- `[templates.variables]` constants are available by name.
+
+The old `{port}` placeholder is retired; a leftover `{port}` in a rendered
+value fails the launch with a migration hint.
+
 Before starting such a server, devkit refuses a launch that resolves to the
 `prd` config: it reads `-c`/`--config` from `launch`, then `DOPPLER_CONFIG` from
 the app's env, then `doppler configure get config --scope <app dir>`; a Doppler
@@ -216,14 +231,14 @@ pr_base        = "staging"
 
 [apps.api]
 base_port    = 9100
-launch       = ["doppler", "run", "-c", "dev_local", "--preserve-env=SOME_JWT_SECRET", "--", "nitro", "dev", "--port", "{port}"]
+launch       = ["doppler", "run", "-c", "dev_local", "--preserve-env=SOME_JWT_SECRET", "--", "nitro", "dev", "--port", "{{ port }}"]
 url_env      = "API_BASE_URL"
 provides_url = true
 static_env   = { SOME_JWT_SECRET = "local-dev-placeholder-value" }
 
 [apps.web]
 base_port  = 4100
-launch     = ["next", "dev", "-p", "{port}"]
+launch     = ["next", "dev", "-p", "{{ port }}"]
 url_env    = "API_BASE_URL"
 setup      = [["doppler", "run", "-c", "local_config", "--", "bun", "install"]]
 
@@ -236,7 +251,7 @@ SOME_FEATURE_FLAG=dummy
 [apps.worker]
 base_port = 8080
 path      = "services/worker"
-launch    = ["uv", "run", "uvicorn", "server.main:create_app", "--factory", "--reload", "--port", "{port}"]
+launch    = ["uv", "run", "uvicorn", "server.main:create_app", "--factory", "--reload", "--port", "{{ port }}"]
 
 [people.alice]
 slack  = "U0XXXXXXXXX"
