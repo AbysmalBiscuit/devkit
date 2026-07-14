@@ -104,6 +104,44 @@ than the daemon's `memory_action`. On Linux with cgroup-v2 delegation the daemon
 also supports a first-class `memory_max_mb` kernel cap — see the `[daemon]`
 section below.
 
+## Tasks
+
+`[tasks.<name>]` defines canned oneshots run by `devrun task <name>`
+(`devrun task` lists them). A task is either a **command** (`run`) or a
+**sequence** (`steps`), never both.
+
+```toml
+[tasks.api-prod-build]
+description = "prod nitro build (node-server preset)"
+app = "api-prod"        # run in this app's dir, inherit its static_env
+run = ["doppler", "run", "-p", "api-foundry", "-c", "dev_local",
+       "--preserve-env=NITRO_PRESET", "--", "bun", "nitro", "build"]
+env = { NITRO_PRESET = "node-server" }
+
+[tasks.profile-lab-os]
+description = "prod api + profiled lab-os, wired together"
+steps = [
+  { task = "api-prod-build" },
+  { up = "api-prod" },
+  { task = "lab-os-build" },
+  { up = "lab-os-prod" },
+]
+```
+
+- Command tasks run in the foreground with inherited stdio; the exit code is
+  propagated. `run` and `env` values are minijinja templates with the same
+  `port`/`ports` context as launches; `{{ ports['x'] }}` resolves from the
+  port registry (issue role), writing a pid-less reservation when `x` isn't
+  running. Env layering, low to high: app `static_env` → task `env` → CLI
+  `--env`. Tasks do not get `url_env` provider wiring — reference the app
+  you need explicitly via `ports[...]`. Doppler invocations go through the
+  same `prd` guard as launches.
+- Sequence steps run in order and stop at the first failure. `{ up = "app" }`
+  is `devrun up app` (a no-op for a live server). A sequence may only set
+  `description` and `steps`, and cannot reference another sequence.
+- `devrun task <name> --dry-run` prints each rendered plan (still resolving
+  ports, so the printed values are real) without executing.
+
 ### `[daemon]`
 
 Optional daemon-level tuning. Env overrides are listed alongside each key.

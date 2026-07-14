@@ -27,13 +27,13 @@ install together via `cargo install --path .`. Three library crates are members.
 | Unit | Role |
 |---|---|
 | `crates/devkit-common` | shared lib: `paths`, `cmd` (git/gh wrappers), `worktree`, `ui` (tables/links), `progress` (TTY-only spinners), `linear`, `slack`, `supervise` |
-| `crates/devkit-ports` | lib: `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load`, `daemon` |
+| `crates/devkit-ports` | lib: `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load`, `daemon`, `task` (canned oneshot resolution/exec) |
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
 | `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + Linear state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
 | `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks`/`devrun`/`issue` handlers) over the port + lock facades, the `devkit-ports::run` server-lifecycle facade, and the `devkit-issue` triage facade |
 | `crates/devkit-docs` | lib: version-correct library checkouts — manifest (global `docs.toml` + `devkit.toml` `[docs]`), lockfile→tag resolution, bare-clone cache with per-version worktrees, flock'd reference registry with reference-based prune |
 | `src/bin/portm.rs` | CLI over the port registry |
-| `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`); `reap` kills servers started outside devrun |
+| `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`, `task`); `reap` kills servers started outside devrun |
 | `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
 | `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens), `doctor` |
