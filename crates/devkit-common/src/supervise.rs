@@ -225,10 +225,30 @@ mod tests {
         panic!("no freed port observed as closed after 100 attempts");
     }
 
+    /// Inline python TCP server bound to IPv4 loopback: binds, announces
+    /// readiness on stdout, then accepts and closes connections forever. A bare
+    /// accept loop rather than `-m http.server` because http.server's
+    /// `server_bind` resolves the bound address with `socket.getfqdn()` — a
+    /// reverse-DNS lookup that stalls ~35s on hosts without reverse resolution
+    /// (macOS GitHub runners), far past the readiness window, with nothing
+    /// written to the log until it completes. The readiness probe only needs a
+    /// TCP accept, and binding 127.0.0.1 explicitly matches `probe_port`'s IPv4
+    /// connect.
+    fn python_listener_script(port: u16) -> String {
+        format!(
+            "import socket\n\
+             s = socket.socket()\n\
+             s.bind((\"127.0.0.1\", {port}))\n\
+             s.listen(16)\n\
+             print(\"listening on\", {port}, flush=True)\n\
+             while True: s.accept()[0].close()\n"
+        )
+    }
+
     #[test]
-    fn spawn_and_ready_on_python_http() {
+    fn spawn_and_ready_on_python_tcp() {
         let Some(py) = python_cmd() else {
-            eprintln!("skipping spawn_and_ready_on_python_http: no launchable python interpreter");
+            eprintln!("skipping spawn_and_ready_on_python_tcp: no launchable python interpreter");
             return;
         };
         let tmp = std::env::temp_dir().join(format!("devrun-{}.log", std::process::id()));
@@ -237,24 +257,14 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         drop(l);
         let mut argv = py;
-        // Bind to 127.0.0.1 explicitly: `probe_port` connects to IPv4 localhost,
-        // but http.server's default DualStackServer binds to `::`, which an IPv4
-        // connect does not reliably reach on macOS — the server comes up yet the
-        // probe never connects. `-u` unbuffers stdout so the "Serving HTTP …" line
-        // (or any error) reaches the log before the process is killed, instead of
-        // dying in a block buffer and leaving the failure diagnostic empty.
-        argv.extend(
-            [
-                "-u",
-                "-m",
-                "http.server",
-                "--bind",
-                "127.0.0.1",
-                &port.to_string(),
-            ]
-            .into_iter()
-            .map(|s| s.to_string()),
-        );
+        // `-u` unbuffers stdout so the readiness line (or any error) reaches the
+        // log before the process is killed, instead of dying in a block buffer
+        // and leaving the failure diagnostic empty.
+        argv.extend([
+            "-u".to_string(),
+            "-c".to_string(),
+            python_listener_script(port),
+        ]);
         let env = BTreeMap::new();
         let pid = spawn_detached(&argv, ".", &env, &tmp, None).unwrap();
         let ready = wait_ready(port, Duration::from_secs(10));
