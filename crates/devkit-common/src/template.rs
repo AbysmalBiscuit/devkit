@@ -51,7 +51,7 @@ impl Object for PortsRecorder {
     fn get_value(self: &Arc<Self>, key: &Value) -> Option<Value> {
         let k = key.as_str()?;
         self.apps.lock().unwrap().insert(k.to_string());
-        Some(Value::from(0u16))
+        Some(Value::from(1u16))
     }
 }
 
@@ -69,7 +69,7 @@ impl Object for DiscoveryCtx {
         match key.as_str()? {
             "port" => {
                 self.own_port.store(true, Ordering::SeqCst);
-                Some(Value::from(0u16))
+                Some(Value::from(1u16))
             }
             "ports" => Some(Value::from_dyn_object(self.ports.clone())),
             k => self.vars.get(k).map(|v| Value::from(v.clone())),
@@ -80,7 +80,9 @@ impl Object for DiscoveryCtx {
 /// Collect the port references across `templates` by rendering each against a
 /// recording context. Never touches the port registry; `ports[...]` lookups
 /// return a placeholder. A reference inside a branch not taken under
-/// placeholder values goes unrecorded — keep port refs out of conditionals.
+/// placeholder values goes unrecorded; however, plain `{% if port %}`/
+/// `{% if ports[...] %}` guards take the branch during discovery and will
+/// record references within.
 pub fn referenced_ports(
     templates: &[&str],
     variables: &BTreeMap<String, String>,
@@ -259,5 +261,13 @@ mod tests {
     #[test]
     fn referenced_ports_unknown_variable_is_an_error() {
         assert!(referenced_ports(&["{{ typo }}"], &novars()).is_err());
+    }
+
+    #[test]
+    fn referenced_ports_sees_refs_behind_if_port_guard() {
+        let vars = BTreeMap::new();
+        let refs = referenced_ports(&["{% if port %}{{ ports['db'] }}{% endif %}"], &vars).unwrap();
+        assert!(refs.own_port);
+        assert!(refs.apps.contains("db"));
     }
 }
