@@ -1,0 +1,77 @@
+name: diag-macos26
+
+on:
+  push:
+    branches: [ci-diag-macos26]
+
+jobs:
+  diag:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: environment
+        run: |
+          sw_vers
+          echo "--- interpreters ---"
+          which -a python3 || true
+          python3 --version
+          python3 -c 'import sys; print(sys.executable)'
+          echo "--- firewall ---"
+          /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate || true
+          xcode-select -p || true
+
+      - name: raw bind+listen timing (foreground)
+        run: |
+          python3 -u -c '
+          import socket, time
+          t = time.time()
+          s = socket.socket()
+          s.bind(("127.0.0.1", 8200))
+          s.listen(1)
+          print("bound+listen in %.3fs" % (time.time() - t))
+          '
+
+      - name: http.server plain background (no setsid)
+        run: |
+          python3 -u -m http.server --bind 127.0.0.1 8123 > /tmp/py1.log 2>&1 &
+          pid=$!
+          t0=$(date +%s)
+          up=no
+          for i in $(seq 1 60); do
+            if nc -z 127.0.0.1 8123 2>/dev/null; then up=yes; break; fi
+            sleep 0.5
+          done
+          echo "up=$up after $(( $(date +%s) - t0 ))s"
+          echo "--- log ---"; cat /tmp/py1.log || true
+          echo "--- ps ---"; ps -o pid,stat,command -p $pid || true
+          kill $pid 2>/dev/null || true
+
+      - name: http.server in new session (setsid, like spawn_detached)
+        run: |
+          python3 -u -c '
+          import os
+          pid = os.fork()
+          if pid == 0:
+              os.setsid()
+              log = os.open("/tmp/py2.log", os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
+              os.dup2(log, 1); os.dup2(log, 2)
+              os.execvp("python3", ["python3", "-u", "-m", "http.server", "--bind", "127.0.0.1", "8124"])
+          print("forked child", pid)
+          '
+          up=no
+          for i in $(seq 1 60); do
+            if nc -z 127.0.0.1 8124 2>/dev/null; then up=yes; break; fi
+            sleep 0.5
+          done
+          echo "up=$up"
+          echo "--- log ---"; cat /tmp/py2.log || true
+          echo "--- ps ---"; ps -axo pid,stat,command | grep 8124 | grep -v grep || true
+          pkill -f "http.server" 2>/dev/null || true
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: actual failing test
+        run: cargo test -p devkit-common --lib supervise -- --nocapture
