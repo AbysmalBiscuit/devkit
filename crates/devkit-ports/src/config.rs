@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Config {
     pub defaults: Defaults,
+    #[serde(default)]
     pub apps: HashMap<String, AppConfig>,
     #[serde(default)]
     pub people: HashMap<String, Person>,
@@ -13,6 +14,8 @@ pub struct Config {
     pub daemon: DaemonConfig,
     #[serde(default)]
     pub templates: Templates,
+    #[serde(default)]
+    pub tasks: HashMap<String, TaskConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -135,6 +138,32 @@ pub struct PrepFile {
     /// Overwrite an existing file rather than skipping it.
     #[serde(default)]
     pub overwrite: bool,
+}
+
+/// One step of a sequence task: run a sibling command task, or bring an app up.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Step {
+    Task(String),
+    Up(String),
+}
+
+/// A canned oneshot invoked by name via `devrun task`: either a command
+/// (`run`, optionally scoped to an `app` for cwd + static_env) or a sequence
+/// (`steps`). Exactly one of `run`/`steps` must be set; a sequence task
+/// carries no `app`/`env`. Validated at resolution, not at parse.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub struct TaskConfig {
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub app: Option<String>,
+    #[serde(default)]
+    pub run: Vec<String>,
+    #[serde(default)]
+    pub steps: Vec<Step>,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
@@ -908,5 +937,73 @@ overwrite = true
     fn checkout_worktree_dir_override_wins() {
         let t: Templates = toml::from_str("checkout_worktree_dir = \"{{ pr_number }}\"\n").unwrap();
         assert_eq!(t.checkout_worktree_dir(), "{{ pr_number }}");
+    }
+
+    #[test]
+    fn tasks_parse_command_and_sequence() {
+        let src = r#"
+[defaults]
+worktree_root = "wts"
+branch_prefix = "x/"
+baseline_ref = "origin/main"
+baseline_path = "~/tmp/baseline"
+
+[tasks.api-prod-build]
+description = "prod nitro build"
+app = "api-prod"
+run = ["doppler", "run", "-c", "dev_local", "--", "bun", "nitro", "build"]
+env = { NITRO_PRESET = "node-server" }
+
+[tasks.profile-lab-os]
+steps = [
+  { task = "api-prod-build" },
+  { up = "api-prod" },
+]
+"#;
+        let c = Config::parse(src).unwrap();
+        let t = &c.tasks["api-prod-build"];
+        assert_eq!(t.app.as_deref(), Some("api-prod"));
+        assert_eq!(t.run[0], "doppler");
+        assert_eq!(t.env["NITRO_PRESET"], "node-server");
+        assert!(t.steps.is_empty());
+        let s = &c.tasks["profile-lab-os"];
+        assert_eq!(
+            s.steps,
+            vec![
+                Step::Task("api-prod-build".to_string()),
+                Step::Up("api-prod".to_string())
+            ]
+        );
+        assert!(s.run.is_empty());
+    }
+
+    #[test]
+    fn tasks_roundtrip_through_toml() {
+        let src = "[defaults]\nworktree_root = \"w\"\nbranch_prefix = \"x/\"\n\
+                   baseline_ref = \"m\"\nbaseline_path = \"b\"\n\
+                   [tasks.t]\nrun = [\"git\", \"version\"]\n\
+                   [tasks.s]\nsteps = [{ task = \"t\" }, { up = \"api\" }]\n";
+        let c = Config::parse(src).unwrap();
+        let out = toml::to_string(&c).expect("serialize config with tasks");
+        let c2 = Config::parse(&out).unwrap();
+        assert_eq!(c2.tasks["s"].steps, c.tasks["s"].steps);
+        assert_eq!(c2.tasks["t"].run, c.tasks["t"].run);
+    }
+
+    #[test]
+    fn tasks_absent_is_empty() {
+        let c = Config::parse(tests_sample()).unwrap();
+        assert!(c.tasks.is_empty());
+    }
+
+    #[test]
+    fn tasks_merge_across_layers() {
+        let base = tbl("[tasks.build]\nrun = ['git', 'version']\n[tasks.build.env]\nA = '1'\n");
+        let top = tbl("[tasks.build.env]\nA = '9'\nB = '2'\n");
+        let (m, _) = merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
+        let t = &m["tasks"]["build"];
+        assert_eq!(t["run"][0].as_str(), Some("git"));
+        assert_eq!(t["env"]["A"].as_str(), Some("9"));
+        assert_eq!(t["env"]["B"].as_str(), Some("2"));
     }
 }
