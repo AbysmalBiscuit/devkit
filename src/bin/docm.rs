@@ -217,7 +217,7 @@ fn cmd_rm(name: &str, project: bool) -> Result<()> {
 
 fn cmd_list(json: bool) -> Result<()> {
     let d = discovered()?;
-    let root = cache::docs_cache_root();
+    let root = cache::docs_root();
     if json {
         let items: Vec<serde_json::Value> = d
             .manifest
@@ -273,7 +273,7 @@ fn cmd_list(json: bool) -> Result<()> {
 
 fn cmd_sync(names: &[String]) -> Result<()> {
     let d = discovered()?;
-    let root = cache::docs_cache_root();
+    let root = cache::docs_root();
     let selected: Vec<&LibEntry> = d
         .manifest
         .libs
@@ -306,7 +306,7 @@ fn cmd_sync(names: &[String]) -> Result<()> {
 fn resolve_one(name: &str) -> Result<resolve::Resolved> {
     let d = discovered()?;
     let entry = find_entry(&d, name)?;
-    let r = resolve::resolve(&entry, &cwd()?, &cache::docs_cache_root())?;
+    let r = resolve::resolve(&entry, &cwd()?, &cache::docs_root())?;
     for w in &r.warnings {
         eprintln!("docm: {w}");
     }
@@ -348,7 +348,7 @@ fn cmd_info(name: &str, json: bool) -> Result<()> {
 
 fn cmd_prune(yes: bool) -> Result<()> {
     let d = discovered()?;
-    let root = cache::docs_cache_root();
+    let root = cache::docs_root();
     if !root.is_dir() {
         println!("cache is empty");
         return Ok(());

@@ -1,5 +1,5 @@
-//! Per-library cache: one bare (ideally blobless) clone plus detached
-//! worktrees per resolved version, all under `~/.cache/devkit/docs/<name>/`.
+//! Per-library store: one bare (ideally blobless) clone plus detached
+//! worktrees per resolved version, all under `~/.local/share/devkit/docs/<name>/`.
 
 use crate::layout::Layout;
 use crate::tags::TagPattern;
@@ -9,9 +9,34 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// `~/.cache/devkit/docs` (or `$XDG_CACHE_HOME/devkit/docs`).
-pub fn docs_cache_root() -> PathBuf {
-    devkit_common::paths::cache_dir().join("docs")
+/// `~/.local/share/devkit/docs` (or `$XDG_DATA_HOME/devkit/docs`).
+///
+/// The store lives under the XDG *data* home, not the cache home: coding
+/// agents commonly run with a blanket read-deny on `~/.cache`, and the whole
+/// point of these checkouts is that an agent can search them.
+pub fn docs_root() -> PathBuf {
+    let root = devkit_common::paths::data_dir().join("docs");
+    migrate_legacy_root(&root, &devkit_common::paths::cache_dir().join("docs"));
+    root
+}
+
+/// Move a store left behind at the pre-data-home location (`~/.cache/devkit/
+/// docs`) to `root` with one rename. Best-effort: an established root always
+/// wins, and on any failure the store is simply refetched on demand.
+fn migrate_legacy_root(root: &Path, legacy: &Path) {
+    if root.exists() || !legacy.exists() {
+        return;
+    }
+    if let Some(parent) = root.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+        && let Err(e) = std::fs::rename(legacy, root)
+    {
+        eprintln!(
+            "docm: could not move {} to {}: {e}",
+            legacy.display(),
+            root.display()
+        );
+    }
 }
 
 /// Recursive byte count; used by the doctor row.
@@ -190,5 +215,44 @@ impl LibCache {
         )
         .with_context(|| format!("removing worktree {dirname}"))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("devkit-docs-root-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn legacy_store_moves_to_new_root_once() {
+        let base = unique_tmp("migrate");
+        let legacy = base.join("cache/devkit/docs");
+        let root = base.join("share/devkit/docs");
+        std::fs::create_dir_all(legacy.join("kysely")).unwrap();
+        std::fs::write(legacy.join("kysely/meta.json"), "{}").unwrap();
+
+        migrate_legacy_root(&root, &legacy);
+        assert!(root.join("kysely/meta.json").exists());
+        assert!(!legacy.exists());
+
+        // Established root wins even if a legacy dir reappears.
+        std::fs::create_dir_all(legacy.join("other")).unwrap();
+        migrate_legacy_root(&root, &legacy);
+        assert!(root.join("kysely/meta.json").exists());
+        assert!(!root.join("other").exists());
+    }
+
+    #[test]
+    fn migration_is_a_noop_without_a_legacy_store() {
+        let base = unique_tmp("noop");
+        let root = base.join("share/devkit/docs");
+        migrate_legacy_root(&root, &base.join("cache/devkit/docs"));
+        assert!(!root.exists());
     }
 }

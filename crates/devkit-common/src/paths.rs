@@ -97,6 +97,14 @@ pub fn daemon_log() -> PathBuf {
     logs_dir().join("devkitd.log")
 }
 
+/// `$XDG_DATA_HOME/devkit` or `~/.local/share/devkit`.
+pub fn data_dir() -> PathBuf {
+    match std::env::var_os("XDG_DATA_HOME") {
+        Some(x) if !x.is_empty() => PathBuf::from(x).join("devkit"),
+        _ => home().join(".local/share/devkit"),
+    }
+}
+
 /// `$XDG_CACHE_HOME/devkit` or `~/.cache/devkit`.
 pub fn cache_dir() -> PathBuf {
     match std::env::var_os("XDG_CACHE_HOME") {

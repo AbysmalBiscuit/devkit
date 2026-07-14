@@ -5,7 +5,7 @@ use std::process::Command;
 fn concurrent_records_never_lose_rows() {
     // The test binary re-execs itself as the worker via an env switch.
     if let Ok(project) = std::env::var("DEVKIT_DOCS_TEST_RECORD") {
-        let store = RefStore::at(&devkit_docs::cache::docs_cache_root());
+        let store = RefStore::at(&devkit_docs::cache::docs_root());
         store
             .commit(|d| {
                 d.record(&project, "tokio", "1.0.0");
@@ -31,6 +31,7 @@ fn concurrent_records_never_lose_rows() {
                 // falls back to $HOME/.cache.
                 .env("HOME", &tmp)
                 .env("XDG_CACHE_HOME", &tmp)
+                .env("XDG_DATA_HOME", &tmp)
                 .env("DEVKIT_DOCS_TEST_RECORD", &project)
                 .args([
                     "--exact",

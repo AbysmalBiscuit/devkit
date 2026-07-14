@@ -173,7 +173,7 @@ devkit completions <shell>
 Version-correct local library checkouts backing the `devkit:docs` skill.
 Register a library once; every lookup resolves the version the current
 project's lockfile pins and materializes a detached worktree for it under
-`~/.cache/devkit/docs/`.
+`~/.local/share/devkit/docs/`.
 
 ```sh
 docm add tokio                    # registry lookup (crates.io/npm/PyPI)
@@ -447,7 +447,7 @@ issue completions bash > ~/.local/share/bash-completion/completions/issue
 | File-lock registry | `~/.local/state/devkit/locks.json` |
 | PR diff cache (`issue prs`) | `$XDG_CACHE_HOME/devkit/pr-status/` (or `~/.cache/devkit/pr-status/`) |
 | Docs library manifest | `~/.config/devkit/docs.toml` |
-| Docs library checkouts | `~/.cache/devkit/docs/` |
+| Docs library checkouts | `$XDG_DATA_HOME/devkit/docs/` (or `~/.local/share/devkit/docs/`) |
 
 The state home honors `$XDG_STATE_HOME` (default `~/.local/state`). A legacy
 `~/.claude/state/devkit` home is migrated automatically on first run.
