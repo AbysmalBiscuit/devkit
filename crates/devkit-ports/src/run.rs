@@ -376,6 +376,34 @@ pub fn daemon_running() -> bool {
     }
 }
 
+/// The plan's port row when it already tracks a live process for the same
+/// holder+app+role. `up` reports such a server instead of respawning it:
+/// a duplicate would fail to bind, and on the daemon path would repoint the
+/// supervision table at the doomed pid.
+fn existing_server(
+    data: &Data,
+    plan: &LaunchPlan,
+    holder: &str,
+    role: Role,
+) -> Option<ServerStatus> {
+    let e = data.entries.get(&plan.port)?;
+    if e.holder != holder || e.app != plan.app || e.role != role {
+        return None;
+    }
+    let pid = e.pid?;
+    if !registry::pid_alive(pid) {
+        return None;
+    }
+    Some(ServerStatus {
+        app: plan.app.clone(),
+        role,
+        port: plan.port,
+        pid: Some(pid),
+        logfile: e.logfile.clone(),
+        state: server_state(plan.port, Some(pid)),
+    })
+}
+
 /// Spawn (or hand to the daemon) every plan in one group and record each pid.
 /// `wait = true` blocks up to 120 s per port for readiness (the CLI path);
 /// `wait = false` returns immediately with each server in its current state.
@@ -396,8 +424,18 @@ pub fn launch(
     #[cfg(not(feature = "daemon"))]
     let _ = supervise_daemon;
 
-    let mut spawned = Vec::with_capacity(plans.len());
+    let data = registry::snapshot()?;
+    let mut existing = Vec::new();
+    let mut pending: Vec<&LaunchPlan> = Vec::new();
     for p in plans {
+        match existing_server(&data, p, holder, role) {
+            Some(s) => existing.push(s),
+            None => pending.push(p),
+        }
+    }
+
+    let mut spawned = Vec::with_capacity(pending.len());
+    for p in pending {
         let pid = supervise::spawn_detached(
             &p.argv,
             p.cwd.to_str().context("app cwd not UTF-8")?,
@@ -425,7 +463,7 @@ pub fn launch(
                 .collect();
             handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
-        Ok(spawned
+        let mut out: Vec<ServerStatus> = spawned
             .into_iter()
             .map(|(a, port, log, pid)| ServerStatus {
                 app: a.clone(),
@@ -439,9 +477,11 @@ pub fn launch(
                     ServerState::Starting
                 },
             })
-            .collect())
+            .collect();
+        out.extend(existing);
+        Ok(out)
     } else {
-        Ok(spawned
+        let mut out: Vec<ServerStatus> = spawned
             .into_iter()
             .map(|(a, port, log, pid)| ServerStatus {
                 app: a,
@@ -451,7 +491,9 @@ pub fn launch(
                 logfile: Some(log),
                 state: server_state(port, Some(pid)),
             })
-            .collect())
+            .collect();
+        out.extend(existing);
+        Ok(out)
     }
 }
 
@@ -937,5 +979,80 @@ mod tests {
         }
         let _ = registry::release("/w-launch-test", None);
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    fn entry(app: &str, holder: &str, role: Role, pid: Option<u32>) -> registry::Entry {
+        registry::Entry {
+            app: app.into(),
+            holder: holder.into(),
+            role,
+            pid,
+            logfile: None,
+            ts: registry::now(),
+        }
+    }
+
+    fn plan(app: &str, port: u16) -> LaunchPlan {
+        LaunchPlan {
+            app: app.into(),
+            port,
+            argv: vec!["true".into()],
+            cwd: PathBuf::from("."),
+            env: BTreeMap::new(),
+            log: PathBuf::from("x.log"),
+        }
+    }
+
+    /// A dead pid: spawn a trivial child and wait for it, so the pid is reaped.
+    fn dead_pid() -> u32 {
+        let mut c = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "exit"]);
+            c
+        } else {
+            std::process::Command::new("true")
+        };
+        let mut child = c.spawn().expect("spawn trivial child");
+        let pid = child.id();
+        child.wait().expect("wait trivial child");
+        pid
+    }
+
+    #[test]
+    fn existing_server_reports_live_pid() {
+        let mut data = Data::default();
+        let me = std::process::id();
+        data.entries
+            .insert(49811, entry("api", "/wt", Role::Issue, Some(me)));
+        let s = existing_server(&data, &plan("api", 49811), "/wt", Role::Issue)
+            .expect("live pid on matching row must be reported");
+        assert_eq!(s.pid, Some(me));
+        assert_eq!(s.port, 49811);
+    }
+
+    #[test]
+    fn existing_server_ignores_dead_pid() {
+        let mut data = Data::default();
+        data.entries
+            .insert(49812, entry("api", "/wt", Role::Issue, Some(dead_pid())));
+        assert!(existing_server(&data, &plan("api", 49812), "/wt", Role::Issue).is_none());
+    }
+
+    #[test]
+    fn existing_server_ignores_pidless_reservation_and_foreign_rows() {
+        let mut data = Data::default();
+        let me = std::process::id();
+        data.entries
+            .insert(49813, entry("api", "/wt", Role::Issue, None));
+        data.entries
+            .insert(49814, entry("web", "/wt", Role::Issue, Some(me)));
+        data.entries
+            .insert(49815, entry("api", "/other", Role::Issue, Some(me)));
+        data.entries
+            .insert(49816, entry("api", "/wt", Role::Baseline, Some(me)));
+        assert!(existing_server(&data, &plan("api", 49813), "/wt", Role::Issue).is_none());
+        assert!(existing_server(&data, &plan("api", 49814), "/wt", Role::Issue).is_none());
+        assert!(existing_server(&data, &plan("api", 49815), "/wt", Role::Issue).is_none());
+        assert!(existing_server(&data, &plan("api", 49816), "/wt", Role::Issue).is_none());
     }
 }
