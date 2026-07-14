@@ -103,7 +103,9 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   config --scope <app dir>`, and refuses to start a server when that resolves to
   `prd` or cannot be resolved. The guard lives in `run::assert_not_prd`, called
   from `run::launch`, so it covers `devrun`, the MCP `devrun.up`, and both the
-  daemon and direct spawn paths.
+  daemon and direct spawn paths. `run::assert_not_prd` is also called during
+  task resolution (`task::resolve_command`), so a `devrun task` command step
+  gets the same guard.
 - **`up` is idempotent for a live server.** Both `run::launch` (direct path) and
   the daemon's `Supervise` handler skip the spawn when the (holder, app, role)
   row already has a live pid, reporting the existing server instead. A duplicate

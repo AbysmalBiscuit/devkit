@@ -455,8 +455,10 @@ fn existing_server(
 }
 
 /// Spawn (or hand to the daemon) every plan in one group and record each pid.
-/// `wait = true` blocks up to 120 s per port for readiness (the CLI path);
-/// `wait = false` returns immediately with each server in its current state.
+/// A plan whose `(holder, app, role)` row already has a live pid is skipped
+/// and reported as existing rather than spawned again. `wait = true` blocks
+/// up to 120 s per port for readiness (the CLI path); `wait = false` returns
+/// immediately with each server in its current state.
 pub fn launch(
     plans: &[LaunchPlan],
     holder: &str,
