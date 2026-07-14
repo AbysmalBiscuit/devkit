@@ -1,6 +1,7 @@
 ---
 name: docs
-description: Use when the user asks how to use, configure, or debug an external library or framework (e.g. "how do I cancel a JoinHandle in tokio", "what does this godot node do"), or invokes /docs. Resolves a version-correct local checkout of the library's source and docs via the docm CLI, then searches it. First word of the argument is the library name; the rest is the question.
+description: Use when the user asks how to use, configure, or debug an external library or framework (e.g. "how do I cancel a JoinHandle in tokio", "what does this godot node do"), or invokes /docs. Resolves a version-correct local checkout of the library's source and docs via the docm CLI, then searches it.
+allowed-tools: Bash(docm list)
 ---
 
 # Library docs lookup
@@ -8,11 +9,19 @@ description: Use when the user asks how to use, configure, or debug an external 
 Answer library-usage questions from a local, version-correct checkout of the
 library's own source and docs — not from memory.
 
+Registered libraries (name, ecosystem, pinned ref, synced versions):
+
+!`docm list`
+
+If the block above shows an error or literal backtick text instead of a
+table, the command did not run — run `docm list` yourself before step 1.
+
 ## Steps
 
-1. Identify the library: the first token of the `/docs` argument, or infer it
-   from the question. `docm list` prints the registered names; match against
-   those.
+1. Identify which library the question is about and match it against the
+   registered names above. If it is not registered: `docm add <package>`
+   (registry lookup) or `docm add <git-url>`, then continue. Ask before
+   adding with `--project` (that edits the repo's devkit.toml).
 2. Run `docm info <lib>`. It prints the checkout path (version-matched to the
    current project's lockfile), the resolved version, a layout map
    (docs/src/examples dirs, doc system), and any notes. The first resolution
@@ -28,9 +37,6 @@ library's own source and docs — not from memory.
 
 - Never reuse a checkout path from memory or an earlier session — versions
   differ per project. Always re-run `docm info`.
-- If the library is not registered: `docm add <package>` (registry lookup) or
-  `docm add <git-url>`, then retry. Ask before adding with `--project`
-  (that edits the repo's devkit.toml).
 - `docm path <lib>` prints just the path when that is all you need.
 - If `docm` is not on PATH, tell the user to `cargo install --path .` in the
   devkit repo.
