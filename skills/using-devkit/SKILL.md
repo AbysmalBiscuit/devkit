@@ -1,6 +1,7 @@
 ---
 name: using-devkit
 description: Use when multiple agents or sessions share one local git checkout and edit files concurrently (coordinating who edits what without clobbering), or when running local dev servers, allocating ports, or managing issue worktrees with the devkit CLI suite — binaries `lockm`, `portm`, `devrun`, `issue`, `devkitd`.
+allowed-tools: Bash(portm --help), Bash(lockm --help), Bash(devrun --help)
 ---
 
 # Using devkit
@@ -94,7 +95,7 @@ locks.
 | `lockm acquire <paths…> [--note S] [--ttl SECS]` | Claim paths (all-or-nothing). Exit 1 if any is held. |
 | `lockm check <paths…>` | Read-only: would `acquire` succeed? No claim taken. |
 | `lockm release <paths…>` / `lockm release --all` | Drop your claims. |
-| `lockm status` / `lockm status --all` | Show held locks (this project / every project). |
+| `lockm status` / `lockm status --all` | Show held locks (this project / every project). Alias: `list`. |
 | `lockm prune` | Drop expired or dead-session locks. |
 
 Add `--json` to `acquire`/`check`/`status` for machine-readable output. Run
@@ -114,6 +115,18 @@ Add `--json` to `acquire`/`check`/`status` for machine-readable output. Run
 Each user-facing CLI also has `--help` on every subcommand. The workflow below is the
 common path; reach for the reference when you need a specific flag.
 
+### Installed command surface (live)
+
+The blocks below come from the *installed* binaries at load time, so they always
+match what actually runs — when these docs and a binary's `--help` disagree, the
+`--help` wins. (If a block still shows a raw `` !`…` `` command, run it yourself.)
+
+**portm** — !`portm --help`
+
+**lockm** — !`lockm --help`
+
+**devrun** — !`devrun --help`
+
 ## Dev-server & issue-worktree workflow
 
 `issue` and `devrun` act on the **current working directory's worktree** by default
@@ -122,17 +135,18 @@ there. So `cd` into the right worktree first. The handoffs that aren't obvious f
 per-command help:
 
 **Start an issue → run its servers.** `issue setup` prints a JSON summary; read
-`worktree` (where to `cd`) and `ports` (already reserved for you):
+`worktree` to know where to `cd`:
 
 ```sh
-issue setup --issue ENG-123 --slug fix-auth --apps web,api
-#  → {"issue":"ENG-123","worktree":"/abs/path/…","branch":"lev/eng-123-fix-auth","ports":{…}}
+issue setup ENG-123 --slug fix-auth --apps web,api
+#  → {"issue":"ENG-123","worktree":"/abs/path/…","branch":"lev/eng-123-fix-auth"}
 cd /abs/path/…                                # the printed worktree
 devrun up web api                             # name apps explicitly — a fresh worktree has no diff to auto-detect
 ```
 
-`devrun up` defaults to `--role issue` and reuses `setup`'s reserved ports. Selecting a
-webapp pulls in `api` automatically.
+`devrun up` defaults to `--role issue` and allocates ports dynamically when the
+servers start (setup reserves none). Selecting a webapp pulls in `api`
+automatically.
 
 **Stop your servers (without touching other worktrees).** `devrun down` stops servers
 *and releases their ports*, scoped to **this worktree only** by default:
