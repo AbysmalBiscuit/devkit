@@ -16,14 +16,17 @@ hand-manage ports.
 
 ```sh
 portm status                                          # table of reserved/live ports (this project)
-portm alloc --holder <path> [--role issue|baseline] <apps…>
-portm release --holder <path> [--role …]
+portm alloc <apps…> [--holder <path>] [--role issue|baseline]    # alias: reserve
+portm release [apps…] [--holder <path>] [--role …]    # no apps = everything the holder has
 portm prune                                           # drop stale reservations
 ```
 
 - The **holder is the worktree root path**, not a session token — a worktree's ports
-  auto-reclaim when its directory disappears (e.g. `git worktree remove`). Get the
-  current root with `git rev-parse --show-toplevel`.
+  auto-reclaim when its directory disappears (e.g. `git worktree remove`). `--holder`
+  defaults to the current worktree's root (`git rev-parse --show-toplevel`); pass it
+  only to act on another worktree.
+- `release` frees reservations in the registry; it does not stop processes
+  (`devrun down` stops *and* releases).
 - `portm status` shows the current project's registry (every worktree of it, since
   the holder is a path). There is no cross-project flag.
 
@@ -68,7 +71,7 @@ mutually exclusive with the column filters. `--older-than` accepts `90s`/`30m`/`
 ## `issue` — issue lifecycle
 
 ```sh
-issue setup --issue <ID> --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore]
+issue setup <ID> --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue info [selector] [--json] [--cache-only]         # one worktree's PR number + Linear id
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
@@ -92,7 +95,7 @@ allocates them dynamically when the worktree's servers start.
 
 | Flag | Meaning |
 |---|---|
-| `--issue <ID>` | Linear issue id; drives the branch name and summary. **Required.** |
+| `<ID>` / `--issue <ID>` | Linear issue id (positional or flag); drives the branch name and summary. **Required.** |
 | `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). **Required.** |
 | `--apps <a,b>` | comma-separated apps to set up; omit to use the config default. |
 | `--dry-run` | print what it would do without creating the worktree. |

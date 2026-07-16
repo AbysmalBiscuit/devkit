@@ -10,10 +10,12 @@ Maintains a shared port registry so concurrent callers never collide on port all
 
 ```
 portm status                                     # table of reserved/live ports
-portm alloc --holder <path> [--role issue|baseline] <apps…>
-portm release --holder <path> [--role …]
+portm alloc <apps…> [--holder <path>] [--role issue|baseline]    # alias: reserve
+portm release [apps…] [--holder <path>] [--role …]
 portm prune                                      # remove stale reservations
 ```
+
+`--holder` defaults to the current worktree's root (`git rev-parse --show-toplevel`). `release` with app names frees only those apps' reservations; it never signals processes (`devrun down` is stop-and-release).
 
 ### `devrun`: Supervised Dev Servers
 
@@ -55,7 +57,7 @@ devrun task [<name>] [--env K=V] [--dry-run]
 One command covering the whole issue lifecycle. Global `-C/--dir` and `--config` flags sit on `issue` itself, before the subcommand (e.g. `issue -C ~/Git/acme/monorepo status`).
 
 ```
-issue setup --issue <ID> --slug <slug> --apps <a,b> [--dry-run]
+issue setup <ID> --slug <slug> --apps <a,b> [--dry-run]     # id also accepted as --issue <ID>
 issue checkout-pr <PR_LINEAR_ID_URL> [WORKTREE_PATH] [--setup [--apps a,b]]
 issue status [ids…]                           # read-only triage table (also the bare `issue`)
 issue info [selector] [--json] [--cache-only] # one worktree's PR number + Linear id (defaults to current)
@@ -137,7 +139,7 @@ locking a file inside it.
 lockm acquire <paths…> [--as <id>] [--note <msg>] [--ttl <secs>] [--json]
 lockm release <paths…> [--as <id>]        # or: release --all
 lockm check   <paths…> [--json]           # read-only: would acquire succeed?
-lockm status  [--all] [--json]
+lockm status  [--all] [--json]            # alias: list
 lockm prune
 ```
 
@@ -167,6 +169,10 @@ devkit completions <shell>
   from the API, so issue links work without setting `LINEAR_WORKSPACE`.
 - **`doctor`**: one row per credential — source (`env`/`file`/`unset`) and live
   validity. Exits non-zero only when a credential that *is* set fails validation.
+  Also warns when the installed binaries are older than the newest devkit plugin
+  checkout in `~/.claude/plugins/cache` (skewed binaries make agents follow docs
+  for features the binaries lack), when servers run outside devrun, and when the
+  docs cache holds unreferenced checkouts.
 
 ### `docm`: Library Docs
 
