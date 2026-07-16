@@ -52,6 +52,12 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
                 Err(e) => (Response::Err(format!("{e:#}")), false),
             }
         }
+        Request::ReleasePorts { ports } => {
+            match registry::release_ports_with(&daemon.port_store(), &ports) {
+                Ok(freed) => (Response::Freed(freed), false),
+                Err(e) => (Response::Err(format!("{e:#}")), false),
+            }
+        }
         Request::Snapshot => match registry::snapshot_with(&daemon.port_store()) {
             Ok(data) => (Response::Snapshot(data), false),
             Err(e) => (Response::Err(format!("{e:#}")), false),

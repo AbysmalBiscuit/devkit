@@ -637,6 +637,22 @@ pub fn release(holder: &str, role: Option<Role>) -> Result<Vec<u16>> {
     release_with(&FlockStore::new(), holder, role)
 }
 
+/// Release exactly the listed reservations (registry-only, no signals); returns
+/// the ports freed.
+pub fn release_ports(ports: &[u16]) -> Result<Vec<u16>> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = daemon_request(crate::daemon::proto::Request::ReleasePorts {
+        ports: ports.to_vec(),
+    })? {
+        return match resp {
+            crate::daemon::proto::Response::Freed(v) => Ok(v),
+            crate::daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    release_ports_with(&FlockStore::new(), ports)
+}
+
 /// Render the port-status table shared by `portm status` and `devrun status`.
 /// `only_holder = Some(h)` limits rows to that holder; `None` shows every port.
 pub fn status_table(data: &Data, only_holder: Option<&str>) -> String {

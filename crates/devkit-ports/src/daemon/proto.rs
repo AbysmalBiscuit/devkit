@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Wire-format version. Bump on any incompatible change to these types.
-pub const PROTO: u32 = 2;
+pub const PROTO: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -29,6 +29,11 @@ pub enum Request {
     Release {
         holder: String,
         role: Option<Role>,
+    },
+    /// Release exactly these reservations without touching the processes
+    /// (registry-only; `DownPorts` is the stop-and-release variant).
+    ReleasePorts {
+        ports: Vec<u16>,
     },
     Snapshot,
     Prune,

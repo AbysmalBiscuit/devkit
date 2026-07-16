@@ -49,11 +49,15 @@ enum Cmd {
         force: bool,
     },
     /// Show held locks for this project (or every project with --all).
+    #[command(visible_alias = "list")]
     Status {
         #[arg(long)]
         all: bool,
         #[arg(long)]
         json: bool,
+        /// Not accepted — `status` lists everything; `check <paths…>` tests paths.
+        #[arg(hide = true)]
+        paths: Vec<String>,
     },
     /// Drop expired/dead locks.
     Prune,
@@ -221,7 +225,15 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Status { all, json } => {
+        Cmd::Status { all, json, paths } => {
+            if !paths.is_empty() {
+                eprintln!(
+                    "status takes no paths — to test whether specific paths are free, \
+                     use `lockm check {}`",
+                    paths.join(" ")
+                );
+                std::process::exit(2);
+            }
             let locks = devkit_locks::status(all)?;
             if json {
                 println!("{}", serde_json::to_string(&status_json(&locks))?);

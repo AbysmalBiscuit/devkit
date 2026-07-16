@@ -59,8 +59,15 @@ struct Cli {
 enum Cmd {
     /// Prepare an issue worktree: branch, per-app setup commands, reserved ports.
     Setup {
+        /// Linear issue id (equivalent to --issue).
+        #[arg(
+            value_name = "ISSUE",
+            required_unless_present = "issue",
+            conflicts_with = "issue"
+        )]
+        issue_pos: Option<String>,
         #[arg(long)]
-        issue: String,
+        issue: Option<String>,
         #[arg(long)]
         slug: String,
         #[arg(long, value_delimiter = ',')]
@@ -189,13 +196,15 @@ fn main() -> Result<()> {
     let _timing = devkit_common::timing::init(timing_mode(cli.timing), cli.timing_log.clone());
     match cli.cmd {
         Some(Cmd::Setup {
+            issue_pos,
             issue,
             slug,
             apps,
             dry_run,
             no_gitignore,
         }) => setup::run(setup::SetupArgs {
-            issue,
+            // clap guarantees exactly one of the two is present
+            issue: issue_pos.or(issue).expect("issue id"),
             slug,
             apps,
             dry_run,
