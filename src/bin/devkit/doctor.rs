@@ -99,6 +99,53 @@ fn docs_cache_check() -> Check {
     }
 }
 
+fn parse_semver(v: &str) -> Option<(u64, u64, u64)> {
+    let mut it = v.split('.').map(|p| p.parse::<u64>().ok());
+    match (it.next(), it.next(), it.next(), it.next()) {
+        (Some(Some(a)), Some(Some(b)), Some(Some(c)), None) => Some((a, b, c)),
+        _ => None,
+    }
+}
+
+/// Compare the running binary's version against the newest plugin checkout in
+/// the coding-agent plugin cache. When the binaries are older, agents read
+/// docs describing features the installed binaries lack. Fail-soft: anything
+/// unparseable (or no plugin cache) is Ok, never a warning.
+fn version_skew_check(binary: &str, plugin: Option<&str>) -> Check {
+    let Some(p) = plugin else {
+        return Check::Ok(format!("{binary} (no plugin cache)"));
+    };
+    match (parse_semver(binary), parse_semver(p)) {
+        (Some(b), Some(pv)) if b < pv => Check::Warn(format!(
+            "binaries {binary} older than plugin {p} — \
+             run `cargo install --path .` in the plugin checkout"
+        )),
+        _ => Check::Ok(format!("{binary} (plugin cache {p})")),
+    }
+}
+
+/// Newest semver-named subdirectory of a plugin cache dir (`0.9.1`, `0.10.0`, …).
+fn newest_plugin_version(dir: &std::path::Path) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            parse_semver(&name).map(|v| (v, name))
+        })
+        .max()
+        .map(|(_, name)| name)
+}
+
+/// The devkit plugin's checkout cache in the coding-agent home
+/// (`~/.claude/plugins/cache/devkit/devkit/<version>/`).
+fn plugin_cache_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|s| !s.is_empty()))?;
+    Some(std::path::PathBuf::from(home).join(".claude/plugins/cache/devkit/devkit"))
+}
+
 fn gather(steps: &Steps) -> Vec<Row> {
     vec![
         Row {
@@ -124,6 +171,16 @@ fn gather(steps: &Steps) -> Vec<Row> {
                 Some(v) => steps.during("Validating Slack token…", || validate_slack(&v)),
                 None => Check::Unset(HINT_SLACK),
             },
+        },
+        Row {
+            key: "binary_version",
+            source: Source::Unset,
+            check: version_skew_check(
+                env!("CARGO_PKG_VERSION"),
+                plugin_cache_dir()
+                    .and_then(|d| newest_plugin_version(&d))
+                    .as_deref(),
+            ),
         },
         Row {
             key: "devrun_strays",
@@ -223,6 +280,51 @@ mod tests {
     fn stray_check_severity_by_count() {
         assert!(matches!(stray_check(0), Check::Ok(_)));
         assert!(matches!(stray_check(3), Check::Warn(_)));
+    }
+
+    #[test]
+    fn version_skew_warns_only_when_binary_is_older() {
+        assert!(matches!(
+            version_skew_check("0.10.0", Some("0.11.0")),
+            Check::Warn(_)
+        ));
+        assert!(matches!(
+            version_skew_check("0.11.0", Some("0.11.0")),
+            Check::Ok(_)
+        ));
+        assert!(matches!(
+            version_skew_check("0.12.0", Some("0.11.0")),
+            Check::Ok(_)
+        ));
+        // fail-soft: no plugin cache or unparseable versions never warn
+        assert!(matches!(version_skew_check("0.11.0", None), Check::Ok(_)));
+        assert!(matches!(
+            version_skew_check("0.11.0", Some("garbage")),
+            Check::Ok(_)
+        ));
+    }
+
+    #[test]
+    fn skew_warning_names_both_versions() {
+        let Check::Warn(msg) = version_skew_check("0.10.0", Some("0.11.0")) else {
+            panic!("older binary must warn");
+        };
+        assert!(msg.contains("0.10.0") && msg.contains("0.11.0"), "{msg}");
+    }
+
+    #[test]
+    fn newest_plugin_version_compares_numerically() {
+        let dir = tempfile::tempdir().unwrap();
+        for v in ["0.9.1", "0.10.0", "not-a-version"] {
+            std::fs::create_dir(dir.path().join(v)).unwrap();
+        }
+        assert_eq!(
+            newest_plugin_version(dir.path()).as_deref(),
+            Some("0.10.0"),
+            "0.10.0 > 0.9.1 numerically (lexical order would pick 0.9.1)"
+        );
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(newest_plugin_version(empty.path()), None);
     }
 
     #[test]
