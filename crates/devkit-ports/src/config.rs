@@ -13,6 +13,8 @@ pub struct Config {
     #[serde(default)]
     pub daemon: DaemonConfig,
     #[serde(default)]
+    pub linear: LinearConfig,
+    #[serde(default)]
     pub templates: Templates,
     #[serde(default)]
     pub tasks: HashMap<String, TaskConfig>,
@@ -68,6 +70,14 @@ impl Default for DaemonConfig {
             health_fail_threshold: 3,
         }
     }
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LinearConfig {
+    /// Query Linear for the issues linked to each PR in `issue prs` (one
+    /// extra batched round trip per run). Off by default.
+    pub resolve_pr_links: bool,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -510,6 +520,13 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             c.apps["api"].url_env.as_deref(),
             Some("FOUNDRY_API_BASE_URL")
         );
+    }
+    #[test]
+    fn linear_section_parses_and_defaults_off() {
+        let c = Config::parse(&format!("{SAMPLE}\n[linear]\nresolve_pr_links = true\n")).unwrap();
+        assert!(c.linear.resolve_pr_links);
+        let bare = Config::parse(SAMPLE).unwrap();
+        assert!(!bare.linear.resolve_pr_links);
     }
     #[test]
     fn parses_app_setup_commands() {
