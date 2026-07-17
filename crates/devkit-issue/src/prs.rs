@@ -165,6 +165,7 @@ struct CommitsConn {
 struct PrNode {
     number: u64,
     url: String,
+    title: String,
     #[serde(rename = "headRefName")]
     head_ref_name: String,
     #[serde(rename = "isDraft")]
@@ -202,9 +203,12 @@ const FAIL: [&str; 4] = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"];
 #[allow(dead_code)]
 const RUNNING: [&str; 3] = ["IN_PROGRESS", "QUEUED", "PENDING"];
 
-/// The issue id a PR addresses, taken from its branch (head) ref and uppercased.
-fn issue_of(head: &str) -> String {
+/// The issue id a PR addresses, uppercased. Taken from the branch (head) ref —
+/// the convention for our own PRs — falling back to the PR title, where other
+/// people's PRs carry the id (e.g. `feat: … [SWE-123]`).
+fn issue_of(head: &str, title: &str) -> String {
     devkit_common::worktree::find_id(head)
+        .or_else(|| devkit_common::worktree::find_id(title))
         .map(|s| s.to_uppercase())
         .unwrap_or_else(|| "-".to_string())
 }
@@ -526,7 +530,7 @@ fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
 
 // GraphQL fetch -----------------------------------------------------------------
 
-const PR_FIELDS: &str = "number url headRefName isDraft reviewDecision mergeable \
+const PR_FIELDS: &str = "number url title headRefName isDraft reviewDecision mergeable \
 author { login } \
 commits(last: 1) { nodes { commit { statusCheckRollup { state \
 contexts(first: 100) { nodes { \
@@ -560,7 +564,7 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
             .map(|pr| MinePrView {
                 number: pr.number,
                 url: pr.url.clone(),
-                issue_id: issue_of(&pr.head_ref_name),
+                issue_id: issue_of(&pr.head_ref_name, &pr.title),
                 review_state: review_text(pr).to_string(),
                 check_state: checks_cell(&check_verdict(pr, ignored)),
                 action: mine_action(pr, ignored),
@@ -587,7 +591,7 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
                 ReviewPrView {
                     number: pr.number,
                     url: pr.url.clone(),
-                    issue_id: issue_of(&pr.head_ref_name),
+                    issue_id: issue_of(&pr.head_ref_name, &pr.title),
                     author: pr.author.login.clone(),
                     my_vote,
                     action,
@@ -706,7 +710,8 @@ mod tests {
                 "reviewRequests": {"nodes": []} }
             ]},
             "reviewRequested": { "nodes": [
-              { "number": 20, "url": "u20", "headRefName": "bob/eng-2-bar",
+              { "number": 20, "url": "u20", "headRefName": "igork/ff-b01-thing",
+                "title": "feat(api): flag-gate thing [SWE-2]",
                 "isDraft": false, "reviewDecision": "REVIEW_REQUIRED", "mergeable": "MERGEABLE",
                 "author": {"login": "bob"},
                 "commits": {"nodes": []},
@@ -726,7 +731,7 @@ mod tests {
         assert_eq!(report.mine[0].action, "MERGE");
         assert_eq!(report.reviews.len(), 1);
         assert_eq!(report.reviews[0].number, 20);
-        assert_eq!(report.reviews[0].issue_id, "ENG-2");
+        assert_eq!(report.reviews[0].issue_id, "SWE-2");
         assert_eq!(report.reviews[0].my_vote, "-");
         assert_eq!(report.reviews[0].action, "REVIEW NEEDED");
     }
@@ -1243,12 +1248,26 @@ mod tests {
     }
     #[test]
     fn issue_of_finds_swe() {
-        assert_eq!(issue_of("lev/swe-123-fix"), "SWE-123");
-        assert_eq!(issue_of("main"), "-");
+        assert_eq!(issue_of("lev/swe-123-fix", ""), "SWE-123");
+        assert_eq!(issue_of("main", ""), "-");
     }
     #[test]
     fn issue_of_finds_non_swe_prefix() {
-        assert_eq!(issue_of("lev/eng-1234-fix"), "ENG-1234");
-        assert_eq!(issue_of("feature/abc-9-thing"), "ABC-9");
+        assert_eq!(issue_of("lev/eng-1234-fix", ""), "ENG-1234");
+        assert_eq!(issue_of("feature/abc-9-thing", ""), "ABC-9");
+    }
+    #[test]
+    fn issue_of_falls_back_to_title() {
+        // Other people's branches don't carry the id; their PR titles do.
+        assert_eq!(
+            issue_of("igork/ff-b01-thing", "feat(api): flag-gate thing [SWE-10412]"),
+            "SWE-10412"
+        );
+        // The branch wins when it has an id, even if the title also carries one.
+        assert_eq!(
+            issue_of("lev/eng-1-fix", "chore: touches SWE-999 too"),
+            "ENG-1"
+        );
+        assert_eq!(issue_of("main", "no id anywhere"), "-");
     }
 }
