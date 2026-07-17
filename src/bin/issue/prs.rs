@@ -201,7 +201,7 @@ fn final_lines(
         let prev = diff.get("reviews").cloned().unwrap_or_default();
         out.push(String::new());
         out.push(ui::bold_cyan("PRs AWAITING MY REVIEW"));
-        let (body, cur) = reviews_table_build(&report.reviews, &prev);
+        let (body, cur) = reviews_table_build(&report.reviews, url_key, &prev);
         out.extend(body.lines().map(String::from));
         diff.insert("reviews".to_string(), cur);
     }
@@ -218,13 +218,14 @@ fn final_lines(
 /// next snapshot. Pure — see [`mine_table_build`].
 fn reviews_table_build(
     rows: &[ReviewPrView],
+    url_key: Option<&str>,
     prev: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> (String, BTreeMap<String, BTreeMap<String, String>>) {
     let mut cur = BTreeMap::new();
     if rows.is_empty() {
         return (format!("  {}", ui::dim("(none)")), cur);
     }
-    let mut t = ui::table(&["PR", "AUTHOR", "MY VOTE", "ACTION"]);
+    let mut t = ui::table(&["PR", "ISSUE", "AUTHOR", "MY VOTE", "ACTION"]);
     for pr in rows {
         let vote = pr.my_vote.clone();
         let action = pr.action.clone();
@@ -232,6 +233,7 @@ fn reviews_table_build(
         let g = |k: &str| was.and_then(|m| m.get(k)).map(|s| s.as_str());
         t.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
+            issue_cell(&pr.issue_id, url_key),
             pr.author.clone(),
             diff_cell(g("vote"), &vote, |s| s.to_string()),
             diff_cell(g("action"), &action, |s| paint_action(&action, s)),
@@ -271,7 +273,7 @@ fn stale_body(
     if want_reviews {
         out.push(String::new());
         out.push(paint.dim("PRs AWAITING MY REVIEW"));
-        let (body, _) = reviews_table_build(prev_reviews, &empty);
+        let (body, _) = reviews_table_build(prev_reviews, None, &empty);
         out.extend(body.lines().map(|l| paint.dim_all(l)));
     }
     if (want_mine && !prev_mine.is_empty()) || (want_reviews && !prev_reviews.is_empty()) {
@@ -450,10 +452,19 @@ mod tests {
         ReviewPrView {
             number: n,
             url: format!("https://x/{n}"),
+            issue_id: "ENG-9".into(),
             author: "alice".into(),
             my_vote: "-".into(),
             action: action.into(),
         }
+    }
+
+    #[test]
+    fn reviews_table_build_renders_issue_column() {
+        let (body, _) =
+            reviews_table_build(&[review_view(9, "REVIEW NEEDED")], Some("acme"), &BTreeMap::new());
+        assert!(body.contains("ISSUE"), "header missing ISSUE: {body}");
+        assert!(body.contains("ENG-9"), "row missing issue id: {body}");
     }
 
     #[test]
@@ -541,6 +552,7 @@ mod tests {
             reviews: vec![devkit_issue::prs::ReviewPrView {
                 number: 9,
                 url: "https://x/9".into(),
+                issue_id: "ENG-9".into(),
                 author: "alice".into(),
                 my_vote: "-".into(),
                 action: "REVIEW NEEDED".into(),

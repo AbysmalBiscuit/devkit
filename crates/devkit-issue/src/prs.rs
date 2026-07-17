@@ -587,6 +587,7 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
                 ReviewPrView {
                     number: pr.number,
                     url: pr.url.clone(),
+                    issue_id: issue_of(&pr.head_ref_name),
                     author: pr.author.login.clone(),
                     my_vote,
                     action,
@@ -623,6 +624,8 @@ pub struct MinePrView {
 pub struct ReviewPrView {
     pub number: u64,
     pub url: String,
+    #[serde(default)]
+    pub issue_id: String,
     pub author: String,
     pub my_vote: String,
     pub action: String,
@@ -703,7 +706,7 @@ mod tests {
                 "reviewRequests": {"nodes": []} }
             ]},
             "reviewRequested": { "nodes": [
-              { "number": 20, "url": "u20", "headRefName": "x",
+              { "number": 20, "url": "u20", "headRefName": "bob/eng-2-bar",
                 "isDraft": false, "reviewDecision": "REVIEW_REQUIRED", "mergeable": "MERGEABLE",
                 "author": {"login": "bob"},
                 "commits": {"nodes": []},
@@ -723,6 +726,7 @@ mod tests {
         assert_eq!(report.mine[0].action, "MERGE");
         assert_eq!(report.reviews.len(), 1);
         assert_eq!(report.reviews[0].number, 20);
+        assert_eq!(report.reviews[0].issue_id, "ENG-2");
         assert_eq!(report.reviews[0].my_vote, "-");
         assert_eq!(report.reviews[0].action, "REVIEW NEEDED");
     }
