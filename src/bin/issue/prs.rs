@@ -296,6 +296,7 @@ fn fetch_report(
     mine: bool,
     reviews: bool,
     ignored_checks: &[String],
+    resolve_pr_links: bool,
 ) -> Result<(Option<String>, devkit_issue::prs::PrsReport)> {
     enum Update {
         Fetched(Result<devkit_issue::prs::PrsReport>),
@@ -318,6 +319,7 @@ fn fetch_report(
                     reviews,
                     Some(resolved),
                     ignored_checks,
+                    resolve_pr_links,
                 )));
             });
         }
@@ -403,7 +405,7 @@ pub fn run(
     };
     let _fetch_spin = live.spinner(&spin_msg);
 
-    let fetched = fetch_report(&resolved, mine, reviews, &ignored_checks);
+    let fetched = fetch_report(&resolved, mine, reviews, &ignored_checks, false);
     // Clear the stale block (and finish the spinner) before any fetch error
     // renders, so the anyhow report is not printed under a half-drawn region.
     live.clear();

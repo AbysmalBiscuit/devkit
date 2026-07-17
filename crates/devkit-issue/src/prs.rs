@@ -2,7 +2,7 @@ use anyhow::Result;
 use devkit_common::cmd::gh_json;
 use devkit_common::github;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 // GraphQL response shapes ---------------------------------------------------------
 
@@ -213,6 +213,31 @@ fn issue_ids_of(head: &str, title: &str) -> Vec<String> {
         .map(|s| s.to_uppercase())
         .into_iter()
         .collect()
+}
+
+/// Merge Linear-linked ids into the text-derived ids: union, text id first,
+/// deduped case-insensitively (text ids are uppercased; Linear identifiers
+/// are canonical uppercase).
+fn merge_linked(ids: &mut Vec<String>, linked: &[String]) {
+    for id in linked {
+        if !ids.iter().any(|have| have.eq_ignore_ascii_case(id)) {
+            ids.push(id.clone());
+        }
+    }
+}
+
+/// Union the Linear-linked issue ids (url → ids) into every view row.
+fn apply_linked(report: &mut PrsReport, linked: &HashMap<String, Vec<String>>) {
+    for pr in &mut report.mine {
+        if let Some(ids) = linked.get(&pr.url) {
+            merge_linked(&mut pr.issue_ids, ids);
+        }
+    }
+    for pr in &mut report.reviews {
+        if let Some(ids) = linked.get(&pr.url) {
+            merge_linked(&mut pr.issue_ids, ids);
+        }
+    }
 }
 
 fn checks_text(rollup: Option<&str>) -> &'static str {
@@ -669,14 +694,19 @@ fn fetch_graphql(query: &str, root: &str) -> Result<GqlResp> {
     gh_json(&["api", "graphql", "-f", &arg], root)
 }
 
-/// Fetch and classify the caller's PRs in a single GraphQL round-trip. Neither
-/// flag set ⇒ both groups. Stateless: no diff cache is read or written.
+/// Fetch and classify the caller's PRs in a single GraphQL round-trip.
+/// Neither flag set ⇒ both groups. Stateless: no diff cache is read or
+/// written. With `resolve_pr_links`, one extra batched Linear round trip
+/// (after the GitHub fetch — it needs the PR URLs) unions Linear-linked
+/// issue ids into each row; fail-soft, so a missing LINEAR_API_KEY or a
+/// Linear error leaves the text-derived ids as-is.
 pub fn gather(
     root: &str,
     mine: bool,
     reviews: bool,
     repo: Option<&str>,
     ignored_checks: &[String],
+    resolve_pr_links: bool,
 ) -> Result<PrsReport> {
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
@@ -686,7 +716,19 @@ pub fn gather(
     };
     let query = build_query(&repo);
     let resp = fetch_graphql(&query, root)?;
-    Ok(classify(resp.data, want_mine, want_reviews, ignored_checks))
+    let mut report = classify(resp.data, want_mine, want_reviews, ignored_checks);
+    if resolve_pr_links {
+        let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
+        let urls: Vec<String> = report
+            .mine
+            .iter()
+            .map(|pr| pr.url.clone())
+            .chain(report.reviews.iter().map(|pr| pr.url.clone()))
+            .collect();
+        let linked = devkit_common::linear::issues_for_prs(&urls, key.as_deref());
+        apply_linked(&mut report, &linked);
+    }
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -1273,5 +1315,50 @@ mod tests {
             vec!["ENG-1"]
         );
         assert!(issue_ids_of("main", "no id anywhere").is_empty());
+    }
+
+    #[test]
+    fn merge_linked_unions_and_dedups() {
+        let mut ids = vec!["ENG-123".to_string()];
+        merge_linked(&mut ids, &["eng-123".to_string(), "SWE-6".to_string()]);
+        assert_eq!(ids, vec!["ENG-123", "SWE-6"]);
+        let mut empty: Vec<String> = vec![];
+        merge_linked(&mut empty, &["SWE-7".to_string()]);
+        assert_eq!(empty, vec!["SWE-7"]);
+        let mut untouched = vec!["ENG-1".to_string()];
+        merge_linked(&mut untouched, &[]);
+        assert_eq!(untouched, vec!["ENG-1"]);
+    }
+
+    #[test]
+    fn apply_linked_hits_both_sections_by_url() {
+        let mut report = PrsReport {
+            mine: vec![MinePrView {
+                number: 1,
+                url: "u1".into(),
+                issue_ids: vec!["ENG-1".into()],
+                review_state: "-".into(),
+                check_state: "ok".into(),
+                action: "MERGE".into(),
+            }],
+            reviews: vec![ReviewPrView {
+                number: 2,
+                url: "u2".into(),
+                issue_ids: vec![],
+                author: "a".into(),
+                my_vote: "-".into(),
+                action: "REVIEW NEEDED".into(),
+            }],
+        };
+        let linked = HashMap::from([
+            (
+                "u1".to_string(),
+                vec!["ENG-1".to_string(), "SWE-6".to_string()],
+            ),
+            ("u2".to_string(), vec!["SWE-7".to_string()]),
+        ]);
+        apply_linked(&mut report, &linked);
+        assert_eq!(report.mine[0].issue_ids, vec!["ENG-1", "SWE-6"]);
+        assert_eq!(report.reviews[0].issue_ids, vec!["SWE-7"]);
     }
 }

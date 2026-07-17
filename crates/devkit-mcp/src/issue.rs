@@ -82,6 +82,13 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let ignored_checks = devkit_ports::load::load(None, std::path::Path::new(&root))
         .map(|l| l.config.defaults.ignored_checks)
         .unwrap_or_default();
-    let report = prs::gather(&root, a.mine, a.reviews, a.repo.as_deref(), &ignored_checks)?;
+    let report = prs::gather(
+        &root,
+        a.mine,
+        a.reviews,
+        a.repo.as_deref(),
+        &ignored_checks,
+        false,
+    )?;
     Ok(serde_json::to_value(report)?)
 }
