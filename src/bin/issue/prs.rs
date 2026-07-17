@@ -360,11 +360,17 @@ pub fn run(
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
 
-    // Check-name globs to discount from the CHECK verdict. Absent or unreadable
-    // config simply means no checks are ignored — triage still works repo-wide.
-    let ignored_checks = devkit_ports::load::load(config.as_deref().map(Path::new), Path::new("."))
-        .map(|l| l.config.defaults.ignored_checks)
+    // Check-name globs to discount from the CHECK verdict, and the Linear
+    // PR-link opt-in. Absent or unreadable config means no checks are ignored
+    // and no Linear lookup — triage still works repo-wide.
+    let loaded = devkit_ports::load::load(config.as_deref().map(Path::new), Path::new(".")).ok();
+    let ignored_checks = loaded
+        .as_ref()
+        .map(|l| l.config.defaults.ignored_checks.clone())
         .unwrap_or_default();
+    let resolve_pr_links = loaded
+        .as_ref()
+        .is_some_and(|l| l.config.linear.resolve_pr_links);
 
     // Resolve the repo up front: the snapshot cache is keyed by it and the
     // stale table must render before the fetch starts.
@@ -405,7 +411,7 @@ pub fn run(
     };
     let _fetch_spin = live.spinner(&spin_msg);
 
-    let fetched = fetch_report(&resolved, mine, reviews, &ignored_checks, false);
+    let fetched = fetch_report(&resolved, mine, reviews, &ignored_checks, resolve_pr_links);
     // Clear the stale block (and finish the spinner) before any fetch error
     // renders, so the anyhow report is not printed under a half-drawn region.
     live.clear();

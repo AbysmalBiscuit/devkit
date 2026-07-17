@@ -248,6 +248,26 @@ Or per-checkout, add the same table to that checkout's own `devkit.toml`; only t
 `[harness]` table is read, so it may be an otherwise-empty file or a full project
 config. Or skip both files and set `DEVKIT_ENFORCE_WRITES=1` in the environment.
 
+### `[linear]`
+
+Opt-in Linear enrichment for `issue prs`.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `resolve_pr_links` | bool | `false` | When `true`, `issue prs` asks Linear which issues each open PR is linked to and shows the union of the text-derived id and every linked id in the ISSUE column, deduplicated (text id first). |
+
+The lookup authenticates with `LINEAR_API_KEY` (environment or
+`~/.config/devkit/secrets.toml`); **no token lives in this table**. It costs
+one extra batched round trip per 25 PRs, after the GitHub fetch. Fail-soft:
+with no key, or on any Linear error, the column falls back to the
+text-derived id — `issue prs` never fails because of Linear. The MCP
+`issue.prs` action honors the same flag.
+
+```toml
+[linear]
+resolve_pr_links = true
+```
+
 ### `[people.<alias>]`
 
 Teammate handle aliases used by `issue review` (`--to <alias>`). The alias maps
