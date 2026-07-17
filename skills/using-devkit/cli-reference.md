@@ -129,7 +129,8 @@ object for an agent to forward.
   per-worktree cache at `<worktree>/.devkit/pr.json` and Linear renders as `—`. A live
   run writes the PR through to that cache, which `git worktree remove` deletes with the
   worktree.
-- **`end`** — removes FINISHED worktrees. `--pr-only` ignores the Linear gate;
+- **`end`** — removes FINISHED worktrees. `--pr-only` ignores the Linear and issue-id
+  gates (finished = PR merged + clean, even without a Linear-style branch name);
   `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree
   guard; `-y` skips confirmation.
 - **`prs`** — GitHub PR triage of your open PRs and PRs awaiting your review.

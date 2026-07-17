@@ -183,7 +183,7 @@ pub fn run(
             steps.during_result("Fetching PR + Linear status…", || gather(start, ids))?;
         render(&report, false);
         if pr_only {
-            println!("--pr-only: Linear 'Done' gate skipped.");
+            println!("--pr-only: Linear 'Done' and issue-id gates skipped.");
         }
         let t: Vec<IssueWorktree> = report
             .worktrees

@@ -300,9 +300,10 @@ pub fn assemble(
 }
 
 /// None when finished; otherwise a short reason it is not. With `pr_only`, the
-/// Linear gate is dropped (finished = PR merged + clean).
+/// Linear and issue-id gates are dropped (finished = PR merged + clean), so
+/// repos whose branches carry no Linear-style issue id still qualify.
 pub fn reason_not_finished(wt: &IssueWorktree, has_key: bool, pr_only: bool) -> Option<String> {
-    if wt.issue_id == "UNKNOWN" {
+    if !pr_only && wt.issue_id == "UNKNOWN" {
         return Some("not an issue worktree".into());
     }
     let mut bits: Vec<String> = Vec::new();
@@ -567,6 +568,21 @@ mod tests {
     fn pr_only_ignores_linear() {
         // No Linear entry, no key, but pr_only drops the Linear gate.
         assert!(reason_not_finished(&wt("ENG-1", "MERGED", false, None), false, true).is_none());
+    }
+
+    #[test]
+    fn pr_only_allows_unknown_issue_id() {
+        // A repo without Linear-style branch names has UNKNOWN issue ids; with
+        // pr_only a merged + clean worktree is still finished.
+        assert!(reason_not_finished(&wt("UNKNOWN", "MERGED", false, None), false, true).is_none());
+    }
+
+    #[test]
+    fn pr_only_unknown_still_gated_on_pr() {
+        assert_eq!(
+            reason_not_finished(&wt("UNKNOWN", "NO_PR", false, None), false, true).as_deref(),
+            Some("no PR")
+        );
     }
 
     #[test]
