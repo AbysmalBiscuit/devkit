@@ -36,18 +36,23 @@ fn diff_cell(prev: Option<&str>, cur: &str, paint: impl Fn(&str) -> String) -> S
     }
 }
 
-fn issue_cell(issue_id: &str, url_key: Option<&str>) -> String {
-    if issue_id == "-" {
+/// The ISSUE column cell: every id as a Linear link (plain text without a
+/// workspace url key), space-joined; dim `-` when no id resolved.
+fn issue_cell(issue_ids: &[String], url_key: Option<&str>) -> String {
+    if issue_ids.is_empty() {
         return ui::dim("-");
     }
-    let linked = match url_key {
-        Some(k) => ui::link(
-            issue_id,
-            &format!("https://linear.app/{k}/issue/{issue_id}"),
-        ),
-        None => issue_id.to_string(),
-    };
-    ui::cyan(&linked)
+    let cells: Vec<String> = issue_ids
+        .iter()
+        .map(|id| {
+            let linked = match url_key {
+                Some(k) => ui::link(id, &format!("https://linear.app/{k}/issue/{id}")),
+                None => id.to_string(),
+            };
+            ui::cyan(&linked)
+        })
+        .collect();
+    cells.join(" ")
 }
 
 // snapshot cache -----------------------------------------------------------------
@@ -144,7 +149,7 @@ fn mine_table_build(
         let g = |k: &str| was.and_then(|m| m.get(k)).map(|s| s.as_str());
         t.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
-            issue_cell(&pr.issue_id, url_key),
+            issue_cell(&pr.issue_ids, url_key),
             diff_cell(g("review"), &review, |s| s.to_string()),
             diff_cell(g("check"), &check, |s| s.to_string()),
             diff_cell(g("action"), &action, |s| paint_action(&action, s)),
@@ -233,7 +238,7 @@ fn reviews_table_build(
         let g = |k: &str| was.and_then(|m| m.get(k)).map(|s| s.as_str());
         t.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
-            issue_cell(&pr.issue_id, url_key),
+            issue_cell(&pr.issue_ids, url_key),
             pr.author.clone(),
             diff_cell(g("vote"), &vote, |s| s.to_string()),
             diff_cell(g("action"), &action, |s| paint_action(&action, s)),
@@ -433,7 +438,7 @@ mod tests {
         MinePrView {
             number: n,
             url: format!("https://x/{n}"),
-            issue_id: "-".into(),
+            issue_ids: vec![],
             review_state: "none".into(),
             check_state: "ok".into(),
             action: action.into(),
@@ -452,7 +457,7 @@ mod tests {
         ReviewPrView {
             number: n,
             url: format!("https://x/{n}"),
-            issue_id: "ENG-9".into(),
+            issue_ids: vec!["ENG-9".into()],
             author: "alice".into(),
             my_vote: "-".into(),
             action: action.into(),
@@ -461,8 +466,11 @@ mod tests {
 
     #[test]
     fn reviews_table_build_renders_issue_column() {
-        let (body, _) =
-            reviews_table_build(&[review_view(9, "REVIEW NEEDED")], Some("acme"), &BTreeMap::new());
+        let (body, _) = reviews_table_build(
+            &[review_view(9, "REVIEW NEEDED")],
+            Some("acme"),
+            &BTreeMap::new(),
+        );
         assert!(body.contains("ISSUE"), "header missing ISSUE: {body}");
         assert!(body.contains("ENG-9"), "row missing issue id: {body}");
     }
@@ -505,6 +513,23 @@ mod tests {
     }
 
     #[test]
+    fn issue_cell_joins_multiple_ids() {
+        assert_eq!(issue_cell(&[], None), ui::dim("-"));
+        let cell = issue_cell(&["ENG-1".into(), "SWE-6".into()], None);
+        assert!(cell.contains("ENG-1") && cell.contains("SWE-6"), "{cell}");
+    }
+
+    // A pre-issue_ids snapshot (rows carry `issue_id`) still whole-struct
+    // parses; the missing `issue_ids` reads as empty for one run.
+    #[test]
+    fn old_issue_id_snapshot_reads_with_empty_ids() {
+        let old = r#"{"mine":[{"number":1,"url":"u","issue_id":"ENG-1","review_state":"approved","check_state":"ok","action":"MERGE"}],"reviews":[],"diff":{}}"#;
+        let snap: Snapshot = serde_json::from_str(old).unwrap();
+        assert_eq!(snap.mine.len(), 1);
+        assert!(snap.mine[0].issue_ids.is_empty());
+    }
+
+    #[test]
     fn diff_cell_shows_change() {
         // Tests are not a tty, so colour/strike helpers pass text through and the
         // change reads as a plain `old → new`.
@@ -520,7 +545,7 @@ mod tests {
             mine: vec![devkit_issue::prs::MinePrView {
                 number: 1,
                 url: "https://x/1".into(),
-                issue_id: "ENG-1".into(),
+                issue_ids: vec!["ENG-1".into()],
                 review_state: "approved".into(),
                 check_state: "ok".into(),
                 action: "MERGE".into(),
@@ -542,7 +567,7 @@ mod tests {
         let prev_mine = vec![devkit_issue::prs::MinePrView {
             number: 7,
             url: "https://x/7".into(),
-            issue_id: "ENG-7".into(),
+            issue_ids: vec!["ENG-7".into()],
             review_state: "pending".into(),
             check_state: "ok".into(),
             action: "awaiting review".into(),
@@ -552,7 +577,7 @@ mod tests {
             reviews: vec![devkit_issue::prs::ReviewPrView {
                 number: 9,
                 url: "https://x/9".into(),
-                issue_id: "ENG-9".into(),
+                issue_ids: vec!["ENG-9".into()],
                 author: "alice".into(),
                 my_vote: "-".into(),
                 action: "REVIEW NEEDED".into(),

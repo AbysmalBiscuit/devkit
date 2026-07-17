@@ -203,14 +203,16 @@ const FAIL: [&str; 4] = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"];
 #[allow(dead_code)]
 const RUNNING: [&str; 3] = ["IN_PROGRESS", "QUEUED", "PENDING"];
 
-/// The issue id a PR addresses, uppercased. Taken from the branch (head) ref —
-/// the convention for our own PRs — falling back to the PR title, where other
-/// people's PRs carry the id (e.g. `feat: … [SWE-123]`).
-fn issue_of(head: &str, title: &str) -> String {
+/// The issue ids a PR addresses, uppercased — zero or one from text. Taken
+/// from the branch (head) ref — the convention for our own PRs — falling
+/// back to the PR title, where other people's PRs carry the id (e.g.
+/// `feat: … [SWE-123]`). Linear-linked ids are merged in later by `gather`.
+fn issue_ids_of(head: &str, title: &str) -> Vec<String> {
     devkit_common::worktree::find_id(head)
         .or_else(|| devkit_common::worktree::find_id(title))
         .map(|s| s.to_uppercase())
-        .unwrap_or_else(|| "-".to_string())
+        .into_iter()
+        .collect()
 }
 
 fn checks_text(rollup: Option<&str>) -> &'static str {
@@ -564,7 +566,7 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
             .map(|pr| MinePrView {
                 number: pr.number,
                 url: pr.url.clone(),
-                issue_id: issue_of(&pr.head_ref_name, &pr.title),
+                issue_ids: issue_ids_of(&pr.head_ref_name, &pr.title),
                 review_state: review_text(pr).to_string(),
                 check_state: checks_cell(&check_verdict(pr, ignored)),
                 action: mine_action(pr, ignored),
@@ -591,7 +593,7 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
                 ReviewPrView {
                     number: pr.number,
                     url: pr.url.clone(),
-                    issue_id: issue_of(&pr.head_ref_name, &pr.title),
+                    issue_ids: issue_ids_of(&pr.head_ref_name, &pr.title),
                     author: pr.author.login.clone(),
                     my_vote,
                     action,
@@ -616,7 +618,8 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
 pub struct MinePrView {
     pub number: u64,
     pub url: String,
-    pub issue_id: String,
+    #[serde(default)]
+    pub issue_ids: Vec<String>,
     pub review_state: String,
     pub check_state: String,
     pub action: String,
@@ -629,7 +632,7 @@ pub struct ReviewPrView {
     pub number: u64,
     pub url: String,
     #[serde(default)]
-    pub issue_id: String,
+    pub issue_ids: Vec<String>,
     pub author: String,
     pub my_vote: String,
     pub action: String,
@@ -725,13 +728,13 @@ mod tests {
         let report = classify(resp.data, true, true, &[]);
         assert_eq!(report.mine.len(), 1);
         assert_eq!(report.mine[0].number, 10);
-        assert_eq!(report.mine[0].issue_id, "ENG-1");
+        assert_eq!(report.mine[0].issue_ids, vec!["ENG-1"]);
         assert_eq!(report.mine[0].review_state, "approved");
         assert_eq!(report.mine[0].check_state, "ok");
         assert_eq!(report.mine[0].action, "MERGE");
         assert_eq!(report.reviews.len(), 1);
         assert_eq!(report.reviews[0].number, 20);
-        assert_eq!(report.reviews[0].issue_id, "SWE-2");
+        assert_eq!(report.reviews[0].issue_ids, vec!["SWE-2"]);
         assert_eq!(report.reviews[0].my_vote, "-");
         assert_eq!(report.reviews[0].action, "REVIEW NEEDED");
     }
@@ -1247,27 +1250,28 @@ mod tests {
         assert_eq!(action, "done (approved)");
     }
     #[test]
-    fn issue_of_finds_swe() {
-        assert_eq!(issue_of("lev/swe-123-fix", ""), "SWE-123");
-        assert_eq!(issue_of("main", ""), "-");
+    fn issue_ids_of_finds_swe() {
+        assert_eq!(issue_ids_of("lev/swe-123-fix", ""), vec!["SWE-123"]);
+        assert!(issue_ids_of("main", "").is_empty());
     }
     #[test]
-    fn issue_of_finds_non_swe_prefix() {
-        assert_eq!(issue_of("lev/eng-1234-fix", ""), "ENG-1234");
-        assert_eq!(issue_of("feature/abc-9-thing", ""), "ABC-9");
+    fn issue_ids_of_finds_non_swe_prefix() {
+        assert_eq!(issue_ids_of("lev/eng-1234-fix", ""), vec!["ENG-1234"]);
+        assert_eq!(issue_ids_of("feature/abc-9-thing", ""), vec!["ABC-9"]);
     }
     #[test]
-    fn issue_of_falls_back_to_title() {
-        // Other people's branches don't carry the id; their PR titles do.
+    fn issue_ids_of_falls_back_to_title() {
         assert_eq!(
-            issue_of("igork/ff-b01-thing", "feat(api): flag-gate thing [SWE-10412]"),
-            "SWE-10412"
+            issue_ids_of(
+                "igork/ff-b01-thing",
+                "feat(api): flag-gate thing [SWE-10412]"
+            ),
+            vec!["SWE-10412"]
         );
-        // The branch wins when it has an id, even if the title also carries one.
         assert_eq!(
-            issue_of("lev/eng-1-fix", "chore: touches SWE-999 too"),
-            "ENG-1"
+            issue_ids_of("lev/eng-1-fix", "chore: touches SWE-999 too"),
+            vec!["ENG-1"]
         );
-        assert_eq!(issue_of("main", "no id anywhere"), "-");
+        assert!(issue_ids_of("main", "no id anywhere").is_empty());
     }
 }
