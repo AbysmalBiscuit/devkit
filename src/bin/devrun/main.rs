@@ -127,7 +127,7 @@ enum Cmd {
         #[arg(short = 'f', long)]
         follow: bool,
     },
-    /// Show the effective merged config, or list configured apps.
+    /// Show the effective merged config, or list configured apps or tasks.
     Config {
         #[command(subcommand)]
         cmd: ConfigCmd,
@@ -158,6 +158,12 @@ enum ConfigCmd {
     },
     /// List the configured apps from the merged config.
     Apps {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the configured tasks from the merged config.
+    Tasks {
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -440,6 +446,7 @@ fn main() -> Result<()> {
         Cmd::Config { cmd } => match cmd {
             ConfigCmd::Show { origin, json } => config::show(&cli, &cwd, *origin, *json),
             ConfigCmd::Apps { json } => config::apps(&cli, &cwd, *json),
+            ConfigCmd::Tasks { json } => config::tasks(&cli, &cwd, *json),
         },
         Cmd::Completions { shell } => {
             clap_complete::generate(
@@ -466,15 +473,7 @@ fn cmd_task(
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     let Some(name) = name else {
         let rows = task::list(&loaded.config);
-        if rows.is_empty() {
-            println!("no tasks configured (add [tasks.<name>] to devkit.toml)");
-            return Ok(());
-        }
-        let mut t = ui::table(&["NAME", "KIND", "APP", "DESCRIPTION"]);
-        for r in rows {
-            t.add_row(vec![r.name, r.kind.to_string(), r.app, r.description]);
-        }
-        print!("{t}");
+        print!("{}", config::tasks_text(&rows));
         return Ok(());
     };
 

@@ -4,6 +4,7 @@ use devkit_common::ui;
 use devkit_ports::apps::App;
 use devkit_ports::config::{self, Config, Provenance};
 use devkit_ports::load;
+use devkit_ports::task::{self, TaskRow};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -42,6 +43,52 @@ pub fn apps(cli: &Cli, cwd: &str, json: bool) -> Result<()> {
         println!("{}", apps_table(&loaded.catalog));
     }
     Ok(())
+}
+
+/// `devrun config tasks [--json]` — a pure readout of the merged `[tasks]`.
+pub fn tasks(cli: &Cli, cwd: &str, json: bool) -> Result<()> {
+    let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
+    let rows = task::list(&loaded.config);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&tasks_json(&rows))?);
+    } else {
+        print!("{}", tasks_text(&rows));
+    }
+    Ok(())
+}
+
+/// Configured tasks as a JSON array of their listing fields.
+fn tasks_json(rows: &[TaskRow]) -> serde_json::Value {
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "name": r.name,
+                "kind": r.kind,
+                "app": r.app,
+                "description": r.description,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(items)
+}
+
+/// Configured tasks as a text table, or a hint when none are configured.
+/// Shared with the bare `devrun task` listing so both render identically.
+pub fn tasks_text(rows: &[TaskRow]) -> String {
+    if rows.is_empty() {
+        return "no tasks configured (add [tasks.<name>] to devkit.toml)\n".into();
+    }
+    let mut t = ui::table(&["NAME", "KIND", "APP", "DESCRIPTION"]);
+    for r in rows {
+        t.add_row(vec![
+            r.name.clone(),
+            r.kind.to_string(),
+            r.app.clone(),
+            r.description.clone(),
+        ]);
+    }
+    t.to_string()
 }
 
 /// Catalog apps sorted by name, as a JSON array of their resolved fields.
@@ -188,6 +235,43 @@ mod tests {
             },
         );
         m
+    }
+
+    fn sample_task_rows() -> Vec<TaskRow> {
+        vec![
+            TaskRow {
+                name: "check".into(),
+                kind: "sequence",
+                app: "-".into(),
+                description: "lint then test".into(),
+            },
+            TaskRow {
+                name: "lint".into(),
+                kind: "command",
+                app: "api".into(),
+                description: String::new(),
+            },
+        ]
+    }
+
+    #[test]
+    fn tasks_json_lists_fields() {
+        let v = tasks_json(&sample_task_rows());
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["name"].as_str(), Some("check"));
+        assert_eq!(arr[0]["kind"].as_str(), Some("sequence"));
+        assert_eq!(arr[1]["app"].as_str(), Some("api"));
+        assert_eq!(arr[1]["description"].as_str(), Some(""));
+    }
+
+    #[test]
+    fn tasks_text_renders_rows_or_hint() {
+        let text = tasks_text(&sample_task_rows());
+        assert!(text.contains("NAME") && text.contains("KIND"), "{text}");
+        assert!(text.contains("check") && text.contains("lint"), "{text}");
+        let empty = tasks_text(&[]);
+        assert!(empty.contains("no tasks configured"), "{empty}");
     }
 
     #[test]

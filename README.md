@@ -29,11 +29,13 @@ devrun reap [--all]
 devrun logs <app> [-f]
 devrun config show [--origin] [--json]
 devrun config apps [--json]
+devrun config tasks [--json]
 devrun task [<name>] [--env K=V] [--dry-run]
 ```
 
 - **`config show`**: prints the effective merged config as TOML. `--origin` annotates each value with the file it was resolved from (or `# (default)` for serde defaults); `--json` emits JSON instead of TOML. `--origin --json` emits `{ "config": …, "origins": { "dotted.path": "file" } }`.
 - **`config apps`**: lists the configured apps from the merged config (columns: name, port, path, provides_url, url_env, launch). `--json` emits a structured array. A pure config readout with no live readiness — for running state use `devrun status`.
+- **`config tasks`**: lists the configured `[tasks]` from the merged config (columns: name, kind, app, description) — the same listing as a bare `devrun task`. `--json` emits a structured array.
 - **`down`**: stops servers and releases their ports. By default stops every server in the current worktree. Reaching another worktree requires an explicit scope flag and a confirmation read from a terminal:
 
   | Command | Effect |
