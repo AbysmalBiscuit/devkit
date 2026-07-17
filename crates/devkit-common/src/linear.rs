@@ -222,6 +222,88 @@ pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, LinearState>
     }
 }
 
+/// GraphQL payloads resolving GitHub PR URLs to their linked Linear issues,
+/// 25 URLs per request to stay under Linear's query-complexity budget. Each
+/// entry is (query, variables, alias → url). Pure → testable. URLs ride in
+/// GraphQL variables, never spliced into the query string.
+pub fn issues_for_prs_queries(
+    urls: &[String],
+) -> Vec<(String, serde_json::Value, HashMap<String, String>)> {
+    urls.chunks(25)
+        .map(|chunk| {
+            let mut decls = Vec::new();
+            let mut parts = Vec::new();
+            let mut vars = serde_json::Map::new();
+            let mut aliases = HashMap::new();
+            for (i, url) in chunk.iter().enumerate() {
+                decls.push(format!("$u{i}: String!"));
+                parts.push(format!(
+                    "a{i}: attachmentsForURL(url: $u{i}) {{ nodes {{ issue {{ identifier }} }} }}"
+                ));
+                vars.insert(format!("u{i}"), serde_json::Value::String(url.clone()));
+                aliases.insert(format!("a{i}"), url.clone());
+            }
+            let query = format!("query({}) {{ {} }}", decls.join(", "), parts.join(" "));
+            (query, serde_json::Value::Object(vars), aliases)
+        })
+        .collect()
+}
+
+/// From one `issues_for_prs_queries` response: url → linked issue ids.
+/// Attachments without an issue are skipped; ids are deduped per PR (an
+/// issue can attach to the same PR more than once). URLs with no linked
+/// issue get no entry.
+pub fn parse_issues_for_prs(
+    resp: &serde_json::Value,
+    aliases: &HashMap<String, String>,
+) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::new();
+    let Some(data) = resp.get("data").and_then(|d| d.as_object()) else {
+        return out;
+    };
+    for (alias, block) in data {
+        let Some(url) = aliases.get(alias) else {
+            continue;
+        };
+        let mut ids: Vec<String> = Vec::new();
+        for node in block["nodes"].as_array().into_iter().flatten() {
+            if let Some(id) = node["issue"]["identifier"].as_str()
+                && !ids.iter().any(|have| have == id)
+            {
+                ids.push(id.to_string());
+            }
+        }
+        if !ids.is_empty() {
+            out.insert(url.clone(), ids);
+        }
+    }
+    out
+}
+
+/// Linked Linear issues for each PR URL. Fail-soft like [`states`]: empty
+/// map with no key or no URLs; on error, one stderr line and whatever
+/// chunks resolved before it. A URL absent from the map has no known links.
+pub fn issues_for_prs(urls: &[String], key: Option<&str>) -> HashMap<String, Vec<String>> {
+    let Some(key) = key else {
+        return HashMap::new();
+    };
+    let mut out = HashMap::new();
+    for (query, vars, aliases) in issues_for_prs_queries(urls) {
+        match send(
+            ureq::json!({ "query": query, "variables": vars }),
+            key,
+            "issues_for_prs",
+        ) {
+            Ok(resp) => out.extend(parse_issues_for_prs(&resp, &aliases)),
+            Err(e) => {
+                eprintln!("Linear PR-link lookup failed: {e}");
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// The workspace url slug for building `linear.app/<slug>/issue/<id>` links.
 ///
 /// Prefers `$LINEAR_WORKSPACE` (no network); otherwise asks the Linear API with
@@ -515,5 +597,66 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].id, "ENG-3340");
         assert_eq!(got[1].title, "B");
+    }
+
+    #[test]
+    fn issues_for_prs_queries_use_variables() {
+        let urls = vec![
+            "https://github.com/o/r/pull/1".to_string(),
+            "https://github.com/o/r/pull/2".to_string(),
+        ];
+        let batches = issues_for_prs_queries(&urls);
+        assert_eq!(batches.len(), 1);
+        let (q, vars, aliases) = &batches[0];
+        assert!(q.contains("a0: attachmentsForURL(url: $u0)"), "{q}");
+        assert!(q.contains("$u1: String!"), "{q}");
+        assert!(
+            !q.contains("github.com"),
+            "urls must ride in variables, not the query: {q}"
+        );
+        assert_eq!(vars["u1"], "https://github.com/o/r/pull/2");
+        assert_eq!(aliases["a0"], "https://github.com/o/r/pull/1");
+    }
+
+    #[test]
+    fn issues_for_prs_queries_chunk_at_25() {
+        let urls: Vec<String> = (0..26)
+            .map(|i| format!("https://github.com/o/r/pull/{i}"))
+            .collect();
+        let batches = issues_for_prs_queries(&urls);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[1].2.len(), 1, "second chunk carries the 26th url");
+        assert!(issues_for_prs_queries(&[]).is_empty());
+    }
+
+    #[test]
+    fn parse_issues_for_prs_collects_and_dedups() {
+        let aliases = HashMap::from([
+            ("a0".to_string(), "u0".to_string()),
+            ("a1".to_string(), "u1".to_string()),
+        ]);
+        let resp = serde_json::json!({ "data": {
+            "a0": { "nodes": [
+                { "issue": { "identifier": "SWE-6" } },
+                { "issue": null },
+                { "issue": { "identifier": "SWE-7" } },
+                { "issue": { "identifier": "SWE-6" } }
+            ]},
+            "a1": { "nodes": [ { "issue": null } ] }
+        }});
+        let got = parse_issues_for_prs(&resp, &aliases);
+        assert_eq!(got["u0"], vec!["SWE-6", "SWE-7"]);
+        assert!(
+            !got.contains_key("u1"),
+            "all-null attachments mean no links"
+        );
+    }
+
+    #[test]
+    fn parse_issues_for_prs_ignores_unknown_aliases() {
+        let resp = serde_json::json!({ "data": {
+            "zz": { "nodes": [ { "issue": { "identifier": "X-1" } } ] }
+        }});
+        assert!(parse_issues_for_prs(&resp, &HashMap::new()).is_empty());
     }
 }
