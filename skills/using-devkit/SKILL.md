@@ -119,7 +119,7 @@ common path; reach for the reference when you need a specific flag.
 
 The blocks below come from the *installed* binaries at load time, so they always
 match what actually runs — when these docs and a binary's `--help` disagree, the
-`--help` wins. (If a block still shows a raw `` !`…` `` command, run it yourself.)
+`--help` wins. (If a block below still shows a raw, un-expanded command, run it yourself.)
 
 **portm** — !`portm --help`
 
