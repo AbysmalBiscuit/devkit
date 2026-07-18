@@ -107,7 +107,7 @@ Add `--json` to `acquire`/`check`/`status` for machine-readable output. Run
 |---|---|
 | `lockm` | Advisory file locks for parallel sessions — the collaboration tool above. |
 | `portm` | Port registry: `alloc`/`release`/`status`/`prune` dev-server ports without collisions. |
-| `devrun` | Run and supervise local dev servers for a worktree: `up`, `down`, `status`, `logs`, `config`. |
+| `devrun` | Run and supervise local dev servers for a worktree: `up`, `down`, `status`, `logs`, `config`, `task` (canned `[tasks]` oneshots). |
 | `issue` | Issue lifecycle: `setup` a worktree, `status`, `end`, `prs`, `dashboard`, `review`. |
 | `devkitd` | Background daemon owning the port registry. Started automatically by `portm`/`devrun`; you rarely invoke it directly. |
 

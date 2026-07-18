@@ -44,6 +44,8 @@ devrun status [--all]                                 # tracked servers (this wo
 devrun logs <app> [-f]                                # print or follow one app's log
 devrun config show [--origin] [--json]                # effective merged config
 devrun config apps [--json]                           # list configured apps
+devrun config tasks [--json]                          # list configured [tasks]
+devrun task [<name>] [--env K=V] [--env-file F] [--dry-run]   # run a canned task (no name: list)
 ```
 
 **`up`** — default `--role issue`. `--role both` runs the issue branch and a fresh
@@ -67,6 +69,13 @@ servers.
 
 A bare positional selector substring-matches across holder/app/port/role/pid and is
 mutually exclusive with the column filters. `--older-than` accepts `90s`/`30m`/`2h`/`1d`.
+
+**`task`** — runs a canned `[tasks]` entry from the config: a **command** task in the
+foreground (exit code propagated), or a **sequence** of `{ task = … }` / `{ up = … }`
+steps in order, stopping at the first failure. The `--env`/`--env-file` overlay applies
+to **every** step — command steps layer it above the task's `env`, `up` steps above the
+app's `static_env`, same as `devrun up --env`. `--dry-run` prints each rendered plan
+(with real resolved ports) without executing.
 
 ## `issue` — issue lifecycle
 
