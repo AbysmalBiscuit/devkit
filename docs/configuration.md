@@ -133,15 +133,15 @@ steps = [
   `port`/`ports` context as launches; `{{ ports['x'] }}` resolves from the
   port registry (issue role), writing a pid-less reservation when `x` isn't
   running. Env layering, low to high: app `static_env` → task `env` → CLI
-  `--env`. Tasks do not get `url_env` provider wiring — reference the app
-  you need explicitly via `ports[...]`. Doppler invocations go through the
-  same `prd` guard as launches.
+  `--env-file` → `--env`. Tasks do not get `url_env` provider wiring —
+  reference the app you need explicitly via `ports[...]`. Doppler invocations
+  go through the same `prd` guard as launches.
 - Sequence steps run in order and stop at the first failure. `{ up = "app" }`
   is `devrun up app` (a no-op for a live server). A sequence may only set
-  `description` and `steps`, and cannot reference another sequence. A CLI
-  `--env` overlay applies only to command steps (`{ task = "..." }`); `{ up =
-  "app" }` steps launch with the app's own `static_env`, unaffected by
-  `--env`.
+  `description` and `steps`, and cannot reference another sequence. The CLI
+  `--env`/`--env-file` overlay applies to every step: command steps layer it
+  above the task `env`, and `{ up = "app" }` steps layer it above the app's
+  `static_env`, exactly as `devrun up --env` would.
 - `devrun task <name> --dry-run` prints each rendered plan (still resolving
   ports, so the printed values are real) without executing.
 

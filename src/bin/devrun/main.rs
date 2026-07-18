@@ -139,6 +139,8 @@ enum Cmd {
         name: Option<String>,
         #[arg(long = "env", value_name = "K=V")]
         env: Vec<String>,
+        #[arg(long = "env-file")]
+        env_file: Option<String>,
         /// Print the rendered plan (cwd, argv, env, resolved ports) without executing.
         #[arg(long)]
         dry_run: bool,
@@ -457,7 +459,19 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Task { name, env, dry_run } => cmd_task(&cli, &cwd, name.as_deref(), env, *dry_run),
+        Cmd::Task {
+            name,
+            env,
+            env_file,
+            dry_run,
+        } => cmd_task(
+            &cli,
+            &cwd,
+            name.as_deref(),
+            env,
+            env_file.as_deref(),
+            *dry_run,
+        ),
     }
 }
 
@@ -466,6 +480,7 @@ fn cmd_task(
     cwd: &str,
     name: Option<&str>,
     env_pairs: &[String],
+    env_file: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
     use devkit_ports::task::{self, Resolved, SeqItem};
@@ -477,7 +492,7 @@ fn cmd_task(
         return Ok(());
     };
 
-    let user = parse_user_env(env_pairs, None)?;
+    let user = parse_user_env(env_pairs, env_file)?;
     let root = toplevel(cwd)?;
     let resolved = task::resolve(
         &loaded.config,
@@ -499,8 +514,8 @@ fn cmd_task(
                             cwd,
                             std::slice::from_ref(app),
                             RoleSelector::Issue,
-                            &[],
-                            None,
+                            env_pairs,
+                            env_file,
                             UpFlags {
                                 dry_run,
                                 supervise: false,

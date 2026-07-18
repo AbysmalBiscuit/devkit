@@ -37,6 +37,7 @@ baseline_path = "b"
 base_port = 39140
 path = "."
 launch = ["git", "version"]
+static_env = { FROM_APP = "static" }
 
 [tasks.hello]
 description = "prints git version"
@@ -136,6 +137,67 @@ fn task_seq_dry_run_renders_up_step_plan() {
     assert!(
         !stdout.contains("→ "),
         "dry-run must not execute steps: {stdout}"
+    );
+}
+
+#[test]
+fn task_seq_env_overrides_up_step_static_env() {
+    let dir = setup();
+    let out = run_in(
+        dir.path(),
+        &["task", "seq", "--env", "FROM_APP=user", "--dry-run"],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("FROM_APP=user"),
+        "--env override missing from rendered env: {stdout}"
+    );
+    assert!(
+        !stdout.contains("FROM_APP=static"),
+        "up step fell back to static_env instead of the --env override: {stdout}"
+    );
+}
+
+#[test]
+fn task_env_file_feeds_steps_and_env_wins() {
+    let dir = setup();
+    let envfile = dir.path().join("task.env");
+    std::fs::write(&envfile, "# comment\nFROM_APP=filed\nEXTRA=1\n").expect("write env file");
+    let envfile = envfile.to_string_lossy().into_owned();
+
+    let out = run_in(
+        dir.path(),
+        &["task", "seq", "--env-file", &envfile, "--dry-run"],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("FROM_APP=filed") && stdout.contains("EXTRA=1"),
+        "--env-file vars missing from rendered env: {stdout}"
+    );
+    assert!(
+        !stdout.contains("FROM_APP=static"),
+        "up step fell back to static_env instead of the --env-file value: {stdout}"
+    );
+
+    let out = run_in(
+        dir.path(),
+        &[
+            "task",
+            "seq",
+            "--env-file",
+            &envfile,
+            "--env",
+            "FROM_APP=cli",
+            "--dry-run",
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("FROM_APP=cli") && !stdout.contains("FROM_APP=filed"),
+        "--env must win over --env-file, matching `up`: {stdout}"
     );
 }
 

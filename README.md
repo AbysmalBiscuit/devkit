@@ -30,7 +30,7 @@ devrun logs <app> [-f]
 devrun config show [--origin] [--json]
 devrun config apps [--json]
 devrun config tasks [--json]
-devrun task [<name>] [--env K=V] [--dry-run]
+devrun task [<name>] [--env K=V] [--env-file F] [--dry-run]
 ```
 
 - **`config show`**: prints the effective merged config as TOML. `--origin` annotates each value with the file it was resolved from (or `# (default)` for serde defaults); `--json` emits JSON instead of TOML. `--origin --json` emits `{ "config": …, "origins": { "dotted.path": "file" } }`.
