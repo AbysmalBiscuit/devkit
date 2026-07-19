@@ -136,6 +136,23 @@ steps = [
   `--env-file` → `--env`. Tasks do not get `url_env` provider wiring —
   reference the app you need explicitly via `ports[...]`. Doppler invocations
   go through the same `prd` guard as launches.
+- `require_live = ["app", …]` (command tasks only): each listed app must have a
+  live devrun-managed server in this worktree when the task *executes*, or the
+  task fails before spawning:
+
+      require_live: `api-serve` has no live server in this worktree (devrun up api-serve)
+
+  Each name must be referenced by the task's templates via `ports[...]`. A
+  `--env`/`--env-file` override that replaces every value referencing an app
+  waives that app's check *and* its allocation — a user-supplied URL makes the
+  local port irrelevant (this is how one build task serves both a local flow
+  and a hosted-preview flow). References in `run` argv cannot be overridden.
+- Sequence steps are re-resolved immediately before each step runs: ports are
+  re-allocated and templates re-rendered then, and `require_live` is checked
+  then — so a step gated on an app that an earlier `up` step starts works, and
+  a build step longer than the reservation grace period cannot bake a port
+  that a later `up` step no longer gets. `--dry-run` prints the upfront
+  resolution and never gates.
 - Sequence steps run in order and stop at the first failure. `{ up = "app" }`
   is `devrun up app` (a no-op for a live server). A sequence may only set
   `description` and `steps`, and cannot reference another sequence. The CLI

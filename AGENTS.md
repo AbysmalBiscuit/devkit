@@ -111,6 +111,15 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   row already has a live pid, reporting the existing server instead. A duplicate
   spawn would fail to bind, and on the daemon path would repoint the supervision
   table at the doomed pid. Sequence-task `up` steps rely on this.
+- **Sequence steps re-resolve at execution time; the upfront pass never
+  gates.** `task::resolve` validates every step before anything spawns, but
+  its rendered plans are for validation and `--dry-run` display only —
+  execution calls `task::resolve_step` per command step (fresh allocation +
+  render, `require_live` enforced) immediately before spawning it. Don't
+  execute the upfront plans: a build step longer than
+  `RESERVATION_GRACE_SECS` would let a t=0 reservation expire and desync
+  later steps. And don't enforce `require_live` in the upfront pass — a
+  gated app may be brought up by an earlier `up` step of the same sequence.
 
 ## Conventions
 
