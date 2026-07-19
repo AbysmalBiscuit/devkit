@@ -182,6 +182,22 @@ fn resolve_command(
     let env_templates = effective_env(&static_env, t, user_env);
     let vars = &cfg.templates.variables;
 
+    let mut all_templates: Vec<&str> = t.run.iter().map(String::as_str).collect();
+    all_templates.extend(static_env.values().map(String::as_str));
+    all_templates.extend(t.env.values().map(String::as_str));
+    let all_refs = template::referenced_ports(&all_templates, vars)
+        .with_context(|| format!("scanning templates of task `{name}`"))?;
+    for r in &t.require_live {
+        ensure!(
+            catalog.contains_key(r),
+            "task `{name}` lists unknown app `{r}` in require_live"
+        );
+        ensure!(
+            all_refs.apps.contains(r),
+            "task `{name}` lists `{r}` in require_live but never references `ports['{r}']`"
+        );
+    }
+
     let mut templates: Vec<&str> = t.run.iter().map(String::as_str).collect();
     templates.extend(env_templates.values().copied());
     let refs = template::referenced_ports(&templates, vars)
@@ -566,5 +582,39 @@ mod tests {
         assert_eq!(rows[0].kind, "sequence");
         assert_eq!(rows[0].description, "d");
         assert_eq!(rows[1].kind, "command");
+    }
+
+    #[test]
+    fn require_live_unknown_app_errors() {
+        let mut t = command_task(None, &["git", "version"], &[]);
+        t.require_live = vec!["nope".into()];
+        let cfg = cfg_with(&[("t", t)]);
+        let err = resolve(
+            &cfg,
+            &api_catalog(),
+            Path::new("/wt"),
+            "/wt",
+            "t",
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("unknown app `nope`"));
+    }
+
+    #[test]
+    fn require_live_unreferenced_app_errors() {
+        let mut t = command_task(None, &["git", "version"], &[]);
+        t.require_live = vec!["api-prod".into()];
+        let cfg = cfg_with(&[("t", t)]);
+        let err = resolve(
+            &cfg,
+            &api_catalog(),
+            Path::new("/wt"),
+            "/wt",
+            "t",
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("never references"));
     }
 }
