@@ -3,6 +3,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 mod auth;
+mod brief;
 mod doctor;
 
 #[derive(Parser)]
@@ -21,6 +22,10 @@ enum Cmd {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Print a compact project brief (apps, tasks, live servers) for the
+    /// current checkout; silent outside a devkit-managed project. Intended
+    /// for coding-agent session-start hooks.
+    Brief,
     /// Check configured credentials and report what is missing.
     Doctor {
         /// Emit the report as JSON instead of a table.
@@ -51,6 +56,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Auth { provider, token } => auth::run(provider, token),
+        Cmd::Brief => brief::run(),
         Cmd::Doctor { json } => doctor::run(json),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "devkit", &mut std::io::stdout());

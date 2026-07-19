@@ -163,6 +163,7 @@ still wins.
 ~~~
 devkit auth <linear|slack> [--token <value>]   # validate + store; prompts (no echo) by default
 devkit doctor [--json]                          # check configured credentials
+devkit brief                                    # compact project brief (apps, tasks, live servers)
 devkit completions <shell>
 ~~~
 
@@ -175,6 +176,12 @@ devkit completions <shell>
   checkout in `~/.claude/plugins/cache` (skewed binaries make agents follow docs
   for features the binaries lack), when servers run outside devrun, and when the
   docs cache holds unreferenced checkouts.
+- **`brief`**: prints a compact orientation for the current checkout — configured
+  apps, the `[tasks]` table, and this worktree's live servers — and prints nothing
+  outside a devkit-managed project (no project `devkit.toml` found and no
+  configured app directory present under the worktree root). The plugin's
+  `SessionStart` hook runs it so coding-agent sessions start already knowing the
+  project's apps and tasks.
 
 ### `docm`: Library Docs
 

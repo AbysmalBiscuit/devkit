@@ -360,7 +360,9 @@ fn read_layer(p: &Path) -> Result<(PathBuf, toml::Table)> {
     Ok((p.to_path_buf(), table))
 }
 
-fn home_config_path() -> Option<PathBuf> {
+/// The personal fallback config layer (`~/.config/devkit/config.toml`).
+/// Public so callers can tell a project-level layer from this global one.
+pub fn home_config_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(PathBuf::from(home).join(".config/devkit/config.toml"))
 }
