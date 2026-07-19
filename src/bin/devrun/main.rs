@@ -502,12 +502,40 @@ fn cmd_task(
         name,
         &user,
     )?;
+    let root_path = Path::new(&root);
     match resolved {
-        Resolved::Command(plan) => run_task_step(&plan, dry_run),
+        Resolved::Command(plan) => {
+            if dry_run {
+                return run_task_step(&plan, true);
+            }
+            let fresh = task::resolve_step(
+                &loaded.config,
+                &loaded.catalog,
+                root_path,
+                &root,
+                name,
+                &user,
+            )?;
+            run_task_step(&fresh, false)
+        }
         Resolved::Sequence(items) => {
             for item in &items {
                 match item {
-                    SeqItem::Run(plan) => run_task_step(plan, dry_run)?,
+                    SeqItem::Run(plan) => {
+                        if dry_run {
+                            run_task_step(plan, true)?;
+                        } else {
+                            let fresh = task::resolve_step(
+                                &loaded.config,
+                                &loaded.catalog,
+                                root_path,
+                                &root,
+                                &plan.name,
+                                &user,
+                            )?;
+                            run_task_step(&fresh, false)?;
+                        }
+                    }
                     SeqItem::Up(app) => {
                         cmd_up(
                             cli,
