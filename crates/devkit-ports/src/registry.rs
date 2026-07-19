@@ -254,6 +254,19 @@ pub fn holder_alive(holder: &str) -> bool {
     std::path::Path::new(holder).exists()
 }
 
+/// Port of `app`'s live reservation under `holder` (issue role): a row whose
+/// pid is set and alive. The pid probe keeps the answer correct even on an
+/// unpruned view; keep calls outside `with_lock`.
+pub fn live_port(data: &Data, holder: &str, app: &str) -> Option<u16> {
+    data.entries.iter().find_map(|(port, e)| {
+        (e.holder == holder
+            && e.app == app
+            && e.role == Role::Issue
+            && e.pid.is_some_and(pid_alive))
+        .then_some(*port)
+    })
+}
+
 #[cfg(test)]
 mod liveness_tests {
     use super::*;
@@ -912,6 +925,29 @@ mod ops_tests {
             },
         );
         assert_eq!(d.dead_ports(), vec![9100]);
+    }
+
+    #[test]
+    fn live_port_requires_matching_live_row() {
+        let mut d = Data::default();
+        let p = d.alloc_one("/wt", "api", 47340, Role::Issue);
+        assert_eq!(live_port(&d, "/wt", "api"), None); // pid-less reservation
+        d.record_pid(p, "api", "/wt", Role::Issue, std::process::id(), "l".into());
+        assert_eq!(live_port(&d, "/wt", "api"), Some(p));
+        assert_eq!(live_port(&d, "/other", "api"), None); // wrong holder
+        assert_eq!(live_port(&d, "/wt", "web"), None); // wrong app
+        d.record_pid(p, "api", "/wt", Role::Issue, u32::MAX, "l".into());
+        assert_eq!(live_port(&d, "/wt", "api"), None); // dead pid
+    }
+
+    #[test]
+    fn alloc_one_skips_foreign_holder_row() {
+        let mut d = Data::default();
+        assert_eq!(d.alloc_one("/foreign", "api", 47350, Role::Issue), 47350);
+        // Same app under a different holder never captures the foreign row.
+        assert_eq!(d.alloc_one("/mine", "api", 47350, Role::Issue), 47351);
+        // Idempotent per holder.
+        assert_eq!(d.alloc_one("/mine", "api", 47350, Role::Issue), 47351);
     }
 }
 
