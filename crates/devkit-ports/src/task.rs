@@ -98,7 +98,7 @@ pub fn resolve(
         )?)),
         (false, true) => {
             ensure!(
-                t.app.is_none() && t.env.is_empty(),
+                t.app.is_none() && t.env.is_empty() && t.require_live.is_empty(),
                 "sequence task `{name}` may only set `description` and `steps`"
             );
             let mut items = Vec::with_capacity(t.steps.len());
@@ -426,16 +426,29 @@ mod tests {
             steps: vec![Step::Up("api-prod".into())],
             ..TaskConfig::default()
         };
+        let seq_with_require_live = TaskConfig {
+            require_live: vec!["api-prod".into()],
+            steps: vec![Step::Up("api-prod".into())],
+            ..TaskConfig::default()
+        };
         let cfg = cfg_with(&[
             ("both", both),
             ("neither", neither),
             ("seq-with-app", seq_with_app),
             ("nested", step_to_sequence),
             ("seq", seq),
+            ("seq-require-live", seq_with_require_live),
         ]);
         let cat = api_catalog();
         let u = BTreeMap::new();
-        for bad in ["both", "neither", "seq-with-app", "nested", "missing"] {
+        for bad in [
+            "both",
+            "neither",
+            "seq-with-app",
+            "nested",
+            "seq-require-live",
+            "missing",
+        ] {
             assert!(
                 resolve(&cfg, &cat, Path::new("/wt"), "/wt", bad, &u).is_err(),
                 "task `{bad}` must fail validation"

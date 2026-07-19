@@ -174,6 +174,11 @@ pub struct TaskConfig {
     pub steps: Vec<Step>,
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// Apps whose server must be live in this worktree when the task executes.
+    /// Each name must be referenced by the task's templates via `ports[...]`;
+    /// a user `--env` override of every referencing value waives the check.
+    #[serde(default)]
+    pub require_live: Vec<String>,
 }
 
 pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
@@ -1022,5 +1027,15 @@ steps = [
         assert_eq!(t["run"][0].as_str(), Some("git"));
         assert_eq!(t["env"]["A"].as_str(), Some("9"));
         assert_eq!(t["env"]["B"].as_str(), Some("2"));
+    }
+
+    #[test]
+    fn task_require_live_roundtrips() {
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\nbaseline_path='b'\n[tasks.build]\nrun=['git']\nrequire_live=['api']\n";
+        let c = Config::parse(s).unwrap();
+        assert_eq!(c.tasks["build"].require_live, vec!["api"]);
+        let out = toml::to_string(&c).unwrap();
+        let c2 = Config::parse(&out).unwrap();
+        assert_eq!(c2.tasks["build"].require_live, vec!["api"]);
     }
 }
