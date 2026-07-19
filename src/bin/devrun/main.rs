@@ -488,7 +488,7 @@ fn cmd_task(
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     let Some(name) = name else {
         let rows = task::list(&loaded.config);
-        print!("{}", config::tasks_text(&rows));
+        print!("{}", task::tasks_text(&rows));
         return Ok(());
     };
 

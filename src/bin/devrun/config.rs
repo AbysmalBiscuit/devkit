@@ -52,7 +52,7 @@ pub fn tasks(cli: &Cli, cwd: &str, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&tasks_json(&rows))?);
     } else {
-        print!("{}", tasks_text(&rows));
+        print!("{}", task::tasks_text(&rows));
     }
     Ok(())
 }
@@ -71,24 +71,6 @@ fn tasks_json(rows: &[TaskRow]) -> serde_json::Value {
         })
         .collect();
     serde_json::Value::Array(items)
-}
-
-/// Configured tasks as a text table, or a hint when none are configured.
-/// Shared with the bare `devrun task` listing so both render identically.
-pub fn tasks_text(rows: &[TaskRow]) -> String {
-    if rows.is_empty() {
-        return "no tasks configured (add [tasks.<name>] to devkit.toml)\n".into();
-    }
-    let mut t = ui::table(&["NAME", "KIND", "APP", "DESCRIPTION"]);
-    for r in rows {
-        t.add_row(vec![
-            r.name.clone(),
-            r.kind.to_string(),
-            r.app.clone(),
-            r.description.clone(),
-        ]);
-    }
-    t.to_string()
 }
 
 /// Catalog apps sorted by name, as a JSON array of their resolved fields.
@@ -263,15 +245,6 @@ mod tests {
         assert_eq!(arr[0]["kind"].as_str(), Some("sequence"));
         assert_eq!(arr[1]["app"].as_str(), Some("api"));
         assert_eq!(arr[1]["description"].as_str(), Some(""));
-    }
-
-    #[test]
-    fn tasks_text_renders_rows_or_hint() {
-        let text = tasks_text(&sample_task_rows());
-        assert!(text.contains("NAME") && text.contains("KIND"), "{text}");
-        assert!(text.contains("check") && text.contains("lint"), "{text}");
-        let empty = tasks_text(&[]);
-        assert!(empty.contains("no tasks configured"), "{empty}");
     }
 
     #[test]

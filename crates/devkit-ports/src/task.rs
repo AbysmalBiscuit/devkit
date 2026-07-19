@@ -67,6 +67,25 @@ pub fn list(cfg: &Config) -> Vec<TaskRow> {
     rows
 }
 
+/// Configured tasks as a text table, or a hint when none are configured.
+/// Shared by `devrun task`/`devrun config tasks` and `devkit brief` so all
+/// render identically.
+pub fn tasks_text(rows: &[TaskRow]) -> String {
+    if rows.is_empty() {
+        return "no tasks configured (add [tasks.<name>] to devkit.toml)\n".into();
+    }
+    let mut t = devkit_common::ui::table(&["NAME", "KIND", "APP", "DESCRIPTION"]);
+    for r in rows {
+        t.add_row(vec![
+            r.name.clone(),
+            r.kind.to_string(),
+            r.app.clone(),
+            r.description.clone(),
+        ]);
+    }
+    t.to_string()
+}
+
 /// Resolve task `name` for execution in `worktree_root`. Command tasks get
 /// their port references allocated (issue role, pid-less reservations for
 /// apps not yet running) and their templates rendered; sequence tasks
@@ -359,6 +378,29 @@ pub fn exec(plan: &CommandPlan) -> Result<std::process::ExitStatus> {
 mod tests {
     use super::*;
     use crate::config::{Config, Step, TaskConfig};
+
+    #[test]
+    fn tasks_text_renders_rows_or_hint() {
+        let rows = vec![
+            TaskRow {
+                name: "check".into(),
+                kind: "sequence",
+                app: "-".into(),
+                description: "lint then test".into(),
+            },
+            TaskRow {
+                name: "lint".into(),
+                kind: "command",
+                app: "api".into(),
+                description: String::new(),
+            },
+        ];
+        let text = tasks_text(&rows);
+        assert!(text.contains("NAME") && text.contains("KIND"), "{text}");
+        assert!(text.contains("check") && text.contains("lint"), "{text}");
+        let empty = tasks_text(&[]);
+        assert!(empty.contains("no tasks configured"), "{empty}");
+    }
 
     fn cfg_with(tasks: &[(&str, TaskConfig)]) -> Config {
         let mut c = Config::default();
