@@ -186,11 +186,12 @@ fn resolve_command(
     let env_templates = effective_env(&static_env, t, user_env);
     let vars = &cfg.templates.variables;
 
+    let empty_user_env = BTreeMap::new();
+    let unfiltered_env = effective_env(&static_env, t, &empty_user_env);
     let mut all_templates: Vec<&str> = t.run.iter().map(String::as_str).collect();
-    all_templates.extend(static_env.values().map(String::as_str));
-    all_templates.extend(t.env.values().map(String::as_str));
+    all_templates.extend(unfiltered_env.values().copied());
     let all_refs = template::referenced_ports(&all_templates, vars)
-        .with_context(|| format!("scanning templates of task `{name}`"))?;
+        .with_context(|| format!("scanning require_live templates of task `{name}`"))?;
     for r in &t.require_live {
         ensure!(
             catalog.contains_key(r),
@@ -663,6 +664,23 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("not a command task"));
+    }
+
+    #[test]
+    fn require_live_shadowed_static_ref_errors() {
+        // static_env has a port reference, but the task's own `env` shadows
+        // the same key with a plain literal. The rendered value never
+        // touches the port, so require_live must not be satisfied by it.
+        let mut cat = api_catalog();
+        cat.get_mut("api-prod").unwrap().static_env.insert(
+            "URL".to_string(),
+            "http://localhost:{{ ports['api-prod'] }}".to_string(),
+        );
+        let mut t = command_task(Some("api-prod"), &["git", "version"], &[("URL", "static")]);
+        t.require_live = vec!["api-prod".into()];
+        let cfg = cfg_with(&[("t", t)]);
+        let err = resolve(&cfg, &cat, Path::new("/wt"), "/wt", "t", &BTreeMap::new()).unwrap_err();
+        assert!(format!("{err:#}").contains("never references"));
     }
 
     #[test]
