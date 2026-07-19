@@ -95,6 +95,7 @@ pub fn resolve(
             name,
             t,
             user_env,
+            false,
         )?)),
         (false, true) => {
             ensure!(
@@ -121,6 +122,7 @@ pub fn resolve(
                             r,
                             sub,
                             user_env,
+                            false,
                         )?));
                     }
                     Step::Up(app) => {
@@ -160,6 +162,7 @@ fn effective_env<'a>(
 /// Discovery + allocation for one command task, then delegate to the pure
 /// renderer. `ports[...]` references and (if `{{ port }}` is used) the task's
 /// own app are allocated in one `registry::alloc` call.
+#[allow(clippy::too_many_arguments)]
 fn resolve_command(
     cfg: &Config,
     catalog: &HashMap<String, App>,
@@ -168,6 +171,7 @@ fn resolve_command(
     name: &str,
     t: &TaskConfig,
     user_env: &BTreeMap<String, String>,
+    enforce_live: bool,
 ) -> Result<CommandPlan> {
     let app = t
         .app
@@ -220,6 +224,24 @@ fn resolve_command(
             names.push(own);
         }
     }
+
+    if enforce_live {
+        let gated: Vec<&String> = t
+            .require_live
+            .iter()
+            .filter(|r| refs.apps.contains(*r))
+            .collect();
+        if !gated.is_empty() {
+            let data = registry::snapshot()?;
+            for r in gated {
+                ensure!(
+                    registry::live_port(&data, holder, r).is_some(),
+                    "require_live: `{r}` has no live server in this worktree (devrun up {r})"
+                );
+            }
+        }
+    }
+
     let ports: BTreeMap<String, u16> = if names.is_empty() {
         BTreeMap::new()
     } else {
@@ -246,6 +268,29 @@ fn resolve_command(
         vars,
         user_env,
     )
+}
+
+/// Resolve command task `name` for immediate execution: fresh allocation,
+/// fresh render, `require_live` enforced. Sequences call this per step at
+/// execution time so a long-running earlier step cannot expire the ports an
+/// upfront render used; standalone commands call it right before exec.
+pub fn resolve_step(
+    cfg: &Config,
+    catalog: &HashMap<String, App>,
+    worktree_root: &Path,
+    holder: &str,
+    name: &str,
+    user_env: &BTreeMap<String, String>,
+) -> Result<CommandPlan> {
+    let t = cfg
+        .tasks
+        .get(name)
+        .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
+    ensure!(
+        !t.run.is_empty() && t.steps.is_empty(),
+        "task `{name}` is not a command task"
+    );
+    resolve_command(cfg, catalog, worktree_root, holder, name, t, user_env, true)
 }
 
 /// Render one command task against an already-resolved port map. Registry-free
@@ -599,6 +644,25 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("unknown app `nope`"));
+    }
+
+    #[test]
+    fn resolve_step_rejects_non_command_tasks() {
+        let seq = TaskConfig {
+            steps: vec![Step::Up("api-prod".into())],
+            ..TaskConfig::default()
+        };
+        let cfg = cfg_with(&[("seq", seq)]);
+        let err = resolve_step(
+            &cfg,
+            &api_catalog(),
+            Path::new("/wt"),
+            "/wt",
+            "seq",
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("not a command task"));
     }
 
     #[test]
