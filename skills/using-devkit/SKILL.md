@@ -1,6 +1,6 @@
 ---
 name: using-devkit
-description: Use when multiple agents or sessions share one local git checkout and edit files concurrently (coordinating who edits what without clobbering), or when running local dev servers, allocating ports, or managing issue worktrees with the devkit CLI suite — binaries `lockm`, `portm`, `devrun`, `issue`, `devkitd`.
+description: Use when multiple agents or sessions share one local git checkout and edit files concurrently (coordinating who edits what without clobbering), or when running local dev servers, allocating ports, running canned project tasks (builds, profiling flows — `devrun task`), or managing issue worktrees with the devkit CLI suite — binaries `lockm`, `portm`, `devrun`, `issue`, `devkit`, `devkitd`.
 allowed-tools: Bash(portm --help), Bash(lockm --help), Bash(devrun --help)
 ---
 
@@ -23,6 +23,9 @@ Respect them.
   and about to edit files → claim them first (the workflow below).
 - You need to run local dev servers, allocate/inspect ports, or set up and tear
   down issue worktrees → see Tool overview.
+- You are about to run a project build/profiling/verification command by hand →
+  check `devrun task` first; a canned task may already exist with the right
+  ports and env wired in (see Canned tasks).
 - You see `conflict: N path(s) held by another session` → another holder has the
   file; do not edit it (see Handling a conflict).
 
@@ -109,6 +112,7 @@ Add `--json` to `acquire`/`check`/`status` for machine-readable output. Run
 | `portm` | Port registry: `alloc`/`release`/`status`/`prune` dev-server ports without collisions. |
 | `devrun` | Run and supervise local dev servers for a worktree: `up`, `down`, `status`, `logs`, `config`, `task` (canned `[tasks]` oneshots). |
 | `issue` | Issue lifecycle: `setup` a worktree, `status`, `end`, `prs`, `dashboard`, `review`. |
+| `devkit` | Toolkit setup + diagnostics: `auth`, `doctor`, `brief` (the session-start project summary). |
 | `devkitd` | Background daemon owning the port registry. Started automatically by `portm`/`devrun`; you rarely invoke it directly. |
 
 **Full command and flag reference → `cli-reference.md`** (in this skill directory).
@@ -169,6 +173,38 @@ issue review "Auth fix ready — please review session handling." --to bob --rev
 ```
 
 See `cli-reference.md` for every flag of `setup`, `review`, `down`, and the rest.
+
+## Canned tasks (`devrun task`)
+
+Projects define oneshot **tasks** in config (`[tasks]`): builds, profiling flows,
+assertions — anything that needs the project's apps, ports, and env wired in.
+Prefer a configured task over hand-assembling the same command: tasks render
+real registry ports into their templates, so a hand-typed port that a task
+would have resolved is exactly the drift devkit exists to prevent.
+
+```sh
+devrun task                                   # list configured tasks (name, kind, app, description)
+devrun task <name> --dry-run                  # print the rendered plan(s) — argv, cwd, env — without running
+devrun task <name>                            # run it (command tasks propagate their exit code)
+```
+
+Semantics that matter when a task fails or surprises you:
+
+- **`require_live` gate.** A task may declare that an app's server must be
+  **live in this worktree** before it runs (e.g. a build that bakes another
+  app's URL). If it isn't, the task errors with
+  `require_live: `<app>` has no live server in this worktree (devrun up <app>)`
+  — do what the message says: `devrun up <app>`, then rerun the task. Don't
+  work around the gate by exporting the env var by hand.
+- **`--env` overrides waive the gate.** Overriding an env key
+  (`--env KEY=…`) replaces that value entirely: its port references are
+  neither allocated nor gated. That's how the same build task targets a
+  remote/preview URL with no local server.
+- **Sequences resolve lazily.** A sequence (`steps = [{ up = … }, { task = … }]`)
+  re-resolves each command step right before it executes, so a step sees ports
+  as they are *after* earlier steps (an `up` step may have just started the
+  server a later step's gate needs). `--dry-run` shows the upfront rendering
+  of every step.
 
 ## Enforced mode (automatic write locks)
 

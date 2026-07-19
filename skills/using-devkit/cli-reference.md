@@ -77,6 +77,17 @@ to **every** step — command steps layer it above the task's `env`, `up` steps 
 app's `static_env`, same as `devrun up --env`. `--dry-run` prints each rendered plan
 (with real resolved ports) without executing.
 
+- A task with `require_live = ["<app>"]` refuses to run unless `<app>` has a
+  **live server in this worktree** (a registry row with an alive pid); the
+  error names the fix: `devrun up <app>`. Only `ports['<app>']` references arm
+  the gate.
+- A user `--env` override of a key **waives** both the gate and the port
+  allocation for that key's references — an overridden value is taken verbatim.
+  `run` argv references cannot be overridden and always arm their gate.
+- Sequence command steps are **re-resolved immediately before each executes**
+  (fresh ports, gate enforced then), so a step sees servers earlier steps
+  started; the upfront pass only validates and feeds `--dry-run`.
+
 ## `issue` — issue lifecycle
 
 ```sh
@@ -145,6 +156,20 @@ object for an agent to forward.
 - **`prs`** — GitHub PR triage of your open PRs and PRs awaiting your review.
 - **`dashboard`** — the triage + PR tables plus terminal timelines; `--no-plots` shows
   only tables, `--no-cache` forces a fresh fetch.
+
+## `devkit` — toolkit setup & diagnostics
+
+```sh
+devkit auth <linear|slack> [--token <value>]   # validate + store a credential
+devkit doctor [--json]                          # check configured credentials
+devkit brief                                    # compact project brief (apps, tasks, live servers)
+```
+
+**`brief`** prints the current checkout's devkit orientation — configured apps,
+the `[tasks]` table, and this worktree's live servers — and prints **nothing**
+outside a devkit-managed project. The plugin's `SessionStart` hook runs it so
+sessions start already knowing the project's apps and tasks; run it by hand to
+re-orient mid-session.
 
 ## Enforced mode — mechanics
 
