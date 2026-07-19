@@ -147,6 +147,9 @@ steps = [
   waives that app's check *and* its allocation — a user-supplied URL makes the
   local port irrelevant (this is how one build task serves both a local flow
   and a hosted-preview flow). References in `run` argv cannot be overridden.
+  The reference must go through `ports['<app>']` specifically — a task
+  referencing its own app only via `{{ port }}` does not satisfy
+  `require_live` for that app.
 - Sequence steps are re-resolved immediately before each step runs: ports are
   re-allocated and templates re-rendered then, and `require_live` is checked
   then — so a step gated on an app that an earlier `up` step starts works, and

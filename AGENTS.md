@@ -120,6 +120,10 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   `RESERVATION_GRACE_SECS` would let a t=0 reservation expire and desync
   later steps. And don't enforce `require_live` in the upfront pass — a
   gated app may be brought up by an earlier `up` step of the same sequence.
+  A CLI-path `require_live` gate failure can leave behind a grace-bounded
+  pid-less reservation from the upfront validation pass; this is the
+  reserve-before-bind row the error's suggested `devrun up <app>` reuses,
+  not a leak.
 
 ## Conventions
 
