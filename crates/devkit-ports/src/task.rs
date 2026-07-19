@@ -137,6 +137,26 @@ pub fn resolve(
     }
 }
 
+/// Env templates a command task will render: `static_env` overlaid by the
+/// task's `env`, minus any key the user's `--env` supplies. An overridden
+/// value is neither scanned for port references nor rendered, so a port it
+/// references neither allocates a reservation nor arms the liveness gate.
+fn effective_env<'a>(
+    static_env: &'a HashMap<String, String>,
+    t: &'a TaskConfig,
+    user_env: &BTreeMap<String, String>,
+) -> BTreeMap<&'a str, &'a str> {
+    let mut m: BTreeMap<&'a str, &'a str> = BTreeMap::new();
+    for (k, v) in static_env {
+        m.insert(k.as_str(), v.as_str());
+    }
+    for (k, v) in &t.env {
+        m.insert(k.as_str(), v.as_str());
+    }
+    m.retain(|k, _| !user_env.contains_key(*k));
+    m
+}
+
 /// Discovery + allocation for one command task, then delegate to the pure
 /// renderer. `ports[...]` references and (if `{{ port }}` is used) the task's
 /// own app are allocated in one `registry::alloc` call.
@@ -159,11 +179,11 @@ fn resolve_command(
         })
         .transpose()?;
     let static_env = app.map(|a| a.static_env.clone()).unwrap_or_default();
+    let env_templates = effective_env(&static_env, t, user_env);
     let vars = &cfg.templates.variables;
 
     let mut templates: Vec<&str> = t.run.iter().map(String::as_str).collect();
-    templates.extend(t.env.values().map(String::as_str));
-    templates.extend(static_env.values().map(String::as_str));
+    templates.extend(env_templates.values().copied());
     let refs = template::referenced_ports(&templates, vars)
         .with_context(|| format!("scanning templates of task `{name}`"))?;
 
@@ -202,7 +222,7 @@ fn resolve_command(
     resolve_command_with_ports(
         name,
         t,
-        &static_env,
+        &env_templates,
         worktree_root,
         app.map(|a| a.path.as_str()),
         &ports,
@@ -218,7 +238,7 @@ fn resolve_command(
 fn resolve_command_with_ports(
     name: &str,
     t: &TaskConfig,
-    static_env: &HashMap<String, String>,
+    env_templates: &BTreeMap<&str, &str>,
     worktree_root: &Path,
     app_path: Option<&str>,
     ports: &BTreeMap<String, u16>,
@@ -238,16 +258,9 @@ fn resolve_command_with_ports(
     );
 
     let mut env = BTreeMap::new();
-    for (k, v) in static_env {
+    for (k, v) in env_templates {
         env.insert(
-            k.clone(),
-            template::render_launch(v, own_port, ports, variables)
-                .with_context(|| format!("rendering static_env `{k}` for task `{name}`"))?,
-        );
-    }
-    for (k, v) in &t.env {
-        env.insert(
-            k.clone(),
+            (*k).to_string(),
             template::render_launch(v, own_port, ports, variables)
                 .with_context(|| format!("rendering env `{k}` of task `{name}`"))?,
         );
@@ -332,10 +345,12 @@ mod tests {
             &[("FROM_APP", "task")],
         );
         let user: BTreeMap<String, String> = [("FROM_APP".to_string(), "user".to_string())].into();
+        let cat = api_catalog();
+        let env_templates = effective_env(&cat["api-prod"].static_env, &t, &user);
         let plan = resolve_command_with_ports(
             "t",
             &t,
-            &api_catalog()["api-prod"].static_env,
+            &env_templates,
             Path::new("/wt"),
             Some("apps/api"),
             &BTreeMap::new(),
@@ -347,16 +362,18 @@ mod tests {
         assert_eq!(plan.env["FROM_APP"], "user");
         assert_eq!(plan.cwd, Path::new("/wt").join("apps/api"));
 
+        let no_user = BTreeMap::new();
+        let env_templates2 = effective_env(&cat["api-prod"].static_env, &t, &no_user);
         let plan2 = resolve_command_with_ports(
             "t",
             &t,
-            &api_catalog()["api-prod"].static_env,
+            &env_templates2,
             Path::new("/wt"),
             Some("apps/api"),
             &BTreeMap::new(),
             None,
             &BTreeMap::new(),
-            &BTreeMap::new(),
+            &no_user,
         )
         .unwrap();
         assert_eq!(plan2.env["FROM_APP"], "task");
@@ -370,10 +387,13 @@ mod tests {
             &[("BASE", "http://localhost:{{ ports['api-prod'] }}")],
         );
         let ports: BTreeMap<String, u16> = [("api-prod".to_string(), 9101)].into();
+        let no_static = HashMap::new();
+        let no_user = BTreeMap::new();
+        let env_templates = effective_env(&no_static, &t, &no_user);
         let plan = resolve_command_with_ports(
             "t",
             &t,
-            &HashMap::new(),
+            &env_templates,
             Path::new("/wt"),
             None,
             &ports,
@@ -390,10 +410,13 @@ mod tests {
     #[test]
     fn command_prd_doppler_is_rejected() {
         let t = command_task(None, &["doppler", "run", "-c", "prd", "--", "x"], &[]);
+        let no_static = HashMap::new();
+        let no_user = BTreeMap::new();
+        let env_templates = effective_env(&no_static, &t, &no_user);
         let err = resolve_command_with_ports(
             "t",
             &t,
-            &HashMap::new(),
+            &env_templates,
             Path::new("/wt"),
             None,
             &BTreeMap::new(),
@@ -480,6 +503,49 @@ mod tests {
             }
             _ => panic!("expected sequence"),
         }
+    }
+
+    #[test]
+    fn effective_env_merges_and_drops_overridden_keys() {
+        let static_env: HashMap<String, String> = [
+            ("A".to_string(), "from-static".to_string()),
+            ("B".to_string(), "from-static".to_string()),
+        ]
+        .into();
+        let t = command_task(None, &["git"], &[("B", "from-task"), ("C", "from-task")]);
+        let user: BTreeMap<String, String> = [("C".to_string(), "x".to_string())].into();
+        let m = effective_env(&static_env, &t, &user);
+        assert_eq!(m["A"], "from-static");
+        assert_eq!(m["B"], "from-task");
+        assert!(!m.contains_key("C"));
+    }
+
+    #[test]
+    fn overridden_env_key_is_not_rendered() {
+        // BASE references a port that is NOT in the ports map; rendering it
+        // would error. The user override must make that value irrelevant.
+        let t = command_task(
+            None,
+            &["git"],
+            &[("BASE", "http://localhost:{{ ports['api-prod'] }}")],
+        );
+        let user: BTreeMap<String, String> =
+            [("BASE".to_string(), "https://preview".to_string())].into();
+        let no_static = HashMap::new();
+        let env_templates = effective_env(&no_static, &t, &user);
+        let plan = resolve_command_with_ports(
+            "t",
+            &t,
+            &env_templates,
+            Path::new("/wt"),
+            None,
+            &BTreeMap::new(),
+            None,
+            &BTreeMap::new(),
+            &user,
+        )
+        .unwrap();
+        assert_eq!(plan.env["BASE"], "https://preview");
     }
 
     #[test]
