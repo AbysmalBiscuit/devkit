@@ -119,6 +119,10 @@ fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("install-service") => return service::install(),
         Some("uninstall-service") => return service::uninstall(),
+        Some("--version" | "-V") => {
+            println!("devkitd {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
         _ => {}
     }
     // Mark this process as the daemon so registry facade calls resolve locally

@@ -7,6 +7,7 @@ use devkit_locks::model::{Conflict, LockEntry, WriteDecision};
 #[derive(Parser)]
 #[command(
     name = "lockm",
+    version,
     about = "Advisory file locks for parallel local sessions"
 )]
 struct Cli {

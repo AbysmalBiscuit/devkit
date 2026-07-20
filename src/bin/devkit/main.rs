@@ -7,7 +7,11 @@ mod brief;
 mod doctor;
 
 #[derive(Parser)]
-#[command(name = "devkit", about = "Configure and diagnose the devkit toolkit")]
+#[command(
+    name = "devkit",
+    version,
+    about = "Configure and diagnose the devkit toolkit"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,

@@ -38,6 +38,7 @@ fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
 #[derive(Parser)]
 #[command(
     name = "issue",
+    version,
     about = "Issue lifecycle: setup, status, info, end, prs, dashboard, review"
 )]
 struct Cli {

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "docm",
+    version,
     about = "Version-correct local library docs and source checkouts"
 )]
 struct Cli {

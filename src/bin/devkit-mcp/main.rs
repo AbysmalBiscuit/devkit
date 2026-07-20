@@ -4,6 +4,10 @@ use anyhow::Result;
 
 fn main() -> Result<()> {
     devkit_common::report::install_panic_hook("devkit-mcp");
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
+        println!("devkit-mcp {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     devkit_common::paths::migrate_legacy_state();
     let ctx = devkit_mcp::ServerCtx {
         default_holder: devkit_mcp::mint_holder(),

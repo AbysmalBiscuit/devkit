@@ -34,7 +34,10 @@ fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
 }
 
 #[derive(Parser)]
-#[command(about = "Run local dev servers for an issue worktree (with optional baseline A/B)")]
+#[command(
+    version,
+    about = "Run local dev servers for an issue worktree (with optional baseline A/B)"
+)]
 struct Cli {
     #[arg(short = 'C', long = "dir", global = true)]
     dir: Option<String>,

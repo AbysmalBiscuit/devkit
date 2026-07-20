@@ -4,7 +4,7 @@ use clap_complete::Shell;
 use devkit_ports::registry::{self, Data, Role};
 
 #[derive(Parser)]
-#[command(about = "Port registry for local dev servers")]
+#[command(version, about = "Port registry for local dev servers")]
 struct Cli {
     #[arg(short = 'C', long = "dir")]
     dir: Option<String>,
