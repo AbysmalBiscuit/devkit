@@ -60,6 +60,10 @@ struct PrsArgs {
     reviews: bool,
     #[serde(default)]
     repo: Option<String>,
+    #[serde(default)]
+    batch_size: Option<u32>,
+    #[serde(default)]
+    retries: Option<u32>,
 }
 
 fn prs_schema() -> Value {
@@ -69,7 +73,9 @@ fn prs_schema() -> Value {
             "root": { "type": "string", "description": "Directory to run gh in (default \".\"); not the MCP server's CWD." },
             "mine": { "type": "boolean", "description": "Include PRs you authored. Neither flag set ⇒ both groups." },
             "reviews": { "type": "boolean", "description": "Include PRs awaiting your review. Neither flag set ⇒ both groups." },
-            "repo": { "type": "string", "description": "owner/name to target instead of detecting from root." }
+            "repo": { "type": "string", "description": "owner/name to target instead of detecting from root." },
+            "batch_size": { "type": "integer", "description": "PRs fetched per search page (default 25). Lower it if GitHub returns HTTP 504." },
+            "retries": { "type": "integer", "description": "Extra attempts per page after a failure (default 0)." }
         },
         "additionalProperties": false
     })
@@ -95,6 +101,10 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
         a.repo.as_deref(),
         &ignored_checks,
         resolve_pr_links,
+        prs::Fetch {
+            batch_size: a.batch_size.unwrap_or(prs::DEFAULT_BATCH_SIZE),
+            retries: a.retries.unwrap_or(0),
+        },
     )?;
     Ok(serde_json::to_value(report)?)
 }

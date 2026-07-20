@@ -122,6 +122,13 @@ enum Cmd {
         repo: Option<String>,
         #[arg(long = "no-cache")]
         no_cache: bool,
+        /// PRs fetched per GitHub search page. Lower this if GitHub returns
+        /// HTTP 504 on a repo with many open PRs.
+        #[arg(long, default_value_t = devkit_issue::prs::DEFAULT_BATCH_SIZE, value_parser = clap::value_parser!(u32).range(1..=100))]
+        batch_size: u32,
+        /// Extra attempts per page after a failed fetch, with backoff.
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=10))]
+        retries: u32,
     },
     /// Combined at-a-glance view plus issue/PR/commit timelines.
     Dashboard {
@@ -244,7 +251,19 @@ fn main() -> Result<()> {
             reviews,
             repo,
             no_cache,
-        }) => prs::run(mine, reviews, repo, no_cache, cli.config),
+            batch_size,
+            retries,
+        }) => prs::run(
+            mine,
+            reviews,
+            repo,
+            no_cache,
+            cli.config,
+            devkit_issue::prs::Fetch {
+                batch_size,
+                retries,
+            },
+        ),
         Some(Cmd::Dashboard {
             bucket,
             chart,

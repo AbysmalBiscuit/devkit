@@ -6,6 +6,10 @@ use std::collections::{BTreeMap, HashMap};
 
 // GraphQL response shapes ---------------------------------------------------------
 
+/// The shape of the old single-request response. Sections are now fetched and
+/// paged separately, so this survives only as the fixture wrapper that lets the
+/// classification tests parse a whole-response JSON blob.
+#[cfg(test)]
 #[derive(serde::Deserialize)]
 struct GqlResp {
     data: GqlData,
@@ -30,6 +34,35 @@ struct Viewer {
 #[serde(default)]
 struct SearchNodes {
     nodes: Vec<PrNode>,
+}
+
+/// One page of a single search section, plus the cursor to the next.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct SearchPage {
+    nodes: Vec<PrNode>,
+    #[serde(rename = "pageInfo")]
+    page_info: PageInfo,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct PageInfo {
+    #[serde(rename = "hasNextPage")]
+    has_next_page: bool,
+    #[serde(rename = "endCursor")]
+    end_cursor: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct PageResp {
+    data: PageData,
+}
+
+#[derive(serde::Deserialize)]
+struct PageData {
+    viewer: Viewer,
+    search: SearchPage,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -567,14 +600,61 @@ __typename \
 reviews(last: 100) { nodes { author { login } state submittedAt } } \
 reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }";
 
-fn build_query(repo: &str) -> String {
-    let scope = format!("repo:{repo} ");
-    let frag = format!("nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }}");
+/// One of the three PR searches the report is built from. Each is fetched as its
+/// own paginated query: a single request carrying all three at `first: 100` asks
+/// GitHub to resolve ~90k nodes before it can answer, which times out (HTTP 504)
+/// on a repo with many open PRs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Section {
+    Mine,
+    ReviewRequested,
+    ReviewedBy,
+}
+
+impl Section {
+    /// The search qualifier selecting this section's PRs.
+    fn qualifier(self) -> &'static str {
+        match self {
+            Section::Mine => "author:@me",
+            Section::ReviewRequested => "review-requested:@me",
+            Section::ReviewedBy => "reviewed-by:@me",
+        }
+    }
+}
+
+/// Pagination and retry knobs for the PR-search round trips.
+#[derive(Clone, Copy, Debug)]
+pub struct Fetch {
+    /// PRs requested per search page. Smaller pages keep each request inside
+    /// GitHub's GraphQL time budget; the nested per-PR selections stay at 100
+    /// because the verdict logic reduces over the full set (see [`PR_FIELDS`]).
+    pub batch_size: u32,
+    /// Extra attempts per page after a failure. Zero ⇒ fail on the first error.
+    pub retries: u32,
+}
+
+impl Default for Fetch {
+    fn default() -> Self {
+        Self {
+            batch_size: DEFAULT_BATCH_SIZE,
+            retries: 0,
+        }
+    }
+}
+
+pub const DEFAULT_BATCH_SIZE: u32 = 25;
+
+/// One page of one section. `after` threads the previous page's `endCursor`.
+fn build_page_query(repo: &str, section: Section, size: u32, after: Option<&str>) -> String {
+    let cursor = match after {
+        Some(c) => format!(", after: \"{c}\""),
+        None => String::new(),
+    };
     format!(
         "query {{ viewer {{ login }} \
-mine: search(query: \"{scope}is:pr is:open author:@me\", type: ISSUE, first: 100) {{ {frag} }} \
-reviewRequested: search(query: \"{scope}is:pr is:open review-requested:@me\", type: ISSUE, first: 100) {{ {frag} }} \
-reviewedBy: search(query: \"{scope}is:pr is:open reviewed-by:@me\", type: ISSUE, first: 100) {{ {frag} }} }}"
+search(query: \"repo:{repo} is:pr is:open {}\", type: ISSUE, first: {size}{cursor}) \
+{{ pageInfo {{ hasNextPage endCursor }} nodes {{ ... on PullRequest {{ {PR_FIELDS} }} }} }} }}",
+        section.qualifier()
     )
 }
 
@@ -684,14 +764,66 @@ pub fn resolve_repo(repo: Option<&str>, cwd: &str) -> Result<String> {
 
 /// One PR-search GraphQL round trip over direct HTTP, falling back to
 /// `gh api graphql` when no token is configured or the HTTP path fails.
-fn fetch_graphql(query: &str, root: &str) -> Result<GqlResp> {
+fn fetch_graphql<T: serde::de::DeserializeOwned>(query: &str, root: &str) -> Result<T> {
     if let Ok(v) = github::graphql(query)
-        && let Ok(resp) = serde_json::from_value::<GqlResp>(v)
+        && let Ok(resp) = serde_json::from_value::<T>(v)
     {
         return Ok(resp);
     }
     let arg = format!("query={query}");
     gh_json(&["api", "graphql", "-f", &arg], root)
+}
+
+/// Backoff before retry `attempt` (1-based): 1s, 2s, 4s, then 8s for the rest.
+fn backoff(attempt: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(1 << attempt.saturating_sub(1).min(3))
+}
+
+/// One page, retried up to `retries` times. Both transports are tried on every
+/// attempt (`fetch_graphql` already falls back HTTP → `gh`), so a retry covers a
+/// 504 from either. The last error is what surfaces.
+fn fetch_page(query: &str, root: &str, retries: u32) -> Result<PageResp> {
+    let mut attempt = 0;
+    loop {
+        match fetch_graphql::<PageResp>(query, root) {
+            Ok(resp) => return Ok(resp),
+            Err(e) if attempt < retries => {
+                attempt += 1;
+                std::thread::sleep(backoff(attempt));
+                let _ = e;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// The viewer login plus every PR node of one fully-paged section.
+type SectionNodes = Result<(String, Vec<PrNode>)>;
+
+/// Follow `pageInfo` cursors until GitHub reports no more, accumulating nodes.
+/// `next` fetches one page for a given cursor; split from the transport so the
+/// loop is unit-testable. Returns the viewer login alongside the nodes.
+fn paginate(mut next: impl FnMut(Option<&str>) -> Result<(String, SearchPage)>) -> SectionNodes {
+    let mut nodes = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let (login, page) = next(cursor.as_deref())?;
+        nodes.extend(page.nodes);
+        // A `hasNextPage` with no cursor would loop forever on the same page.
+        match page.page_info.end_cursor {
+            Some(c) if page.page_info.has_next_page => cursor = Some(c),
+            _ => return Ok((login, nodes)),
+        }
+    }
+}
+
+/// Every open PR in one section, paged at `f.batch_size`.
+fn fetch_section(repo: &str, section: Section, root: &str, f: Fetch) -> SectionNodes {
+    paginate(|cursor| {
+        let query = build_page_query(repo, section, f.batch_size, cursor);
+        let resp = fetch_page(&query, root, f.retries)?;
+        Ok((resp.data.viewer.login, resp.data.search))
+    })
 }
 
 /// Fetch and classify the caller's PRs in a single GraphQL round-trip.
@@ -707,6 +839,7 @@ pub fn gather(
     repo: Option<&str>,
     ignored_checks: &[String],
     resolve_pr_links: bool,
+    fetch: Fetch,
 ) -> Result<PrsReport> {
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
@@ -714,9 +847,59 @@ pub fn gather(
         Some(r) => r.to_string(),
         None => resolve_repo(None, root)?,
     };
-    let query = build_query(&repo);
-    let resp = fetch_graphql(&query, root)?;
-    let mut report = classify(resp.data, want_mine, want_reviews, ignored_checks);
+
+    // Only the sections the report will render are fetched, and the three run
+    // concurrently — each paginates independently, so serialising them would
+    // multiply the wall clock by the section count.
+    let mut wanted = Vec::new();
+    if want_mine {
+        wanted.push(Section::Mine);
+    }
+    if want_reviews {
+        wanted.push(Section::ReviewRequested);
+        wanted.push(Section::ReviewedBy);
+    }
+    let fetched: Vec<(Section, SectionNodes)> = std::thread::scope(|s| {
+        let handles: Vec<_> = wanted
+            .iter()
+            .map(|&sec| {
+                let repo = repo.as_str();
+                (sec, s.spawn(move || fetch_section(repo, sec, root, fetch)))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|(sec, h)| {
+                (
+                    sec,
+                    h.join()
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("{sec:?} search thread panicked"))),
+                )
+            })
+            .collect()
+    });
+
+    let mut data = GqlData {
+        viewer: Viewer {
+            login: String::new(),
+        },
+        mine: SearchNodes::default(),
+        review_requested: SearchNodes::default(),
+        reviewed_by: SearchNodes::default(),
+    };
+    for (sec, res) in fetched {
+        let (login, nodes) = res?;
+        if data.viewer.login.is_empty() {
+            data.viewer.login = login;
+        }
+        match sec {
+            Section::Mine => data.mine.nodes = nodes,
+            Section::ReviewRequested => data.review_requested.nodes = nodes,
+            Section::ReviewedBy => data.reviewed_by.nodes = nodes,
+        }
+    }
+
+    let mut report = classify(data, want_mine, want_reviews, ignored_checks);
     if resolve_pr_links {
         let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
         let urls: Vec<String> = report
@@ -779,6 +962,115 @@ mod tests {
         assert_eq!(report.reviews[0].issue_ids, vec!["SWE-2"]);
         assert_eq!(report.reviews[0].my_vote, "-");
         assert_eq!(report.reviews[0].action, "REVIEW NEEDED");
+    }
+
+    fn page(nodes: &[u64], next: Option<&str>) -> SearchPage {
+        SearchPage {
+            nodes: nodes
+                .iter()
+                .map(|n| node(serde_json::json!({ "number": n })))
+                .collect(),
+            page_info: PageInfo {
+                has_next_page: next.is_some(),
+                end_cursor: next.map(str::to_string),
+            },
+        }
+    }
+
+    // Every page is followed, and each request carries the previous page's
+    // cursor — the whole point of paging: no PR is dropped past the first page.
+    #[test]
+    fn paginate_follows_cursors_across_pages() {
+        let mut seen_cursors: Vec<Option<String>> = Vec::new();
+        let (login, nodes) = paginate(|c| {
+            seen_cursors.push(c.map(str::to_string));
+            Ok(match c {
+                None => ("me".into(), page(&[1, 2], Some("c1"))),
+                Some("c1") => ("me".into(), page(&[3, 4], Some("c2"))),
+                _ => ("me".into(), page(&[5], None)),
+            })
+        })
+        .unwrap();
+        assert_eq!(login, "me");
+        let got: Vec<u64> = nodes.iter().map(|n| n.number).collect();
+        assert_eq!(got, vec![1, 2, 3, 4, 5]);
+        assert_eq!(
+            seen_cursors,
+            vec![None, Some("c1".to_string()), Some("c2".to_string())]
+        );
+    }
+
+    // `hasNextPage: true` with a null `endCursor` must terminate rather than
+    // refetch page one forever.
+    #[test]
+    fn paginate_stops_when_cursor_missing() {
+        let mut calls = 0;
+        let (_, nodes) = paginate(|_| {
+            calls += 1;
+            assert!(calls < 10, "paginate looped on a null cursor");
+            Ok((
+                "me".into(),
+                SearchPage {
+                    nodes: vec![node(serde_json::json!({ "number": 1 }))],
+                    page_info: PageInfo {
+                        has_next_page: true,
+                        end_cursor: None,
+                    },
+                },
+            ))
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(nodes.len(), 1);
+    }
+
+    // A page error aborts the whole section: a partial PR list would silently
+    // under-report, which is worse than failing loudly.
+    #[test]
+    fn paginate_propagates_page_error() {
+        let mut calls = 0;
+        let res = paginate(|_| {
+            calls += 1;
+            if calls == 1 {
+                Ok(("me".into(), page(&[1], Some("c1"))))
+            } else {
+                Err(anyhow::anyhow!("HTTP 504"))
+            }
+        });
+        assert!(res.is_err());
+        assert_eq!(calls, 2);
+    }
+
+    // The per-section query carries the batch size, the section's qualifier, and
+    // the cursor — and keeps the nested selections at 100 (the verdict logic
+    // reduces over the full review/check set).
+    #[test]
+    fn page_query_shape() {
+        let first = build_page_query("o/r", Section::Mine, 25, None);
+        assert!(first.contains("first: 25"), "{first}");
+        assert!(first.contains("author:@me"), "{first}");
+        assert!(!first.contains("after:"), "{first}");
+        assert!(
+            first.contains("pageInfo { hasNextPage endCursor }"),
+            "{first}"
+        );
+        assert!(first.contains("reviews(last: 100)"), "{first}");
+
+        let next = build_page_query("o/r", Section::ReviewRequested, 10, Some("Y3Vyc29y"));
+        assert!(next.contains("first: 10, after: \"Y3Vyc29y\""), "{next}");
+        assert!(next.contains("review-requested:@me"), "{next}");
+
+        let by = build_page_query("o/r", Section::ReviewedBy, 25, None);
+        assert!(by.contains("reviewed-by:@me"), "{by}");
+    }
+
+    #[test]
+    fn backoff_grows_then_caps() {
+        assert_eq!(backoff(1).as_secs(), 1);
+        assert_eq!(backoff(2).as_secs(), 2);
+        assert_eq!(backoff(3).as_secs(), 4);
+        assert_eq!(backoff(4).as_secs(), 8);
+        assert_eq!(backoff(9).as_secs(), 8);
     }
 
     // GitHub returns `submittedAt: null` for a PENDING review. The node must

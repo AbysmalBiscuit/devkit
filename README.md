@@ -64,7 +64,7 @@ issue checkout-pr <PR_LINEAR_ID_URL> [WORKTREE_PATH] [--setup [--apps a,b]]
 issue status [ids…]                           # read-only triage table (also the bare `issue`)
 issue info [selector] [--json] [--cache-only] # one worktree's PR number + Linear id (defaults to current)
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
-issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache]
+issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size <N>] [--retries <N>]
 issue dashboard [--bucket auto|day|week|month] [--chart bar|line] [--mode absolute|proportional] [--all-roles] [--author <email>] [--no-plots] [--no-cache]
 issue review request [<body>] --to <alias|#channel> [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push] [--arg k=v]
 issue review finish  [<body>] [--pr <number>] [--to <alias|#channel>] [--arg k=v]
@@ -75,7 +75,7 @@ issue review finish  [<body>] [--pr <number>] [--to <alias|#channel>] [--arg k=v
 - **`status`** (the default when you run bare `issue`): triage table of every issue worktree. A worktree is FINISHED only when its PR is MERGED, its Linear issue is Done, and the working tree is clean.
 - **`info`**: shows one worktree's PR number and Linear id. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single machine-readable object (the `IssueWorktree` struct, with `pr_number`/`issue_id` for scripts). `--cache-only` skips the network — the PR number comes from the per-worktree cache at `<worktree>/.devkit/pr.json` and Linear state renders as `—`. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
 - **`end`**: removes FINISHED worktrees. `--pr-only` ignores the Linear and issue-id gates (finished = PR merged + clean, even without a Linear-style branch name); `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation.
-- **`prs`**: GitHub PR triage of your open PRs and PRs awaiting your review, with a per-repo diff cache that renders `old → new` for anything changed since the last run.
+- **`prs`**: GitHub PR triage of your open PRs and PRs awaiting your review, with a per-repo diff cache that renders `old → new` for anything changed since the last run. The three searches (authored, review-requested, reviewed-by) run concurrently, each paged at `--batch-size` (default 25) and followed to exhaustion, so the table is complete however many PRs are open. Lower the batch size if GitHub answers a page with HTTP 504 — the per-PR check and review selections are what make a page expensive. `--retries <N>` (default 0) re-attempts a failed page with backoff.
 - **`dashboard`**: the triage + PR tables, plus terminal timelines of your Linear issues by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). The timeline fetches (Linear + GitHub) are cached under `~/.cache/devkit/dashboard` for a few minutes so reruns are fast; the live triage/PR panel is never cached. `--no-plots` shows only the tables; `--no-cache` forces a fresh fetch.
 - **`review`**: two subcommands — `review request` (push, open/reuse PR, add GitHub reviewers, Slack them) and `review finish` (Slack the PR author when you are done reviewing). See below.
 
