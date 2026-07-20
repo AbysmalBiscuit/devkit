@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.12.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.11.0...v0.12.0) (2026-07-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **issue:** prs views carry issue_ids as a list
+
+### Features
+
+* **cli:** accept the arg shapes agents guess ([c2d51a2](https://github.com/AbysmalBiscuit/devkit/commit/c2d51a23cc2b37016518d30fee2114a29ff87879))
+* **cli:** report --version from every binary ([51f876e](https://github.com/AbysmalBiscuit/devkit/commit/51f876ed9fd6bb9c50eec153450cd45344fd5a15))
+* **config:** add [linear] resolve_pr_links option ([6a1b1b3](https://github.com/AbysmalBiscuit/devkit/commit/6a1b1b3924cb4c357e1e98747f03269d8e4e1f0d))
+* **devkit:** add brief for session-start orientation ([2c015eb](https://github.com/AbysmalBiscuit/devkit/commit/2c015eb67016744fe8df2705f3e77b8b44c3f147))
+* **devkit:** warn on binary/plugin version skew ([2fe1197](https://github.com/AbysmalBiscuit/devkit/commit/2fe1197d5876ae4adea2b1217704299ec3883e94))
+* **devrun:** add config tasks listing subcommand ([a9b8062](https://github.com/AbysmalBiscuit/devkit/commit/a9b8062b73d0865fd509439580778dd7476182e2))
+* **devrun:** apply task env overlay to up steps ([6a0eee7](https://github.com/AbysmalBiscuit/devkit/commit/6a0eee70caea1ed059213c03880e8f6feb1f8231))
+* **devrun:** re-resolve task steps at execution time ([59a84a3](https://github.com/AbysmalBiscuit/devkit/commit/59a84a3a9687f777435370e68ebefc9b952f26d6))
+* **hooks:** inject project brief at session start ([0ff14bc](https://github.com/AbysmalBiscuit/devkit/commit/0ff14bc366308a6ebc2d0d07669456434dad7cfd))
+* **issue:** add linear issue column to prs review table ([d3114c9](https://github.com/AbysmalBiscuit/devkit/commit/d3114c9a6db84b8fb811fa886226ce9d7ad19099))
+* **issue:** config-gate linear pr-link resolution ([1daacb1](https://github.com/AbysmalBiscuit/devkit/commit/1daacb12e3112e408c3c969c12958dd1758a0e53))
+* **issue:** union linear-linked issue ids into prs rows ([44e843c](https://github.com/AbysmalBiscuit/devkit/commit/44e843c802ddfea43565f0c30206bb274333894d))
+* **linear:** batched pr-url to linked-issues lookup ([cd8cfb7](https://github.com/AbysmalBiscuit/devkit/commit/cd8cfb74e1bf1e10cf47f5e492b9845b980fd008))
+* **plugin:** bootstrap binaries at session start ([03913fb](https://github.com/AbysmalBiscuit/devkit/commit/03913fb36ca2a164dc8bb0cba3c002cd117b59c2))
+* **ports:** add live_port lookup and holder-scope test ([631bbd2](https://github.com/AbysmalBiscuit/devkit/commit/631bbd227258980021403241bc358be893b98f00))
+* **ports:** add require_live field to task config ([b4ff9f5](https://github.com/AbysmalBiscuit/devkit/commit/b4ff9f5d2f21c8936ee7909645799b4a9eb684f0))
+* **ports:** gate task execution on live servers ([cd8e8a9](https://github.com/AbysmalBiscuit/devkit/commit/cd8e8a924c8e78a6ef519ccd51c1114a75d5d52a))
+* **ports:** user env overrides waive task port refs ([fbed7a6](https://github.com/AbysmalBiscuit/devkit/commit/fbed7a672bfb0e351fc97acac7db445144ff96fd))
+* **ports:** validate require_live names and references ([d7d86c3](https://github.com/AbysmalBiscuit/devkit/commit/d7d86c3be5f76d8ef02896eec5e18fea16fb8973))
+* **skills:** inject live binary help into using-devkit ([f3ded26](https://github.com/AbysmalBiscuit/devkit/commit/f3ded26b510d291abb86926d4d4b6a75c016fdda))
+
+
+### Bug Fixes
+
+* **issue:** drop issue-id gate under end --pr-only ([4bcb65b](https://github.com/AbysmalBiscuit/devkit/commit/4bcb65baf795bf6490afc12a9bf5cbc7c09f32db))
+* **issue:** page PR searches to avoid GitHub 504 ([141a950](https://github.com/AbysmalBiscuit/devkit/commit/141a950c15ca5ba7ded7498ba801cdd27964a7ad))
+* **issue:** resolve prs issue id from title when branch lacks one ([71855f8](https://github.com/AbysmalBiscuit/devkit/commit/71855f8e6c392dd834df544d445e110d0ccf3dfc))
+* **ports:** scan merged env for require_live refs ([54a410e](https://github.com/AbysmalBiscuit/devkit/commit/54a410e9c3685c9eb23ac09fc9140c17533a6902))
+* **skills:** reword literal preprocessing pattern that aborted skill load ([14dc595](https://github.com/AbysmalBiscuit/devkit/commit/14dc595eacff02b9266d7bb286e253c2204a7682))
+
+
+### Code Refactoring
+
+* **issue:** prs views carry issue_ids as a list ([2e958b8](https://github.com/AbysmalBiscuit/devkit/commit/2e958b80e20d273a033868ed441da90df0abbefb))
+
 ## [0.11.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.10.0...v0.11.0) (2026-07-14)
 
 
