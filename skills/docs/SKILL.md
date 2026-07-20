@@ -1,6 +1,6 @@
 ---
 name: docs
-description: Use when the user asks how to use, configure, or debug an external library or framework (e.g. "how do I cancel a JoinHandle in tokio", "what does this godot node do"), or invokes /docs. Resolves a version-correct local checkout of the library's source and docs via the docm CLI, then searches it.
+description: Use whenever a question or task hinges on how a third-party library, framework, or crate actually behaves — API semantics, feature support, version differences, intended usage (e.g. "how do I cancel a JoinHandle in tokio", "why does kysely's leftJoin filter rows"). Trigger even when you already know the answer — training knowledge is version-stale; this skill resolves a version-correct local checkout of the library's own source and docs via the docm CLI (any library, registered or not) and answers from that. The library question is often wrapped in project context — file paths, line numbers, "fix our code" — if resolving it requires knowing what the dependency does or expects, use this skill first. Also use on /docs. Not for: this repo's own code, bumping dependency versions, summarizing web content, or authoring project documentation.
 allowed-tools: Bash(docm list)
 ---
 
