@@ -33,7 +33,14 @@ if %ERRORLEVEL% equ 0 (
     exit /b %ERRORLEVEL%
 )
 
-REM No bash found - exit silently rather than error
+REM No bash. Fall back to a PowerShell twin of the hook where one exists, so a
+REM Windows host without Git for Windows still gets hooks that must run.
+if exist "%HOOK_DIR%%~1.ps1" (
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%HOOK_DIR%%~1.ps1" %2 %3 %4 %5 %6 %7 %8 %9
+    exit /b %ERRORLEVEL%
+)
+
+REM Bash-only hook with no bash - exit silently rather than error
 REM (plugin still works, just without SessionStart context injection)
 exit /b 0
 CMDBLOCK

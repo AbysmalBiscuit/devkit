@@ -4,6 +4,10 @@
       {
         "matcher": "startup|resume|clear",
         "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" bootstrap-binaries"
+          },
           { "type": "command", "command": "devkit brief" }
         ]
       }

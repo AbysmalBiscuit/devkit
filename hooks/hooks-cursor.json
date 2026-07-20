@@ -4,6 +4,10 @@
     "sessionStart": [
       {
         "type": "command",
+        "command": "./hooks/run-hook.cmd bootstrap-binaries"
+      },
+      {
+        "type": "command",
         "command": "./hooks/run-hook.cmd announce-skill"
       }
     ]

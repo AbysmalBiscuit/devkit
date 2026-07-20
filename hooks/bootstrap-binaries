@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# SessionStart hook: ensure the devkit binaries this plugin drives are present
+# and match its version, installing them from the matching GitHub release.
+#
+# The plugin's other hooks (`devkit brief`, `lockm hook …`) and its MCP server
+# (`devkit-mcp`) are resolved from PATH, but a plugin install cannot place them
+# there — Claude Code has no install lifecycle hook. This runs at session start
+# instead.
+#
+# Every failure path exits 0: a session must start even with no network.
+
+set -uo pipefail
+
+[ "${DEVKIT_NO_BOOTSTRAP:-}" = "1" ] && exit 0
+
+REPO_URL="https://github.com/AbysmalBiscuit/devkit"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+MANIFEST="${PLUGIN_ROOT}/.claude-plugin/plugin.json"
+
+warn() { printf 'devkit plugin: %s\n' "$1" >&2; }
+
+version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST" 2>/dev/null | head -1)
+if [ -z "$version" ]; then
+    warn "could not read a version from ${MANIFEST}; skipping binary bootstrap"
+    exit 0
+fi
+
+state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/devkit"
+stamp="${state_dir}/bootstrap-version"
+failed="${state_dir}/bootstrap-failed"
+
+missing=""
+for bin in devkit lockm devkit-mcp; do
+    command -v "$bin" >/dev/null 2>&1 || missing="${missing} ${bin}"
+done
+
+if [ -z "$missing" ]; then
+    case "$(cat "$stamp" 2>/dev/null || true)" in
+        "$version") exit 0 ;;
+        # Binaries we did not install (cargo, a distro package, a source build).
+        # Record that and never overwrite them; upgrades stay the user's call.
+        "" | external)
+            mkdir -p "$state_dir" 2>/dev/null && printf 'external\n' >"$stamp" 2>/dev/null
+            exit 0
+            ;;
+        *) action="updating devkit binaries to ${version}" ;;
+    esac
+else
+    action="installing devkit binaries ${version} (missing:${missing} )"
+fi
+
+# A pinned installer keeps the binaries in lockstep with the hooks and MCP
+# server this plugin version ships.
+if [ "$(cat "$failed" 2>/dev/null || true)" = "$version" ]; then
+    warn "install of ${version} failed previously; run the installer yourself or remove ${failed} to retry"
+    exit 0
+fi
+
+warn "$action"
+
+case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW* | MSYS* | CYGWIN*)
+        installer="${REPO_URL}/releases/download/v${version}/devkit-installer.ps1"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass \
+            -Command "irm ${installer} | iex" >&2
+        ;;
+    *)
+        installer="${REPO_URL}/releases/download/v${version}/devkit-installer.sh"
+        curl --proto '=https' --tlsv1.2 -LsSf \
+            --connect-timeout 10 --max-time 300 "$installer" | sh >&2
+        ;;
+esac
+status=$?
+
+mkdir -p "$state_dir" 2>/dev/null
+if [ "$status" -ne 0 ]; then
+    printf '%s\n' "$version" >"$failed" 2>/dev/null
+    warn "installer exited ${status}; see ${REPO_URL}#install to install manually"
+    exit 0
+fi
+
+printf '%s\n' "$version" >"$stamp" 2>/dev/null
+rm -f "$failed" 2>/dev/null
+warn "devkit ${version} installed; binaries land on PATH via CARGO_HOME (restart the session if they are not found yet)"
+exit 0

@@ -6,6 +6,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"${PLUGIN_ROOT}/hooks/run-hook.cmd\" bootstrap-binaries",
+            "async": false
+          },
+          {
+            "type": "command",
             "command": "\"${PLUGIN_ROOT}/hooks/run-hook.cmd\" announce-skill",
             "async": false
           }

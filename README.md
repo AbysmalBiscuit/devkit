@@ -249,9 +249,33 @@ devkit ships two things for agents:
   `devkit-mcp` server, bundled together; and
 - the **`devkit-mcp` server on its own**, for hosts without a plugin system.
 
-Either way the binaries must be on your `PATH` first — the plugin's MCP entry and
+Either way the binaries must be on your `PATH` — the plugin's MCP entry and
 every config below invoke `devkit-mcp` by name (see [Install](#install) for
-feature flags):
+feature flags).
+
+The **plugin bootstraps them for you**. Claude Code, Codex, and Cursor have no
+install-time hook, so a session-start hook checks for `devkit`, `lockm`, and
+`devkit-mcp` and, when they are missing, runs the [dist](#prebuilt-binaries-no-rust-toolchain)
+installer for the GitHub release matching the plugin's own version — so the
+binaries stay in lockstep with the hooks and MCP server that drive them. It
+re-runs on plugin update, when the version moves.
+
+Two cases where it stays out of the way:
+
+- **Binaries already on `PATH` that the hook did not install** (`cargo install`,
+  a distro package, a source build) are never overwritten — the hook records
+  them as externally managed and leaves upgrades to you.
+- **`DEVKIT_NO_BOOTSTRAP=1`** disables it outright.
+
+A failed install (offline, say) never blocks the session; it warns and does not
+retry until you resolve it or delete
+`${XDG_STATE_HOME:-~/.local/state}/devkit/bootstrap-failed`.
+
+On Windows the hook runs under Git Bash when it is present and under PowerShell
+otherwise, so it does not depend on a bash being installed. Both paths resolve
+the same state directory, so gaining Git Bash later does not reinstall.
+
+To install the binaries yourself instead, see [Install](#install):
 
 ```sh
 cargo install --path .
