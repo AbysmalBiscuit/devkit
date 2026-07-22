@@ -25,11 +25,39 @@ pub fn table_on(stream: Stream, headers: &[&str]) -> Table {
 
 /// OSC8 hyperlink when the terminal supports it; otherwise just the label.
 pub fn link(label: &str, url: &str) -> String {
-    link_styled(
-        supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout),
-        label,
-        url,
-    )
+    link_styled(hyperlinks_enabled_on(Stream::Stdout), label, url)
+}
+
+/// Whether to emit OSC 8 hyperlinks on `stream`. `DEVKIT_HYPERLINKS` overrides
+/// detection — `always`/`1`/`on`/`true`/`yes` forces links, `never`/`0`/`off`/
+/// `false`/`no` suppresses them — for terminals `supports-hyperlinks` can't
+/// identify. Some capable terminals (e.g. alacritty forks that report a bare
+/// `TERM=xterm-256color` with no `TERM_PROGRAM`) render OSC 8 fine yet fail its
+/// detection, degrading links to plain text; the override restores them. Unset
+/// falls back to `supports-hyperlinks`, which gates on both TTY-ness and a
+/// recognised terminal.
+pub(crate) fn hyperlinks_enabled_on(stream: Stream) -> bool {
+    if let Ok(v) = std::env::var("DEVKIT_HYPERLINKS")
+        && let Some(force) = parse_flag(&v)
+    {
+        return force;
+    }
+    let s = match stream {
+        Stream::Stdout => supports_hyperlinks::Stream::Stdout,
+        Stream::Stderr => supports_hyperlinks::Stream::Stderr,
+    };
+    supports_hyperlinks::on(s)
+}
+
+/// Parse a tri-state boolean env value. `1`/`true`/`on`/`always`/`yes` → on,
+/// `0`/`false`/`off`/`never`/`no` → off (case- and whitespace-insensitive);
+/// anything else — including empty — is `None`, meaning "no opinion, detect".
+fn parse_flag(v: &str) -> Option<bool> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "always" | "yes" => Some(true),
+        "0" | "false" | "off" | "never" | "no" => Some(false),
+        _ => None,
+    }
 }
 
 /// Render `label` as an OSC8 hyperlink to `url` when `supported`, else the bare
@@ -300,6 +328,20 @@ mod tests {
             link_styled(true, "PR #1", "https://x"),
             "\x1b]8;;https://x\x1b\\PR #1\x1b]8;;\x1b\\"
         );
+    }
+
+    #[test]
+    fn parse_flag_reads_boolean_words() {
+        for on in ["1", "true", "on", "always", "yes", "TRUE", " Always "] {
+            assert_eq!(parse_flag(on), Some(true), "{on:?} should force on");
+        }
+        for off in ["0", "false", "off", "never", "no", "Never"] {
+            assert_eq!(parse_flag(off), Some(false), "{off:?} should force off");
+        }
+        // No opinion → fall back to terminal detection.
+        for none in ["", "  ", "maybe", "auto"] {
+            assert_eq!(parse_flag(none), None, "{none:?} should defer to detection");
+        }
     }
 
     #[test]

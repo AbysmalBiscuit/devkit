@@ -346,3 +346,4 @@ Env-only tuning knobs with no `config.toml` equivalent:
 | Variable | Default | Meaning |
 |---|---|---|
 | `DEVKIT_FETCH_TTL_SECS` | `60` | Freshness window for `git fetch`. `issue setup`, `issue checkout-pr`, and `devrun up`'s baseline refresh skip a fetch of the same repo+remote made within this many seconds, reusing the remote-tracking refs already on disk (so the ref a worktree is cut from is at most this stale). `0` disables the gate — always fetch. |
+| `DEVKIT_HYPERLINKS` | _(detect)_ | Override OSC 8 hyperlink emission in the `issue`/`portm`/etc. tables. `always`/`1`/`on`/`true`/`yes` forces clickable links; `never`/`0`/`off`/`false`/`no` disables them. Unset auto-detects via [`supports-hyperlinks`](https://crates.io/crates/supports-hyperlinks). Set `always` for a hyperlink-capable terminal that detection misses — e.g. an alacritty fork exporting a bare `TERM=xterm-256color`. |
