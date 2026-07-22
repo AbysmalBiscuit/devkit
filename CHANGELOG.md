@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.1](https://github.com/AbysmalBiscuit/devkit/compare/v0.12.0...v0.12.1) (2026-07-22)
+
+
+### Features
+
+* **ui:** add DEVKIT_HYPERLINKS link override ([79ba23b](https://github.com/AbysmalBiscuit/devkit/commit/79ba23b81133bf8746782a471e9af173d7d10ce8))
+
+
+### Bug Fixes
+
+* **plugin:** broaden docs skill triggering ([dbbc867](https://github.com/AbysmalBiscuit/devkit/commit/dbbc86722d485a83f5113e4b2ed6284b3931b691))
+
 ## [0.12.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.11.0...v0.12.0) (2026-07-20)
 
 
