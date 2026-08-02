@@ -161,6 +161,31 @@ impl LibCache {
         self.dir.join(dirname)
     }
 
+    /// Commit a commitish names in the bare clone, or `None` when it names
+    /// nothing (an unfetched tag, a deleted branch).
+    pub fn rev(&self, commitish: &str) -> Option<String> {
+        let spec = format!("{commitish}^{{commit}}");
+        cmd::git(
+            &["rev-parse", "--verify", "--quiet", &spec],
+            &self.bare_str(),
+        )
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    }
+
+    /// Commit an existing worktree is checked out at.
+    pub fn worktree_head(&self, dirname: &str) -> Option<String> {
+        let path = self.worktree_path(dirname);
+        if !path.is_dir() {
+            return None;
+        }
+        cmd::git(&["rev-parse", "HEAD"], &path.to_string_lossy())
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
     /// Materialize a detached worktree at `commitish` if missing.
     pub fn ensure_worktree(&self, dirname: &str, commitish: &str) -> Result<PathBuf> {
         let path = self.worktree_path(dirname);

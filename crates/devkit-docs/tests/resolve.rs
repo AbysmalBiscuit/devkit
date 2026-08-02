@@ -83,6 +83,38 @@ fn ref_pin_wins_and_no_lockfile_falls_back_to_default_with_warning() {
 }
 
 #[test]
+fn a_changed_ref_never_reports_a_version_the_worktree_does_not_hold() {
+    let tmp = unique_tmp("resolve-stale");
+    let repo = fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let mut entry = LibEntry {
+        name: "mylib".into(),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let r = resolve(&entry, &project, &cache_root).unwrap();
+    assert_eq!(r.version, "v1.0.0");
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+
+    // The pin moves, but re-pointing the shared `default` worktree is
+    // `docm sync`'s job — a lookup must not claim the move already happened.
+    entry.r#ref = Some("v1.1.0".into());
+    let r = resolve(&entry, &project, &cache_root).unwrap();
+    let on_disk = std::fs::read_to_string(r.path.join("src/lib.rs")).unwrap();
+    assert_eq!(on_disk, "// v1", "worktree is still the old pin");
+    assert_ne!(r.version, "v1.1.0", "reported a version it does not serve");
+    assert!(
+        r.warnings.iter().any(|w| w.contains("docm sync")),
+        "stale pin must name the remedy: {:?}",
+        r.warnings
+    );
+}
+
+#[test]
 fn layout_override_applies_and_meta_caches_detection() {
     let tmp = unique_tmp("resolve-layout");
     let repo = fixture_repo(&tmp.join("upstream"));

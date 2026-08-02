@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Serialize)]
 pub struct Resolved {
     pub name: String,
-    /// Human-facing version: lockfile version, the pinned ref, or the branch name.
+    /// Human-facing version: lockfile version, the pinned ref, or the branch
+    /// name — or a commit, when the `default` worktree holds neither.
     pub version: String,
     /// Worktree dirname — also the version recorded in the reference registry.
     pub worktree: String,
@@ -52,14 +53,9 @@ pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Reso
     let mut meta = cache::read_meta(&lib.dir);
 
     let (worktree, version, path, project) = if let Some(pin) = entry.r#ref.as_deref() {
-        // A changed pin is re-pointed by `docm sync`, not on every lookup.
         let path = lib.ensure_worktree("default", pin)?;
-        (
-            "default".to_string(),
-            pin.to_string(),
-            path,
-            project_root(start),
-        )
+        let version = default_version(&lib, &entry.name, pin, &mut warnings);
+        ("default".to_string(), version, path, project_root(start))
     } else {
         let eco = entry
             .ecosystem
@@ -89,7 +85,7 @@ pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Reso
                             "no git tag found for {} {v}; falling back to the default branch",
                             entry.name
                         ));
-                        let (w, ver, p) = default_worktree(&lib)?;
+                        let (w, ver, p) = default_worktree(&lib, &entry.name, &mut warnings)?;
                         (w, ver, p, root)
                     }
                 }
@@ -103,7 +99,7 @@ pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Reso
                         entry.package_name()
                     )
                 });
-                let (w, ver, p) = default_worktree(&lib)?;
+                let (w, ver, p) = default_worktree(&lib, &entry.name, &mut warnings)?;
                 (w, ver, p, project_root(start))
             }
         }
@@ -135,10 +131,37 @@ pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Reso
     })
 }
 
-fn default_worktree(lib: &LibCache) -> Result<(String, String, PathBuf)> {
+fn default_worktree(
+    lib: &LibCache,
+    name: &str,
+    warnings: &mut Vec<String>,
+) -> Result<(String, String, PathBuf)> {
     let branch = lib.default_branch()?;
     let path = lib.ensure_worktree("default", &branch)?;
-    Ok(("default".to_string(), branch, path))
+    let version = default_version(lib, name, &branch, warnings);
+    Ok(("default".to_string(), version, path))
+}
+
+/// What the `default` worktree actually holds, named as `target` when the two
+/// agree and as a commit otherwise.
+///
+/// Every ref-pinned and fallback lookup shares this one worktree, and only
+/// `docm sync` re-points it — so an edited pin, or a branch that moved under a
+/// fetch, leaves the previous commit checked out. Reporting `target` there
+/// would name a version the returned path does not contain.
+fn default_version(lib: &LibCache, name: &str, target: &str, warnings: &mut Vec<String>) -> String {
+    let (Some(want), Some(have)) = (lib.rev(target), lib.worktree_head("default")) else {
+        return target.to_string();
+    };
+    if want == have {
+        return target.to_string();
+    }
+    let short: String = have.chars().take(12).collect();
+    warnings.push(format!(
+        "{name} points at {target}, but its `default` worktree is checked out at \
+         {short}; run `docm sync {name}` to re-point it"
+    ));
+    short
 }
 
 /// Cached pattern first; then a probe; then one fetch (the version may be
