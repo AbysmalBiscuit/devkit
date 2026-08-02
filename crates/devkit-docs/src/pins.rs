@@ -5,7 +5,7 @@
 use crate::cache::LibCache;
 use crate::lockfiles;
 use crate::manifest::{self, Ecosystem};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,6 +55,23 @@ pub fn pins(start: &Path, global: Option<&Path>, cache_root: &Path) -> Vec<Pin> 
         return Vec::new();
     };
     let scoped = project_scoped_names(&d);
+
+    // Resolve every library of an ecosystem in one walk: parsing a large
+    // lockfile once per registered library dominated this call.
+    let mut by_eco: BTreeMap<Ecosystem, Vec<String>> = BTreeMap::new();
+    for e in &d.manifest.libs {
+        if e.r#ref.is_none()
+            && let Some(eco) = e.ecosystem
+            && eco != Ecosystem::Git
+        {
+            by_eco.entry(eco).or_default().push(e.package_name());
+        }
+    }
+    let resolved: BTreeMap<Ecosystem, BTreeMap<String, (std::path::PathBuf, Vec<String>)>> = by_eco
+        .into_iter()
+        .map(|(eco, pkgs)| (eco, lockfiles::find_versions(start, eco, &pkgs)))
+        .collect();
+
     let mut out: Vec<Pin> = d
         .manifest
         .libs
@@ -75,12 +92,11 @@ pub fn pins(start: &Path, global: Option<&Path>, cache_root: &Path) -> Vec<Pin> 
                     project_scoped,
                 };
             }
-            let found = match entry.ecosystem {
-                Some(eco) if eco != Ecosystem::Git => {
-                    lockfiles::find_version(start, eco, &entry.package_name())
-                }
-                _ => None,
-            };
+            let found = entry
+                .ecosystem
+                .and_then(|eco| resolved.get(&eco))
+                .and_then(|m| m.get(&entry.package_name()))
+                .cloned();
             match found {
                 Some((_, versions)) => {
                     let extra = versions.len().saturating_sub(1);

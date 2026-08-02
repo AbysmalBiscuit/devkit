@@ -3,37 +3,81 @@
 //! All parsers are tolerant — an unreadable or unparsable lockfile yields no
 //! versions rather than an error, so resolution can fall through to the
 //! default branch.
+//!
+//! Every parser answers for a *set* of packages from a single parse. A brief
+//! resolves every registered library at once, and parsing a large lockfile
+//! per library dominated that cost.
 
 use crate::manifest::Ecosystem;
+use serde::Deserialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-pub fn versions_in_dir(dir: &Path, eco: Ecosystem, package: &str) -> Vec<String> {
+/// Versions pinned in `dir` for each requested package that appears there.
+pub fn versions_in_dir_many(
+    dir: &Path,
+    eco: Ecosystem,
+    want: &BTreeSet<&str>,
+) -> BTreeMap<String, Vec<String>> {
     match eco {
-        Ecosystem::Rust => toml_packages(&dir.join("Cargo.lock"), package),
-        Ecosystem::Python => toml_packages(&dir.join("uv.lock"), package),
+        Ecosystem::Rust => toml_packages(&dir.join("Cargo.lock"), want),
+        Ecosystem::Python => toml_packages(&dir.join("uv.lock"), want),
         Ecosystem::Js => {
-            let mut v = npm_versions(&dir.join("package-lock.json"), package);
-            v.extend(pnpm_versions(&dir.join("pnpm-lock.yaml"), package));
-            v.extend(bun_versions(&dir.join("bun.lock"), package));
-            v
+            // Each JS lockfile contributes independently: a malformed one must
+            // not suppress the versions another would have supplied.
+            let mut out = npm_versions(&dir.join("package-lock.json"), want);
+            for (k, v) in pnpm_versions(&dir.join("pnpm-lock.yaml"), want) {
+                out.entry(k).or_default().extend(v);
+            }
+            for (k, v) in bun_versions(&dir.join("bun.lock"), want) {
+                out.entry(k).or_default().extend(v);
+            }
+            out
         }
-        Ecosystem::Git => Vec::new(),
+        Ecosystem::Git => BTreeMap::new(),
     }
+}
+
+pub fn versions_in_dir(dir: &Path, eco: Ecosystem, package: &str) -> Vec<String> {
+    let want = BTreeSet::from([package]);
+    versions_in_dir_many(dir, eco, &want)
+        .remove(package)
+        .unwrap_or_default()
+}
+
+/// Resolve many packages in one walk. Each package independently takes the
+/// nearest ancestor whose lockfile mentions it, so a monorepo where packages
+/// resolve at different levels keeps that behaviour; the walk simply stops
+/// early once nothing is left to find.
+pub fn find_versions(
+    start: &Path,
+    eco: Ecosystem,
+    packages: &[String],
+) -> BTreeMap<String, (PathBuf, Vec<String>)> {
+    let mut pending: BTreeSet<&str> = packages.iter().map(String::as_str).collect();
+    let mut out = BTreeMap::new();
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        if pending.is_empty() {
+            break;
+        }
+        for (name, versions) in versions_in_dir_many(d, eco, &pending) {
+            if versions.is_empty() {
+                continue;
+            }
+            pending.remove(name.as_str());
+            out.insert(name, (d.to_path_buf(), versions));
+        }
+        dir = d.parent();
+    }
+    out
 }
 
 /// Walk up from `start`; the first directory whose lockfile mentions
 /// `package` wins. Returns that directory (the project root for registry
 /// purposes) and every version it pins.
 pub fn find_version(start: &Path, eco: Ecosystem, package: &str) -> Option<(PathBuf, Vec<String>)> {
-    let mut dir = Some(start);
-    while let Some(d) = dir {
-        let vs = versions_in_dir(d, eco, package);
-        if !vs.is_empty() {
-            return Some((d.to_path_buf(), vs));
-        }
-        dir = d.parent();
-    }
-    None
+    find_versions(start, eco, &[package.to_string()]).remove(package)
 }
 
 /// Highest version by numeric dot-segment comparison (`10.0.0` > `9.0.1`).
@@ -49,79 +93,111 @@ fn ver_key(v: &str) -> Vec<u64> {
         .collect()
 }
 
+fn insert(out: &mut BTreeMap<String, Vec<String>>, want: &BTreeSet<&str>, name: &str, ver: &str) {
+    if let Some(k) = want.get(name) {
+        out.entry((*k).to_string())
+            .or_default()
+            .push(ver.to_string());
+    }
+}
+
 /// `Cargo.lock` and `uv.lock` share the `[[package]] name/version` shape.
-fn toml_packages(path: &Path, package: &str) -> Vec<String> {
+fn toml_packages(path: &Path, want: &BTreeSet<&str>) -> BTreeMap<String, Vec<String>> {
+    #[derive(Deserialize)]
+    struct Lock {
+        #[serde(default)]
+        package: Vec<Pkg>,
+    }
+    #[derive(Deserialize)]
+    struct Pkg {
+        name: String,
+        version: Option<String>,
+    }
+    let mut out = BTreeMap::new();
     let Ok(s) = std::fs::read_to_string(path) else {
-        return Vec::new();
+        return out;
     };
-    let Ok(t) = s.parse::<toml::Table>() else {
-        return Vec::new();
+    let Ok(lock) = toml::from_str::<Lock>(&s) else {
+        return out;
     };
-    let Some(pkgs) = t.get("package").and_then(|p| p.as_array()) else {
-        return Vec::new();
-    };
-    pkgs.iter()
-        .filter(|p| p.get("name").and_then(|n| n.as_str()) == Some(package))
-        .filter_map(|p| p.get("version").and_then(|v| v.as_str()).map(String::from))
-        .collect()
+    for p in lock.package {
+        if let Some(v) = p.version {
+            insert(&mut out, want, &p.name, &v);
+        }
+    }
+    out
 }
 
 /// package-lock.json v2/v3 `packages` map, falling back to the ancient v1
 /// top-level `dependencies` map.
-fn npm_versions(path: &Path, package: &str) -> Vec<String> {
+fn npm_versions(path: &Path, want: &BTreeSet<&str>) -> BTreeMap<String, Vec<String>> {
+    #[derive(Deserialize)]
+    struct Lock {
+        #[serde(default)]
+        packages: BTreeMap<String, Entry>,
+        #[serde(default)]
+        dependencies: BTreeMap<String, Entry>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        version: Option<String>,
+    }
+    let mut out = BTreeMap::new();
     let Ok(s) = std::fs::read_to_string(path) else {
-        return Vec::new();
+        return out;
     };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) else {
-        return Vec::new();
+    let Ok(lock) = serde_json::from_str::<Lock>(&s) else {
+        return out;
     };
-    let mut out = Vec::new();
-    if let Some(pkgs) = v.get("packages").and_then(|p| p.as_object()) {
-        let suffix = format!("node_modules/{package}");
-        for (k, e) in pkgs {
-            if (k == &suffix || k.ends_with(&format!("/{suffix}")))
-                && let Some(ver) = e.get("version").and_then(|x| x.as_str())
-            {
-                out.push(ver.to_string());
-            }
+    for (key, e) in &lock.packages {
+        // The name is the final `node_modules/` segment, which keeps a scoped
+        // package whole and a nested copy attributed to the package itself.
+        let Some((_, name)) = key.rsplit_once("node_modules/") else {
+            continue;
+        };
+        if let Some(v) = &e.version {
+            insert(&mut out, want, name, v);
         }
     }
-    if out.is_empty()
-        && let Some(ver) = v
-            .get("dependencies")
-            .and_then(|d| d.get(package))
-            .and_then(|e| e.get("version"))
-            .and_then(|x| x.as_str())
-    {
-        out.push(ver.to_string());
+    // The v1 fallback is per package, not per file: a v2 lockfile can carry a
+    // `dependencies` map that names something `packages` never resolved.
+    for (name, e) in &lock.dependencies {
+        if out.contains_key(name.as_str()) {
+            continue;
+        }
+        if let Some(v) = &e.version {
+            insert(&mut out, want, name, v);
+        }
     }
     out
 }
 
 /// pnpm-lock.yaml `packages` keys: v9 `name@1.2.3` / `@scope/name@1.2.3`,
 /// v6 `/name@1.2.3(peer@x)`, v5 `/name/1.2.3`.
-fn pnpm_versions(path: &Path, package: &str) -> Vec<String> {
+fn pnpm_versions(path: &Path, want: &BTreeSet<&str>) -> BTreeMap<String, Vec<String>> {
+    #[derive(Deserialize)]
+    struct Lock {
+        // Only the keys carry name and version; discarding each value avoids
+        // building a tree for the whole file.
+        #[serde(default)]
+        packages: BTreeMap<String, serde::de::IgnoredAny>,
+    }
+    let mut out = BTreeMap::new();
     let Ok(s) = std::fs::read_to_string(path) else {
-        return Vec::new();
+        return out;
     };
-    let Ok(y) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&s) else {
-        return Vec::new();
+    let Ok(lock) = serde_yaml_ng::from_str::<Lock>(&s) else {
+        return out;
     };
-    let Some(pkgs) = y.get("packages").and_then(|p| p.as_mapping()) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for key in pkgs.keys().filter_map(|k| k.as_str()) {
+    for key in lock.packages.keys() {
         let k = key.trim_start_matches('/');
         let k = k.split('(').next().unwrap_or(k);
         let parsed = k
             .rsplit_once('@')
             .filter(|(n, _)| !n.is_empty())
             .or_else(|| k.rsplit_once('/'));
-        if let Some((name, ver)) = parsed
-            && name == package
-        {
-            out.push(ver.to_string());
+        if let Some((name, ver)) = parsed {
+            insert(&mut out, want, name, ver);
         }
     }
     out
@@ -131,22 +207,28 @@ fn pnpm_versions(path: &Path, package: &str) -> Vec<String> {
 /// resolved `name@version` spec. The spec — not the map key — identifies the
 /// package: a key like `parent/kysely` is a nested copy of `kysely`, while
 /// `@scope/kysely` is a different package, and only the spec tells them apart.
-fn bun_versions(path: &Path, package: &str) -> Vec<String> {
+fn bun_versions(path: &Path, want: &BTreeSet<&str>) -> BTreeMap<String, Vec<String>> {
+    #[derive(Deserialize)]
+    struct Lock {
+        #[serde(default)]
+        packages: BTreeMap<String, Vec<serde_json::Value>>,
+    }
+    let mut out = BTreeMap::new();
     let Ok(s) = std::fs::read_to_string(path) else {
-        return Vec::new();
+        return out;
     };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&strip_trailing_commas(&s)) else {
-        return Vec::new();
+    let Ok(lock) = serde_json::from_str::<Lock>(&strip_trailing_commas(&s)) else {
+        return out;
     };
-    let Some(pkgs) = v.get("packages").and_then(|p| p.as_object()) else {
-        return Vec::new();
-    };
-    pkgs.values()
-        .filter_map(|e| e.get(0).and_then(|x| x.as_str()))
-        .filter_map(|spec| spec.rsplit_once('@').filter(|(n, _)| !n.is_empty()))
-        .filter(|(name, _)| *name == package)
-        .map(|(_, ver)| ver.to_string())
-        .collect()
+    for entry in lock.packages.values() {
+        let Some(spec) = entry.first().and_then(|x| x.as_str()) else {
+            continue;
+        };
+        if let Some((name, ver)) = spec.rsplit_once('@').filter(|(n, _)| !n.is_empty()) {
+            insert(&mut out, want, name, ver);
+        }
+    }
+    out
 }
 
 /// bun writes its lockfile as JSONC, but the only JSONC feature its writer
@@ -284,6 +366,42 @@ mod tests {
             vec!["9.9.9"]
         );
         assert!(versions_in_dir(&d, Ecosystem::Js, "absent").is_empty());
+    }
+
+    #[test]
+    fn batching_keeps_each_package_on_its_own_nearest_ancestor() {
+        let root = unique_tmp("batch");
+        let nested = root.join("apps/web");
+        std::fs::create_dir_all(&nested).unwrap();
+        // `serde` is pinned only at the root; `tokio` is pinned at both levels
+        // and must take the nearer one.
+        std::fs::write(
+            root.join("Cargo.lock"),
+            "[[package]]\nname = \"serde\"\nversion = \"1.0.203\"\n\n\
+             [[package]]\nname = \"tokio\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            nested.join("Cargo.lock"),
+            "[[package]]\nname = \"tokio\"\nversion = \"1.38.0\"\n",
+        )
+        .unwrap();
+
+        let got = find_versions(
+            &nested,
+            Ecosystem::Rust,
+            &["serde".to_string(), "tokio".to_string()],
+        );
+        assert_eq!(got["tokio"], (nested.clone(), vec!["1.38.0".to_string()]));
+        assert_eq!(got["serde"], (root.clone(), vec!["1.0.203".to_string()]));
+        // And it agrees with resolving them one at a time.
+        for name in ["serde", "tokio"] {
+            assert_eq!(
+                find_version(&nested, Ecosystem::Rust, name).unwrap(),
+                got[name],
+                "{name}"
+            );
+        }
     }
 
     #[test]
