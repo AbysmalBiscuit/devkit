@@ -161,7 +161,7 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
 }
 
 /// Extract the `[docs]` section of one `devkit.toml`, if present.
-fn docs_layer(path: &Path) -> Result<Option<DocsManifest>> {
+pub fn docs_layer(path: &Path) -> Result<Option<DocsManifest>> {
     let s = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let t: toml::Table = s
         .parse()
