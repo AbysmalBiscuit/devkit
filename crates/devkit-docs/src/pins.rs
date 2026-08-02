@@ -2,7 +2,6 @@
 //! project resolve to? Filesystem only — no clone, no fetch, no worktree —
 //! so a session hook can call it on every start.
 
-use crate::cache::LibCache;
 use crate::lockfiles;
 use crate::manifest::{self, Ecosystem};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,11 +22,6 @@ pub struct Pin {
     pub name: String,
     pub version: Option<String>,
     pub origin: Origin,
-    /// A worktree for this exact version is already on disk, so `docm info`
-    /// will resolve to it. When false the version is only what the lockfile
-    /// *asks* for: resolution still has to find a matching git tag, and falls
-    /// back to the default branch when there is none.
-    pub materialized: bool,
     /// Further versions the lockfile pins beyond the one shown.
     pub other_versions: usize,
     /// Declared by a project's own `devkit.toml`, not the machine-wide
@@ -44,13 +38,13 @@ impl Pin {
     }
 }
 
-/// Every registered library with the version this project would resolve.
+/// Every registered library with the version this project's own files name.
 ///
 /// Precedence mirrors `resolve::resolve` — manual `ref`, then lockfile, then
-/// the default branch. Where this cannot match `resolve` without a network
-/// call it reports less rather than guessing: `materialized` is the honest
-/// signal for "`docm info` will agree with this line".
-pub fn pins(start: &Path, global: Option<&Path>, cache_root: &Path) -> Vec<Pin> {
+/// the default branch. This is the version *requested*, which is all the
+/// filesystem can answer; whether a matching tag exists, and what gets served
+/// if none does, is `resolve`'s to report after it has fetched.
+pub fn pins(start: &Path, global: Option<&Path>) -> Vec<Pin> {
     let Ok(d) = manifest::discover(start, global) else {
         return Vec::new();
     };
@@ -78,16 +72,11 @@ pub fn pins(start: &Path, global: Option<&Path>, cache_root: &Path) -> Vec<Pin> 
         .iter()
         .map(|entry| {
             let project_scoped = scoped.contains(&entry.name);
-            let lib = LibCache::new(cache_root, &entry.name);
             if let Some(r) = entry.r#ref.as_deref() {
                 return Pin {
                     name: entry.name.clone(),
                     version: Some(r.to_string()),
                     origin: Origin::Ref,
-                    // A changed pin is re-pointed by `docm sync`, never by a
-                    // lookup, so the on-disk default worktree may still be at
-                    // the previous commit. Never claim otherwise.
-                    materialized: false,
                     other_versions: 0,
                     project_scoped,
                 };
@@ -101,12 +90,10 @@ pub fn pins(start: &Path, global: Option<&Path>, cache_root: &Path) -> Vec<Pin> 
                 Some((_, versions)) => {
                     let extra = versions.len().saturating_sub(1);
                     let v = lockfiles::highest(versions).expect("non-empty versions");
-                    let materialized = lib.worktree_path(&v).is_dir();
                     Pin {
                         name: entry.name.clone(),
                         version: Some(v),
                         origin: Origin::Lockfile,
-                        materialized,
                         other_versions: extra,
                         project_scoped,
                     }
@@ -115,7 +102,6 @@ pub fn pins(start: &Path, global: Option<&Path>, cache_root: &Path) -> Vec<Pin> 
                     name: entry.name.clone(),
                     version: None,
                     origin: Origin::Unpinned,
-                    materialized: false,
                     other_versions: 0,
                     project_scoped,
                 },
@@ -172,46 +158,6 @@ repo = "https://github.com/fish-shell/fish-shell"
 "#;
 
     #[test]
-    fn a_lockfile_version_is_not_claimed_resolved_until_its_worktree_exists() {
-        let root = unique_tmp("mat");
-        let cache = root.join("cache");
-        let global = root.join("docs.toml");
-        write(&global, GLOBAL);
-        write(
-            &root.join("Cargo.lock"),
-            "[[package]]\nname = \"clap\"\nversion = \"3.2.25\"\n",
-        );
-
-        // No worktree on disk: resolution still has to find a tag and may fall
-        // back to the default branch, so the version is a request, not a fact.
-        let got = pins(&root, Some(&global), &cache);
-        let clap = got.iter().find(|p| p.name == "clap").unwrap();
-        assert_eq!(clap.version.as_deref(), Some("3.2.25"));
-        assert!(!clap.materialized, "{clap:?}");
-
-        std::fs::create_dir_all(cache.join("clap/3.2.25")).unwrap();
-        let got = pins(&root, Some(&global), &cache);
-        let clap = got.iter().find(|p| p.name == "clap").unwrap();
-        assert!(clap.materialized, "{clap:?}");
-    }
-
-    #[test]
-    fn a_ref_pin_is_never_reported_as_materialized() {
-        let root = unique_tmp("ref");
-        let cache = root.join("cache");
-        let global = root.join("docs.toml");
-        write(&global, GLOBAL);
-        // Even with a default worktree present, `docm sync` — not a lookup —
-        // is what re-points it at a changed pin.
-        std::fs::create_dir_all(cache.join("godot/default")).unwrap();
-
-        let got = pins(&root, Some(&global), &cache);
-        let godot = got.iter().find(|p| p.name == "godot").unwrap();
-        assert_eq!(godot.origin, Origin::Ref);
-        assert!(!godot.materialized, "{godot:?}");
-    }
-
-    #[test]
     fn extra_lockfile_versions_are_counted_not_silently_dropped() {
         let root = unique_tmp("multi");
         let global = root.join("docs.toml");
@@ -222,7 +168,7 @@ repo = "https://github.com/fish-shell/fish-shell"
              [[package]]\nname = \"clap\"\nversion = \"4.6.2\"\n",
         );
 
-        let got = pins(&root, Some(&global), &root.join("cache"));
+        let got = pins(&root, Some(&global));
         let clap = got.iter().find(|p| p.name == "clap").unwrap();
         assert_eq!(clap.version.as_deref(), Some("4.6.2"));
         assert_eq!(clap.other_versions, 1, "{clap:?}");
@@ -243,7 +189,7 @@ repo = "https://github.com/fish-shell/fish-shell"
             "[[docs.libs]]\nname = \"godot\"\n",
         );
 
-        let got = pins(&root, Some(&global), &root.join("cache"));
+        let got = pins(&root, Some(&global));
         let by = |n: &str| got.iter().find(|p| p.name == n).unwrap().relevant();
         assert!(by("clap"), "lockfile hit is evidence");
         assert!(by("godot"), "project registration is evidence");

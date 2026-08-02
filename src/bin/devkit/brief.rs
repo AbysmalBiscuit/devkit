@@ -32,11 +32,7 @@ pub fn run(pins_only: bool, if_changed: bool) -> Result<()> {
 /// injection, so the pins have to be restated afterwards — but restating the
 /// whole brief would spend the context compaction just reclaimed.
 fn pins_text(cwd: &Path) -> Option<String> {
-    let docs = docs_line(&devkit_docs::pins::pins(
-        cwd,
-        None,
-        &devkit_docs::cache::docs_root(),
-    ))?;
+    let docs = docs_line(&devkit_docs::pins::pins(cwd, None))?;
     Some(docs_section(&docs, "##").trim_start().to_string())
 }
 
@@ -95,11 +91,7 @@ fn render(cwd: &Path) -> Option<String> {
     // Library pins resolve from lockfiles alone, so they survive a project
     // whose devkit.toml carries no app/port config at all — those checkouts
     // still get the docs brief.
-    let docs = docs_line(&devkit_docs::pins::pins(
-        cwd,
-        None,
-        &devkit_docs::cache::docs_root(),
-    ));
+    let docs = docs_line(&devkit_docs::pins::pins(cwd, None));
     let home = config::home_config_path();
     let project = load::load(None, cwd).ok().filter(|loaded| {
         is_project_member(
@@ -173,7 +165,7 @@ const MAX_PINS: usize = 12;
 /// How strongly this checkout's own files vouch for a pin. The cap drops the
 /// weakest first, so a version a lockfile actually states always outranks one
 /// the project merely registered — dropping alphabetically would hide `react`
-/// behind a run of unpinned entries.
+/// behind a run of libraries whose names happen to sort earlier.
 fn evidence_rank(p: &Pin) -> u8 {
     match (p.project_scoped, &p.origin) {
         (_, Origin::Lockfile) => 0,
@@ -185,45 +177,52 @@ fn evidence_rank(p: &Pin) -> u8 {
 /// One line naming the version each registered library resolves to here, or
 /// `None` when the project registers none. Pins are what `devkit:docs` will
 /// read; stating them up front is what keeps a long session from drifting
-/// back to training-set versions. Capped at `MAX_PINS`, weakest evidence
-/// dropped first — the brief is injected on every session start, so its cost
-/// is paid repeatedly.
+/// back to training-set versions.
+///
+/// Only entries carrying a version are named, capped at `MAX_PINS` and
+/// weakest evidence dropped first. A library with no version contributes
+/// nothing this line exists to carry, and the docs skill already runs
+/// `docm list`, so the rest collapse to a count — the brief is injected on
+/// every session start, and pays for its width every time.
 fn docs_line(pins: &[Pin]) -> Option<String> {
-    let mut relevant: Vec<&Pin> = pins.iter().filter(|p| p.relevant()).collect();
-    if relevant.is_empty() {
+    let (mut versioned, unpinned): (Vec<&Pin>, Vec<&Pin>) = pins
+        .iter()
+        .filter(|p| p.relevant())
+        .partition(|p| p.version.is_some());
+    if versioned.is_empty() && unpinned.is_empty() {
         return None;
     }
     // Stable, over a list `pins` already ordered by name: alphabetical within
     // each tier.
-    relevant.sort_by_key(|p| evidence_rank(p));
-    let dropped = relevant.len().saturating_sub(MAX_PINS);
-    relevant.truncate(MAX_PINS);
-    let mut line = relevant
+    versioned.sort_by_key(|p| evidence_rank(p));
+    let dropped = versioned.len().saturating_sub(MAX_PINS);
+    versioned.truncate(MAX_PINS);
+
+    let mut parts: Vec<String> = versioned
         .iter()
         .map(|p| {
+            let v = sanitize(p.version.as_deref().unwrap_or_default());
             let name = sanitize(&p.name);
-            let mut s = match (&p.version, &p.origin) {
-                (Some(v), Origin::Ref) => format!("{name} {} (ref)", sanitize(v)),
-                // Until the worktree exists, the version is what the
-                // lockfile asks for — resolution can still miss the tag
-                // and fall back to the default branch.
-                (Some(v), _) if !p.materialized => {
-                    format!("{name} {} (unresolved)", sanitize(v))
-                }
-                (Some(v), _) => format!("{name} {}", sanitize(v)),
-                (None, _) => format!("{name} (unpinned → default branch)"),
+            let mut s = match p.origin {
+                Origin::Ref => format!("{name} {v} (ref)"),
+                _ => format!("{name} {v}"),
             };
             if p.other_versions > 0 {
                 s.push_str(&format!(" +{} more in lockfile", p.other_versions));
             }
             s
         })
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
     if dropped > 0 {
-        line.push_str(&format!(", +{dropped} more (`docm list`)"));
+        parts.push(format!("+{dropped} more (`docm list`)"));
     }
-    Some(line)
+    if !unpinned.is_empty() {
+        parts.push(format!(
+            "{} unpinned → default branch (`docm list`)",
+            unpinned.len()
+        ));
+    }
+    Some(parts.join(", "))
 }
 
 /// Manifest values reach this brief from a repository's checked-in
@@ -286,10 +285,11 @@ fn render_text(
 fn docs_section(docs: &str, heading: &str) -> String {
     format!(
         "\n{heading} Library versions (`devkit:docs` skill)\n\n\
-         Registered libraries resolve to these versions in this checkout — the \
-         `devkit:docs` skill reads the matching source, and `docm info <lib>` prints \
-         the path. Answer questions about them from those checkouts; training-set \
-         recall is a different version.\n\n{docs}\n"
+         These are the versions this checkout's lockfiles and pins name. \
+         `docm info <lib>` resolves the matching source, prints its path, and reports \
+         the version it actually serves — including when it finds no matching tag and \
+         falls back to the default branch. Answer questions about these libraries from \
+         those checkouts; training-set recall is a different version.\n\n{docs}\n"
     )
 }
 
@@ -362,7 +362,6 @@ mod tests {
             name: name.into(),
             version: version.map(Into::into),
             origin,
-            materialized: true,
             other_versions: 0,
             project_scoped: false,
         }
@@ -372,13 +371,11 @@ mod tests {
     fn only_project_relevant_libraries_are_injected() {
         // A machine-wide registration resolves the same in every unrelated
         // repository; it is not this checkout's context.
-        let mut fish = pin("fish-shell", None, Origin::Unpinned);
-        fish.materialized = false;
+        let fish = pin("fish-shell", None, Origin::Unpinned);
         assert_eq!(docs_line(&[fish]), None);
 
         let mut godot = pin("godot", Some("4.3-stable"), Origin::Ref);
         godot.project_scoped = true;
-        godot.materialized = false;
         let line = docs_line(&[pin("clap", Some("3.2.25"), Origin::Lockfile), godot])
             .expect("relevant pins");
         assert!(line.contains("clap 3.2.25"), "{line}");
@@ -387,11 +384,39 @@ mod tests {
     }
 
     #[test]
-    fn an_unmaterialized_version_is_marked_unresolved() {
-        let mut p = pin("clap", Some("3.2.25"), Origin::Lockfile);
-        p.materialized = false;
-        let line = docs_line(&[p]).unwrap();
-        assert!(line.contains("clap 3.2.25 (unresolved)"), "{line}");
+    fn a_lockfile_pin_is_stated_without_a_per_entry_hedge() {
+        // What the lockfile names is certain; what the cache can serve for it
+        // is not, and that belongs to whoever fetches. Hedging each entry
+        // would tag every line on a cold cache and teach the reader to skip
+        // the tag.
+        assert_eq!(
+            docs_line(&[pin("clap", Some("3.2.25"), Origin::Lockfile)]).unwrap(),
+            "clap 3.2.25"
+        );
+
+        // The caveat is stated once, where it costs one line instead of N.
+        let section = docs_section("clap 3.2.25", "##");
+        assert!(section.contains("docm info"), "{section}");
+        assert!(section.contains("falls back"), "{section}");
+    }
+
+    #[test]
+    fn unpinned_libraries_collapse_to_a_count() {
+        let mut pins: Vec<Pin> = (0..15)
+            .map(|i| {
+                let mut p = pin(&format!("lib{i:02}"), None, Origin::Unpinned);
+                p.project_scoped = true;
+                p
+            })
+            .collect();
+        pins.push(pin("zod", Some("3.23.8"), Origin::Lockfile));
+
+        // A name that carries no version buys the reader nothing the docs
+        // skill's own `docm list` does not already show.
+        let line = docs_line(&pins).unwrap();
+        assert!(line.starts_with("zod 3.23.8"), "{line}");
+        assert!(!line.contains("lib00"), "{line}");
+        assert!(line.contains("15 unpinned → default branch"), "{line}");
     }
 
     #[test]
@@ -438,13 +463,12 @@ mod tests {
     fn a_cap_drops_the_weakest_evidence_not_the_alphabetical_tail() {
         let mut pins: Vec<Pin> = (0..MAX_PINS)
             .map(|i| {
-                let mut p = pin(&format!("lib{i:02}"), None, Origin::Unpinned);
+                let mut p = pin(&format!("lib{i:02}"), Some("4.3-stable"), Origin::Ref);
                 p.project_scoped = true;
-                p.materialized = false;
                 p
             })
             .collect();
-        // Alphabetically last, but the only version this checkout states.
+        // Alphabetically last, but the only version a lockfile states.
         pins.push(pin("zod", Some("3.23.8"), Origin::Lockfile));
 
         let line = docs_line(&pins).unwrap();
