@@ -3,6 +3,7 @@ pub mod layout;
 pub mod lockfiles;
 pub mod lookup;
 pub mod manifest;
+pub mod pins;
 pub mod refs;
 pub mod resolve;
 pub mod tags;

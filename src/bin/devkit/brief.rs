@@ -5,6 +5,7 @@
 //! hook can call it unconditionally from any repository.
 
 use anyhow::Result;
+use devkit_docs::pins::{Origin, Pin};
 use devkit_ports::apps::App;
 use devkit_ports::{config, load, registry, task};
 use std::collections::HashMap;
@@ -26,16 +27,22 @@ fn render(cwd: &Path) -> Option<String> {
         .ok()?
         .trim()
         .to_string();
-    let loaded = load::load(None, cwd).ok()?;
+    // Library pins resolve from lockfiles alone, so they survive a project
+    // whose devkit.toml carries no app/port config at all — those checkouts
+    // still get the docs brief.
+    let docs = docs_line(&devkit_docs::pins::pins(cwd, None));
     let home = config::home_config_path();
-    if !is_project_member(
-        &root,
-        &loaded.provenance.layers,
-        home.as_deref(),
-        &loaded.catalog,
-    ) {
-        return None;
-    }
+    let project = load::load(None, cwd).ok().filter(|loaded| {
+        is_project_member(
+            &root,
+            &loaded.provenance.layers,
+            home.as_deref(),
+            &loaded.catalog,
+        )
+    });
+    let Some(loaded) = project else {
+        return docs.map(|d| docs_section(&d, "##").trim_start().to_string());
+    };
     let tasks = task::tasks_text(&task::list(&loaded.config));
     let servers = live_servers(&root);
     Some(render_text(
@@ -43,6 +50,7 @@ fn render(cwd: &Path) -> Option<String> {
         &apps_line(&loaded.catalog),
         &tasks,
         servers.as_deref(),
+        docs.as_deref(),
     ))
 }
 
@@ -91,7 +99,36 @@ fn live_servers(root: &str) -> Option<String> {
         .then(|| registry::status_table(&data, Some(root)))
 }
 
-fn render_text(root: &str, apps: &str, tasks: &str, servers: Option<&str>) -> String {
+/// One line naming the version each registered library resolves to here, or
+/// `None` when the project registers none. Pins are what `devkit:docs` will
+/// read; stating them up front is what keeps a long session from drifting
+/// back to training-set versions.
+fn docs_line(pins: &[Pin]) -> Option<String> {
+    // A lockfile hit is what proves these libraries belong to the checkout in
+    // hand. Without one the manifest is just the machine-wide registration,
+    // which resolves identically in every unrelated repository.
+    if !pins.iter().any(|p| p.origin == Origin::Lockfile) {
+        return None;
+    }
+    Some(
+        pins.iter()
+            .map(|p| match (&p.version, &p.origin) {
+                (Some(v), Origin::Ref) => format!("{} {v} (ref)", p.name),
+                (Some(v), _) => format!("{} {v}", p.name),
+                (None, _) => format!("{} (unpinned → default branch)", p.name),
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
+fn render_text(
+    root: &str,
+    apps: &str,
+    tasks: &str,
+    servers: Option<&str>,
+    docs: Option<&str>,
+) -> String {
     let mut out = String::new();
     out.push_str("## devkit project context\n\n");
     out.push_str(&format!(
@@ -111,7 +148,20 @@ fn render_text(root: &str, apps: &str, tasks: &str, servers: Option<&str>) -> St
         out.push_str("\n### Live servers in this worktree\n\n");
         out.push_str(s);
     }
+    if let Some(d) = docs {
+        out.push_str(&docs_section(d, "###"));
+    }
     out
+}
+
+fn docs_section(docs: &str, heading: &str) -> String {
+    format!(
+        "\n{heading} Library versions (`devkit:docs` skill)\n\n\
+         Registered libraries resolve to these versions in this checkout — the \
+         `devkit:docs` skill reads the matching source, and `docm info <lib>` prints \
+         the path. Answer questions about them from those checkouts; training-set \
+         recall is a different version.\n\n{docs}\n"
+    )
 }
 
 #[cfg(test)]
@@ -160,7 +210,7 @@ mod tests {
 
     #[test]
     fn render_text_sections_and_optional_servers() {
-        let text = render_text("/w/root", "api (apps/api)", "NAME KIND\n", None);
+        let text = render_text("/w/root", "api (apps/api)", "NAME KIND\n", None, None);
         assert!(text.contains("devkit project context"), "{text}");
         assert!(text.contains("using-devkit"), "{text}");
         assert!(text.contains("api (apps/api)"), "{text}");
@@ -172,8 +222,60 @@ mod tests {
             "api (apps/api)",
             "NAME KIND\n",
             Some("PORT APP\n"),
+            None,
         );
         assert!(with.contains("Live servers in this worktree"), "{with}");
         assert!(with.contains("PORT APP"), "{with}");
+    }
+
+    fn pin(name: &str, version: Option<&str>, origin: Origin) -> Pin {
+        Pin {
+            name: name.into(),
+            version: version.map(Into::into),
+            origin,
+        }
+    }
+
+    #[test]
+    fn docs_line_needs_a_lockfile_hit_to_prove_project_relevance() {
+        assert_eq!(docs_line(&[]), None);
+        // Machine-wide registrations that this checkout does not pin resolve
+        // the same everywhere; they are not this project's context.
+        assert_eq!(
+            docs_line(&[
+                pin("fish-shell", None, Origin::Unpinned),
+                pin("godot", Some("4.3-stable"), Origin::Ref),
+            ]),
+            None
+        );
+    }
+
+    #[test]
+    fn docs_line_distinguishes_lockfile_ref_and_unpinned() {
+        let line = docs_line(&[
+            pin("clap", Some("3.2.25"), Origin::Lockfile),
+            pin("godot", Some("4.3-stable"), Origin::Ref),
+            pin("serde", None, Origin::Unpinned),
+        ])
+        .expect("pins present");
+        assert!(line.contains("clap 3.2.25"), "{line}");
+        assert!(line.contains("godot 4.3-stable (ref)"), "{line}");
+        assert!(line.contains("serde (unpinned"), "{line}");
+    }
+
+    #[test]
+    fn render_text_includes_docs_section_only_when_pins_exist() {
+        let without = render_text("/w/root", "api (apps/api)", "T\n", None, None);
+        assert!(!without.contains("devkit:docs"), "{without}");
+
+        let with = render_text(
+            "/w/root",
+            "api (apps/api)",
+            "T\n",
+            None,
+            Some("clap 3.2.25"),
+        );
+        assert!(with.contains("devkit:docs"), "{with}");
+        assert!(with.contains("clap 3.2.25"), "{with}");
     }
 }
