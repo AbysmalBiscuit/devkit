@@ -11,14 +11,79 @@ use devkit_ports::{config, load, registry, task};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub fn run() -> Result<()> {
+pub fn run(pins_only: bool, if_changed: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     // A brief is context injection, never a gate: any failure (no git, no
     // config, unreadable registry) means no output, exit 0.
-    if let Some(text) = render(&cwd) {
-        print!("{text}");
+    let rendered = if pins_only {
+        pins_text(&cwd)
+    } else {
+        render(&cwd)
+    };
+    let Some(text) = rendered else { return Ok(()) };
+    if if_changed && !changed(&devkit_common::paths::state_dir(), &session_key(), &text) {
+        return Ok(());
     }
+    print!("{text}");
     Ok(())
+}
+
+/// Just the library-versions section. Compaction discards the earlier
+/// injection, so the pins have to be restated afterwards — but restating the
+/// whole brief would spend the context compaction just reclaimed.
+fn pins_text(cwd: &Path) -> Option<String> {
+    let docs = docs_line(&devkit_docs::pins::pins(
+        cwd,
+        None,
+        &devkit_docs::cache::docs_root(),
+    ))?;
+    Some(docs_section(&docs, "##").trim_start().to_string())
+}
+
+/// Whether `text` differs from the last text emitted under `key`.
+///
+/// Fails open: an unreadable or unwritable watermark reports "changed", so a
+/// broken state directory costs a duplicate brief rather than silently
+/// withholding one.
+fn changed(state_dir: &Path, key: &str, text: &str) -> bool {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    let digest = format!("{:016x}", h.finish());
+    let path = state_dir.join("brief").join(format!("{key}.hash"));
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(digest.as_str()) {
+        return false;
+    }
+    if let Some(p) = path.parent() {
+        let _ = std::fs::create_dir_all(p);
+    }
+    let _ = std::fs::write(&path, &digest);
+    true
+}
+
+/// Session identity for the watermark, from the hook's stdin payload when one
+/// is piped in. The value reaches us from the harness and becomes a filename,
+/// so it is reduced to an allowlist before it can name a path.
+fn session_key() -> String {
+    use std::io::{IsTerminal, Read};
+    let mut raw = String::new();
+    if !std::io::stdin().is_terminal() {
+        let _ = std::io::stdin().read_to_string(&mut raw);
+    }
+    let id = serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("session_id")?.as_str().map(str::to_string))
+        .unwrap_or_default();
+    safe_key(&id)
+}
+
+fn safe_key(id: &str) -> String {
+    let k: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        .take(64)
+        .collect();
+    if k.is_empty() { "default".into() } else { k }
 }
 
 fn render(cwd: &Path) -> Option<String> {
@@ -312,6 +377,26 @@ mod tests {
         p.other_versions = 2;
         let line = docs_line(&[p]).unwrap();
         assert!(line.contains("+2 more in lockfile"), "{line}");
+    }
+
+    #[test]
+    fn a_repeated_identical_brief_is_suppressed_but_a_changed_one_is_not() {
+        let dir = std::env::temp_dir().join(format!("devkit-brief-wm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(changed(&dir, "s1", "clap 3.2.25"), "first emission");
+        assert!(!changed(&dir, "s1", "clap 3.2.25"), "identical repeat");
+        assert!(changed(&dir, "s1", "clap 4.6.2"), "content changed");
+        // Watermarks are per session, never shared.
+        assert!(changed(&dir, "s2", "clap 4.6.2"), "other session");
+    }
+
+    #[test]
+    fn a_session_id_cannot_escape_the_state_directory() {
+        assert_eq!(safe_key("../../etc/passwd"), "etcpasswd");
+        assert_eq!(safe_key("abc-123_DEF"), "abc-123_DEF");
+        assert_eq!(safe_key(""), "default");
+        assert_eq!(safe_key("/"), "default");
     }
 
     #[test]

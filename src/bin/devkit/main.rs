@@ -29,7 +29,15 @@ enum Cmd {
     /// Print a compact project brief (apps, tasks, live servers) for the
     /// current checkout; silent outside a devkit-managed project. Intended
     /// for coding-agent session-start hooks.
-    Brief,
+    Brief {
+        /// Emit only the library-versions section, for re-injection after a
+        /// compaction that discarded the earlier brief.
+        #[arg(long)]
+        pins_only: bool,
+        /// Print nothing when this session already received identical text.
+        #[arg(long)]
+        if_changed: bool,
+    },
     /// Check configured credentials and report what is missing.
     Doctor {
         /// Emit the report as JSON instead of a table.
@@ -60,7 +68,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Auth { provider, token } => auth::run(provider, token),
-        Cmd::Brief => brief::run(),
+        Cmd::Brief {
+            pins_only,
+            if_changed,
+        } => brief::run(pins_only, if_changed),
         Cmd::Doctor { json } => doctor::run(json),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "devkit", &mut std::io::stdout());
