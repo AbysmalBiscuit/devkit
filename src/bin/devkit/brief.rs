@@ -168,39 +168,62 @@ fn live_servers(root: &str) -> Option<String> {
         .then(|| registry::status_table(&data, Some(root)))
 }
 
+const MAX_PINS: usize = 12;
+
+/// How strongly this checkout's own files vouch for a pin. The cap drops the
+/// weakest first, so a version a lockfile actually states always outranks one
+/// the project merely registered — dropping alphabetically would hide `react`
+/// behind a run of unpinned entries.
+fn evidence_rank(p: &Pin) -> u8 {
+    match (p.project_scoped, &p.origin) {
+        (_, Origin::Lockfile) => 0,
+        (true, Origin::Ref) => 1,
+        _ => 2,
+    }
+}
+
 /// One line naming the version each registered library resolves to here, or
 /// `None` when the project registers none. Pins are what `devkit:docs` will
 /// read; stating them up front is what keeps a long session from drifting
-/// back to training-set versions.
+/// back to training-set versions. Capped at `MAX_PINS`, weakest evidence
+/// dropped first — the brief is injected on every session start, so its cost
+/// is paid repeatedly.
 fn docs_line(pins: &[Pin]) -> Option<String> {
-    let relevant: Vec<&Pin> = pins.iter().filter(|p| p.relevant()).collect();
+    let mut relevant: Vec<&Pin> = pins.iter().filter(|p| p.relevant()).collect();
     if relevant.is_empty() {
         return None;
     }
-    Some(
-        relevant
-            .iter()
-            .map(|p| {
-                let name = sanitize(&p.name);
-                let mut s = match (&p.version, &p.origin) {
-                    (Some(v), Origin::Ref) => format!("{name} {} (ref)", sanitize(v)),
-                    // Until the worktree exists, the version is what the
-                    // lockfile asks for — resolution can still miss the tag
-                    // and fall back to the default branch.
-                    (Some(v), _) if !p.materialized => {
-                        format!("{name} {} (unresolved)", sanitize(v))
-                    }
-                    (Some(v), _) => format!("{name} {}", sanitize(v)),
-                    (None, _) => format!("{name} (unpinned → default branch)"),
-                };
-                if p.other_versions > 0 {
-                    s.push_str(&format!(" +{} more in lockfile", p.other_versions));
+    // Stable, over a list `pins` already ordered by name: alphabetical within
+    // each tier.
+    relevant.sort_by_key(|p| evidence_rank(p));
+    let dropped = relevant.len().saturating_sub(MAX_PINS);
+    relevant.truncate(MAX_PINS);
+    let mut line = relevant
+        .iter()
+        .map(|p| {
+            let name = sanitize(&p.name);
+            let mut s = match (&p.version, &p.origin) {
+                (Some(v), Origin::Ref) => format!("{name} {} (ref)", sanitize(v)),
+                // Until the worktree exists, the version is what the
+                // lockfile asks for — resolution can still miss the tag
+                // and fall back to the default branch.
+                (Some(v), _) if !p.materialized => {
+                    format!("{name} {} (unresolved)", sanitize(v))
                 }
-                s
-            })
-            .collect::<Vec<_>>()
-            .join(", "),
-    )
+                (Some(v), _) => format!("{name} {}", sanitize(v)),
+                (None, _) => format!("{name} (unpinned → default branch)"),
+            };
+            if p.other_versions > 0 {
+                s.push_str(&format!(" +{} more in lockfile", p.other_versions));
+            }
+            s
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if dropped > 0 {
+        line.push_str(&format!(", +{dropped} more (`docm list`)"));
+    }
+    Some(line)
 }
 
 /// Manifest values reach this brief from a repository's checked-in
@@ -409,6 +432,35 @@ mod tests {
         let line = docs_line(&[hostile]).unwrap();
         assert!(!line.contains('\n'), "{line}");
         assert!(!line.contains("##"), "{line}");
+    }
+
+    #[test]
+    fn a_cap_drops_the_weakest_evidence_not_the_alphabetical_tail() {
+        let mut pins: Vec<Pin> = (0..MAX_PINS)
+            .map(|i| {
+                let mut p = pin(&format!("lib{i:02}"), None, Origin::Unpinned);
+                p.project_scoped = true;
+                p.materialized = false;
+                p
+            })
+            .collect();
+        // Alphabetically last, but the only version this checkout states.
+        pins.push(pin("zod", Some("3.23.8"), Origin::Lockfile));
+
+        let line = docs_line(&pins).unwrap();
+        assert!(line.contains("zod 3.23.8"), "{line}");
+        assert!(!line.contains("lib11"), "{line}");
+    }
+
+    #[test]
+    fn a_capped_line_reports_how_many_it_left_out() {
+        let pins: Vec<Pin> = (0..MAX_PINS + 3)
+            .map(|i| pin(&format!("lib{i:02}"), Some("1.0"), Origin::Lockfile))
+            .collect();
+
+        let line = docs_line(&pins).unwrap();
+        assert_eq!(line.matches(", ").count(), MAX_PINS, "{line}");
+        assert!(line.contains("+3 more (`docm list`)"), "{line}");
     }
 
     #[test]
