@@ -31,12 +31,23 @@ table, the command did not run — run `docm list` yourself before step 1.
 3. Search ONLY under the printed path: the docs dir for guides and concepts,
    the source dir for API ground truth, examples for usage patterns. Use
    `rg` for text and `ast-grep` for structural queries.
-4. Answer with `file:line` citations relative to the checkout.
+4. Answer with `file:line` citations relative to the checkout. Every path you
+   cite is one you opened; the resolved checkout is the only version you have
+   read.
 
 ## Rules
 
 - Never reuse a checkout path from memory or an earlier session — versions
   differ per project. Always re-run `docm info`.
+- Reading a version other than the resolved one is a second lookup, not a
+  recollection. The bare clone holds every tag, so read it without
+  materializing a worktree:
+  `git -C ~/.local/share/devkit/docs/<lib>/repo.git tag --list 'v4.*'`
+  `git -C ~/.local/share/devkit/docs/<lib>/repo.git show <tag>:<path>`
+- An answer that spans versions has three parts: what the resolved version
+  does, cited; whether the API is absent from it; and what the other version
+  does — that third part carries either a tag-sourced citation or the word
+  "unverified".
 - `docm path <lib>` prints just the path when that is all you need.
 - If `docm` is not on PATH, tell the user to `cargo install --path .` in the
   devkit repo.
