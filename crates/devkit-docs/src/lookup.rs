@@ -36,8 +36,6 @@ impl Registry for Http {
 }
 
 /// Ecosystem markers checked closest-directory-first walking up from `cwd`.
-/// Within one directory, the first ecosystem with a present marker wins —
-/// an arbitrary but deterministic tie-break for a polyglot directory.
 const LOCAL_MARKERS: &[(Ecosystem, &[&str])] = &[
     (
         Ecosystem::Js,
@@ -52,15 +50,27 @@ const LOCAL_MARKERS: &[(Ecosystem, &[&str])] = &[
     (Ecosystem::Python, &["pyproject.toml", "uv.lock"]),
 ];
 
-/// The ecosystem of the local project `cwd` sits in, if any, found by
-/// walking up from `cwd` looking for a package manifest or lockfile.
+/// The ecosystem of the local project `cwd` sits in, found by walking up
+/// from `cwd` to the closest directory carrying any ecosystem marker. A
+/// directory carrying markers for more than one ecosystem (a polyglot
+/// monorepo root) is an ambiguous signal, not a tie to break — this returns
+/// `None` for it rather than picking one, so the caller's ambiguous-hits
+/// hard error fires instead of a silent guess.
 fn local_ecosystem(cwd: &Path) -> Option<Ecosystem> {
-    cwd.ancestors().find_map(|dir| {
-        LOCAL_MARKERS
+    for dir in cwd.ancestors() {
+        let mut matched = LOCAL_MARKERS
             .iter()
-            .find(|(_, markers)| markers.iter().any(|m| dir.join(m).is_file()))
-            .map(|(eco, _)| *eco)
-    })
+            .filter(|(_, markers)| markers.iter().any(|m| dir.join(m).is_file()))
+            .map(|(eco, _)| *eco);
+        if let Some(eco) = matched.next() {
+            return if matched.next().is_none() {
+                Some(eco)
+            } else {
+                None
+            };
+        }
+    }
+    None
 }
 
 /// Probe crates.io, npm, and PyPI for `package`. A single hit wins; with no
@@ -236,11 +246,13 @@ mod tests {
                 }
             }
         }
-        let dir = std::env::temp_dir();
+        let dir = std::env::temp_dir().join(format!("docm-eco-none-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
         let err = detect(&Both, "h3", &dir).unwrap_err().to_string();
         assert!(err.contains("hyperium"), "{err}");
         assert!(err.contains("unjs"), "{err}");
         assert!(err.contains("--eco"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -259,6 +271,7 @@ mod tests {
         std::fs::write(dir.join("bun.lock"), "{}").unwrap();
         let (eco, _) = detect(&Npm, "h3", &dir).unwrap();
         assert_eq!(eco, Ecosystem::Js);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The brief's `a_js_project_reports_js_when_only_npm_has_the_name` fixture
@@ -284,5 +297,32 @@ mod tests {
         let (eco, url) = detect(&Both, "h3", &dir).unwrap();
         assert_eq!(eco, Ecosystem::Js);
         assert_eq!(url, "https://github.com/unjs/h3");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A directory carrying markers for two ecosystems at once (an ordinary
+    /// monorepo root) must not silently pick one by array order — that is
+    /// exactly the ambiguous state the hard-error path exists for.
+    #[test]
+    fn a_polyglot_directory_does_not_resolve_ambiguity() {
+        struct Both;
+        impl Registry for Both {
+            fn repo_url(&self, eco: Ecosystem, _p: &str) -> anyhow::Result<String> {
+                match eco {
+                    Ecosystem::Rust => Ok("https://github.com/hyperium/h3".into()),
+                    Ecosystem::Js => Ok("https://github.com/unjs/h3".into()),
+                    _ => anyhow::bail!("not found"),
+                }
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("docm-eco-poly-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "").unwrap();
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+        let err = detect(&Both, "h3", &dir).unwrap_err().to_string();
+        assert!(err.contains("hyperium"), "{err}");
+        assert!(err.contains("unjs"), "{err}");
+        assert!(err.contains("--eco"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
