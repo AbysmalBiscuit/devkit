@@ -222,3 +222,32 @@ a single scoping error in round 5.
 
 **Round cap lifted by the user.** The loop had stopped at `MAX_ROUNDS=5` with the
 round-5 fix unreviewed; continuing to round 6 to close that gap.
+
+## Round 6 — Codex
+
+Confirmed the checkout/library partition is now correct and no stale single-set
+assumption remains. One finding:
+
+1. **Registry temp and backup paths remain valid library names.** The store owns `<cache>/registry.json.tmp` during every atomic write (`store.rs:118`) and `<cache>/registry.json.bak` during corruption recovery (`store.rs:104`), but §1.1 reserved only `registry.json` and `registry.lock`. Registering `registry.json.tmp` creates a directory where the registry must write a file. Test 28 checked only the two enumerated names, and the store tests never create a colliding library directory.
+
+VERDICT: REVISE
+
+### Claude's response
+
+Verified both paths in `store.rs` before accepting. Accepted — but not by adding
+two more literals.
+
+This was the third consecutive round on reserved names, which is evidence that
+enumeration is the wrong pattern rather than that the list was two short. Codex
+offered the structural alternative and I took it: the library-level reserved name
+is now the **stem** `registry` — that name, or any name beginning with
+`registry.` — so anything the store adds later is covered without another round.
+
+Two follow-ons the finding implied:
+
+- §9 previously never said where the per-library lock file lives, which was a
+  latent instance of the same collision class. It is now
+  `<cache>/registry.locks/<encoded-lib>.lock`: covered by the stem rule so it
+  needs no reservation of its own, and outside the library directory so a held
+  lock survives the upgrade pass renaming that directory.
+- Test 28 now tests the stem rule rather than a fixed list, and says why.

@@ -61,8 +61,8 @@ These cases are hard errors rather than silent renames:
 - a ref whose dirname would collide with a control name **inside a library
   directory**: `repo.git` and `meta.toml`, both valid git ref names. Library
   directories sit one level up and have their own, different reserved set
-  (§1.1) — conflating the two leaves the cache-root control files unprotected.
-  Any control file added later joins the set for its own level.
+  (§1.1); conflating the two leaves one level or the other unprotected. Any
+  control file added later joins the set for its own level.
 - a ref not representable on the host filesystem. Git permits characters Windows
   forbids — `|`, `<`, `>`, `"` are all legal in a ref name — and Windows also
   reserves device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`,
@@ -90,14 +90,20 @@ reachable in shipped 0.12.1 with `docm add @types/node` or any scoped package.
 
 Library directories therefore become `@hey-api~client-fetch/`, with the same
 representability checks and the same hard errors — but **their own reserved
-set**. Library directories live at the cache root beside the reference
-registry's own files, `registry.json` and `registry.lock` (`refs.rs:88`), so
-those two names are reserved for library directories, and `repo.git` /
-`meta.toml` are reserved one level down for checkout directories. Applying the
-checkout set to library names would leave the registry unprotected: registering a
-library whose inferred name is `registry.json` creates a *directory* at
-`<cache>/registry.json`, after which the registry can never write its file again
+set**, because they sit at the cache root beside the reference registry's own
+files while `repo.git` / `meta.toml` sit one level down inside a library.
+Registering a library named for a cache-root control file creates a *directory*
+where the registry must write a *file*, after which every registry write fails
 and the cache is unusable until someone deletes the directory by hand.
+
+**The library-level rule is a stem, not a list.** The registry owns four paths
+today — `registry.json` and `registry.lock` (`refs.rs:88`), plus
+`registry.json.tmp` during every atomic write and `registry.json.bak` during
+corruption recovery (`store.rs:118`, `:104`) — and enumerating them invites the
+same omission each time the store grows a fifth. So the reserved name for a
+library directory is the stem: **`registry`, or any name beginning with
+`registry.`**. Anything the store adds later is covered without revisiting this
+section.
 
 **The injectivity argument does not transfer, and needs its own rule.** `/` → `~`
 is injective for *refs* because git forbids `~` in a ref name. A library name is
@@ -539,7 +545,13 @@ the same dirname. Fix: clone, fetch, worktree materialization, `meta.toml`
 updates **and the reference-registry commit** for one library run under a
 per-library advisory lock — held continuously across all of them. The registry
 commit is inside the lock, not after it: releasing between materialization and
-the commit reopens exactly the window prune must not have (§7). This is the
+the commit reopens exactly the window prune must not have (§7).
+
+The lock file is `<cache>/registry.locks/<encoded-lib>.lock`. It sits under the
+reserved `registry.` stem (§1.1), so it needs no reservation of its own and can
+never collide with a library directory; and it sits *outside* the library
+directory, so a lock stays valid across the upgrade pass renaming that directory
+out from under it. This is the
 pattern `refs.rs` already uses for the reference registry, so it is an existing
 mechanism applied to a second target rather than new machinery. Lock ordering is
 per-library lock before registry lock, never the reverse, and no network call
@@ -692,10 +704,13 @@ support these.
 26d. **Encoded-name collision on load.** A manifest holding both `a~b` (legacy)
     and `a/b` hard-errors naming both, before any cache path is built.
 28. **Library names cannot shadow cache-root control files.** Against a fresh
-    cache, registering a library named `registry.json` or `registry.lock`
-    hard-errors; the registry's own file is still creatable afterwards. Test at
-    the library level specifically — tests 15, 17 and 26d all operate on
-    checkout names or slug collisions and would miss this.
+    cache, registering a library named `registry`, `registry.json`,
+    `registry.lock`, `registry.json.tmp`, `registry.json.bak` or
+    `registry.anything` all hard-error, and the registry's own files are still
+    creatable afterwards. Test the *stem rule*, not a fixed list — the store owns
+    four such paths today and the enumeration approach missed two of them across
+    two review rounds. Test at the library level specifically: tests 15, 17 and
+    26d all operate on checkout names or slug collisions and would miss this.
 27. **Tag replaced by a same-named branch.** A pin resolved as `refs/tags/v1`
     whose tag is deleted upstream and replaced by branch `v1` hard-errors rather
     than silently resolving the branch.
