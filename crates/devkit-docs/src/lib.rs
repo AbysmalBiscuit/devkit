@@ -169,15 +169,21 @@ pub struct DocsDoctor {
     pub libs: usize,
     pub bytes: u64,
     pub unreferenced: usize,
+    /// One line per checkout that is dirty or is not at the commit `meta.toml`
+    /// records for it.
+    pub problems: Vec<String>,
 }
 
-/// Cheap health summary for `devkit doctor`: lib count, cache size, and
-/// version worktrees no registry row references.
+/// Health summary for `devkit doctor`: lib count, cache size, version
+/// worktrees no registry row references, and a sweep of every materialized
+/// checkout for cleanliness and commit correctness. Resolution verifies the
+/// one checkout it returns; this covers the ones no workspace resolves.
 pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
     let mut out = DocsDoctor {
         libs: 0,
         bytes: cache::dir_size(cache_root),
         unreferenced: 0,
+        problems: Vec::new(),
     };
     let data = refs::RefStore::at(cache_root).snapshot();
     let referenced: std::collections::BTreeSet<(String, String)> = data
@@ -198,13 +204,50 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
         }
         let name = names::decode(&dirname);
         out.libs += 1;
-        for (wt, _) in cache::LibCache::from_dir(cache_root, &dirname).version_worktrees() {
-            if !referenced.contains(&(name.clone(), wt)) {
+        let lib = cache::LibCache::from_dir(cache_root, &dirname);
+        let meta = cache::read_meta(&lib.dir);
+        for (wt, path) in lib.version_worktrees() {
+            if !referenced.contains(&(name.clone(), wt.clone())) {
                 out.unreferenced += 1;
             }
+            out.problems.extend(inspect(
+                &format!("{dirname}/{wt}"),
+                &path,
+                meta.worktrees.get(&wt),
+            ));
         }
     }
     out
+}
+
+/// What is wrong with one materialized checkout, if anything: source that
+/// differs from the commit, or a HEAD that is not the recorded one. Reported
+/// rather than repaired — `doctor` diagnoses, it does not mutate the cache.
+fn inspect(label: &str, path: &Path, recorded: Option<&cache::WorktreeMeta>) -> Vec<String> {
+    let mut problems = Vec::new();
+    let dir = path.to_string_lossy().into_owned();
+    match devkit_common::cmd::git(&["status", "--porcelain"], &dir) {
+        Ok(status) if !status.trim().is_empty() => problems.push(format!(
+            "{label} has local modifications:\n    {}",
+            status.trim().replace('\n', "\n    ")
+        )),
+        Ok(_) => {}
+        Err(error) => problems.push(format!("{label} cannot be inspected: {error:#}")),
+    }
+    let Some(recorded) = recorded else {
+        return problems;
+    };
+    match devkit_common::cmd::git(&["rev-parse", "HEAD"], &dir) {
+        Ok(head) if head.trim() != recorded.commit => problems.push(format!(
+            "{label} is at {}, but {} resolved to {}",
+            head.trim(),
+            recorded.raw_ref,
+            recorded.commit
+        )),
+        Ok(_) => {}
+        Err(error) => problems.push(format!("{label} has no readable HEAD: {error:#}")),
+    }
+    problems
 }
 
 #[cfg(test)]

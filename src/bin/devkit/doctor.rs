@@ -81,7 +81,7 @@ fn count_strays() -> usize {
 }
 
 fn docs_cache_check() -> Check {
-    let root = devkit_common::paths::cache_dir().join("docs");
+    let root = devkit_docs::cache::docs_root();
     if !root.is_dir() {
         return Check::Ok("empty".into());
     }
@@ -92,6 +92,13 @@ fn docs_cache_check() -> Check {
         s.bytes / (1024 * 1024),
         s.unreferenced
     );
+    if !s.problems.is_empty() {
+        return Check::Warn(format!(
+            "{msg}; {} checkout(s) do not match what docm resolved:\n  {}",
+            s.problems.len(),
+            s.problems.join("\n  ")
+        ));
+    }
     if s.unreferenced > 0 {
         Check::Warn(format!("{msg} — run `docm prune`"))
     } else {
