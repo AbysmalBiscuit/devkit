@@ -513,3 +513,61 @@ rationale to give the real reason — one set of flock semantics, RAII guards, a
 `fs2::unlock` now being shadowed by `std::fs::File`'s inherent method.
 
 ---
+
+## Round 7 — Codex (`gpt-5.6-sol`, effort `xhigh`)
+
+> The plan still needs revision. The race test remains unfalsifiable, and four round-6 edits introduce compile, commit-boundary, or diagnostic defects.
+>
+> 1. **Crucial — the add/rm test can still pass with rm's library lock removed.** Add holds the lock and pauses after snapshot; rm writes `.rm-started`; parent releases `.go`; add may write `{keep, up}` before unlocked rm runs; rm then removes `up`, leaving the asserted `{keep}` state. Signalling immediately before `with_lib` proves neither lock contention nor mutation ordering.
+> Fix: Instrument a failed nonblocking library-lock attempt under the test hook, wait for that explicit contention signal, then release add; the lock-removed build must fail waiting for contention.
+>
+> 2. **Routine — the new `Candidates` field breaks compilation.** `bun_candidates` and `json_candidates` construct `Candidates` without the required `resolved` field, producing E0063.
+> Fix: Add `resolved: Vec::new()` or `..Default::default()` to both literals.
+>
+> 3. **Routine — cargo's revised diagnostic reports a fabricated "unspecified" candidate and its test misses it.** The fixture's edge is bare `"serde"`, so `dep_edge` returns `None`; `from_package_array` puts `"unspecified"` into `resolved`, and `undeclared` suppresses the actual lockfile candidate `1.0.210`. The test checks only the dependent, so it passes the wrong output.
+> Fix: Put only `Some(version)` edges in `resolved`, retain package-row versions and unpaired declarers, and assert both `1.0.210` and `a`.
+>
+> 4. **Routine — Task 6's committed tree omits `jsonc-parser`.** The task adds the dependency, but neither its Files block nor `git add` includes either `Cargo.toml` or `Cargo.lock`; a clean checkout therefore cannot resolve `jsonc_parser`.
+> Fix: List and stage root `Cargo.toml`, `crates/devkit-docs/Cargo.toml`, and `Cargo.lock`.
+>
+> 5. **Routine — Task 11's shown code references undefined barrier functions.** `barrier_signal` and `barrier_wait` appear only at two call sites; no task defines their signatures, visibility, environment lookup, timeout, or no-op behavior, so `rm_library` does not compile as written.
+> Fix: Provide the shared barrier implementation and imports explicitly, including its unset behavior and bounded polling.
+>
+> VERDICT: REVISE
+
+### Claude's response — accepted in full
+
+**The race test, fourth attempt.** Codex walked the interleaving, and it is
+right: add holds the lock and pauses, rm signals it has arrived, the parent
+releases `.go`, add finishes its write, and only then does the unlocked remover
+run — deleting `up` from a complete manifest and producing exactly the asserted
+state. Every previous version of this signal proved *arrival*, and arrival is
+satisfiable without a lock. Three drafts moved the signal closer to the lock
+without ever changing what it meant.
+
+The fix is to signal from inside the acquisition rather than around it.
+`locks::hold` now attempts a non-blocking `try_write` when the barrier variable
+is set, and writes `.contended` when that fails — which can only happen while
+another process holds that exact lock. A build where `rm` takes no lock cannot
+produce the file, so the parent's wait times out and the test fails. That is the
+first version of this test whose RED I can argue for rather than assert. Cost in
+production is one `env::var_os` miss.
+
+**The barrier module.** Findings 5 and 1 share a root cause: three tasks each
+invented their own rendezvous, so the names drifted (`DEVKIT_DOCS_BARRIER` vs
+`DEVKIT_DOCS_MANIFEST_BARRIER` vs a `DOCM_RACE_BARRIER` nothing read) and the
+helpers were never defined anywhere. Added `crates/devkit-docs/src/barrier.rs`
+with `signal`/`wait`, one `VAR` constant, a bounded 60s timeout, and no-op
+behaviour when unset; every call site now references `barrier::VAR` rather than
+retyping a string, which turns that whole class of mistake into a compile error.
+
+**The three mechanical ones.** `Candidates` gained `resolved` in round 6 without
+updating the two struct literals (E0063). `from_package_array` wrote
+`"unspecified"` into `resolved` for a bare `"serde"` edge — inventing a version
+*and* suppressing the real `1.0.210`, since the resolved branch shadows the
+version list; now only `Some(version)` edges become pairs, and the test asserts
+`1.0.210`, `declared by: a`, and the absence of `unspecified`. Task 6 added
+`jsonc-parser` without staging any manifest, so a clean checkout could not
+resolve the crate.
+
+Nothing was rejected this round.

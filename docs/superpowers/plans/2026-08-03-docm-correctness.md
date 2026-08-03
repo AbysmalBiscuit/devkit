@@ -40,7 +40,8 @@
 | File | Responsibility |
 |---|---|
 | `crates/devkit-docs/src/names.rs` | **new** — encode/decode library and ref directory names, reserved-name and host-representability validation. Pure, no IO. |
-| `crates/devkit-docs/src/locks.rs` | **new** — per-library advisory lock; `with_lib_lock(cache_root, lib, f)`. |
+| `crates/devkit-docs/src/locks.rs` | **new** — per-library advisory lock; `with_lib(cache_root, lib, f)`, `with_manifest`, `with_lib_dir`. |
+| `crates/devkit-docs/src/barrier.rs` | **new** — test-only rendezvous (`signal`/`wait`), no-op unless `DEVKIT_DOCS_MANIFEST_BARRIER` is set. |
 | `crates/devkit-docs/src/upgrade.rs` | **new** — one-shot 0.12.x cache migration: nested scoped dirs, `git worktree repair`, `origin` bootstrap. |
 | `crates/devkit-docs/src/importers.rs` | **new** — per-lockfile importer-graph resolution: workspace path → installed version. |
 | `crates/devkit-docs/src/cache.rs` | `LibCache` gains origin recording, worktree cleanliness/HEAD verification, ref-named worktrees. |
@@ -715,6 +716,8 @@ git commit -m "fix(docs): probe package-specific tags before generic ones"
 
 **Files:**
 - Create: `crates/devkit-docs/src/locks.rs`
+- Create: `crates/devkit-docs/src/barrier.rs` — the one test-rendezvous module
+  Tasks 7 and 11 both use
 - Create: `crates/devkit-docs/tests/concurrency.rs`
 - Modify: `crates/devkit-docs/src/cache.rs` (`write_meta`)
 - Modify: `crates/devkit-docs/src/manifest.rs` (`upsert_global`, `upsert_project`, `remove_global`, `remove_project`)
@@ -843,6 +846,82 @@ pub fn with_manifest<T>(cache_root: &Path, f: impl FnOnce() -> Result<T>) -> Res
 the guard immediately and releases the lock. Never `truncate(true)`: another
 process may hold this same file.
 
+- [ ] **Step 3b: Add the shared test barrier and the contention probe**
+
+Three tasks place rendezvous points (Tasks 7 and 11's race tests, and
+`resolve_locked`). They all use one module rather than three ad-hoc `env::var`
+reads, because getting the variable name wrong is silent — a parent waits
+forever on a file no code writes.
+
+Create `crates/devkit-docs/src/barrier.rs`:
+
+```rust
+//! Test-only rendezvous. Every function is a no-op unless `VAR` is set, so a
+//! production run pays one environment lookup and nothing else.
+//!
+//! Files are `<base>.<suffix>`, where `<base>` is the variable's value. A
+//! bounded wait is mandatory: an unbounded one turns a logic error in a test
+//! into a hung CI job with no output.
+
+use anyhow::{Context, Result, bail};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+pub const VAR: &str = "DEVKIT_DOCS_MANIFEST_BARRIER";
+const TIMEOUT: Duration = Duration::from_secs(60);
+
+fn base() -> Option<PathBuf> {
+    std::env::var_os(VAR).map(PathBuf::from)
+}
+
+pub fn signal(suffix: &str) -> Result<()> {
+    let Some(b) = base() else { return Ok(()) };
+    let p = b.with_extension(suffix);
+    std::fs::create_dir_all(p.parent().expect("barrier path has a parent"))?;
+    std::fs::write(&p, "").with_context(|| format!("signalling {}", p.display()))
+}
+
+pub fn wait(suffix: &str) -> Result<()> {
+    let Some(b) = base() else { return Ok(()) };
+    let p = b.with_extension(suffix);
+    let deadline = Instant::now() + TIMEOUT;
+    while !p.exists() {
+        if Instant::now() > deadline {
+            bail!("barrier timed out after {TIMEOUT:?} waiting for {}", p.display());
+        }
+        std::thread::yield_now();
+    }
+    Ok(())
+}
+```
+
+Add `pub mod barrier;` to `lib.rs`. `resolve_locked`'s hook (Task 7) becomes
+`barrier::signal("ready")?` then `barrier::wait("go")?`, replacing the inline
+`DEVKIT_DOCS_BARRIER` sketch — one variable, one module.
+
+Then give `hold` a contention probe, which is what makes a lock's *absence*
+observable:
+
+```rust
+    let mut lock = RwLock::new(file);
+    // When the barrier variable is set, a failed non-blocking attempt proves
+    // another process holds this lock *right now*. That is the one fact a race
+    // test cannot otherwise establish: every other signal proves only that a
+    // contender started. Costs one `env::var_os` miss in production.
+    if std::env::var_os(crate::barrier::VAR).is_some() && lock.try_write().is_err() {
+        crate::barrier::signal("contended")?;
+    }
+    let _held = lock
+        .write()
+        .with_context(|| format!("locking {}", path.display()))?;
+    f()
+```
+
+`lock.try_write().is_err()` drops its temporary guard at the end of the
+statement, so the following `lock.write()` borrows freely. If `try_write`
+happens to succeed the lock is released and immediately retaken; nothing runs in
+the gap, so no invariant depends on holding it continuously.
+
 Add to `crates/devkit-docs/Cargo.toml`:
 
 ```toml
@@ -910,7 +989,8 @@ fn concurrent_adds_of_different_libraries_both_survive() {
 
 ```bash
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
-git add crates/devkit-docs/src/locks.rs crates/devkit-docs/src/lib.rs \
+git add crates/devkit-docs/src/locks.rs crates/devkit-docs/src/barrier.rs \
+        crates/devkit-docs/src/lib.rs \
         crates/devkit-docs/src/cache.rs crates/devkit-docs/src/manifest.rs \
         crates/devkit-docs/Cargo.toml crates/devkit-docs/tests/concurrency.rs
 git commit -m "feat(docs): add a per-library lock and atomic writes"
@@ -1436,6 +1516,8 @@ git commit -m "fix(docs): name checkouts for their ref and verify them"
 **Files:**
 - Create: `crates/devkit-docs/src/importers.rs`
 - Create: `crates/devkit-docs/tests/importers.rs`
+- Modify: `Cargo.toml`, `crates/devkit-docs/Cargo.toml`, `Cargo.lock` — the
+  `jsonc-parser` dependency `bun.lock` parsing needs
 - Modify: `crates/devkit-docs/src/lockfiles.rs` (keep parsing helpers, drop `highest`-based selection)
 - Modify: `crates/devkit-docs/src/resolve.rs`
 
@@ -1646,7 +1728,12 @@ version = "1.0.210"
     );
     // `b` does not depend on serde, even though the lockfile contains it.
     let err = importers::select(&root.join("b"), Ecosystem::Rust, "serde").unwrap_err().to_string();
-    assert!(err.contains("required by a"), "the error must name the dependent: {err}");
+    // `a`'s edge is a bare `"serde"` carrying no version, so there is no pair
+    // to report. The real lockfile version must still be listed, and no
+    // fabricated "unspecified" may stand in for it.
+    assert!(err.contains("1.0.210"), "the lockfile version must be listed: {err}");
+    assert!(err.contains("declared by: a"), "the declarer must be named: {err}");
+    assert!(!err.contains("unspecified"), "no invented version: {err}");
 }
 
 #[test]
@@ -2011,7 +2098,7 @@ fn bun_candidates(v: &serde_json::Value, package: &str) -> Candidates {
     declarers.extend(declarers_in(pkgs, package, |r| {
         r.get(2).map(class_deps).unwrap_or_default()
     }));
-    Candidates { versions, declarers }
+    Candidates { versions, declarers, ..Default::default() }
 }
 
 fn json_candidates(
@@ -2026,6 +2113,7 @@ fn json_candidates(
             .filter_map(|(k, r)| Some((r.get("version")?.as_str()?.to_string(), k.clone())))
             .collect(),
         declarers: declarers_in(Some(pkgs), package, class_deps),
+        ..Default::default()
     }
 }
 ```
@@ -2244,9 +2332,11 @@ fn from_package_array(
                     .iter()
                     .filter_map(dep_edge)
                     .filter(|(n, _)| *n == package)
-                    .map(move |(_, v)| {
-                        (v.unwrap_or("unspecified").to_string(), p.name.clone())
-                    })
+                    // Only an edge that names a version becomes a pair. A
+                    // bare `"serde"` edge has none, and inventing
+                    // "unspecified" would both state a falsehood and suppress
+                    // the real lockfile versions below.
+                    .filter_map(move |(_, v)| Some((v?.to_string(), p.name.clone())))
             })
             .collect();
         // Cargo and uv edges carry the resolved version, so these are genuine
@@ -2371,7 +2461,8 @@ with "has no `[[package]]` for" is a fixture this step missed.
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
 git add crates/devkit-docs/src/importers.rs crates/devkit-docs/src/lib.rs \
         crates/devkit-docs/src/lockfiles.rs crates/devkit-docs/src/resolve.rs \
-        crates/devkit-docs/tests/importers.rs crates/devkit-docs/tests/resolve.rs
+        crates/devkit-docs/tests/importers.rs crates/devkit-docs/tests/resolve.rs \
+        Cargo.toml crates/devkit-docs/Cargo.toml Cargo.lock
 git commit -m "fix(docs): resolve versions from the workspace importer graph"
 ```
 
@@ -2464,25 +2555,12 @@ So add a deterministic, test-only barrier to `resolve_locked`, in the same
 env-driven style the daemon already uses for `DEVKIT_DAEMON_HEALTH_PROBE_SECS`:
 
 ```rust
-/// Test-only rendezvous. With `DEVKIT_DOCS_BARRIER=<path>` set, `resolve_locked`
-/// signals `<path>.ready` once the checkout is materialized and then blocks
-/// until `<path>.go` appears. Unset — every real run — this is a no-op.
-fn barrier_after_materialize() -> Result<()> {
-    let Ok(base) = std::env::var("DEVKIT_DOCS_BARRIER") else {
-        return Ok(());
-    };
-    let base = PathBuf::from(base);
-    std::fs::write(base.with_extension("ready"), "")?;
-    let go = base.with_extension("go");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while !go.exists() {
-        if std::time::Instant::now() > deadline {
-            bail!("barrier timed out waiting for {}", go.display());
-        }
-        std::thread::yield_now();
-    }
-    Ok(())
-}
+`resolve_locked` uses the shared module from Task 4 Step 3b — one variable, one
+implementation, one bounded timeout:
+
+```rust
+    crate::barrier::signal("ready")?;
+    crate::barrier::wait("go")?;
 ```
 
 Call it in `resolve_locked` between `assert_clean` and the reference-registry
@@ -2515,7 +2593,7 @@ fn prune_cannot_delete_a_directory_a_concurrent_resolve_just_materialized() {
         .args(["--exact", "race_child_materializes_and_waits", "--ignored"])
         .env("DOCM_RACE_CACHE", &cache)
         .env("DOCM_RACE_REPO", &repo)
-        .env("DEVKIT_DOCS_BARRIER", &barrier)
+        .env(devkit_docs::barrier::VAR, &barrier)
         .spawn()
         .unwrap();
 
@@ -3352,13 +3430,25 @@ fn rm_blocks_until_a_concurrent_add_of_the_same_library_completes() {
 
     let mut remover = spawn_child("child_rm_up", &global, &cache, &base, &repo, &barrier);
 
-    // Wait for the remover to be inside its transaction before releasing the
-    // adder. Releasing on spawn alone would let the adder finish first, and
-    // both the locked and unlocked builds would then produce the same result.
-    let rm_started = barrier.with_extension("rm-started");
+    // Wait for proof that the remover is *blocked on the library lock* — not
+    // merely that it started. `.contended` is written from inside
+    // `locks::hold` after a non-blocking acquisition fails, which can only
+    // happen while the adder holds the same lock.
+    //
+    // Waiting on "the remover started" is not enough, and this is the exact
+    // hole three earlier drafts of this test had: release `.go` then, and the
+    // adder can finish its write before an unlocked remover does anything, so
+    // the remover deletes `up` from a complete manifest and the locked and
+    // unlocked builds agree. Contention is the only signal that distinguishes
+    // them, and with `rm`'s lock removed it never arrives — the test fails on
+    // this timeout, which is the RED this test exists to produce.
+    let contended = barrier.with_extension("contended");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while !rm_started.exists() {
-        assert!(std::time::Instant::now() < deadline, "remover never started");
+    while !contended.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the remover never contended for the library lock — it is not taking one"
+        );
         std::thread::yield_now();
     }
 
@@ -3425,13 +3515,16 @@ pub enum RmTarget<'a> {
 
 /// Returns whether an entry was actually removed.
 pub fn rm_library(target: RmTarget<'_>, cache_root: &Path, name: &str) -> Result<bool> {
-    barrier_signal("rm-started")?;
     locks::with_lib(cache_root, name, || match target {
         RmTarget::Global(p) => manifest::remove_global(p, name),
         RmTarget::Project(p) => manifest::remove_project(p, name),
     })
 }
 ```
+
+No rendezvous of its own: `locks::hold`'s contention probe (Task 4 Step 3b)
+signals `.contended` from inside the lock acquisition, which is strictly
+stronger than anything this function could signal around it.
 
 It must carry the target. `docm rm --project` edits a `devkit.toml`, so a helper
 that only knows `remove_global` either removes from the wrong manifest, or is
@@ -3445,21 +3538,27 @@ process. That deadlocks permanently — the exact hazard Global Constraints warn
 about, reintroduced four tasks after the warning was written. Each lock is taken
 once, at one layer, and the layer that owns it is the one closest to the file.
 
-**The rendezvous has to be on the production path, immediately before the lock.**
-Writing `.rm-started` in the test child *before* calling `rm_library` proves only
-that the child ran; an unlocked remover could still do its whole transaction
-after add finishes and produce the result the test expects. Signalling from
-inside `rm_library` on the line before `with_lib` is what makes "the remover has
-reached its lock attempt" observable, and that is the state the parent must see
-before it releases add.
+**The rendezvous must prove contention, not arrival.** Three earlier drafts of
+this test signalled progressively closer to the lock — from the test child
+before calling `rm_library`, then from `rm_library` just before `with_lib` — and
+all three were satisfiable by a remover that takes no lock at all. The
+interleaving they miss: add holds the lock and pauses, rm signals, the parent
+releases `.go`, add completes its write, and *then* the unlocked remover runs
+and deletes `up` from a finished manifest — producing exactly the state the test
+asserts. Reaching the lock is not the same as being stopped by it.
+
+`.contended` is written from inside `locks::hold` only when a non-blocking
+acquisition fails, which is only possible while another process holds that same
+lock. It cannot be produced by a build where `rm` takes no lock, so waiting on it
+is what makes the test fail when the lock is removed.
 
 `spawn_child` re-enters this binary at an `#[ignore]`d test and passes
 `DOCM_RACE_GLOBAL`, `DOCM_RACE_CACHE`, `DOCM_RACE_BASE`, `DOCM_RACE_REPO` and —
-critically — **`DEVKIT_DOCS_MANIFEST_BARRIER`**, the variable `add` and
-`barrier_signal` actually read. An earlier draft passed a `DOCM_RACE_BARRIER`
-that nothing consumed, so `.ready` was never written and the parent hung on a
-file no code produced. Pass the real name, at spawn, never via `set_var` — for
-the reason given in Task 7.
+critically — **`barrier::VAR`** — referenced by that constant, never
+retyped as a string literal. An earlier draft passed a `DOCM_RACE_BARRIER` that
+nothing consumed, so `.ready` was never written and the parent hung on a file no
+code produces; naming the constant is what makes that class of mistake a compile
+error. Pass it at spawn, never via `set_var` — for the reason given in Task 7.
 
 Run this against a build with `rm`'s library lock removed and confirm it fails —
 `up` survives — before restoring it. That RED run is the whole evidence the test
@@ -3470,11 +3569,10 @@ is load-bearing.
 Order, all inside **one** `locks::with_lib` for the target library:
 
 1. snapshot any existing same-name entry
-2. `barrier_signal("ready")` then `barrier_wait("go")` — the
-   `DEVKIT_DOCS_MANIFEST_BARRIER` hook, between the read and the write, no-op
-   when the variable is unset. This is the only point where a locked and an
-   unlocked `rm` diverge; putting it after the write makes the race test
-   unfalsifiable.
+2. `barrier::signal("ready")?` then `barrier::wait("go")?` — the shared hook
+   from Task 4 Step 3b, between the read and the write, no-op when the variable
+   is unset. This is the only point where a locked and an unlocked `rm` diverge;
+   putting it after the write makes the race test unfalsifiable.
 3. write the new entry — `locks::with_manifest`, atomic rename
 4. for a git URL with no `--ref`: resolve the default branch and store it as the
    entry's `ref`. Under `--project`, bail instead with the §6.1 text.
