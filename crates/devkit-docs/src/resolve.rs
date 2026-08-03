@@ -141,10 +141,9 @@ pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Resu
     let (path, repaired) = lib.ensure_at(&worktree, &commit)?;
     lib.assert_clean(&path)?;
     if repaired && let Some(previous_commit) = moved_tag_from {
-        eprintln!(
-            "docm: tag {git_ref} moved {previous_commit} → {commit} upstream; \
-             {worktree} re-pointed"
-        );
+        warnings.push(format!(
+            "tag {git_ref} moved {previous_commit} → {commit} upstream; {worktree} re-pointed"
+        ));
     }
     meta.worktrees.insert(
         worktree.clone(),
@@ -169,6 +168,8 @@ pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Resu
         }
     };
     cache::write_meta(&lib.dir, &meta)?;
+    crate::barrier::signal("materialized")?;
+    crate::barrier::wait("commit")?;
     RefStore::at(cache_root).commit(|data| {
         data.record(&project.to_string_lossy(), &entry.name, &worktree);
         Ok(())

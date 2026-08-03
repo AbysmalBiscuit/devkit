@@ -314,6 +314,14 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
         "the ref names the directory, so it is reused"
     );
     assert_eq!(third.status, devkit_docs::resolve::Status::Repaired);
+    assert!(
+        third
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("re-pointed")),
+        "moved-tag repair was not reported: {:?}",
+        third.warnings
+    );
     let head = devkit_common::cmd::capture(
         "git",
         &["rev-parse", "HEAD"],
@@ -324,6 +332,34 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
     assert_eq!(
         std::fs::read_to_string(third.path.join("src/lib.rs")).unwrap(),
         "// v2"
+    );
+}
+
+#[test]
+fn a_failed_moved_tag_repair_does_not_report_success() {
+    let base = common::unique_tmp("movedtag-failed-repair");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let entry = devkit_docs::manifest::LibEntry {
+        name: "up".into(),
+        ecosystem: Some(devkit_docs::manifest::Ecosystem::Git),
+        repo: Some(repo.clone()),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let first = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    devkit_common::cmd::capture("git", &["tag", "-f", "v1.0.0", "v1.1.0"], Some(&repo)).unwrap();
+    let lib = devkit_docs::cache::LibCache::new(&cache, "up").unwrap();
+    lib.fetch().unwrap();
+    std::fs::write(first.path.join("src/lib.rs"), "// local change").unwrap();
+
+    let error = devkit_docs::resolve::resolve(&entry, &base, &cache)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        !error.contains("re-pointed"),
+        "failed repair reported success: {error}"
     );
 }
 

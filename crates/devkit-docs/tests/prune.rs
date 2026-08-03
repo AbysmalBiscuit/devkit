@@ -4,6 +4,155 @@ use common::unique_tmp;
 use devkit_docs::manifest::{Ecosystem, LibEntry};
 use devkit_docs::refs::{self, RefStore};
 use std::collections::BTreeSet;
+use std::path::Path;
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
+
+fn wait_for(path: &Path) {
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    while !path.try_exists().unwrap() {
+        assert!(
+            Instant::now() <= deadline,
+            "timed out waiting for {}",
+            path.display()
+        );
+        std::thread::yield_now();
+    }
+}
+
+fn wait_for_contention_or_exit(child: &mut Child, contended: &Path) -> bool {
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    loop {
+        if contended.try_exists().unwrap() {
+            return true;
+        }
+        if child.try_wait().unwrap().is_some() {
+            return false;
+        }
+        assert!(
+            Instant::now() <= deadline,
+            "timed out waiting for prune contention or completion"
+        );
+        std::thread::yield_now();
+    }
+}
+
+fn wait_for_child(mut child: Child, label: &str) -> Output {
+    let deadline = Instant::now() + PROCESS_TIMEOUT;
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() > deadline {
+            child.kill().unwrap();
+            panic!("{label} worker timed out");
+        }
+        std::thread::yield_now();
+    }
+}
+
+fn assert_worker_succeeded(output: Output, label: &str) {
+    assert!(
+        output.status.success(),
+        "{label} worker failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn prune_waits_for_an_in_flight_resolve_registry_commit() {
+    if let Ok(role) = std::env::var("DEVKIT_DOCS_TEST_PRUNE_RACE") {
+        let cache_root =
+            std::path::PathBuf::from(std::env::var_os("DEVKIT_DOCS_TEST_CACHE_ROOT").unwrap());
+        let project =
+            std::path::PathBuf::from(std::env::var_os("DEVKIT_DOCS_TEST_PROJECT").unwrap());
+        if role == "resolve" {
+            let entry = LibEntry {
+                name: "up".into(),
+                ecosystem: Some(Ecosystem::Git),
+                repo: Some(std::env::var("DEVKIT_DOCS_TEST_REPO").unwrap()),
+                r#ref: Some("v1.0.0".into()),
+                ..Default::default()
+            };
+            devkit_docs::resolve::resolve(&entry, &project, &cache_root).unwrap();
+        } else {
+            let store = RefStore::at(&cache_root);
+            let snapshot = store.snapshot();
+            let manifest_libs = BTreeSet::from(["up".to_string()]);
+            let plan = refs::plan_for_cache(
+                &cache_root,
+                &snapshot,
+                &manifest_libs,
+                Some(&project.join("missing-global.toml")),
+            )
+            .unwrap();
+            assert_eq!(plan.delete, [("up".to_string(), "v1.0.0".to_string())]);
+            for (lib, worktree) in &plan.delete {
+                devkit_docs::cache::LibCache::new(&cache_root, lib)
+                    .unwrap()
+                    .remove_worktree(worktree, &snapshot)
+                    .unwrap();
+            }
+            store
+                .commit(|data| {
+                    refs::reconcile(data, &snapshot, &plan.keep);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        return;
+    }
+
+    let root = unique_tmp("resolve-prune-race");
+    let repo = common::fixture_repo(&root.join("upstream"));
+    let cache_root = root.join("cache");
+    let project = root.join("project");
+    let barrier = root.join("resolve");
+    std::fs::create_dir_all(&project).unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let spawn_worker = |role: &str| {
+        Command::new(&exe)
+            .env("DEVKIT_DOCS_TEST_PRUNE_RACE", role)
+            .env("DEVKIT_DOCS_TEST_CACHE_ROOT", &cache_root)
+            .env("DEVKIT_DOCS_TEST_PROJECT", &project)
+            .env("DEVKIT_DOCS_TEST_REPO", &repo)
+            .env(devkit_docs::barrier::VAR, &barrier)
+            .args([
+                "--exact",
+                "prune_waits_for_an_in_flight_resolve_registry_commit",
+                "--nocapture",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+
+    let resolve = spawn_worker("resolve");
+    wait_for(&barrier.with_extension("materialized"));
+    let checkout = cache_root.join("up/v1.0.0");
+    assert!(checkout.is_dir());
+
+    let mut prune = spawn_worker("prune");
+    let contended = wait_for_contention_or_exit(&mut prune, &barrier.with_extension("contended"));
+    let in_flight_checkout_survived = checkout.is_dir();
+
+    std::fs::write(barrier.with_extension("commit"), "").unwrap();
+    assert_worker_succeeded(wait_for_child(resolve, "resolve"), "resolve");
+    assert_worker_succeeded(wait_for_child(prune, "prune"), "prune");
+
+    assert!(contended, "prune did not block on the per-library lock");
+    assert!(
+        in_flight_checkout_survived,
+        "prune deleted the in-flight checkout"
+    );
+    assert!(checkout.is_dir(), "prune deleted the committed checkout");
+    let data = RefStore::at(&cache_root).snapshot();
+    assert_eq!(data.rows.len(), 1);
+    assert_eq!(data.rows[0].version, "v1.0.0");
+}
 
 // Bug #1 regression: pruning from project A must NOT delete project B's
 // overlay-only lib worktree.
@@ -149,6 +298,60 @@ fn prune_never_schedules_a_stray_scoped_parent_for_deletion() {
 }
 
 #[test]
+fn whole_library_deletion_rechecks_fresh_references() {
+    let root = unique_tmp("whole-lib-race");
+    let cache_root = root.join("cache");
+    let project = root.join("project");
+    std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+
+    let snapshot = RefStore::at(&cache_root).snapshot();
+    let plan = refs::plan_for_cache(&cache_root, &snapshot, &BTreeSet::new(), None).unwrap();
+    assert_eq!(plan.removable_libs, ["up"]);
+
+    RefStore::at(&cache_root)
+        .commit(|data| {
+            data.record(project.to_str().unwrap(), "up", "v1.0.0");
+            Ok(())
+        })
+        .unwrap();
+
+    let removed = devkit_docs::cache::LibCache::new(&cache_root, "up")
+        .unwrap()
+        .remove_if_unreferenced(&snapshot)
+        .unwrap();
+
+    assert!(!removed);
+    assert!(cache_root.join("up").is_dir());
+}
+
+#[test]
+fn whole_library_deletion_ignores_rows_already_rejected_by_the_plan() {
+    let root = unique_tmp("whole-lib-stale-row");
+    let cache_root = root.join("cache");
+    std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
+    let store = RefStore::at(&cache_root);
+    store
+        .commit(|data| {
+            data.record("/missing/project", "up", "v1.0.0");
+            Ok(())
+        })
+        .unwrap();
+
+    let snapshot = store.snapshot();
+    let plan = refs::plan_for_cache(&cache_root, &snapshot, &BTreeSet::new(), None).unwrap();
+    assert_eq!(plan.removable_libs, ["up"]);
+
+    let removed = devkit_docs::cache::LibCache::new(&cache_root, "up")
+        .unwrap()
+        .remove_if_unreferenced(&snapshot)
+        .unwrap();
+
+    assert!(removed);
+    assert!(!cache_root.join("up").exists());
+}
+
+#[test]
 fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
     let tmp = unique_tmp("live-ref-checkouts");
     let repo = common::fixture_repo(&tmp.join("upstream"));
@@ -212,7 +415,7 @@ fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
     for (lib, worktree) in &plan.delete {
         devkit_docs::cache::LibCache::new(&cache_root, lib)
             .unwrap()
-            .remove_worktree(worktree)
+            .remove_worktree(worktree, &snapshot)
             .unwrap();
     }
 

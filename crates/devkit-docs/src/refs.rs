@@ -225,25 +225,24 @@ pub fn plan_for_cache(
 }
 
 /// Apply a prune plan to the freshly-locked registry without clobbering rows a
-/// concurrent resolve added after `snapshot` was taken. Drops exactly the rows
-/// that were in `snapshot` but not in `keep`; retargets kept rows to the plan's
-/// versions; leaves rows unknown to `snapshot` untouched.
+/// concurrent resolve added or retargeted after `snapshot` was taken. Drops
+/// unchanged snapshot rows absent from `keep` and leaves fresher rows untouched.
 pub fn reconcile(current: &mut Data, snapshot: &Data, keep: &[RefRow]) {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     let key = |r: &RefRow| (r.project.clone(), r.lib.clone());
-    let snapshot_keys: HashSet<(String, String)> = snapshot.rows.iter().map(key).collect();
+    let snapshot_rows: HashMap<(String, String), &RefRow> =
+        snapshot.rows.iter().map(|row| (key(row), row)).collect();
     let keep_keys: HashSet<(String, String)> = keep.iter().map(key).collect();
     current
         .rows
-        .retain(|r| !snapshot_keys.contains(&key(r)) || keep_keys.contains(&key(r)));
-    for r in current.rows.iter_mut() {
-        if let Some(k) = keep
-            .iter()
-            .find(|k| k.project == r.project && k.lib == r.lib)
-        {
-            r.version = k.version.clone();
-        }
-    }
+        .retain(|row| match snapshot_rows.get(&key(row)) {
+            None => true,
+            Some(snapshot_row) => {
+                keep_keys.contains(&key(row))
+                    || row.version != snapshot_row.version
+                    || row.resolved_at != snapshot_row.resolved_at
+            }
+        });
 }
 
 #[cfg(test)]
@@ -353,6 +352,21 @@ mod tests {
                 .any(|r| r.project == "/A" && r.lib == "libX" && r.version == "1.0.0")
         );
         assert_eq!(current.rows.len(), 2);
+    }
+
+    #[test]
+    fn reconcile_preserves_a_concurrent_same_key_retarget() {
+        let mut snapshot = Data::default();
+        snapshot.record("/A", "libX", "1.0.0");
+        let keep = snapshot.rows.clone();
+
+        let mut current = Data::default();
+        current.record("/A", "libX", "2.0.0");
+
+        reconcile(&mut current, &snapshot, &keep);
+
+        assert_eq!(current.rows.len(), 1);
+        assert_eq!(current.rows[0].version, "2.0.0");
     }
 
     #[test]

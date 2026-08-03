@@ -363,8 +363,11 @@ fn cmd_prune(yes: bool) -> Result<()> {
     let plan = refs::plan_for_cache(&root, &snapshot, &manifest_libs, None)?;
 
     for (lib, wt) in &plan.delete {
-        cache::LibCache::from_dir(&root, &devkit_docs::names::encode(lib)).remove_worktree(wt)?;
-        println!("removed {lib}/{wt}");
+        if cache::LibCache::from_dir(&root, &devkit_docs::names::encode(lib))
+            .remove_worktree(wt, &snapshot)?
+        {
+            println!("removed {lib}/{wt}");
+        }
     }
     if !plan.removable_libs.is_empty() {
         println!(
@@ -373,9 +376,11 @@ fn cmd_prune(yes: bool) -> Result<()> {
         );
         if yes || confirm("delete them entirely? [y/N] ")? {
             for lib in &plan.removable_libs {
-                std::fs::remove_dir_all(root.join(lib))
-                    .with_context(|| format!("deleting {lib}"))?;
-                println!("deleted {lib}");
+                if cache::LibCache::from_dir(&root, &devkit_docs::names::encode(lib))
+                    .remove_if_unreferenced(&snapshot)?
+                {
+                    println!("deleted {lib}");
+                }
             }
         }
     }
