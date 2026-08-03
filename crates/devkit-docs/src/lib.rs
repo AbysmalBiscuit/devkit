@@ -40,6 +40,9 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
             continue;
         }
         let dirname = e.file_name().to_string_lossy().into_owned();
+        if locks::is_control(&dirname) {
+            continue;
+        }
         let name = names::decode(&dirname);
         out.libs += 1;
         for (wt, _) in cache::LibCache::from_dir(cache_root, &dirname).version_worktrees() {
@@ -74,5 +77,18 @@ mod tests {
         assert_eq!(s.libs, 1);
         assert_eq!(s.unreferenced, 1); // 2.0.0 (default + repo.git exempt)
         assert!(s.bytes > 0);
+    }
+
+    #[test]
+    fn doctor_summary_skips_registry_lock_directory() {
+        let root =
+            std::env::temp_dir().join(format!("devkit-docs-dr-controls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("tokio/default")).unwrap();
+        std::fs::create_dir_all(root.join("registry.locks")).unwrap();
+
+        let summary = doctor_summary(&root);
+
+        assert_eq!(summary.libs, 1);
     }
 }
