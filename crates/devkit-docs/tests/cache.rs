@@ -1,7 +1,7 @@
 mod common;
 
 use common::{fixture_repo, unique_tmp};
-use devkit_docs::cache::{self, LibCache, Meta};
+use devkit_docs::cache::{self, LibCache, Meta, WorktreeMeta};
 use devkit_docs::tags::TagPattern;
 
 #[test]
@@ -20,32 +20,35 @@ fn a_directory_the_host_folds_into_an_existing_one_is_refused() {
 }
 
 #[test]
-fn clone_tags_worktree_and_sync() {
+fn clone_tags_and_ref_named_worktrees() {
     let tmp = unique_tmp("cache");
     let repo = fixture_repo(&tmp.join("upstream"));
     let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
+    let mut meta = Meta::default();
 
     assert!(!lib.cloned());
-    lib.ensure_clone(&repo).unwrap();
+    lib.ensure_clone(&repo, &mut meta).unwrap();
     assert!(lib.cloned());
-    lib.ensure_clone(&repo).unwrap(); // idempotent
+    assert_eq!(meta.origin.as_deref(), Some(repo.as_str()));
+    lib.ensure_clone(&repo, &mut meta).unwrap();
 
     let tags = lib.tags().unwrap();
     assert!(tags.contains(&"v1.0.0".to_string()) && tags.contains(&"v1.1.0".to_string()));
     assert_eq!(lib.default_branch().unwrap(), "main");
 
-    // Version worktree pins the tag's content, not the tip.
-    let wt = lib.ensure_worktree("1.0.0", "v1.0.0").unwrap();
+    let (_, tag_commit) = lib.resolve_ref("v1.0.0").unwrap();
+    let (wt, repaired) = lib.ensure_at("v1.0.0", &tag_commit).unwrap();
+    assert!(!repaired);
     assert_eq!(
         std::fs::read_to_string(wt.join("src/lib.rs")).unwrap(),
         "// v1"
     );
-    lib.ensure_worktree("1.0.0", "v1.0.0").unwrap(); // idempotent
+    assert!(!lib.ensure_at("v1.0.0", &tag_commit).unwrap().1);
 
-    // Default worktree tracks the branch tip.
-    let def = lib.sync_default(None).unwrap();
+    let (_, main_commit) = lib.resolve_ref("main").unwrap();
+    let (main, _) = lib.ensure_at("main", &main_commit).unwrap();
     assert_eq!(
-        std::fs::read_to_string(def.join("src/lib.rs")).unwrap(),
+        std::fs::read_to_string(main.join("src/lib.rs")).unwrap(),
         "// v2"
     );
 
@@ -55,26 +58,27 @@ fn clone_tags_worktree_and_sync() {
         .map(|(n, _)| n)
         .collect();
     names.sort();
-    assert_eq!(names, vec!["1.0.0", "default"]);
+    assert_eq!(names, vec!["main", "v1.0.0"]);
 
-    lib.remove_worktree("1.0.0").unwrap();
-    assert!(!lib.worktree_path("1.0.0").exists());
+    lib.remove_worktree("v1.0.0").unwrap();
+    assert!(!lib.worktree_path("v1.0.0").exists());
 }
 
 #[test]
-fn sync_default_follows_new_commits() {
+fn a_branch_checkout_follows_new_commits_after_fetch() {
     let tmp = unique_tmp("sync");
     let upstream = tmp.join("upstream");
     let repo = fixture_repo(&upstream);
     let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
-    lib.ensure_clone(&repo).unwrap();
-    let def = lib.sync_default(None).unwrap();
+    let mut meta = Meta::default();
+    lib.ensure_clone(&repo, &mut meta).unwrap();
+    let (_, first_commit) = lib.resolve_ref("main").unwrap();
+    let (main, _) = lib.ensure_at("main", &first_commit).unwrap();
     assert_eq!(
-        std::fs::read_to_string(def.join("src/lib.rs")).unwrap(),
+        std::fs::read_to_string(main.join("src/lib.rs")).unwrap(),
         "// v2"
     );
 
-    // Upstream moves on; fetch + sync catches up.
     std::fs::write(upstream.join("src/lib.rs"), "// v3").unwrap();
     devkit_common::cmd::capture("git", &["add", "."], Some(upstream.to_str().unwrap())).unwrap();
     devkit_common::cmd::capture(
@@ -84,10 +88,45 @@ fn sync_default_follows_new_commits() {
     )
     .unwrap();
     lib.fetch().unwrap();
-    let def = lib.sync_default(None).unwrap();
+    let (_, next_commit) = lib.resolve_ref("main").unwrap();
+    let (main, repaired) = lib.ensure_at("main", &next_commit).unwrap();
+    assert!(repaired);
     assert_eq!(
-        std::fs::read_to_string(def.join("src/lib.rs")).unwrap(),
+        std::fs::read_to_string(main.join("src/lib.rs")).unwrap(),
         "// v3"
+    );
+}
+
+#[test]
+fn an_existing_clone_without_origin_bootstraps_from_the_bare_repo() {
+    let tmp = unique_tmp("legacy-origin");
+    let repo = fixture_repo(&tmp.join("upstream"));
+    let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
+    let mut initial = Meta::default();
+    lib.ensure_clone(&repo, &mut initial).unwrap();
+
+    let mut legacy = Meta::default();
+    lib.ensure_clone(&repo, &mut legacy).unwrap();
+
+    assert_eq!(legacy.origin.as_deref(), Some(repo.as_str()));
+}
+
+#[test]
+fn a_forty_hex_pin_is_only_an_object_name() {
+    let tmp = unique_tmp("hex-object");
+    let upstream = tmp.join("upstream");
+    let repo = fixture_repo(&upstream);
+    let hex = "0000000000000000000000000000000000000000";
+    devkit_common::cmd::capture("git", &["tag", hex, "v1.0.0"], Some(&repo)).unwrap();
+    let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
+    let mut meta = Meta::default();
+    lib.ensure_clone(&repo, &mut meta).unwrap();
+
+    let error = lib.resolve_ref(hex).unwrap_err();
+
+    assert!(
+        error.to_string().contains(hex),
+        "the missing object error must name the pin: {error}"
     );
 }
 
@@ -95,6 +134,7 @@ fn sync_default_follows_new_commits() {
 fn meta_round_trips() {
     let tmp = unique_tmp("meta");
     let mut m = Meta {
+        origin: Some("https://example.test/up.git".into()),
         tag_pattern: Some(TagPattern::LeafDash),
         ..Default::default()
     };
@@ -105,7 +145,27 @@ fn meta_round_trips() {
             ..Default::default()
         },
     );
+    m.worktrees.insert(
+        "v1.0.0".into(),
+        WorktreeMeta {
+            raw_ref: "v1.0.0".into(),
+            resolved_ref: "refs/tags/v1.0.0".into(),
+            commit: "0123456789012345678901234567890123456789".into(),
+        },
+    );
     cache::write_meta(&tmp, &m).unwrap();
     assert_eq!(cache::read_meta(&tmp), m);
     assert_eq!(cache::read_meta(&tmp.join("missing")), Meta::default());
+}
+
+#[test]
+fn meta_without_identity_fields_keeps_backward_compatible_defaults() {
+    let tmp = unique_tmp("legacy-meta");
+    std::fs::write(tmp.join("meta.toml"), "tag_pattern = \"v\"\n").unwrap();
+
+    let meta = cache::read_meta(&tmp);
+
+    assert_eq!(meta.tag_pattern, Some(TagPattern::V));
+    assert_eq!(meta.origin, None);
+    assert!(meta.worktrees.is_empty());
 }

@@ -1,16 +1,25 @@
 //! The lookup facade: entry + CWD → version-correct checkout path.
-//! Order: manual `ref` pin → lockfile version → tag probe → `default`
-//! worktree fallback (with a warning). Every success records a reference row.
+//! Order: manual `ref` pin → lockfile version → tag probe → default-branch
+//! fallback (with a warning). Every success records a reference row.
 
 use crate::cache::{self, LibCache};
 use crate::layout::{self, Layout};
 use crate::lockfiles;
+use crate::locks;
 use crate::manifest::{Ecosystem, LibEntry};
+use crate::names;
 use crate::refs::RefStore;
 use crate::tags;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    Ok,
+    Repaired,
+}
 
 #[derive(Debug, Serialize)]
 pub struct Resolved {
@@ -19,6 +28,10 @@ pub struct Resolved {
     pub version: String,
     /// Worktree dirname — also the version recorded in the reference registry.
     pub worktree: String,
+    pub git_ref: String,
+    pub commit: String,
+    pub status: Status,
+    pub origin: String,
     pub path: PathBuf,
     pub layout: Layout,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,24 +55,27 @@ pub fn project_root(start: &Path) -> PathBuf {
 }
 
 pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Resolved> {
+    locks::with_lib(cache_root, &entry.name, || {
+        resolve_locked(entry, start, cache_root)
+    })
+}
+
+pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Resolved> {
     let repo = entry
         .repo
         .as_deref()
         .with_context(|| format!("lib `{}` has no repo url", entry.name))?;
     let lib = LibCache::new(cache_root, &entry.name)?;
-    lib.ensure_clone(repo)?;
     let mut warnings = Vec::new();
     let mut meta = cache::read_meta(&lib.dir);
+    lib.ensure_clone(repo, &mut meta)?;
+    let origin = meta
+        .origin
+        .clone()
+        .context("clone origin was not recorded")?;
 
-    let (worktree, version, path, project) = if let Some(pin) = entry.r#ref.as_deref() {
-        // A changed pin is re-pointed by `docm sync`, not on every lookup.
-        let path = lib.ensure_worktree("default", pin)?;
-        (
-            "default".to_string(),
-            pin.to_string(),
-            path,
-            project_root(start),
-        )
+    let (git_ref, version, project) = if let Some(pin) = entry.r#ref.as_deref() {
+        (pin.to_string(), pin.to_string(), project_root(start))
     } else {
         let eco = entry
             .ecosystem
@@ -80,17 +96,14 @@ pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Reso
                     ));
                 }
                 match locate_tag(&lib, &mut meta, &entry.package_name(), &v)? {
-                    Some(tag) => {
-                        let path = lib.ensure_worktree(&v, &tag)?;
-                        (v.clone(), v, path, root)
-                    }
+                    Some(tag) => (tag, v, root),
                     None => {
                         warnings.push(format!(
                             "no git tag found for {} {v}; falling back to the default branch",
                             entry.name
                         ));
-                        let (w, ver, p) = default_worktree(&lib)?;
-                        (w, ver, p, root)
+                        let branch = lib.default_branch()?;
+                        (branch.clone(), branch, root)
                     }
                 }
             }
@@ -103,16 +116,48 @@ pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Reso
                         entry.package_name()
                     )
                 });
-                let (w, ver, p) = default_worktree(&lib)?;
-                (w, ver, p, project_root(start))
+                let branch = lib.default_branch()?;
+                (branch.clone(), branch, project_root(start))
             }
         }
     };
 
-    RefStore::at(cache_root).commit(|d| {
-        d.record(&project.to_string_lossy(), &entry.name, &worktree);
-        Ok(())
-    })?;
+    let worktree = names::checkout_dir(&git_ref)?;
+    let (canonical, commit) = lib.resolve_ref(&git_ref)?;
+    let previous = meta.worktrees.get(&worktree).cloned();
+    if let Some(previous) = &previous
+        && previous.resolved_ref != canonical
+    {
+        bail!(
+            "`{git_ref}` previously resolved to {} and now resolves to {canonical}; \
+             the pin changed kind upstream — re-pin it explicitly",
+            previous.resolved_ref
+        );
+    }
+    if let Some(previous) = &previous
+        && previous.commit != commit
+        && canonical.starts_with("refs/tags/")
+    {
+        eprintln!(
+            "docm: tag {git_ref} moved {} → {commit} upstream; {worktree} re-pointed",
+            previous.commit
+        );
+    }
+    let (path, repaired) = lib.ensure_at(&worktree, &commit)?;
+    lib.assert_clean(&path)?;
+    meta.worktrees.insert(
+        worktree.clone(),
+        cache::WorktreeMeta {
+            raw_ref: git_ref.clone(),
+            resolved_ref: canonical,
+            commit: commit.clone(),
+        },
+    );
+    let status = if repaired {
+        Status::Repaired
+    } else {
+        Status::Ok
+    };
 
     let detected = match meta.layouts.get(&worktree) {
         Some(l) => l.clone(),
@@ -123,22 +168,24 @@ pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Reso
         }
     };
     cache::write_meta(&lib.dir, &meta)?;
+    RefStore::at(cache_root).commit(|data| {
+        data.record(&project.to_string_lossy(), &entry.name, &worktree);
+        Ok(())
+    })?;
 
     Ok(Resolved {
         name: entry.name.clone(),
         version,
         worktree,
+        git_ref,
+        commit,
+        status,
+        origin,
         path,
         layout: layout::with_overrides(detected, entry),
         notes: entry.notes.clone(),
         warnings,
     })
-}
-
-fn default_worktree(lib: &LibCache) -> Result<(String, String, PathBuf)> {
-    let branch = lib.default_branch()?;
-    let path = lib.ensure_worktree("default", &branch)?;
-    Ok(("default".to_string(), branch, path))
 }
 
 /// Probe tag patterns in priority order, using the cached pattern at its
