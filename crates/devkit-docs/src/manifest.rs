@@ -5,7 +5,7 @@
 //! project's `devkit.toml`. Layers merge field-by-field per lib name, the
 //! deeper (more project-specific) layer winning.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -153,6 +153,28 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
     }
     for layer in layers.into_iter().rev() {
         manifest = merge(manifest, layer);
+    }
+    let mut problems: Vec<String> = Vec::new();
+    let mut seen: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for l in &manifest.libs {
+        let dir = crate::names::encode(&l.name);
+        if let Some(other) = seen.insert(crate::names::fold_key(&dir), l.name.clone())
+            && other != l.name
+        {
+            problems.push(format!(
+                "`{other}` and `{}` both map to the cache directory `{dir}`",
+                l.name
+            ));
+        }
+        if let Err(e) = crate::names::validate_lib(&l.name) {
+            problems.push(format!("library `{}`: {e}", l.name));
+        }
+    }
+    if !problems.is_empty() {
+        bail!(
+            "the docs manifest is not usable:\n  {}",
+            problems.join("\n  ")
+        );
     }
     Ok(Discovered {
         manifest,
