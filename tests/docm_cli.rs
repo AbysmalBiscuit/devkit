@@ -416,6 +416,10 @@ fn sync_refuses_to_write_an_inferred_ref_into_a_devkit_toml() {
         stderr(&refused)
     );
     assert_eq!(read(&devkit_toml), before);
+    // The pin must not land anywhere: writing it to the global manifest instead
+    // gives a project entry a machine-specific pin the project cannot see.
+    let global = std::fs::read_to_string(env.global()).unwrap_or_default();
+    assert!(!global.contains("ref ="), "{global}");
 }
 
 #[test]
