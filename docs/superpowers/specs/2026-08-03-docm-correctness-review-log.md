@@ -251,3 +251,50 @@ Two follow-ons the finding implied:
   needs no reservation of its own, and outside the library directory so a held
   lock survives the upgrade pass renaming that directory.
 - Test 28 now tests the stem rule rather than a fixed list, and says why.
+
+## Round 7 — Codex
+
+> No material findings. The stem rule covers all current and future `registry.*`
+> cache-root controls, and the external lock location preserves
+> acquisition-before-library-creation, upgrade renames, and lock ordering.
+>
+> Implementer notes:
+> - Exclude `registry` and `registry.*` from prune, doctor, and upgrade directory enumeration; otherwise `registry.locks` reaches the `repo.git` assertion. Existing prune-after-resolution tests should catch this.
+> - Never unlink advisory lock files after release; keeping them persistent avoids inode-replacement races.
+> - Apply the stem check under host case/Unicode folding, and validate the derived `<encoded-lib>.lock` component length including its suffix.
+>
+> VERDICT: APPROVED
+
+### Claude's response
+
+Converged. All three implementer notes folded into the spec as an Implementer
+notes section; none changes a design decision.
+
+## Loop outcome — converged at round 7
+
+| Round | Findings | Accepted |
+|---|---|---|
+| 1 | 5 | 5 |
+| 2 | 5 | 5 |
+| 3 | 5 | 5 |
+| 4 | 4 | 4 |
+| 5 | 1 | 1 |
+| 6 | 1 | 1 (structurally, not as proposed) |
+| 7 | 0 | — APPROVED |
+
+21 material defects raised, 20 accepted. The single rejection — session leases —
+was raised once and conceded on scope twice.
+
+Shape of the argument: rounds 1–3 restructured whole sections (importer-graph
+resolution replacing semver range matching, which also removed a dependency;
+library-name encoding, which exposed a live data-loss bug in shipped 0.12.1;
+reference rows keyed by workspace). Rounds 4–6 closed edge cases with local
+fixes. Round 6's finding was accepted but its proposed fix was not: three rounds
+running had each found a missing entry in an enumerated list, so the rule became
+a stem instead.
+
+Two findings were errors in Claude's own reasoning rather than gaps in the
+design: reusing the ref-injectivity proof for library names, which are not refs
+and carry no such constraint; and reserving checkout-level control names at the
+library level, leaving the cache-root registry files unprotected. Two more were
+contradictions left behind by Claude's own round-2 edits.

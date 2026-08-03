@@ -1,10 +1,9 @@
 # docm correctness: make wrong answers loud
 
 **Date:** 2026-08-03
-**Status:** reviewed over five adversarial rounds (see the companion review log);
-20 material defects found, 19 accepted. The loop ended at its round cap on a
-REVISE, so the final fix — scoping reserved names per directory level — is
-itself unreviewed. Pending human sign-off, then implementation.
+**Status:** approved. Seven adversarial review rounds (see the companion review
+log): 21 material defects found, 20 accepted, converging to APPROVED at round 7
+with three implementer notes (below).
 **Source:** `scratch/docm_issues.md` — a field report from an agent that resolved
 four libraries for SWE-10805 and got three of them wrong on the first attempt.
 
@@ -765,6 +764,23 @@ support these.
   everywhere would not buy knowledge — an agent under time pressure types
   `--ref main` or copies the branch out of the error text, producing the same
   value while making it look deliberate.
+
+## Implementer notes
+
+Carried out of review as guidance rather than design; none changes a decision
+above.
+
+- **Exclude the reserved stem from directory enumeration.** Prune, doctor and the
+  upgrade pass all walk the cache root; `registry.locks/` would otherwise reach
+  the `repo.git` assertion (§1.1) and fail as a malformed library. The
+  prune-after-resolution tests should catch a miss here.
+- **Never unlink an advisory lock file after release.** Persistent lock files
+  avoid the inode-replacement race where two processes hold locks on different
+  inodes for the same path.
+- **Apply the stem check under host case and Unicode folding**, the same way ref
+  collisions are detected (§1), and validate the derived
+  `<encoded-lib>.lock` component length *including* its suffix against the
+  255-byte limit.
 
 ## Unresolved questions
 
