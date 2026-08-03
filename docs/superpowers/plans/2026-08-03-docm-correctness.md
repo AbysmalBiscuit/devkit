@@ -857,9 +857,13 @@ Expected: PASS, 2 tests.
 
 In `crates/devkit-docs/src/cache.rs`:
 
+Task 1 Step 5c already replaced this function's `create_dir_all` with
+`create_dir_exact`; keep that. Only the write becomes atomic here:
+
 ```rust
 pub fn write_meta(lib_dir: &Path, m: &Meta) -> Result<()> {
-    std::fs::create_dir_all(lib_dir)?;
+    // Task 1: the directory is created by `create_dir_exact` at the point the
+    // library is first materialized, not re-created here.
     let path = lib_dir.join("meta.toml");
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, toml::to_string_pretty(m)?).context("writing meta.toml")?;
@@ -1149,6 +1153,20 @@ so bootstrap it from the bare repo rather than assuming the manifest is right:
                 &self.bare_str(),
             )
             .with_context(|| format!("materializing {dirname} at {commit}"))?;
+            // `worktree add` creates the directory itself, so this cannot route
+            // through `create_dir_exact`. The check it performs still must
+            // happen: a host that folds `V1.0` onto `v1.0` would otherwise let
+            // two refs share one checkout, which is the failure §1 exists to
+            // prevent.
+            let stored = std::fs::read_dir(&self.dir)?
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy() == dirname);
+            if !stored {
+                bail!(
+                    "this filesystem did not store the checkout under `{dirname}`; \
+                     it folds onto an existing directory and the two refs would share one checkout"
+                );
+            }
             return Ok((path, false));
         }
         let head = cmd::git(&["rev-parse", "HEAD"], &path.to_string_lossy())?
@@ -1306,6 +1324,12 @@ fn a_tag_deleted_upstream_is_a_hard_error_after_prune_tags() {
         ).is_err(),
         "--prune-tags must delete the local tag"
     );
+
+    // The point of pruning the tag is that the pin then fails. Stopping at the
+    // rev-parse check would leave the actual promise — a hard error rather than
+    // a stale checkout served as if still released — untested.
+    let err = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap_err().to_string();
+    assert!(err.contains("v2.0.0"), "the error must name the withdrawn ref: {err}");
 }
 
 #[test]
@@ -1408,7 +1432,8 @@ const BUN_LOCK: &str = r#"{
   "lockfileVersion": 1,
   "workspaces": {
     "": { "name": "root" },
-    "apps/api": { "name": "@app/api", "dependencies": { "h3": "^1.15.5" } }
+    "apps/api": { "name": "@app/api", "dependencies": { "h3": "^1.15.5" } },
+    "apps/web": { "name": "@app/web", "dependencies": {} }
   },
   "packages": {
     "h3": ["h3@1.15.11", "", {}, "sha512-a"],
@@ -1438,9 +1463,12 @@ fn a_transitive_package_is_a_hard_error_that_lists_candidates() {
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::write(ws.join("package.json"), r#"{"name":"@app/web","dependencies":{}}"#).unwrap();
 
+    // `apps/web` must exist in bun.lock's workspaces, or this errors on the
+    // missing workspace entry and never reaches the transitive check.
     let err = importers::select(&ws, Ecosystem::Js, "h3").unwrap_err().to_string();
     assert!(err.contains("does not declare"), "{err}");
     assert!(err.contains("--ref"), "the error must suggest a pin: {err}");
+    assert!(err.contains("1.15.11"), "the error must list candidate versions: {err}");
 }
 
 #[test]
@@ -1858,16 +1886,26 @@ fn bun(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selection
     })
 }
 
-/// Every version of `package` the lockfile holds, for the undeclared error.
-fn bun_candidates(v: &serde_json::Value, package: &str) -> Vec<String> {
+/// Every version of `package` the lockfile holds, paired with the key that owns
+/// it — `undeclared` takes (version, dependent), not versions alone.
+fn bun_candidates(v: &serde_json::Value, package: &str) -> Vec<(String, String)> {
     v.get("packages").and_then(|p| p.as_object()).map(|o| {
-        o.values()
-            .filter_map(|r| r.get(0)?.as_str())
-            .filter_map(|s| s.rsplit_once('@'))
-            .filter(|(n, _)| *n == package)
-            .map(|(_, ver)| ver.to_string())
+        o.iter()
+            .filter_map(|(key, r)| Some((key.clone(), r.get(0)?.as_str()?)))
+            .filter_map(|(key, s)| s.rsplit_once('@').map(|(n, ver)| (key, n.to_string(), ver.to_string())))
+            .filter(|(_, n, _)| n == package)
+            .map(|(key, _, ver)| (ver, key))
             .collect()
     }).unwrap_or_default()
+}
+
+/// The same shape for the JSON-object formats, where a nested copy's key is its
+/// `node_modules` path and that path names the dependent.
+fn json_candidates(pkgs: &serde_json::Map<String, serde_json::Value>, package: &str) -> Vec<(String, String)> {
+    pkgs.iter()
+        .filter(|(k, _)| k.ends_with(&format!("node_modules/{package}")))
+        .filter_map(|(k, r)| Some((r.get("version")?.as_str()?.to_string(), k.clone())))
+        .collect()
 }
 ```
 
@@ -1910,10 +1948,12 @@ fn json5_ish(src: &str) -> Result<serde_json::Value> {
                 }
             }
             ',' => {
-                // A comma is trailing when the next non-whitespace is a closer.
-                let mut lookahead = chars.clone();
-                let next = lookahead.find(|c| !c.is_whitespace());
-                if !matches!(next, Some(']') | Some('}')) {
+                // Trailing when the next thing that is neither whitespace nor a
+                // comment is a closer. Skipping only whitespace is wrong:
+                // `{"a":1, // note\n}` has a comment between the comma and the
+                // `}`, so the comma would be kept and the stripped output would
+                // then be invalid JSON.
+                if !next_is_closer(&chars) {
                     out.push(c);
                 }
             }
@@ -1922,16 +1962,43 @@ fn json5_ish(src: &str) -> Result<serde_json::Value> {
     }
     serde_json::from_str(&out).context("parsing bun.lock as JSONC")
 }
+
+/// Look past whitespace *and* `//` comments for the next significant character.
+fn next_is_closer(rest: &std::iter::Peekable<std::str::Chars>) -> bool {
+    let mut it = rest.clone();
+    loop {
+        match it.next() {
+            Some(c) if c.is_whitespace() => continue,
+            Some('/') if it.peek() == Some(&'/') => {
+                for n in it.by_ref() {
+                    if n == '\n' {
+                        break;
+                    }
+                }
+            }
+            Some(']') | Some('}') => return true,
+            _ => return false,
+        }
+    }
+}
 ```
 
-Unit-test it in the module on a fixture containing both a trailing comma and a
-`//` inside a string:
+Unit-test it on the three shapes that actually appear — a `//` inside a URL
+string, a trailing comma, and a comma separated from its closer by a comment:
 
 ```rust
 #[test]
-fn jsonc_stripping_keeps_double_slashes_inside_strings() {
+fn jsonc_stripping_handles_urls_trailing_commas_and_interposed_comments() {
     let v = json5_ish(r#"{ "url": "https://example.com/x", "a": [1, 2,], }"#).unwrap();
     assert_eq!(v["url"], "https://example.com/x");
+    assert_eq!(v["a"].as_array().unwrap().len(), 2);
+
+    // The comma is trailing even though a comment sits between it and the `}`.
+    let v = json5_ish("{\n  \"a\": 1, // note\n}").unwrap();
+    assert_eq!(v["a"], 1);
+
+    // A comment line of its own, and one after the last array element.
+    let v = json5_ish("{\n  // leading\n  \"a\": [1, 2 // tail\n  ]\n}").unwrap();
     assert_eq!(v["a"].as_array().unwrap().len(), 2);
 }
 ```
@@ -1946,10 +2013,25 @@ fn pnpm(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selectio
     let key = if rel.is_empty() { "." } else { rel };
     let imp = v.get("importers").and_then(|i| i.get(key))
         .with_context(|| format!("pnpm-lock.yaml has no importer `{key}`"))?;
+    // Which other importers install it, for the undeclared error's dependents.
+    let elsewhere: Vec<(String, String)> = v
+        .get("importers")
+        .and_then(|i| i.as_mapping())
+        .map(|m| {
+            m.iter()
+                .filter_map(|(who, imp)| {
+                    let ver = ["dependencies", "devDependencies", "optionalDependencies"]
+                        .iter()
+                        .find_map(|c| imp.get(*c)?.get(package)?.get("version")?.as_str())?;
+                    Some((ver.to_string(), who.as_str()?.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let found = ["dependencies", "devDependencies", "optionalDependencies"]
         .iter()
         .find_map(|c| imp.get(*c)?.get(package))
-        .ok_or_else(|| undeclared(ws, package, &[]))?;
+        .ok_or_else(|| undeclared(ws, package, &elsewhere))?;
     let locator = found.get("version").and_then(|s| s.as_str())
         .context("an importer entry carries a `version` locator")?;
 
@@ -1976,7 +2058,7 @@ fn npm(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selection
     let entry = pkgs.get(rel)
         .with_context(|| format!("package-lock.json has no entry for `{rel}`"))?;
     declared_key(entry, package)
-        .ok_or_else(|| undeclared(ws, package, &[]))?;
+        .ok_or_else(|| undeclared(ws, package, &json_candidates(pkgs, package)))?;
 
     // Nearest wins: apps/api/node_modules/h3 before the hoisted node_modules/h3.
     let mut dir = rel.to_string();
@@ -2164,11 +2246,21 @@ module may guess: an unparsed field is an error, never a fallback.
 Run: `cargo test -p devkit-docs --test importers`
 Expected: PASS, 12 tests — one per format rule, plus the negative and ambiguity cases.
 
-- [ ] **Step 5: Call it from `resolve`**
+- [ ] **Step 5: Call it from `resolve`, and fix the fixtures that assumed the old selector**
 
 Replace the `lockfiles::find_version` + `highest` block in `resolve::resolve`
 with `importers::select`, print `selection.source` on stderr, and use
 `selection.workspace` as the reference-registry key (Task 7).
+
+Range-matching needed only the dependency's `[[package]]` row; importer-graph
+resolution also needs *the member's own row and its edge*. Every existing
+fixture in `crates/devkit-docs/tests/resolve.rs` that writes a bare `Cargo.lock`
+therefore stops resolving, and fails in selection rather than where its
+assertion lives. Update each to add a `[package] name` in its `Cargo.toml` and
+the matching `[[package]]` entry with a `dependencies` edge in its `Cargo.lock`,
+and stage `tests/resolve.rs` with this commit. Run
+`cargo test -p devkit-docs --test resolve` before committing: any test failing
+with "has no `[[package]]` for" is a fixture this step missed.
 
 - [ ] **Step 6: Run the gate and commit**
 
@@ -2176,7 +2268,7 @@ with `importers::select`, print `selection.source` on stderr, and use
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
 git add crates/devkit-docs/src/importers.rs crates/devkit-docs/src/lib.rs \
         crates/devkit-docs/src/lockfiles.rs crates/devkit-docs/src/resolve.rs \
-        crates/devkit-docs/tests/importers.rs
+        crates/devkit-docs/tests/importers.rs crates/devkit-docs/tests/resolve.rs
 git commit -m "fix(docs): resolve versions from the workspace importer graph"
 ```
 
@@ -2291,7 +2383,18 @@ fn barrier_after_materialize() -> Result<()> {
 ```
 
 Call it in `resolve_locked` between `assert_clean` and the reference-registry
-commit. Then:
+commit. `prune_with_lock` gets the mirror-image hook: with
+`DEVKIT_DOCS_PRUNE_BARRIER=<path>` set, it writes `<path>.planned` after taking
+its pre-lock registry snapshot and immediately before acquiring the library
+lock. Both hooks are no-ops when their variable is unset.
+
+**Run these against the unfixed code before implementing.** A concurrency test
+that has never been observed failing is not evidence of anything. With the
+per-library lock removed from `prune_with_lock`, this test must fail — prune
+plans from the stale snapshot and deletes the child's checkout. Confirm that,
+then restore the lock and confirm it passes.
+
+Then:
 
 ```rust
 /// The child re-enters this same test binary, so the two contenders are
@@ -2304,6 +2407,8 @@ fn prune_cannot_delete_a_directory_a_concurrent_resolve_just_materialized() {
     let cache = root.join("cache");
     std::fs::create_dir_all(&cache).unwrap();
     let barrier = root.join("barrier");
+    // Set before either contender starts; `prune_with_lock` reads it once.
+    unsafe { std::env::set_var("DEVKIT_DOCS_PRUNE_BARRIER", &barrier) };
 
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "race_child_materializes_and_waits", "--ignored"])
@@ -2324,12 +2429,23 @@ fn prune_cannot_delete_a_directory_a_concurrent_resolve_just_materialized() {
 
     // Prune now runs against a cache holding an unreferenced-looking checkout.
     // It must block on the library lock rather than plan from a stale snapshot.
+    // Prune's own rendezvous, set before the thread starts: `prune_with_lock`
+    // writes `.planned` once it has taken its pre-lock snapshot and is about to
+    // block on the library lock. Spawning the thread proves only that it
+    // started — releasing the child then would let it commit its row before
+    // prune ever planned, and the test would pass against an unlocked prune.
     let pruner = std::thread::spawn({
         let cache = cache.clone();
         move || devkit_docs::refs::prune_with_lock(&cache).unwrap()
     });
 
     // Release the child only once prune is definitely contending for the lock.
+    let planned = barrier.with_extension("planned");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !planned.exists() {
+        assert!(std::time::Instant::now() < deadline, "prune never reached the lock");
+        std::thread::yield_now();
+    }
     std::fs::write(barrier.with_extension("go"), "").unwrap();
     assert!(child.wait().unwrap().success());
     let removed = pruner.join().unwrap();
@@ -2369,8 +2485,11 @@ are required for the locks to contend at all.
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cargo test -p devkit-docs --test prune`
-Expected: FAIL to compile — `record` takes three arguments.
+Run: `cargo test -p devkit-docs --test prune && cargo test -p devkit-docs --test concurrency`
+Expected: FAIL to compile — `record` takes three arguments, and
+`prune_with_lock` does not exist. The `--test concurrency` run is not optional:
+the race test added above lives there, and running only `--test prune` would
+leave the task's decisive test unexecuted at its own RED step.
 
 - [ ] **Step 3: Implement**
 
@@ -2560,12 +2679,22 @@ nothing, if any of:
 Report every conflict in one error, not the first — an operator fixing these
 wants the whole list.
 
-*Phase 2b — record every HEAD, still without mutating.* For each worktree under
-each library about to move, capture `git -C <path> rev-parse HEAD`. This is the
-only moment that commit is readable with certainty, and phase 3 needs it to
-rebuild a worktree whose administrative link cannot be repaired. A worktree
-whose HEAD is unreadable *now* is already broken; record it as such and let
-phase 3 recreate it rather than trying to repair it.
+*Phase 2b — record every HEAD, still without mutating.* Phase 3 needs each
+worktree's commit to rebuild one whose administrative link cannot be repaired.
+Read it from **the bare repository's worktree administration**, not from the
+worktree:
+
+```
+<lib>/repo.git/worktrees/<name>/HEAD
+```
+
+`git -C <path> rev-parse HEAD` is the obvious way and the wrong one: it needs
+the worktree's `.git` link to be intact, and the worktrees that most need their
+commit captured are exactly the ones whose link is broken. The admin copy is
+readable either way. Fall back to `git --git-dir <lib>/repo.git worktree list
+--porcelain`, which reports each worktree's path and commit from the same
+administration. A worktree with no readable admin entry is recorded as
+unrecoverable and reported; it is not silently dropped.
 
 *Phase 3 — act, per library, under `with_lib_dir` on the target name.* For each
 rename:
@@ -2590,11 +2719,67 @@ rename:
 4. Remove the emptied `<scope>` directory, ignoring `ENOTEMPTY` (a sibling
    scope member may not have been a library).
 
-There is deliberately **no rollback across renames.** Each `fs::rename` is
-atomic, phase 2 has already proven every target free, and `run` is idempotent —
-so a crash mid-phase-3 leaves a cache that is part-migrated and *resumable*, and
-the next invocation finishes it. Unwinding completed renames would add a second
-failure path over the one that already recovers by re-running.
+*Phase 5 — audit every already-encoded library, on every run.* For each library
+directory that phase 1 classified as "already a library", check each of its
+worktrees resolves, and repair or rebuild exactly as phase 3 does.
+
+This phase is what makes the forward-resume claim true, and it exists because
+the claim was false without it. A crash between phase 3's `fs::rename` and its
+`git worktree repair` leaves `@scope~pkg` present and containing `repo.git` —
+so the next run's phase 1 classifies it as *already migrated*, phase 2 finds
+nothing to rename, and the broken absolute worktree links are never touched
+again. The cache is then permanently half-migrated with no operation that
+notices. Phase 5 closes that by making repair unconditional rather than a
+consequence of renaming.
+
+With phase 5 there is deliberately **no rollback across renames.** Each
+`fs::rename` is atomic, phase 2 has already proven every target free, `run` is
+idempotent, and any state a crash can leave is one phase 5 repairs on the next
+run. Unwinding completed renames would add a second failure path over one that
+already recovers by re-running.
+
+- [ ] **Step 3c: Test the resume that phase 5 exists for**
+
+```rust
+#[test]
+fn a_crash_between_rename_and_repair_is_finished_by_the_next_run() {
+    let base = common::unique_tmp("upgrade-resume");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let old = cache.join("@scope/pkg");
+    std::fs::create_dir_all(&old).unwrap();
+    let bare = old.join("repo.git");
+    devkit_common::cmd::capture("git", &["clone", "--bare", &repo, bare.to_str().unwrap()], None).unwrap();
+    devkit_common::cmd::capture(
+        "git",
+        &["worktree", "add", "--detach", old.join("v1.0.0").to_str().unwrap(), "v1.0.0"],
+        Some(bare.to_str().unwrap()),
+    )
+    .unwrap();
+    let head = devkit_common::cmd::capture(
+        "git", &["rev-parse", "HEAD"], Some(old.join("v1.0.0").to_str().unwrap()),
+    ).unwrap().trim().to_string();
+
+    // Exactly the state a crash after `fs::rename` and before `worktree repair`
+    // leaves: renamed, so it looks migrated, but every absolute link is stale.
+    std::fs::rename(&old, cache.join("@scope~pkg")).unwrap();
+    std::fs::remove_dir_all(cache.join("@scope")).ok();
+    let moved = cache.join("@scope~pkg").join("v1.0.0");
+    assert!(
+        devkit_common::cmd::capture("git", &["status", "--porcelain"], Some(moved.to_str().unwrap())).is_err(),
+        "the fixture must actually be broken, or this test proves nothing"
+    );
+
+    let done = devkit_docs::upgrade::run(&cache).unwrap();
+    assert!(!done.is_empty(), "phase 5 must repair a library that needs no rename");
+    assert_eq!(
+        devkit_common::cmd::capture("git", &["rev-parse", "HEAD"], Some(moved.to_str().unwrap()))
+            .unwrap().trim(),
+        head
+    );
+    assert!(devkit_docs::upgrade::run(&cache).unwrap().is_empty(), "and then settle");
+}
+```
 
 *Phase 4, under the same per-library lock.* If `meta.toml` has no `origin`, read
 `git config --get remote.origin.url` from its bare repo and write it via the
@@ -2654,7 +2839,8 @@ fn an_already_migrated_cache_is_left_alone() {
 ```bash
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
 git add crates/devkit-docs/src/upgrade.rs crates/devkit-docs/src/lib.rs \
-        src/bin/docm.rs crates/devkit-docs/tests/upgrade.rs
+        crates/devkit-docs/src/locks.rs src/bin/docm.rs \
+        crates/devkit-docs/tests/upgrade.rs
 git commit -m "feat(docs): migrate 0.12 caches on first run"
 ```
 
@@ -2669,7 +2855,23 @@ git commit -m "feat(docs): migrate 0.12 caches on first run"
 - Test: `crates/devkit-docs/tests/resolve.rs`
 
 **Interfaces:**
-- Produces: `resolve::Options { pub allow_default_branch: bool }`; `resolve::resolve(entry, start, cache_root, opts)`.
+- Produces: `resolve::Options { pub allow_default_branch: bool }`, deriving `Default`;
+  `resolve::resolve(entry, start, cache_root, opts: &Options)` **and**
+  `resolve::resolve_locked(entry, start, cache_root, opts: &Options)` — both gain
+  the parameter, or the wrapper cannot pass it through.
+
+**Callers to update and stage in this commit** — the signature change reaches
+past this task's own files:
+
+| File | What calls it |
+|---|---|
+| `crates/devkit-docs/tests/resolve.rs` | every test written in Task 5 |
+| `crates/devkit-docs/tests/concurrency.rs` | the Task 7 race child |
+| `crates/devkit-docs/tests/upgrade.rs` | any resolve after migration |
+| `src/bin/docm.rs` | `cmd_add`, `cmd_sync`, `resolve_one` |
+
+Passing `&Options::default()` is the correct update everywhere except `cmd_add`
+and `cmd_sync`, which thread the parsed flag.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2910,34 +3112,62 @@ no rollback exists: the entry is written and left behind when resolution fails.
 
 Add the cross-process test that the library lock over `rm` exists to satisfy:
 
+Accepting either final state would make this vacuous — an unserialized
+implementation also lands on one of them most of the time. Force the ordering
+with the same barrier, so exactly one outcome is correct:
+
 ```rust
 #[test]
-fn rm_racing_add_of_the_same_library_leaves_a_coherent_manifest() {
+fn rm_blocks_until_a_concurrent_add_of_the_same_library_completes() {
     let base = common::unique_tmp("rm-add-race");
     let repo = common::fixture_repo(&base.join("src"));
     let global = base.join("docs.toml");
     let cache = base.join("cache");
-    docm_add(&global, &cache, &base, "up", &repo, Some("v1.0.0")).unwrap();
+    let barrier = base.join("barrier");
+    docm_add(&global, &cache, &base, "keep", &repo, Some("v1.0.0")).unwrap();
 
-    // Two processes, opposite mutations, same library. Whichever wins, the
-    // manifest must parse and must not hold a half-written entry.
-    let mut adder = spawn_child("child_add", &global, &cache, &base, &repo);
-    let mut remover = spawn_child("child_rm", &global, &cache, &base, &repo);
+    // The adder holds the library lock and pauses mid-transaction. `rm` must
+    // block on that lock, so it can only observe the completed add — never the
+    // half-written state, and never a manifest it rewrites from a stale read.
+    let mut adder = spawn_child("child_add_up_and_wait", &global, &cache, &base, &repo, &barrier);
+    let ready = barrier.with_extension("ready");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !ready.exists() {
+        assert!(std::time::Instant::now() < deadline, "adder never reached the barrier");
+        std::thread::yield_now();
+    }
+
+    let mut remover = spawn_child("child_rm_up", &global, &cache, &base, &repo, &barrier);
+    std::fs::write(barrier.with_extension("go"), "").unwrap();
     assert!(adder.wait().unwrap().success());
     assert!(remover.wait().unwrap().success());
 
     let d = devkit_docs::manifest::discover(&base, Some(&global)).unwrap();
-    match d.manifest.libs.iter().find(|l| l.name == "up") {
-        Some(l) => assert_eq!(l.r#ref.as_deref(), Some("v1.1.0"), "add won: the new pin is intact"),
-        None => {} // rm won: the entry is gone, which is equally coherent
-    }
+    assert!(
+        d.manifest.libs.iter().all(|l| l.name != "up"),
+        "rm ran after the add completed, so `up` must be gone — finding it means \
+         rm read the manifest before the add committed and wrote back a stale copy"
+    );
+    assert!(
+        d.manifest.libs.iter().any(|l| l.name == "keep"),
+        "the unrelated entry must survive: a lost update would drop it"
+    );
 }
+
+/// Child: add `up`, pausing under the library lock before the manifest commit.
+#[test]
+#[ignore]
+fn child_add_up_and_wait() { /* reads the same env vars as the Task 7 child */ }
+
+/// Child: remove `up`.
+#[test]
+#[ignore]
+fn child_rm_up() { /* calls the `rm` path under `locks::with_lib` */ }
 ```
 
 `spawn_child` re-enters this binary at an `#[ignore]`d test, the same pattern as
-the prune race in Task 7. The failure this catches is an interleaved
-read-modify-write producing an entry with a name but no ref, which
-`discover` then rejects for the whole manifest.
+the prune race in Task 7. Run it first with `rm`'s library lock removed and
+confirm it fails — `up` survives, or `keep` vanishes — before restoring it.
 
 - [ ] **Step 3: Implement `add`**
 

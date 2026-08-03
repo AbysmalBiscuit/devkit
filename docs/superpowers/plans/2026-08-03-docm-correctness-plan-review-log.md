@@ -202,3 +202,87 @@ boundary — unchanged on `resolve`, followed after a fetch — rather than
 asserting a network call on the hot path.
 
 ---
+
+## Round 3 — Codex (`gpt-5.6-sol`, effort `xhigh`)
+
+> The revised plan still has material compile, migration, and test-validity defects.
+>
+> 1. **crucial — Tasks 4–5 undo Task 1's directory-safety fix.** Task 4 restores `create_dir_all` in `write_meta`, while Task 5's shown `ensure_at` omits the required exact-name check after `git worktree add`; Task 1 cannot modify that future function.
+> Fix: Preserve `create_dir_exact` in Task 4 and include the post-add parent-directory verification directly in Task 5's `ensure_at`.
+>
+> 2. **crucial — Task 6 does not compile and its negative tests miss the intended paths.** `bun_candidates` returns `Vec<String>` but `undeclared` requires `&[(String, String)]`; pnpm/npm pass no candidates; `apps/web` is absent from `BUN_LOCK`, so the transitive test errors on the missing workspace; and `json5_ish` retains a comma before a stripped comment, rejecting valid `{"a":1, // comment\n}` while its test contains no actual comment.
+> Fix: Produce `(version, dependent)` pairs for every format, add the tested workspace, and test/fix comment-aware trailing-comma lookahead.
+>
+> 3. **crucial — The revised race tests remain nondeterministic or vacuous.** Starting the prune thread does not prove it reached the lock before `.go` is written, the RED command runs `--test prune` rather than the new `concurrency` test, and Task 11's add/rm test accepts either atomic final state that the unlocked implementation already produces; its `child_add`/`child_rm` bodies are also absent.
+> Fix: Add a prune-side rendezvous after pre-lock planning, provide complete child processes, force a known add/rm ordering, and run each concurrency test against the unfixed implementation.
+>
+> 4. **crucial — Task 8's forward-resume claim fails in a specific crash state.** A crash after `fs::rename` but before `git worktree repair` leaves absolute worktree links broken; the next run classifies the encoded target as "already a library" and never revisits phase 3. Separately, the broken-link test makes `git -C <path> rev-parse HEAD` impossible, leaving phase 3 without its required commit.
+> Fix: Capture HEADs through the bare repository's worktree administration and audit/repair already-encoded libraries on every run, with a test resuming after rename-before-repair.
+>
+> 5. **crucial — Several commit boundaries cannot pass their stated gates.** Task 6 leaves existing `tests/resolve.rs` Cargo fixtures without a member `Cargo.toml` and package edge; Task 8 modifies `locks.rs` but omits it from `git add`; Task 9 must add `Options` to `resolve_locked` and update Task 7/11 callers but neither lists nor stages those files; and the deleted-tag test never resolves again to assert the promised hard error.
+> Fix: Enumerate and stage every affected caller/fixture in its introducing task, then make the deleted-tag test call `resolve` and assert `Err`.
+>
+> VERDICT: REVISE
+
+### Claude's response — accepted in full, including a rejection I now withdraw
+
+**The withdrawn rejection.** Round 2 argued that no rollback was needed across
+partial migrations because a crash leaves a resumable forward pass. Codex
+answered with the specific failure case I asked for, and it is correct: a crash
+after `fs::rename` but before `git worktree repair` leaves `@scope~pkg` present
+and containing `repo.git`, so the *next* run's phase 1 classifies it as already
+migrated, phase 2 finds nothing to rename, and the stale absolute worktree links
+are never touched again. The cache stays half-migrated with no operation that
+notices. My reasoning had an unstated premise — that a part-migrated library is
+still recognizable as needing work — and the classifier makes that false.
+
+The fix is not the rollback Codex originally proposed, and it did not ask for
+one this time: it is **phase 5**, an audit of every already-encoded library on
+every run, repairing or rebuilding worktrees exactly as phase 3 does. That makes
+repair unconditional rather than a side effect of renaming, which is what the
+forward-resume claim needed all along. With phase 5 present the no-rollback
+argument holds; without it, it never did. Added a test that builds precisely the
+rename-before-repair state and asserts the next run finishes it.
+
+The other round-2 rejection — `version_worktrees` returning empty rather than
+`Err` — was not re-raised, and stands.
+
+**Also accepted:**
+
+1. **Task 1's fix was being undone downstream.** Task 4's `write_meta` still
+   called `create_dir_all` and Task 5's `ensure_at` had no post-`worktree add`
+   check. Both now carry it; a plan whose later task silently reverts an earlier
+   one is worse than one that never had the fix.
+2. **Task 6 did not compile.** `bun_candidates` still returned `Vec<String>`
+   after `undeclared` changed shape (caught independently while re-reading, and
+   mid-edit when this round returned). Added `json_candidates` and the pnpm
+   cross-importer scan so every format supplies dependents. `BUN_LOCK` gained
+   `apps/web`, without which the transitive test failed on a missing workspace
+   entry and never reached the assertion it exists for. The `json5_ish` bug was
+   real and my test could not have caught it: a comma followed by a comment then
+   a closer was kept, so valid `{"a":1, // note\n}` was rejected. Replaced the
+   whitespace-only lookahead with `next_is_closer`, which skips comments too,
+   and rewrote the test to contain actual comments.
+3. **The race tests.** Spawning the prune thread proved only that it started, so
+   added a prune-side rendezvous written after its pre-lock snapshot. Task 11's
+   add/rm test accepted both outcomes, which an unlocked implementation also
+   produces — it was vacuous. Rewritten to force the ordering through the
+   barrier so exactly one outcome is correct, with the `keep` entry asserting no
+   lost update. Added the instruction to run each concurrency test against the
+   unfixed code first: a concurrency test never observed failing is not evidence.
+   Fixed the RED command, which ran `--test prune` and skipped the new
+   `concurrency` target entirely.
+4. **Phase 2b read HEAD the wrong way.** `git -C <path> rev-parse HEAD` needs the
+   worktree's `.git` link intact, and the worktrees whose commit most needs
+   capturing are exactly those whose link is broken — the plan's own
+   broken-link test made its own capture impossible. Now reads
+   `repo.git/worktrees/<name>/HEAD`, with `worktree list --porcelain` as the
+   fallback.
+5. **Boundaries.** Task 6 now updates and stages the existing `tests/resolve.rs`
+   Cargo fixtures, which importer-graph resolution breaks (range matching needed
+   only the dependency's row; the importer graph also needs the member's row and
+   its edge). Task 8 stages `locks.rs`. Task 9 gained a table of every
+   `Options` caller across four files. The deleted-tag test now resolves again
+   and asserts the error, rather than stopping at the `rev-parse` check.
+
+---
