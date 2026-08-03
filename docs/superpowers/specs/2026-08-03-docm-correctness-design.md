@@ -55,9 +55,11 @@ suffix, no collision table, and the transform is reversible.
 These cases are hard errors rather than silent renames:
 
 - a ref longer than 255 bytes (filesystem component limit)
-- a ref whose dirname would collide with a cache control name. The reserved set
-  is `repo.git` and `meta.toml`; both are valid git ref names. Any control file
-  added later joins the set.
+- a ref whose dirname would collide with a control name **inside a library
+  directory**: `repo.git` and `meta.toml`, both valid git ref names. Library
+  directories sit one level up and have their own, different reserved set
+  (§1.1) — conflating the two leaves the cache-root control files unprotected.
+  Any control file added later joins the set for its own level.
 - a ref not representable on the host filesystem. Git permits characters Windows
   forbids — `|`, `<`, `>`, `"` are all legal in a ref name — and Windows also
   reserves device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`,
@@ -84,7 +86,15 @@ worktree and deletes. The field report registered exactly that name. This is
 reachable in shipped 0.12.1 with `docm add @types/node` or any scoped package.
 
 Library directories therefore become `@hey-api~client-fetch/`, with the same
-reserved-name and representability checks and the same hard errors.
+representability checks and the same hard errors — but **their own reserved
+set**. Library directories live at the cache root beside the reference
+registry's own files, `registry.json` and `registry.lock` (`refs.rs:88`), so
+those two names are reserved for library directories, and `repo.git` /
+`meta.toml` are reserved one level down for checkout directories. Applying the
+checkout set to library names would leave the registry unprotected: registering a
+library whose inferred name is `registry.json` creates a *directory* at
+`<cache>/registry.json`, after which the registry can never write its file again
+and the cache is unusable until someone deletes the directory by hand.
 
 **The injectivity argument does not transfer, and needs its own rule.** `/` → `~`
 is injective for *refs* because git forbids `~` in a ref name. A library name is
@@ -678,6 +688,11 @@ support these.
     library.
 26d. **Encoded-name collision on load.** A manifest holding both `a~b` (legacy)
     and `a/b` hard-errors naming both, before any cache path is built.
+28. **Library names cannot shadow cache-root control files.** Against a fresh
+    cache, registering a library named `registry.json` or `registry.lock`
+    hard-errors; the registry's own file is still creatable afterwards. Test at
+    the library level specifically — tests 15, 17 and 26d all operate on
+    checkout names or slug collisions and would miss this.
 27. **Tag replaced by a same-named branch.** A pin resolved as `refs/tags/v1`
     whose tag is deleted upstream and replaced by branch `v1` hard-errors rather
     than silently resolving the branch.

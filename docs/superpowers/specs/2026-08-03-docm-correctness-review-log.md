@@ -187,3 +187,33 @@ rounds 1–2 restructured whole sections.
 - **Lock scope stated normatively (4).** §9 now says the per-library lock is held
   continuously through the reference-registry commit, and says why: releasing
   between materialization and the commit reopens the window prune must not have.
+
+## Round 5 — Codex (final round; MAX_ROUNDS reached)
+
+Codex judged the four round-4 fixes sound and the importer/prune rules to meet the
+stated threshold, and returned exactly one finding:
+
+1. **Library names can collide with cache-root control files.** §1.1 applied the *checkout* reserved set (`repo.git`, `meta.toml`) to library directories, but libraries live at the cache root beside `registry.json` and `registry.lock` (`refs.rs:88`). Registering a library inferred as `registry.json` creates a directory at that path, after which the reference registry can never write its file and every later registry write fails. The suite would not catch it: tests 15, 17 and 26d cover checkout controls and slug collisions, never library names against cache-root registry files.
+
+VERDICT: REVISE
+
+### Claude's response
+
+Accepted — the spec conflated two reserved sets that live at different levels, which
+was my error. Library directories now carry their own reserved set
+(`registry.json`, `registry.lock`); `repo.git` / `meta.toml` stay reserved one level
+down for checkout directories. §1, §1.1, new test 28.
+
+## Loop outcome
+
+The loop terminated at `MAX_ROUNDS=5` on a REVISE verdict, not on an APPROVED one.
+That distinction is deliberate and should not be smoothed over: the round-5 finding
+was accepted and fixed, but the fix has not itself been adversarially reviewed.
+
+There is no unresolved *disagreement* — across five rounds Codex raised 20 material
+defects and 19 were accepted. The single rejection, session leases, Codex twice
+conceded on scope. What remains is simply an unreviewed final edit.
+
+Tally by round: 5 findings, 5, 5, 4, 1 — restructuring in rounds 1–2 (importer-graph
+resolution, library-name encoding, registry keying), edge cases in rounds 3–4,
+a single scoping error in round 5.
