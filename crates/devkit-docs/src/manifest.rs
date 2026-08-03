@@ -207,105 +207,116 @@ pub fn load_global(path: &Path) -> Result<DocsManifest> {
 }
 
 /// The global file is docm-owned and machine-written — a full serialize is fine.
-pub fn upsert_global(path: &Path, entry: &LibEntry) -> Result<()> {
-    let mut m = load_global(path)?;
-    match m.libs.iter_mut().find(|l| l.name == entry.name) {
-        Some(l) => *l = entry.clone(),
-        None => m.libs.push(entry.clone()),
-    }
-    write_global(path, &m)
+pub fn upsert_global(path: &Path, entry: &LibEntry, cache_root: &Path) -> Result<()> {
+    crate::locks::with_manifest(cache_root, || {
+        let mut m = load_global(path)?;
+        crate::barrier::signal("ready")?;
+        crate::barrier::wait("go")?;
+        match m.libs.iter_mut().find(|l| l.name == entry.name) {
+            Some(l) => *l = entry.clone(),
+            None => m.libs.push(entry.clone()),
+        }
+        write_global(path, &m)
+    })
 }
 
-pub fn remove_global(path: &Path, name: &str) -> Result<bool> {
-    let mut m = load_global(path)?;
-    let before = m.libs.len();
-    m.libs.retain(|l| l.name != name);
-    let removed = m.libs.len() != before;
-    if removed {
-        write_global(path, &m)?;
-    }
-    Ok(removed)
+pub fn remove_global(path: &Path, name: &str, cache_root: &Path) -> Result<bool> {
+    crate::locks::with_manifest(cache_root, || {
+        let mut m = load_global(path)?;
+        let before = m.libs.len();
+        m.libs.retain(|l| l.name != name);
+        let removed = m.libs.len() != before;
+        if removed {
+            write_global(path, &m)?;
+        }
+        Ok(removed)
+    })
 }
 
 fn write_global(path: &Path, m: &DocsManifest) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
     }
-    std::fs::write(path, toml::to_string_pretty(m)?)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    atomic_write(path, toml::to_string_pretty(m)?)
+}
+
+fn atomic_write(path: &Path, contents: String) -> Result<()> {
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, contents)
+        .with_context(|| format!("writing temporary manifest {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("replacing manifest {}", path.display()))
 }
 
 /// devkit.toml is hand-maintained — edit via toml_edit so comments and
 /// formatting survive.
-pub fn upsert_project(devkit_toml: &Path, entry: &LibEntry) -> Result<()> {
-    let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(devkit_toml)
-        .with_context(|| format!("reading {}", devkit_toml.display()))?
-        .parse()
-        .with_context(|| format!("parsing {}", devkit_toml.display()))?;
-    let tbl = toml_edit::ser::to_document(entry)
-        .context("serializing lib entry")?
-        .as_table()
-        .clone();
-    let root = doc.as_table_mut();
-    let docs = root
-        .entry("docs")
-        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-    let docs_tbl = docs
-        .as_table_mut()
-        .context("[docs] in devkit.toml is not a table")?;
-    docs_tbl.set_implicit(true); // no bare [docs] header, just [[docs.libs]]
-    let libs = docs_tbl
-        .entry("libs")
-        .or_insert(toml_edit::Item::ArrayOfTables(
-            toml_edit::ArrayOfTables::new(),
-        ));
-    let arr = libs
-        .as_array_of_tables_mut()
-        .context("docs.libs in devkit.toml is not an array of tables")?;
-    // Collect tables, update or append, then rebuild array
-    let mut tables: Vec<toml_edit::Table> = arr.iter().cloned().collect();
-    let mut found = false;
-    for t in &mut tables {
-        if t.get("name").and_then(|v| v.as_str()) == Some(entry.name.as_str()) {
-            *t = tbl.clone();
-            found = true;
-            break;
+pub fn upsert_project(devkit_toml: &Path, entry: &LibEntry, cache_root: &Path) -> Result<()> {
+    crate::locks::with_manifest(cache_root, || {
+        let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(devkit_toml)
+            .with_context(|| format!("reading {}", devkit_toml.display()))?
+            .parse()
+            .with_context(|| format!("parsing {}", devkit_toml.display()))?;
+        let tbl = toml_edit::ser::to_document(entry)
+            .context("serializing lib entry")?
+            .as_table()
+            .clone();
+        let root = doc.as_table_mut();
+        let docs = root
+            .entry("docs")
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        let docs_tbl = docs
+            .as_table_mut()
+            .context("[docs] in devkit.toml is not a table")?;
+        docs_tbl.set_implicit(true); // no bare [docs] header, just [[docs.libs]]
+        let libs = docs_tbl
+            .entry("libs")
+            .or_insert(toml_edit::Item::ArrayOfTables(
+                toml_edit::ArrayOfTables::new(),
+            ));
+        let arr = libs
+            .as_array_of_tables_mut()
+            .context("docs.libs in devkit.toml is not an array of tables")?;
+        let mut tables: Vec<toml_edit::Table> = arr.iter().cloned().collect();
+        let mut found = false;
+        for t in &mut tables {
+            if t.get("name").and_then(|v| v.as_str()) == Some(entry.name.as_str()) {
+                *t = tbl.clone();
+                found = true;
+                break;
+            }
         }
-    }
-    if !found {
-        tables.push(tbl.clone());
-    }
-    // Clear and rebuild
-    arr.clear();
-    for t in tables {
-        arr.push(t);
-    }
-    std::fs::write(devkit_toml, doc.to_string())
-        .with_context(|| format!("writing {}", devkit_toml.display()))?;
-    Ok(())
+        if !found {
+            tables.push(tbl);
+        }
+        arr.clear();
+        for table in tables {
+            arr.push(table);
+        }
+        atomic_write(devkit_toml, doc.to_string())
+    })
 }
 
-pub fn remove_project(devkit_toml: &Path, name: &str) -> Result<bool> {
-    let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(devkit_toml)
-        .with_context(|| format!("reading {}", devkit_toml.display()))?
-        .parse()
-        .with_context(|| format!("parsing {}", devkit_toml.display()))?;
-    let Some(arr) = doc
-        .get_mut("docs")
-        .and_then(|d| d.get_mut("libs"))
-        .and_then(|l| l.as_array_of_tables_mut())
-    else {
-        return Ok(false);
-    };
-    let before = arr.len();
-    arr.retain(|t| t.get("name").and_then(|v| v.as_str()) != Some(name));
-    let removed = arr.len() != before;
-    if removed {
-        std::fs::write(devkit_toml, doc.to_string())
-            .with_context(|| format!("writing {}", devkit_toml.display()))?;
-    }
-    Ok(removed)
+pub fn remove_project(devkit_toml: &Path, name: &str, cache_root: &Path) -> Result<bool> {
+    crate::locks::with_manifest(cache_root, || {
+        let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(devkit_toml)
+            .with_context(|| format!("reading {}", devkit_toml.display()))?
+            .parse()
+            .with_context(|| format!("parsing {}", devkit_toml.display()))?;
+        let Some(arr) = doc
+            .get_mut("docs")
+            .and_then(|d| d.get_mut("libs"))
+            .and_then(|l| l.as_array_of_tables_mut())
+        else {
+            return Ok(false);
+        };
+        let before = arr.len();
+        arr.retain(|t| t.get("name").and_then(|v| v.as_str()) != Some(name));
+        let removed = arr.len() != before;
+        if removed {
+            atomic_write(devkit_toml, doc.to_string())?;
+        }
+        Ok(removed)
+    })
 }
 
 #[cfg(test)]
@@ -401,17 +412,17 @@ mod tests {
             repo: Some("u1".into()),
             ..Default::default()
         };
-        upsert_global(&path, &e).unwrap();
+        upsert_global(&path, &e, &root).unwrap();
         let e2 = LibEntry {
             repo: Some("u2".into()),
             ..e.clone()
         };
-        upsert_global(&path, &e2).unwrap();
+        upsert_global(&path, &e2, &root).unwrap();
         let m = load_global(&path).unwrap();
         assert_eq!(m.libs.len(), 1);
         assert_eq!(m.libs[0].repo.as_deref(), Some("u2"));
-        assert!(remove_global(&path, "tokio").unwrap());
-        assert!(!remove_global(&path, "tokio").unwrap());
+        assert!(remove_global(&path, "tokio", &root).unwrap());
+        assert!(!remove_global(&path, "tokio", &root).unwrap());
         assert!(load_global(&path).unwrap().libs.is_empty());
     }
 
@@ -426,7 +437,7 @@ mod tests {
             repo: Some("r1".into()),
             ..Default::default()
         };
-        upsert_project(&path, &e).unwrap();
+        upsert_project(&path, &e, &root).unwrap();
         let s = std::fs::read_to_string(&path).unwrap();
         assert!(s.contains("# keep me") && s.contains("# inline"));
         assert!(s.contains("[[docs.libs]]"));
@@ -435,13 +446,13 @@ mod tests {
             repo: Some("r2".into()),
             ..e
         };
-        upsert_project(&path, &e2).unwrap();
+        upsert_project(&path, &e2, &root).unwrap();
         let d = discover(path.parent().unwrap(), Some(&root.join("nope.toml"))).unwrap();
         assert_eq!(d.manifest.libs.len(), 1);
         assert_eq!(d.manifest.libs[0].repo.as_deref(), Some("r2"));
 
-        assert!(remove_project(&path, "react").unwrap());
-        assert!(!remove_project(&path, "react").unwrap());
+        assert!(remove_project(&path, "react", &root).unwrap());
+        assert!(!remove_project(&path, "react", &root).unwrap());
         let s = std::fs::read_to_string(&path).unwrap();
         assert!(s.contains("# keep me")); // untouched content survives removal too
     }

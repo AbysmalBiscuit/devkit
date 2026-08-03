@@ -1,6 +1,8 @@
+pub mod barrier;
 pub mod cache;
 pub mod layout;
 pub mod lockfiles;
+pub mod locks;
 pub mod lookup;
 pub mod manifest;
 pub mod names;

@@ -74,8 +74,10 @@ pub fn read_meta(lib_dir: &Path) -> Meta {
 
 pub fn write_meta(lib_dir: &Path, m: &Meta) -> Result<()> {
     ensure_dir_exact(lib_dir)?;
-    std::fs::write(lib_dir.join("meta.toml"), toml::to_string_pretty(m)?)
-        .context("writing meta.toml")?;
+    let path = lib_dir.join("meta.toml");
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, toml::to_string_pretty(m)?).context("writing meta.toml")?;
+    std::fs::rename(&tmp, &path).context("replacing meta.toml")?;
     Ok(())
 }
 

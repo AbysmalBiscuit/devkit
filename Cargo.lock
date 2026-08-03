@@ -292,6 +292,7 @@ dependencies = [
  "anyhow",
  "clap",
  "devkit-common",
+ "fd-lock",
  "serde",
  "serde_json",
  "serde_yaml_ng",

@@ -13,3 +13,4 @@ toml_edit.workspace = true
 serde_yaml_ng.workspace = true
 ureq.workspace = true
 devkit-common.workspace = true
+fd-lock.workspace = true

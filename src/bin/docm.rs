@@ -172,17 +172,18 @@ fn cmd_add(
     entry.src_dir = src_dir;
     entry.docs_dir = docs_dir;
     entry.notes = notes;
+    let cache_root = cache::docs_root();
 
     let dest = if project {
         let d = discovered()?;
         let path = d
             .project_devkit_toml
             .context("no devkit.toml found walking up from CWD (required for --project)")?;
-        manifest::upsert_project(&path, &entry)?;
+        manifest::upsert_project(&path, &entry, &cache_root)?;
         path
     } else {
         let path = manifest::global_docs_path();
-        manifest::upsert_global(&path, &entry)?;
+        manifest::upsert_global(&path, &entry, &cache_root)?;
         path
     };
     println!(
@@ -196,14 +197,15 @@ fn cmd_add(
 }
 
 fn cmd_rm(name: &str, project: bool) -> Result<()> {
+    let cache_root = cache::docs_root();
     let removed = if project {
         let d = discovered()?;
         let path = d
             .project_devkit_toml
             .context("no devkit.toml found walking up from CWD (required for --project)")?;
-        manifest::remove_project(&path, name)?
+        manifest::remove_project(&path, name, &cache_root)?
     } else {
-        manifest::remove_global(&manifest::global_docs_path(), name)?
+        manifest::remove_global(&manifest::global_docs_path(), name, &cache_root)?
     };
     if removed {
         println!("removed {name}; run `docm prune` to reclaim its checkouts");
