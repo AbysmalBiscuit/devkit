@@ -1,7 +1,8 @@
 //! The lookup facade: entry + CWD → version-correct checkout path.
-//! Order: manual `ref` pin → lockfile version → tag probe. A pin or tag miss
-//! is a hard error unless `Options::allow_default_branch` opts into the
-//! default-branch fallback (with a warning). Every success records a
+//! Order: manual `ref` pin → lockfile version → tag probe. A tag miss (or an
+//! unresolved version) is a hard error unless `Options::allow_default_branch`
+//! opts into the default-branch fallback (with a warning); an explicit `ref`
+//! pin that fails to resolve is always a hard error. Every success records a
 //! reference row.
 
 use crate::cache::{self, LibCache};
@@ -23,9 +24,10 @@ pub enum Status {
     Repaired,
 }
 
-/// Resolution behavior a caller opts into. The default refuses every
-/// default-branch fallback as a hard error; setting `allow_default_branch`
-/// restores the old silent-fallback behavior for a single call.
+/// Resolution behavior a caller opts into. By default, a resolution that
+/// would otherwise need the repo's default branch fails instead;
+/// `allow_default_branch` checks out that branch for this call, recording a
+/// warning in `Resolved::warnings` rather than failing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
     pub allow_default_branch: bool,
@@ -108,20 +110,25 @@ pub fn resolve_locked(
         match selection {
             Some(selection) => {
                 let v = selection.version;
+                let source = selection.source.clone();
                 warnings.push(selection.source);
                 match locate_tag(&lib, &mut meta, &entry.package_name(), &v)? {
                     Some(tag) => (tag, v, selection.workspace),
                     None => {
                         if !opts.allow_default_branch {
-                            let tried = tags::ALL
-                                .iter()
-                                .map(|p| tags::apply(*p, &entry.package_name(), &v))
-                                .collect::<Vec<_>>()
-                                .join(", ");
+                            let mut tried = Vec::new();
+                            for pattern in tags::ALL {
+                                let candidate = tags::apply(pattern, &entry.package_name(), &v);
+                                if !tried.contains(&candidate) {
+                                    tried.push(candidate);
+                                }
+                            }
+                            let tried = tried.join(", ");
                             bail!(
-                                "no git tag found for {} {v} (tried {tried}); pin a ref \
-                                 explicitly, or pass --allow-default-branch to check out \
-                                 the default branch for this run",
+                                "no git tag found for {} {v} ({source}; tried {tried}); \
+                                 pin a ref explicitly with `docm add --ref`, or pass \
+                                 --allow-default-branch to check out the default branch \
+                                 for this run",
                                 entry.name
                             );
                         }
@@ -144,10 +151,12 @@ pub fn resolve_locked(
                             entry.name
                         );
                     }
+                    let manifest = importer_manifest_name(eco);
                     bail!(
-                        "no lockfile pins {} for lib `{}`; pin a ref explicitly with \
-                         `docm add --ref`, or pass --allow-default-branch to use the \
-                         default branch for this run",
+                        "no {manifest} found at or above {}, so nothing pins {} for lib \
+                         `{}`; run `docm` from inside the project, pin a ref with \
+                         `docm add --ref`, or pass --allow-default-branch",
+                        start.display(),
                         entry.package_name(),
                         entry.name
                     );
@@ -240,13 +249,22 @@ pub fn resolve_locked(
     })
 }
 
-fn has_importer_manifest(start: &Path, ecosystem: Ecosystem) -> bool {
-    let manifest = match ecosystem {
+/// The importer manifest filename an ecosystem is looked up from. `Git` has
+/// no importer manifest; every caller checks for it before reading this.
+fn importer_manifest_name(ecosystem: Ecosystem) -> &'static str {
+    match ecosystem {
         Ecosystem::Rust => "Cargo.toml",
         Ecosystem::Js => "package.json",
         Ecosystem::Python => "pyproject.toml",
-        Ecosystem::Git => return false,
-    };
+        Ecosystem::Git => "",
+    }
+}
+
+fn has_importer_manifest(start: &Path, ecosystem: Ecosystem) -> bool {
+    if ecosystem == Ecosystem::Git {
+        return false;
+    }
+    let manifest = importer_manifest_name(ecosystem);
     start
         .ancestors()
         .any(|directory| directory.join(manifest).is_file())

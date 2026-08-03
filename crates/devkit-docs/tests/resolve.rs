@@ -52,7 +52,7 @@ fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
 }
 
 #[test]
-fn ref_pin_wins_and_no_lockfile_falls_back_to_default_branch_with_warning() {
+fn ref_pin_wins_and_no_lockfile_falls_back_to_default_branch_when_allowed() {
     let tmp = unique_tmp("resolve-pin");
     let repo = fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
@@ -114,7 +114,7 @@ fn layout_override_applies_and_meta_caches_detection() {
 }
 
 #[test]
-fn git_ecosystem_without_ref_falls_back_to_default_with_warning() {
+fn git_ecosystem_without_ref_falls_back_to_default_when_allowed() {
     let tmp = unique_tmp("resolve-git");
     let repo = fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
@@ -646,6 +646,20 @@ fn a_version_with_no_tag_is_a_hard_error_listing_what_was_tried() {
         "the error must list the patterns tried: {err}"
     );
     assert!(err.contains("--allow-default-branch"), "{err}");
+    assert!(
+        err.contains("Cargo.lock"),
+        "the error must name what selected 9.9.9: {err}"
+    );
+    assert!(
+        err.contains("docm add --ref"),
+        "the error must name the command that fixes it: {err}"
+    );
+    assert_eq!(
+        err.matches("up@9.9.9").count(),
+        1,
+        "the tried-patterns list must not repeat a candidate the package-scoped \
+         and leaf-scoped forms collapse to when the name has no `/`: {err}"
+    );
 
     let opts = devkit_docs::resolve::Options {
         allow_default_branch: true,
@@ -672,4 +686,41 @@ fn a_git_entry_with_no_ref_is_a_hard_error_naming_sync() {
     .unwrap_err()
     .to_string();
     assert!(err.contains("docm sync"), "{err}");
+}
+
+#[test]
+fn a_missing_importer_manifest_is_a_hard_error_naming_the_manifest() {
+    let base = common::unique_tmp("nomanifest");
+    let repo = common::fixture_repo(&base.join("src"));
+    let project = base.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let entry = devkit_docs::manifest::LibEntry {
+        name: "up".into(),
+        ecosystem: Some(devkit_docs::manifest::Ecosystem::Rust),
+        repo: Some(repo),
+        ..Default::default()
+    };
+    let err = devkit_docs::resolve::resolve(
+        &entry,
+        &project,
+        &base.join("cache"),
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("Cargo.toml"),
+        "the error must name the manifest it looked for, not a lockfile: {err}"
+    );
+    assert!(
+        err.contains(project.to_str().unwrap()),
+        "the error must name the directory it searched from: {err}"
+    );
+    assert!(err.contains("docm add --ref"), "{err}");
+    assert!(err.contains("--allow-default-branch"), "{err}");
+    assert!(
+        !err.contains("lockfile"),
+        "the old diagnosis named a lockfile that does not exist here: {err}"
+    );
 }
