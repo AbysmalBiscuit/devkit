@@ -124,6 +124,60 @@ fn bun_rejects_a_selected_non_registry_resolution() {
     assert!(error.contains("workspace:packages/local"), "{error}");
 }
 
+const BUN_LOCK_EMBEDDED_AT: &str = r#"{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "root",
+      "dependencies": {
+        "pkg": "git+ssh://git@github.com/owner/repo.git#abc123",
+        "@types/node": "^20.11.0"
+      }
+    }
+  },
+  "packages": {
+    "pkg": ["pkg@git+ssh://git@github.com/owner/repo.git#abc123", {}, "github:owner/repo#abc123"],
+    "@types/node": ["@types/node@20.11.0", "", {}, "sha512-x"]
+  }
+}"#;
+
+fn write_embedded_at_workspace(root: &std::path::Path) {
+    write_package_json(
+        root,
+        r#"{"name":"root","dependencies":{"pkg":"git+ssh://git@github.com/owner/repo.git#abc123","@types/node":"^20.11.0"}}"#,
+    );
+}
+
+#[test]
+fn a_git_ssh_resolution_with_an_embedded_at_sign_decodes_as_git() {
+    let root = common::unique_tmp("bun-embedded-at-git");
+    std::fs::write(root.join("bun.lock"), BUN_LOCK_EMBEDDED_AT).unwrap();
+    write_embedded_at_workspace(&root);
+
+    // The ssh-user marker inside the URL (`git@github.com`) must not be
+    // mistaken for the name/resolution separator: the resolution should
+    // decode whole, as a non-registry git dependency, not fail tuple arity.
+    let error = importers::select(&root, Ecosystem::Js, "pkg")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("non-registry"), "{error}");
+    assert!(
+        error.contains("git+ssh://git@github.com/owner/repo.git#abc123"),
+        "{error}"
+    );
+    assert!(!error.contains("fields; expected"), "{error}");
+}
+
+#[test]
+fn a_scoped_registry_name_still_resolves_beside_an_embedded_at_sign() {
+    let root = common::unique_tmp("bun-embedded-at-scoped");
+    std::fs::write(root.join("bun.lock"), BUN_LOCK_EMBEDDED_AT).unwrap();
+    write_embedded_at_workspace(&root);
+
+    let selection = importers::select(&root, Ecosystem::Js, "@types/node").unwrap();
+    assert_eq!(selection.version, "20.11.0");
+}
+
 #[test]
 fn a_transitive_package_is_a_hard_error_that_lists_truthful_candidates() {
     let root = common::unique_tmp("bun-transitive");

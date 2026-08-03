@@ -308,10 +308,37 @@ fn json_declares(row: &JsonValue, classes: &[&str], package: &str, location: &st
         .any(|dependencies| dependencies.contains_key(package)))
 }
 
+/// Resolution prefixes a Bun package spec's `name@resolution` tail may start
+/// with. A git+ssh or basic-auth URL resolution can carry its own `@` (the
+/// ssh-user marker in `git@github.com`, or userinfo in `user:pass@host`), so
+/// the true name/resolution boundary is the `@` immediately before one of
+/// these, not necessarily the last `@` in the spec.
+const BUN_RESOLUTION_PREFIXES: [&str; 8] = [
+    "workspace:",
+    "root:",
+    "link:",
+    "file:",
+    "http:",
+    "https:",
+    "git+",
+    "github:",
+];
+
 fn name_and_version<'a>(spec: &'a str, location: &str) -> Result<(&'a str, &'a str)> {
-    let (name, version) = spec
-        .rsplit_once('@')
-        .filter(|(name, version)| !name.is_empty() && !version.is_empty())
+    let scheme_split = spec.match_indices('@').find_map(|(index, _)| {
+        let (name, rest) = spec.split_at(index);
+        let resolution = &rest[1..];
+        (!name.is_empty()
+            && BUN_RESOLUTION_PREFIXES
+                .iter()
+                .any(|prefix| resolution.starts_with(prefix)))
+        .then_some((name, resolution))
+    });
+    let (name, version) = scheme_split
+        .or_else(|| {
+            spec.rsplit_once('@')
+                .filter(|(name, version)| !name.is_empty() && !version.is_empty())
+        })
         .with_context(|| format!("{location} value `{spec}` is not a name@version spec"))?;
     Ok((name, version))
 }
