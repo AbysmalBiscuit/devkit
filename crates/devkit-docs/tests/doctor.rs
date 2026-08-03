@@ -55,8 +55,8 @@ fn a_dirty_checkout_is_named() {
     );
 }
 
-/// An untracked file is cited by `rg` exactly like a tracked one, so it is the
-/// same failure.
+/// An untracked file inside a checkout is source a reader can find and cite,
+/// so the sweep counts it exactly like a modified tracked file.
 #[test]
 fn an_untracked_file_in_a_checkout_is_named() {
     let (cache, checkout) = materialize("doctor-untracked", "v1.0.0");

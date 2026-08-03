@@ -2,6 +2,22 @@
 //!
 //! Files are `<base>.<suffix>`, where `<base>` is the variable value. Bounded
 //! waits prevent a broken rendezvous from hanging a CI worker indefinitely.
+//!
+//! Every suffix in the tree, and where it is reached. A test that sets [`VAR`]
+//! must release each `wait` the processes it spawns will run into, or one of
+//! them stalls for a minute and fails there rather than where the test looks:
+//!
+//! | suffix | kind | reached at |
+//! |---|---|---|
+//! | `ready`, `go` | signal, wait | `add_library`, between the manifest read and the manifest write, holding only the library lock |
+//! | `manifest-ready`, `manifest-go` | signal, wait | `manifest::upsert_global`, between its read and its write, holding the manifest lock |
+//! | `materialized`, `commit` | signal, wait | `resolve::resolve_locked`, after materialization and before the reference-registry commit |
+//! | `contended` | signal | `locks::hold`, after a non-blocking acquisition fails — reachable only while another process holds that same lock |
+//!
+//! The two manifest rendezvous are named apart deliberately. Sharing one name
+//! lets a pause taken *inside* the manifest lock satisfy a wait meant for a
+//! pause taken outside it, and a race test then cannot tell a contender
+//! blocked on the lock it is about from one blocked on a different lock.
 
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
