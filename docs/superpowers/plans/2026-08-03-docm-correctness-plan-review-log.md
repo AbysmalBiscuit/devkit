@@ -102,3 +102,103 @@ round in, that costs little: a new critic should read the revised plan anyway,
 and round 1's findings are recorded here.
 
 ---
+
+## Round 2 — Codex (`gpt-5.6-sol`, effort `xhigh`, fresh thread)
+
+Effort was raised mid-loop, and `codex-reply` inherits it from the thread's
+first call, so round 2 opened a new thread pointed at the revised plan and this
+log.
+
+> The revised plan still has material correctness failures and cannot be implemented safely as written.
+>
+> 1. **crucial — Name validation still permits cache aliasing and escape.** Task 1 never calls `create_dir_exact`; `validate_lib("..")` escapes the cache root, `REGISTRY.JSON` bypasses the reserved stem on folding hosts, Task 2 returns on invalid `a~b` before naming colliding `a/b`, and `version_worktrees` silently returns empty instead of hard-erroring without `repo.git`.
+> Fix: Reject dot components and folded reserved names, validate all manifest names together using folded keys, route every directory creation through `create_dir_exact`, and make malformed-library enumeration return `Result::Err`.
+>
+> 2. **crucial — Task 6 does not correctly resolve importer graph edges.** Cargo dependency `"serde 1.0.210 (registry+…)"` is reduced to `"serde"`, so another locked serde version causes a false ambiguity despite the edge identifying the exact package; undeclared errors omit required dependents, competing-lockfile errors omit resolved versions, and the Cargo/uv entry points plus JSONC scanner remain unfinished code.
+> Fix: Resolve Cargo and uv dependency records by full identity/version/source, implement every parser completely, and test duplicate package versions, dependent attribution, optional/dev groups, and competing-lockfile version diagnostics.
+>
+> 3. **crucial — The decisive concurrency test cannot exercise the claimed window.** Task 5 puts the registry commit inside `resolve_locked`, but Task 7 says to call `resolve_locked`, pause before that commit, and commit afterward; additionally, lock-file existence is observable before the child acquires the lock, while the fixed 200 ms hold can expire before prune runs. ABA add, `rm` versus `add`, and the real CLI transaction remain untested.
+> Fix: Add a deterministic test-only barrier immediately after materialization inside `resolve_locked`, signal only after the library lock is held, and add separate-process tests for prune, ABA rollback, and `rm`/`add`.
+>
+> 4. **crucial — Task 8 can strand shipped 0.12.1 worktrees.** On repair failure it may delete the moved directory while leaving `repo.git/worktrees/*` administration behind, then explicitly defers re-materialization despite the spec requiring it; no rollback protects earlier renames, and origin backfill is not stated to run under the library lock. The test checks only clean status and `origin.is_some()`, so a changed HEAD or wrong origin passes.
+> Fix: Capture every HEAD before renaming, use the target library lock, repair or fully unregister and recreate each worktree before release, roll back/resume partial migrations, and assert exact HEAD, origin, metadata preservation, and repair-failure recovery.
+>
+> 5. **crucial — Multiple task boundaries cannot pass their stated gate, and several RED tests fail for the wrong reason.** Task 4 calls nonexistent `devkit_common::paths::config_dir`; Task 6 omits `anyhow::Context` and leaves existing Cargo fixtures without a member manifest/package row; Task 7 calls `plan_for_cache` with an unspecified new arity; Task 9's no-tag fixture fails during importer selection, while its moved-tag test never fetches; Task 10 does not instruct updating `cmd_add` for the new `detect(..., cwd)` signature. Branch movement, deleted-tag, tag-to-branch, two-project legacy-prune, and CLI output/JSON/doctor regressions are also absent.
+> Fix: Supply compile-ready code and fixtures for every task, enumerate and stage every changed caller, and prove each regression RED for its intended behavior before the task's full gate.
+>
+> VERDICT: REVISE
+
+### Claude's response — accepted with two reasoned exceptions
+
+The `xhigh` pass went materially deeper than round 1, and most of what it found
+was in code added *during* round 1's revision — the strongest argument for the
+loop. Two findings were already fixed before this round returned, having been
+caught while re-reading the new code: `paths::config_dir` does not exist (the
+accessors in `crates/devkit-common/src/paths.rs` return `PathBuf`, not `Result`,
+and there is no config accessor at all — `manifest::global_docs_path` is the
+real one), and pnpm's `imp.get(c)` passed `&&str` where `Index` needs `&str`.
+
+**Accepted:**
+
+1. **Names.** Added `reject_traversal` — `validate_lib("..")` really did encode
+   to `..` and `cache_root.join("..")` leaves the cache, which every deletion
+   path downstream trusts it does not. Folded the reserved-stem check through
+   `fold_key`, so `REGISTRY.JSON` is caught on a folding host. Rewrote Task 2's
+   validation to collect problems across all entries rather than returning at
+   the first — its own test demands an error naming both `a~b` and `a/b`, and
+   the fail-fast version could only ever name one. Added Step 5c wiring
+   `create_dir_exact` into `ensure_clone`, `write_meta` and the post-`worktree
+   add` check; without that the function added in round 1 was dead code.
+2. **Cargo/uv edges.** Replaced `dep_name` with `dep_edge`, which keeps the
+   version cargo writes into the edge (`"serde 1.0.210 (registry+…)"`) and uv
+   writes as `{ name, version }`. A lockfile holding two `serde` versions was
+   being reported as an unresolvable fork even though the edge named exactly
+   one. Added the matching test. `undeclared` now carries (version, dependent)
+   pairs, and the competing-lockfile error resolves each candidate so it can
+   print what each file would have returned. Wrote out `cargo`, `uv` and
+   `json5_ish` in full, with a JSONC test covering a `//` inside a URL string.
+3. **The race test.** This was the sharpest finding. The plan had the child
+   pausing "before committing the registry row" while Task 5 put that commit
+   inside `resolve_locked` — the child could not do what it was told. Worse,
+   `locks::hold` creates the lock file *before* acquiring the lock, so polling
+   for the file proved nothing, and the 200 ms hold was the fixed-interval sleep
+   `AGENTS.md` forbids. Replaced with a `DEVKIT_DOCS_BARRIER` rendezvous inside
+   `resolve_locked` (same env-driven style as `DEVKIT_DAEMON_HEALTH_PROBE_SECS`)
+   that signals only after materialization under the held lock. Added the
+   `rm`-versus-`add` cross-process test.
+4. **Migration.** Added phase 2b capturing every HEAD before any rename, made
+   the repair check compare against that commit rather than trusting `worktree
+   repair`'s exit code, and made an unrepairable worktree get fully
+   unregistered — including the `git worktree prune` that `remove_dir_all`
+   alone leaves behind — and rebuilt before the lock is released. Deferring the
+   rebuild to `resolve` was wrong because prune runs first and would misread a
+   registered-but-absent checkout. Put phase 4 under the same lock. Both tests
+   now assert the exact HEAD and the exact origin.
+5. **Boundaries.** Fixed Task 9's Cargo fixture, which lacked `app`'s own
+   `[[package]]` row and so failed in importer selection — RED for the wrong
+   reason. Specified `plan_for_cache`'s new signature and `Removal`. Told
+   Task 10 to update `cmd_add` for `detect(..., cwd)`. Added deleted-tag and
+   tag-to-branch tests.
+
+**Rejected, with reasons:**
+
+- **"Make `version_worktrees` return `Err` when `repo.git` is absent."** This is
+  the prune path. A stray directory must make prune do *less*, never fail —
+  hard-erroring here turns one malformed entry into a total prune outage, and
+  prune is what reclaims disk. The real defect Codex is pointing at is silence,
+  not leniency, so `plan_for_cache` now reports every skipped entry and `devkit
+  doctor` lists them. Safe behaviour kept; invisibility removed.
+- **"Roll back earlier renames on a partial migration."** Each `fs::rename` is
+  atomic, phase 2 proves every target free before anything moves, and `run` is
+  idempotent — so a crash leaves a part-migrated cache that the next invocation
+  *finishes*. Rollback would add a second failure path over the one that already
+  recovers by re-running, and an unwind that itself crashes is strictly worse
+  than a resumable forward pass. Documented the resumability instead.
+
+Also corrected the moved-tag test, which asserted a behaviour the design does
+not have: `resolve` reads the local repo and does not fetch for a ref it already
+holds, so a force-moved tag is invisible to it. The test now pins the real
+boundary — unchanged on `resolve`, followed after a fetch — rather than
+asserting a network call on the hot path.
+
+---
