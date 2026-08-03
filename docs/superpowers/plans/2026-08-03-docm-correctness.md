@@ -1486,10 +1486,17 @@ fn a_transitive_package_is_a_hard_error_that_lists_candidates() {
     assert!(err.contains("does not declare"), "{err}");
     assert!(err.contains("--ref"), "the error must suggest a pin: {err}");
     assert!(err.contains("1.15.11"), "the error must list candidate versions: {err}");
-    // The dependent must be whoever has an edge to h3 — `apps/api` — not h3's
-    // own lockfile key, which would read "1.15.11 (required by h3)".
-    assert!(err.contains("apps/api"), "the error must name the dependent: {err}");
-    assert!(!err.contains("required by h3"), "a package is not its own dependent: {err}");
+    // The declarer must be whoever has an edge to h3 — `apps/api` — not h3's
+    // own lockfile key, which would read "required by h3".
+    assert!(err.contains("declared by: apps/api"), "the error must name the declarer: {err}");
+
+    // BUN_LOCK holds three h3 versions and apps/api's edge resolves exactly
+    // one. Attributing all three to apps/api states two falsehoods, so versions
+    // and declarers are reported as separate lists and never cross-paired.
+    assert!(err.contains("2.0.1"), "every candidate version is listed: {err}");
+    for bogus in ["2.0.1 (required by apps/api)", "2.0.1-rc.20 (required by apps/api)"] {
+        assert!(!err.contains(bogus), "versions must not be paired with declarers: {err}");
+    }
 }
 
 #[test]
@@ -1767,31 +1774,34 @@ fn rel_key(lock_dir: &Path, ws: &Path) -> Result<String> {
         .join("/"))
 }
 
-/// `candidates` is (version, who requires it) — the spec requires the error to
-/// name the dependent, not just the version, because that is what tells the
-/// reader which package to pin instead.
-fn undeclared(ws: &Path, package: &str, candidates: &[(String, String)]) -> anyhow::Error {
-    let listed = if candidates.is_empty() {
+fn undeclared(ws: &Path, package: &str, c: &Candidates) -> anyhow::Error {
+    let versions = if c.versions.is_empty() {
         "none".to_string()
     } else {
-        candidates
+        c.versions
             .iter()
-            .map(|(v, by)| format!("{v} (required by {by})"))
+            .map(|(v, at)| format!("{v} (at {at})"))
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let declarers = if c.declarers.is_empty() {
+        "nothing in the lockfile declares it".to_string()
+    } else {
+        c.declarers.join(", ")
+    };
     anyhow::anyhow!(
         "{} does not declare `{package}` (it is transitive); pin the version with --ref.\n\
-         versions present in the lockfile: {listed}",
+         versions present in the lockfile: {versions}\n\
+         declared by: {declarers}",
         ws.display()
     )
 }
 ```
 
-Every call site builds the dependent by scanning the lockfile for entries whose
-dependency list names `package`. For bun and npm that is the `packages` key that
-owns the nested copy; for cargo and uv it is the `[[package]]` whose
-`dependencies` contains it.
+`declarers` is built by scanning for entries whose dependency map names
+`package`. For cargo and uv the edge *does* carry a version, so those two report
+`{version} (required by {member})` pairs — `dep_edge` already returns both, and
+that pairing is read from the lockfile rather than inferred.
 
 **`js`** — locate the workspace, then the lockfile, then choose among lockfiles:
 
@@ -1913,24 +1923,20 @@ fn bun(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selection
 /// package's own lockfile key. Reading the key gives `1.15.11 required by h3`,
 /// which names the package as its own dependent and tells the reader nothing.
 ///
-/// `versions` yields (version, where-it-is); `declarers` yields every owner that
-/// has an edge to `package`. Splitting them is what keeps a package from being
-/// named as its own dependent.
-fn pair_with_declarers(
-    versions: Vec<(String, String)>,
-    declarers: Vec<String>,
-) -> Vec<(String, String)> {
-    versions
-        .into_iter()
-        .map(|(ver, where_)| {
-            let who = if declarers.is_empty() {
-                format!("nothing declares it; it appears at {where_}")
-            } else {
-                declarers.join(", ")
-            };
-            (ver, who)
-        })
-        .collect()
+/// What the lockfile knows about a package the workspace does not declare.
+///
+/// Versions and declarers are kept apart on purpose. Pairing them would mean
+/// claiming which declarer resolves to which version, and that edge is not
+/// available here: a bun workspace or an npm `dependencies` object records a
+/// *range*, not a resolved version. Attributing all three `h3` versions to
+/// `apps/api` because it declares `h3` is a fabricated relationship — it reads
+/// as fact and is wrong for every version but one.
+#[derive(Default)]
+pub struct Candidates {
+    /// (version, where the lockfile holds it)
+    pub versions: Vec<(String, String)>,
+    /// Owners with a dependency edge to the package.
+    pub declarers: Vec<String>,
 }
 
 /// Owners with an edge to `package`, across both a bun/npm workspace table
@@ -1955,9 +1961,9 @@ fn class_deps(r: &serde_json::Value) -> Vec<&serde_json::Map<String, serde_json:
     DEP_CLASSES.iter().filter_map(|c| r.get(c)?.as_object()).collect()
 }
 
-fn bun_candidates(v: &serde_json::Value, package: &str) -> Vec<(String, String)> {
+fn bun_candidates(v: &serde_json::Value, package: &str) -> Candidates {
     let pkgs = v.get("packages").and_then(|p| p.as_object());
-    let versions: Vec<(String, String)> = pkgs
+    let versions = pkgs
         .map(|o| {
             o.iter()
                 .filter_map(|(k, r)| {
@@ -1970,24 +1976,27 @@ fn bun_candidates(v: &serde_json::Value, package: &str) -> Vec<(String, String)>
 
     // A workspace that declares it, or a package whose own dependency map
     // (tuple index 2) names it.
-    let mut declarers = declarers_in(v.get("workspaces").and_then(|w| w.as_object()), package, class_deps);
+    let mut declarers =
+        declarers_in(v.get("workspaces").and_then(|w| w.as_object()), package, class_deps);
     declarers.extend(declarers_in(pkgs, package, |r| {
         r.get(2).map(class_deps).unwrap_or_default()
     }));
-    pair_with_declarers(versions, declarers)
+    Candidates { versions, declarers }
 }
 
 fn json_candidates(
     pkgs: &serde_json::Map<String, serde_json::Value>,
     package: &str,
-) -> Vec<(String, String)> {
+) -> Candidates {
     let suffix = format!("node_modules/{package}");
-    let versions: Vec<(String, String)> = pkgs
-        .iter()
-        .filter(|(k, _)| k.ends_with(&suffix))
-        .filter_map(|(k, r)| Some((r.get("version")?.as_str()?.to_string(), k.clone())))
-        .collect();
-    pair_with_declarers(versions, declarers_in(Some(pkgs), package, class_deps))
+    Candidates {
+        versions: pkgs
+            .iter()
+            .filter(|(k, _)| k.ends_with(&suffix))
+            .filter_map(|(k, r)| Some((r.get("version")?.as_str()?.to_string(), k.clone())))
+            .collect(),
+        declarers: declarers_in(Some(pkgs), package, class_deps),
+    }
 }
 ```
 
@@ -2099,8 +2108,7 @@ fn pnpm(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selectio
     // any snapshot/package whose own dependency map names it. Scanning only
     // importers misses the transitive case, which is exactly the case this
     // error is raised for.
-    let mut declarers: Vec<String> = Vec::new();
-    let mut versions: Vec<(String, String)> = Vec::new();
+    let mut elsewhere = Candidates::default();
     for table in ["importers", "snapshots", "packages"] {
         let Some(m) = v.get(table).and_then(|t| t.as_mapping()) else {
             continue;
@@ -2111,14 +2119,18 @@ fn pnpm(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selectio
                 let Some(entry) = row.get(c).and_then(|d| d.get(package)) else {
                     continue;
                 };
-                declarers.push(who.to_string());
-                // An importer entry nests the locator under `version`; a
-                // snapshot maps the name straight to it.
-                if let Some(loc) = entry.get("version").and_then(|s| s.as_str())
+                elsewhere.declarers.push(who.to_string());
+                // pnpm is the one JS format whose edge carries the resolved
+                // locator, so here the (version, owner) pairing is read from the
+                // lockfile rather than inferred. An importer nests it under
+                // `version`; a snapshot maps the name straight to it.
+                if let Some(loc) = entry
+                    .get("version")
+                    .and_then(|s| s.as_str())
                     .or_else(|| entry.as_str())
                 {
                     let bare = loc.split_once('(').map_or(loc, |(h, _)| h);
-                    versions.push((
+                    elsewhere.versions.push((
                         bare.rsplit_once('@').map_or(bare, |(_, x)| x).to_string(),
                         who.to_string(),
                     ));
@@ -2126,7 +2138,6 @@ fn pnpm(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selectio
             }
         }
     }
-    let elsewhere = pair_with_declarers(versions, declarers);
     let found = ["dependencies", "devDependencies", "optionalDependencies"]
         .iter()
         .find_map(|c| imp.get(*c)?.get(package))
@@ -2578,8 +2589,11 @@ fn race_child_materializes_and_waits() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
+    // Three arguments here. `Options` and the fourth parameter arrive in
+    // Task 9, which stages this file in its own caller-table update — writing
+    // the four-argument form now would not compile at Task 7's commit.
     devkit_docs::locks::with_lib(&cache, "up", || {
-        devkit_docs::resolve::resolve_locked(&entry, &cache, &cache, &Default::default())
+        devkit_docs::resolve::resolve_locked(&entry, &cache, &cache)
     })
     .unwrap();
 }
@@ -3221,6 +3235,8 @@ git commit -m "fix(docs): refuse ambiguous ecosystems and alias rm"
 
 **Files:**
 - Modify: `src/bin/docm.rs`, `crates/devkit-docs/src/manifest.rs`
+- Modify: `crates/devkit-docs/src/lib.rs` — `rm_library`, the shared `rm`
+  transaction `cmd_rm` and the race child both call
 - Modify: `src/bin/devkit/` (doctor row)
 - Test: `crates/devkit-docs/tests/concurrency.rs`
 
@@ -3342,6 +3358,17 @@ fn rm_blocks_until_a_concurrent_add_of_the_same_library_completes() {
     }
 
     let mut remover = spawn_child("child_rm_up", &global, &cache, &base, &repo, &barrier);
+
+    // Wait for the remover to be inside its transaction before releasing the
+    // adder. Releasing on spawn alone would let the adder finish first, and
+    // both the locked and unlocked builds would then produce the same result.
+    let rm_started = barrier.with_extension("rm-started");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !rm_started.exists() {
+        assert!(std::time::Instant::now() < deadline, "remover never started");
+        std::thread::yield_now();
+    }
+
     std::fs::write(barrier.with_extension("go"), "").unwrap();
     assert!(adder.wait().unwrap().success());
     assert!(remover.wait().unwrap().success());
@@ -3371,7 +3398,12 @@ fn child_add_up_and_wait() {
     docm_add(&global, &cache, &base, "up", &repo, Some("v1.0.0")).unwrap();
 }
 
-/// Child: remove `up` through the same path `docm rm` uses.
+/// Child: remove `up` through the *production* path.
+///
+/// It calls `docm::rm_library`, the shared transaction `cmd_rm` also calls —
+/// not a locking sequence rebuilt here. A child that took `with_lib` itself
+/// would stay green with the production lock deleted, which is the opposite of
+/// what this test is for.
 #[test]
 #[ignore]
 fn child_rm_up() {
@@ -3382,14 +3414,18 @@ fn child_rm_up() {
         "",
     )
     .unwrap();
-    devkit_docs::locks::with_lib(&cache, "up", || {
-        devkit_docs::locks::with_manifest(&cache, || {
-            devkit_docs::manifest::remove_global(&global, "up").map(|_| ())
-        })
-    })
-    .unwrap();
+    devkit_docs::rm_library(&global, &cache, "up").unwrap();
 }
 ```
+
+`rm_library(global, cache_root, name)` lives in the library, not in
+`src/bin/docm.rs`, so both `cmd_rm` and this child reach the same code. It takes
+`locks::with_lib` and calls `manifest::remove_global` — and **takes no manifest
+lock of its own**: Task 4 Step 6 put `locks::with_manifest` *inside*
+`remove_global`, and wrapping it again would be a second acquisition of a
+non-reentrant lock from one process. That deadlocks, permanently, and it is the
+exact hazard Global Constraints warns about. Each lock is taken once, at one
+layer, and the layer that owns it is the one closest to the file.
 
 `spawn_child` re-enters this binary at an `#[ignore]`d test and passes
 `DOCM_RACE_GLOBAL`, `DOCM_RACE_CACHE`, `DOCM_RACE_BASE`, `DOCM_RACE_REPO` and
