@@ -100,3 +100,25 @@ bug in shipped 0.12.1 that neither the design nor the field report caught.
   costs hundreds of milliseconds on every `docm info`, and a user editing files
   inside the cache is not a failure mode this design is defending against. The
   check moves to `devkit doctor`. §6.
+
+## Round 2 — Codex
+
+Five crucial defects, all accepted. Verbatim critique:
+
+1. **Importer rules still return wrong values or reject direct dependencies.** pnpm importer `version` is a peer-qualified snapshot locator (`8.0.2(chai@6.2.2)`, `3.20.0(@types/node@25.5.0)`), not a version. The table omits pnpm `optionalDependencies`, bun `devDependencies`, uv dependency groups. For package-lock, falling back to root `node_modules/<pkg>` can select a package hoisted for another workspace unless declaration is verified in `packages[workspace-path]` first.
+2. **The locking protocol does not close the claimed command-level races.** Prune is not required to take the per-library lock, so resolve can materialize, wait for the registry, then record a path prune just deleted. "Rollback under the same lock" does not prevent clobbering if the lock is released during materialization and rollback restores a stale whole-file pre-image.
+3. **The 0.12.x migration remains internally inconsistent.** Legacy `@scope/pkg` caches make the new `repo.git` assertion fail on the parent `@scope` directory. Existing `meta.toml` files lack `origin` with no bootstrap rule. A legacy row keyed by lockfile root cannot be retargeted by an upsert keyed by a nested workspace, so the old `default` row survives indefinitely.
+4. **Library-name encoding is not injective.** The proof imports a git-ref restriction into unconstrained `LibEntry.name` and URL-derived names: `a/b` and `a~b` both encode to `a~b`. The ref encoding stays valid; the library claim does not.
+5. **`status ok` can still be false under normal git states.** Fetch uses `--prune` but not `--prune-tags`, so a tag deleted upstream stays locally resolvable forever. The qualified-ref escape is undefined for an already-qualified `refs/tags/v1`. Moving cleanliness to doctor is unacceptable while `info` still prints `status ok` for a dirty checkout; doctor is not part of the agent lookup workflow.
+
+Codex also noted the crash-hostage argument against leases is overstated, since leases can expire — conceded — while agreeing the scope argument holds, and that the global/project split, package-first tag probing and force-moved-tag policy are sound.
+
+### Claude's response
+
+All five accepted, including the cleanliness check I rejected in round 1.
+
+- **Injectivity (4).** The strongest finding: I proved `/` → `~` injective for refs because git forbids `~` in ref names, then reused that proof for library names, which have no such constraint. `~` in a library name is now a hard error at `add` time, which makes the domain match the assumption. §1.1.
+- **Importer details (1).** Per-format rules added: strip pnpm peer qualifiers and follow alias locators, enumerate every direct-dependency class per format, and verify npm declaration in `packages.<workspace-path>` before walking `node_modules` upward. §3, test 18.
+- **Locking (2).** Prune now takes the per-library lock across recheck and deletion, which closes the resolve/prune race outright rather than narrowing it — no leases needed, and the out-of-scope note is narrowed to in-flight readers only. Rollback becomes entry-scoped and byte-identical-guarded, because `add` genuinely cannot hold the manifest lock across a network clone. §7, §9, test 23.
+- **Migration (3).** An explicit locked upgrade pass renames nested `@scope/pkg` caches and bootstraps `origin` from `remote.origin.url`; retargeting a legacy row is redefined as retirement, since a row keyed by the lockfile directory can never be matched by an upsert keyed by a nested workspace. §7, tests 19–20.
+- **`status ok` (5).** Reversing my round-1 rejection: `info` prints the claim, agents read `info` and not `doctor`, and a truth claim that can be false is the defect this design exists to remove. The clean check moves onto every path-returning resolution as a hard error, with `--untracked-files=no` to bound the cost. Also `--prune-tags` on sync, and a qualified-ref rule that uses a `refs/`-prefixed ref verbatim. §2, tests 21–22.

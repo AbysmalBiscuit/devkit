@@ -84,10 +84,20 @@ worktree and deletes. The field report registered exactly that name. This is
 reachable in shipped 0.12.1 with `docm add @types/node` or any scoped package.
 
 Library directories therefore become `@hey-api~client-fetch/`, with the same
-injective `/` → `~` mapping, the same reserved-name and representability checks,
-and the same hard errors. `version_worktrees()` gains an assertion that it is
-reading a directory that contains `repo.git`, so a mis-scan fails loudly instead
-of proposing deletions.
+reserved-name and representability checks and the same hard errors.
+
+**The injectivity argument does not transfer, and needs its own rule.** `/` → `~`
+is injective for *refs* because git forbids `~` in a ref name. A library name is
+not a ref — it comes from `LibEntry.name`, a registry package name, or a URL
+leaf, none of which are constrained that way — so `a/b` and `a~b` would both
+encode to `a~b`. A `~` in a library name is therefore a hard error at `add`
+time, which restores injectivity by making the domain match the assumption. No
+real package name on crates.io, npm, or PyPI contains `~`; the error names the
+character and suggests `--package` to set a different registry name.
+
+`version_worktrees()` gains an assertion that it is reading a directory
+containing `repo.git`, so a mis-scan fails loudly instead of proposing
+deletions.
 
 ### 2. Identity and verification
 
@@ -108,18 +118,33 @@ Every resolution:
 1. selects a ref (§3)
 2. resolves the ref to a commit against the **local** bare repo — no network; a
    miss triggers exactly one fetch, then a retry, then a hard error. The lookup
-   is fully qualified and option-terminated —
-   `git rev-parse --verify --end-of-options refs/tags/<ref>^{commit}`, then
-   `refs/heads/<ref>`, then the raw name for a SHA — so a ref that looks like an
-   option cannot be misparsed. A name that exists as *both* a branch and a tag is
-   a hard error demanding the qualified form, rather than silently taking git's
-   precedence order.
+   is option-terminated (`git rev-parse --verify --end-of-options`) so a ref that
+   looks like an option cannot be misparsed, and qualification depends on the
+   shape of the ref:
+   - a ref already starting with `refs/` is used verbatim — prefixing
+     `refs/tags/` onto `refs/tags/v1` would produce a nonexistent ref
+   - a 40-character hex string is tried as a raw object name
+   - anything else is tried as `refs/tags/<ref>` and `refs/heads/<ref>`. Matching
+     both is a hard error demanding the qualified form, rather than silently
+     taking git's precedence order.
 3. materializes `<lib>/<slug(ref)>` at that commit if absent
 4. if the directory exists, compares its HEAD to the resolved commit; a mismatch
    re-points the worktree (`git checkout --detach <commit>`) and reports
    `status repaired`
-5. records `(project, lib, ref, version, commit, dirname)` in the reference
+5. verifies the worktree is **clean** — `git status --porcelain
+   --untracked-files=no`. A tracked file modified inside the cache is a hard
+   error naming the files, because source read from a dirty checkout is not the
+   released source, and `status ok` would otherwise be a false claim. Untracked
+   files are ignored: they add nothing an answer could be cited from.
+6. records `(workspace, lib, ref, version, commit, dirname)` in the reference
    registry
+
+Step 5 costs a `git status` on every path-returning resolution — hundreds of
+milliseconds on a large checkout. An earlier draft moved it to `devkit doctor`
+to avoid that, which was wrong: `info` prints `status ok`, agents read `info` and
+not `doctor`, and a truth claim that can be false is the exact defect this design
+exists to remove. `doctor` keeps a deeper sweep across every materialized
+checkout; `info` pays for the claim it makes.
 
 A SHA pin is immutable, so step 4 is a pure corruption check for it. A *branch*
 pin keeps a stable dirname while its commit moves; that directory does change
@@ -140,6 +165,12 @@ docm: tag v1.15.11 moved 5f72330a1b2c… → 9e41a08b7d3f… upstream; h3/v1.15.
 Reported rather than silently accepted, because a moved release tag means any
 answer cited from the old checkout was cited from source that no longer exists
 under that name.
+
+**Deleted tags must also disappear locally.** `cache.rs:137` fetches `--prune`
+but not `--prune-tags`, so a tag deleted upstream stays resolvable in the local
+bare repo forever — and would keep resolving, and keep reporting `status ok`,
+for a release that has been withdrawn. Sync fetches with `--prune-tags`, and a
+pinned ref that vanishes upstream becomes a hard error naming the pin.
 
 `git describe --tags` is used nowhere. Issue 4 established that it names the
 nearest *reachable* tag, which in a package monorepo is routinely a different
@@ -165,15 +196,31 @@ Selection order, first hit wins:
 
    | Lockfile | Importer entry |
    |---|---|
-   | `pnpm-lock.yaml` | `importers.<workspace-path>.{dependencies,devDependencies}.<pkg>.version` — exact and authoritative |
-   | `package-lock.json` | `packages` keyed by path: `<workspace-path>/node_modules/<pkg>` if present, else the hoisted `node_modules/<pkg>` |
-   | `bun.lock` | `workspaces.<workspace-path>.dependencies` names the dep, then `packages` key `<workspace-name>/<pkg>` if present, else the hoisted `<pkg>` |
+   | `pnpm-lock.yaml` | `importers.<workspace-path>.{dependencies,devDependencies,optionalDependencies}.<pkg>.version` |
+   | `package-lock.json` | `packages.<workspace-path>` must declare `<pkg>`; the version then comes from the nearest `node_modules/<pkg>` walking up from `<workspace-path>` |
+   | `bun.lock` | `workspaces.<workspace-path>.{dependencies,devDependencies,optionalDependencies,peerDependencies}` names the dep, then `packages` key `<workspace-name>/<pkg>` if present, else the hoisted `<pkg>` |
    | `Cargo.lock` | the member's `[[package]]` entry's `dependencies` list, resolved against the lock's package set |
-   | `uv.lock` | the member's `[[package]]` entry's `dependencies` list |
+   | `uv.lock` | the member's `[[package]]` entry's `dependencies`, plus its `dependency-groups` and optional-dependency tables |
 
    The workspace path comes from walking up from CWD to the nearest manifest
    (`package.json`, or `Cargo.toml` / `pyproject.toml` carrying a dependency
    table), taken relative to the lockfile's directory.
+
+   Three format details that a naive reading of the table gets wrong:
+
+   - **A pnpm `version` is a snapshot locator, not a version.** Real entries
+     carry peer qualifiers — `8.0.2(chai@6.2.2)`, `3.20.0(@types/node@25.5.0)` —
+     and an alias locator can name a different package entirely. Strip the
+     parenthesised suffix and follow an alias locator to its package identity
+     before treating what remains as a version.
+   - **Every direct-dependency class counts**, not just `dependencies`. The
+     table above enumerates them per format; a package declared only in
+     `devDependencies` or a uv `dependency-group` is still a direct dependency of
+     that workspace.
+   - **npm resolution must verify declaration first.** Falling straight back to
+     the hoisted root `node_modules/<pkg>` can return a copy hoisted for a
+     *different* workspace. Confirm `packages.<workspace-path>` declares the
+     package, then resolve by walking `node_modules` upward the way node does.
 
    **This removes the need for semver range matching, and with it the
    `node-semver` dependency argued for earlier in this design.** Ranges are never
@@ -360,6 +407,26 @@ legacy row, then a `docm prune` run before that project has re-resolved sees
 - a `default` directory is therefore reclaimed exactly when the last project
   referencing it has re-resolved, whatever order prune and resolve run in
 
+Retargeting is a *retirement*, not an upsert. A legacy row is keyed by the
+lockfile directory while its replacement is keyed by a nested workspace, so an
+upsert would never match it and the legacy row — and its `default` directory —
+would survive forever. When a workspace-keyed row for a library commits, any
+legacy row for the same library whose key is an ancestor directory of that
+workspace is dropped in the same registry commit.
+
+**An upgrade pass handles what cannot migrate lazily.** A 0.12.x cache already
+on disk holds two shapes the new code cannot simply reinterpret: nested scoped
+library directories (`@scope/pkg/`), which would trip the `repo.git` assertion on
+the parent `@scope` directory rather than being reclaimed, and `meta.toml` files
+with no `origin` field. On first run against such a cache, under the per-library
+lock:
+
+- a nested `@scope/pkg/` directory containing `repo.git` is renamed to
+  `@scope~pkg/`; a `@scope/` directory left empty afterwards is removed
+- a missing `origin` is bootstrapped from the bare repo's own
+  `git config remote.origin.url`, which is ground truth for where it was cloned
+  from, rather than assumed from the manifest
+
 **Ref-less global git entries get a durable migration, not a permanent error.**
 §3.2 hard-errors on a git entry with no `ref`, which for entries written by
 0.12.x is a papercut with no exit. `docm sync` infers the repo's default branch
@@ -367,11 +434,15 @@ and records it in the *global* manifest, exactly as `add` now does (§6.1);
 `--project` entries still refuse, for the same reason `add --project` refuses.
 The hard error names `docm sync` as the fix.
 
-Prune's delete candidates are re-checked against the live registry under the
-lock immediately before removal, narrowing the existing window at `docm.rs:361`
-where a worktree materialized after the snapshot could be deleted by a
-concurrent prune. This narrows the race rather than closing it; closing it needs
-session leases, which are out of scope.
+**Prune takes the per-library lock**, and holds it across its live-registry
+recheck and the deletion itself. Re-checking under the registry lock alone is not
+enough: a resolve can materialize a directory, then wait on the registry lock,
+and have prune delete that directory before the resolve's row is recorded. Since
+materialization already runs under the per-library lock (§9), prune holding the
+same lock makes the two mutually exclusive and closes the window at
+`docm.rs:361` — no session leases required. What leases would additionally buy
+is protection for a reader holding a path it has already been given, which stays
+out of scope.
 
 ### 9. Concurrent access
 
@@ -382,11 +453,19 @@ Two classes of damage are in scope:
 (`manifest.rs:187`, `:219`) are read-modify-write over a whole file with no lock,
 so two concurrent `docm add` calls silently drop one entry, and two concurrent
 resolutions of the same library can drop a `layouts` entry or a cached tag
-pattern. The `add` rollback introduced in §6 makes this worse: restoring a
-pre-image would clobber an unrelated add that landed in between. Fix: every
-manifest and `meta.toml` write becomes write-temp-then-rename, and the
-read-modify-write runs under a lock on the target file. Rollback restores under
-the same lock, so it can never overwrite a concurrent write.
+pattern. Fix: every manifest and `meta.toml` write becomes
+write-temp-then-rename, and the read-modify-write runs under a lock on the
+target file.
+
+**Rollback is entry-scoped, not a pre-image restore.** `add` cannot hold the
+manifest lock across its whole transaction, because materialization clones over
+the network and holding a lock across a network call is what `AGENTS.md` already
+forbids for the port registry. The lock is therefore released while
+materializing — so restoring a whole-file pre-image afterwards would silently
+revert any add that landed in the interval. Rollback instead re-takes the lock
+and removes the specific entry it wrote, and only if that entry is still
+byte-identical to what it wrote. Anything else means another writer has touched
+it since, and the rollback is abandoned with a warning rather than guessing.
 
 **Racing materialization.** Two resolutions of the same library can race
 `ensure_clone` into the same directory, or race two `git worktree add` calls for
@@ -433,14 +512,15 @@ Sequencing inside the branch, one commit per task:
 2. **Tag patterns and probe order** must precede the hard errors. Making a
    missing tag fatal while `tags::apply` still strips the scope would hard-fail
    scoped lookups that ought to succeed.
-3. **Atomic writes and the per-library lock** (§9) — before anything that adds
-   new writers to `meta.toml`.
+3. **Atomic writes, the per-library lock, and prune taking it** (§9) — before
+   anything that adds new writers to `meta.toml`.
 4. **Ecosystem probing, `rm` aliases** — independent, land any time.
 5. **Ref-named directories, repository identity, commit verification** — the
    core change.
 6. **Importer-graph selection** (§3).
 7. **Hard-error failure modes** — last, once every path that should succeed does.
-8. **Prune, registry keying and migration, `add`/`sync`/`info` surface, SKILL.md.**
+8. **Prune, registry keying, the upgrade pass and legacy-row retirement,
+   `add`/`sync`/`info` surface, SKILL.md.**
 
 ## Testing
 
@@ -499,6 +579,28 @@ support these.
     NFC/NFD collision each error.
 16. **`add` rollback under concurrency.** A failing add leaves the manifest
     byte-identical, and cannot revert a concurrent successful add.
+17. **Library-name injectivity.** `a/b` and `a~b` cannot both be registered —
+    the `~` name errors at `add` time.
+18. **Lockfile format details.** A pnpm peer-qualified locator
+    (`8.0.2(chai@6.2.2)`) yields version `8.0.2`; a pnpm alias locator follows to
+    the aliased package; a dep declared only in `devDependencies` /
+    `optionalDependencies` / a uv `dependency-group` resolves; and an npm
+    workspace that does *not* declare a package does not silently receive
+    another workspace's hoisted copy.
+19. **Upgrade pass.** A seeded 0.12.x cache with `@scope/pkg/repo.git` and an
+    `origin`-less `meta.toml` migrates to `@scope~pkg/` with origin recovered
+    from `remote.origin.url`, and the emptied `@scope/` is removed.
+20. **Legacy row retirement.** A legacy row keyed by the lockfile directory is
+    dropped when the first workspace-keyed row for the same library commits, so
+    its `default` directory becomes reclaimable.
+21. **Deleted upstream tag.** A tag removed upstream stops resolving after
+    `sync` and produces a hard error naming the pin, rather than resolving from
+    a stale local ref.
+22. **Dirty checkout.** A tracked file modified inside a checkout makes `info`
+    exit non-zero naming the file, instead of reporting `status ok`.
+23. **Prune versus in-flight materialization.** A prune running concurrently
+    with a resolve of the same library cannot delete the directory that resolve
+    just materialized.
 
 ## Risks
 
@@ -522,13 +624,14 @@ support these.
 
 ## Out of scope
 
-- Session leases that would let a concurrent agent hold a checkout against
-  prune, or against a branch pin being re-pointed by a concurrent `sync`. The
-  reference registry tracks workspaces, not sessions. §9 closes the lost-update
-  and racing-materialization classes; this one stays open, deliberately, because
-  leases bring their own liveness failure — a crashed agent holding a checkout
-  hostage — and doubling the scope of a correctness fix to get there is a bad
-  trade.
+- Session leases that would protect a reader holding a path it has *already*
+  been given — against a branch pin re-pointed by a concurrent `sync`, or a
+  directory removed by a concurrent prune mid-read. The reference registry
+  tracks workspaces, not sessions. §9 closes the lost-update,
+  racing-materialization and resolve-versus-prune classes with the per-library
+  lock; only in-flight readers remain, and covering them means expiring leases,
+  their own liveness failures, and roughly doubling the scope of a correctness
+  fix.
 - Any change to the docs cache location or the global/project manifest split.
 
 ## Settled by review
