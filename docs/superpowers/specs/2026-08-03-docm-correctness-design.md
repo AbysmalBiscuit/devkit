@@ -276,18 +276,20 @@ verify. Corrections:
 
 ## Delivery
 
-Two PRs. The first is independent of the naming work and fixes the two
-wrong-library failures immediately.
+One PR, one release, about two days. Splitting the resolution-accuracy fixes
+into their own PR would ship a release where scoped tags resolve correctly while
+checkouts are still silently stale — a partial upgrade nobody wants to be on.
 
-**PR 1 — resolution accuracy (~3h)**
-issues 3, 4, 5 and the bun alias filter: tag patterns, all-registry probe with
-CWD-biased order and collision refusal, `rm` aliases, alias-aware bun parsing.
+Sequencing inside the branch, one commit per task:
 
-**PR 2 — version-truthful checkouts (~1.5d)**
-ref-named directories, commit verification, `info`/`list`/state-file identity
-fields, workspace-aware selection, hard-error failure modes, `add`
-materialization with rollback, `sync` rewrite, prune and registry updates,
-SKILL.md.
+1. **Tag patterns and alias filtering** must precede the hard errors. Making a
+   missing tag fatal while `tags::apply` still strips the scope would hard-fail
+   scoped lookups that ought to succeed.
+2. **Ecosystem probing, `rm` aliases** — independent, land any time.
+3. **Ref-named directories and commit verification** — the core change.
+4. **Workspace-aware selection** — depends on alias filtering being in place.
+5. **Hard-error failure modes** — last, once every path that should succeed does.
+6. **Prune, registry, `add`/`sync`/`info` surface, SKILL.md.**
 
 ## Testing
 
