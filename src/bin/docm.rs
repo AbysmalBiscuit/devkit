@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use devkit_docs::manifest::{self, Discovered, Ecosystem, LibEntry};
-use devkit_docs::{cache, lookup, refs, resolve};
+use devkit_docs::{cache, lookup, refs, resolve, upgrade};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -81,6 +81,9 @@ enum Cmd {
 fn main() -> Result<()> {
     devkit_common::report::install_panic_hook("docm");
     let cli = Cli::parse();
+    for line in upgrade::run(&cache::docs_root())? {
+        eprintln!("docm: {line}");
+    }
     match cli.cmd {
         Cmd::Add {
             target,

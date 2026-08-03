@@ -17,12 +17,18 @@ pub fn is_control(component: &str) -> bool {
     component == "registry" || component.starts_with("registry.")
 }
 
+/// Where the cache keeps its own bookkeeping. `is_control` holds for its name,
+/// so prune and doctor leave everything under it alone.
+pub fn control_dir(cache_root: &Path) -> PathBuf {
+    cache_root.join(DIR)
+}
+
 pub fn lock_path(cache_root: &Path, lib: &str) -> Result<PathBuf> {
     lock_path_for_dir(cache_root, &crate::names::lib_dir(lib)?, lib)
 }
 
 pub fn manifest_lock_path(cache_root: &Path) -> PathBuf {
-    cache_root.join(DIR).join("manifest.lock")
+    control_dir(cache_root).join("manifest.lock")
 }
 
 fn lock_path_for_dir(cache_root: &Path, dirname: &str, display_name: &str) -> Result<PathBuf> {
@@ -30,7 +36,7 @@ fn lock_path_for_dir(cache_root: &Path, dirname: &str, display_name: &str) -> Re
     if component.len() > MAX_COMPONENT_BYTES {
         bail!("library name `{display_name}` is too long to form a lock file name");
     }
-    Ok(cache_root.join(DIR).join(component))
+    Ok(control_dir(cache_root).join(component))
 }
 
 fn hold<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {

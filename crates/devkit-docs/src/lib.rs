@@ -10,6 +10,7 @@ pub mod names;
 pub mod refs;
 pub mod resolve;
 pub mod tags;
+pub mod upgrade;
 
 use std::path::Path;
 
