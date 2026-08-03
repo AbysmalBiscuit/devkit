@@ -217,3 +217,8 @@ conceded on scope. What remains is simply an unreviewed final edit.
 Tally by round: 5 findings, 5, 5, 4, 1 — restructuring in rounds 1–2 (importer-graph
 resolution, library-name encoding, registry keying), edge cases in rounds 3–4,
 a single scoping error in round 5.
+
+---
+
+**Round cap lifted by the user.** The loop had stopped at `MAX_ROUNDS=5` with the
+round-5 fix unreviewed; continuing to round 6 to close that gap.
