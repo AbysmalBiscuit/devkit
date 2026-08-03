@@ -32,12 +32,19 @@ impl<'a> ManifestTarget<'a> {
         }
     }
 
-    fn entry(&self, name: &str) -> Result<Option<LibEntry>> {
-        let manifest = match self {
-            Self::Global(path) => manifest::load_global(path)?,
-            Self::Project(path) => manifest::load_project(path)?,
-        };
-        Ok(manifest.libs.into_iter().find(|lib| lib.name == name))
+    /// What this target holds for `name` right now, in the form a rollback can
+    /// put back unchanged.
+    fn snapshot(&self, name: &str) -> Result<Snapshot<'a>> {
+        Ok(match self {
+            Self::Global(path) => Snapshot::Global(
+                path,
+                manifest::load_global(path)?
+                    .libs
+                    .into_iter()
+                    .find(|lib| lib.name == name),
+            ),
+            Self::Project(path) => Snapshot::Project(path, manifest::project_entry(path, name)?),
+        })
     }
 
     fn upsert(&self, entry: &LibEntry, cache_root: &Path) -> Result<()> {
@@ -51,6 +58,32 @@ impl<'a> ManifestTarget<'a> {
         match self {
             Self::Global(path) => manifest::remove_global(path, name, cache_root),
             Self::Project(path) => manifest::remove_project(path, name, cache_root),
+        }
+    }
+}
+
+/// What a manifest held for one library before a registration touched it.
+///
+/// The project variant keeps the entry's raw table rather than a parsed
+/// `LibEntry`: a `devkit.toml` is hand-maintained and repo-committed, so a
+/// rollback that re-serialized the entry would reorder its keys and drop
+/// comments inside it — a diff left behind by a command that failed.
+enum Snapshot<'a> {
+    Global(&'a Path, Option<LibEntry>),
+    Project(&'a Path, Option<toml_edit::Table>),
+}
+
+impl Snapshot<'_> {
+    fn restore(&self, name: &str, cache_root: &Path) -> Result<()> {
+        match self {
+            Self::Global(path, Some(entry)) => manifest::upsert_global(path, entry, cache_root),
+            Self::Global(path, None) => manifest::remove_global(path, name, cache_root).map(|_| ()),
+            Self::Project(path, Some(table)) => {
+                manifest::put_project_entry(path, name, table, cache_root)
+            }
+            Self::Project(path, None) => {
+                manifest::remove_project(path, name, cache_root).map(|_| ())
+            }
         }
     }
 }
@@ -86,7 +119,7 @@ pub fn add_library(
     opts: &resolve::Options,
 ) -> Result<Added> {
     locks::with_lib(cache_root, &entry.name, || {
-        let previous = target.entry(&entry.name)?;
+        let previous = target.snapshot(&entry.name)?;
         barrier::signal("ready")?;
         barrier::wait("go")?;
         let mut entry = entry.clone();
@@ -97,13 +130,7 @@ pub fn add_library(
                 resolved,
                 inferred_ref,
             }),
-            Err(error) => Err(restore(
-                target,
-                cache_root,
-                &entry.name,
-                previous.as_ref(),
-                error,
-            )),
+            Err(error) => Err(restore(&previous, cache_root, &entry.name, error)),
         }
     })
 }
@@ -145,22 +172,18 @@ fn pin_default_branch(
 /// here outranks the original error in the report: an entry naming a library
 /// that was never materialized is what every later command reads.
 fn restore(
-    target: ManifestTarget<'_>,
+    previous: &Snapshot<'_>,
     cache_root: &Path,
     name: &str,
-    previous: Option<&LibEntry>,
     error: anyhow::Error,
 ) -> anyhow::Error {
-    let restored = match previous {
-        Some(entry) => target.upsert(entry, cache_root),
-        None => target.remove(name, cache_root).map(|_| ()),
-    };
-    match restored {
+    let (Snapshot::Global(path, _) | Snapshot::Project(path, _)) = previous;
+    match previous.restore(name, cache_root) {
         Ok(()) => error,
         Err(failure) => error.context(format!(
             "`{name}` is left registered in {} but was not materialized — \
              restoring it failed too: {failure:#}",
-            target.path().display()
+            path.display()
         )),
     }
 }

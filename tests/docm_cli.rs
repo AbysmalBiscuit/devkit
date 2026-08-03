@@ -114,6 +114,38 @@ impl Env {
             git_ref,
         ])
     }
+
+    fn add_project(&self, name: &str, git_ref: &str) -> Output {
+        self.docm(&[
+            "add",
+            name,
+            "--eco",
+            "git",
+            "--repo",
+            &self.upstream,
+            "--ref",
+            git_ref,
+            "--project",
+        ])
+    }
+
+    /// A hand-maintained `devkit.toml`: comments, an inline comment, and keys
+    /// in an order no serializer would produce. A rollback that rewrites the
+    /// file instead of restoring it disturbs all three visibly.
+    fn write_devkit_toml(&self, registered: &str) -> PathBuf {
+        let path = self.project.join("devkit.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "# keep me\n[defaults]\napps_dir = 'apps' # inline\n\n\
+                 [[docs.libs]]\nref = \"v1.0.0\"\nrepo = {:?}\nname = {registered:?}\n\
+                 ecosystem = \"git\"\n",
+                self.upstream
+            ),
+        )
+        .unwrap();
+        path
+    }
 }
 
 fn stdout(output: &Output) -> String {
@@ -217,6 +249,74 @@ fn a_failed_add_of_a_new_library_leaves_the_manifest_byte_identical() {
     assert!(
         !before.contains("\"new\""),
         "the failed entry must not survive: {before}"
+    );
+}
+
+/// The project manifest is hand-maintained and repo-committed, so a rollback
+/// there has to put the file back rather than rewrite it.
+#[test]
+fn a_failed_project_add_leaves_the_devkit_toml_byte_identical() {
+    let env = Env::new("project-add-rollback");
+    let devkit_toml = env.write_devkit_toml("keep");
+    let before = read(&devkit_toml);
+
+    let failed = env.add_project("new", "does-not-exist");
+
+    assert!(
+        !failed.status.success(),
+        "an unresolvable ref must fail the add:\n{}",
+        stdout(&failed)
+    );
+    assert_eq!(read(&devkit_toml), before);
+}
+
+/// The re-pin arm restores an entry the file already carried, so it must leave
+/// the rest of the file — comments, formatting, unrelated tables — alone.
+#[test]
+fn a_failed_project_repin_restores_the_previous_entry() {
+    let env = Env::new("project-repin-rollback");
+    let devkit_toml = env.write_devkit_toml("keep");
+    let before = read(&devkit_toml);
+
+    let failed = env.add_project("keep", "does-not-exist");
+
+    assert!(
+        !failed.status.success(),
+        "an unresolvable ref must fail the add:\n{}",
+        stdout(&failed)
+    );
+    let after = read(&devkit_toml);
+    assert!(
+        !after.contains("does-not-exist"),
+        "the failed pin must not survive:\n{after}"
+    );
+    assert!(
+        after.contains("# keep me") && after.contains("# inline"),
+        "hand-written content outside the entry must survive:\n{after}"
+    );
+    let path = env.docm(&["path", "keep"]);
+    assert_ran(&path, "docm path keep");
+    assert_eq!(
+        stdout(&path).trim(),
+        env.cache().join("keep/v1.0.0").to_string_lossy(),
+        "the restored entry must still resolve to the old pin"
+    );
+    assert_eq!(read(&devkit_toml), before);
+}
+
+#[test]
+fn rm_project_removes_only_the_named_entry() {
+    let env = Env::new("project-rm");
+    let devkit_toml = env.write_devkit_toml("keep");
+
+    let removed = env.docm(&["rm", "keep", "--project"]);
+
+    assert_ran(&removed, "docm rm keep --project");
+    let after = read(&devkit_toml);
+    assert!(!after.contains("keep\""), "{after}");
+    assert!(
+        after.contains("# keep me") && after.contains("apps_dir"),
+        "removal must not disturb the rest of the file:\n{after}"
     );
 }
 

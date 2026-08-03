@@ -272,15 +272,44 @@ fn atomic_write(path: &Path, contents: String) -> Result<()> {
 /// devkit.toml is hand-maintained — edit via toml_edit so comments and
 /// formatting survive.
 pub fn upsert_project(devkit_toml: &Path, entry: &LibEntry, cache_root: &Path) -> Result<()> {
+    let tbl = toml_edit::ser::to_document(entry)
+        .context("serializing lib entry")?
+        .as_table()
+        .clone();
+    put_project_entry(devkit_toml, &entry.name, &tbl, cache_root)
+}
+
+/// The `[[docs.libs]]` table for `name` exactly as the file carries it — key
+/// order and comments included — so a rollback can put back what was there
+/// instead of a re-serialization of it.
+pub(crate) fn project_entry(devkit_toml: &Path, name: &str) -> Result<Option<toml_edit::Table>> {
+    let doc: toml_edit::DocumentMut = std::fs::read_to_string(devkit_toml)
+        .with_context(|| format!("reading {}", devkit_toml.display()))?
+        .parse()
+        .with_context(|| format!("parsing {}", devkit_toml.display()))?;
+    Ok(doc
+        .get("docs")
+        .and_then(|docs| docs.get("libs"))
+        .and_then(|libs| libs.as_array_of_tables())
+        .and_then(|arr| arr.iter().find(|t| entry_name(t) == Some(name)).cloned()))
+}
+
+fn entry_name(table: &toml_edit::Table) -> Option<&str> {
+    table.get("name").and_then(|value| value.as_str())
+}
+
+/// Write `tbl` as `name`'s entry, replacing an existing one in place.
+pub(crate) fn put_project_entry(
+    devkit_toml: &Path,
+    name: &str,
+    tbl: &toml_edit::Table,
+    cache_root: &Path,
+) -> Result<()> {
     crate::locks::with_manifest(cache_root, || {
         let mut doc: toml_edit::DocumentMut = std::fs::read_to_string(devkit_toml)
             .with_context(|| format!("reading {}", devkit_toml.display()))?
             .parse()
             .with_context(|| format!("parsing {}", devkit_toml.display()))?;
-        let tbl = toml_edit::ser::to_document(entry)
-            .context("serializing lib entry")?
-            .as_table()
-            .clone();
         let root = doc.as_table_mut();
         let docs = root
             .entry("docs")
@@ -298,16 +327,9 @@ pub fn upsert_project(devkit_toml: &Path, entry: &LibEntry, cache_root: &Path) -
             .as_array_of_tables_mut()
             .context("docs.libs in devkit.toml is not an array of tables")?;
         let mut tables: Vec<toml_edit::Table> = arr.iter().cloned().collect();
-        let mut found = false;
-        for t in &mut tables {
-            if t.get("name").and_then(|v| v.as_str()) == Some(entry.name.as_str()) {
-                *t = tbl.clone();
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            tables.push(tbl);
+        match tables.iter_mut().find(|t| entry_name(t) == Some(name)) {
+            Some(existing) => *existing = tbl.clone(),
+            None => tables.push(tbl.clone()),
         }
         arr.clear();
         for table in tables {
