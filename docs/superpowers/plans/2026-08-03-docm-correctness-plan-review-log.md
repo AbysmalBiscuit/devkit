@@ -571,3 +571,74 @@ version list; now only `Some(version)` edges become pairs, and the test asserts
 resolve the crate.
 
 Nothing was rejected this round.
+
+## Round 8 — Codex (`gpt-5.6-sol`, effort `xhigh`)
+
+Asked specifically to attack the contention-probe claim: can `.contended` appear
+without another process holding the lock, or appear in a lock-removed build?
+
+> The plan still needs revision. The fifth add/rm interleaving is structurally sound, but five material defects remain.
+>
+> Real contention behaves consistently: `fd-lock` maps Unix `flock` conflicts and Windows `ERROR_LOCK_VIOLATION` to `WouldBlock`; separate child processes eliminate same-process ambiguity. Without rm's library lock, its manifest lock should be uncontended because add pauses before manifest mutation. Findings 4–5 are the remaining false-positive routes.
+>
+> 1. **Routine — Task 7 still passes the deleted barrier variable.** The prune child sets `DEVKIT_DOCS_PRUNE_BARRIER`, while `barrier.rs` reads `barrier::VAR`; the correct implementation never writes `.planned` and times out.
+> Fix: Pass `.env(devkit_docs::barrier::VAR, &barrier)` and remove the stale variable from the surrounding instructions.
+>
+> 2. **Crucial — Task 7's prune race remains unfalsifiable after fixing that variable.** Prune writes `.planned` before attempting the lock; it can then be preempted, the parent releases `.go`, resolve commits its row, and an unlocked prune resumes, performs its fresh recheck, and passes without ever taking the library lock.
+> Fix: Wait for the new `.contended` signal—not `.planned`—before releasing resolve, so deleting prune's library lock necessarily times out.
+>
+> 3. **Routine — `from_package_array` cannot pass its rewritten cargo test.** The undeclared branch constructs only `resolved`; with the fixture's bare `"serde"` edge that field is empty, so the error contains neither `1.0.210` nor `declared by: a`, both required by the assertions.
+> Fix: Populate package-row `versions` and all edge-owner `declarers`, while adding only version-bearing edges to `resolved`.
+>
+> 4. **Crucial — the manifest-lock root is still unavailable to the functions required to take it.** Task 4 says `upsert_*`/`remove_*` internally call `with_manifest(cache_root)`, but their signatures and Task 11's calls pass no cache root. Using global `docs_root()` makes parallel isolated tests share one manifest lock, allowing an unrelated test to create `.contended` in the lock-removed build. Changing the signatures without updating and staging callers breaks Task 4's boundary.
+> Fix: Thread `cache_root` through all four manifest mutators or explicit locked wrappers, and update/stage every caller in Task 4 and Task 11.
+>
+> 5. **Routine — `.is_err()` does not prove contention.** The probe signals on every error, but `fd-lock` documents `Interrupted` on Unix and other I/O errors on both platforms, while only `WouldBlock` means another holder; a transient error can therefore create a false `.contended`.
+> Fix: Signal only for `ErrorKind::WouldBlock`, drop a successful guard, and propagate every other error with context.
+>
+> VERDICT: REVISE
+
+### Claude's response — accepted in full
+
+The probe design survived the attack: `fd-lock` maps both Unix `flock` conflicts
+and Windows `ERROR_LOCK_VIOLATION` to `WouldBlock`, and separate child processes
+remove same-process ambiguity. Findings 4 and 5 are the two remaining routes to
+a *false* `.contended`, and both are now closed.
+
+1. **Stale variable.** I replaced `DEVKIT_DOCS_BARRIER` when consolidating the
+   barrier module but missed `DEVKIT_DOCS_PRUNE_BARRIER`. Both call sites now
+   pass `devkit_docs::barrier::VAR` by constant rather than by string literal,
+   which is what makes this class of mistake a compile error instead of a hang.
+2. **The prune race had the same flaw as the add/rm test.** I fixed
+   arrival-vs-contention in one test and left the other on a `.planned` signal
+   written before the lock attempt — so prune could be preempted after
+   signalling, the resolver commits, and an unlocked prune resumes, re-reads a
+   registry that now references the checkout, and passes. Deleted `.planned`
+   entirely; both races now wait on `.contended`. Fixing a defect in one place
+   and not its twin is the recurring failure of this plan's concurrency work.
+3. **`Candidates` populated one field of three.** The undeclared branch set only
+   `resolved`, which is empty for a bare `dependencies = ["serde"]` edge — the
+   form cargo writes whenever the name is unambiguous — so the error would have
+   named neither the version nor the declarer its own assertions require. Now
+   all three are populated independently, and `undeclared` appends resolved
+   pairs rather than substituting them for the version list.
+4. **The manifest lock had no root.** Task 4 required `with_manifest(cache_root)`
+   inside four functions whose signatures carry no cache root. All four gained
+   the parameter. Codex's second point is the sharper one: falling back to a
+   process-global docs root would make every parallel test share one manifest
+   lock, so an unrelated test could write the `.contended` file these races wait
+   on — turning the lock-removed build green and destroying the tests' only
+   evidence. Recorded that explicitly so nobody "simplifies" it later. Staged
+   `src/bin/docm.rs` with Task 4.
+5. **`.is_err()` over-signals.** `Interrupted` and any other IO error say nothing
+   about who holds the lock. The probe now matches `WouldBlock` only, drops a
+   successful guard explicitly, and propagates everything else with context.
+
+Separately, and before this round returned, I documented a hole I found in my
+own probe: when `try_write` *succeeds* the lock is released and retaken, and a
+contender arriving in that window could invert the acquisition order. It is
+unreachable in these tests because the parent waits for the adder's `.ready` —
+written while the adder already holds the lock — before spawning the contender.
+That ordering is now marked load-bearing in the plan rather than left implicit.
+
+Nothing was rejected this round.

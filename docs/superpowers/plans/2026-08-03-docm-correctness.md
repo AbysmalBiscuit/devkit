@@ -720,7 +720,8 @@ git commit -m "fix(docs): probe package-specific tags before generic ones"
   Tasks 7 and 11 both use
 - Create: `crates/devkit-docs/tests/concurrency.rs`
 - Modify: `crates/devkit-docs/src/cache.rs` (`write_meta`)
-- Modify: `crates/devkit-docs/src/manifest.rs` (`upsert_global`, `upsert_project`, `remove_global`, `remove_project`)
+- Modify: `crates/devkit-docs/src/manifest.rs` (`upsert_global`, `upsert_project`, `remove_global`, `remove_project` — all four gain `cache_root`)
+- Modify: `src/bin/docm.rs` — the callers those signatures break
 - Modify: `crates/devkit-docs/src/lib.rs`
 
 **Interfaces:**
@@ -908,8 +909,22 @@ observable:
     // another process holds this lock *right now*. That is the one fact a race
     // test cannot otherwise establish: every other signal proves only that a
     // contender started. Costs one `env::var_os` miss in production.
-    if std::env::var_os(crate::barrier::VAR).is_some() && lock.try_write().is_err() {
-        crate::barrier::signal("contended")?;
+    if std::env::var_os(crate::barrier::VAR).is_some() {
+        match lock.try_write() {
+            // Held by someone else *right now* — the only outcome that means
+            // contention. `fd-lock` maps Unix `flock` conflicts and Windows
+            // ERROR_LOCK_VIOLATION to `WouldBlock`.
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                crate::barrier::signal("contended")?;
+            }
+            // `Interrupted` and every other IO error say nothing about who
+            // holds the lock; treating them as contention writes a false
+            // `.contended` and makes the race tests pass on a fluke.
+            Err(e) => {
+                return Err(e).with_context(|| format!("probing {}", path.display()));
+            }
+            Ok(guard) => drop(guard),
+        }
     }
     let _held = lock
         .write()
@@ -918,9 +933,26 @@ observable:
 ```
 
 `lock.try_write().is_err()` drops its temporary guard at the end of the
-statement, so the following `lock.write()` borrows freely. If `try_write`
-happens to succeed the lock is released and immediately retaken; nothing runs in
-the gap, so no invariant depends on holding it continuously.
+statement, so the following `lock.write()` borrows freely. Binding the guard
+instead — `match lock.try_write() { Ok(g) => …, Err(_) => lock.write()? }` —
+does not compile: the `Ok` arm holds a mutable borrow of `lock` that the `Err`
+arm's `write()` needs.
+
+**The gap between the probe and the acquisition is real, and it is why the probe
+is gated on the barrier variable.** When `try_write` *succeeds*, the lock is
+released and retaken, and another process can take it in between. Two things
+keep that from mattering:
+
+- In production the variable is unset, so no probe runs and there is no gap.
+- In the tests, the parent waits for the adder's `.ready` — written from inside
+  `resolve_locked` while the adder already holds the lock — *before* spawning
+  the contender. The contender therefore never exists during the adder's probe
+  window. This ordering is load-bearing: spawning both children at once would
+  make the probe able to invert the acquisition order, and the parent would then
+  wait forever for a `.contended` that the wrong process was positioned to write.
+
+Do not use this probe outside a test rendezvous, and do not reorder the tests'
+spawns.
 
 Add to `crates/devkit-docs/Cargo.toml`:
 
@@ -972,6 +1004,28 @@ Apply the same write-temp-then-rename to the file write inside
 the file, edits the parsed document and writes it back, so wrap the whole
 read-modify-write of each in `locks::with_manifest`.
 
+**All four gain a `cache_root: &Path` parameter**, because the manifest lock
+lives at `<cache>/registry.locks/manifest.lock` and none of them can currently
+name it:
+
+```rust
+pub fn upsert_global(path: &Path, entry: &LibEntry, cache_root: &Path) -> Result<()>
+pub fn upsert_project(path: &Path, entry: &LibEntry, cache_root: &Path) -> Result<()>
+pub fn remove_global(path: &Path, name: &str, cache_root: &Path) -> Result<bool>
+pub fn remove_project(path: &Path, name: &str, cache_root: &Path) -> Result<bool>
+```
+
+Do **not** reach for a process-global `docs_root()` instead. Every test would
+then share one manifest lock, so an unrelated test running in parallel could
+produce the `.contended` file the race tests wait on — turning the lock-removed
+build green and destroying the only evidence those tests provide. The lock root
+must be the same per-test temporary directory the rest of the fixture uses.
+
+Update and stage every caller in this commit — the compiler lists them; expect
+`src/bin/docm.rs` (`cmd_add`, `cmd_rm`, `cmd_sync`) and `manifest.rs`'s own test
+module. Task 11's `rm_library` and `docm_add` helper pass their `cache_root`
+straight through.
+
 Add the regression test to `crates/devkit-docs/tests/concurrency.rs`, using the
 process-spawn harness in `crates/devkit-docs/tests/refs_race.rs`:
 
@@ -989,9 +1043,12 @@ fn concurrent_adds_of_different_libraries_both_survive() {
 
 ```bash
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
+# manifest.rs's four mutators gained a cache_root parameter, so every caller
+# moves with them or this boundary does not compile.
 git add crates/devkit-docs/src/locks.rs crates/devkit-docs/src/barrier.rs \
         crates/devkit-docs/src/lib.rs \
         crates/devkit-docs/src/cache.rs crates/devkit-docs/src/manifest.rs \
+        src/bin/docm.rs \
         crates/devkit-docs/Cargo.toml crates/devkit-docs/tests/concurrency.rs
 git commit -m "feat(docs): add a per-library lock and atomic writes"
 ```
@@ -1875,18 +1932,21 @@ fn rel_key(lock_dir: &Path, ws: &Path) -> Result<String> {
 }
 
 fn undeclared(ws: &Path, package: &str, c: &Candidates) -> anyhow::Error {
-    if !c.resolved.is_empty() {
-        return anyhow::anyhow!(
-            "{} does not declare `{package}` (it is transitive); pin the version with --ref.\n\
-             versions present in the lockfile: {}",
-            ws.display(),
+    // `resolved` augments the version list, it does not replace it: an edge
+    // without a version contributes a declarer and no pair, and suppressing the
+    // package rows would then print nothing.
+    let pairs = if c.resolved.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nresolved edges: {}",
             c.resolved
                 .iter()
                 .map(|(v, by)| format!("{v} (required by {by})"))
                 .collect::<Vec<_>>()
                 .join(", ")
-        );
-    }
+        )
+    };
     let versions = if c.versions.is_empty() {
         "none".to_string()
     } else {
@@ -1904,7 +1964,7 @@ fn undeclared(ws: &Path, package: &str, c: &Candidates) -> anyhow::Error {
     anyhow::anyhow!(
         "{} does not declare `{package}` (it is transitive); pin the version with --ref.\n\
          versions present in the lockfile: {versions}\n\
-         declared by: {declarers}",
+         declared by: {declarers}{pairs}",
         ws.display()
     )
 }
@@ -2339,12 +2399,31 @@ fn from_package_array(
                     .filter_map(move |(_, v)| Some((v?.to_string(), p.name.clone())))
             })
             .collect();
-        // Cargo and uv edges carry the resolved version, so these are genuine
-        // pairs rather than a cross-product.
+        // Three separate facts, none inferred from another:
+        //   versions   — every `[[package]]` row for this name
+        //   declarers  — every member with an edge to it, versioned or not
+        //   resolved   — only the edges that carry a version
+        // Populating `resolved` alone loses both others, and a lockfile whose
+        // edges are all bare (`dependencies = ["serde"]`, which is what cargo
+        // writes when the name is unambiguous) would then report nothing at all.
         return Err(undeclared(
             ws,
             package,
-            &Candidates { resolved: by, ..Default::default() },
+            &Candidates {
+                versions: l
+                    .packages
+                    .iter()
+                    .filter(|p| p.name == package)
+                    .map(|p| (p.version.clone(), lock.display().to_string()))
+                    .collect(),
+                declarers: l
+                    .packages
+                    .iter()
+                    .filter(|p| p.dependencies.iter().filter_map(dep_edge).any(|(n, _)| n == package))
+                    .map(|p| p.name.clone())
+                    .collect(),
+                resolved: by,
+            },
         ));
     }
 
@@ -2565,9 +2644,11 @@ implementation, one bounded timeout:
 
 Call it in `resolve_locked` between `assert_clean` and the reference-registry
 commit. `prune_with_lock` gets the mirror-image hook: with
-`DEVKIT_DOCS_PRUNE_BARRIER=<path>` set, it writes `<path>.planned` after taking
-its pre-lock registry snapshot and immediately before acquiring the library
-lock. Both hooks are no-ops when their variable is unset.
+`barrier::VAR` set, `prune_with_lock` takes its pre-lock registry snapshot and
+then acquires the library lock — and `locks::hold`'s contention probe writes
+`.contended` when that acquisition finds the lock already held. No separate
+`.planned` signal: reaching the lock is not the same as being stopped by it, and
+only the second is observable proof that prune took a lock at all.
 
 **Run these against the unfixed code before implementing.** A concurrency test
 that has never been observed failing is not evidence of anything. With the
@@ -2612,27 +2693,34 @@ fn prune_cannot_delete_a_directory_a_concurrent_resolve_just_materialized() {
     // and process-global, and libtest runs tests in parallel threads — setting
     // the barrier variable in-process would leak into every concurrent test.
     // A child gets it at spawn, where it is scoped and safe.
-    //
-    // `prune_with_lock` writes `.planned` once it has taken its pre-lock
-    // snapshot and is about to block on the library lock. Spawning proves only
-    // that it started; without `.planned`, releasing the resolver here would
-    // let it commit its row before prune ever planned, and the test would pass
-    // against an unlocked prune.
     let mut pruner = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "race_child_prunes", "--ignored"])
         .env("DOCM_RACE_CACHE", &cache)
-        .env("DEVKIT_DOCS_PRUNE_BARRIER", &barrier)
+        .env(devkit_docs::barrier::VAR, &barrier)
         .env("DOCM_RACE_REMOVED", root.join("removed.json"))
         .spawn()
         .unwrap();
 
-    // Release the child only once prune is definitely contending for the lock.
-    let planned = barrier.with_extension("planned");
+    // Wait for proof that prune is *blocked on the library lock*, not merely
+    // that it started or that it finished planning. Releasing on a
+    // "planning done" signal leaves the same hole the add/rm test had for four
+    // rounds: prune can be preempted after signalling, the resolver commits its
+    // row, and an unlocked prune then resumes, re-reads a registry that now
+    // references the checkout, and passes without ever taking a lock.
+    //
+    // `.contended` comes from inside `locks::hold` and requires another process
+    // to hold this lock at that instant, so a prune with no library lock cannot
+    // produce it — the wait times out and the test fails. That is the RED.
+    let contended = barrier.with_extension("contended");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while !planned.exists() {
-        assert!(std::time::Instant::now() < deadline, "prune never reached the lock");
+    while !contended.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "prune never contended for the library lock — it is not taking one"
+        );
         std::thread::yield_now();
     }
+
     std::fs::write(barrier.with_extension("go"), "").unwrap();
     assert!(child.wait().unwrap().success());
     assert!(pruner.wait().unwrap().success());
@@ -3516,8 +3604,8 @@ pub enum RmTarget<'a> {
 /// Returns whether an entry was actually removed.
 pub fn rm_library(target: RmTarget<'_>, cache_root: &Path, name: &str) -> Result<bool> {
     locks::with_lib(cache_root, name, || match target {
-        RmTarget::Global(p) => manifest::remove_global(p, name),
-        RmTarget::Project(p) => manifest::remove_project(p, name),
+        RmTarget::Global(p) => manifest::remove_global(p, name, cache_root),
+        RmTarget::Project(p) => manifest::remove_project(p, name, cache_root),
     })
 }
 ```
