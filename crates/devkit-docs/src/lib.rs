@@ -47,7 +47,7 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
         let name = names::decode(&dirname);
         out.libs += 1;
         for (wt, _) in cache::LibCache::from_dir(cache_root, &dirname).version_worktrees() {
-            if wt != "default" && !referenced.contains(&(name.clone(), wt)) {
+            if !referenced.contains(&(name.clone(), wt)) {
                 out.unreferenced += 1;
             }
         }
@@ -76,7 +76,7 @@ mod tests {
             .unwrap();
         let s = doctor_summary(&root);
         assert_eq!(s.libs, 1);
-        assert_eq!(s.unreferenced, 1); // 2.0.0 (default + repo.git exempt)
+        assert_eq!(s.unreferenced, 2); // 2.0.0 and default; repo.git is not a checkout
         assert!(s.bytes > 0);
     }
 

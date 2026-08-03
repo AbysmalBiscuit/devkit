@@ -166,6 +166,10 @@ pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Resu
     crate::barrier::wait("commit")?;
     RefStore::at(cache_root).commit(|data| {
         let workspace = project.to_string_lossy();
+        // Record before retiring: for a workspace whose own path is the legacy
+        // key, retiring first deletes the row and the record re-inserts it at
+        // revision 0, the value `refs::reconcile` compares to decide a row is
+        // unchanged since a prune's snapshot.
         data.record(&workspace, &entry.name, &worktree, &git_ref, &commit);
         data.retire_legacy(&workspace, &entry.name);
         Ok(())

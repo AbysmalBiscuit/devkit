@@ -539,6 +539,42 @@ fn a_legacy_row_protects_default_until_a_real_materialization_retires_it() {
 }
 
 #[test]
+fn resolving_the_workspace_that_owns_a_legacy_row_upserts_it() {
+    let tmp = unique_tmp("legacy-upsert");
+    let repo = common::fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("devkit.toml"), "[defaults]\n").unwrap();
+    RefStore::at(&cache_root)
+        .commit(|data| {
+            data.record_legacy(project.to_str().unwrap(), "up", "default");
+            Ok(())
+        })
+        .unwrap();
+
+    let entry = LibEntry {
+        name: "up".into(),
+        ecosystem: Some(Ecosystem::Git),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    devkit_docs::resolve::resolve(&entry, &project, &cache_root).unwrap();
+
+    let rows = RefStore::at(&cache_root).snapshot().rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].version, "v1.0.0");
+    assert!(!rows[0].commit.is_empty());
+    assert_eq!(
+        rows[0].revision, 1,
+        "the legacy row was retired and re-inserted rather than upserted; a \
+         fresh row restarts the revision at 0, and that is the value reconcile \
+         compares, so a prune holding the pre-resolve snapshot would drop this row"
+    );
+}
+
+#[test]
 fn a_legacy_row_keeps_its_checkout_until_a_workspace_row_retires_it() {
     let root = unique_tmp("legacy-retire");
     let lockfile_dir = root.join("repo");
@@ -601,6 +637,59 @@ fn prune_never_enumerates_a_control_entry_as_a_library() {
         !root.join("registry.locks/registry.locks.lock").exists(),
         "prune locked a control entry as if it were a library"
     );
+}
+
+// Bug #1 regression on the production path: pruning from project A must not
+// reclaim project B's overlay-only lib, whose checkouts A's manifest never
+// mentions.
+#[test]
+fn prune_with_lock_preserves_another_projects_overlay_lib() {
+    let tmp = unique_tmp("xproj-prune");
+    let repo = common::fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let global = tmp.join("docs.toml");
+    let proj_a = tmp.join("A");
+    let proj_b = tmp.join("B");
+    for project in [&proj_a, &proj_b] {
+        std::fs::create_dir_all(project).unwrap();
+        std::fs::write(project.join("devkit.toml"), "[defaults]\n").unwrap();
+    }
+
+    let lib_x = LibEntry {
+        name: "libX".into(),
+        repo: Some(repo.clone()),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let lib_y = LibEntry {
+        name: "libY".into(),
+        repo: Some(repo),
+        r#ref: Some("v1.1.0".into()),
+        ..Default::default()
+    };
+    devkit_docs::manifest::upsert_global(&global, &lib_x, &cache_root).unwrap();
+    devkit_docs::manifest::upsert_project(&proj_b.join("devkit.toml"), &lib_y, &cache_root)
+        .unwrap();
+
+    let x = devkit_docs::resolve::resolve(&lib_x, &proj_a, &cache_root).unwrap();
+    let y = devkit_docs::resolve::resolve(&lib_y, &proj_b, &cache_root).unwrap();
+
+    // Pruning "as if from A": A's manifest sees only libX.
+    let a_libs = BTreeSet::from(["libX".to_string()]);
+    let pruned = refs::prune_with_lock(&cache_root, &a_libs, Some(&global)).unwrap();
+
+    assert!(
+        pruned.removed.is_empty(),
+        "prune from A reclaimed a checkout it does not own: {:?}",
+        pruned.removed
+    );
+    assert!(
+        pruned.removable_libs.is_empty(),
+        "prune from A offered another project's lib for deletion: {:?}",
+        pruned.removable_libs
+    );
+    assert!(x.path.is_dir() && y.path.is_dir());
+    assert_eq!(RefStore::at(&cache_root).snapshot().rows.len(), 2);
 }
 
 #[test]
