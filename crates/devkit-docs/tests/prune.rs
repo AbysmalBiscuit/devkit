@@ -68,7 +68,7 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
             std::path::PathBuf::from(std::env::var_os("DEVKIT_DOCS_TEST_CACHE_ROOT").unwrap());
         let project =
             std::path::PathBuf::from(std::env::var_os("DEVKIT_DOCS_TEST_PROJECT").unwrap());
-        if role == "resolve" {
+        if role == "resolve" || role == "seed" {
             let entry = LibEntry {
                 name: "up".into(),
                 ecosystem: Some(Ecosystem::Git),
@@ -112,30 +112,41 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
     let barrier = root.join("resolve");
     std::fs::create_dir_all(&project).unwrap();
     let exe = std::env::current_exe().unwrap();
-    let spawn_worker = |role: &str| {
-        Command::new(&exe)
+    let fixed_now = "42424242";
+    let spawn_worker = |role: &str, pause: bool| {
+        let mut command = Command::new(&exe);
+        command
             .env("DEVKIT_DOCS_TEST_PRUNE_RACE", role)
             .env("DEVKIT_DOCS_TEST_CACHE_ROOT", &cache_root)
             .env("DEVKIT_DOCS_TEST_PROJECT", &project)
             .env("DEVKIT_DOCS_TEST_REPO", &repo)
-            .env(devkit_docs::barrier::VAR, &barrier)
+            .env(devkit_docs::refs::TEST_NOW_VAR, fixed_now)
             .args([
                 "--exact",
                 "prune_waits_for_an_in_flight_resolve_registry_commit",
                 "--nocapture",
             ])
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap()
+            .stderr(Stdio::piped());
+        if pause {
+            command.env(devkit_docs::barrier::VAR, &barrier);
+        } else {
+            command.env_remove(devkit_docs::barrier::VAR);
+        }
+        command.spawn().unwrap()
     };
 
-    let resolve = spawn_worker("resolve");
+    assert_worker_succeeded(wait_for_child(spawn_worker("seed", false), "seed"), "seed");
+    let stale = RefStore::at(&cache_root).snapshot();
+    assert_eq!(stale.rows.len(), 1);
+    assert_eq!(stale.rows[0].resolved_at, 42_424_242);
+
+    let resolve = spawn_worker("resolve", true);
     wait_for(&barrier.with_extension("materialized"));
     let checkout = cache_root.join("up/v1.0.0");
     assert!(checkout.is_dir());
 
-    let mut prune = spawn_worker("prune");
+    let mut prune = spawn_worker("prune", true);
     let contended = wait_for_contention_or_exit(&mut prune, &barrier.with_extension("contended"));
     let in_flight_checkout_survived = checkout.is_dir();
 
@@ -152,6 +163,7 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
     let data = RefStore::at(&cache_root).snapshot();
     assert_eq!(data.rows.len(), 1);
     assert_eq!(data.rows[0].version, "v1.0.0");
+    assert!(data.rows[0].resolved_at > stale.rows[0].resolved_at);
 }
 
 // Bug #1 regression: pruning from project A must NOT delete project B's
@@ -323,6 +335,75 @@ fn whole_library_deletion_rechecks_fresh_references() {
 
     assert!(!removed);
     assert!(cache_root.join("up").is_dir());
+}
+
+#[test]
+fn whole_library_deletion_detects_a_same_row_refresh() {
+    if std::env::var_os("DEVKIT_DOCS_TEST_WHOLE_LIB_ABA").is_some() {
+        let cache_root =
+            std::path::PathBuf::from(std::env::var_os("DEVKIT_DOCS_TEST_CACHE_ROOT").unwrap());
+        let project = std::env::var("DEVKIT_DOCS_TEST_PROJECT").unwrap();
+        RefStore::at(&cache_root)
+            .commit(|data| {
+                data.record(&project, "up", "v1.0.0");
+                Ok(())
+            })
+            .unwrap();
+        return;
+    }
+
+    let root = unique_tmp("whole-lib-same-row-race");
+    let cache_root = root.join("cache");
+    let project = root.join("project");
+    std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
+    std::fs::create_dir_all(cache_root.join("up/v1.0.0")).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+    let store = RefStore::at(&cache_root);
+    store
+        .commit(|data| {
+            data.rows.push(refs::RefRow {
+                project: project.to_string_lossy().into_owned(),
+                lib: "up".into(),
+                version: "v1.0.0".into(),
+                resolved_at: 42_424_242,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let snapshot = store.snapshot();
+    let plan = refs::plan_for_cache(&cache_root, &snapshot, &BTreeSet::new(), None).unwrap();
+    assert_eq!(plan.removable_libs, ["up"]);
+
+    let output = Command::new(std::env::current_exe().unwrap())
+        .env("DEVKIT_DOCS_TEST_WHOLE_LIB_ABA", "1")
+        .env("DEVKIT_DOCS_TEST_CACHE_ROOT", &cache_root)
+        .env("DEVKIT_DOCS_TEST_PROJECT", &project)
+        .env(devkit_docs::refs::TEST_NOW_VAR, "42424242")
+        .args([
+            "--exact",
+            "whole_library_deletion_detects_a_same_row_refresh",
+            "--nocapture",
+        ])
+        .output()
+        .unwrap();
+    assert_worker_succeeded(output, "refresh");
+
+    let removed = devkit_docs::cache::LibCache::new(&cache_root, "up")
+        .unwrap()
+        .remove_if_unreferenced(&snapshot)
+        .unwrap();
+    store
+        .commit(|data| {
+            refs::reconcile(data, &snapshot, &plan.keep);
+            Ok(())
+        })
+        .unwrap();
+
+    assert!(!removed, "whole-library prune missed the refreshed row");
+    assert!(cache_root.join("up").is_dir());
+    let fresh = store.snapshot();
+    assert_eq!(fresh.rows.len(), 1);
+    assert!(fresh.rows[0].resolved_at > snapshot.rows[0].resolved_at);
 }
 
 #[test]

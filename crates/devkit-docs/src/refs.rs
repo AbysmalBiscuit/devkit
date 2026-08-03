@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub const SCHEMA: u32 = 1;
+pub const TEST_NOW_VAR: &str = "DEVKIT_DOCS_TEST_REGISTRY_NOW";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefRow {
@@ -49,6 +50,12 @@ impl Document for Data {
 }
 
 fn now() -> u64 {
+    if let Some(value) = std::env::var_os(TEST_NOW_VAR) {
+        return value
+            .to_string_lossy()
+            .parse()
+            .expect("test registry timestamp must be an integer");
+    }
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -58,6 +65,10 @@ fn now() -> u64 {
 impl Data {
     /// Upsert keyed on (project, lib).
     pub fn record(&mut self, project: &str, lib: &str, version: &str) {
+        self.record_at(project, lib, version, now());
+    }
+
+    fn record_at(&mut self, project: &str, lib: &str, version: &str, timestamp: u64) {
         match self
             .rows
             .iter_mut()
@@ -65,13 +76,13 @@ impl Data {
         {
             Some(r) => {
                 r.version = version.to_string();
-                r.resolved_at = now();
+                r.resolved_at = timestamp.max(r.resolved_at.saturating_add(1));
             }
             None => self.rows.push(RefRow {
                 project: project.to_string(),
                 lib: lib.to_string(),
                 version: version.to_string(),
-                resolved_at: now(),
+                resolved_at: timestamp,
             }),
         }
     }
@@ -268,6 +279,16 @@ mod tests {
     }
 
     #[test]
+    fn repeated_same_key_and_version_record_advances_freshness() {
+        let mut data = Data::default();
+        data.record_at("/p1", "tokio", "1.0.0", 42);
+
+        data.record_at("/p1", "tokio", "1.0.0", 42);
+
+        assert_eq!(data.rows[0].resolved_at, 43);
+    }
+
+    #[test]
     fn store_commit_and_snapshot_round_trip() {
         let root = unique_tmp("store");
         let store = RefStore::at(&root);
@@ -370,6 +391,22 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_preserves_a_concurrent_same_row_refresh() {
+        let mut snapshot = Data::default();
+        snapshot.record_at("/A", "libX", "1.0.0", 42);
+        let mut current = Data {
+            version: snapshot.version,
+            rows: snapshot.rows.clone(),
+        };
+        current.record_at("/A", "libX", "1.0.0", 42);
+
+        reconcile(&mut current, &snapshot, &[]);
+
+        assert_eq!(current.rows.len(), 1);
+        assert_eq!(current.rows[0].resolved_at, 43);
+    }
+
+    #[test]
     fn reconcile_drops_a_dead_row_but_keeps_live() {
         let mut snapshot = Data::default();
         snapshot.record("/A", "libX", "1.0.0");
@@ -377,9 +414,10 @@ mod tests {
         // plan only kept the live row
         let keep = vec![snapshot.rows[0].clone()];
 
-        let mut current = Data::default();
-        current.record("/A", "libX", "1.0.0");
-        current.record("/DEAD", "libW", "9.0.0");
+        let mut current = Data {
+            version: snapshot.version,
+            rows: snapshot.rows.clone(),
+        };
 
         reconcile(&mut current, &snapshot, &keep);
 
