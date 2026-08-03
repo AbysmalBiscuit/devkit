@@ -6,7 +6,7 @@
 
 **Architecture:** Checkout directories are named for the ref that produced them (`/` → `~`), library directories for the encoded library name; `meta.toml` records origin, canonical ref and commit so every resolution can prove what it returned; versions resolve through each lockfile's importer graph rather than by matching semver ranges; and a per-library advisory lock serializes clone/fetch/materialize/registry-commit against prune.
 
-**Tech Stack:** Rust 2024, `anyhow`, `serde`/`toml`/`serde_json`/`serde_yaml_ng`, `clap` + `clap_complete`, `fs2` advisory locks (already used by `devkit-locks`/`devkit-ports`), `devkit_common::cmd` for git.
+**Tech Stack:** Rust 2024, `anyhow`, `serde`/`toml`/`serde_json`/`serde_yaml_ng`, `clap` + `clap_complete`, `fd-lock` advisory locks (the workspace lock crate — `fd-lock = "4"` at `Cargo.toml:69`, already used by `devkit-common`, `devkit-locks` and `devkit-ports`), `devkit_common::cmd` for git.
 
 **Spec:** `docs/superpowers/specs/2026-08-03-docm-correctness-design.md` — read it before starting. Section references below (§1, §3…) point at it.
 
@@ -20,9 +20,12 @@
 - **`anyhow` everywhere**, with `.context()` on every fallible IO or git call.
 - **Comments follow `AGENTS.md`:** no narration, no PR/issue references, no change-relative phrasing. A comment explains a non-obvious *why* or it does not exist.
 - **Conventional Commits**, one logical change per commit, imperative subject ≤50 chars.
-- **No new third-party dependency.** The spec explicitly dropped `node-semver`; importer-graph resolution needs no range matching.
+- **No new third-party dependency.** The spec explicitly dropped `node-semver`; importer-graph resolution needs no range matching. Locking uses `fd-lock`, which the workspace already depends on — do **not** add `fs2`.
 - **Reserved names (§1, §1.1):** checkout level `repo.git`, `meta.toml`; library level the stem `registry` — that exact name or any name beginning with `registry.`.
 - **Never unlink an advisory lock file after release** (implementer note): persistent lock files avoid inode-replacement races.
+- **Locks are not reentrant.** `fd-lock` takes an OS advisory lock; a second acquisition of the same path from the same process opens a second file description and blocks forever. Every function that takes the library lock is named `*_locked` at its inner, lock-free layer, and only the outermost caller wraps it. Never call a lock-taking function from inside `locks::with_lib`.
+- **Lock ordering, always:** library lock → manifest lock → reference-registry lock. Never the reverse, and never two library locks at once.
+- **A directory name is only correct if the host stored it verbatim.** After creating any cache directory, confirm the parent lists the exact bytes requested (`cache::create_dir_exact`). This is what catches case folding and NFC/NFD folding on macOS and Windows without a Unicode dependency (§1).
 
 ## File Structure
 
@@ -63,10 +66,19 @@ Fixes the live 0.12.1 data-loss bug (§1.1) and is independent of everything els
 - Produces:
   - `names::encode(name: &str) -> String` — `/` → `~`, no validation
   - `names::decode(dir: &str) -> String` — `~` → `/`
-  - `names::validate_lib(name: &str) -> anyhow::Result<()>`
-  - `names::validate_checkout(dirname: &str) -> anyhow::Result<()>`
-  - `names::lib_dir(name: &str) -> anyhow::Result<String>` — validate then encode
-  - `names::checkout_dir(git_ref: &str) -> anyhow::Result<String>` — validate then encode
+  - `names::validate_lib(name: &str) -> anyhow::Result<()>` — takes the **logical** name (`@types/node`)
+  - `names::validate_ref(git_ref: &str) -> anyhow::Result<()>` — takes the **raw ref** (`release/2.x`)
+  - `names::lib_dir(name: &str) -> anyhow::Result<String>` — validate the logical name, then encode
+  - `names::checkout_dir(git_ref: &str) -> anyhow::Result<String>` — validate the raw ref, then encode
+  - `names::fold_key(component: &str) -> String` — ASCII-case-folded comparison key
+  - `cache::LibCache::from_dir(cache_root: &Path, dirname: &str) -> LibCache` — build from an
+    already-encoded directory name, skipping validation. Enumeration paths use this.
+  - `cache::create_dir_exact(parent: &Path, name: &str) -> Result<PathBuf>`
+
+Two levels, two validators, and they are **not** interchangeable. `validate_lib` sees
+`@types/node` and rejects `~`; `validate_ref` sees `release/2.x` and rejects `~`. Both
+encode afterwards. Validating the *encoded* form for `~` would reject every name
+containing `/` — which is every scoped package and every branch ref.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -106,27 +118,66 @@ fn lib_names_reject_the_registry_stem() {
 }
 
 #[test]
+fn a_branch_ref_containing_a_slash_encodes_rather_than_erroring() {
+    // The bug this pins: validating the *encoded* form for `~` rejects every
+    // ref with a `/` in it, which is most real branch and qualified refs.
+    assert_eq!(names::checkout_dir("release/2.x").unwrap(), "release~2.x");
+    assert_eq!(names::checkout_dir("refs/tags/v1.0.0").unwrap(), "refs~tags~v1.0.0");
+    assert_eq!(names::lib_dir("@hey-api/client-fetch").unwrap(), "@hey-api~client-fetch");
+}
+
+#[test]
 fn checkout_names_reject_control_files_but_not_the_registry_stem() {
-    assert!(names::validate_checkout("repo.git").is_err());
-    assert!(names::validate_checkout("meta.toml").is_err());
+    assert!(names::validate_ref("repo.git").is_err());
+    assert!(names::validate_ref("meta.toml").is_err());
     // The registry lives at the cache root, one level up from checkouts.
-    assert!(names::validate_checkout("registry.json").is_ok());
+    assert!(names::validate_ref("registry.json").is_ok());
 }
 
 #[test]
 fn rejects_names_the_host_filesystem_cannot_represent() {
-    assert!(names::validate_checkout(&"v".repeat(256)).is_err());
+    assert!(names::validate_ref(&"v".repeat(256)).is_err());
     if cfg!(windows) {
         for n in ["a|b", "a<b", "a>b", "a\"b", "NUL", "con", "COM1", "LPT9.txt"] {
-            assert!(names::validate_checkout(n).is_err(), "{n} must be rejected");
+            assert!(names::validate_ref(n).is_err(), "{n} must be rejected");
         }
     }
 }
 
 #[test]
 fn tilde_is_illegal_in_a_git_ref_so_checkout_encoding_is_injective() {
-    // `release/2.x` -> `release~2.x`; no valid ref can produce a `~` itself.
-    assert!(names::validate_checkout("release~2.x").is_err());
+    // No valid ref contains `~`, so `/` -> `~` cannot collide with a literal.
+    assert!(names::validate_ref("release~2.x").is_err());
+}
+
+#[test]
+fn case_folding_keys_let_a_caller_spot_a_host_collision() {
+    assert_eq!(names::fold_key("V1.0"), names::fold_key("v1.0"));
+    assert_ne!(names::fold_key("v1.0"), names::fold_key("v1.1"));
+}
+```
+
+The host may fold beyond ASCII case — macOS normalizes NFD, Windows folds
+Unicode case — and normalizing that in-process would need a dependency the
+spec forbids. So the collision is caught by observation instead of prediction:
+`create_dir_exact` creates the directory and then requires the parent listing
+to contain the exact bytes it asked for. Add to `crates/devkit-docs/tests/cache.rs`:
+
+```rust
+#[test]
+fn a_directory_the_host_folds_into_an_existing_one_is_refused() {
+    let root = common::unique_tmp("fold");
+    let first = devkit_docs::cache::create_dir_exact(&root, "V1.0").unwrap();
+    assert!(first.is_dir());
+    // Case-sensitive hosts store both; folding hosts return the first, and the
+    // exact-bytes check is what turns that into an error instead of a silent alias.
+    match devkit_docs::cache::create_dir_exact(&root, "v1.0") {
+        Ok(p) => assert!(p.is_dir(), "a case-sensitive host keeps them distinct"),
+        Err(e) => assert!(
+            e.to_string().contains("V1.0"),
+            "a folding host must name the directory it collided with: {e}"
+        ),
+    }
 }
 ```
 
@@ -155,6 +206,14 @@ pub fn decode(dir: &str) -> String {
     dir.replace('~', "/")
 }
 
+/// ASCII case-folded key. Enough to catch the collision a caller can predict;
+/// the rest is caught by `cache::create_dir_exact` observing what the host stored.
+pub fn fold_key(component: &str) -> String {
+    component.to_ascii_lowercase()
+}
+
+/// Takes the *logical* library name (`@types/node`), never the encoded form.
+///
 /// `/` → `~` is injective for refs because git forbids `~` in a ref name.
 /// Library names carry no such constraint, so the constraint is imposed here.
 pub fn validate_lib(name: &str) -> Result<()> {
@@ -176,17 +235,19 @@ pub fn validate_lib(name: &str) -> Result<()> {
     representable(&encode(name))
 }
 
-pub fn validate_checkout(dirname: &str) -> Result<()> {
-    if dirname.is_empty() {
+/// Takes the *raw* ref (`release/2.x`), never the encoded directory name.
+pub fn validate_ref(git_ref: &str) -> Result<()> {
+    if git_ref.is_empty() {
         bail!("ref is empty");
     }
-    if dirname.contains('~') {
-        bail!("`{dirname}` contains `~`, which is illegal in a git ref name");
+    if git_ref.contains('~') {
+        bail!("`{git_ref}` contains `~`, which is illegal in a git ref name");
     }
-    if CHECKOUT_RESERVED.contains(&dirname) {
-        bail!("ref `{dirname}` collides with a control file inside the library directory");
+    let dir = encode(git_ref);
+    if CHECKOUT_RESERVED.contains(&dir.as_str()) {
+        bail!("ref `{git_ref}` collides with a control file inside the library directory");
     }
-    representable(dirname)
+    representable(&dir)
 }
 
 pub fn lib_dir(name: &str) -> Result<String> {
@@ -195,9 +256,8 @@ pub fn lib_dir(name: &str) -> Result<String> {
 }
 
 pub fn checkout_dir(git_ref: &str) -> Result<String> {
-    let dir = encode(git_ref);
-    validate_checkout(&dir)?;
-    Ok(dir)
+    validate_ref(git_ref)?;
+    Ok(encode(git_ref))
 }
 
 /// Git permits characters and names Windows forbids in a path component.
@@ -233,7 +293,7 @@ Add `pub mod names;` to `crates/devkit-docs/src/lib.rs`.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p devkit-docs --test names`
-Expected: PASS, 6 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Route `LibCache` through the encoder**
 
@@ -248,7 +308,55 @@ Modify `crates/devkit-docs/src/cache.rs`. `LibCache::new` currently joins the ra
 ```
 
 This changes the signature to return `Result`. Fix every caller the compiler
-reports (`resolve.rs`, `refs.rs`, `src/bin/docm.rs`) by propagating with `?`.
+reports by propagating with `?`: `src/bin/docm.rs:228`, `:255`, `:291`, `:364`
+and `crates/devkit-docs/src/resolve.rs`.
+
+- [ ] **Step 5b: Add the enumeration constructor and the exact-bytes creator**
+
+`LibCache::new` now *validates a logical name*. Two call sites do not have one —
+they have an encoded directory name read from `read_dir`, and `@types~node`
+would be rejected for containing `~`. They need the unvalidated constructor:
+
+```rust
+    /// From an already-encoded directory name, as read from the cache root.
+    /// Skips validation: the name came from disk, not from a user.
+    pub fn from_dir(cache_root: &Path, dirname: &str) -> Self {
+        Self { dir: cache_root.join(dirname) }
+    }
+```
+
+Convert `crates/devkit-docs/src/refs.rs:187-192` (the cache-root scan) and
+`src/bin/docm.rs:364` (`remove_worktree`) to `from_dir`, and use
+`names::decode(&dirname)` wherever the *logical* name is needed for display or
+for a manifest lookup. Getting this backwards is what breaks prune.
+
+Also in `cache.rs`:
+
+```rust
+/// Create `parent/name` and prove the host stored that exact name. A
+/// case-folding or Unicode-normalizing filesystem silently aliases the new
+/// directory onto an existing one; the listing check is what makes that visible.
+pub fn create_dir_exact(parent: &Path, name: &str) -> Result<PathBuf> {
+    let path = parent.join(name);
+    std::fs::create_dir_all(&path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    let stored = std::fs::read_dir(parent)?
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy() == name);
+    if !stored {
+        let existing: Vec<String> = std::fs::read_dir(parent)?
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| crate::names::fold_key(n) == crate::names::fold_key(name))
+            .collect();
+        bail!(
+            "this filesystem folds `{name}` onto {existing:?}; docm cannot keep them apart — \
+             rename the library or pin a ref whose name does not collide"
+        );
+    }
+    Ok(path)
+}
+```
 
 - [ ] **Step 6: Guard the prune scan**
 
@@ -381,10 +489,16 @@ git commit -m "fix(docs): validate library names when a manifest loads"
 **Files:**
 - Modify: `crates/devkit-docs/src/tags.rs`
 - Modify: `crates/devkit-docs/src/resolve.rs:146-169` (`locate_tag`)
-- Modify: `crates/devkit-docs/src/cache.rs` (`Meta`)
+- Modify: `crates/devkit-docs/tests/cache.rs:83` — **required in this commit**
 
 **Interfaces:**
 - Produces: `tags::ALL` ordered package-specific first; `tags::TagPattern::{PkgAt, LeafAt, PkgDashV, LeafDashV, LeafDash, V, Plain}`.
+
+The old variants `NameDash`, `NameDashV` and `NameAt` are **removed**, and
+`crates/devkit-docs/tests/cache.rs:83` still names `TagPattern::NameDash`. That
+line becomes `TagPattern::LeafDash` in this same commit — otherwise the tree does
+not compile at this task's boundary and the merge gate fails. `tests/resolve.rs:45`
+uses `TagPattern::V`, which survives unchanged.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -508,7 +622,8 @@ fn locate_tag(
 
 ```bash
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
-git add crates/devkit-docs/src/tags.rs crates/devkit-docs/src/resolve.rs
+git add crates/devkit-docs/src/tags.rs crates/devkit-docs/src/resolve.rs \
+        crates/devkit-docs/tests/cache.rs
 git commit -m "fix(docs): probe package-specific tags before generic ones"
 ```
 
@@ -528,8 +643,21 @@ git commit -m "fix(docs): probe package-specific tags before generic ones"
 **Interfaces:**
 - Produces:
   - `locks::with_lib<T>(cache_root: &Path, lib: &str, f: impl FnOnce() -> Result<T>) -> Result<T>`
+  - `locks::with_manifest<T>(f: impl FnOnce() -> Result<T>) -> Result<T>` — one global lock over every manifest read-modify-write
   - `locks::lock_path(cache_root: &Path, lib: &str) -> Result<PathBuf>` — `<cache>/registry.locks/<encoded>.lock`
+  - `locks::manifest_lock_path() -> Result<PathBuf>` — `<config dir>/docs.manifest.lock`
   - `locks::is_control(component: &str) -> bool` — true for `registry` / `registry.*`, so prune, doctor and the upgrade pass can skip them
+
+**Two locks, because they protect different things.** The library lock serializes
+one library's clone/fetch/materialize/registry-commit. It does *not* protect the
+manifest: `docm add a` and `docm add b` take different library locks and would
+still perform overlapping read-modify-write cycles on the one `docs.toml`,
+and the later writer's atomic rename would drop the earlier one's entry. Atomic
+writes prevent a torn file, not a lost update. The manifest lock is global
+because the manifest is a single file shared by every library.
+
+**Neither lock is reentrant.** See Global Constraints. Every consumer below is
+split so the lock is taken exactly once at the outermost layer.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -573,8 +701,8 @@ Expected: FAIL to compile — no `locks` module.
 //! would let two processes hold locks on different inodes for one path.
 
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
-use std::fs::{self, File};
+use fd_lock::RwLock;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 const DIR: &str = "registry.locks";
@@ -593,21 +721,56 @@ pub fn lock_path(cache_root: &Path, lib: &str) -> Result<PathBuf> {
     Ok(cache_root.join(DIR).join(component))
 }
 
-pub fn with_lib<T>(cache_root: &Path, lib: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let path = lock_path(cache_root, lib)?;
+pub fn manifest_lock_path() -> Result<PathBuf> {
+    Ok(devkit_common::paths::config_dir()?.join("docs.manifest.lock"))
+}
+
+fn hold<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     fs::create_dir_all(path.parent().expect("lock path has a parent"))?;
-    let file = File::create(&path).with_context(|| format!("opening {}", path.display()))?;
-    file.lock_exclusive()
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let mut lock = RwLock::new(file);
+    let _held = lock
+        .write()
         .with_context(|| format!("locking {}", path.display()))?;
-    let out = f();
-    let _ = fs2::FileExt::unlock(&file);
-    out
+    f()
+}
+
+pub fn with_lib<T>(cache_root: &Path, lib: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    hold(&lock_path(cache_root, lib)?, f)
+}
+
+/// The manifest is one file shared by every library, so its read-modify-write
+/// needs a lock of its own — a per-library lock lets two adds interleave and
+/// lose one entry.
+pub fn with_manifest<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    hold(&manifest_lock_path()?, f)
 }
 ```
 
-Add `fs2` to `crates/devkit-docs/Cargo.toml` (already a workspace dependency —
-copy the line from `crates/devkit-locks/Cargo.toml`), and `pub mod locks;` to
-`lib.rs`.
+`_held` must stay bound for the body's whole scope — `let _ = lock.write()` drops
+the guard immediately and releases the lock. Never `truncate(true)`: another
+process may hold this same file.
+
+Add to `crates/devkit-docs/Cargo.toml`:
+
+```toml
+fd-lock.workspace = true
+```
+
+`fd-lock = "4"` is already declared at `Cargo.toml:69` and used by
+`devkit-common`, `devkit-locks` and `devkit-ports`. Do not add `fs2` — it is
+not a dependency of this workspace, and adding it would violate the
+no-new-dependency constraint. Add `pub mod locks;` to `lib.rs`.
+
+Confirm `devkit_common::paths::config_dir` is the accessor this repo uses for
+`~/.config/devkit`; if it is named differently, use whatever `manifest.rs`
+already calls to locate `docs.toml` rather than inventing a second path source.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -629,11 +792,26 @@ pub fn write_meta(lib_dir: &Path, m: &Meta) -> Result<()> {
 }
 ```
 
-- [ ] **Step 6: Make manifest writes atomic**
+- [ ] **Step 6: Make manifest writes atomic *and* serialized**
 
 Apply the same write-temp-then-rename to the file write inside
 `manifest::upsert_global`, `upsert_project`, `remove_global` and
-`remove_project`.
+`remove_project`. Atomicity alone is not enough: each of those functions reads
+the file, edits the parsed document and writes it back, so wrap the whole
+read-modify-write of each in `locks::with_manifest`.
+
+Add the regression test to `crates/devkit-docs/tests/concurrency.rs`, using the
+process-spawn harness in `crates/devkit-docs/tests/refs_race.rs`:
+
+```rust
+#[test]
+fn concurrent_adds_of_different_libraries_both_survive() {
+    // N child processes each call manifest::upsert_global for a distinct name
+    // against one docs.toml. Afterwards every name must be present: an
+    // unserialized read-modify-write keeps only the last writer's entry.
+    // Spawn pattern: tests/refs_race.rs.
+}
+```
 
 - [ ] **Step 7: Run the gate and commit**
 
@@ -661,11 +839,19 @@ git commit -m "feat(docs): add a per-library lock and atomic writes"
 - Produces:
   - `cache::WorktreeMeta { raw_ref: String, resolved_ref: String, commit: String }`
   - `cache::Meta { origin: Option<String>, tag_pattern: Option<TagPattern>, layouts: BTreeMap<String, Layout>, worktrees: BTreeMap<String, WorktreeMeta> }`
-  - `LibCache::resolve_ref(&self, r: &str) -> Result<(String, String)>` — returns `(canonical_ref, commit)`
-  - `LibCache::ensure_at(&self, dirname: &str, commit: &str) -> Result<PathBuf>` — materialize, re-point on HEAD mismatch
+  - `LibCache::resolve_ref(&self, r: &str) -> Result<(String, String)>` — returns `(canonical_ref, commit)`; fetches once and retries before failing
+  - `LibCache::ensure_at(&self, dirname: &str, commit: &str) -> Result<(PathBuf, bool)>` — materialize, re-point on HEAD mismatch; the `bool` is "had to repair"
   - `LibCache::assert_clean(&self, path: &Path) -> Result<()>`
   - `resolve::Resolved` gains `git_ref: String`, `commit: String`, `status: Status`, `origin: String`
   - `resolve::Status { Ok, Repaired }`
+  - `resolve::resolve(...)` takes the library lock; `resolve::resolve_locked(...)` assumes it is already held
+
+**The split matters.** `docm add` and `docm sync` (Task 11) take the library lock
+themselves so the manifest write and the materialization land under one hold.
+They must call `resolve_locked`. `resolve` is the entry point for everything
+else and is the *only* function that wraps `resolve_locked` in `locks::with_lib`.
+Calling `resolve` from inside a held library lock deadlocks — `fd-lock` is not
+reentrant, and the second acquisition blocks on the first forever.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -831,7 +1017,23 @@ so bootstrap it from the bare repo rather than assuming the manifest is right:
     /// A `refs/`-qualified ref is used verbatim; a 40-hex string is an object
     /// name; anything else is a tag first, then a branch, and matching both is
     /// ambiguous.
+    ///
+    /// A ref pushed upstream after the last fetch is not in the local repo yet,
+    /// so a miss triggers exactly one fetch and one retry before it is an error
+    /// (§ spec: "a miss triggers exactly one fetch, then a retry, then a hard
+    /// error"). Without it, every newly published tag fails on first use.
     pub fn resolve_ref(&self, r: &str) -> Result<(String, String)> {
+        if let Some(found) = self.try_resolve_ref(r)? {
+            return Ok(found);
+        }
+        self.fetch()?;
+        self.try_resolve_ref(r)?
+            .with_context(|| format!("`{r}` does not resolve to a commit, even after fetching"))
+    }
+
+    /// `Ok(None)` means "not present locally"; `Err` means ambiguous, which a
+    /// fetch cannot fix and which must not be retried.
+    fn try_resolve_ref(&self, r: &str) -> Result<Option<(String, String)>> {
         let peel = |name: &str| -> Option<String> {
             cmd::git(
                 &["rev-parse", "--verify", "--end-of-options", &format!("{name}^{{commit}}")],
@@ -841,13 +1043,12 @@ so bootstrap it from the bare repo rather than assuming the manifest is right:
             .map(|s| s.trim().to_string())
         };
         if r.starts_with("refs/") {
-            let c = peel(r).with_context(|| format!("`{r}` does not resolve"))?;
-            return Ok((r.to_string(), c));
+            return Ok(peel(r).map(|c| (r.to_string(), c)));
         }
         if r.len() == 40 && r.chars().all(|c| c.is_ascii_hexdigit())
             && let Some(c) = peel(r)
         {
-            return Ok((r.to_string(), c));
+            return Ok(Some((r.to_string(), c)));
         }
         let tag = peel(&format!("refs/tags/{r}"));
         let head = peel(&format!("refs/heads/{r}"));
@@ -855,9 +1056,9 @@ so bootstrap it from the bare repo rather than assuming the manifest is right:
             (Some(_), Some(_)) => bail!(
                 "`{r}` is both a tag and a branch; pin it as refs/tags/{r} or refs/heads/{r}"
             ),
-            (Some(c), None) => Ok((format!("refs/tags/{r}"), c)),
-            (None, Some(c)) => Ok((format!("refs/heads/{r}"), c)),
-            (None, None) => bail!("`{r}` does not resolve to a commit"),
+            (Some(c), None) => Ok(Some((format!("refs/tags/{r}"), c))),
+            (None, Some(c)) => Ok(Some((format!("refs/heads/{r}"), c))),
+            (None, None) => Ok(None),
         }
     }
 
@@ -908,13 +1109,23 @@ the window prune must not have. The pinned branch of the selection becomes:
 ```rust
     let dirname = names::checkout_dir(&git_ref)?;
     let (canonical, commit) = lib.resolve_ref(&git_ref)?;
-    if let Some(prev) = meta.worktrees.get(&dirname)
+    let previous = meta.worktrees.get(&dirname).cloned();
+    if let Some(prev) = &previous
         && prev.resolved_ref != canonical
     {
         bail!(
             "`{git_ref}` previously resolved to {} and now resolves to {canonical}; \
              the pin changed kind upstream — re-pin it explicitly",
             prev.resolved_ref
+        );
+    }
+    if let Some(prev) = &previous
+        && prev.commit != commit
+        && canonical.starts_with("refs/tags/")
+    {
+        eprintln!(
+            "docm: tag {git_ref} moved {} → {commit} upstream; {dirname} re-pointed",
+            prev.commit
         );
     }
     let (path, repaired) = lib.ensure_at(&dirname, &commit)?;
@@ -927,27 +1138,88 @@ the window prune must not have. The pinned branch of the selection becomes:
             commit: commit.clone(),
         },
     );
+    let status = if repaired { Status::Repaired } else { Status::Ok };
 ```
 
+`previous` is cloned up front because the moved-tag report in Step 7 and the
+kind-change guard both read it, and both must see the pre-update value —
+`WorktreeMeta` derives `Clone` for exactly this. `status` flows into the
+returned `Resolved`, which is what the `Status::Repaired` assertion reads.
+
 `default_worktree` and every `ensure_worktree("default", …)` call site are deleted.
+
+Wrap the whole body as `resolve_locked`, and add the thin outer entry point:
+
+```rust
+pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Resolved> {
+    locks::with_lib(cache_root, &entry.name, || {
+        resolve_locked(entry, start, cache_root)
+    })
+}
+```
 
 - [ ] **Step 6: Run the tests**
 
 Run: `cargo test -p devkit-docs --test resolve`
 Expected: PASS.
 
-- [ ] **Step 7: Add `--prune-tags` and the moved-tag report**
+- [ ] **Step 7: Add `--prune-tags` and test the moved and deleted tag paths**
 
-In `LibCache::fetch`, add `--prune-tags` to the argument list. In `resolve`,
-when `meta.worktrees[dirname].commit` differs from the freshly resolved commit
-for a `refs/tags/` ref, print to stderr before re-pointing:
+In `LibCache::fetch`, add `--prune-tags` to the argument list. The moved-tag
+report itself is already in Step 5's body. Append the tests that prove both
+directions:
 
 ```rust
-eprintln!(
-    "docm: tag {git_ref} moved {} → {commit} upstream; {dirname} re-pointed",
-    prev.commit
-);
+#[test]
+fn a_tag_moved_upstream_is_reported_and_the_checkout_follows_it() {
+    let base = common::unique_tmp("movedtag");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let entry = devkit_docs::manifest::LibEntry {
+        name: "up".into(),
+        ecosystem: Some(devkit_docs::manifest::Ecosystem::Git),
+        repo: Some(repo.clone()),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let first = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+
+    // Force-move the tag upstream onto the second commit.
+    devkit_common::cmd::capture("git", &["tag", "-f", "v1.0.0", "v1.1.0"], Some(&repo)).unwrap();
+
+    let second = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    assert_ne!(first.commit, second.commit, "the checkout must follow the moved tag");
+    assert_eq!(second.path, first.path, "the ref names the directory, so it is reused");
+}
+
+#[test]
+fn a_ref_published_after_the_last_fetch_resolves_without_a_manual_sync() {
+    let base = common::unique_tmp("newtag");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let mut entry = devkit_docs::manifest::LibEntry {
+        name: "up".into(),
+        ecosystem: Some(devkit_docs::manifest::Ecosystem::Git),
+        repo: Some(repo.clone()),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+
+    // Published upstream only after the clone — the local repo has never seen it.
+    devkit_common::cmd::capture("git", &["tag", "v3.0.0", "v1.1.0"], Some(&repo)).unwrap();
+
+    entry.r#ref = Some("v3.0.0".into());
+    let r = devkit_docs::resolve::resolve(&entry, &base, &cache)
+        .expect("a miss must fetch once and retry before failing");
+    assert!(r.path.ends_with("v3.0.0"));
+}
 ```
+
+`common::fixture_repo` must therefore build a repo with at least two tagged
+commits (`v1.0.0` → `// v1`, `v1.1.0` → `// v2`) and return a path usable as
+both a clone source and a `cwd` for further `git` calls. Extend it if it does
+not already; every test in this task depends on that shape.
 
 - [ ] **Step 8: Run the gate and commit**
 
@@ -1070,15 +1342,150 @@ fn competing_js_lockfiles_are_selected_by_packagemanager_and_otherwise_error() {
 #[test]
 fn a_uv_fork_recording_two_versions_is_a_hard_error() {
     let root = common::unique_tmp("uv-fork");
+    // The app depends on httpx, and a marker fork records two resolutions of
+    // it. Without the dependency edge this fixture would prove nothing — the
+    // error has to come from the package the workspace actually declares.
     std::fs::write(
         root.join("uv.lock"),
-        "version = 1\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\n[[package.dev-dependencies]]\n\n[[package]]\nname = \"httpx\"\nversion = \"0.27.0\"\n\n[[package]]\nname = \"httpx\"\nversion = \"0.28.1\"\n",
+        r#"version = 1
+
+[[package]]
+name = "app"
+version = "0.1.0"
+dependencies = [
+    { name = "httpx" },
+]
+
+[[package]]
+name = "httpx"
+version = "0.27.0"
+
+[[package]]
+name = "httpx"
+version = "0.28.1"
+"#,
     )
     .unwrap();
     std::fs::write(root.join("pyproject.toml"), "[project]\nname = \"app\"\ndependencies = [\"httpx\"]\n").unwrap();
 
     let err = importers::select(&root, Ecosystem::Python, "httpx").unwrap_err().to_string();
     assert!(err.contains("0.27.0") && err.contains("0.28.1"), "{err}");
+}
+
+#[test]
+fn a_uv_dev_dependency_resolves_like_a_runtime_one() {
+    let root = common::unique_tmp("uv-dev");
+    std::fs::write(
+        root.join("uv.lock"),
+        r#"version = 1
+
+[[package]]
+name = "app"
+version = "0.1.0"
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[[package]]
+name = "pytest"
+version = "8.3.2"
+"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("pyproject.toml"), "[project]\nname = \"app\"\n").unwrap();
+
+    assert_eq!(importers::select(&root, Ecosystem::Python, "pytest").unwrap().version, "8.3.2");
+}
+
+#[test]
+fn a_cargo_member_gets_its_own_dependency_not_another_members() {
+    let root = common::unique_tmp("cargo-ws");
+    std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = [\"a\", \"b\"]\n").unwrap();
+    std::fs::write(
+        root.join("Cargo.lock"),
+        r#"version = 4
+
+[[package]]
+name = "a"
+version = "0.1.0"
+dependencies = ["serde"]
+
+[[package]]
+name = "b"
+version = "0.1.0"
+
+[[package]]
+name = "serde"
+version = "1.0.210"
+"#,
+    )
+    .unwrap();
+    for (m, dep) in [("a", "serde = \"1\"\n"), ("b", "")] {
+        let d = root.join(m);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("Cargo.toml"), format!("[package]\nname = \"{m}\"\n\n[dependencies]\n{dep}")).unwrap();
+    }
+
+    assert_eq!(
+        importers::select(&root.join("a"), Ecosystem::Rust, "serde").unwrap().version,
+        "1.0.210"
+    );
+    // `b` does not depend on serde, even though the lockfile contains it.
+    assert!(importers::select(&root.join("b"), Ecosystem::Rust, "serde").is_err());
+}
+
+#[test]
+fn npm_resolves_the_nearest_nested_copy_walking_up_from_the_workspace() {
+    let root = common::unique_tmp("npm-nested");
+    std::fs::write(
+        root.join("package-lock.json"),
+        r#"{
+  "lockfileVersion": 3,
+  "packages": {
+    "": { "name": "root" },
+    "apps/api": { "name": "@app/api", "dependencies": { "h3": "^1.0.0" } },
+    "apps/api/node_modules/h3": { "version": "1.15.11" },
+    "node_modules/h3": { "version": "2.0.1" }
+  }
+}"#,
+    )
+    .unwrap();
+    let ws = root.join("apps/api");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join("package.json"), r#"{"name":"@app/api","dependencies":{"h3":"^1.0.0"}}"#).unwrap();
+
+    // The hoisted root copy is 2.0.1; the workspace runs its own nested 1.15.11.
+    assert_eq!(importers::select(&ws, Ecosystem::Js, "h3").unwrap().version, "1.15.11");
+}
+
+#[test]
+fn a_pnpm_alias_locator_resolves_to_the_aliased_packages_version() {
+    let root = common::unique_tmp("pnpm-alias");
+    std::fs::write(
+        root.join("pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3-v2:\n        specifier: npm:h3@2.0.1\n        version: h3@2.0.1\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("package.json"), r#"{"name":"root","dependencies":{"h3-v2":"npm:h3@2.0.1"}}"#).unwrap();
+
+    // Declared under the alias, so `h3` itself is not a declared dependency.
+    assert!(importers::select(&root, Ecosystem::Js, "h3").is_err());
+    assert_eq!(importers::select(&root, Ecosystem::Js, "h3-v2").unwrap().version, "2.0.1");
+}
+
+#[test]
+fn a_dev_dependency_resolves_in_every_js_format() {
+    let root = common::unique_tmp("js-dev");
+    std::fs::write(
+        root.join("pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      vitest:\n        specifier: ^3.2.0\n        version: 3.2.4\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("package.json"), r#"{"name":"root","devDependencies":{"vitest":"^3.2.0"}}"#).unwrap();
+
+    assert_eq!(importers::select(&root, Ecosystem::Js, "vitest").unwrap().version, "3.2.4");
 }
 ```
 
@@ -1117,24 +1524,282 @@ pub fn select(start: &Path, eco: Ecosystem, package: &str) -> Result<Selection> 
 }
 ```
 
-Implementation requirements, each covered by a test above:
+Shared helpers — every format needs them:
 
-- **`js`**: walk up from `start` for the nearest `package.json`; walk up from
-  there for the lockfile directory. Choose the lockfile by `packageManager`
-  (`bun` → `bun.lock`, `pnpm` → `pnpm-lock.yaml`, `npm`/`yarn` →
-  `package-lock.json`); with no `packageManager`, exactly one present is used and
-  two or more is an error naming each file and the version it resolves to.
-- **pnpm**: read `importers.<rel-workspace>.{dependencies,devDependencies,optionalDependencies}.<pkg>.version`; strip a trailing `(…)` peer suffix; follow an alias locator (`npm:other@1.2.3`) to its package identity.
-- **bun**: the workspace's own declaration in `workspaces.<rel>.{dependencies,devDependencies,optionalDependencies,peerDependencies}` names the key to look up; then `packages["<workspace-name>/<pkg>"]` if present, else `packages["<pkg>"]`. Looking up the declared *key* is what makes an alias unreachable unless declared.
-- **npm**: require `packages.<rel-workspace>` to declare the package, then resolve the nearest `packages["<dir>/node_modules/<pkg>"]` walking `<dir>` upward from the workspace to the root.
-- **cargo**: find the member's `[[package]]` entry by the workspace `Cargo.toml`'s `package.name`, then resolve its `dependencies` entry against the lock's package set.
-- **uv**: same shape over `uv.lock`, reading `dependencies`, `[package.dev-dependencies]` and optional-dependency tables. More than one version for the package is an error listing them.
-- Not declared by the workspace → error: `"<ws> does not declare <pkg> (it is transitive); pin the version with --ref"`, listing each candidate version and the dependent requiring it.
+```rust
+/// Nearest ancestor of `start` (inclusive) containing `file`.
+fn find_up(start: &Path, file: &str) -> Option<PathBuf> {
+    start.ancestors().find(|d| d.join(file).is_file()).map(Path::to_path_buf)
+}
+
+/// Lockfile-relative workspace key: "apps/api", or "" for the lockfile root.
+/// pnpm writes "." for the root importer; callers normalize.
+fn rel_key(lock_dir: &Path, ws: &Path) -> Result<String> {
+    let rel = ws.strip_prefix(lock_dir)
+        .with_context(|| format!("{} is not under {}", ws.display(), lock_dir.display()))?;
+    Ok(rel.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/"))
+}
+
+fn undeclared(ws: &Path, package: &str, candidates: &[String]) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} does not declare `{package}` (it is transitive); pin the version with --ref.\n\
+         versions present in the lockfile: {}",
+        ws.display(),
+        if candidates.is_empty() { "none".into() } else { candidates.join(", ") }
+    )
+}
+```
+
+**`js`** — locate the workspace, then the lockfile, then choose among lockfiles:
+
+```rust
+fn js(start: &Path, package: &str) -> Result<Selection> {
+    let ws = find_up(start, "package.json")
+        .with_context(|| format!("no package.json at or above {}", start.display()))?;
+    const LOCKS: [(&str, &str); 3] =
+        [("bun", "bun.lock"), ("pnpm", "pnpm-lock.yaml"), ("npm", "package-lock.json")];
+    let lock_dir = ws
+        .ancestors()
+        .find(|d| LOCKS.iter().any(|(_, f)| d.join(f).is_file()))
+        .with_context(|| format!("no JS lockfile at or above {}", ws.display()))?
+        .to_path_buf();
+
+    let present: Vec<&(&str, &str)> =
+        LOCKS.iter().filter(|(_, f)| lock_dir.join(f).is_file()).collect();
+    let chosen = match present.as_slice() {
+        [] => unreachable!("lock_dir was chosen because one exists"),
+        [only] => **only,
+        _ => {
+            // `packageManager` may sit on the workspace or on any package.json
+            // up to the lockfile root; the nearest declaration wins.
+            let pm = ws
+                .ancestors()
+                .take_while(|d| d.starts_with(&lock_dir) || *d == lock_dir)
+                .filter_map(|d| std::fs::read_to_string(d.join("package.json")).ok())
+                .filter_map(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .find_map(|v| v.get("packageManager")?.as_str().map(str::to_string));
+            let name = pm
+                .as_deref()
+                .map(|p| p.split('@').next().unwrap_or(p).to_string());
+            match name.and_then(|n| present.iter().find(|(m, _)| *m == n).copied()) {
+                Some(hit) => *hit,
+                None => bail!(
+                    "{} holds {} and no `packageManager` field says which one governs; \
+                     add \"packageManager\" to package.json",
+                    lock_dir.display(),
+                    present.iter().map(|(_, f)| *f).collect::<Vec<_>>().join(" and ")
+                ),
+            }
+        }
+    };
+
+    let rel = rel_key(&lock_dir, &ws)?;
+    match chosen.0 {
+        "bun" => bun(&lock_dir, &ws, &rel, package),
+        "pnpm" => pnpm(&lock_dir, &ws, &rel, package),
+        _ => npm(&lock_dir, &ws, &rel, package),
+    }
+}
+
+const DEP_CLASSES: [&str; 4] =
+    ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+
+/// The key the workspace declares this package under. An alias is declared under
+/// its alias, so looking up the declared key is what keeps `h3-v2` from
+/// answering a query for `h3`.
+fn declared_key(entry: &serde_json::Value, package: &str) -> Option<String> {
+    DEP_CLASSES
+        .iter()
+        .filter_map(|c| entry.get(c)?.as_object())
+        .find(|o| o.contains_key(package))
+        .map(|_| package.to_string())
+}
+```
+
+**bun** — `workspaces.<rel>` declares, `packages` resolves:
+
+```rust
+fn bun(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selection> {
+    let raw = std::fs::read_to_string(lock_dir.join("bun.lock"))?;
+    // bun.lock is JSONC: trailing commas and // comments are legal.
+    let v: serde_json::Value = json5_ish(&raw).context("parsing bun.lock")?;
+    let entry = v.get("workspaces").and_then(|w| w.get(rel))
+        .with_context(|| format!("bun.lock has no workspace entry for `{rel}`"))?;
+    let key = declared_key(entry, package)
+        .ok_or_else(|| undeclared(ws, package, &bun_candidates(&v, package)))?;
+
+    let pkgs = v.get("packages").and_then(|p| p.as_object())
+        .context("bun.lock has no `packages` table")?;
+    let name = entry.get("name").and_then(|n| n.as_str()).unwrap_or_default();
+    let scoped = format!("{name}/{key}");
+    let row = pkgs.get(&scoped).or_else(|| pkgs.get(&key))
+        .with_context(|| format!("bun.lock has no package row for `{key}`"))?;
+    let spec = row.get(0).and_then(|s| s.as_str())
+        .context("a bun package row starts with its `name@version` spec")?;
+    let version = spec.rsplit_once('@').map(|(_, v)| v)
+        .with_context(|| format!("`{spec}` is not a name@version spec"))?;
+    Ok(Selection {
+        workspace: ws.to_path_buf(),
+        version: version.to_string(),
+        source: format!("{rel} installs it (bun.lock)"),
+    })
+}
+
+/// Every version of `package` the lockfile holds, for the undeclared error.
+fn bun_candidates(v: &serde_json::Value, package: &str) -> Vec<String> {
+    v.get("packages").and_then(|p| p.as_object()).map(|o| {
+        o.values()
+            .filter_map(|r| r.get(0)?.as_str())
+            .filter_map(|s| s.rsplit_once('@'))
+            .filter(|(n, _)| *n == package)
+            .map(|(_, ver)| ver.to_string())
+            .collect()
+    }).unwrap_or_default()
+}
+```
+
+`json5_ish` strips `//` line comments outside strings and trailing commas before
+`serde_json::from_str`. Write it as a small scanner in this module and unit-test
+it on a `bun.lock` containing both; do not pull in a JSON5 crate.
+
+**pnpm** — the importer graph, with peer qualifiers and aliases:
+
+```rust
+fn pnpm(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selection> {
+    let v: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(lock_dir.join("pnpm-lock.yaml"))?)
+            .context("parsing pnpm-lock.yaml")?;
+    let key = if rel.is_empty() { "." } else { rel };
+    let imp = v.get("importers").and_then(|i| i.get(key))
+        .with_context(|| format!("pnpm-lock.yaml has no importer `{key}`"))?;
+    let found = ["dependencies", "devDependencies", "optionalDependencies"]
+        .iter()
+        .find_map(|c| imp.get(c)?.get(package))
+        .ok_or_else(|| undeclared(ws, package, &[]))?;
+    let locator = found.get("version").and_then(|s| s.as_str())
+        .context("an importer entry carries a `version` locator")?;
+
+    // `3.2.4(@types/node@25.5.0)` -> `3.2.4`; `h3@2.0.1` (alias) -> `2.0.1`.
+    let bare = locator.split_once('(').map_or(locator, |(head, _)| head);
+    let version = bare.rsplit_once('@').map_or(bare, |(_, v)| v);
+    Ok(Selection {
+        workspace: ws.to_path_buf(),
+        version: version.to_string(),
+        source: format!("{key} installs it (pnpm-lock.yaml)"),
+    })
+}
+```
+
+**npm** — declared by the workspace, resolved at the nearest `node_modules`:
+
+```rust
+fn npm(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selection> {
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(lock_dir.join("package-lock.json"))?)
+            .context("parsing package-lock.json")?;
+    let pkgs = v.get("packages").and_then(|p| p.as_object())
+        .context("package-lock.json has no `packages` table")?;
+    let entry = pkgs.get(rel)
+        .with_context(|| format!("package-lock.json has no entry for `{rel}`"))?;
+    declared_key(entry, package)
+        .ok_or_else(|| undeclared(ws, package, &[]))?;
+
+    // Nearest wins: apps/api/node_modules/h3 before the hoisted node_modules/h3.
+    let mut dir = rel.to_string();
+    loop {
+        let probe = if dir.is_empty() {
+            format!("node_modules/{package}")
+        } else {
+            format!("{dir}/node_modules/{package}")
+        };
+        if let Some(row) = pkgs.get(&probe)
+            && let Some(ver) = row.get("version").and_then(|s| s.as_str())
+        {
+            return Ok(Selection {
+                workspace: ws.to_path_buf(),
+                version: ver.to_string(),
+                source: format!("{rel} installs it via {probe} (package-lock.json)"),
+            });
+        }
+        match dir.rsplit_once('/') {
+            Some((head, _)) => dir = head.to_string(),
+            None if dir.is_empty() => break,
+            None => dir = String::new(),
+        }
+    }
+    bail!("package-lock.json resolves no `{package}` reachable from `{rel}`")
+}
+```
+
+**cargo** and **uv** share a shape — a `[[package]]` array where the member's own
+entry lists its dependencies:
+
+```rust
+#[derive(serde::Deserialize)]
+struct LockPkg {
+    name: String,
+    version: String,
+    #[serde(default)]
+    dependencies: Vec<toml::Value>,
+}
+
+/// Cargo writes `"serde"` or `"serde 1.0.210"`; uv writes `{ name = "httpx" }`.
+fn dep_name(v: &toml::Value) -> Option<&str> {
+    v.as_str()
+        .map(|s| s.split_whitespace().next().unwrap_or(s))
+        .or_else(|| v.get("name")?.as_str())
+}
+
+fn from_package_array(
+    lock: &Path, ws: &Path, member: &str, package: &str, extra_deps: &[String],
+) -> Result<Selection> {
+    #[derive(serde::Deserialize)]
+    struct Lock { #[serde(default, rename = "package")] packages: Vec<LockPkg> }
+    let l: Lock = toml::from_str(&std::fs::read_to_string(lock)?)
+        .with_context(|| format!("parsing {}", lock.display()))?;
+
+    let own = l.packages.iter().find(|p| p.name == member)
+        .with_context(|| format!("{} has no `[[package]]` for `{member}`", lock.display()))?;
+    let declares = own.dependencies.iter().filter_map(dep_name).any(|n| n == package)
+        || extra_deps.iter().any(|n| n == package);
+
+    let versions: Vec<String> =
+        l.packages.iter().filter(|p| p.name == package).map(|p| p.version.clone()).collect();
+    if !declares {
+        return Err(undeclared(ws, package, &versions));
+    }
+    match versions.as_slice() {
+        [] => bail!("{} declares `{package}` but the lockfile records no version", ws.display()),
+        [one] => Ok(Selection {
+            workspace: ws.to_path_buf(),
+            version: one.clone(),
+            source: format!("{member} depends on it ({})", lock.display()),
+        }),
+        many => bail!(
+            "{} records {} versions of `{package}` ({}); a resolution fork cannot be \
+             disambiguated from the lockfile — pin one with --ref",
+            lock.display(), many.len(), many.join(", ")
+        ),
+    }
+}
+```
+
+`cargo` reads `package.name` from the nearest `Cargo.toml` and calls
+`from_package_array` with the nearest `Cargo.lock` and no extras. `uv` reads
+`project.name` from the nearest `pyproject.toml`, collects names out of the
+`[package.dev-dependencies]` and `[package.optional-dependencies]` tables of the
+member's own entry into `extra_deps`, and calls the same function with `uv.lock`.
+
+Each helper returns `Err` for every shape it does not recognize. Nothing in this
+module may guess: an unparsed field is an error, never a fallback.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p devkit-docs --test importers`
-Expected: PASS, 5 tests.
+Expected: PASS, 10 tests — one per format rule, plus the negative cases.
 
 - [ ] **Step 5: Call it from `resolve`**
 
@@ -1165,7 +1830,23 @@ git commit -m "fix(docs): resolve versions from the workspace importer graph"
 
 **Interfaces:**
 - Consumes: `importers::Selection::workspace`, `locks::with_lib`, `locks::is_control`.
-- Produces: `RefRow { project, lib, version, git_ref: String, commit: String, resolved_at }` with `#[serde(default)]` on `git_ref`/`commit`; `Data::record(workspace, lib, dirname, git_ref, commit)`; `Data::retire_legacy(workspace, lib)`.
+- Produces:
+  - `RefRow { project, lib, version, git_ref: String, commit: String, resolved_at }`, `#[serde(default)]` on `git_ref` and `commit` so a 0.12.x `registry.json` still deserializes
+  - `Data::record(&mut self, workspace: &str, lib: &str, dirname: &str, git_ref: &str, commit: &str)` — `dirname` is stored in the `version` field, which now holds the checkout directory name rather than a bare version
+  - `Data::record_legacy(&mut self, project: &str, lib: &str, version: &str)`
+  - `Data::retire_legacy(&mut self, workspace: &str, lib: &str)`
+  - `refs::row_dirname(row: &RefRow) -> String` — the checkout directory a row points at
+
+**Callers this task must update — all of them, in this commit:**
+`crates/devkit-docs/src/resolve.rs:113` is the only production call, but
+`refs.rs` has seven in its own `#[cfg(test)]` module (lines 260-262, 273,
+287-289, 326, 332-333, 357-358, 363-364). Every one takes three arguments today.
+Leaving any behind fails the merge gate at this task's boundary.
+
+The `version` field keeps its name (renaming it would break the on-disk schema)
+but changes meaning: it now stores the checkout dirname. `row_dirname` exists so
+no caller re-derives it — the old `current_version` computed `"default"` from an
+entry, and that name no longer describes what it returns.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1185,26 +1866,78 @@ fn a_legacy_row_protects_default_until_a_real_materialization_retires_it() {
     let mut d = devkit_docs::refs::Data::default();
     // A 0.12.x row: empty commit, keyed by the lockfile directory.
     d.record_legacy("/repo", "h3", "default");
-    assert_eq!(devkit_docs::refs::current_for_row(&d.rows[0]), "default");
+    assert_eq!(devkit_docs::refs::row_dirname(&d.rows[0]), "default");
 
     d.record("/repo/apps/api", "h3", "v1.15.11", "v1.15.11", "aaa");
     d.retire_legacy("/repo/apps/api", "h3");
     assert_eq!(d.rows.len(), 1);
     assert_eq!(d.rows[0].version, "v1.15.11");
 }
-```
 
-Append to `crates/devkit-docs/tests/concurrency.rs` — the race the lock must
-close, using the same multiprocess pattern as `tests/refs_race.rs`:
-
-```rust
 #[test]
-fn prune_cannot_delete_a_directory_a_concurrent_resolve_just_materialized() {
-    // Child holds the library lock, materializes, sleeps before recording;
-    // parent runs prune. Prune must block on the lock, then observe the row.
-    // See tests/refs_race.rs for the process-spawn harness this mirrors.
+fn prune_never_enumerates_a_control_entry_as_a_library() {
+    let root = common::unique_tmp("control");
+    std::fs::create_dir_all(root.join("registry.locks")).unwrap();
+    std::fs::write(root.join("registry.json"), "{}").unwrap();
+    let plan = devkit_docs::refs::plan_for_cache(&root, &devkit_docs::refs::Data::default())
+        .unwrap();
+    assert!(
+        plan.is_empty(),
+        "the registry's own files are not unreferenced libraries: {plan:?}"
+    );
 }
 ```
+
+Append to `crates/devkit-docs/tests/concurrency.rs`. This is the decisive test
+for §9 — write it in full, not as a sketch. `tests/refs_race.rs` already spawns
+the current test binary as a child with an env marker; copy that harness:
+
+```rust
+/// The child re-enters this same test binary with DOCM_RACE_CHILD set, so the
+/// two contenders are genuinely separate processes holding separate fds —
+/// two threads would share one file description and never contend.
+#[test]
+fn prune_cannot_delete_a_directory_a_concurrent_resolve_just_materialized() {
+    if std::env::var("DOCM_RACE_CHILD").is_ok() {
+        return; // the child body runs from main() below, not as a test
+    }
+    let root = common::unique_tmp("race");
+    let repo = common::fixture_repo(&root.join("src"));
+    let cache = root.join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    // Child: take the library lock, materialize, hold briefly, then record.
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .env("DOCM_RACE_CHILD", "1")
+        .env("DOCM_RACE_CACHE", &cache)
+        .env("DOCM_RACE_REPO", &repo)
+        .spawn()
+        .unwrap();
+
+    // Poll for the lock file rather than sleeping: a loaded CI runner starts
+    // the child later than any fixed interval allows.
+    let lock = devkit_docs::locks::lock_path(&cache, "up").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !lock.exists() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+
+    // Prune must block on the library lock, so by the time it plans, the
+    // child's row is committed and the fresh checkout is referenced.
+    let removed = devkit_docs::refs::prune_with_lock(&cache).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert!(
+        !removed.iter().any(|r| r.contains("v1.0.0")),
+        "prune deleted a checkout a concurrent resolve had just materialized: {removed:?}"
+    );
+    assert!(cache.join("up").join("v1.0.0").is_dir());
+}
+```
+
+Add the child body to the test file's `main`-equivalent — `tests/refs_race.rs`
+shows the pattern this repo uses for that. The child calls
+`locks::with_lib(&cache, "up", …)`, inside it runs `resolve::resolve_locked`,
+sleeps 200ms *before* committing the registry row, then commits.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -1214,18 +1947,25 @@ Expected: FAIL to compile — `record` takes three arguments.
 - [ ] **Step 3: Implement**
 
 - `RefRow` gains `git_ref` and `commit`, both `#[serde(default)]`.
-- `Data::record` takes the workspace path and the new fields.
+- `Data::record` takes the workspace path and the new fields; update the one
+  production caller and all seven `refs.rs` test callers listed above.
 - `Data::record_legacy` writes a row with an empty `commit` (test support and
   the read path for 0.12.x data).
-- `refs::current_version` computes the dirname the resolver would produce —
-  except for a legacy row (empty `commit`), which keeps returning `default`.
+- `refs::row_dirname` returns `row.version`, which is the dirname the resolver
+  produced — and for a legacy row (empty `commit`) that value is `default`,
+  so the same accessor covers both without a special case.
 - `Data::retire_legacy(workspace, lib)` drops any row for `lib` whose project is
   an ancestor directory of `workspace` and whose `commit` is empty. Call it in
   the same registry commit that records the new row.
 - Delete the `d != "default"` exemption in `plan`.
-- `plan_for_cache` skips any cache-root entry where `locks::is_control(name)`.
-- `cmd_prune` wraps each library's recheck and `remove_worktree` in
-  `locks::with_lib`.
+- `plan_for_cache` skips any cache-root entry where `locks::is_control(name)`,
+  and builds its `LibCache` with `from_dir`, not `new` — the entry name is
+  already encoded and `new` would reject the `~`.
+- `cmd_prune` becomes `refs::prune_with_lock`, which for each library takes
+  `locks::with_lib` and *then* re-reads the reference registry inside the hold
+  before planning. Planning from a snapshot taken before the lock is what lets
+  it delete a checkout a concurrent resolve committed in the gap. The recheck
+  and `remove_worktree` both run under that same hold.
 
 - [ ] **Step 4: Run tests, gate, commit**
 
@@ -1309,20 +2049,103 @@ Expected: FAIL to compile.
 
 - [ ] **Step 3: Implement `upgrade::run`**
 
-Under `locks::with_lib` per migrated library:
+`locks::with_lib` validates a *logical* name, and a 0.12.x cache can hold
+directories that fail that validation — including a literal `a~b`. Add the
+sibling that locks by directory name instead, and use it here:
 
-1. Enumerate cache-root entries, skipping any where `locks::is_control(name)`.
-2. An entry that is a directory *without* `repo.git` but whose children contain
-   `repo.git` is a nested scope: for each child, rename
-   `<root>/<scope>/<pkg>` to `<root>/<scope>~<pkg>`, then run
-   `git worktree repair <path>` from the moved bare repo for every worktree
-   under it, then verify each worktree's HEAD resolves; remove and
-   re-materialize any that will not repair. Remove the emptied `<scope>` dir.
-3. For every library directory, if `meta.toml` has no `origin`, read
-   `git config --get remote.origin.url` from its bare repo and write it.
+```rust
+pub fn with_lib_dir<T>(cache_root: &Path, dirname: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    hold(&cache_root.join(DIR).join(format!("{dirname}{SUFFIX}")), f)
+}
+```
+
+`upgrade::run` is a preflight-then-act state machine. It must never leave the
+cache half-migrated, so **nothing moves until every rename is known to be safe**:
+
+*Phase 1 — survey.* Enumerate cache-root entries, skipping `locks::is_control`.
+Classify each: a directory containing `repo.git` is already a library; a
+directory whose *children* contain `repo.git` is a nested 0.12.x scope;
+anything else is left alone and reported.
+
+*Phase 2 — preflight, no mutation.* Build the full list of
+`<scope>/<pkg>` → `<scope>~<pkg>` renames. Refuse the whole run, changing
+nothing, if any of:
+
+- the target already exists — `@scope~pkg` may have been created by a newer
+  docm before the old tree was migrated. Report both paths and stop; merging
+  two caches is not something to guess at.
+- two sources map to one target under `names::fold_key`, or a target folds onto
+  an existing entry. On a case-folding host the second rename would silently
+  land inside the first.
+- the source name does not validate as a library once decoded.
+
+Report every conflict in one error, not the first — an operator fixing these
+wants the whole list.
+
+*Phase 3 — act, per library, under `with_lib_dir`.* For each rename:
+
+1. `fs::rename` the directory.
+2. From the moved `repo.git`, run `git worktree repair <path>` for every
+   worktree under it, then `git -C <path> rev-parse HEAD` to confirm the repair
+   took. `worktree repair` fixes both reciprocal links but reports success even
+   where the worktree is unusable, so the `rev-parse` is the actual check.
+3. A worktree that still will not resolve is removed
+   (`git worktree remove --force`, then `fs::remove_dir_all` if that fails) and
+   recorded in the returned lines as needing re-materialization. It is *not*
+   re-cloned here — `resolve` will rebuild it on next use, under its own lock.
+4. Remove the emptied `<scope>` directory, ignoring `ENOTEMPTY` (a sibling
+   scope member may not have been a library).
+
+*Phase 4.* For every library directory, if `meta.toml` has no `origin`, read
+`git config --get remote.origin.url` from its bare repo and write it via the
+atomic `write_meta`. A bare repo with no origin is reported, not guessed at.
 
 Call `upgrade::run` once at the start of `docm`'s `main`, printing each returned
-line to stderr.
+line to stderr. It returns `Ok(vec![])` when there was nothing to do, so the
+common case costs one `read_dir`.
+
+- [ ] **Step 3b: Test the states the survey has to distinguish**
+
+Add to `crates/devkit-docs/tests/upgrade.rs`:
+
+```rust
+#[test]
+fn a_rename_whose_target_already_exists_migrates_nothing() {
+    let base = common::unique_tmp("upgrade-collide");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+
+    // Old nested form and the new encoded form both present.
+    let old = cache.join("@scope/pkg");
+    std::fs::create_dir_all(&old).unwrap();
+    devkit_common::cmd::capture(
+        "git", &["clone", "--bare", &repo, old.join("repo.git").to_str().unwrap()], None,
+    ).unwrap();
+    let new = cache.join("@scope~pkg");
+    std::fs::create_dir_all(&new).unwrap();
+
+    let err = devkit_docs::upgrade::run(&cache).unwrap_err().to_string();
+    assert!(err.contains("@scope~pkg"), "the error must name the target: {err}");
+    // Nothing moved: a refused migration leaves the cache exactly as it was.
+    assert!(old.join("repo.git").is_dir());
+}
+
+#[test]
+fn an_already_migrated_cache_is_left_alone() {
+    let base = common::unique_tmp("upgrade-noop");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let lib = cache.join("@scope~pkg");
+    std::fs::create_dir_all(&lib).unwrap();
+    devkit_common::cmd::capture(
+        "git", &["clone", "--bare", &repo, lib.join("repo.git").to_str().unwrap()], None,
+    ).unwrap();
+
+    // Only the origin backfill runs, and only once.
+    assert_eq!(devkit_docs::upgrade::run(&cache).unwrap().len(), 1);
+    assert!(devkit_docs::upgrade::run(&cache).unwrap().is_empty());
+}
+```
 
 - [ ] **Step 4: Run tests, gate, commit**
 
@@ -1502,60 +2325,124 @@ git commit -m "fix(docs): refuse ambiguous ecosystems and alias rm"
 
 **Interfaces:**
 - Consumes: everything above.
+- Produces: `manifest::LibEntry` gains `#[serde(skip)] pub origin_file: Option<PathBuf>`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Give merged entries a provenance**
+
+`manifest::discover` merges the global `docs.toml` and every `devkit.toml`
+`[docs]` section into one `DocsManifest` (`manifest.rs:113-118`), and
+`Discovered` records only `project_devkit_toml` — the *write target*, not where
+each existing entry came from. `sync` cannot then tell whether a ref-less entry
+is a global one it may backfill or a project one it must not touch.
+
+Add a skipped field to `LibEntry` and stamp it as each layer loads:
+
+```rust
+    /// Which file this entry was read from. Set during `discover`, never
+    /// serialized — writing it back would put an absolute path in a manifest
+    /// that gets committed to a repo.
+    #[serde(skip)]
+    pub origin_file: Option<PathBuf>,
+```
+
+In `merge`, an overriding entry takes the overriding file's path. `#[serde(skip)]`
+gives `None` on deserialize, so `Default` covers every existing construction
+site — including all the test fixtures in the tasks above, which stay valid.
+
+- [ ] **Step 2: Write the failing tests**
 
 ```rust
 #[test]
 fn a_failed_repin_leaves_the_previous_entry_intact() {
-    // add lib at v1.0.0, then re-add with --ref does-not-exist; the manifest
-    // must still hold v1.0.0, not lose the library.
+    let base = common::unique_tmp("repin-rollback");
+    let repo = common::fixture_repo(&base.join("src"));
+    let global = base.join("docs.toml");
+    let cache = base.join("cache");
+
+    docm_add(&global, &cache, &base, "up", &repo, Some("v1.0.0")).unwrap();
+    let before = std::fs::read_to_string(&global).unwrap();
+
+    docm_add(&global, &cache, &base, "up", &repo, Some("does-not-exist"))
+        .expect_err("an unresolvable ref must fail the add");
+
+    assert_eq!(
+        std::fs::read_to_string(&global).unwrap(),
+        before,
+        "a failed re-pin must restore the previous entry byte for byte"
+    );
 }
 
 #[test]
 fn a_failed_add_of_a_new_library_leaves_the_manifest_byte_identical() {
+    let base = common::unique_tmp("add-rollback");
+    let repo = common::fixture_repo(&base.join("src"));
+    let global = base.join("docs.toml");
+    let cache = base.join("cache");
+
+    docm_add(&global, &cache, &base, "keep", &repo, Some("v1.0.0")).unwrap();
+    let before = std::fs::read_to_string(&global).unwrap();
+
+    docm_add(&global, &cache, &base, "new", &repo, Some("does-not-exist"))
+        .expect_err("an unresolvable ref must fail the add");
+
+    assert_eq!(std::fs::read_to_string(&global).unwrap(), before);
+    assert!(!before.contains("new"), "the failed entry must not survive");
 }
 ```
 
-Fill both in with the harness used by `tests/upgrade.rs`, driving
-`manifest::upsert_global` plus `resolve::resolve` the way `cmd_add` will.
+`docm_add` is a test helper in `tests/common` performing exactly the Step 3
+sequence — take the library lock once, then manifest write, then
+`resolve::resolve_locked`, then rollback on error. Both tests fail today because
+no rollback exists: the entry is written and left behind when resolution fails.
 
-- [ ] **Step 2: Implement `add`**
+- [ ] **Step 3: Implement `add`**
 
-Order, all inside `locks::with_lib` for the target library:
+Order, all inside **one** `locks::with_lib` for the target library:
 
 1. snapshot any existing same-name entry
-2. write the new entry (manifest lock, atomic)
+2. write the new entry — `locks::with_manifest`, atomic rename
 3. for a git URL with no `--ref`: resolve the default branch and store it as the
    entry's `ref`. Under `--project`, bail instead with the §6.1 text.
-4. materialize by calling `resolve::resolve`
+4. materialize by calling `resolve::resolve_locked` — **not** `resolve`, which
+   would take the library lock a second time and deadlock against the hold this
+   function is already inside
 5. on error: restore the snapshot, or remove the entry when there was none, then
    return the error
 6. on success print the multi-line block from §6.1
 
-- [ ] **Step 3: Implement `sync`**
+`rm` takes the same library lock around its manifest removal. Without it, `rm a`
+racing `add a` can interleave into an entry that names a library whose
+directory the other call is mid-way through building.
+
+- [ ] **Step 4: Implement `sync`**
 
 Per selected library, under its lock: fetch (`--prune --prune-tags`), infer and
-record a missing `ref` for a *global* git entry, re-resolve, materialize, verify,
-record. Delete `sync_default` and `LibCache::sync_default`.
+record a missing `ref`, re-resolve, materialize, verify, record — again through
+`resolve_locked`. Delete `sync_default` and `LibCache::sync_default`.
 
-- [ ] **Step 4: Implement `info` and `list`**
+Backfilling a missing `ref` is only allowed when
+`entry.origin_file` is the global `docs.toml`. A project entry read from a
+`devkit.toml` is committed to someone's repo; writing an inferred default branch
+into it would commit a machine-specific pin. For those, report the missing ref
+and leave the file alone.
+
+- [ ] **Step 5: Implement `info` and `list`**
 
 `info` prints `name`, `repo`, `ref`, `version`, `commit`, `status`, `path`, then
 layout and notes; exit non-zero on a mismatch that could not be repaired. `list`
 gains ref, commit and origin columns. Both keep `--json` in sync with the struct.
 
-- [ ] **Step 5: Add the doctor row**
+- [ ] **Step 6: Add the doctor row**
 
 `devkit doctor` sweeps every materialized checkout for HEAD correctness and
 cleanliness, skipping cache-root entries where `locks::is_control(name)`.
 
-- [ ] **Step 6: Gate and commit**
+- [ ] **Step 7: Gate and commit**
 
 ```bash
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
 git add src/bin/docm.rs crates/devkit-docs/src/manifest.rs src/bin/devkit \
-        crates/devkit-docs/tests/concurrency.rs
+        crates/devkit-docs/tests/concurrency.rs crates/devkit-docs/tests/common
 git commit -m "feat(docs): materialize on add and prove checkouts in info"
 ```
 
@@ -1600,13 +2487,26 @@ git commit -m "docs: describe version-truthful docm checkouts"
 §4 → Task 3; §5 → Tasks 9–10; §6/§6.1 → Task 11; §7 → Tasks 7–8; §9 → Task 4;
 §8 → Task 12. Spec tests 1–28 map onto Tasks 1, 3, 5, 6, 7, 8, 9, 10, 11.
 
-**Known gaps handed to the implementer.** Task 6 step 3 specifies five lockfile
-parsers as requirements rather than as finished code — each has a test above
-that pins its behaviour, and the shapes are documented in the spec's §3 table.
-Task 7 and Task 11 leave two multiprocess race harnesses as sketches pointing at
-`tests/refs_race.rs`, which already contains the spawn pattern to copy.
+**Known gaps handed to the implementer.** Two remain, both narrow and both
+named at their use site rather than left to be discovered:
 
-**Type consistency.** `LibCache::new` returns `Result` from Task 1 onward;
-`resolve::resolve` takes `&Options` from Task 9 onward, so Tasks 5–8 write calls
-without it and Task 9 updates them. `Data::record` takes five arguments from
-Task 7 onward.
+- Task 6's `json5_ish` (bun.lock is JSONC — `//` comments and trailing commas
+  are legal) is specified as a scanner to write and unit-test in place, not as
+  finished code. Every parser that consumes its output has a test above.
+- Task 7's and Task 4's multiprocess tests give the full parent body and
+  describe the child body; the spawn-and-re-enter mechanism itself is whatever
+  `tests/refs_race.rs` already does, which is why both point at it rather than
+  inventing a second harness.
+
+**Type consistency.** `LibCache::new` returns `Result` and validates a *logical*
+name from Task 1 onward; `LibCache::from_dir` is the unvalidated constructor for
+names read from disk, and mixing them up breaks prune. `resolve::resolve` takes
+`&Options` from Task 9 onward, so Tasks 5–8 write calls without it and Task 9
+updates them — including the tests written in Task 5. `Data::record` takes five
+arguments from Task 7 onward, which is one production caller and seven in
+`refs.rs`'s own test module. `resolve_locked` is the lock-free inner layer;
+`resolve` is the only wrapper, and `add`/`sync` call the inner one.
+
+**Lock discipline.** Library lock → manifest lock → registry, never reversed,
+never two library locks, never the same lock twice — `fd-lock` is not reentrant
+and a second acquisition from one process blocks forever.
