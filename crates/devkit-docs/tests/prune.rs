@@ -134,3 +134,19 @@ fn a_scoped_library_is_one_directory_and_prune_leaves_it_alone() {
     let stray = devkit_docs::cache::LibCache::new(&root, "@scope").unwrap();
     assert!(stray.version_worktrees().is_empty());
 }
+
+#[test]
+fn prune_never_schedules_a_stray_scoped_parent_for_deletion() {
+    let root = unique_tmp("scoped-prune");
+    let stray = root.join("@scope/pkg");
+    std::fs::create_dir_all(&stray).unwrap();
+
+    let plan = refs::plan_for_cache(&root, &Default::default(), &BTreeSet::new(), None).unwrap();
+
+    assert!(
+        plan.removable_libs.is_empty(),
+        "a cache-root directory without repo.git must not reach docm prune's recursive deletion: {:?}",
+        plan.removable_libs
+    );
+    assert!(stray.is_dir());
+}

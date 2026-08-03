@@ -96,10 +96,7 @@ fn ensure_dir_exact(path: &Path) -> Result<PathBuf> {
 }
 
 fn assert_dir_exact(parent: &Path, name: &str) -> Result<()> {
-    let entries: Vec<_> = std::fs::read_dir(parent)
-        .with_context(|| format!("reading {}", parent.display()))?
-        .flatten()
-        .collect();
+    let entries = read_dir_entries(parent)?;
     if entries
         .iter()
         .any(|entry| entry.file_name() == std::ffi::OsStr::new(name))
@@ -115,6 +112,21 @@ fn assert_dir_exact(parent: &Path, name: &str) -> Result<()> {
         "this filesystem folds `{name}` onto {existing:?}; docm cannot keep them apart — \\
          rename the library or pin a ref whose name does not collide"
     );
+}
+
+fn read_dir_entries(parent: &Path) -> Result<Vec<std::fs::DirEntry>> {
+    let entries =
+        std::fs::read_dir(parent).with_context(|| format!("reading {}", parent.display()))?;
+    collect_dir_entries(entries, parent)
+}
+
+fn collect_dir_entries(
+    entries: impl Iterator<Item = std::io::Result<std::fs::DirEntry>>,
+    parent: &Path,
+) -> Result<Vec<std::fs::DirEntry>> {
+    entries
+        .map(|entry| entry.with_context(|| format!("reading entry in {}", parent.display())))
+        .collect()
 }
 
 pub struct LibCache {
@@ -273,6 +285,7 @@ impl LibCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
 
     fn unique_tmp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("devkit-docs-root-{tag}-{}", std::process::id()));
@@ -306,5 +319,18 @@ mod tests {
         let root = base.join("share/devkit/docs");
         migrate_legacy_root(&root, &base.join("cache/devkit/docs"));
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn directory_entry_errors_keep_the_cache_path_context() {
+        let parent = unique_tmp("read-dir-entry");
+        let error = collect_dir_entries(
+            std::iter::once(Err(io::Error::other("entry disappeared"))),
+            &parent,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("reading entry in"));
+        assert!(error.to_string().contains(&parent.display().to_string()));
     }
 }

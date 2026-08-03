@@ -190,7 +190,11 @@ pub fn plan_for_cache(
         }
         let dirname = e.file_name().to_string_lossy().into_owned();
         let name = crate::names::decode(&dirname);
-        let dirs = cache::LibCache::from_dir(cache_root, &dirname)
+        let lib = cache::LibCache::from_dir(cache_root, &dirname);
+        if !lib.cloned() {
+            continue;
+        }
+        let dirs = lib
             .version_worktrees()
             .into_iter()
             .map(|(n, _)| n)
