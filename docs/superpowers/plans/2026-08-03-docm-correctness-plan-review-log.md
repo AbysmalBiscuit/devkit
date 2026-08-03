@@ -286,3 +286,76 @@ The other round-2 rejection — `version_worktrees` returning empty rather than
    and asserts the error, rather than stopping at the `rev-parse` check.
 
 ---
+
+## Round 4 — Codex (`gpt-5.6-sol`, effort `xhigh`)
+
+> The revised JSONC lookahead, rename-before-repair fixture, and prune snapshot rendezvous are logically sound. Five material defects remain.
+>
+> 1. **crucial — Phase 5 still cannot resume every phase-3 crash.** If rebuilding removes the worktree and prunes its admin entry, then crashes before `worktree add`, the captured name and commit existed only in memory; phase 5 sees neither a directory nor an admin entry and cannot reconstruct it.
+> Fix: Persist phase-2b records before mutation and clear them after recreation, with a crash-after-prune-before-add resume test.
+>
+> 2. **crucial — Candidate "dependents" are still wrong.** `bun_candidates` reports the candidate's own package key (`1.15.11 required by h3`), `json_candidates` reports its `node_modules` path, and pnpm scans only importers rather than package/snapshot dependency edges; the tests assert versions but not the required dependents.
+> Fix: Derive candidates from actual dependency edges for each format and add negative tests asserting the dependent names.
+>
+> 3. **crucial — Task 11's rewritten race test still passes without the `rm` library lock.** Add writes the manifest before entering `resolve_locked`, so its barrier is not "before the manifest commit"; unlocked `rm` still leaves `up` absent and `keep` present, exactly the asserted result, while both child bodies remain placeholders. Task 7 also calls unsafe process-global `set_var` under parallel libtest execution.
+> Fix: Provide complete child bodies and a completion-ordering probe that distinguishes blocked from unlocked `rm`, and run the prune contender as a child with its environment set at spawn.
+>
+> 4. **routine — Task 9's caller table and commit command contradict each other.** The table correctly requires changing `tests/concurrency.rs`, but the `git add` list omits it, so the committed Task 9 snapshot retains the old three-argument `resolve_locked` call and does not compile.
+> Fix: Add every caller-table file actually changed—especially `tests/concurrency.rs`—to Task 9's Files and `git add` lists.
+>
+> 5. **crucial — Task 5's exact-name failure is bypassed on retry.** On a normalizing filesystem, `worktree add` can succeed, the listing check can fail, and the registered checkout remains; the next call takes the existing-directory branch, skips the exact-name check, and returns that same unrepresentable checkout successfully.
+> Fix: Verify the exact stored name on both branches and unregister/remove a newly added worktree before returning an exact-name error.
+>
+> VERDICT: REVISE
+
+### Claude's response — accepted in full
+
+Two of the five are defects in code added during round 3's revision, which is
+the pattern this loop keeps surfacing: each fix opens a narrower seam than the
+one it closed.
+
+1. **The journal.** Phase 5 audits *what is on disk*, so it cannot recover a
+   worktree whose directory and admin entry are both gone — precisely the state
+   a crash between `git worktree prune` and `git worktree add` leaves. The name
+   and commit existed only in the dead process's memory. Phase 2b now persists
+   its records to
+   `<cache>/registry.locks/<encoded-lib>.migration.json` before any mutation and
+   clears the file once every listed worktree is back; phase 5 reads it first.
+   Added a test that builds exactly that state — journal present, directory
+   absent, no admin entry — and asserts recovery at the recorded commit.
+2. **Dependents.** `bun_candidates` was reporting the candidate's own lockfile
+   key, so a transitive `h3` produced "1.15.11 (required by h3)" — a package
+   named as its own dependent, which is worse than saying nothing. Split the two
+   concerns: `pair_with_declarers` takes versions and *declarers* separately,
+   and `declarers_in` walks real dependency edges — bun's workspace table plus
+   the dependency map at tuple index 2, npm's `dependencies` objects, and for
+   pnpm the `snapshots` and `packages` tables rather than importers alone.
+   Importers-only was the same mistake in a third form: it cannot see the
+   transitive dependent, which is the only case the error fires for. The bun
+   test now asserts `apps/api` appears and `required by h3` does not.
+3. **The add/rm ordering test.** Correct and the one I would have shipped
+   broken. `add`'s order is snapshot → write entry → resolve, so a barrier
+   inside `resolve_locked` fires *after* the manifest commit, and an unlocked
+   `rm` observes the finished add and lands on the same final state a locked one
+   does. Moved the hook between add's read and its write
+   (`DEVKIT_DOCS_MANIFEST_BARRIER`), where the two paths genuinely diverge —
+   documented as a table in the plan: locked `rm` leaves `up` gone, unlocked
+   `rm` writes back a stale manifest that add then overwrites, so `up` survives.
+   Wrote both child bodies. Also replaced Task 7's in-process `set_var` — it is
+   `unsafe`, process-global, and libtest runs tests on parallel threads, so it
+   would leak into whatever else was running — with a prune child process
+   receiving the variable at spawn and returning its result through a file.
+4. **Task 9's staging.** The caller table listed `tests/concurrency.rs`; the
+   `git add` beneath it did not. Added it and `tests/upgrade.rs`, and listed
+   both in the task's Files.
+5. **The exact-name bypass.** Also correct and subtle: `worktree add` succeeds,
+   the listing check fails, the folded checkout stays registered, and the *next*
+   call takes the existing-directory branch — which had no check — and returns
+   the very checkout the error existed to prevent. The check now runs on both
+   branches, and the failing path unregisters (`worktree remove --force` then
+   `worktree prune`) before erroring, so a retry cannot slip into the other
+   branch. A guard that only fires on first attempt is not a guard.
+
+Nothing was rejected this round.
+
+---

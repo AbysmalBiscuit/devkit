@@ -1146,6 +1146,16 @@ so bootstrap it from the bare repo rather than assuming the manifest is right:
     /// Returns whether it had to repair.
     pub fn ensure_at(&self, dirname: &str, commit: &str) -> Result<(PathBuf, bool)> {
         let path = self.worktree_path(dirname);
+        // Checked on *both* branches. Checking only after `worktree add` leaves
+        // a bypass: on a normalizing host the add succeeds, the check fails, and
+        // the folded checkout stays registered — so the next call takes the
+        // existing-directory branch, never re-checks, and returns the very
+        // checkout the error was meant to prevent.
+        let stored = |lib: &Self| -> Result<bool> {
+            Ok(std::fs::read_dir(&lib.dir)?
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy() == dirname))
+        };
         if !path.is_dir() {
             let p = path.to_string_lossy().into_owned();
             cmd::git(
@@ -1158,16 +1168,23 @@ so bootstrap it from the bare repo rather than assuming the manifest is right:
             // happen: a host that folds `V1.0` onto `v1.0` would otherwise let
             // two refs share one checkout, which is the failure §1 exists to
             // prevent.
-            let stored = std::fs::read_dir(&self.dir)?
-                .flatten()
-                .any(|e| e.file_name().to_string_lossy() == dirname);
-            if !stored {
+            if !stored(self)? {
+                // Leave nothing registered behind, or the retry hits the
+                // existing-directory branch and the error becomes unreachable.
+                let _ = cmd::git(&["worktree", "remove", "--force", &p], &self.bare_str());
+                let _ = cmd::git(&["worktree", "prune"], &self.bare_str());
                 bail!(
                     "this filesystem did not store the checkout under `{dirname}`; \
                      it folds onto an existing directory and the two refs would share one checkout"
                 );
             }
             return Ok((path, false));
+        }
+        if !stored(self)? {
+            bail!(
+                "`{dirname}` is not stored under that exact name; this filesystem folds it \
+                 onto another checkout and the two refs would share one directory"
+            );
         }
         let head = cmd::git(&["rev-parse", "HEAD"], &path.to_string_lossy())?
             .trim()
@@ -1469,6 +1486,10 @@ fn a_transitive_package_is_a_hard_error_that_lists_candidates() {
     assert!(err.contains("does not declare"), "{err}");
     assert!(err.contains("--ref"), "the error must suggest a pin: {err}");
     assert!(err.contains("1.15.11"), "the error must list candidate versions: {err}");
+    // The dependent must be whoever has an edge to h3 — `apps/api` — not h3's
+    // own lockfile key, which would read "1.15.11 (required by h3)".
+    assert!(err.contains("apps/api"), "the error must name the dependent: {err}");
+    assert!(!err.contains("required by h3"), "a package is not its own dependent: {err}");
 }
 
 #[test]
@@ -1886,26 +1907,87 @@ fn bun(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selection
     })
 }
 
-/// Every version of `package` the lockfile holds, paired with the key that owns
-/// it — `undeclared` takes (version, dependent), not versions alone.
-fn bun_candidates(v: &serde_json::Value, package: &str) -> Vec<(String, String)> {
-    v.get("packages").and_then(|p| p.as_object()).map(|o| {
-        o.iter()
-            .filter_map(|(key, r)| Some((key.clone(), r.get(0)?.as_str()?)))
-            .filter_map(|(key, s)| s.rsplit_once('@').map(|(n, ver)| (key, n.to_string(), ver.to_string())))
-            .filter(|(_, n, _)| n == package)
-            .map(|(key, _, ver)| (ver, key))
-            .collect()
-    }).unwrap_or_default()
+/// (version, dependent) pairs for the undeclared error.
+///
+/// The dependent is whoever has a dependency *edge* to `package` — not the
+/// package's own lockfile key. Reading the key gives `1.15.11 required by h3`,
+/// which names the package as its own dependent and tells the reader nothing.
+///
+/// `versions` yields (version, where-it-is); `declarers` yields every owner that
+/// has an edge to `package`. Splitting them is what keeps a package from being
+/// named as its own dependent.
+fn pair_with_declarers(
+    versions: Vec<(String, String)>,
+    declarers: Vec<String>,
+) -> Vec<(String, String)> {
+    versions
+        .into_iter()
+        .map(|(ver, where_)| {
+            let who = if declarers.is_empty() {
+                format!("nothing declares it; it appears at {where_}")
+            } else {
+                declarers.join(", ")
+            };
+            (ver, who)
+        })
+        .collect()
 }
 
-/// The same shape for the JSON-object formats, where a nested copy's key is its
-/// `node_modules` path and that path names the dependent.
-fn json_candidates(pkgs: &serde_json::Map<String, serde_json::Value>, package: &str) -> Vec<(String, String)> {
-    pkgs.iter()
-        .filter(|(k, _)| k.ends_with(&format!("node_modules/{package}")))
+/// Owners with an edge to `package`, across both a bun/npm workspace table
+/// (deps under the dependency-class keys) and a package table (bun keeps the
+/// dependency map at index 2 of the tuple, npm under `dependencies`).
+fn declarers_in(
+    table: Option<&serde_json::Map<String, serde_json::Value>>,
+    package: &str,
+    deps_of: fn(&serde_json::Value) -> Vec<&serde_json::Map<String, serde_json::Value>>,
+) -> Vec<String> {
+    table
+        .map(|t| {
+            t.iter()
+                .filter(|(_, r)| deps_of(r).iter().any(|d| d.contains_key(package)))
+                .map(|(k, _)| if k.is_empty() { "<root>".to_string() } else { k.clone() })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn class_deps(r: &serde_json::Value) -> Vec<&serde_json::Map<String, serde_json::Value>> {
+    DEP_CLASSES.iter().filter_map(|c| r.get(c)?.as_object()).collect()
+}
+
+fn bun_candidates(v: &serde_json::Value, package: &str) -> Vec<(String, String)> {
+    let pkgs = v.get("packages").and_then(|p| p.as_object());
+    let versions: Vec<(String, String)> = pkgs
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, r)| {
+                    let (n, ver) = r.get(0)?.as_str()?.rsplit_once('@')?;
+                    (n == package).then(|| (ver.to_string(), k.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // A workspace that declares it, or a package whose own dependency map
+    // (tuple index 2) names it.
+    let mut declarers = declarers_in(v.get("workspaces").and_then(|w| w.as_object()), package, class_deps);
+    declarers.extend(declarers_in(pkgs, package, |r| {
+        r.get(2).map(class_deps).unwrap_or_default()
+    }));
+    pair_with_declarers(versions, declarers)
+}
+
+fn json_candidates(
+    pkgs: &serde_json::Map<String, serde_json::Value>,
+    package: &str,
+) -> Vec<(String, String)> {
+    let suffix = format!("node_modules/{package}");
+    let versions: Vec<(String, String)> = pkgs
+        .iter()
+        .filter(|(k, _)| k.ends_with(&suffix))
         .filter_map(|(k, r)| Some((r.get("version")?.as_str()?.to_string(), k.clone())))
-        .collect()
+        .collect();
+    pair_with_declarers(versions, declarers_in(Some(pkgs), package, class_deps))
 }
 ```
 
@@ -2013,21 +2095,38 @@ fn pnpm(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selectio
     let key = if rel.is_empty() { "." } else { rel };
     let imp = v.get("importers").and_then(|i| i.get(key))
         .with_context(|| format!("pnpm-lock.yaml has no importer `{key}`"))?;
-    // Which other importers install it, for the undeclared error's dependents.
-    let elsewhere: Vec<(String, String)> = v
-        .get("importers")
-        .and_then(|i| i.as_mapping())
-        .map(|m| {
-            m.iter()
-                .filter_map(|(who, imp)| {
-                    let ver = ["dependencies", "devDependencies", "optionalDependencies"]
-                        .iter()
-                        .find_map(|c| imp.get(*c)?.get(package)?.get("version")?.as_str())?;
-                    Some((ver.to_string(), who.as_str()?.to_string()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // Dependents come from real edges: other importers that declare it, plus
+    // any snapshot/package whose own dependency map names it. Scanning only
+    // importers misses the transitive case, which is exactly the case this
+    // error is raised for.
+    let mut declarers: Vec<String> = Vec::new();
+    let mut versions: Vec<(String, String)> = Vec::new();
+    for table in ["importers", "snapshots", "packages"] {
+        let Some(m) = v.get(table).and_then(|t| t.as_mapping()) else {
+            continue;
+        };
+        for (who, row) in m {
+            let Some(who) = who.as_str() else { continue };
+            for c in ["dependencies", "devDependencies", "optionalDependencies"] {
+                let Some(entry) = row.get(c).and_then(|d| d.get(package)) else {
+                    continue;
+                };
+                declarers.push(who.to_string());
+                // An importer entry nests the locator under `version`; a
+                // snapshot maps the name straight to it.
+                if let Some(loc) = entry.get("version").and_then(|s| s.as_str())
+                    .or_else(|| entry.as_str())
+                {
+                    let bare = loc.split_once('(').map_or(loc, |(h, _)| h);
+                    versions.push((
+                        bare.rsplit_once('@').map_or(bare, |(_, x)| x).to_string(),
+                        who.to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    let elsewhere = pair_with_declarers(versions, declarers);
     let found = ["dependencies", "devDependencies", "optionalDependencies"]
         .iter()
         .find_map(|c| imp.get(*c)?.get(package))
@@ -2407,8 +2506,6 @@ fn prune_cannot_delete_a_directory_a_concurrent_resolve_just_materialized() {
     let cache = root.join("cache");
     std::fs::create_dir_all(&cache).unwrap();
     let barrier = root.join("barrier");
-    // Set before either contender starts; `prune_with_lock` reads it once.
-    unsafe { std::env::set_var("DEVKIT_DOCS_PRUNE_BARRIER", &barrier) };
 
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "race_child_materializes_and_waits", "--ignored"])
@@ -2429,15 +2526,23 @@ fn prune_cannot_delete_a_directory_a_concurrent_resolve_just_materialized() {
 
     // Prune now runs against a cache holding an unreferenced-looking checkout.
     // It must block on the library lock rather than plan from a stale snapshot.
-    // Prune's own rendezvous, set before the thread starts: `prune_with_lock`
-    // writes `.planned` once it has taken its pre-lock snapshot and is about to
-    // block on the library lock. Spawning the thread proves only that it
-    // started — releasing the child then would let it commit its row before
-    // prune ever planned, and the test would pass against an unlocked prune.
-    let pruner = std::thread::spawn({
-        let cache = cache.clone();
-        move || devkit_docs::refs::prune_with_lock(&cache).unwrap()
-    });
+    // Prune runs as its own child, not a thread. `std::env::set_var` is unsafe
+    // and process-global, and libtest runs tests in parallel threads — setting
+    // the barrier variable in-process would leak into every concurrent test.
+    // A child gets it at spawn, where it is scoped and safe.
+    //
+    // `prune_with_lock` writes `.planned` once it has taken its pre-lock
+    // snapshot and is about to block on the library lock. Spawning proves only
+    // that it started; without `.planned`, releasing the resolver here would
+    // let it commit its row before prune ever planned, and the test would pass
+    // against an unlocked prune.
+    let mut pruner = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "race_child_prunes", "--ignored"])
+        .env("DOCM_RACE_CACHE", &cache)
+        .env("DEVKIT_DOCS_PRUNE_BARRIER", &barrier)
+        .env("DOCM_RACE_REMOVED", root.join("removed.json"))
+        .spawn()
+        .unwrap();
 
     // Release the child only once prune is definitely contending for the lock.
     let planned = barrier.with_extension("planned");
@@ -2448,7 +2553,9 @@ fn prune_cannot_delete_a_directory_a_concurrent_resolve_just_materialized() {
     }
     std::fs::write(barrier.with_extension("go"), "").unwrap();
     assert!(child.wait().unwrap().success());
-    let removed = pruner.join().unwrap();
+    assert!(pruner.wait().unwrap().success());
+    let removed: Vec<String> =
+        serde_json::from_str(&std::fs::read_to_string(root.join("removed.json")).unwrap()).unwrap();
 
     assert!(
         !removed.iter().any(|r| r.contains("v1.0.0")),
@@ -2472,16 +2579,28 @@ fn race_child_materializes_and_waits() {
         ..Default::default()
     };
     devkit_docs::locks::with_lib(&cache, "up", || {
-        devkit_docs::resolve::resolve_locked(&entry, &cache, &cache)
+        devkit_docs::resolve::resolve_locked(&entry, &cache, &cache, &Default::default())
     })
     .unwrap();
 }
+
+/// The prune half, in its own process so the two library locks genuinely
+/// contend. Results come back through a file because a child's return value
+/// cannot.
+#[test]
+#[ignore]
+fn race_child_prunes() {
+    let cache = PathBuf::from(std::env::var("DOCM_RACE_CACHE").unwrap());
+    let out = PathBuf::from(std::env::var("DOCM_RACE_REMOVED").unwrap());
+    let removed = devkit_docs::refs::prune_with_lock(&cache).unwrap();
+    std::fs::write(&out, serde_json::to_string(&removed).unwrap()).unwrap();
+}
 ```
 
-The parent's `prune_with_lock` call runs on a thread so the test can release the
-barrier while prune is blocked; joining it afterwards surfaces any panic. This
-is the one place the plan spawns a thread — everywhere else, separate processes
-are required for the locks to contend at all.
+Both contenders are child processes. Nothing here uses `std::env::set_var`:
+it is `unsafe` and process-global, and libtest runs tests on parallel threads,
+so setting a barrier variable in-process would leak into whatever else is
+running. Passing it at `Command::spawn` scopes it to the one child that needs it.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -2696,6 +2815,24 @@ readable either way. Fall back to `git --git-dir <lib>/repo.git worktree list
 administration. A worktree with no readable admin entry is recorded as
 unrecoverable and reported; it is not silently dropped.
 
+**Persist the record before mutating anything.** Write it to
+`<cache>/registry.locks/<encoded-lib>.migration.json` — under the reserved stem,
+so `is_control` already keeps prune and doctor off it:
+
+```json
+{"worktrees": [{"dirname": "v1.0.0", "commit": "a1b2c3…"}]}
+```
+
+Holding these only in memory leaves a hole phase 5 cannot close. Phase 3's
+rebuild removes the worktree and runs `git worktree prune`; a crash *between
+that and `worktree add`* destroys both the directory and the admin entry, so the
+next run sees no trace that the checkout ever existed — no directory to repair,
+no entry to read a commit from. The name and commit were only ever in the
+crashed process's memory. The journal is what survives that gap.
+
+Delete the file once every worktree in it is present and resolving. Its presence
+on startup means a previous run died mid-migration, and phase 5 reads it.
+
 *Phase 3 — act, per library, under `with_lib_dir` on the target name.* For each
 rename:
 
@@ -2720,8 +2857,14 @@ rename:
    scope member may not have been a library).
 
 *Phase 5 — audit every already-encoded library, on every run.* For each library
-directory that phase 1 classified as "already a library", check each of its
-worktrees resolves, and repair or rebuild exactly as phase 3 does.
+directory that phase 1 classified as "already a library":
+
+1. If a `<encoded-lib>.migration.json` journal exists, recreate every worktree
+   it lists that is absent, at the commit it records, then delete the journal.
+   This is the only way back from a crash between `worktree prune` and
+   `worktree add`.
+2. Check each present worktree resolves, and repair or rebuild exactly as
+   phase 3 does.
 
 This phase is what makes the forward-resume claim true, and it exists because
 the claim was false without it. A crash between phase 3's `fs::rename` and its
@@ -2778,6 +2921,43 @@ fn a_crash_between_rename_and_repair_is_finished_by_the_next_run() {
         head
     );
     assert!(devkit_docs::upgrade::run(&cache).unwrap().is_empty(), "and then settle");
+}
+
+#[test]
+fn a_crash_between_worktree_prune_and_worktree_add_is_recovered_from_the_journal() {
+    let base = common::unique_tmp("upgrade-journal");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let lib = cache.join("@scope~pkg");
+    std::fs::create_dir_all(&lib).unwrap();
+    let bare = lib.join("repo.git");
+    devkit_common::cmd::capture("git", &["clone", "--bare", &repo, bare.to_str().unwrap()], None).unwrap();
+    let head = devkit_common::cmd::capture(
+        "git", &["rev-parse", "v1.0.0^{commit}"], Some(bare.to_str().unwrap()),
+    ).unwrap().trim().to_string();
+
+    // The state a crash after `worktree prune` and before `worktree add` leaves:
+    // no directory, no admin entry, nothing on disk naming the checkout except
+    // the journal the previous run wrote before it started mutating.
+    let journal = cache.join("registry.locks").join("@scope~pkg.migration.json");
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    std::fs::write(
+        &journal,
+        format!(r#"{{"worktrees":[{{"dirname":"v1.0.0","commit":"{head}"}}]}}"#),
+    )
+    .unwrap();
+    assert!(!lib.join("v1.0.0").exists());
+
+    let done = devkit_docs::upgrade::run(&cache).unwrap();
+    assert!(done.iter().any(|l| l.contains("v1.0.0")), "the recovery must be reported: {done:?}");
+    assert_eq!(
+        devkit_common::cmd::capture(
+            "git", &["rev-parse", "HEAD"], Some(lib.join("v1.0.0").to_str().unwrap()),
+        ).unwrap().trim(),
+        head
+    );
+    assert!(!journal.exists(), "the journal is cleared once its worktrees are back");
+    assert!(devkit_docs::upgrade::run(&cache).unwrap().is_empty());
 }
 ```
 
@@ -2852,7 +3032,8 @@ git commit -m "feat(docs): migrate 0.12 caches on first run"
 
 **Files:**
 - Modify: `crates/devkit-docs/src/resolve.rs`, `src/bin/docm.rs`
-- Test: `crates/devkit-docs/tests/resolve.rs`
+- Test: `crates/devkit-docs/tests/resolve.rs`, `crates/devkit-docs/tests/concurrency.rs`,
+  `crates/devkit-docs/tests/upgrade.rs` — every caller in the table below
 
 **Interfaces:**
 - Produces: `resolve::Options { pub allow_default_branch: bool }`, deriving `Default`;
@@ -2941,7 +3122,12 @@ clap-global flag in `src/bin/docm.rs` and thread it through `resolve_one`.
 
 ```bash
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
-git add crates/devkit-docs/src/resolve.rs src/bin/docm.rs crates/devkit-docs/tests/resolve.rs
+# Every file in the caller table above, or the committed snapshot keeps a
+# three-argument `resolve_locked` call and does not compile.
+git add crates/devkit-docs/src/resolve.rs src/bin/docm.rs \
+        crates/devkit-docs/tests/resolve.rs \
+        crates/devkit-docs/tests/concurrency.rs \
+        crates/devkit-docs/tests/upgrade.rs
 git commit -m "feat(docs)!: fail instead of falling back to the default branch"
 ```
 
@@ -3112,9 +3298,27 @@ no rollback exists: the entry is written and left behind when resolution fails.
 
 Add the cross-process test that the library lock over `rm` exists to satisfy:
 
-Accepting either final state would make this vacuous — an unserialized
-implementation also lands on one of them most of the time. Force the ordering
-with the same barrier, so exactly one outcome is correct:
+Two things make this test real, and both were missing at first.
+
+**The barrier has to sit between add's manifest *read* and its *write*.** Put it
+where `add` already pauses — inside `resolve_locked`, after materialization —
+and the manifest is already committed by then, so an unlocked `rm` still
+observes the finished add and produces the same final state a locked one does.
+The test then passes without the lock and proves nothing. `add`'s Step 3 order
+is: snapshot (read) → write entry → resolve. So the child needs its own hook
+*between the read and the write*, not the resolve-time one.
+
+With the barrier there, the two outcomes separate cleanly:
+
+| | rm reads | rm writes | final |
+|---|---|---|---|
+| `rm` takes the library lock | after add commits: `{keep, up}` | `{keep}` | `up` gone |
+| `rm` unlocked | before add writes: `{keep}` | `{keep}` | add then writes its stale `{keep, up}` → **`up` survives** |
+
+So "is `up` absent" is exactly the discriminator, and `keep` surviving catches
+the lost update in the other direction.
+
+```rust
 
 ```rust
 #[test]
@@ -3154,20 +3358,50 @@ fn rm_blocks_until_a_concurrent_add_of_the_same_library_completes() {
     );
 }
 
-/// Child: add `up`, pausing under the library lock before the manifest commit.
+/// Child: add `up`, pausing between the manifest read and the manifest write
+/// while holding the library lock. `DEVKIT_DOCS_MANIFEST_BARRIER` is the hook
+/// `add` consults at exactly that point; it is a no-op when unset.
 #[test]
 #[ignore]
-fn child_add_up_and_wait() { /* reads the same env vars as the Task 7 child */ }
+fn child_add_up_and_wait() {
+    let global = PathBuf::from(std::env::var("DOCM_RACE_GLOBAL").unwrap());
+    let cache = PathBuf::from(std::env::var("DOCM_RACE_CACHE").unwrap());
+    let base = PathBuf::from(std::env::var("DOCM_RACE_BASE").unwrap());
+    let repo = std::env::var("DOCM_RACE_REPO").unwrap();
+    docm_add(&global, &cache, &base, "up", &repo, Some("v1.0.0")).unwrap();
+}
 
-/// Child: remove `up`.
+/// Child: remove `up` through the same path `docm rm` uses.
 #[test]
 #[ignore]
-fn child_rm_up() { /* calls the `rm` path under `locks::with_lib` */ }
+fn child_rm_up() {
+    let global = PathBuf::from(std::env::var("DOCM_RACE_GLOBAL").unwrap());
+    let cache = PathBuf::from(std::env::var("DOCM_RACE_CACHE").unwrap());
+    std::fs::write(
+        PathBuf::from(std::env::var("DOCM_RACE_BARRIER").unwrap()).with_extension("rm-started"),
+        "",
+    )
+    .unwrap();
+    devkit_docs::locks::with_lib(&cache, "up", || {
+        devkit_docs::locks::with_manifest(&cache, || {
+            devkit_docs::manifest::remove_global(&global, "up").map(|_| ())
+        })
+    })
+    .unwrap();
+}
 ```
 
-`spawn_child` re-enters this binary at an `#[ignore]`d test, the same pattern as
-the prune race in Task 7. Run it first with `rm`'s library lock removed and
-confirm it fails — `up` survives, or `keep` vanishes — before restoring it.
+`spawn_child` re-enters this binary at an `#[ignore]`d test and passes
+`DOCM_RACE_GLOBAL`, `DOCM_RACE_CACHE`, `DOCM_RACE_BASE`, `DOCM_RACE_REPO` and
+`DOCM_RACE_BARRIER` at spawn — never via `set_var`, for the reason given in
+Task 7. `docm_add` reads `DEVKIT_DOCS_MANIFEST_BARRIER` itself, so the adder
+needs no extra wiring.
+
+The parent waits for `.rm-started` before releasing `.go`, so `rm` has entered
+its transaction in both the locked and unlocked builds; what differs is whether
+it can proceed. Run this against a build with `rm`'s library lock removed and
+confirm it fails — `up` survives — before restoring it. That RED run is the
+whole evidence the test is load-bearing.
 
 - [ ] **Step 3: Implement `add`**
 
