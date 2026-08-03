@@ -141,8 +141,8 @@ fn default_worktree(lib: &LibCache) -> Result<(String, String, PathBuf)> {
     Ok(("default".to_string(), branch, path))
 }
 
-/// Cached pattern first; then a probe; then one fetch (the version may be
-/// newer than the last fetch) and a final probe.
+/// Probe tag patterns in priority order, using the cached pattern at its
+/// priority position; then fetch once and probe again.
 fn locate_tag(
     lib: &LibCache,
     meta: &mut cache::Meta,
@@ -150,18 +150,12 @@ fn locate_tag(
     version: &str,
 ) -> Result<Option<String>> {
     let tags_now = lib.tags()?;
-    if let Some(p) = meta.tag_pattern {
-        let t = tags::apply(p, package, version);
-        if tags_now.contains(&t) {
-            return Ok(Some(t));
-        }
-    }
-    if let Some((p, t)) = tags::find(&tags_now, package, version) {
+    if let Some((p, t)) = tags::find_with_hint(&tags_now, package, version, meta.tag_pattern) {
         meta.tag_pattern = Some(p);
         return Ok(Some(t));
     }
     lib.fetch()?;
-    if let Some((p, t)) = tags::find(&lib.tags()?, package, version) {
+    if let Some((p, t)) = tags::find_with_hint(&lib.tags()?, package, version, meta.tag_pattern) {
         meta.tag_pattern = Some(p);
         return Ok(Some(t));
     }

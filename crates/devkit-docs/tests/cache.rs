@@ -95,7 +95,7 @@ fn sync_default_follows_new_commits() {
 fn meta_round_trips() {
     let tmp = unique_tmp("meta");
     let mut m = Meta {
-        tag_pattern: Some(TagPattern::NameDash),
+        tag_pattern: Some(TagPattern::LeafDash),
         ..Default::default()
     };
     m.layouts.insert(
