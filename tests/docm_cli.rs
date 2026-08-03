@@ -81,6 +81,9 @@ impl Env {
             .current_dir(&self.project)
             .env("HOME", &self.home)
             .env("XDG_DATA_HOME", &self.data)
+            // Without this, `docs_root` computes its legacy path from the
+            // caller's cache home and moves a real store into the temp tree.
+            .env("XDG_CACHE_HOME", self.root.join("xdg-cache"))
             .env_remove(devkit_docs::barrier::VAR)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
