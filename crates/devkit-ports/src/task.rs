@@ -431,6 +431,7 @@ mod tests {
                 base_port: 9101,
                 path: "apps/api".into(),
                 launch: vec![],
+                url: None,
                 url_env: None,
                 provides_url: false,
                 static_env: [("FROM_APP".to_string(), "static".to_string())].into(),

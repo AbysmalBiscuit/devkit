@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, DEFAULT_APP_URL};
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -8,11 +8,19 @@ pub struct App {
     pub base_port: u16,
     pub path: String,
     pub launch: Vec<String>,
+    pub url: Option<String>,
     pub url_env: Option<String>,
     pub provides_url: bool,
     pub static_env: HashMap<String, String>,
     pub prep_files: Vec<crate::config::PrepFile>,
     pub setup: Vec<Vec<String>>,
+}
+
+impl App {
+    /// The app's URL template, or the localhost default when it declares none.
+    pub fn url_template(&self) -> &str {
+        self.url.as_deref().unwrap_or(DEFAULT_APP_URL)
+    }
 }
 
 /// Build the catalog: an app's path comes from its explicit `path` or is inferred from
@@ -45,6 +53,7 @@ pub fn catalog(
                 base_port: a.base_port,
                 path,
                 launch: a.launch.clone(),
+                url: a.url.clone(),
                 url_env: a.url_env.clone(),
                 provides_url: a.provides_url,
                 static_env: a.static_env.clone(),

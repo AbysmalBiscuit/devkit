@@ -11,7 +11,7 @@ use devkit_ports::config::expand_tilde;
 use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
 use devkit_ports::run;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -357,6 +357,7 @@ struct Row {
     role: Role,
     app: String,
     port: u16,
+    url: String,
     pid: Option<u32>,
     log: PathBuf,
     ready: Option<bool>,
@@ -365,12 +366,12 @@ struct Row {
 fn print_summary(rows: &[Row]) {
     let mut t = ui::table(&["ROLE", "APP", "PORT", "URL", "PID", "READY", "LOG"]);
     for r in rows {
-        let url = format!("http://localhost:{}", r.port);
+        let url = &r.url;
         t.add_row(vec![
             r.role.to_string(),
             r.app.clone(),
             r.port.to_string(),
-            ui::link(&url, &url),
+            ui::link(url, url),
             r.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             match r.ready {
                 Some(true) => "yes".into(),
@@ -685,6 +686,7 @@ fn cmd_up(
                     role: *grp_role,
                     app: p.app.clone(),
                     port: p.port,
+                    url: p.url.clone(),
                     pid: None,
                     log: p.log.clone(),
                     ready: None,
@@ -693,6 +695,10 @@ fn cmd_up(
             continue;
         }
 
+        let urls: HashMap<String, String> = plans
+            .iter()
+            .map(|p| (p.app.clone(), p.url.clone()))
+            .collect();
         let statuses = steps.during(
             &format!("Starting {} server(s) [{}]…", apps.len(), grp_role.as_str()),
             || run::launch(&plans, holder, *grp_role, supervise, true),
@@ -710,6 +716,7 @@ fn cmd_up(
             }
             rows.push(Row {
                 role: s.role,
+                url: urls.get(&s.app).cloned().unwrap_or_default(),
                 app: s.app,
                 port: s.port,
                 pid: s.pid,

@@ -124,6 +124,7 @@ mod tests {
             base_port: 9100,
             path: path.into(),
             launch: vec![],
+            url: None,
             url_env: None,
             provides_url: false,
             static_env: HashMap::new(),

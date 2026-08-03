@@ -237,10 +237,19 @@ impl Templates {
     }
 }
 
+/// The `url` an app is addressed at when it sets none of its own.
+pub const DEFAULT_APP_URL: &str = "http://localhost:{{ port }}";
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct AppConfig {
     pub base_port: u16,
     pub launch: Vec<String>,
+    /// Address the app serves on, as a template over the same variables as
+    /// `launch` (`{{ port }}`, `ports['<app>']`, `[templates.variables]`).
+    /// Defaults to `DEFAULT_APP_URL`; set it for an app that serves https, a
+    /// custom host, or a path prefix — devkit never terminates TLS itself.
+    #[serde(default)]
+    pub url: Option<String>,
     #[serde(default)]
     pub url_env: Option<String>,
     /// This app serves the URL that consumer apps wire to via their `url_env`.

@@ -85,6 +85,7 @@ fn apps_json(catalog: &HashMap<String, App>) -> serde_json::Value {
                 "name": a.name,
                 "base_port": a.base_port,
                 "path": a.path,
+                "url": a.url_template(),
                 "provides_url": a.provides_url,
                 "url_env": a.url_env,
                 "launch": a.launch,
@@ -98,13 +99,22 @@ fn apps_json(catalog: &HashMap<String, App>) -> serde_json::Value {
 fn apps_table(catalog: &HashMap<String, App>) -> String {
     let mut names: Vec<&String> = catalog.keys().collect();
     names.sort();
-    let mut t = ui::table(&["NAME", "PORT", "PATH", "PROVIDES_URL", "URL_ENV", "LAUNCH"]);
+    let mut t = ui::table(&[
+        "NAME",
+        "PORT",
+        "PATH",
+        "URL",
+        "PROVIDES_URL",
+        "URL_ENV",
+        "LAUNCH",
+    ]);
     for n in names {
         let a = &catalog[n];
         t.add_row(vec![
             a.name.clone(),
             a.base_port.to_string(),
             a.path.clone(),
+            a.url_template().to_string(),
             a.provides_url.to_string(),
             a.url_env.clone().unwrap_or_else(|| "-".into()),
             a.launch.join(" "),
@@ -209,6 +219,7 @@ mod tests {
                 base_port: 9100,
                 path: "apps/api".into(),
                 launch: vec!["nitro".into(), "dev".into()],
+                url: Some("https://localhost:{{ port }}/x".into()),
                 url_env: Some("FOUNDRY_API_BASE_URL".into()),
                 provides_url: true,
                 static_env: HashMap::new(),
@@ -255,6 +266,10 @@ mod tests {
         assert_eq!(arr[0]["name"].as_str(), Some("api"));
         assert_eq!(arr[0]["base_port"].as_u64(), Some(9100));
         assert_eq!(arr[0]["path"].as_str(), Some("apps/api"));
+        assert_eq!(
+            arr[0]["url"].as_str(),
+            Some("https://localhost:{{ port }}/x")
+        );
         assert_eq!(arr[0]["provides_url"].as_bool(), Some(true));
         assert_eq!(arr[0]["url_env"].as_str(), Some("FOUNDRY_API_BASE_URL"));
     }
@@ -269,6 +284,7 @@ mod tests {
                 base_port: 9200,
                 path: "apps/lab-os".into(),
                 launch: vec!["next".into()],
+                url: None,
                 url_env: None,
                 provides_url: false,
                 static_env: HashMap::new(),

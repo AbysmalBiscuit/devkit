@@ -61,6 +61,7 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 | `base_port` | yes | Base port; per-worktree ports are allocated from here via the registry. |
 | `launch` | yes | The complete launch command, run verbatim. `{{ port }}` is substituted with the allocated port. Write the whole invocation here, including any `doppler run -c <config> --` wrapper and `--preserve-env=…` flags the app needs. |
 | `path` | no | App subdirectory (relative to the repo) when it differs from `<name>`. |
+| `url` | no | Address the app serves on, defaulting to `http://localhost:{{ port }}`. Rendered as a minijinja template over the same variables as `launch` — `{{ port }}`, `ports['<app>']`, and `[templates.variables]` — so it can carry any scheme, host, or path (`https://app.localhost:{{ port }}/admin`). It is what `devrun up` prints in its URL column and, for the `provides_url` app, what is wired into consumers' `url_env`. Devkit never terminates TLS on an app's behalf, and readiness stays a TCP probe against the allocated port. |
 | `url_env` | no | Env var that receives the app's URL. |
 | `provides_url` | no | `true` marks the one app whose URL other apps consume. Exactly one app should set this. |
 | `static_env` | no | Inline env vars always set for this app. |

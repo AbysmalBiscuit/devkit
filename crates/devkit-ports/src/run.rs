@@ -15,18 +15,18 @@ use crate::registry::{self, Data, Role};
 use devkit_common::{paths, supervise};
 
 /// Env layering (low→high): static_env → url-wiring → user overrides.
-/// `provider_port` is the port of the URL-providing app (the API), if it shares the run.
+/// `provider_url` is the URL-providing app's rendered `url`, if it shares the run.
 pub fn env_for(
     app: &App,
-    provider_port: Option<u16>,
+    provider_url: Option<&str>,
     user: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     for (k, v) in &app.static_env {
         env.insert(k.clone(), v.clone());
     }
-    if let (Some(var), Some(p)) = (url_consumer_var(app), provider_port) {
-        env.insert(var, format!("http://localhost:{p}"));
+    if let (Some(var), Some(url)) = (url_consumer_var(app), provider_url) {
+        env.insert(var, url.to_string());
     }
     for (k, v) in user {
         env.insert(k.clone(), v.clone());
@@ -222,6 +222,8 @@ pub struct LaunchPlan {
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
     pub log: PathBuf,
+    /// The app's rendered `url`, as reported to the user.
+    pub url: String,
 }
 
 /// Ports one (role, holder) group needs: each selected app's own port plus
@@ -241,6 +243,7 @@ pub fn resolve_ports(
         let app = &catalog[a];
         let mut templates: Vec<&str> = app.launch.iter().map(String::as_str).collect();
         templates.extend(app.static_env.values().map(String::as_str));
+        templates.push(app.url_template());
         let refs = devkit_common::template::referenced_ports(&templates, variables)
             .with_context(|| format!("scanning templates of app `{a}`"))?;
         for r in refs.apps {
@@ -274,7 +277,14 @@ pub fn plan_group(
     variables: &BTreeMap<String, String>,
 ) -> Result<Vec<LaunchPlan>> {
     use devkit_common::template::render_launch;
-    let provider_port = provider.and_then(|p| ports.get(p).copied());
+    let provider_url =
+        match provider.and_then(|p| Some((p, catalog.get(p)?, ports.get(p).copied()?))) {
+            Some((name, app, port)) => Some(
+                render_launch(app.url_template(), Some(port), ports, variables)
+                    .with_context(|| format!("rendering url of `{name}`"))?,
+            ),
+            None => None,
+        };
     let mut plans = Vec::with_capacity(apps.len());
     for a in apps {
         let app = &catalog[a];
@@ -298,7 +308,9 @@ pub fn plan_group(
             })
             .collect::<Result<_>>()?;
         let cwd = base_dir.join(&app.path);
-        let env = env_for(&rendered, provider_port, user_env);
+        let env = env_for(&rendered, provider_url.as_deref(), user_env);
+        let url = render_launch(app.url_template(), Some(port), ports, variables)
+            .with_context(|| format!("rendering url of `{a}`"))?;
         let log = paths::logs_dir()
             .join(holder_slug(base_dir.to_str().unwrap_or("wt")))
             .join(format!("{}-{}.log", role.as_str(), a));
@@ -309,6 +321,7 @@ pub fn plan_group(
             cwd,
             env,
             log,
+            url,
         });
     }
     Ok(plans)
@@ -611,6 +624,7 @@ mod tests {
                 "-p".into(),
                 "{{ port }}".into(),
             ],
+            url: None,
             url_env: url_env.map(Into::into),
             provides_url: false,
             static_env: HashMap::new(),
@@ -623,7 +637,7 @@ mod tests {
     fn provider_does_not_wire_its_own_url() {
         let mut api = app("api", Some("FOUNDRY_API_BASE_URL"));
         api.provides_url = true;
-        let e = env_for(&api, Some(9100), &BTreeMap::new());
+        let e = env_for(&api, Some("http://localhost:9100"), &BTreeMap::new());
         assert!(!e.contains_key("FOUNDRY_API_BASE_URL"));
     }
 
@@ -631,7 +645,7 @@ mod tests {
     fn wires_api_url_for_consumer() {
         let e = env_for(
             &app("lab-os", Some("FOUNDRY_API_BASE_URL")),
-            Some(9103),
+            Some("http://localhost:9103"),
             &BTreeMap::new(),
         );
         assert_eq!(e["FOUNDRY_API_BASE_URL"], "http://localhost:9103");
@@ -751,7 +765,11 @@ mod tests {
     fn user_override_wins() {
         let mut u = BTreeMap::new();
         u.insert("FOUNDRY_API_BASE_URL".into(), "http://x".into());
-        let e = env_for(&app("lab-os", Some("FOUNDRY_API_BASE_URL")), Some(9103), &u);
+        let e = env_for(
+            &app("lab-os", Some("FOUNDRY_API_BASE_URL")),
+            Some("http://localhost:9103"),
+            &u,
+        );
         assert_eq!(e["FOUNDRY_API_BASE_URL"], "http://x");
     }
 
@@ -761,6 +779,7 @@ mod tests {
             base_port: 9100,
             path: "apps/api".into(),
             launch: launch.iter().map(|s| s.to_string()).collect(),
+            url: None,
             url_env: None,
             provides_url: false,
             static_env: static_env
@@ -1104,6 +1123,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             env: BTreeMap::new(),
             log: tmp.clone(),
+            url: format!("http://localhost:{port}"),
         };
         // Non-blocking: returns immediately; the just-spawned server is "starting".
         let out = launch(&[plan], "/w-launch-test", Role::Issue, false, false).unwrap();
@@ -1154,6 +1174,7 @@ mod tests {
             cwd: PathBuf::from("."),
             env: BTreeMap::new(),
             log: PathBuf::from("x.log"),
+            url: format!("http://localhost:{port}"),
         }
     }
 

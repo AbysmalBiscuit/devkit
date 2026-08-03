@@ -20,6 +20,7 @@ fn catalog() -> HashMap<String, App> {
             base_port: BASE,
             path: "apps/api".into(),
             launch: vec![],
+            url: None,
             url_env: None,
             provides_url: false,
             static_env: HashMap::new(),

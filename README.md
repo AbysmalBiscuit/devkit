@@ -34,7 +34,7 @@ devrun task [<name>] [--env K=V] [--env-file F] [--dry-run]
 ```
 
 - **`config show`**: prints the effective merged config as TOML. `--origin` annotates each value with the file it was resolved from (or `# (default)` for serde defaults); `--json` emits JSON instead of TOML. `--origin --json` emits `{ "config": …, "origins": { "dotted.path": "file" } }`.
-- **`config apps`**: lists the configured apps from the merged config (columns: name, port, path, provides_url, url_env, launch). `--json` emits a structured array. A pure config readout with no live readiness — for running state use `devrun status`.
+- **`config apps`**: lists the configured apps from the merged config (columns: name, port, path, url, provides_url, url_env, launch). `--json` emits a structured array. A pure config readout with no live readiness — for running state use `devrun status`.
 - **`config tasks`**: lists the configured `[tasks]` from the merged config (columns: name, kind, app, description) — the same listing as a bare `devrun task`. `--json` emits a structured array.
 - **`down`**: stops servers and releases their ports. By default stops every server in the current worktree. Reaching another worktree requires an explicit scope flag and a confirmation read from a terminal:
 
@@ -361,6 +361,7 @@ App `path` is normally inferred from the monorepo's `doppler.yaml`; individual `
 App conventions are config-driven, not hardcoded:
 
 - `provides_url = true` marks the app that serves the URL other apps consume (the API). Consumer apps name that variable in their own `url_env`; `devrun` wires it to the provider's local port and auto-includes the provider when a consumer is run.
+- `url` is the address an app serves on, defaulting to `http://localhost:{{ port }}`. It is a template over the same variables as `launch`, so an app that terminates TLS itself, lives on a custom host, or serves under a path prefix declares it verbatim — `url = "https://app.localhost:{{ port }}/admin"`. `devrun up` prints the rendered value, and for the `provides_url` app it is what consumers receive in their `url_env`.
 - `prep_files` declares files written into an app's directory during `issue setup` (before its `setup` commands). Each is `{ path, content, overwrite }`; `content` is rendered as a minijinja template with the issue context (`prefix`, `issue`, `slug`, `apps`, `app`, `branch`, `worktree`), and existing files are kept unless `overwrite = true`.
 - `defaults.apps_dir` (default `apps`) is the repo-relative directory apps live under; it drives path inference and diff-based app detection.
 
