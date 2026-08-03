@@ -15,6 +15,10 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    /// Check out the default branch when no tag or ref pins a version,
+    /// instead of failing with a hard error.
+    #[arg(long, global = true)]
+    allow_default_branch: bool,
 }
 
 #[derive(Subcommand)]
@@ -101,8 +105,8 @@ fn main() -> Result<()> {
         Cmd::Rm { name, project } => cmd_rm(&name, project),
         Cmd::List { json } => cmd_list(json),
         Cmd::Sync { names } => cmd_sync(&names),
-        Cmd::Path { name } => cmd_path(&name),
-        Cmd::Info { name, json } => cmd_info(&name, json),
+        Cmd::Path { name } => cmd_path(&name, cli.allow_default_branch),
+        Cmd::Info { name, json } => cmd_info(&name, json, cli.allow_default_branch),
         Cmd::Prune { yes } => cmd_prune(yes),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "docm", &mut std::io::stdout());
@@ -309,24 +313,27 @@ fn cmd_sync(names: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn resolve_one(name: &str) -> Result<resolve::Resolved> {
+fn resolve_one(name: &str, allow_default_branch: bool) -> Result<resolve::Resolved> {
     let d = discovered()?;
     let entry = find_entry(&d, name)?;
-    let r = resolve::resolve(&entry, &cwd()?, &cache::docs_root())?;
+    let opts = resolve::Options {
+        allow_default_branch,
+    };
+    let r = resolve::resolve(&entry, &cwd()?, &cache::docs_root(), &opts)?;
     for w in &r.warnings {
         eprintln!("docm: {w}");
     }
     Ok(r)
 }
 
-fn cmd_path(name: &str) -> Result<()> {
-    let r = resolve_one(name)?;
+fn cmd_path(name: &str, allow_default_branch: bool) -> Result<()> {
+    let r = resolve_one(name, allow_default_branch)?;
     println!("{}", r.path.display());
     Ok(())
 }
 
-fn cmd_info(name: &str, json: bool) -> Result<()> {
-    let r = resolve_one(name)?;
+fn cmd_info(name: &str, json: bool, allow_default_branch: bool) -> Result<()> {
+    let r = resolve_one(name, allow_default_branch)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&r)?);
         return Ok(());

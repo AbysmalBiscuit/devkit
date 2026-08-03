@@ -76,7 +76,13 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
                 r#ref: Some(std::env::var("DEVKIT_DOCS_TEST_REF").unwrap()),
                 ..Default::default()
             };
-            devkit_docs::resolve::resolve(&entry, &project, &cache_root).unwrap();
+            devkit_docs::resolve::resolve(
+                &entry,
+                &project,
+                &cache_root,
+                &devkit_docs::resolve::Options::default(),
+            )
+            .unwrap();
         } else {
             let manifest_libs = BTreeSet::from(["up".to_string()]);
             refs::prune_with_lock(
@@ -480,7 +486,17 @@ fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
 
     let resolved: Vec<_> = entries
         .iter()
-        .map(|entry| devkit_docs::resolve::resolve(entry, &project, &cache_root).unwrap())
+        .map(|entry| {
+            devkit_docs::resolve::resolve(
+                entry,
+                &project,
+                &cache_root,
+                &devkit_docs::resolve::Options {
+                    allow_default_branch: true,
+                },
+            )
+            .unwrap()
+        })
         .collect();
     assert_eq!(
         resolved
@@ -560,7 +576,13 @@ fn resolving_the_workspace_that_owns_a_legacy_row_upserts_it() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    devkit_docs::resolve::resolve(&entry, &project, &cache_root).unwrap();
+    devkit_docs::resolve::resolve(
+        &entry,
+        &project,
+        &cache_root,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
 
     let rows = RefStore::at(&cache_root).snapshot().rows;
     assert_eq!(rows.len(), 1);
@@ -671,8 +693,20 @@ fn prune_with_lock_preserves_another_projects_overlay_lib() {
     devkit_docs::manifest::upsert_project(&proj_b.join("devkit.toml"), &lib_y, &cache_root)
         .unwrap();
 
-    let x = devkit_docs::resolve::resolve(&lib_x, &proj_a, &cache_root).unwrap();
-    let y = devkit_docs::resolve::resolve(&lib_y, &proj_b, &cache_root).unwrap();
+    let x = devkit_docs::resolve::resolve(
+        &lib_x,
+        &proj_a,
+        &cache_root,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
+    let y = devkit_docs::resolve::resolve(
+        &lib_y,
+        &proj_b,
+        &cache_root,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
 
     // Pruning "as if from A": A's manifest sees only libX.
     let a_libs = BTreeSet::from(["libX".to_string()]);

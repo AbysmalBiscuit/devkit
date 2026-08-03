@@ -1,6 +1,8 @@
 //! The lookup facade: entry + CWD → version-correct checkout path.
-//! Order: manual `ref` pin → lockfile version → tag probe → default-branch
-//! fallback (with a warning). Every success records a reference row.
+//! Order: manual `ref` pin → lockfile version → tag probe. A pin or tag miss
+//! is a hard error unless `Options::allow_default_branch` opts into the
+//! default-branch fallback (with a warning). Every success records a
+//! reference row.
 
 use crate::cache::{self, LibCache};
 use crate::importers;
@@ -19,6 +21,14 @@ use std::path::{Path, PathBuf};
 pub enum Status {
     Ok,
     Repaired,
+}
+
+/// Resolution behavior a caller opts into. The default refuses every
+/// default-branch fallback as a hard error; setting `allow_default_branch`
+/// restores the old silent-fallback behavior for a single call.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Options {
+    pub allow_default_branch: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,13 +64,23 @@ pub fn project_root(start: &Path) -> PathBuf {
     start.to_path_buf()
 }
 
-pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Resolved> {
+pub fn resolve(
+    entry: &LibEntry,
+    start: &Path,
+    cache_root: &Path,
+    opts: &Options,
+) -> Result<Resolved> {
     locks::with_lib(cache_root, &entry.name, || {
-        resolve_locked(entry, start, cache_root)
+        resolve_locked(entry, start, cache_root, opts)
     })
 }
 
-pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Resolved> {
+pub fn resolve_locked(
+    entry: &LibEntry,
+    start: &Path,
+    cache_root: &Path,
+    opts: &Options,
+) -> Result<Resolved> {
     let repo = entry
         .repo
         .as_deref()
@@ -92,6 +112,19 @@ pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Resu
                 match locate_tag(&lib, &mut meta, &entry.package_name(), &v)? {
                     Some(tag) => (tag, v, selection.workspace),
                     None => {
+                        if !opts.allow_default_branch {
+                            let tried = tags::ALL
+                                .iter()
+                                .map(|p| tags::apply(*p, &entry.package_name(), &v))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            bail!(
+                                "no git tag found for {} {v} (tried {tried}); pin a ref \
+                                 explicitly, or pass --allow-default-branch to check out \
+                                 the default branch for this run",
+                                entry.name
+                            );
+                        }
                         warnings.push(format!(
                             "no git tag found for {} {v}; falling back to the default branch",
                             entry.name
@@ -102,6 +135,23 @@ pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Resu
                 }
             }
             None => {
+                if !opts.allow_default_branch {
+                    if eco == Ecosystem::Git {
+                        bail!(
+                            "lib `{}` (git) has no ref pinned; run `docm sync` to infer \
+                             and record the default branch, or pass --allow-default-branch \
+                             to use it for this run",
+                            entry.name
+                        );
+                    }
+                    bail!(
+                        "no lockfile pins {} for lib `{}`; pin a ref explicitly with \
+                         `docm add --ref`, or pass --allow-default-branch to use the \
+                         default branch for this run",
+                        entry.package_name(),
+                        entry.name
+                    );
+                }
                 warnings.push(if eco == Ecosystem::Git {
                     format!("no ref pinned for {}; using the default branch", entry.name)
                 } else {

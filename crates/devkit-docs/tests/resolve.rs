@@ -3,7 +3,7 @@ mod common;
 use common::{fixture_repo, unique_tmp};
 use devkit_docs::manifest::{Ecosystem, LibEntry};
 use devkit_docs::refs::RefStore;
-use devkit_docs::resolve::resolve;
+use devkit_docs::resolve::{Options, resolve};
 
 #[test]
 fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
@@ -29,7 +29,7 @@ fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
         repo: Some(repo),
         ..Default::default()
     };
-    let r = resolve(&entry, &project, &cache_root).unwrap();
+    let r = resolve(&entry, &project, &cache_root, &Options::default()).unwrap();
     assert_eq!(r.worktree, "v1.0.0");
     assert_eq!(r.version, "1.0.0");
     // Tag content, not tip: v1.0.0 has "// v1".
@@ -65,7 +65,7 @@ fn ref_pin_wins_and_no_lockfile_falls_back_to_default_branch_with_warning() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    let r = resolve(&pinned, &project, &cache_root).unwrap();
+    let r = resolve(&pinned, &project, &cache_root, &Options::default()).unwrap();
     assert_eq!(r.worktree, "v1.0.0");
     assert_eq!(r.version, "v1.0.0");
     assert_eq!(
@@ -80,7 +80,15 @@ fn ref_pin_wins_and_no_lockfile_falls_back_to_default_branch_with_warning() {
         repo: Some(repo),
         ..Default::default()
     };
-    let r2 = resolve(&unpinned, &project, &cache2).unwrap();
+    let r2 = resolve(
+        &unpinned,
+        &project,
+        &cache2,
+        &Options {
+            allow_default_branch: true,
+        },
+    )
+    .unwrap();
     assert_eq!(r2.worktree, "main");
     assert_eq!(r2.version, "main");
     assert_eq!(r2.warnings.len(), 1);
@@ -98,7 +106,7 @@ fn layout_override_applies_and_meta_caches_detection() {
         docs_dir: Some("docs/special".into()),
         ..Default::default()
     };
-    let r = resolve(&entry, &tmp, &cache_root).unwrap();
+    let r = resolve(&entry, &tmp, &cache_root, &Options::default()).unwrap();
     assert_eq!(r.layout.docs_dir.as_deref(), Some("docs/special")); // override wins
     let meta = devkit_docs::cache::read_meta(&cache_root.join("mylib"));
     // meta stores the DETECTED layout (docs), not the override.
@@ -119,7 +127,15 @@ fn git_ecosystem_without_ref_falls_back_to_default_with_warning() {
         repo: Some(repo),
         ..Default::default()
     };
-    let r = resolve(&entry, &project, &cache_root).unwrap();
+    let r = resolve(
+        &entry,
+        &project,
+        &cache_root,
+        &Options {
+            allow_default_branch: true,
+        },
+    )
+    .unwrap();
     assert_eq!(r.worktree, "main");
     assert_eq!(r.version, "main");
     assert_eq!(
@@ -162,7 +178,7 @@ fn lockfile_resolved_from_subdir_records_selected_workspace() {
         repo: Some(repo),
         ..Default::default()
     };
-    let r = resolve(&entry, &deep, &cache_root).unwrap();
+    let r = resolve(&entry, &deep, &cache_root, &Options::default()).unwrap();
     assert_eq!(r.worktree, "v1.0.0");
 
     let data = RefStore::at(&cache_root).snapshot();
@@ -191,7 +207,13 @@ fn a_changed_pin_gets_its_own_directory_and_never_returns_the_old_checkout() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    let first = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let first = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
     assert!(first.path.ends_with("v1.0.0"));
     assert_eq!(
         std::fs::read_to_string(first.path.join("src/lib.rs")).unwrap(),
@@ -199,7 +221,13 @@ fn a_changed_pin_gets_its_own_directory_and_never_returns_the_old_checkout() {
     );
 
     entry.r#ref = Some("v1.1.0".into());
-    let second = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let second = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
     assert!(
         second.path.ends_with("v1.1.0"),
         "a re-pin must not reuse the old directory"
@@ -227,7 +255,13 @@ fn a_corrupted_head_is_repaired_and_reported() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    let r = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let r = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
     devkit_common::cmd::capture(
         "git",
         &["checkout", "--detach", "v1.1.0"],
@@ -235,7 +269,13 @@ fn a_corrupted_head_is_repaired_and_reported() {
     )
     .unwrap();
 
-    let again = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let again = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
     assert_eq!(again.status, devkit_docs::resolve::Status::Repaired);
     assert_eq!(again.commit, r.commit);
 }
@@ -252,10 +292,24 @@ fn a_tracked_dirty_checkout_is_a_hard_error() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    let r = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let r = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
 
     std::fs::write(r.path.join("src/lib.rs"), "// tampered").unwrap();
-    assert!(devkit_docs::resolve::resolve(&entry, &base, &cache).is_err());
+    assert!(
+        devkit_docs::resolve::resolve(
+            &entry,
+            &base,
+            &cache,
+            &devkit_docs::resolve::Options::default()
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -270,10 +324,24 @@ fn an_untracked_dirty_checkout_is_a_hard_error() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    let r = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let r = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
 
     std::fs::write(r.path.join("src/planted.rs"), "// planted").unwrap();
-    assert!(devkit_docs::resolve::resolve(&entry, &base, &cache).is_err());
+    assert!(
+        devkit_docs::resolve::resolve(
+            &entry,
+            &base,
+            &cache,
+            &devkit_docs::resolve::Options::default()
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -289,9 +357,21 @@ fn a_repo_url_change_is_refused_rather_than_reusing_the_clone() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
     entry.repo = Some(b);
-    let err = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap_err();
+    let err = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap_err();
     assert!(
         err.to_string().contains("origin"),
         "error must name the mismatch: {err}"
@@ -310,11 +390,23 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    let first = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let first = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
 
     devkit_common::cmd::capture("git", &["tag", "-f", "v1.0.0", "v1.1.0"], Some(&repo)).unwrap();
 
-    let second = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let second = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
     assert_eq!(
         second.commit, first.commit,
         "resolve must not fetch for a ref it already has"
@@ -322,7 +414,13 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
 
     let lib = devkit_docs::cache::LibCache::new(&cache, "up").unwrap();
     lib.fetch().unwrap();
-    let third = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let third = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
     assert_ne!(
         third.commit, first.commit,
         "after a fetch the checkout follows the moved tag"
@@ -365,15 +463,26 @@ fn a_failed_moved_tag_repair_does_not_report_success() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    let first = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    let first = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
     devkit_common::cmd::capture("git", &["tag", "-f", "v1.0.0", "v1.1.0"], Some(&repo)).unwrap();
     let lib = devkit_docs::cache::LibCache::new(&cache, "up").unwrap();
     lib.fetch().unwrap();
     std::fs::write(first.path.join("src/lib.rs"), "// local change").unwrap();
 
-    let error = devkit_docs::resolve::resolve(&entry, &base, &cache)
-        .unwrap_err()
-        .to_string();
+    let error = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap_err()
+    .to_string();
 
     assert!(
         !error.contains("re-pointed"),
@@ -394,7 +503,13 @@ fn a_tag_deleted_upstream_is_a_hard_error_after_prune_tags() {
         r#ref: Some("v2.0.0".into()),
         ..Default::default()
     };
-    devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
 
     devkit_common::cmd::capture("git", &["tag", "-d", "v2.0.0"], Some(&repo)).unwrap();
     let lib = devkit_docs::cache::LibCache::new(&cache, "up").unwrap();
@@ -409,9 +524,14 @@ fn a_tag_deleted_upstream_is_a_hard_error_after_prune_tags() {
         "--prune-tags must delete the local tag"
     );
 
-    let err = devkit_docs::resolve::resolve(&entry, &base, &cache)
-        .unwrap_err()
-        .to_string();
+    let err = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(
         err.contains("v2.0.0"),
         "the error must name the withdrawn ref: {err}"
@@ -431,16 +551,27 @@ fn a_pin_that_changes_from_a_tag_to_a_branch_is_refused() {
         r#ref: Some("release".into()),
         ..Default::default()
     };
-    devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
 
     devkit_common::cmd::capture("git", &["tag", "-d", "release"], Some(&repo)).unwrap();
     devkit_common::cmd::capture("git", &["branch", "release", "v1.1.0"], Some(&repo)).unwrap();
     let lib = devkit_docs::cache::LibCache::new(&cache, "up").unwrap();
     lib.fetch().unwrap();
 
-    let err = devkit_docs::resolve::resolve(&entry, &base, &cache)
-        .unwrap_err()
-        .to_string();
+    let err = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(
         err.contains("refs/tags/release"),
         "the error must name the previous kind: {err}"
@@ -459,12 +590,86 @@ fn a_ref_published_after_the_last_fetch_resolves_without_a_manual_sync() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
-    devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
+    devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
 
     devkit_common::cmd::capture("git", &["tag", "v3.0.0", "v1.1.0"], Some(&repo)).unwrap();
 
     entry.r#ref = Some("v3.0.0".into());
-    let r = devkit_docs::resolve::resolve(&entry, &base, &cache)
-        .expect("a miss must fetch once and retry before failing");
+    let r = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &cache,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .expect("a miss must fetch once and retry before failing");
     assert!(r.path.ends_with("v3.0.0"));
+}
+
+#[test]
+fn a_version_with_no_tag_is_a_hard_error_listing_what_was_tried() {
+    let base = common::unique_tmp("notag");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    // The lockfile needs `app`'s own entry with its edge to `up`, or importer
+    // selection fails first and this test goes RED for the wrong reason —
+    // proving nothing about the missing tag it exists to check.
+    std::fs::write(
+        base.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\n \"up\",\n]\n\n[[package]]\nname = \"up\"\nversion = \"9.9.9\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("Cargo.toml"),
+        "[package]\nname = \"app\"\n\n[dependencies]\nup = \"9.9.9\"\n",
+    )
+    .unwrap();
+
+    let entry = devkit_docs::manifest::LibEntry {
+        name: "up".into(),
+        ecosystem: Some(devkit_docs::manifest::Ecosystem::Rust),
+        repo: Some(repo),
+        ..Default::default()
+    };
+    let opts = devkit_docs::resolve::Options::default();
+    let err = devkit_docs::resolve::resolve(&entry, &base, &cache, &opts)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("9.9.9"), "{err}");
+    assert!(
+        err.contains("v9.9.9"),
+        "the error must list the patterns tried: {err}"
+    );
+    assert!(err.contains("--allow-default-branch"), "{err}");
+
+    let opts = devkit_docs::resolve::Options {
+        allow_default_branch: true,
+    };
+    assert!(devkit_docs::resolve::resolve(&entry, &base, &cache, &opts).is_ok());
+}
+
+#[test]
+fn a_git_entry_with_no_ref_is_a_hard_error_naming_sync() {
+    let base = common::unique_tmp("noref");
+    let repo = common::fixture_repo(&base.join("src"));
+    let entry = devkit_docs::manifest::LibEntry {
+        name: "up".into(),
+        ecosystem: Some(devkit_docs::manifest::Ecosystem::Git),
+        repo: Some(repo),
+        ..Default::default()
+    };
+    let err = devkit_docs::resolve::resolve(
+        &entry,
+        &base,
+        &base.join("cache"),
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("docm sync"), "{err}");
 }
