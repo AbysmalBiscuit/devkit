@@ -1,7 +1,10 @@
 # docm correctness: make wrong answers loud
 
 **Date:** 2026-08-03
-**Status:** approved design, pending implementation
+**Status:** reviewed over five adversarial rounds (see the companion review log);
+20 material defects found, 19 accepted. The loop ended at its round cap on a
+REVISE, so the final fix — scoping reserved names per directory level — is
+itself unreviewed. Pending human sign-off, then implementation.
 **Source:** `scratch/docm_issues.md` — a field report from an agent that resolved
 four libraries for SWE-10805 and got three of them wrong on the first attempt.
 
