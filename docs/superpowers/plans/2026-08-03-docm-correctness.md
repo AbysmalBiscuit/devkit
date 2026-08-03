@@ -177,8 +177,10 @@ fn case_folding_keys_let_a_caller_spot_a_host_collision() {
 ```
 
 The host may fold beyond ASCII case — macOS normalizes NFD, Windows folds
-Unicode case — and normalizing that in-process would need a dependency the
-spec forbids. So the collision is caught by observation instead of prediction:
+Unicode case — and a normalization crate would not help: those crates model
+NFC/NFD, not a volume's case-folding table or its filename storage semantics,
+which vary between APFS, HFS+, NTFS and ext4 and are configurable per volume.
+So the collision is caught by observation rather than prediction:
 `create_dir_exact` creates the directory and then requires the parent listing
 to contain the exact bytes it asked for. Add to `crates/devkit-docs/tests/cache.rs`:
 
@@ -848,9 +850,12 @@ fd-lock.workspace = true
 ```
 
 `fd-lock = "4"` is already declared at `Cargo.toml:69` and used by
-`devkit-common`, `devkit-locks` and `devkit-ports`. Do not add `fs2` — it is
-not a dependency of this workspace, and adding it would violate the
-no-new-dependency constraint. Add `pub mod locks;` to `lib.rs`.
+`devkit-common`, `devkit-locks` and `devkit-ports`. Do not add `fs2`: a second
+locking crate means two sets of flock semantics across three platforms, and
+`fs2`'s `unlock` is now shadowed by `std::fs::File`'s inherent method of the
+same name, so `file.unlock()` silently calls std's. `fd-lock`'s RAII guard also
+ties the lock's lifetime to a binding, which manual lock/unlock pairs do not.
+Add `pub mod locks;` to `lib.rs`.
 
 Confirm `devkit_common::paths::config_dir` is the accessor this repo uses for
 `~/.config/devkit`; if it is named differently, use whatever `manifest.rs`
@@ -1783,6 +1788,18 @@ fn rel_key(lock_dir: &Path, ws: &Path) -> Result<String> {
 }
 
 fn undeclared(ws: &Path, package: &str, c: &Candidates) -> anyhow::Error {
+    if !c.resolved.is_empty() {
+        return anyhow::anyhow!(
+            "{} does not declare `{package}` (it is transitive); pin the version with --ref.\n\
+             versions present in the lockfile: {}",
+            ws.display(),
+            c.resolved
+                .iter()
+                .map(|(v, by)| format!("{v} (required by {by})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     let versions = if c.versions.is_empty() {
         "none".to_string()
     } else {
@@ -1945,6 +1962,11 @@ pub struct Candidates {
     pub versions: Vec<(String, String)>,
     /// Owners with a dependency edge to the package.
     pub declarers: Vec<String>,
+    /// (version, dependent) for formats whose dependency edge carries the
+    /// resolved version — cargo, uv and pnpm. Read from the lockfile, never
+    /// inferred, so it is safe to print as `required by`. Empty for bun and
+    /// npm, whose edges record a range.
+    pub resolved: Vec<(String, String)>,
 }
 
 /// Owners with an edge to `package`, across both a bun/npm workspace table
@@ -2008,99 +2030,56 @@ fn json_candidates(
 }
 ```
 
-`bun.lock` is JSONC — `//` comments and trailing commas are both legal and
-`serde_json` rejects both. Strip them with a scanner that tracks string state,
-because a `//` inside a URL string is not a comment:
+`bun.lock` is JSONC — `//` comments, `/* block comments */` and trailing commas
+are all legal, and `serde_json` rejects every one of them.
+
+**Use `jsonc-parser`, not a hand-rolled scanner.** Add to
+`crates/devkit-docs/Cargo.toml` and the workspace `[workspace.dependencies]`:
+
+```toml
+jsonc-parser = { version = "0.26", features = ["serde"] }
+```
 
 ```rust
-/// Strip `//` line comments and trailing commas from JSONC. String-aware: a
-/// `//` inside a string literal (every registry URL contains one) is content.
 fn json5_ish(src: &str) -> Result<serde_json::Value> {
-    let mut out = String::with_capacity(src.len());
-    let mut chars = src.chars().peekable();
-    let mut in_string = false;
-    while let Some(c) = chars.next() {
-        if in_string {
-            out.push(c);
-            match c {
-                '\\' => {
-                    if let Some(esc) = chars.next() {
-                        out.push(esc);
-                    }
-                }
-                '"' => in_string = false,
-                _ => {}
-            }
-            continue;
-        }
-        match c {
-            '"' => {
-                in_string = true;
-                out.push(c);
-            }
-            '/' if chars.peek() == Some(&'/') => {
-                for n in chars.by_ref() {
-                    if n == '\n' {
-                        out.push('\n');
-                        break;
-                    }
-                }
-            }
-            ',' => {
-                // Trailing when the next thing that is neither whitespace nor a
-                // comment is a closer. Skipping only whitespace is wrong:
-                // `{"a":1, // note\n}` has a comment between the comma and the
-                // `}`, so the comma would be kept and the stripped output would
-                // then be invalid JSON.
-                if !next_is_closer(&chars) {
-                    out.push(c);
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-    serde_json::from_str(&out).context("parsing bun.lock as JSONC")
-}
-
-/// Look past whitespace *and* `//` comments for the next significant character.
-fn next_is_closer(rest: &std::iter::Peekable<std::str::Chars>) -> bool {
-    let mut it = rest.clone();
-    loop {
-        match it.next() {
-            Some(c) if c.is_whitespace() => continue,
-            Some('/') if it.peek() == Some(&'/') => {
-                for n in it.by_ref() {
-                    if n == '\n' {
-                        break;
-                    }
-                }
-            }
-            Some(']') | Some('}') => return true,
-            _ => return false,
-        }
-    }
+    jsonc_parser::parse_to_serde_value(src, &Default::default())
+        .context("parsing bun.lock as JSONC")?
+        .context("bun.lock is empty")
 }
 ```
 
-Unit-test it on the three shapes that actually appear — a `//` inside a URL
-string, a trailing comma, and a comma separated from its closer by a comment:
+The earlier draft of this plan hand-wrote the stripper because of a
+no-new-dependency rule that this repo does not actually have. That scanner had
+two bugs before it ever ran: a comma followed by a comment then a closer was
+kept, and block comments were not handled at all — `/* … */` survived into the
+output and also defeated the trailing-comma lookahead. Both are cases a JSONC
+parser has already solved. Keep the tests below regardless; they now pin the
+dependency's behaviour rather than ours:
 
 ```rust
 #[test]
-fn jsonc_stripping_handles_urls_trailing_commas_and_interposed_comments() {
+fn jsonc_handles_urls_trailing_commas_and_both_comment_forms() {
     let v = json5_ish(r#"{ "url": "https://example.com/x", "a": [1, 2,], }"#).unwrap();
     assert_eq!(v["url"], "https://example.com/x");
     assert_eq!(v["a"].as_array().unwrap().len(), 2);
 
-    // The comma is trailing even though a comment sits between it and the `}`.
     let v = json5_ish("{\n  \"a\": 1, // note\n}").unwrap();
     assert_eq!(v["a"], 1);
 
-    // A comment line of its own, and one after the last array element.
-    let v = json5_ish("{\n  // leading\n  \"a\": [1, 2 // tail\n  ]\n}").unwrap();
+    // Block comment between a trailing comma and its closer — the shape that
+    // defeated the hand-written lookahead.
+    let v = json5_ish("{\n  \"a\": 1, /* note */ }").unwrap();
+    assert_eq!(v["a"], 1);
+
+    let v = json5_ish("{ /* lead */ \"a\": [1, 2 /* tail */ ] }").unwrap();
     assert_eq!(v["a"].as_array().unwrap().len(), 2);
 }
 ```
+
+Confirm the crate version and that `parse_to_serde_value` is behind its `serde`
+feature before writing the manifest line; if the API differs, use whatever it
+exposes that returns a `serde_json::Value`. 
+
 
 **pnpm** — the importer graph, with peer qualifiers and aliases:
 
@@ -2138,7 +2117,7 @@ fn pnpm(lock_dir: &Path, ws: &Path, rel: &str, package: &str) -> Result<Selectio
                     .or_else(|| entry.as_str())
                 {
                     let bare = loc.split_once('(').map_or(loc, |(h, _)| h);
-                    elsewhere.versions.push((
+                    elsewhere.resolved.push((
                         bare.rsplit_once('@').map_or(bare, |(_, x)| x).to_string(),
                         who.to_string(),
                     ));
@@ -2270,7 +2249,13 @@ fn from_package_array(
                     })
             })
             .collect();
-        return Err(undeclared(ws, package, &by));
+        // Cargo and uv edges carry the resolved version, so these are genuine
+        // pairs rather than a cross-product.
+        return Err(undeclared(
+            ws,
+            package,
+            &Candidates { resolved: by, ..Default::default() },
+        ));
     }
 
     // The edge names the exact version, so duplicates in the lockfile are not
@@ -3417,50 +3402,88 @@ fn child_add_up_and_wait() {
 fn child_rm_up() {
     let global = PathBuf::from(std::env::var("DOCM_RACE_GLOBAL").unwrap());
     let cache = PathBuf::from(std::env::var("DOCM_RACE_CACHE").unwrap());
-    std::fs::write(
-        PathBuf::from(std::env::var("DOCM_RACE_BARRIER").unwrap()).with_extension("rm-started"),
-        "",
+    // No `.rm-started` write here — see below. The rendezvous is inside
+    // `rm_library`, on the production path.
+    devkit_docs::rm_library(
+        devkit_docs::RmTarget::Global(&global),
+        &cache,
+        "up",
     )
     .unwrap();
-    devkit_docs::rm_library(&global, &cache, "up").unwrap();
 }
 ```
 
-`rm_library(global, cache_root, name)` lives in the library, not in
-`src/bin/docm.rs`, so both `cmd_rm` and this child reach the same code. It takes
-`locks::with_lib` and calls `manifest::remove_global` — and **takes no manifest
-lock of its own**: Task 4 Step 6 put `locks::with_manifest` *inside*
-`remove_global`, and wrapping it again would be a second acquisition of a
-non-reentrant lock from one process. That deadlocks, permanently, and it is the
-exact hazard Global Constraints warns about. Each lock is taken once, at one
-layer, and the layer that owns it is the one closest to the file.
+`rm_library` lives in the library, not in `src/bin/docm.rs`, so both `cmd_rm`
+and this child reach the same code:
+
+```rust
+pub enum RmTarget<'a> {
+    Global(&'a Path),
+    /// The `devkit.toml` a `--project` removal edits.
+    Project(&'a Path),
+}
+
+/// Returns whether an entry was actually removed.
+pub fn rm_library(target: RmTarget<'_>, cache_root: &Path, name: &str) -> Result<bool> {
+    barrier_signal("rm-started")?;
+    locks::with_lib(cache_root, name, || match target {
+        RmTarget::Global(p) => manifest::remove_global(p, name),
+        RmTarget::Project(p) => manifest::remove_project(p, name),
+    })
+}
+```
+
+It must carry the target. `docm rm --project` edits a `devkit.toml`, so a helper
+that only knows `remove_global` either removes from the wrong manifest, or is
+used only for global removals and leaves the project branch outside the library
+lock — and that branch is exactly where `rm` races `add`.
+
+It takes `locks::with_lib` and **no manifest lock of its own**: Task 4 Step 6 put
+`locks::with_manifest` *inside* `remove_global` and `remove_project`, and
+wrapping it again would be a second acquisition of a non-reentrant lock from one
+process. That deadlocks permanently — the exact hazard Global Constraints warns
+about, reintroduced four tasks after the warning was written. Each lock is taken
+once, at one layer, and the layer that owns it is the one closest to the file.
+
+**The rendezvous has to be on the production path, immediately before the lock.**
+Writing `.rm-started` in the test child *before* calling `rm_library` proves only
+that the child ran; an unlocked remover could still do its whole transaction
+after add finishes and produce the result the test expects. Signalling from
+inside `rm_library` on the line before `with_lib` is what makes "the remover has
+reached its lock attempt" observable, and that is the state the parent must see
+before it releases add.
 
 `spawn_child` re-enters this binary at an `#[ignore]`d test and passes
-`DOCM_RACE_GLOBAL`, `DOCM_RACE_CACHE`, `DOCM_RACE_BASE`, `DOCM_RACE_REPO` and
-`DOCM_RACE_BARRIER` at spawn — never via `set_var`, for the reason given in
-Task 7. `docm_add` reads `DEVKIT_DOCS_MANIFEST_BARRIER` itself, so the adder
-needs no extra wiring.
+`DOCM_RACE_GLOBAL`, `DOCM_RACE_CACHE`, `DOCM_RACE_BASE`, `DOCM_RACE_REPO` and —
+critically — **`DEVKIT_DOCS_MANIFEST_BARRIER`**, the variable `add` and
+`barrier_signal` actually read. An earlier draft passed a `DOCM_RACE_BARRIER`
+that nothing consumed, so `.ready` was never written and the parent hung on a
+file no code produced. Pass the real name, at spawn, never via `set_var` — for
+the reason given in Task 7.
 
-The parent waits for `.rm-started` before releasing `.go`, so `rm` has entered
-its transaction in both the locked and unlocked builds; what differs is whether
-it can proceed. Run this against a build with `rm`'s library lock removed and
-confirm it fails — `up` survives — before restoring it. That RED run is the
-whole evidence the test is load-bearing.
+Run this against a build with `rm`'s library lock removed and confirm it fails —
+`up` survives — before restoring it. That RED run is the whole evidence the test
+is load-bearing.
 
 - [ ] **Step 3: Implement `add`**
 
 Order, all inside **one** `locks::with_lib` for the target library:
 
 1. snapshot any existing same-name entry
-2. write the new entry — `locks::with_manifest`, atomic rename
-3. for a git URL with no `--ref`: resolve the default branch and store it as the
+2. `barrier_signal("ready")` then `barrier_wait("go")` — the
+   `DEVKIT_DOCS_MANIFEST_BARRIER` hook, between the read and the write, no-op
+   when the variable is unset. This is the only point where a locked and an
+   unlocked `rm` diverge; putting it after the write makes the race test
+   unfalsifiable.
+3. write the new entry — `locks::with_manifest`, atomic rename
+4. for a git URL with no `--ref`: resolve the default branch and store it as the
    entry's `ref`. Under `--project`, bail instead with the §6.1 text.
-4. materialize by calling `resolve::resolve_locked` — **not** `resolve`, which
+5. materialize by calling `resolve::resolve_locked` — **not** `resolve`, which
    would take the library lock a second time and deadlock against the hold this
    function is already inside
-5. on error: restore the snapshot, or remove the entry when there was none, then
+6. on error: restore the snapshot, or remove the entry when there was none, then
    return the error
-6. on success print the multi-line block from §6.1
+7. on success print the multi-line block from §6.1
 
 `rm` takes the same library lock around its manifest removal. Without it, `rm a`
 racing `add a` can interleave into an entry that names a library whose
@@ -3493,7 +3516,8 @@ cleanliness, skipping cache-root entries where `locks::is_control(name)`.
 
 ```bash
 cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
-git add src/bin/docm.rs crates/devkit-docs/src/manifest.rs src/bin/devkit \
+git add src/bin/docm.rs crates/devkit-docs/src/manifest.rs \
+        crates/devkit-docs/src/lib.rs src/bin/devkit \
         crates/devkit-docs/tests/concurrency.rs crates/devkit-docs/tests/common
 git commit -m "feat(docs): materialize on add and prove checkouts in info"
 ```

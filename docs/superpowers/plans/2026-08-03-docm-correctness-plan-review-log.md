@@ -437,3 +437,79 @@ round 5 found an error message that over-claims and a test-only helper that
 deadlocks. What remains is convergent, but the last three rounds each found real
 defects **in the previous round's fixes**, so the sequence has not demonstrably
 reached zero. The decision to run further rounds is the human's.
+
+## Round 6 — Codex (`gpt-5.6-sol`, effort `xhigh`) — cap extended by the human
+
+Also asked this round: whether any part of the plan is worse for having avoided
+a dependency, now that the invented no-new-dependency rule is gone.
+
+> The revised plan still has five material blockers, including defects in both round-5 fixes.
+>
+> 1. **Routine — Task 6 does not compile.** `from_package_array` passes `&Vec<(String, String)>` to `undeclared`, which requires `&Candidates`; moreover, `Candidates` cannot render the genuine `required by` pairs asserted at line 1644.
+> Fix: Add an explicit resolved-edge-pairs field or diagnostic variant, construct `Candidates` for cargo/uv, and align the exact output tests.
+>
+> 2. **Crucial — `json5_ish` rejects valid `bun.lock` JSONC.** The scanner handles only `//`; a valid `/* block comment */` remains in the output and also defeats `next_is_closer` after a trailing comma.
+> Fix: Replace the handwritten stripper with a JSONC-capable dependency and add block-comment and comma/block-comment/closer tests.
+>
+> 3. **Crucial — `rm_library` cannot preserve `rm --project`.** The proposed helper accepts only a global-manifest path and calls `remove_global`; using it unconditionally removes the wrong manifest, while using it only globally leaves the existing project branch outside the required library lock.
+> Fix: Give the shared transaction a global/project target and dispatch to `remove_global` or `remove_project` under the same `with_lib`, returning `Result<bool>`.
+>
+> 4. **Crucial — the revised add/rm race test still cannot prove RED.** `spawn_child` passes `DOCM_RACE_BARRIER`, but the adder reads `DEVKIT_DOCS_MANIFEST_BARRIER`, so `.ready` is never produced; after fixing that, `.rm-started` is still written before `rm_library` is called, allowing an unlocked remover to run after add and produce the expected result.
+> Fix: Set the actual barrier variable at spawn and use a production-path rendezvous that proves the remover reached its manifest mutation or lock attempt before releasing add.
+>
+> 5. **Routine — Task 11's committed boundary omits its new production function.** The task adds `rm_library` to `crates/devkit-docs/src/lib.rs`, but its `git add` does not stage that file.
+> Fix: Add `crates/devkit-docs/src/lib.rs` to Task 11's staging list.
+>
+> Non-blocking: keep `create_dir_exact`'s host-observation approach. Unicode normalization libraries model NFC/NFD, not volume-specific case folding and filename storage semantics. Remove the stale statements at lines 180–181 and 851–853 that still claim dependencies are forbidden.
+>
+> VERDICT: REVISE
+
+### Claude's response — accepted in full
+
+Findings 1 and 4 are in round-5's fixes. Finding 4 is the third consecutive
+round to find that the add/rm race test could not fail, each time for a
+different reason, which is a fair verdict on how hard a genuinely falsifiable
+concurrency test is to write.
+
+1. **`Candidates` broke its own caller.** Changing `undeclared`'s parameter left
+   `from_package_array` passing the old `Vec<(String, String)>`, and the new
+   struct could not express the `required by` pairs the cargo test asserts.
+   Added a third field, `resolved: Vec<(version, dependent)>`, for the formats
+   whose edge *does* carry a resolved version — cargo, uv, pnpm — so genuine
+   pairs are printed as pairs while bun and npm keep versions and declarers as
+   separate lists. The distinction is not cosmetic: it is the difference between
+   reporting what the lockfile says and inventing an attribution.
+2. **The JSONC stripper is gone.** It handled `//` but not `/* … */`, which is
+   valid in `bun.lock` and also defeated the trailing-comma lookahead. I
+   hand-wrote it only because of the no-new-dependency rule I had invented; with
+   that rule withdrawn, the honest answer is `jsonc-parser`, which has solved
+   this. Deleted the scanner and `next_is_closer`, kept the tests, and added the
+   block-comment-before-closer case the old code failed.
+3. **`rm_library` needed a target.** It only knew `remove_global`, so
+   `docm rm --project` would either edit the wrong manifest or stay outside the
+   library lock — and the project branch is exactly where `rm` races `add`.
+   Added `RmTarget::{Global, Project}` dispatching under one `with_lib`.
+4. **The race test was unfalsifiable in two independent ways.** `spawn_child`
+   passed `DOCM_RACE_BARRIER`, which nothing reads — `add` reads
+   `DEVKIT_DOCS_MANIFEST_BARRIER` — so `.ready` was never written and the parent
+   would have hung on a file no code produces. And `.rm-started` was written by
+   the *test child* before calling `rm_library`, which proves only that the
+   child started; an unlocked remover could still complete after add and produce
+   the asserted result. Moved the signal into `rm_library` immediately before
+   `with_lib`, so it means "the remover has reached its lock attempt", and fixed
+   the variable name. Also numbered the barrier into `add`'s step list between
+   the manifest read and the write, so it cannot drift back to a position where
+   the two builds agree.
+5. **Staging.** Added `crates/devkit-docs/src/lib.rs` to Task 11's `git add`.
+
+**On the dependency question.** Codex agrees `create_dir_exact` should keep
+observing what the host stored: normalization crates model NFC/NFD, not a
+volume's case-folding table or filename storage semantics, which differ across
+APFS, HFS+, NTFS and ext4 and are per-volume configurable. So the observation
+approach is right on its merits, not merely as a workaround. The one place the
+invented rule *did* cost something was the JSONC stripper, now replaced. Removed
+both stale passages that still asserted the rule, and rewrote the `fd-lock`
+rationale to give the real reason — one set of flock semantics, RAII guards, and
+`fs2::unlock` now being shadowed by `std::fs::File`'s inherent method.
+
+---
