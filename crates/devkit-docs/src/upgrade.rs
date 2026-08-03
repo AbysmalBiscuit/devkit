@@ -40,14 +40,20 @@ pub fn run(cache_root: &Path) -> Result<Vec<String>> {
     let survey = survey(cache_root)?;
     let renames = plan_renames(cache_root, &survey)?;
 
+    // Capturing before journalling keeps a refused run from leaving a record
+    // at a target name no later pass visits, which a re-added library would
+    // then read as its own.
+    let mut captured = Vec::new();
+    for rename in &renames {
+        let source = cache_root.join(&rename.scope).join(&rename.member);
+        captured.push(capture_commits(&source.join("repo.git"))?);
+    }
     // Every commit is on disk before the first directory moves: a rebuild
     // destroys both the checkout and the administrative entry naming it, and
     // an interrupted run leaves nothing else to recover them from.
-    for rename in &renames {
-        let source = cache_root.join(&rename.scope).join(&rename.member);
-        let commits = capture_commits(&source.join("repo.git"))?;
+    for (rename, commits) in renames.iter().zip(&captured) {
         if !commits.is_empty() {
-            write_journal(cache_root, &rename.target, &commits)?;
+            write_journal(cache_root, &rename.target, commits)?;
         }
     }
 
@@ -83,6 +89,15 @@ struct Survey {
 struct Scope {
     dir: String,
     members: Vec<String>,
+}
+
+/// A checkout `heal` has to put back, and whether a directory is in the way.
+#[derive(Debug)]
+struct Pending {
+    checkout: String,
+    commit: String,
+    verb: &'static str,
+    occupied: bool,
 }
 
 #[derive(Debug)]
@@ -189,12 +204,18 @@ fn apply_rename(cache_root: &Path, rename: &Rename) -> Result<Vec<String>> {
     let scope_dir = cache_root.join(&rename.scope);
     let source = scope_dir.join(&rename.member);
     let target = cache_root.join(&rename.target);
-    std::fs::rename(&source, &target)
-        .with_context(|| format!("moving {} to {}", source.display(), target.display()))?;
-    let mut lines = vec![format!(
-        "migrated {}/{} to {}",
-        rename.scope, rename.member, rename.target
-    )];
+    let mut lines = Vec::new();
+    // Another process planning the same migration may have held this lock
+    // first and already moved the library. The plan is then satisfied rather
+    // than violated, and healing it is still this run's job.
+    if source.exists() || !target.is_dir() {
+        std::fs::rename(&source, &target)
+            .with_context(|| format!("moving {} to {}", source.display(), target.display()))?;
+        lines.push(format!(
+            "migrated {}/{} to {}",
+            rename.scope, rename.member, rename.target
+        ));
+    }
     lines.extend(heal_and_backfill(cache_root, &rename.target)?);
     // A scope whose other members were not libraries keeps its directory.
     let _ = std::fs::remove_dir(&scope_dir);
@@ -223,6 +244,21 @@ fn needs_attention(cache_root: &Path, dirname: &str) -> bool {
         .any(|(_, path)| is_worktree(path) && !links_ok(&bare, path))
 }
 
+/// A checkout git can still use: present, a worktree, and linked to its
+/// administrative entry in both directions.
+fn resolves(bare: &Path, checkout: &Path) -> bool {
+    is_worktree(checkout) && links_ok(bare, checkout)
+}
+
+/// A journal is spent only once every checkout it names is back and usable.
+/// Clearing it on mere presence would discard the record of a directory an
+/// interrupted removal left behind as a husk, which no other pass would fix.
+fn journal_satisfied(lib_dir: &Path, bare: &Path, journal: &[JournalEntry]) -> bool {
+    journal
+        .iter()
+        .all(|entry| resolves(bare, &lib_dir.join(&entry.dirname)))
+}
+
 /// Make every checkout of one library resolve again: repair the ones whose
 /// links a rename invalidated, rebuild the ones repair cannot fix, and
 /// recreate the ones an interrupted rebuild left with no trace but a journal.
@@ -234,9 +270,9 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     let admin = capture_commits(&bare)?;
 
     let mut lines = Vec::new();
-    let mut pending: Vec<(String, String, &str)> = Vec::new();
+    let mut pending: Vec<Pending> = Vec::new();
     for (checkout, path) in checkouts(cache_root, dirname) {
-        if !is_worktree(&path) || links_ok(&bare, &path) {
+        if resolves(&bare, &path) || !is_worktree(&path) {
             continue;
         }
         let commit = expected_commit(&admin, &journal, &checkout).with_context(|| {
@@ -253,29 +289,45 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
         let _ = cmd::git(&["worktree", "repair", path_str.as_str()], &bare_str);
         match head_at(&path) {
             Ok(head) if head == commit => lines.push(format!("repaired {dirname}/{checkout}")),
-            _ => pending.push((checkout, commit, "rebuilt")),
+            _ => pending.push(Pending {
+                checkout,
+                commit,
+                verb: "rebuilt",
+                occupied: true,
+            }),
         }
     }
-    let rebuilt = pending.len();
     for entry in &journal {
-        if !lib_dir.join(&entry.dirname).exists() {
-            pending.push((entry.dirname.clone(), entry.commit.clone(), "restored"));
+        let path = lib_dir.join(&entry.dirname);
+        if resolves(&bare, &path) || pending.iter().any(|p| p.checkout == entry.dirname) {
+            continue;
         }
+        // A husk in the way of its own recreation has to be cleared first; a
+        // checkout that is simply absent does not.
+        let occupied = path.exists();
+        pending.push(Pending {
+            checkout: entry.dirname.clone(),
+            commit: entry.commit.clone(),
+            verb: if occupied { "rebuilt" } else { "restored" },
+            occupied,
+        });
     }
 
     if pending.is_empty() {
-        clear_journal(cache_root, dirname)?;
+        if journal_satisfied(&lib_dir, &bare, &journal) {
+            clear_journal(cache_root, dirname)?;
+        }
         return Ok(lines);
     }
 
     let mut record = admin;
-    for (checkout, commit, _) in &pending {
-        record.insert(checkout.clone(), commit.clone());
+    for step in &pending {
+        record.insert(step.checkout.clone(), step.commit.clone());
     }
     write_journal(cache_root, dirname, &record)?;
 
-    for (checkout, _, _) in &pending[..rebuilt] {
-        let path = lib_dir.join(checkout);
+    for step in pending.iter().filter(|step| step.occupied) {
+        let path = lib_dir.join(&step.checkout);
         let path_str = path.to_string_lossy().into_owned();
         if cmd::git(
             &["worktree", "remove", "--force", path_str.as_str()],
@@ -296,16 +348,21 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     // and `worktree add` refuses a name that is still registered.
     cmd::git(&["worktree", "prune"], &bare_str)
         .with_context(|| format!("pruning worktrees of {dirname}"))?;
-    for (checkout, commit, verb) in &pending {
+    for step in &pending {
+        let Pending {
+            checkout, commit, ..
+        } = step;
         let path_str = lib_dir.join(checkout).to_string_lossy().into_owned();
         cmd::git(
             &["worktree", "add", "--detach", path_str.as_str(), commit],
             &bare_str,
         )
         .with_context(|| format!("recreating {dirname}/{checkout} at {commit}"))?;
-        lines.push(format!("{verb} {dirname}/{checkout} at {commit}"));
+        lines.push(format!("{} {dirname}/{checkout} at {commit}", step.verb));
     }
-    clear_journal(cache_root, dirname)?;
+    if journal_satisfied(&lib_dir, &bare, &journal) {
+        clear_journal(cache_root, dirname)?;
+    }
     Ok(lines)
 }
 
@@ -454,10 +511,16 @@ fn admin_checkout_name(admin: &Path, lib_dir: &Path) -> Option<String> {
 }
 
 fn admin_head(admin: &Path) -> Option<String> {
-    let head = std::fs::read_to_string(admin.join("HEAD")).ok()?;
-    let head = head.trim().to_string();
-    let detached = head.len() == 40 && head.chars().all(|c| c.is_ascii_hexdigit());
-    detached.then_some(head)
+    real_commit(&std::fs::read_to_string(admin.join("HEAD")).ok()?)
+}
+
+/// A detached object id, rejecting the null id git reports for an entry it
+/// cannot resolve — recording that as a commit would journal a checkout no
+/// `worktree add` can ever recreate.
+fn real_commit(value: &str) -> Option<String> {
+    let value = value.trim();
+    let hex = value.len() == 40 && value.chars().all(|c| c.is_ascii_hexdigit());
+    (hex && value.bytes().any(|byte| byte != b'0')).then(|| value.to_string())
 }
 
 fn list_worktrees(bare: &Path) -> Result<BTreeMap<String, String>> {
@@ -473,8 +536,9 @@ fn list_worktrees(bare: &Path) -> Result<BTreeMap<String, String>> {
                 .map(|name| name.to_string_lossy().into_owned());
         } else if let Some(commit) = line.strip_prefix("HEAD ")
             && let Some(checkout) = checkout.take()
+            && let Some(commit) = real_commit(commit)
         {
-            listed.insert(checkout, commit.trim().to_string());
+            listed.insert(checkout, commit);
         }
     }
     Ok(listed)

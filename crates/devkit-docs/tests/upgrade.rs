@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 mod common;
 
 #[test]
@@ -524,4 +526,197 @@ fn a_recreated_checkout_clears_the_registration_its_removal_left_behind() {
     );
     assert!(!journal.exists());
     assert!(devkit_docs::upgrade::run(&cache).unwrap().is_empty());
+}
+
+/// Clone a bare repo for `lib` and add `checkout` as a detached worktree.
+fn seed_library(repo: &str, lib: &std::path::Path, checkouts: &[&str]) -> Vec<String> {
+    std::fs::create_dir_all(lib).unwrap();
+    let bare = lib.join("repo.git");
+    devkit_common::cmd::capture(
+        "git",
+        &["clone", "--bare", repo, bare.to_str().unwrap()],
+        None,
+    )
+    .unwrap();
+    checkouts
+        .iter()
+        .map(|checkout| {
+            devkit_common::cmd::capture(
+                "git",
+                &[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    lib.join(checkout).to_str().unwrap(),
+                    checkout,
+                ],
+                Some(bare.to_str().unwrap()),
+            )
+            .unwrap();
+            devkit_common::cmd::capture(
+                "git",
+                &["rev-parse", "HEAD"],
+                Some(lib.join(checkout).to_str().unwrap()),
+            )
+            .unwrap()
+            .trim()
+            .to_string()
+        })
+        .collect()
+}
+
+fn write_journal(cache: &std::path::Path, lib: &str, checkout: &str, commit: &str) -> PathBuf {
+    let path = cache
+        .join("registry.locks")
+        .join(format!("{lib}.migration.json"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        format!(r#"{{"worktrees":[{{"dirname":"{checkout}","commit":"{commit}"}}]}}"#),
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn a_husk_left_by_an_interrupted_removal_is_rebuilt_rather_than_forgotten() {
+    let base = common::unique_tmp("upgrade-husk");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let lib = cache.join("@scope~pkg");
+    let head = seed_library(&repo, &lib, &["v1.0.0"]).remove(0);
+    let journal = write_journal(&cache, "@scope~pkg", "v1.0.0", &head);
+
+    // What a crash inside `worktree remove` leaves: the directory is still
+    // there, so it is not missing, but its gitfile is gone, so it is not a
+    // worktree either. It falls between "repair it" and "restore it".
+    std::fs::remove_file(lib.join("v1.0.0").join(".git")).unwrap();
+
+    let done = devkit_docs::upgrade::run(&cache).unwrap();
+    assert!(
+        done.iter().any(|l| l.contains("v1.0.0")),
+        "the husk must be healed, not skipped: {done:?}"
+    );
+    assert_eq!(
+        devkit_common::cmd::capture(
+            "git",
+            &["rev-parse", "HEAD"],
+            Some(lib.join("v1.0.0").to_str().unwrap()),
+        )
+        .unwrap()
+        .trim(),
+        head
+    );
+    assert!(
+        !journal.exists(),
+        "the journal is cleared only once its checkout is back and resolving"
+    );
+    assert!(devkit_docs::upgrade::run(&cache).unwrap().is_empty());
+}
+
+#[test]
+fn a_rename_another_process_already_applied_is_not_an_error() {
+    let base = common::unique_tmp("upgrade-raced");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let old = cache.join("@scope/pkg");
+    let head = seed_library(&repo, &old, &["v1.0.0"]).remove(0);
+    let new = cache.join("@scope~pkg");
+    let journal = cache
+        .join("registry.locks")
+        .join("@scope~pkg.migration.json");
+
+    // Hold the target lock, then start a run: it surveys and journals before it
+    // reaches the lock, so it plans a rename it will apply against a source
+    // another process has meanwhile moved.
+    let mut racer = None;
+    devkit_docs::locks::with_lib_dir(&cache, "@scope~pkg", || {
+        let racing_cache = cache.clone();
+        racer = Some(std::thread::spawn(move || {
+            devkit_docs::upgrade::run(&racing_cache)
+        }));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !journal.try_exists().unwrap() {
+            assert!(
+                std::time::Instant::now() <= deadline,
+                "the run never reached its journal write"
+            );
+            std::thread::yield_now();
+        }
+        std::fs::rename(&old, &new).unwrap();
+        let _ = std::fs::remove_dir(cache.join("@scope"));
+        Ok(())
+    })
+    .unwrap();
+
+    let done = racer.unwrap().join().unwrap().unwrap();
+    assert!(
+        !done.iter().any(|l| l.contains("migrated")),
+        "the rename was another process's to report: {done:?}"
+    );
+    assert_eq!(
+        devkit_common::cmd::capture(
+            "git",
+            &["rev-parse", "HEAD"],
+            Some(new.join("v1.0.0").to_str().unwrap()),
+        )
+        .unwrap()
+        .trim(),
+        head
+    );
+    assert!(devkit_docs::upgrade::run(&cache).unwrap().is_empty());
+}
+
+#[test]
+fn two_sources_that_fold_onto_one_target_migrate_nothing() {
+    let base = common::unique_tmp("upgrade-fold");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    seed_library(&repo, &cache.join("@Scope/pkg"), &[]);
+    if cache.join("@scope").is_dir() {
+        // The volume folds case, so the two scopes are one directory and the
+        // collision this guards cannot be staged here.
+        return;
+    }
+    seed_library(&repo, &cache.join("@scope/pkg"), &[]);
+
+    let err = devkit_docs::upgrade::run(&cache).unwrap_err().to_string();
+    assert!(
+        err.contains("differ only by case"),
+        "the fold collision must be named: {err}"
+    );
+    assert!(cache.join("@Scope/pkg/repo.git").is_dir());
+    assert!(cache.join("@scope/pkg/repo.git").is_dir());
+}
+
+#[test]
+fn a_capture_failure_refuses_the_run_before_any_library_is_touched() {
+    let base = common::unique_tmp("upgrade-capture");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    seed_library(&repo, &cache.join("@scope/aaa"), &["v1.0.0"]);
+    let zzz = cache.join("@scope/zzz");
+    seed_library(&repo, &zzz, &[]);
+
+    // An administrative entry naming a checkout it records no commit for. It
+    // sorts after `aaa`, whose capture has already succeeded by then.
+    let ghost = zzz.join("repo.git/worktrees/ghost");
+    std::fs::create_dir_all(&ghost).unwrap();
+    std::fs::write(ghost.join("gitdir"), "/nonexistent/ghost/.git\n").unwrap();
+
+    let err = devkit_docs::upgrade::run(&cache).unwrap_err().to_string();
+    assert!(
+        err.contains("ghost"),
+        "the error must name the entry: {err}"
+    );
+    assert!(
+        cache.join("@scope/aaa/repo.git").is_dir(),
+        "a refused run moves nothing, including the libraries that planned cleanly"
+    );
+    assert!(
+        !cache
+            .join("registry.locks/@scope~aaa.migration.json")
+            .exists(),
+        "no journal outlives a run that never renamed anything"
+    );
 }
