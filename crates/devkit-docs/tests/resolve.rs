@@ -13,8 +13,13 @@ fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
     let project = tmp.join("proj");
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmylib = \"1\"\n",
+    )
+    .unwrap();
+    std::fs::write(
         project.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\n",
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"mylib\"]\n\n[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\n",
     )
     .unwrap();
 
@@ -33,7 +38,8 @@ fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
         "// v1"
     );
     assert_eq!(r.layout.docs_dir.as_deref(), Some("docs"));
-    assert!(r.warnings.is_empty());
+    assert_eq!(r.warnings.len(), 1);
+    assert!(r.warnings[0].contains("Cargo.lock"), "{:?}", r.warnings);
 
     let data = RefStore::at(&cache_root).snapshot();
     assert_eq!(data.rows.len(), 1);
@@ -126,16 +132,27 @@ fn git_ecosystem_without_ref_falls_back_to_default_with_warning() {
 }
 
 #[test]
-fn lockfile_resolved_from_subdir_records_lockfile_holding_dir() {
+fn lockfile_resolved_from_subdir_records_selected_workspace() {
     let tmp = unique_tmp("resolve-subdir");
     let repo = fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("proj");
-    let deep = project.join("crates/app/src");
+    let member = project.join("crates/app");
+    let deep = member.join("src");
     std::fs::create_dir_all(&deep).unwrap();
     std::fs::write(
+        project.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/app\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        member.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmylib = \"1\"\n",
+    )
+    .unwrap();
+    std::fs::write(
         project.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\n",
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"mylib\"]\n\n[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\n",
     )
     .unwrap();
 
@@ -145,9 +162,6 @@ fn lockfile_resolved_from_subdir_records_lockfile_holding_dir() {
         repo: Some(repo),
         ..Default::default()
     };
-    // Resolve starting DEEP below the lockfile dir; there is no devkit.toml
-    // anywhere, so project_root(start) would be `deep`, distinct from the
-    // lockfile's holding dir `project`.
     let r = resolve(&entry, &deep, &cache_root).unwrap();
     assert_eq!(r.worktree, "v1.0.0");
 
@@ -155,8 +169,12 @@ fn lockfile_resolved_from_subdir_records_lockfile_holding_dir() {
     assert_eq!(data.rows.len(), 1);
     assert_eq!(
         data.rows[0].project,
-        project.to_string_lossy(),
-        "reference must be attributed to the lockfile's holding dir, not the start dir"
+        member.to_string_lossy(),
+        "reference must be attributed to the selected member workspace"
+    );
+    assert_eq!(
+        devkit_docs::refs::current_version(&entry, &member),
+        Some("1.0.0".to_string())
     );
 }
 

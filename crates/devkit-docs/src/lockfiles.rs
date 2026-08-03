@@ -1,8 +1,8 @@
-//! Lockfile parsers: which version of a package does a project pin?
+//! Tolerant lockfile version discovery used by conservative prune liveness checks.
 //!
-//! All parsers are tolerant — an unreadable or unparsable lockfile yields no
-//! versions rather than an error, so resolution can fall through to the
-//! default branch.
+//! Importer-aware checkout resolution lives in `crate::importers`. These parsers
+//! only answer whether a live project still has a lockfile reference, so an
+//! unreadable or unparsable lockfile yields no versions.
 
 use crate::manifest::Ecosystem;
 use std::path::{Path, PathBuf};
@@ -135,7 +135,7 @@ fn bun_versions(path: &Path, package: &str) -> Vec<String> {
     let Ok(s) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&strip_trailing_commas(&s)) else {
+    let Ok(Some(v)) = jsonc_parser::parse_to_serde_value(&s, &Default::default()) else {
         return Vec::new();
     };
     let Some(pkgs) = v.get("packages").and_then(|p| p.as_object()) else {
@@ -147,42 +147,6 @@ fn bun_versions(path: &Path, package: &str) -> Vec<String> {
         .filter(|(name, _)| *name == package)
         .map(|(_, ver)| ver.to_string())
         .collect()
-}
-
-/// bun writes its lockfile as JSONC, but the only JSONC feature its writer
-/// emits is trailing commas — drop them (outside strings) so serde_json can
-/// parse the rest.
-fn strip_trailing_commas(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let (mut in_str, mut escaped) = (false, false);
-    for c in s.chars() {
-        if in_str {
-            out.push(c);
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_str = false;
-            }
-            continue;
-        }
-        match c {
-            '"' => {
-                in_str = true;
-                out.push(c);
-            }
-            '}' | ']' => {
-                let trimmed = out.trim_end().len();
-                if out[..trimmed].ends_with(',') {
-                    out.truncate(trimmed - 1);
-                }
-                out.push(c);
-            }
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -206,6 +170,7 @@ mod tests {
     const PNPM_V9: &str = "lockfileVersion: '9.0'\npackages:\n  react@18.3.1:\n    resolution: {integrity: sha512-x}\n  '@types/node@20.12.0':\n    resolution: {integrity: sha512-y}\n";
     const PNPM_V6: &str = "lockfileVersion: '6.0'\npackages:\n  /react@18.2.0(scheduler@0.23.0):\n    resolution: {integrity: sha512-z}\n";
     const BUN_LOCK: &str = r#"{
+  // Prune must recognize the same JSONC that importer resolution accepts.
   "lockfileVersion": 1,
   "configVersion": 1,
   "workspaces": {
@@ -220,7 +185,7 @@ mod tests {
     "kysely": ["kysely@0.28.17", "", {}, "sha512-x"],
     "@types/node": ["@types/node@20.12.0", "", {}, "sha512-y"],
     "@app/portal/kysely": ["kysely@0.28.14", "", {}, "sha512-z"],
-    "@scope/kysely": ["@scope/kysely@9.9.9", "", {}, "sha512-w"],
+    "@scope/kysely": ["@scope/kysely@9.9.9", "", {}, "sha512-w"], /* note */
   },
 }"#;
 

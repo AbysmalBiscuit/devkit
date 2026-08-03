@@ -449,8 +449,13 @@ fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(&manifest_path, "[defaults]\n").unwrap();
     std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlocked = \"1\"\n",
+    )
+    .unwrap();
+    std::fs::write(
         project.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\n",
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"locked\"]\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\n",
     )
     .unwrap();
 

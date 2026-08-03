@@ -3,8 +3,8 @@
 //! fallback (with a warning). Every success records a reference row.
 
 use crate::cache::{self, LibCache};
+use crate::importers;
 use crate::layout::{self, Layout};
-use crate::lockfiles;
 use crate::locks;
 use crate::manifest::{Ecosystem, LibEntry};
 use crate::names;
@@ -80,30 +80,24 @@ pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Resu
         let eco = entry
             .ecosystem
             .with_context(|| format!("lib `{}` has neither ecosystem nor ref", entry.name))?;
-        let hit = if eco == Ecosystem::Git {
+        let selection = if eco == Ecosystem::Git || !has_importer_manifest(start, eco) {
             None
         } else {
-            lockfiles::find_version(start, eco, &entry.package_name())
+            Some(importers::select(start, eco, &entry.package_name())?)
         };
-        match hit {
-            Some((root, versions)) => {
-                let v = lockfiles::highest(versions.clone()).expect("non-empty versions");
-                if versions.len() > 1 {
-                    warnings.push(format!(
-                        "lockfile holds {} versions of {}; using {v}",
-                        versions.len(),
-                        entry.package_name()
-                    ));
-                }
+        match selection {
+            Some(selection) => {
+                let v = selection.version;
+                warnings.push(selection.source);
                 match locate_tag(&lib, &mut meta, &entry.package_name(), &v)? {
-                    Some(tag) => (tag, v, root),
+                    Some(tag) => (tag, v, selection.workspace),
                     None => {
                         warnings.push(format!(
                             "no git tag found for {} {v}; falling back to the default branch",
                             entry.name
                         ));
                         let branch = lib.default_branch()?;
-                        (branch.clone(), branch, root)
+                        (branch.clone(), branch, selection.workspace)
                     }
                 }
             }
@@ -188,6 +182,18 @@ pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Resu
         notes: entry.notes.clone(),
         warnings,
     })
+}
+
+fn has_importer_manifest(start: &Path, ecosystem: Ecosystem) -> bool {
+    let manifest = match ecosystem {
+        Ecosystem::Rust => "Cargo.toml",
+        Ecosystem::Js => "package.json",
+        Ecosystem::Python => "pyproject.toml",
+        Ecosystem::Git => return false,
+    };
+    start
+        .ancestors()
+        .any(|directory| directory.join(manifest).is_file())
 }
 
 /// Probe tag patterns in priority order, using the cached pattern at its

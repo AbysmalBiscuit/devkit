@@ -1,5 +1,6 @@
 pub mod barrier;
 pub mod cache;
+pub mod importers;
 pub mod layout;
 pub mod lockfiles;
 pub mod locks;
