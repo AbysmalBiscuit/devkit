@@ -125,21 +125,21 @@ fn concurrent_adds_of_different_libraries_both_survive() {
     let exe = std::env::current_exe().unwrap();
 
     let first = spawn_upsert_worker(&exe, &manifest, &cache_root, &first_barrier, "alpha");
-    wait_for(&first_barrier.with_extension("ready"));
+    wait_for(&first_barrier.with_extension("manifest-ready"));
 
     let second = spawn_upsert_worker(&exe, &manifest, &cache_root, &second_barrier, "beta");
-    let second_ready = second_barrier.with_extension("ready");
+    let second_ready = second_barrier.with_extension("manifest-ready");
     let second_contended = second_barrier.with_extension("contended");
     if wait_for_either(&second_ready, &second_contended) {
-        std::fs::write(second_barrier.with_extension("go"), "").unwrap();
+        std::fs::write(second_barrier.with_extension("manifest-go"), "").unwrap();
         assert_worker_succeeded(wait_for_child(second, "second"), "second");
-        std::fs::write(first_barrier.with_extension("go"), "").unwrap();
+        std::fs::write(first_barrier.with_extension("manifest-go"), "").unwrap();
         assert_worker_succeeded(wait_for_child(first, "first"), "first");
     } else {
-        std::fs::write(first_barrier.with_extension("go"), "").unwrap();
+        std::fs::write(first_barrier.with_extension("manifest-go"), "").unwrap();
         assert_worker_succeeded(wait_for_child(first, "first"), "first");
         wait_for(&second_ready);
-        std::fs::write(second_barrier.with_extension("go"), "").unwrap();
+        std::fs::write(second_barrier.with_extension("manifest-go"), "").unwrap();
         assert_worker_succeeded(wait_for_child(second, "second"), "second");
     }
 

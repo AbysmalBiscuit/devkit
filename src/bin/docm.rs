@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use devkit_docs::manifest::{self, Discovered, Ecosystem, LibEntry};
-use devkit_docs::{cache, lookup, refs, resolve, upgrade};
+use devkit_docs::{ManifestTarget, cache, lookup, refs, resolve, upgrade};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -101,11 +101,20 @@ fn main() -> Result<()> {
             notes,
             project,
         } => cmd_add(
-            target, eco, package, repo, git_ref, src_dir, docs_dir, notes, project,
+            target,
+            eco,
+            package,
+            repo,
+            git_ref,
+            src_dir,
+            docs_dir,
+            notes,
+            project,
+            cli.allow_default_branch,
         ),
         Cmd::Rm { name, project } => cmd_rm(&name, project),
         Cmd::List { json } => cmd_list(json),
-        Cmd::Sync { names } => cmd_sync(&names),
+        Cmd::Sync { names } => cmd_sync(&names, cli.allow_default_branch),
         Cmd::Path { name } => cmd_path(&name, cli.allow_default_branch),
         Cmd::Info { name, json } => cmd_info(&name, json, cli.allow_default_branch),
         Cmd::Prune { yes } => cmd_prune(yes),
@@ -146,6 +155,7 @@ fn cmd_add(
     docs_dir: Option<String>,
     notes: Option<String>,
     project: bool,
+    allow_default_branch: bool,
 ) -> Result<()> {
     let is_url = target.contains("://") || target.starts_with("git@");
     let mut entry = if is_url {
@@ -182,39 +192,61 @@ fn cmd_add(
     entry.notes = notes;
     let cache_root = cache::docs_root();
 
-    let dest = if project {
-        let d = discovered()?;
-        let path = d
-            .project_devkit_toml
-            .context("no devkit.toml found walking up from CWD (required for --project)")?;
-        manifest::upsert_project(&path, &entry, &cache_root)?;
-        path
-    } else {
-        let path = manifest::global_docs_path();
-        manifest::upsert_global(&path, &entry, &cache_root)?;
-        path
-    };
+    let dest = manifest_path(project)?;
+    let added = devkit_docs::add_library(
+        manifest_target(project, &dest),
+        &cache_root,
+        &cwd()?,
+        &entry,
+        &resolve::Options {
+            allow_default_branch,
+        },
+    )?;
+    for w in &added.resolved.warnings {
+        eprintln!("docm: {w}");
+    }
+    let r = &added.resolved;
     println!(
-        "registered {} ({}) -> {} in {}",
-        entry.name,
+        "registered {} ({}) -> {}",
+        r.name,
         entry.ecosystem.map(|e| e.to_string()).unwrap_or_default(),
-        entry.repo.as_deref().unwrap_or("-"),
-        dest.display()
+        r.origin
     );
+    let inferred = if added.inferred_ref {
+        " (inferred default branch; moves on `docm sync`)"
+    } else {
+        ""
+    };
+    println!("  ref       {}{inferred}", r.git_ref);
+    println!("  commit    {}", r.commit);
+    println!("  path      {}", r.path.display());
+    println!("  manifest  {}", dest.display());
     Ok(())
+}
+
+/// The manifest a mutation writes to: the nearest `devkit.toml` under
+/// `--project`, else the global file.
+fn manifest_path(project: bool) -> Result<PathBuf> {
+    if !project {
+        return Ok(manifest::global_docs_path());
+    }
+    discovered()?
+        .project_devkit_toml
+        .context("no devkit.toml found walking up from CWD (required for --project)")
+}
+
+fn manifest_target(project: bool, path: &Path) -> ManifestTarget<'_> {
+    if project {
+        ManifestTarget::Project(path)
+    } else {
+        ManifestTarget::Global(path)
+    }
 }
 
 fn cmd_rm(name: &str, project: bool) -> Result<()> {
     let cache_root = cache::docs_root();
-    let removed = if project {
-        let d = discovered()?;
-        let path = d
-            .project_devkit_toml
-            .context("no devkit.toml found walking up from CWD (required for --project)")?;
-        manifest::remove_project(&path, name, &cache_root)?
-    } else {
-        manifest::remove_global(&manifest::global_docs_path(), name, &cache_root)?
-    };
+    let dest = manifest_path(project)?;
+    let removed = devkit_docs::rm_library(manifest_target(project, &dest), &cache_root, name)?;
     if removed {
         println!("removed {name}; run `docm prune` to reclaim its checkouts");
         Ok(())
@@ -226,6 +258,33 @@ fn cmd_rm(name: &str, project: bool) -> Result<()> {
     }
 }
 
+struct LibState {
+    /// The URL the bare clone was made from, which is what a checkout actually
+    /// holds — not the manifest's declared repo.
+    origin: Option<String>,
+    checkouts: Vec<(String, cache::WorktreeMeta)>,
+}
+
+fn lib_state(root: &Path, name: &str) -> Result<LibState> {
+    let lib = cache::LibCache::new(root, name)?;
+    let meta = cache::read_meta(&lib.dir);
+    Ok(LibState {
+        origin: meta.origin.clone(),
+        checkouts: lib
+            .version_worktrees()
+            .into_iter()
+            .map(|(dirname, _)| {
+                let recorded = meta.worktrees.get(&dirname).cloned().unwrap_or_default();
+                (dirname, recorded)
+            })
+            .collect(),
+    })
+}
+
+fn short(commit: &str) -> &str {
+    &commit[..commit.len().min(12)]
+}
+
 fn cmd_list(json: bool) -> Result<()> {
     let d = discovered()?;
     let root = cache::docs_root();
@@ -235,10 +294,17 @@ fn cmd_list(json: bool) -> Result<()> {
             .libs
             .iter()
             .map(|l| -> Result<serde_json::Value> {
-                let synced: Vec<String> = cache::LibCache::new(&root, &l.name)?
-                    .version_worktrees()
+                let state = lib_state(&root, &l.name)?;
+                let checkouts: Vec<serde_json::Value> = state
+                    .checkouts
                     .into_iter()
-                    .map(|(n, _)| n)
+                    .map(|(dirname, recorded)| {
+                        serde_json::json!({
+                            "worktree": dirname,
+                            "ref": recorded.raw_ref,
+                            "commit": recorded.commit,
+                        })
+                    })
                     .collect();
                 Ok(serde_json::json!({
                     "name": l.name,
@@ -246,7 +312,9 @@ fn cmd_list(json: bool) -> Result<()> {
                     "package": l.package_name(),
                     "repo": l.repo,
                     "ref": l.r#ref,
-                    "synced": synced,
+                    "origin": state.origin,
+                    "manifest": l.origin_file,
+                    "checkouts": checkouts,
                 }))
             })
             .collect::<Result<_>>()?;
@@ -262,29 +330,33 @@ fn cmd_list(json: bool) -> Result<()> {
             .ecosystem
             .map(|e| e.to_string())
             .unwrap_or_else(|| "?".into());
-        let synced: Vec<String> = cache::LibCache::new(&root, &l.name)?
-            .version_worktrees()
-            .into_iter()
-            .map(|(n, _)| n)
-            .collect();
-        let synced = if synced.is_empty() {
-            "(not synced)".to_string()
-        } else {
-            synced.join(", ")
-        };
+        let state = lib_state(&root, &l.name)?;
         println!(
-            "{:<24} {:<7} {:<16} {synced}",
+            "{:<24} {:<7} {:<16} {}",
             l.name,
             eco,
-            l.r#ref.as_deref().unwrap_or("-")
+            l.r#ref.as_deref().unwrap_or("-"),
+            state.origin.as_deref().unwrap_or("-")
         );
+        if state.checkouts.is_empty() {
+            println!("    (not synced)");
+        }
+        for (dirname, recorded) in state.checkouts {
+            println!(
+                "    {:<24} {:<12} {}",
+                dirname,
+                short(&recorded.commit),
+                recorded.raw_ref
+            );
+        }
     }
     Ok(())
 }
 
-fn cmd_sync(names: &[String]) -> Result<()> {
+fn cmd_sync(names: &[String], allow_default_branch: bool) -> Result<()> {
     let d = discovered()?;
     let root = cache::docs_root();
+    let start = cwd()?;
     let selected: Vec<&LibEntry> = d
         .manifest
         .libs
@@ -297,20 +369,96 @@ fn cmd_sync(names: &[String]) -> Result<()> {
     {
         anyhow::bail!("`{unknown}` is not registered — see `docm list`");
     }
+    let opts = resolve::Options {
+        allow_default_branch,
+    };
+    let mut failed: Vec<&str> = Vec::new();
     for l in selected {
-        let lib = cache::LibCache::new(&root, &l.name)?;
-        if !lib.cloned() {
-            eprintln!(
-                "docm: {} not cloned yet (materialized on first lookup); skipping",
-                l.name
-            );
-            continue;
+        match sync_one(l, &root, &start, &opts) {
+            Ok(r) => println!(
+                "synced {} {} ({}) -> {}",
+                l.name,
+                r.git_ref,
+                short(&r.commit),
+                r.path.display()
+            ),
+            Err(e) => {
+                eprintln!("docm: {}: {e:#}", l.name);
+                failed.push(&l.name);
+            }
         }
-        lib.fetch()
-            .with_context(|| format!("fetching {}", l.name))?;
-        lib.sync_default(l.r#ref.as_deref())?;
-        println!("synced {}", l.name);
     }
+    if !failed.is_empty() {
+        anyhow::bail!("could not sync: {}", failed.join(", "));
+    }
+    Ok(())
+}
+
+/// Fetch, then re-resolve, re-materialize and re-verify one library, all under
+/// its library lock so a concurrent prune cannot reclaim what this just built.
+fn sync_one(
+    entry: &LibEntry,
+    cache_root: &Path,
+    start: &Path,
+    opts: &resolve::Options,
+) -> Result<resolve::Resolved> {
+    devkit_docs::locks::with_lib(cache_root, &entry.name, || {
+        let lib = cache::LibCache::new(cache_root, &entry.name)?;
+        if lib.cloned() {
+            lib.fetch()
+                .with_context(|| format!("fetching {}", entry.name))?;
+        }
+        let mut entry = entry.clone();
+        record_default_branch(&mut entry, &lib, cache_root)?;
+        let r = resolve::resolve_locked(&entry, start, cache_root, opts)?;
+        for w in &r.warnings {
+            eprintln!("docm: {w}");
+        }
+        Ok(r)
+    })
+}
+
+/// Pin a git entry that predates mandatory refs to the repo's current default
+/// branch. Only the global manifest is written: a `devkit.toml` is committed to
+/// a repo, where an inferred branch would read as a deliberate team decision.
+fn record_default_branch(
+    entry: &mut LibEntry,
+    lib: &cache::LibCache,
+    cache_root: &Path,
+) -> Result<()> {
+    if entry.ecosystem != Some(Ecosystem::Git) || entry.r#ref.is_some() {
+        return Ok(());
+    }
+    let global = manifest::global_docs_path();
+    if entry.origin_file.as_deref() != Some(global.as_path()) {
+        anyhow::bail!(
+            "`{}` is a git entry with no ref, declared in {}; docm will not write an \
+             inferred default branch into a devkit.toml, because a repo-committed pin \
+             reads as a team decision — add one there with \
+             `docm add {} --project --ref <tag|branch|sha>`",
+            entry.name,
+            entry
+                .origin_file
+                .as_deref()
+                .unwrap_or(Path::new("an unknown manifest"))
+                .display(),
+            entry.name
+        );
+    }
+    let repo = entry
+        .repo
+        .as_deref()
+        .with_context(|| format!("lib `{}` has no repo url", entry.name))?;
+    let mut meta = cache::read_meta(&lib.dir);
+    lib.ensure_clone(repo, &mut meta)?;
+    entry.r#ref = Some(lib.default_branch()?);
+    manifest::upsert_global(&global, entry, cache_root)?;
+    eprintln!(
+        "docm: recorded {} ref {} in {} (inferred default branch)",
+        entry.name,
+        entry.r#ref.as_deref().unwrap_or_default(),
+        global.display()
+    );
     Ok(())
 }
 
@@ -340,7 +488,11 @@ fn cmd_info(name: &str, json: bool, allow_default_branch: bool) -> Result<()> {
         return Ok(());
     }
     println!("name     {}", r.name);
+    println!("repo     {}", r.origin);
+    println!("ref      {}", r.git_ref);
     println!("version  {}", r.version);
+    println!("commit   {}", r.commit);
+    println!("status   {}", r.status);
     println!("path     {}", r.path.display());
     if let Some(d) = &r.layout.docs_dir {
         println!("docs     {d}");

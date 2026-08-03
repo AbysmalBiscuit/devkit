@@ -392,16 +392,6 @@ impl LibCache {
         Ok(())
     }
 
-    pub fn sync_default(&self, pin: Option<&str>) -> Result<PathBuf> {
-        let git_ref = match pin {
-            Some(git_ref) => git_ref.to_string(),
-            None => self.default_branch()?,
-        };
-        let dirname = crate::names::checkout_dir(&git_ref)?;
-        let (_, commit) = self.resolve_ref(&git_ref)?;
-        self.ensure_at(&dirname, &commit).map(|(path, _)| path)
-    }
-
     /// Worktree dirs currently on disk, excluding the bare repo itself.
     pub fn version_worktrees(&self) -> Vec<(String, PathBuf)> {
         if !self.bare().is_dir() {

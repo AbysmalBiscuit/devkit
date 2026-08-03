@@ -24,6 +24,15 @@ pub enum Status {
     Repaired,
 }
 
+impl std::fmt::Display for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Status::Ok => "ok",
+            Status::Repaired => "repaired",
+        })
+    }
+}
+
 /// Resolution behavior a caller opts into. By default, a resolution that
 /// would otherwise need the repo's default branch fails instead;
 /// `allow_default_branch` checks out that branch for this call, recording a

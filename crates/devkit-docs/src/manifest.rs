@@ -51,6 +51,11 @@ pub struct LibEntry {
     pub docs_dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// Which file this entry was read from. Set during `discover`, never
+    /// serialized — writing it back would put an absolute path in a manifest
+    /// that gets committed to a repo.
+    #[serde(skip)]
+    pub origin_file: Option<PathBuf>,
 }
 
 impl LibEntry {
@@ -91,6 +96,9 @@ pub fn merge(mut base: DocsManifest, over: DocsManifest) -> DocsManifest {
                 }
                 if e.notes.is_some() {
                     b.notes = e.notes;
+                }
+                if e.origin_file.is_some() {
+                    b.origin_file = e.origin_file;
                 }
             }
             None => base.libs.push(e),
@@ -134,6 +142,7 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
             return Err(e).with_context(|| format!("reading {}", global_path.display()));
         }
     };
+    stamp(&mut manifest, &global_path);
 
     // Collect devkit.toml [docs] layers deepest-first, then apply shallowest-first.
     let mut layers: Vec<DocsManifest> = Vec::new();
@@ -145,7 +154,8 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
             if nearest.is_none() {
                 nearest = Some(c.clone());
             }
-            if let Some(layer) = docs_layer(&c)? {
+            if let Some(mut layer) = docs_layer(&c)? {
+                stamp(&mut layer, &c);
                 layers.push(layer);
             }
         }
@@ -182,6 +192,12 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
     })
 }
 
+fn stamp(manifest: &mut DocsManifest, path: &Path) {
+    for lib in &mut manifest.libs {
+        lib.origin_file = Some(path.to_path_buf());
+    }
+}
+
 /// Extract the `[docs]` section of one `devkit.toml`, if present.
 fn docs_layer(path: &Path) -> Result<Option<DocsManifest>> {
     let s = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -206,12 +222,17 @@ pub fn load_global(path: &Path) -> Result<DocsManifest> {
     }
 }
 
+/// The `[docs]` section of one `devkit.toml`, empty when the file has none.
+pub fn load_project(devkit_toml: &Path) -> Result<DocsManifest> {
+    Ok(docs_layer(devkit_toml)?.unwrap_or_default())
+}
+
 /// The global file is docm-owned and machine-written — a full serialize is fine.
 pub fn upsert_global(path: &Path, entry: &LibEntry, cache_root: &Path) -> Result<()> {
     crate::locks::with_manifest(cache_root, || {
         let mut m = load_global(path)?;
-        crate::barrier::signal("ready")?;
-        crate::barrier::wait("go")?;
+        crate::barrier::signal("manifest-ready")?;
+        crate::barrier::wait("manifest-go")?;
         match m.libs.iter_mut().find(|l| l.name == entry.name) {
             Some(l) => *l = entry.clone(),
             None => m.libs.push(entry.clone()),
