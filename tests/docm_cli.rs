@@ -352,6 +352,29 @@ fn info_and_list_report_the_ref_commit_and_clone_origin() {
     assert_eq!(lib["checkouts"][0]["commit"], serde_json::json!(head));
 }
 
+/// `status ok` is a claim agents act on, so it must be paid for: a checkout
+/// whose source no longer matches its commit fails the command instead.
+#[test]
+fn info_fails_instead_of_reporting_ok_for_a_dirty_checkout() {
+    let env = Env::new("info-dirty");
+    assert_ran(&env.add("up", "v1.0.0"), "docm add up");
+    std::fs::write(env.cache().join("up/v1.0.0/src/lib.rs"), "// local edit").unwrap();
+
+    let info = env.docm(&["info", "up"]);
+
+    assert!(
+        !info.status.success(),
+        "info reported on a modified checkout:\n{}",
+        stdout(&info)
+    );
+    assert!(
+        stderr(&info).contains("has local modifications"),
+        "{}",
+        stderr(&info)
+    );
+    assert!(!stdout(&info).contains("status   ok"), "{}", stdout(&info));
+}
+
 /// `rm` must take the same library lock `add` holds for its whole transaction.
 /// The adder pauses between reading the manifest and writing its entry, which
 /// is the only window where a locked and an unlocked `rm` differ: an unlocked
