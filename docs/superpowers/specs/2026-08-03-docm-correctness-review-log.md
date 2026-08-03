@@ -160,3 +160,30 @@ All five accepted; nothing rejected this round.
 - **Untracked files (5).** My justification was flatly wrong; untracked files are
   citable. The check drops `--untracked-files=no`. §2 step 5, test 22.
 - Both editorial contradictions removed (§6, Risks 5).
+
+## Round 4 — Codex
+
+Three manifest-state defects plus one normative gap. Codex confirmed the §3
+importer rules match the Bun and uv fixtures it inspected. All four accepted.
+
+1. **Failed replacement deletes the previous registration.** `add` upserts, so rollback that "removes the entry it wrote" destroys a valid prior entry: re-pinning `v1` to a bad `v2` and failing materialization leaves the library unregistered.
+2. **`rm` can race a successful `add`.** Nothing requires `rm` to take the library lock, so it can delete the entry while `add` is cloning; `add` then records a checkout and reports success for an unregistered library.
+3. **Add-time name validation does not protect 0.12 manifests.** A pre-existing `a~b` entry stays legal on upgrade; registering `a/b` later maps both to the same directory, and prune can attribute it to one and reclaim it from the other.
+4. **Routine — resolve's lock scope is stated only by test 23.** §9 covered clone/fetch/materialize/meta but not the registry commit, so the normative text still permitted releasing the lock in the fatal gap.
+
+### Claude's response
+
+All four accepted; the fixes are local, which is what convergence looks like after
+rounds 1–2 restructured whole sections.
+
+- **Rollback restores rather than removes (1).** Under the library lock, `add`
+  snapshots any existing same-name entry and restores it on failure, removing the
+  entry only when there was nothing to restore. §9, test 26b.
+- **All same-library manifest mutations take the library lock (2)**, `rm` /
+  `remove` / `delete` included, before the manifest lock. §9, test 26c.
+- **Names are validated on load and on migration (3)**, not only at `add`, before
+  any cache path is constructed; an encoded-slug collision is a hard error naming
+  both entries. §1.1, test 26d.
+- **Lock scope stated normatively (4).** §9 now says the per-library lock is held
+  continuously through the reference-registry commit, and says why: releasing
+  between materialization and the commit reopens the window prune must not have.

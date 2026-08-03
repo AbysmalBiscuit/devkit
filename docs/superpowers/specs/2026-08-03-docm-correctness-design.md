@@ -90,10 +90,20 @@ reserved-name and representability checks and the same hard errors.
 is injective for *refs* because git forbids `~` in a ref name. A library name is
 not a ref — it comes from `LibEntry.name`, a registry package name, or a URL
 leaf, none of which are constrained that way — so `a/b` and `a~b` would both
-encode to `a~b`. A `~` in a library name is therefore a hard error at `add`
-time, which restores injectivity by making the domain match the assumption. No
-real package name on crates.io, npm, or PyPI contains `~`; the error names the
-character and suggests `--package` to set a different registry name.
+encode to `a~b`. A `~` in a library name is therefore a hard error, which
+restores injectivity by making the domain match the assumption. No real package
+name on crates.io, npm, or PyPI contains `~`; the error names the character and
+suggests `--package` to set a different registry name.
+
+**Validation runs on every name loaded, not only on `add`.** A manifest written
+by 0.12.x may already contain `a~b`, which was legal then. Rejecting `~` only at
+registration time would let that entry survive, and a later `docm add a/b` would
+encode to the same `a~b` directory — two libraries sharing one checkout and one
+`meta.toml`, with prune able to attribute the directory to just one of them and
+reclaim it from under the other. Names are therefore validated when a manifest is
+read and when the upgrade pass migrates a cache, before any cache path is built
+from them; an invalid name or an encoded-slug collision is a hard error naming
+both entries.
 
 `version_worktrees()` gains an assertion that it is reading a directory
 containing `repo.git`, so a mis-scan fails loudly instead of proposing
@@ -495,13 +505,28 @@ identical E and succeeds, and A then finds a byte-identical E and deletes B's
 successful registration. Remove-then-re-add produces the same ABA. The fix is
 scope, not comparison: the *per-library* lock is acquired before the manifest
 insertion and held through materialization and rollback, so a second add for the
-same library cannot interleave at all. Rollback removes the entry it wrote; with
-the library serialized, that entry can only be its own.
+same library cannot interleave at all.
+
+**Rollback restores, it does not just remove.** `add` upserts (`manifest.rs:188`),
+so a rollback that only deletes the entry it wrote destroys a *previous* valid
+registration: re-pinning `h3` from `v1.15.11` to a bad `v2` ref and failing
+materialization would leave `h3` unregistered rather than still on `v1.15.11`.
+Under the library lock, `add` snapshots any existing same-name entry before
+writing; failure restores that snapshot, and removes the entry only when there
+was nothing to restore.
+
+**Every same-library manifest mutation takes the library lock**, `rm` /
+`remove` / `delete` included, before taking the manifest lock. Otherwise `rm`
+deletes the entry while `add` is still cloning, and `add` goes on to record a
+checkout and report success for a library that is no longer registered.
 
 **Racing materialization.** Two resolutions of the same library can race
 `ensure_clone` into the same directory, or race two `git worktree add` calls for
-the same dirname. Fix: clone, fetch, worktree materialization and `meta.toml`
-updates for one library run under a per-library advisory lock. This is the
+the same dirname. Fix: clone, fetch, worktree materialization, `meta.toml`
+updates **and the reference-registry commit** for one library run under a
+per-library advisory lock — held continuously across all of them. The registry
+commit is inside the lock, not after it: releasing between materialization and
+the commit reopens exactly the window prune must not have (§7). This is the
 pattern `refs.rs` already uses for the reference registry, so it is an existing
 mechanism applied to a second target rather than new machinery. Lock ordering is
 per-library lock before registry lock, never the reverse, and no network call
@@ -645,6 +670,14 @@ support these.
     `git worktree repair` exists to fix.
 26. **Rollback ABA.** Add A fails while a concurrent add B registers an
     identical entry; B's registration survives.
+26b. **Failed re-pin preserves the old pin.** Re-pinning a registered library to
+    a ref that fails to materialize leaves the previous entry intact, not the
+    library unregistered.
+26c. **`rm` versus `add`.** An `rm` issued while an `add` for the same library
+    is materializing cannot leave a recorded checkout for an unregistered
+    library.
+26d. **Encoded-name collision on load.** A manifest holding both `a~b` (legacy)
+    and `a/b` hard-errors naming both, before any cache path is built.
 27. **Tag replaced by a same-named branch.** A pin resolved as `refs/tags/v1`
     whose tag is deleted upstream and replaced by branch `v1` hard-errors rather
     than silently resolving the branch.
