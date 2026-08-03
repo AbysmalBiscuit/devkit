@@ -102,7 +102,15 @@ deletions.
 ### 2. Identity and verification
 
 `meta.toml` gains an `origin` field and a `worktrees` map: dirname →
-`{ raw_ref, commit }`.
+`{ raw_ref, resolved_ref, commit }`.
+
+`resolved_ref` is the *canonical* name the ref resolved to — `refs/tags/v1`, not
+`v1` — and it pins the namespace for later resolutions. Without it a pin can
+silently change kind: `v1` resolves as a tag, upstream deletes that tag and
+creates a branch of the same name, `--prune-tags` drops the tag locally, and the
+next resolution quietly accepts the branch. The promised "tag vanished upstream"
+hard error would never fire. A resolution whose canonical namespace differs from
+the recorded one is a hard error until the manifest pin itself changes.
 
 **Repository identity.** `ensure_clone` (`cache.rs:107`) returns early when
 `<lib>/repo.git` exists, without checking that it was cloned from the URL now
@@ -131,11 +139,14 @@ Every resolution:
 4. if the directory exists, compares its HEAD to the resolved commit; a mismatch
    re-points the worktree (`git checkout --detach <commit>`) and reports
    `status repaired`
-5. verifies the worktree is **clean** — `git status --porcelain
-   --untracked-files=no`. A tracked file modified inside the cache is a hard
-   error naming the files, because source read from a dirty checkout is not the
-   released source, and `status ok` would otherwise be a false claim. Untracked
-   files are ignored: they add nothing an answer could be cited from.
+5. verifies the worktree is **clean** — `git status --porcelain`, untracked
+   files included. Any modification inside the cache is a hard error naming the
+   files, because source read from a dirty checkout is not the released source
+   and `status ok` would otherwise be a false claim. An earlier draft passed
+   `--untracked-files=no` on the reasoning that untracked files add nothing an
+   answer could be cited from; that is simply wrong — an untracked
+   `src/new.rs` or `docs/fake.md` is found by `rg` and cited exactly like tracked
+   source, which is the whole attack surface this check exists to close.
 6. records `(workspace, lib, ref, version, commit, dirname)` in the reference
    registry
 
@@ -200,7 +211,17 @@ Selection order, first hit wins:
    | `package-lock.json` | `packages.<workspace-path>` must declare `<pkg>`; the version then comes from the nearest `node_modules/<pkg>` walking up from `<workspace-path>` |
    | `bun.lock` | `workspaces.<workspace-path>.{dependencies,devDependencies,optionalDependencies,peerDependencies}` names the dep, then `packages` key `<workspace-name>/<pkg>` if present, else the hoisted `<pkg>` |
    | `Cargo.lock` | the member's `[[package]]` entry's `dependencies` list, resolved against the lock's package set |
-   | `uv.lock` | the member's `[[package]]` entry's `dependencies`, plus its `dependency-groups` and optional-dependency tables |
+   | `uv.lock` | the member's `[[package]]` entry's `dependencies`, plus its `[package.dev-dependencies]` and optional-dependency tables |
+
+   **Which JS lockfile is authoritative** has to be decided, not assumed. A repo
+   can carry more than one, and they disagree: an `h3` checkout on this machine
+   holds both a `pnpm-lock.yaml` resolving `h3` to 1.15.10 and a
+   `package-lock.json` resolving it to 1.15.7. Today `versions_in_dir`
+   (`lockfiles.rs:14`) merges all three JS parsers' output into one list, which
+   is strictly worse than picking wrong. Rule: the nearest `package.json`'s
+   `packageManager` field selects the lockfile. With no `packageManager`, exactly
+   one lockfile present is used and more than one is a hard error naming each
+   file and the version it resolves to, with `packageManager` named as the fix.
 
    The workspace path comes from walking up from CWD to the nearest manifest
    (`package.json`, or `Cargo.toml` / `pyproject.toml` carrying a dependency
@@ -368,12 +389,10 @@ manifest value would hide it.
 
 - `list` gains the ref → commit mapping and the origin per lib, so the state file
   is the index agents read rather than inferring anything from a path.
-- `devkit doctor` gains a docs row that verifies each materialized checkout is
-  *clean* (`git status --porcelain`), not merely at the right commit. This is
-  deliberately not on the resolve path: the check costs hundreds of milliseconds
-  on a large checkout, and it would run on every `docm info` to defend against a
-  failure — someone editing files inside the cache — that no other part of this
-  design assumes.
+- `devkit doctor` gains a docs row that sweeps *every* materialized checkout for
+  cleanliness and commit correctness, including ones no current workspace
+  resolves. Resolution checks the one checkout it returns (§2 step 5); doctor
+  checks the whole cache.
 
 ### 7. Reference registry and prune
 
@@ -423,6 +442,13 @@ lock:
 
 - a nested `@scope/pkg/` directory containing `repo.git` is renamed to
   `@scope~pkg/`; a `@scope/` directory left empty afterwards is removed
+- **every linked worktree under it is repaired.** A rename alone corrupts them:
+  git records absolute reciprocal paths in both the worktree's `.git` file and
+  the bare repo's `worktrees/<name>/gitdir` administration file, so after the
+  rename `git status`, checkout and `worktree remove` all address a path that no
+  longer exists. `git worktree repair` runs for every migrated worktree, and each
+  HEAD is verified afterwards; a worktree that cannot be repaired is removed and
+  re-materialized rather than left half-linked.
 - a missing `origin` is bootstrapped from the bare repo's own
   `git config remote.origin.url`, which is ground truth for where it was cloned
   from, rather than assumed from the manifest
@@ -457,15 +483,20 @@ pattern. Fix: every manifest and `meta.toml` write becomes
 write-temp-then-rename, and the read-modify-write runs under a lock on the
 target file.
 
-**Rollback is entry-scoped, not a pre-image restore.** `add` cannot hold the
-manifest lock across its whole transaction, because materialization clones over
-the network and holding a lock across a network call is what `AGENTS.md` already
-forbids for the port registry. The lock is therefore released while
-materializing — so restoring a whole-file pre-image afterwards would silently
-revert any add that landed in the interval. Rollback instead re-takes the lock
-and removes the specific entry it wrote, and only if that entry is still
-byte-identical to what it wrote. Anything else means another writer has touched
-it since, and the rollback is abandoned with a warning rather than guessing.
+**`add` runs its whole transaction under the per-library lock.** The manifest
+lock cannot be held throughout — materialization clones over the network, and
+holding a lock across a network call is what `AGENTS.md` already forbids for the
+port registry — so the manifest lock is taken twice, once to insert the entry and
+once to roll it back, with materialization in between.
+
+That interval is what makes a pre-image restore unsafe, and byte-equality does
+not rescue it either: add A writes entry E and fails, concurrent add B writes an
+identical E and succeeds, and A then finds a byte-identical E and deletes B's
+successful registration. Remove-then-re-add produces the same ABA. The fix is
+scope, not comparison: the *per-library* lock is acquired before the manifest
+insertion and held through materialization and rollback, so a second add for the
+same library cannot interleave at all. Rollback removes the entry it wrote; with
+the library serialized, that entry can only be its own.
 
 **Racing materialization.** Two resolutions of the same library can race
 `ensure_clone` into the same directory, or race two `git worktree add` calls for
@@ -597,10 +628,26 @@ support these.
     `sync` and produces a hard error naming the pin, rather than resolving from
     a stale local ref.
 22. **Dirty checkout.** A tracked file modified inside a checkout makes `info`
-    exit non-zero naming the file, instead of reporting `status ok`.
+    exit non-zero naming the file, instead of reporting `status ok` — and
+    separately, an *untracked* `src/new.rs` does too, since `rg` finds and cites
+    it exactly like tracked source.
 23. **Prune versus in-flight materialization.** A prune running concurrently
     with a resolve of the same library cannot delete the directory that resolve
-    just materialized.
+    just materialized. The test pauses resolve after materialization but
+    *before* it acquires the registry lock — that exact window is the one the
+    per-library lock has to cover.
+24. **Competing JS lockfiles.** A workspace carrying both `pnpm-lock.yaml` and
+    `package-lock.json` that disagree resolves via `packageManager`; with no
+    `packageManager`, it hard-errors naming both files and both versions.
+25. **Worktree linkage survives the upgrade pass.** After a seeded
+    `@scope/pkg/` cache with a materialized worktree is migrated, `git status`
+    inside the moved worktree succeeds and its HEAD is unchanged — the case
+    `git worktree repair` exists to fix.
+26. **Rollback ABA.** Add A fails while a concurrent add B registers an
+    identical entry; B's registration survives.
+27. **Tag replaced by a same-named branch.** A pin resolved as `refs/tags/v1`
+    whose tag is deleted upstream and replaced by branch `v1` hard-errors rather
+    than silently resolving the branch.
 
 ## Risks
 
@@ -620,7 +667,10 @@ support these.
 4. **Dirname churn, twice.** Lockfile-resolved checkouts move from `2.13.4` to
    the tag `v2.13.4`, and scoped library directories move from `@scope/pkg` to
    `@scope~pkg`. Prune reclaims the old ones; the cost is one refetch each.
-5. **The prune/resolve race is narrowed, not closed** (§9).
+5. **Every path-returning resolution now runs `git status`** on the checkout it
+   returns — hundreds of milliseconds on a large repo, on every `docm info`.
+   Accepted: `info` asserts `status ok`, and an assertion that can be false is
+   the defect this design exists to remove.
 
 ## Out of scope
 

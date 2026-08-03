@@ -122,3 +122,41 @@ All five accepted, including the cleanliness check I rejected in round 1.
 - **Locking (2).** Prune now takes the per-library lock across recheck and deletion, which closes the resolve/prune race outright rather than narrowing it — no leases needed, and the out-of-scope note is narrowed to in-flight readers only. Rollback becomes entry-scoped and byte-identical-guarded, because `add` genuinely cannot hold the manifest lock across a network clone. §7, §9, test 23.
 - **Migration (3).** An explicit locked upgrade pass renames nested `@scope/pkg` caches and bootstraps `origin` from `remote.origin.url`; retargeting a legacy row is redefined as retirement, since a row keyed by the lockfile directory can never be matched by an upsert keyed by a nested workspace. §7, tests 19–20.
 - **`status ok` (5).** Reversing my round-1 rejection: `info` prints the claim, agents read `info` and not `doctor`, and a truth claim that can be false is the defect this design exists to remove. The clean check moves onto every path-returning resolution as a hard error, with `--untracked-files=no` to bound the cost. Also `--prune-tags` on sync, and a qualified-ref rule that uses a `refs/`-prefixed ref verbatim. §2, tests 21–22.
+
+## Round 3 — Codex
+
+Five defects, all accepted. Two of them were contradictions left behind by my own
+round-2 edits.
+
+1. **§3 cannot choose the authoritative JS lockfile.** A real checkout carries both `pnpm-lock.yaml` (h3 → 1.15.10) and `package-lock.json` (h3 → 1.15.7) with no selection or disagreement rule. The uv field is also factually wrong: dependency groups serialize as `[package.dev-dependencies]`, not `dependency-groups`.
+2. **The scoped-cache upgrade breaks every linked worktree.** Git stores absolute reciprocal paths in the worktree `.git` file and in `repo.git/worktrees/<name>/gitdir`; after a rename, status, checkout and removal all address the old path.
+3. **Entry-byte equality does not give rollback ownership.** Add A writes entry E and fails; concurrent add B writes an identical E and succeeds; A removes B's registration. Remove/re-add is the same ABA.
+4. **A deleted tag can silently become a branch pin.** Metadata stores only `{raw_ref, commit}`, so if `v1` resolves as a tag, upstream deletes it and creates branch `v1`, `--prune-tags` drops the tag and the next resolution accepts the branch — the promised hard error never fires.
+5. **`status ok` still ignores citable source.** `--untracked-files=no` lets an untracked `docs/fake.md` or `src/new.rs` be read and cited exactly like tracked source.
+
+Codex confirmed the prune/library-lock reasoning is correct *provided resolve holds
+the per-library lock through its registry commit*, and specified the window test 23
+must actually cover. It also flagged two editorial contradictions: §6 still claimed
+cleanliness was deliberately off the resolve path, and Risks still called the
+prune/resolve race merely narrowed.
+
+### Claude's response
+
+All five accepted; nothing rejected this round.
+
+- **Lockfile authority (1).** `packageManager` selects; exactly one lockfile is used
+  when it is absent; disagreement without `packageManager` is a hard error naming
+  both files and both versions. Today's code merges all three JS parsers' output,
+  which is worse than picking wrong. uv's table name corrected. §3, test 24.
+- **Worktree repair (2).** The upgrade pass now runs `git worktree repair` for every
+  migrated worktree and verifies HEAD, re-materializing any that cannot be repaired.
+  This would have been an implementation-time discovery at best. §7, test 25.
+- **Rollback ABA (3).** Fixed by scope rather than comparison: the per-library lock
+  is acquired before the manifest insertion and held through materialization and
+  rollback, so a second add for the same library cannot interleave. §9, test 26.
+- **Ref namespace (4).** `meta.toml` now records `resolved_ref` — the canonical
+  `refs/tags/v1` — and a resolution whose namespace differs from the recorded one is
+  a hard error until the manifest pin changes. §2, test 27.
+- **Untracked files (5).** My justification was flatly wrong; untracked files are
+  citable. The check drops `--untracked-files=no`. §2 step 5, test 22.
+- Both editorial contradictions removed (§6, Risks 5).
