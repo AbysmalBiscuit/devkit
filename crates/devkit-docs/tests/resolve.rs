@@ -223,7 +223,7 @@ fn a_corrupted_head_is_repaired_and_reported() {
 }
 
 #[test]
-fn a_dirty_checkout_is_a_hard_error_tracked_or_untracked() {
+fn a_tracked_dirty_checkout_is_a_hard_error() {
     let base = common::unique_tmp("dirty");
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
@@ -238,7 +238,21 @@ fn a_dirty_checkout_is_a_hard_error_tracked_or_untracked() {
 
     std::fs::write(r.path.join("src/lib.rs"), "// tampered").unwrap();
     assert!(devkit_docs::resolve::resolve(&entry, &base, &cache).is_err());
-    std::fs::write(r.path.join("src/lib.rs"), "// v1").unwrap();
+}
+
+#[test]
+fn an_untracked_dirty_checkout_is_a_hard_error() {
+    let base = common::unique_tmp("dirty-untracked");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let entry = devkit_docs::manifest::LibEntry {
+        name: "up".into(),
+        ecosystem: Some(devkit_docs::manifest::Ecosystem::Git),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let r = devkit_docs::resolve::resolve(&entry, &base, &cache).unwrap();
 
     std::fs::write(r.path.join("src/planted.rs"), "// planted").unwrap();
     assert!(devkit_docs::resolve::resolve(&entry, &base, &cache).is_err());
@@ -298,6 +312,18 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
     assert_eq!(
         third.path, first.path,
         "the ref names the directory, so it is reused"
+    );
+    assert_eq!(third.status, devkit_docs::resolve::Status::Repaired);
+    let head = devkit_common::cmd::capture(
+        "git",
+        &["rev-parse", "HEAD"],
+        Some(third.path.to_str().unwrap()),
+    )
+    .unwrap();
+    assert_eq!(head.trim(), third.commit);
+    assert_eq!(
+        std::fs::read_to_string(third.path.join("src/lib.rs")).unwrap(),
+        "// v2"
     );
 }
 

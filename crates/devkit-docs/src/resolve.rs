@@ -134,17 +134,18 @@ pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Resu
             previous.resolved_ref
         );
     }
-    if let Some(previous) = &previous
-        && previous.commit != commit
-        && canonical.starts_with("refs/tags/")
-    {
-        eprintln!(
-            "docm: tag {git_ref} moved {} → {commit} upstream; {worktree} re-pointed",
-            previous.commit
-        );
-    }
+    let moved_tag_from = previous
+        .as_ref()
+        .filter(|previous| previous.commit != commit && canonical.starts_with("refs/tags/"))
+        .map(|previous| previous.commit.clone());
     let (path, repaired) = lib.ensure_at(&worktree, &commit)?;
     lib.assert_clean(&path)?;
+    if repaired && let Some(previous_commit) = moved_tag_from {
+        eprintln!(
+            "docm: tag {git_ref} moved {previous_commit} → {commit} upstream; \
+             {worktree} re-pointed"
+        );
+    }
     meta.worktrees.insert(
         worktree.clone(),
         cache::WorktreeMeta {

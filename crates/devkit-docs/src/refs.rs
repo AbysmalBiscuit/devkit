@@ -101,7 +101,7 @@ impl RefStore {
 
 #[derive(Debug)]
 pub struct PrunePlan {
-    /// Rows that survive (already retargeted to the current version).
+    /// Rows that survive with their materialized checkout identity unchanged.
     pub keep: Vec<RefRow>,
     /// (lib, worktree dirname) pairs with zero remaining references.
     pub delete: Vec<(String, String)>,
@@ -111,9 +111,11 @@ pub struct PrunePlan {
 }
 
 /// Pure prune planner. `worktrees` maps lib → worktree dirnames on disk
-/// (including `default`); `current(project, lib)` re-resolves what a live
-/// project pins right now (`None` = no longer referenced). Liveness checks
-/// run on a snapshot outside the registry lock.
+/// (including `default`); `current(project, lib)` reports whether a live
+/// project still references the library (`None` = no longer referenced).
+/// A surviving row keeps its recorded dirname because only resolve can make a
+/// different checkout authoritative. Liveness checks run on a snapshot outside
+/// the registry lock.
 pub fn plan(
     data: &Data,
     worktrees: &BTreeMap<String, Vec<String>>,
@@ -125,11 +127,8 @@ pub fn plan(
         if !Path::new(&r.project).exists() {
             continue; // project root gone → holder dead → row drops
         }
-        if let Some(v) = current(&r.project, &r.lib) {
-            keep.push(RefRow {
-                version: v,
-                ..r.clone()
-            });
+        if current(&r.project, &r.lib).is_some() {
+            keep.push(r.clone());
         }
     }
     let referenced: BTreeSet<(String, String)> = keep
@@ -156,9 +155,9 @@ pub fn plan(
     }
 }
 
-/// What a live project pins for `entry` right now: a `ref`/git entry → the
-/// `default` worktree; otherwise the highest lockfile version, or None when no
-/// lockfile pins it.
+/// What a live project selects for `entry`: an explicit/git entry remains
+/// referenced, while a package entry requires a matching lockfile version.
+/// Prune uses only presence here; the registry row owns the materialized dirname.
 pub fn current_version(entry: &manifest::LibEntry, project: &Path) -> Option<String> {
     use manifest::Ecosystem;
     if entry.r#ref.is_some() {
@@ -286,10 +285,10 @@ mod tests {
     }
 
     #[test]
-    fn plan_drops_dead_projects_retargets_bumps_and_deletes_orphans() {
+    fn plan_drops_dead_projects_and_preserves_materialized_rows() {
         let live = unique_tmp("live"); // an existing dir = live project
         let mut data = Data::default();
-        data.record(live.to_str().unwrap(), "tokio", "1.0.0"); // will retarget to 1.1.0
+        data.record(live.to_str().unwrap(), "tokio", "1.0.0");
         data.record("/gone/nowhere", "tokio", "0.9.0"); // dead project → drop
         data.record(live.to_str().unwrap(), "serde", "2.0.0"); // no longer in lockfile → drop
 
@@ -311,7 +310,7 @@ mod tests {
             (lib == "tokio").then(|| "1.1.0".to_string())
         });
         assert_eq!(p.keep.len(), 1);
-        assert_eq!(p.keep[0].version, "1.1.0"); // retargeted
+        assert_eq!(p.keep[0].version, "1.0.0");
         let mut del = p.delete.clone();
         del.sort();
         assert_eq!(
@@ -319,9 +318,9 @@ mod tests {
             vec![
                 ("legacy".to_string(), "3.0.0".to_string()),
                 ("tokio".to_string(), "0.9.0".to_string()),
-                ("tokio".to_string(), "1.0.0".to_string()),
+                ("tokio".to_string(), "1.1.0".to_string()),
             ]
-        ); // "default" never deleted; 1.1.0 referenced
+        ); // "default" never deleted; 1.0.0 is the recorded checkout
         assert_eq!(p.removable_libs, vec!["legacy".to_string()]);
     }
 

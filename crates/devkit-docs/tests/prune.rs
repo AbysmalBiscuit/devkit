@@ -1,12 +1,9 @@
+mod common;
+
+use common::unique_tmp;
+use devkit_docs::manifest::{Ecosystem, LibEntry};
 use devkit_docs::refs::{self, RefStore};
 use std::collections::BTreeSet;
-
-fn unique_tmp(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("devkit-docs-prune-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
-}
 
 // Bug #1 regression: pruning from project A must NOT delete project B's
 // overlay-only lib worktree.
@@ -149,4 +146,87 @@ fn prune_never_schedules_a_stray_scoped_parent_for_deletion() {
         plan.removable_libs
     );
     assert!(stray.is_dir());
+}
+
+#[test]
+fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
+    let tmp = unique_tmp("live-ref-checkouts");
+    let repo = common::fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("project");
+    let manifest_path = project.join("devkit.toml");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(&manifest_path, "[defaults]\n").unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    let entries = [
+        LibEntry {
+            name: "explicit".into(),
+            repo: Some(repo.clone()),
+            r#ref: Some("v1.0.0".into()),
+            ..Default::default()
+        },
+        LibEntry {
+            name: "git-default".into(),
+            ecosystem: Some(Ecosystem::Git),
+            repo: Some(repo.clone()),
+            ..Default::default()
+        },
+        LibEntry {
+            name: "locked".into(),
+            ecosystem: Some(Ecosystem::Rust),
+            repo: Some(repo),
+            ..Default::default()
+        },
+    ];
+    for entry in &entries {
+        devkit_docs::manifest::upsert_project(&manifest_path, entry, &cache_root).unwrap();
+    }
+
+    let resolved: Vec<_> = entries
+        .iter()
+        .map(|entry| devkit_docs::resolve::resolve(entry, &project, &cache_root).unwrap())
+        .collect();
+    assert_eq!(
+        resolved
+            .iter()
+            .map(|resolution| resolution.worktree.as_str())
+            .collect::<Vec<_>>(),
+        ["v1.0.0", "main", "v1.0.0"]
+    );
+
+    let manifest_libs = entries
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect::<BTreeSet<_>>();
+    let snapshot = RefStore::at(&cache_root).snapshot();
+    let global = tmp.join("docs.toml");
+    std::fs::write(&global, "").unwrap();
+    let plan = refs::plan_for_cache(&cache_root, &snapshot, &manifest_libs, Some(&global)).unwrap();
+    let scheduled = plan.delete.clone();
+
+    for (lib, worktree) in &plan.delete {
+        devkit_docs::cache::LibCache::new(&cache_root, lib)
+            .unwrap()
+            .remove_worktree(worktree)
+            .unwrap();
+    }
+
+    for resolution in &resolved {
+        assert!(
+            resolution.path.is_dir(),
+            "prune removed the live {} checkout {} via {:?}",
+            resolution.name,
+            resolution.worktree,
+            scheduled
+        );
+    }
+    assert!(
+        scheduled.is_empty(),
+        "prune scheduled live ref-named checkouts: {scheduled:?}"
+    );
 }
