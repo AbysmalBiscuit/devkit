@@ -70,7 +70,7 @@ mod tests {
         std::fs::write(root.join("tokio/1.0.0/f"), "x").unwrap();
         refs::RefStore::at(&root)
             .commit(|d| {
-                d.record("/some/project", "tokio", "1.0.0");
+                d.record("/some/project", "tokio", "1.0.0", "v1.0.0", "aaa");
                 Ok(())
             })
             .unwrap();

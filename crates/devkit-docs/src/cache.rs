@@ -417,36 +417,16 @@ impl LibCache {
             .collect()
     }
 
-    pub fn remove_worktree(&self, dirname: &str, snapshot: &RefData) -> Result<bool> {
-        let cache_root = self
-            .dir
-            .parent()
-            .context("library cache has no cache root")?
-            .to_path_buf();
-        let lib_dir = self
-            .dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .context("library cache name is not valid UTF-8")?
-            .to_string();
-        let lib = crate::names::decode(&lib_dir);
-        locks::with_lib_dir(&cache_root, &lib_dir, || {
-            let fresh = RefStore::at(&cache_root).snapshot();
-            if fresh
-                .rows
-                .iter()
-                .any(|row| row.lib == lib && row.version == dirname && !snapshot.rows.contains(row))
-            {
-                return Ok(false);
-            }
-            let p = self.worktree_path(dirname).to_string_lossy().into_owned();
-            cmd::git(
-                &["worktree", "remove", "--force", p.as_str()],
-                &self.bare_str(),
-            )
-            .with_context(|| format!("removing worktree {dirname}"))?;
-            Ok(true)
-        })
+    /// Remove one checkout. The caller holds this library's lock, which is what
+    /// keeps a concurrent resolve from materializing into the same directory.
+    pub fn remove_worktree_locked(&self, dirname: &str) -> Result<()> {
+        let p = self.worktree_path(dirname).to_string_lossy().into_owned();
+        cmd::git(
+            &["worktree", "remove", "--force", p.as_str()],
+            &self.bare_str(),
+        )
+        .with_context(|| format!("removing worktree {dirname}"))?;
+        Ok(())
     }
 
     pub fn remove_if_unreferenced(&self, snapshot: &RefData) -> Result<bool> {

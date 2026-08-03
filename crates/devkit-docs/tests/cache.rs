@@ -60,7 +60,7 @@ fn clone_tags_and_ref_named_worktrees() {
     names.sort();
     assert_eq!(names, vec!["main", "v1.0.0"]);
 
-    lib.remove_worktree("v1.0.0", &Default::default()).unwrap();
+    lib.remove_worktree_locked("v1.0.0").unwrap();
     assert!(!lib.worktree_path("v1.0.0").exists());
 }
 

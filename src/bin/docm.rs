@@ -356,26 +356,24 @@ fn cmd_prune(yes: bool) -> Result<()> {
         println!("cache is empty");
         return Ok(());
     }
-    let store = refs::RefStore::at(&root);
-    let snapshot = store.snapshot();
     let manifest_libs: BTreeSet<String> = d.manifest.libs.iter().map(|l| l.name.clone()).collect();
 
-    let plan = refs::plan_for_cache(&root, &snapshot, &manifest_libs, None)?;
+    let pruned = refs::prune_with_lock(&root, &manifest_libs, None)?;
 
-    for (lib, wt) in &plan.delete {
-        if cache::LibCache::from_dir(&root, &devkit_docs::names::encode(lib))
-            .remove_worktree(wt, &snapshot)?
-        {
-            println!("removed {lib}/{wt}");
-        }
+    for removed in &pruned.removed {
+        println!("removed {removed}");
     }
-    if !plan.removable_libs.is_empty() {
+    for entry in &pruned.skipped {
+        println!("skipped {entry}: no repo.git, so it is not a library");
+    }
+    if !pruned.removable_libs.is_empty() {
         println!(
             "unregistered libs with no references: {}",
-            plan.removable_libs.join(", ")
+            pruned.removable_libs.join(", ")
         );
         if yes || confirm("delete them entirely? [y/N] ")? {
-            for lib in &plan.removable_libs {
+            let snapshot = refs::RefStore::at(&root).snapshot();
+            for lib in &pruned.removable_libs {
                 if cache::LibCache::from_dir(&root, &devkit_docs::names::encode(lib))
                     .remove_if_unreferenced(&snapshot)?
                 {
@@ -384,14 +382,7 @@ fn cmd_prune(yes: bool) -> Result<()> {
             }
         }
     }
-    // Reconcile against the freshly-locked data rather than blind-overwriting
-    // with the pre-lock snapshot's survivors, so a resolve that raced the
-    // snapshot isn't lost.
-    store.commit(|data| {
-        refs::reconcile(data, &snapshot, &plan.keep);
-        Ok(())
-    })?;
-    if plan.delete.is_empty() && plan.removable_libs.is_empty() {
+    if pruned.removed.is_empty() && pruned.removable_libs.is_empty() {
         println!("nothing to prune");
     }
     Ok(())

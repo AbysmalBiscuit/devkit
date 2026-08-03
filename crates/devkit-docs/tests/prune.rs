@@ -3,7 +3,7 @@ mod common;
 use common::unique_tmp;
 use devkit_docs::manifest::{Ecosystem, LibEntry};
 use devkit_docs::refs::{self, RefStore};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -73,34 +73,18 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
                 name: "up".into(),
                 ecosystem: Some(Ecosystem::Git),
                 repo: Some(std::env::var("DEVKIT_DOCS_TEST_REPO").unwrap()),
-                r#ref: Some("v1.0.0".into()),
+                r#ref: Some(std::env::var("DEVKIT_DOCS_TEST_REF").unwrap()),
                 ..Default::default()
             };
             devkit_docs::resolve::resolve(&entry, &project, &cache_root).unwrap();
         } else {
-            let store = RefStore::at(&cache_root);
-            let snapshot = store.snapshot();
             let manifest_libs = BTreeSet::from(["up".to_string()]);
-            let plan = refs::plan_for_cache(
+            refs::prune_with_lock(
                 &cache_root,
-                &snapshot,
                 &manifest_libs,
                 Some(&project.join("missing-global.toml")),
             )
             .unwrap();
-            assert_eq!(plan.delete, [("up".to_string(), "v1.0.0".to_string())]);
-            for (lib, worktree) in &plan.delete {
-                devkit_docs::cache::LibCache::new(&cache_root, lib)
-                    .unwrap()
-                    .remove_worktree(worktree, &snapshot)
-                    .unwrap();
-            }
-            store
-                .commit(|data| {
-                    refs::reconcile(data, &snapshot, &plan.keep);
-                    Ok(())
-                })
-                .unwrap();
         }
         return;
     }
@@ -111,14 +95,20 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
     let project = root.join("project");
     let barrier = root.join("resolve");
     std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("devkit.toml"),
+        format!("[[docs.libs]]\nname = 'up'\necosystem = 'git'\nrepo = '{repo}'\n"),
+    )
+    .unwrap();
     let exe = std::env::current_exe().unwrap();
-    let spawn_worker = |role: &str, pause: bool| {
+    let spawn_worker = |role: &str, git_ref: &str, pause: bool| {
         let mut command = Command::new(&exe);
         command
             .env("DEVKIT_DOCS_TEST_PRUNE_RACE", role)
             .env("DEVKIT_DOCS_TEST_CACHE_ROOT", &cache_root)
             .env("DEVKIT_DOCS_TEST_PROJECT", &project)
             .env("DEVKIT_DOCS_TEST_REPO", &repo)
+            .env("DEVKIT_DOCS_TEST_REF", git_ref)
             .args([
                 "--exact",
                 "prune_waits_for_an_in_flight_resolve_registry_commit",
@@ -134,24 +124,23 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
         command.spawn().unwrap()
     };
 
-    assert_worker_succeeded(wait_for_child(spawn_worker("seed", false), "seed"), "seed");
-    RefStore::at(&cache_root)
-        .commit(|data| {
-            data.rows[0].resolved_at = u64::MAX;
-            data.rows[0].revision = u64::MAX;
-            Ok(())
-        })
-        .unwrap();
-    let stale = RefStore::at(&cache_root).snapshot();
-    assert_eq!(stale.rows.len(), 1);
-    assert_eq!(stale.rows[0].resolved_at, u64::MAX);
+    assert_worker_succeeded(
+        wait_for_child(spawn_worker("seed", "v1.0.0", false), "seed"),
+        "seed",
+    );
+    let seeded = RefStore::at(&cache_root).snapshot();
+    assert_eq!(seeded.rows.len(), 1);
+    assert_eq!(seeded.rows[0].version, "v1.0.0");
 
-    let resolve = spawn_worker("resolve", true);
+    // The second resolve materializes `main`, a checkout the registry does not
+    // reference yet — exactly what a plan taken before the row is committed
+    // reads as garbage.
+    let resolve = spawn_worker("resolve", "main", true);
     wait_for(&barrier.with_extension("materialized"));
-    let checkout = cache_root.join("up/v1.0.0");
+    let checkout = cache_root.join("up/main");
     assert!(checkout.is_dir());
 
-    let mut prune = spawn_worker("prune", true);
+    let mut prune = spawn_worker("prune", "main", true);
     let contended = wait_for_contention_or_exit(&mut prune, &barrier.with_extension("contended"));
     let in_flight_checkout_survived = checkout.is_dir();
 
@@ -165,11 +154,15 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
         "prune deleted the in-flight checkout"
     );
     assert!(checkout.is_dir(), "prune deleted the committed checkout");
+    assert!(
+        !cache_root.join("up/v1.0.0").exists(),
+        "prune kept a checkout the committed row no longer references"
+    );
     let data = RefStore::at(&cache_root).snapshot();
     assert_eq!(data.rows.len(), 1);
-    assert_eq!(data.rows[0].version, "v1.0.0");
-    assert!(data.rows[0].resolved_at < stale.rows[0].resolved_at);
-    assert_eq!(data.rows[0].revision, 0);
+    assert_eq!(data.rows[0].version, "main");
+    assert_eq!(data.rows[0].revision, 1);
+    assert!(seeded.rows[0].resolved_at <= data.rows[0].resolved_at);
 }
 
 // Bug #1 regression: pruning from project A must NOT delete project B's
@@ -215,8 +208,8 @@ fn prune_preserves_other_projects_overlay_lib() {
     let store = RefStore::at(&cache_root);
     store
         .commit(|d| {
-            d.record(proj_a.to_str().unwrap(), "libX", "1.0.0");
-            d.record(proj_b.to_str().unwrap(), "libY", "2.0.0");
+            d.record(proj_a.to_str().unwrap(), "libX", "1.0.0", "v1.0.0", "aaa");
+            d.record(proj_b.to_str().unwrap(), "libY", "2.0.0", "v2.0.0", "bbb");
             Ok(())
         })
         .unwrap();
@@ -265,7 +258,7 @@ fn prune_keeps_rows_for_a_project_with_an_unreadable_manifest() {
     let store = RefStore::at(&cache_root);
     store
         .commit(|d| {
-            d.record(proj_b.to_str().unwrap(), "libZ", "1.0.0");
+            d.record(proj_b.to_str().unwrap(), "libZ", "1.0.0", "v1.0.0", "ccc");
             Ok(())
         })
         .unwrap();
@@ -329,7 +322,7 @@ fn whole_library_deletion_rechecks_fresh_references() {
 
     RefStore::at(&cache_root)
         .commit(|data| {
-            data.record(project.to_str().unwrap(), "up", "v1.0.0");
+            data.record(project.to_str().unwrap(), "up", "v1.0.0", "v1.0.0", "aaa");
             Ok(())
         })
         .unwrap();
@@ -351,7 +344,7 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
         let project = std::env::var("DEVKIT_DOCS_TEST_PROJECT").unwrap();
         RefStore::at(&cache_root)
             .commit(|data| {
-                data.record(&project, "up", "v1.0.0");
+                data.record(&project, "up", "v1.0.0", "v1.0.0", "aaa");
                 Ok(())
             })
             .unwrap();
@@ -371,6 +364,8 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
                 project: project.to_string_lossy().into_owned(),
                 lib: "up".into(),
                 version: "v1.0.0".into(),
+                git_ref: "v1.0.0".into(),
+                commit: "aaa".into(),
                 resolved_at: u64::MAX,
                 revision: u64::MAX,
             });
@@ -421,7 +416,7 @@ fn whole_library_deletion_ignores_rows_already_rejected_by_the_plan() {
     let store = RefStore::at(&cache_root);
     store
         .commit(|data| {
-            data.record("/missing/project", "up", "v1.0.0");
+            data.record("/missing/project", "up", "v1.0.0", "v1.0.0", "aaa");
             Ok(())
         })
         .unwrap();
@@ -499,18 +494,9 @@ fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
         .iter()
         .map(|entry| entry.name.clone())
         .collect::<BTreeSet<_>>();
-    let snapshot = RefStore::at(&cache_root).snapshot();
     let global = tmp.join("docs.toml");
     std::fs::write(&global, "").unwrap();
-    let plan = refs::plan_for_cache(&cache_root, &snapshot, &manifest_libs, Some(&global)).unwrap();
-    let scheduled = plan.delete.clone();
-
-    for (lib, worktree) in &plan.delete {
-        devkit_docs::cache::LibCache::new(&cache_root, lib)
-            .unwrap()
-            .remove_worktree(worktree, &snapshot)
-            .unwrap();
-    }
+    let pruned = refs::prune_with_lock(&cache_root, &manifest_libs, Some(&global)).unwrap();
 
     for resolution in &resolved {
         assert!(
@@ -518,11 +504,136 @@ fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
             "prune removed the live {} checkout {} via {:?}",
             resolution.name,
             resolution.worktree,
-            scheduled
+            pruned.removed
         );
     }
     assert!(
-        scheduled.is_empty(),
-        "prune scheduled live ref-named checkouts: {scheduled:?}"
+        pruned.removed.is_empty(),
+        "prune removed live ref-named checkouts: {:?}",
+        pruned.removed
+    );
+}
+
+#[test]
+fn two_workspaces_sharing_a_lockfile_keep_separate_rows() {
+    let mut d = refs::Data::default();
+    d.record("/repo/apps/api", "h3", "v1.15.11", "v1.15.11", "aaa");
+    d.record("/repo/apps/web", "h3", "v2.0.1", "v2.0.1", "bbb");
+    assert_eq!(
+        d.rows.len(),
+        2,
+        "a workspace key must not overwrite its sibling"
+    );
+}
+
+#[test]
+fn a_legacy_row_protects_default_until_a_real_materialization_retires_it() {
+    let mut d = refs::Data::default();
+    d.record_legacy("/repo", "h3", "default");
+    assert_eq!(refs::row_dirname(&d.rows[0]), "default");
+
+    d.record("/repo/apps/api", "h3", "v1.15.11", "v1.15.11", "aaa");
+    d.retire_legacy("/repo/apps/api", "h3");
+    assert_eq!(d.rows.len(), 1);
+    assert_eq!(d.rows[0].version, "v1.15.11");
+}
+
+#[test]
+fn a_legacy_row_keeps_its_checkout_until_a_workspace_row_retires_it() {
+    let root = unique_tmp("legacy-retire");
+    let lockfile_dir = root.join("repo");
+    let member = lockfile_dir.join("apps/api");
+    std::fs::create_dir_all(&member).unwrap();
+    let worktrees = BTreeMap::from([(
+        "h3".to_string(),
+        vec!["default".to_string(), "v1.15.11".to_string()],
+    )]);
+    let libs = BTreeSet::from(["h3".to_string()]);
+
+    let mut data = refs::Data::default();
+    data.record_legacy(lockfile_dir.to_str().unwrap(), "h3", "default");
+    let before = refs::plan(&data, &worktrees, &libs, |_, _| Some("default".to_string()));
+    assert!(
+        !before
+            .delete
+            .contains(&("h3".to_string(), "default".to_string())),
+        "a legacy row must keep protecting the checkout it references: {:?}",
+        before.delete
+    );
+
+    data.record(
+        member.to_str().unwrap(),
+        "h3",
+        "v1.15.11",
+        "v1.15.11",
+        "aaa",
+    );
+    data.retire_legacy(member.to_str().unwrap(), "h3");
+
+    let after = refs::plan(&data, &worktrees, &libs, |_, _| {
+        Some("v1.15.11".to_string())
+    });
+    assert_eq!(
+        after.delete,
+        [("h3".to_string(), "default".to_string())],
+        "a retired legacy row must stop protecting its checkout"
+    );
+}
+
+#[test]
+fn prune_never_enumerates_a_control_entry_as_a_library() {
+    let root = unique_tmp("control");
+    std::fs::create_dir_all(root.join("registry.locks")).unwrap();
+    std::fs::write(root.join("registry.json"), "{}").unwrap();
+
+    let pruned = refs::prune_with_lock(&root, &BTreeSet::new(), None).unwrap();
+
+    assert!(
+        pruned.removed.is_empty() && pruned.removable_libs.is_empty(),
+        "the registry's own files are not unreferenced libraries: {pruned:?}"
+    );
+    assert!(
+        pruned.skipped.is_empty(),
+        "the registry's own files were reported as malformed libraries: {:?}",
+        pruned.skipped
+    );
+    assert!(
+        !root.join("registry.locks/registry.locks.lock").exists(),
+        "prune locked a control entry as if it were a library"
+    );
+}
+
+#[test]
+fn prune_reports_a_cache_entry_that_is_not_a_library() {
+    let root = unique_tmp("stray-report");
+    std::fs::create_dir_all(root.join("@scope/pkg")).unwrap();
+
+    let pruned = refs::prune_with_lock(&root, &BTreeSet::new(), None).unwrap();
+
+    assert_eq!(
+        pruned.skipped,
+        ["@scope"],
+        "a directory without repo.git must be reported, not silently ignored"
+    );
+    assert!(pruned.removed.is_empty() && pruned.removable_libs.is_empty());
+    assert!(root.join("@scope/pkg").is_dir());
+}
+
+#[test]
+fn prune_drops_a_row_whose_project_directory_is_gone() {
+    let root = unique_tmp("dead-holder");
+    RefStore::at(&root)
+        .commit(|data| {
+            data.record("/gone/nowhere", "libX", "v1.0.0", "v1.0.0", "aaa");
+            Ok(())
+        })
+        .unwrap();
+
+    refs::prune_with_lock(&root, &BTreeSet::new(), None).unwrap();
+
+    assert!(
+        RefStore::at(&root).snapshot().rows.is_empty(),
+        "a row whose holder directory is gone outlived prune, and no cache \
+         directory exists to reach it through"
     );
 }

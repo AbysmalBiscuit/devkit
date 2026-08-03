@@ -8,7 +8,7 @@ fn concurrent_records_never_lose_rows() {
         let store = RefStore::at(&devkit_docs::cache::docs_root());
         store
             .commit(|d| {
-                d.record(&project, "tokio", "1.0.0");
+                d.record(&project, "tokio", "1.0.0", "v1.0.0", "aaa");
                 Ok(())
             })
             .unwrap();

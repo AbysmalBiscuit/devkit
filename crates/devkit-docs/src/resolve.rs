@@ -165,7 +165,9 @@ pub fn resolve_locked(entry: &LibEntry, start: &Path, cache_root: &Path) -> Resu
     crate::barrier::signal("materialized")?;
     crate::barrier::wait("commit")?;
     RefStore::at(cache_root).commit(|data| {
-        data.record(&project.to_string_lossy(), &entry.name, &worktree);
+        let workspace = project.to_string_lossy();
+        data.record(&workspace, &entry.name, &worktree, &git_ref, &commit);
+        data.retire_legacy(&workspace, &entry.name);
         Ok(())
     })?;
 
