@@ -93,12 +93,10 @@ package's release.
 Selection order, first hit wins:
 
 1. **Manifest `ref`** — used verbatim.
-2. **Git-ecosystem entries** always have a ref, because `docm add <git-url>`
-   without `--ref` now writes the repo's default branch name into the manifest
-   at add time (§5). There is no implicit fallback state. A git entry already in
-   a manifest without a `ref` — written by 0.12.x — is a hard error naming the
-   entry and suggesting `docm add <name> --ref <branch>`, or
-   `--allow-default-branch` for a one-off.
+2. **Git-ecosystem entries** always have a ref (§6.1). There is no implicit
+   fallback state. A git entry already in a manifest without a `ref` — written
+   by 0.12.x — is a hard error naming the entry and suggesting
+   `docm add <name> --ref <branch>`, or `--allow-default-branch` for a one-off.
 3. **Workspace-aware lockfile resolution** for js/rust/python entries:
    1. walk up from CWD to the nearest workspace manifest — `package.json` (js),
       `Cargo.toml` carrying a dependency table (rust)
@@ -173,10 +171,45 @@ Silent degradation is replaced by hard errors:
 
 - `add` resolves and materializes before reporting success; any failure restores
   the manifest to its prior content, so a failed add leaves nothing behind. Its
-  success line echoes ecosystem, repo, ref, commit and path — a wrong-ecosystem
+  success output echoes ecosystem, repo, ref, commit and path — a wrong-ecosystem
   registration is visible at a glance.
-- `add <git-url>` without `--ref` writes the resolved default branch name into
-  the manifest (§3.2).
+
+#### 6.1 `add <git-url>` without `--ref`
+
+The behaviour differs by destination manifest, because the two manifests have
+different owners.
+
+**Global** (`~/.config/devkit/docs.toml`, machine-owned and machine-written):
+resolve the repo's default branch and write it into the manifest as an explicit
+ref. The value is derived from remote `HEAD`, not invented, and no entry is ever
+left in an unpinned state. The success output names it as inferred and moving:
+
+```
+registered h3 (git) -> https://github.com/unjs/h3
+  ref       main (inferred default branch; moves on `docm sync`)
+  commit    5f72330a1b2c3d4e5f6071829304a5b6c7d8e9f0
+  path      ~/.local/share/devkit/docs/h3/main
+  manifest  ~/.config/devkit/docs.toml
+```
+
+**`--project`** (a repo-committed `devkit.toml`, hand-maintained shared policy):
+hard error. An inferred `main` committed to a repo reads as a deliberate team
+decision to every person and agent that later sees it.
+
+```
+error: --project needs an explicit --ref for a git URL entry
+
+devkit.toml is shared policy — an inferred default branch would read as a
+team decision. Take the ref from this project's dependency or release
+policy; don't guess `main`. Then rerun:
+
+    docm add <url> --project --ref <tag|branch|sha>
+```
+
+A ref-less entry that permanently *tracks* the default branch is deliberately
+not offered. It has no friction and no visible staleness, so it would silently
+re-resolve to a newer commit on every sync while continuing to look healthy —
+the design's founding bug, re-issued as a feature.
 - `sync` becomes fetch → re-resolve → materialize → verify → record, replacing
   the blanket `sync_default` call at `docm.rs:301`. It no longer exists to
   re-point a shared directory, because there is no shared directory.
@@ -314,14 +347,22 @@ support these.
 - Workspace-aware selection for Python.
 - Any change to the docs cache location or the global/project manifest split.
 
+## Settled by review
+
+- **`--allow-default-branch` is a flag only**, with no environment-variable
+  equivalent. An escape hatch that a skill can set once stops appearing in the
+  transcript, which is how the fallback became invisible in the first place.
+- **Nothing outside this repo reads `<lib>/default` by path.** Agents receive the
+  path from `docm info` / `docm path`; a sweep found the string only in the
+  archived 2026-07-10 implementation plan and in `devkit-docs`' own tests.
+  Retiring the name strands nothing.
+
+- **`add <git-url>` without `--ref` splits by manifest** (§6.1): inferred and
+  recorded globally, refused under `--project`. Demanding an explicit `--ref`
+  everywhere would not buy knowledge — an agent under time pressure types
+  `--ref main` or copies the branch out of the error text, producing the same
+  value while making it look deliberate.
+
 ## Unresolved questions
 
-1. Should `--allow-default-branch` also be readable as an environment variable
-   (`DOCM_ALLOW_DEFAULT_BRANCH`), so the skill can set it once rather than
-   threading a flag through every call? My inclination is no — a per-invocation
-   flag keeps the escape hatch visible in the transcript.
-2. `add <git-url>` without `--ref` writing the default branch into the manifest
-   makes the manifest record a decision the user did not type. Acceptable, or
-   should it require an explicit `--ref`?
-3. Does anything outside this repo read `~/.local/share/devkit/docs/<lib>/default`
-   by path — another skill, a script, a hook?
+None outstanding.
