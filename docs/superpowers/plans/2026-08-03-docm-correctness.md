@@ -20,7 +20,15 @@
 - **`anyhow` everywhere**, with `.context()` on every fallible IO or git call.
 - **Comments follow `AGENTS.md`:** no narration, no PR/issue references, no change-relative phrasing. A comment explains a non-obvious *why* or it does not exist.
 - **Conventional Commits**, one logical change per commit, imperative subject ≤50 chars.
-- **No new third-party dependency.** The spec explicitly dropped `node-semver`; importer-graph resolution needs no range matching. Locking uses `fd-lock`, which the workspace already depends on — do **not** add `fs2`.
+- **Adding a dependency is allowed** — this repo has no policy against it and
+  already carries ~25. Two specific choices here are not about that:
+  - **Locking uses `fd-lock`**, the crate `devkit-common`, `devkit-locks` and
+    `devkit-ports` already use for advisory file locks (`Cargo.toml:69`). Do not
+    add `fs2`. Not because it is a new dependency, but because two locking
+    crates in one workspace means two sets of flock semantics to reason about
+    on three platforms.
+  - **`node-semver` stays dropped** because importer-graph resolution reads the
+    version the lockfile already resolved; there is no range to match.
 - **Reserved names (§1, §1.1):** checkout level `repo.git`, `meta.toml`; library level the stem `registry` — that exact name or any name beginning with `registry.`.
 - **Never unlink an advisory lock file after release** (implementer note): persistent lock files avoid inode-replacement races.
 - **Locks are not reentrant.** `fd-lock` takes an OS advisory lock; a second acquisition of the same path from the same process opens a second file description and blocks forever. Every function that takes the library lock is named `*_locked` at its inner, lock-free layer, and only the outermost caller wraps it. Never call a lock-taking function from inside `locks::with_lib`.
