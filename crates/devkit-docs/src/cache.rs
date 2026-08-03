@@ -3,7 +3,7 @@
 
 use crate::layout::Layout;
 use crate::tags::TagPattern;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use devkit_common::cmd;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -73,10 +73,48 @@ pub fn read_meta(lib_dir: &Path) -> Meta {
 }
 
 pub fn write_meta(lib_dir: &Path, m: &Meta) -> Result<()> {
-    std::fs::create_dir_all(lib_dir)?;
+    ensure_dir_exact(lib_dir)?;
     std::fs::write(lib_dir.join("meta.toml"), toml::to_string_pretty(m)?)
         .context("writing meta.toml")?;
     Ok(())
+}
+
+pub fn create_dir_exact(parent: &Path, name: &str) -> Result<PathBuf> {
+    let path = parent.join(name);
+    std::fs::create_dir_all(&path).with_context(|| format!("creating {}", path.display()))?;
+    assert_dir_exact(parent, name)?;
+    Ok(path)
+}
+
+fn ensure_dir_exact(path: &Path) -> Result<PathBuf> {
+    let parent = path.parent().context("cache directory has no parent")?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("cache directory name is not valid UTF-8")?;
+    create_dir_exact(parent, name)
+}
+
+fn assert_dir_exact(parent: &Path, name: &str) -> Result<()> {
+    let entries: Vec<_> = std::fs::read_dir(parent)
+        .with_context(|| format!("reading {}", parent.display()))?
+        .flatten()
+        .collect();
+    if entries
+        .iter()
+        .any(|entry| entry.file_name() == std::ffi::OsStr::new(name))
+    {
+        return Ok(());
+    }
+    let existing: Vec<String> = entries
+        .iter()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|entry| crate::names::fold_key(entry) == crate::names::fold_key(name))
+        .collect();
+    bail!(
+        "this filesystem folds `{name}` onto {existing:?}; docm cannot keep them apart — \\
+         rename the library or pin a ref whose name does not collide"
+    );
 }
 
 pub struct LibCache {
@@ -84,10 +122,20 @@ pub struct LibCache {
 }
 
 impl LibCache {
-    pub fn new(cache_root: &Path, name: &str) -> Self {
+    pub fn new(cache_root: &Path, name: &str) -> Result<Self> {
+        Ok(Self {
+            dir: cache_root.join(crate::names::lib_dir(name)?),
+        })
+    }
+
+    pub fn from_dir(cache_root: &Path, dirname: &str) -> Self {
         Self {
-            dir: cache_root.join(name),
+            dir: cache_root.join(dirname),
         }
+    }
+
+    pub fn ensure_dir(&self) -> Result<PathBuf> {
+        ensure_dir_exact(&self.dir)
     }
 
     pub fn bare(&self) -> PathBuf {
@@ -108,7 +156,7 @@ impl LibCache {
         if self.cloned() {
             return Ok(());
         }
-        std::fs::create_dir_all(&self.dir)?;
+        self.ensure_dir()?;
         let dest = self.bare_str();
         if cmd::capture(
             "git",
@@ -173,6 +221,7 @@ impl LibCache {
             &self.bare_str(),
         )
         .with_context(|| format!("materializing {dirname} at {commitish}"))?;
+        assert_dir_exact(&self.dir, dirname)?;
         Ok(path)
     }
 
@@ -197,6 +246,9 @@ impl LibCache {
     /// Worktree dirs currently on disk (including `default`, excluding the
     /// bare repo itself).
     pub fn version_worktrees(&self) -> Vec<(String, PathBuf)> {
+        if !self.bare().is_dir() {
+            return Vec::new();
+        }
         let Ok(rd) = std::fs::read_dir(&self.dir) else {
             return Vec::new();
         };

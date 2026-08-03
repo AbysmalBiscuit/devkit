@@ -5,10 +5,25 @@ use devkit_docs::cache::{self, LibCache, Meta};
 use devkit_docs::tags::TagPattern;
 
 #[test]
+fn a_directory_the_host_folds_into_an_existing_one_is_refused() {
+    let root = common::unique_tmp("fold");
+    let first = devkit_docs::cache::create_dir_exact(&root, "V1.0").unwrap();
+    assert!(first.is_dir());
+
+    match devkit_docs::cache::create_dir_exact(&root, "v1.0") {
+        Ok(path) => assert!(path.is_dir(), "a case-sensitive host keeps them distinct"),
+        Err(error) => assert!(
+            error.to_string().contains("V1.0"),
+            "a folding host must name the directory it collided with: {error}"
+        ),
+    }
+}
+
+#[test]
 fn clone_tags_worktree_and_sync() {
     let tmp = unique_tmp("cache");
     let repo = fixture_repo(&tmp.join("upstream"));
-    let lib = LibCache::new(&tmp.join("cacheroot"), "mylib");
+    let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
 
     assert!(!lib.cloned());
     lib.ensure_clone(&repo).unwrap();
@@ -51,7 +66,7 @@ fn sync_default_follows_new_commits() {
     let tmp = unique_tmp("sync");
     let upstream = tmp.join("upstream");
     let repo = fixture_repo(&upstream);
-    let lib = LibCache::new(&tmp.join("cacheroot"), "mylib");
+    let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
     lib.ensure_clone(&repo).unwrap();
     let def = lib.sync_default(None).unwrap();
     assert_eq!(

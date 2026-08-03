@@ -188,8 +188,9 @@ pub fn plan_for_cache(
         if !e.path().is_dir() {
             continue;
         }
-        let name = e.file_name().to_string_lossy().into_owned();
-        let dirs = cache::LibCache::new(cache_root, &name)
+        let dirname = e.file_name().to_string_lossy().into_owned();
+        let name = crate::names::decode(&dirname);
+        let dirs = cache::LibCache::from_dir(cache_root, &dirname)
             .version_worktrees()
             .into_iter()
             .map(|(n, _)| n)

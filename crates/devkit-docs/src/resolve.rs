@@ -46,7 +46,7 @@ pub fn resolve(entry: &LibEntry, start: &Path, cache_root: &Path) -> Result<Reso
         .repo
         .as_deref()
         .with_context(|| format!("lib `{}` has no repo url", entry.name))?;
-    let lib = LibCache::new(cache_root, &entry.name);
+    let lib = LibCache::new(cache_root, &entry.name)?;
     lib.ensure_clone(repo)?;
     let mut warnings = Vec::new();
     let mut meta = cache::read_meta(&lib.dir);

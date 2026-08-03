@@ -3,6 +3,7 @@ pub mod layout;
 pub mod lockfiles;
 pub mod lookup;
 pub mod manifest;
+pub mod names;
 pub mod refs;
 pub mod resolve;
 pub mod tags;
@@ -36,9 +37,10 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
         if !e.path().is_dir() {
             continue;
         }
-        let name = e.file_name().to_string_lossy().into_owned();
+        let dirname = e.file_name().to_string_lossy().into_owned();
+        let name = names::decode(&dirname);
         out.libs += 1;
-        for (wt, _) in cache::LibCache::new(cache_root, &name).version_worktrees() {
+        for (wt, _) in cache::LibCache::from_dir(cache_root, &dirname).version_worktrees() {
             if wt != "default" && !referenced.contains(&(name.clone(), wt)) {
                 out.unreferenced += 1;
             }

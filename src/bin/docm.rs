@@ -224,22 +224,22 @@ fn cmd_list(json: bool) -> Result<()> {
             .manifest
             .libs
             .iter()
-            .map(|l| {
-                let synced: Vec<String> = cache::LibCache::new(&root, &l.name)
+            .map(|l| -> Result<serde_json::Value> {
+                let synced: Vec<String> = cache::LibCache::new(&root, &l.name)?
                     .version_worktrees()
                     .into_iter()
                     .map(|(n, _)| n)
                     .collect();
-                serde_json::json!({
+                Ok(serde_json::json!({
                     "name": l.name,
                     "ecosystem": l.ecosystem,
                     "package": l.package_name(),
                     "repo": l.repo,
                     "ref": l.r#ref,
                     "synced": synced,
-                })
+                }))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         println!("{}", serde_json::to_string_pretty(&items)?);
         return Ok(());
     }
@@ -252,7 +252,7 @@ fn cmd_list(json: bool) -> Result<()> {
             .ecosystem
             .map(|e| e.to_string())
             .unwrap_or_else(|| "?".into());
-        let synced: Vec<String> = cache::LibCache::new(&root, &l.name)
+        let synced: Vec<String> = cache::LibCache::new(&root, &l.name)?
             .version_worktrees()
             .into_iter()
             .map(|(n, _)| n)
@@ -288,7 +288,7 @@ fn cmd_sync(names: &[String]) -> Result<()> {
         anyhow::bail!("`{unknown}` is not registered — see `docm list`");
     }
     for l in selected {
-        let lib = cache::LibCache::new(&root, &l.name);
+        let lib = cache::LibCache::new(&root, &l.name)?;
         if !lib.cloned() {
             eprintln!(
                 "docm: {} not cloned yet (materialized on first lookup); skipping",
@@ -361,7 +361,7 @@ fn cmd_prune(yes: bool) -> Result<()> {
     let plan = refs::plan_for_cache(&root, &snapshot, &manifest_libs, None)?;
 
     for (lib, wt) in &plan.delete {
-        cache::LibCache::new(&root, lib).remove_worktree(wt)?;
+        cache::LibCache::from_dir(&root, &devkit_docs::names::encode(lib)).remove_worktree(wt)?;
         println!("removed {lib}/{wt}");
     }
     if !plan.removable_libs.is_empty() {

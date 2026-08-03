@@ -123,3 +123,14 @@ fn prune_keeps_rows_for_a_project_with_an_unreadable_manifest() {
             .any(|r| r.lib == "libZ" && r.version == "1.0.0")
     );
 }
+
+#[test]
+fn a_scoped_library_is_one_directory_and_prune_leaves_it_alone() {
+    let root = unique_tmp("scoped");
+    let lib = devkit_docs::cache::LibCache::new(&root, "@types/node").unwrap();
+    assert!(lib.dir.ends_with("@types~node"));
+
+    std::fs::create_dir_all(root.join("@scope/pkg")).unwrap();
+    let stray = devkit_docs::cache::LibCache::new(&root, "@scope").unwrap();
+    assert!(stray.version_worktrees().is_empty());
+}
