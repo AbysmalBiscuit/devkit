@@ -14,7 +14,7 @@ const BUN_LOCK: &str = r#"{
   },
   "packages": {
     "h3": ["h3@1.15.11", "", {}, "sha512-a"],
-    "h3-v2": ["h3@2.0.1-rc.20", "", { "transitive": "^3.0.0" }, "sha512-b"],
+    "h3-v2": ["h3@2.0.1-rc.20", "", { "dependencies": { "transitive": "^3.0.0" } }, "sha512-b"],
     "@compat/h3": ["h3@2.0.1", "", {}, "sha512-c"],
     "transitive": ["transitive@3.2.1", "", {}, "sha512-d"], /* block comment */
   },
@@ -59,6 +59,69 @@ fn a_bun_alias_never_wins_over_the_declared_dependency() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("empty"), "{error}");
+}
+
+#[test]
+fn bun_candidates_decode_valid_tuple_variants_and_info_slots() {
+    let root = common::unique_tmp("bun-variants");
+    std::fs::write(
+        root.join("bun.lock"),
+        r#"{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": { "name": "root", "dependencies": {} }
+  },
+  "packages": {
+    "root": ["root@root:", { "bin": "bin/root" }],
+    "local": ["local@workspace:packages/local"],
+    "linked": ["linked@link:../linked", { "devDependencies": { "transitive": "^1" } }],
+    "folder": ["folder@file:../folder", { "optionalDependencies": { "transitive": "^1" } }],
+    "archive": ["archive@https://example.invalid/archive.tgz", { "peerDependencies": { "transitive": "^1" } }],
+    "gitdep": ["gitdep@git+https://example.invalid/repo.git#abc", { "dependencies": { "transitive": "^1" } }, "github:example/repo#abc"],
+    "h3": ["h3@1.15.11", "", { "dependencies": { "transitive": "^1" } }, "sha512-a"],
+    "transitive": ["transitive@3.2.1", "", {}, "sha512-b"]
+  }
+}"#,
+    )
+    .unwrap();
+    write_package_json(&root, r#"{"name":"root","dependencies":{}}"#);
+
+    let error = importers::select(&root, Ecosystem::Js, "transitive")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("does not declare"), "{error}");
+    for declarer in ["linked", "folder", "archive", "gitdep", "h3"] {
+        assert!(error.contains(declarer), "missing {declarer}: {error}");
+    }
+    assert!(error.contains("3.2.1"), "{error}");
+}
+
+#[test]
+fn bun_rejects_a_selected_non_registry_resolution() {
+    let root = common::unique_tmp("bun-non-registry");
+    std::fs::write(
+        root.join("bun.lock"),
+        r#"{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": { "name": "root", "dependencies": { "local": "workspace:*" } }
+  },
+  "packages": {
+    "local": ["local@workspace:packages/local"]
+  }
+}"#,
+    )
+    .unwrap();
+    write_package_json(
+        &root,
+        r#"{"name":"root","dependencies":{"local":"workspace:*"}}"#,
+    );
+
+    let error = importers::select(&root, Ecosystem::Js, "local")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("non-registry"), "{error}");
+    assert!(error.contains("workspace:packages/local"), "{error}");
 }
 
 #[test]
@@ -195,7 +258,7 @@ fn competing_js_lockfiles_use_the_nearest_valid_packagemanager() {
     std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
     std::fs::write(
         root.join("pnpm-lock.yaml"),
-        "lockfileVersion: '9.0'\nimporters:\n  apps/api:\n    dependencies:\n      h3:\n        specifier: ^1.15.5\n        version: 1.15.7\n",
+        "lockfileVersion: '9.0'\nimporters:\n  apps/api:\n    dependencies:\n      h3:\n        specifier: ^1.15.5\n        version: 1.15.7\npackages:\n  h3@1.15.7: {}\n",
     )
     .unwrap();
     let ws = root.join("apps/api");
@@ -282,6 +345,40 @@ version = "0.28.1"
     assert!(error.contains("0.27.0"), "{error}");
     assert!(error.contains("0.28.1"), "{error}");
     assert!(error.contains("fork"), "{error}");
+}
+
+#[test]
+fn uv_selects_a_versionless_dynamic_member_by_local_source() {
+    let root = common::unique_tmp("uv-dynamic-member");
+    std::fs::write(
+        root.join("uv.lock"),
+        r#"version = 1
+
+[[package]]
+name = "app"
+source = { editable = "." }
+dependencies = [{ name = "httpx", version = "0.28.1" }]
+
+[[package]]
+name = "app"
+version = "9.9.9"
+source = { registry = "https://example.invalid/simple" }
+
+[[package]]
+name = "httpx"
+version = "0.28.1"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pyproject.toml"),
+        "[project]\nname = \"app\"\ndynamic = [\"version\"]\ndependencies = [\"httpx\"]\n",
+    )
+    .unwrap();
+
+    let selection = importers::select(&root, Ecosystem::Python, "httpx").unwrap();
+    assert_eq!(selection.version, "0.28.1");
+    assert_eq!(selection.workspace, root);
 }
 
 #[test]
@@ -604,6 +701,23 @@ fn a_pnpm_alias_resolves_and_non_registry_locators_are_rejected() {
 }
 
 #[test]
+fn pnpm_rejects_a_direct_locator_without_a_target_row() {
+    let root = common::unique_tmp("pnpm-missing-target");
+    std::fs::write(
+        root.join("pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3:\n        specifier: ^9\n        version: 9.9.9\npackages:\n  h3@1.15.11: {}\n",
+    )
+    .unwrap();
+    write_package_json(&root, r#"{"name":"root","dependencies":{"h3":"^9"}}"#);
+
+    let error = importers::select(&root, Ecosystem::Js, "h3")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("h3@9.9.9"), "{error}");
+    assert!(error.contains("package row"), "{error}");
+}
+
+#[test]
 fn every_direct_dependency_class_resolves_in_its_js_format() {
     let bun = common::unique_tmp("js-classes-bun");
     std::fs::write(
@@ -646,7 +760,7 @@ fn every_direct_dependency_class_resolves_in_its_js_format() {
     let pnpm = common::unique_tmp("js-classes-pnpm");
     std::fs::write(
         pnpm.join("pnpm-lock.yaml"),
-        "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      vitest:\n        specifier: ^3\n        version: 3.2.4\n    optionalDependencies:\n      fsevents:\n        specifier: ^2\n        version: 2.3.3\n",
+        "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      vitest:\n        specifier: ^3\n        version: 3.2.4\n    optionalDependencies:\n      fsevents:\n        specifier: ^2\n        version: 2.3.3\npackages:\n  vitest@3.2.4: {}\n  fsevents@2.3.3: {}\n",
     )
     .unwrap();
     write_package_json(

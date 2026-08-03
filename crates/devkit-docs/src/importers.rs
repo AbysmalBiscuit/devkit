@@ -322,6 +322,91 @@ fn json5_ish(source: &str) -> Result<JsonValue> {
         .context("bun.lock is empty")
 }
 
+struct BunPackageRow<'a> {
+    name: &'a str,
+    resolution: &'a str,
+    version: Option<&'a str>,
+    info: Option<&'a JsonValue>,
+}
+
+fn bun_tuple_len(tuple: &[JsonValue], expected: usize, location: &str) -> Result<()> {
+    if tuple.len() != expected {
+        bail!(
+            "{location} has {} fields; expected {expected} for this Bun package variant",
+            tuple.len()
+        );
+    }
+    Ok(())
+}
+
+fn bun_tuple_info<'a>(
+    tuple: &'a [JsonValue],
+    index: usize,
+    location: &str,
+) -> Result<&'a JsonValue> {
+    let info = tuple
+        .get(index)
+        .with_context(|| format!("{location}[{index}] is missing"))?;
+    info.as_object()
+        .with_context(|| format!("{location}[{index}] must be a package info object"))?;
+    Ok(info)
+}
+
+fn bun_package_row<'a>(row: &'a JsonValue, location: &str) -> Result<BunPackageRow<'a>> {
+    let tuple = row
+        .as_array()
+        .with_context(|| format!("{location} must be an array"))?;
+    let spec = tuple
+        .first()
+        .and_then(JsonValue::as_str)
+        .with_context(|| format!("{location}[0] must be a name@resolution string"))?;
+    let (name, resolution) = name_and_version(spec, &format!("{location}[0]"))?;
+
+    let (version, info) = if resolution.starts_with("workspace:") {
+        bun_tuple_len(tuple, 1, location)?;
+        (None, None)
+    } else if resolution.starts_with("root:")
+        || resolution.starts_with("link:")
+        || resolution.starts_with("file:")
+        || resolution.starts_with("http:")
+        || resolution.starts_with("https:")
+    {
+        bun_tuple_len(tuple, 2, location)?;
+        (None, Some(bun_tuple_info(tuple, 1, location)?))
+    } else if resolution.starts_with("git+") || resolution.starts_with("github:") {
+        bun_tuple_len(tuple, 3, location)?;
+        let bun_tag = tuple
+            .get(2)
+            .and_then(JsonValue::as_str)
+            .with_context(|| format!("{location}[2] must be a Bun tag string"))?;
+        if bun_tag.is_empty() {
+            bail!("{location}[2] must not be empty");
+        }
+        (None, Some(bun_tuple_info(tuple, 1, location)?))
+    } else {
+        if resolution.contains(':') {
+            bail!("{location} has unsupported non-registry resolution `{resolution}`");
+        }
+        bun_tuple_len(tuple, 4, location)?;
+        tuple
+            .get(1)
+            .and_then(JsonValue::as_str)
+            .with_context(|| format!("{location}[1] must be a registry string"))?;
+        tuple
+            .get(3)
+            .and_then(JsonValue::as_str)
+            .with_context(|| format!("{location}[3] must be an integrity string"))?;
+        (Some(resolution), Some(bun_tuple_info(tuple, 2, location)?))
+    };
+
+    Ok(BunPackageRow {
+        name,
+        resolution,
+        version,
+        info,
+    })
+}
+
 fn bun(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Result<Selection> {
     let lock_path = lock_dir.join("bun.lock");
     let raw = std::fs::read_to_string(&lock_path)
@@ -363,14 +448,13 @@ fn bun(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Resu
         .get_key_value(&scoped)
         .or_else(|| packages.get_key_value(package))
         .with_context(|| format!("bun.lock has no package row for `{package}`"))?;
-    let tuple = row
-        .as_array()
-        .with_context(|| format!("packages.{package_key} must be an array"))?;
-    let spec = tuple
-        .first()
-        .and_then(JsonValue::as_str)
-        .with_context(|| format!("packages.{package_key}[0] must be a name@version string"))?;
-    let (_, version) = name_and_version(spec, &format!("packages.{package_key}[0]"))?;
+    let decoded = bun_package_row(row, &format!("packages.{package_key}"))?;
+    let version = decoded.version.with_context(|| {
+        format!(
+            "bun package `{package_key}` uses non-registry resolution `{}`; pin it with --ref",
+            decoded.resolution
+        )
+    })?;
     Ok(Selection {
         workspace: workspace.to_path_buf(),
         version: version.to_string(),
@@ -395,22 +479,20 @@ fn bun_candidates(value: &JsonValue, package: &str) -> Result<Candidates> {
         }
     }
     for (key, row) in packages {
-        let tuple = row
-            .as_array()
-            .with_context(|| format!("packages.{key} must be an array"))?;
-        let spec = tuple
-            .first()
-            .and_then(JsonValue::as_str)
-            .with_context(|| format!("packages.{key}[0] must be a name@version string"))?;
-        let (name, version) = name_and_version(spec, &format!("packages.{key}[0]"))?;
-        if name == package {
+        let decoded = bun_package_row(row, &format!("packages.{key}"))?;
+        if decoded.name == package
+            && let Some(version) = decoded.version
+        {
             candidates.add_version(version, format!("packages.{key}"));
         }
-        let dependencies = tuple
-            .get(2)
-            .and_then(JsonValue::as_object)
-            .with_context(|| format!("packages.{key}[2] must be a dependency object"))?;
-        if dependencies.contains_key(package) {
+        if let Some(info) = decoded.info
+            && json_declares(
+                info,
+                &BUN_DEP_CLASSES,
+                package,
+                &format!("packages.{key} info"),
+            )?
+        {
             candidates.add_declarer(key);
         }
     }
@@ -602,11 +684,10 @@ fn pnpm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Res
             let location = format!("importers.{importer_key}.{class}.{package}");
             let locator = pnpm_entry_locator(entry, true, &location)?;
             let (identity, version) = pnpm_locator(locator)?;
-            if let Some(identity) = identity
-                && !pnpm_has_package_row(&value, &identity, &version)?
-            {
+            let target = identity.as_deref().unwrap_or(package);
+            if !pnpm_has_package_row(&value, target, &version)? {
                 bail!(
-                    "pnpm locator `{locator}` has no matching package row for `{identity}@{version}`"
+                    "pnpm locator `{locator}` has no matching package row for `{target}@{version}`"
                 );
             }
             matches.push(version);
@@ -720,7 +801,8 @@ struct PackageLock {
 #[derive(Debug, Deserialize)]
 struct LockPackage {
     name: String,
-    version: String,
+    #[serde(default)]
+    version: Option<String>,
     #[serde(default)]
     source: Option<toml::Value>,
     #[serde(default)]
@@ -892,7 +974,9 @@ fn choose_member<'a>(
             .iter()
             .copied()
             .filter(|package| package.source.is_none())
-            .filter(|package| manifest_version.is_none_or(|version| package.version == version))
+            .filter(|package| {
+                manifest_version.is_none_or(|version| package.version.as_deref() == Some(version))
+            })
             .collect::<Vec<_>>();
         return match local.as_slice() {
             [package] => Ok(*package),
@@ -931,7 +1015,7 @@ fn choose_member<'a>(
         let matching = named
             .iter()
             .copied()
-            .filter(|package| package.version == version)
+            .filter(|package| package.version.as_deref() == Some(version))
             .collect::<Vec<_>>();
         match matching.as_slice() {
             [package] => return Ok(*package),
@@ -963,7 +1047,14 @@ fn package_candidates(
     let mut candidates = Candidates::default();
     for row in packages {
         if row.name == package {
-            candidates.add_version(&row.version, lock.display().to_string());
+            let version = row.version.as_deref().with_context(|| {
+                format!(
+                    "{} package `{}` is a dependency candidate but has no version",
+                    lock.display(),
+                    row.name
+                )
+            })?;
+            candidates.add_version(version, lock.display().to_string());
         }
         for edge in package_edges(row, format)? {
             if edge.name == package {
@@ -990,6 +1081,17 @@ fn from_package_array(
         std::fs::read_to_string(lock).with_context(|| format!("reading {}", lock.display()))?;
     let parsed: PackageLock =
         toml::from_str(&raw).with_context(|| format!("parsing {}", lock.display()))?;
+    if format == PackageFormat::Cargo {
+        for package in &parsed.packages {
+            if package.version.is_none() {
+                bail!(
+                    "{} Cargo package `{}` has no version",
+                    lock.display(),
+                    package.name
+                );
+            }
+        }
+    }
     let own = choose_member(
         &parsed.packages,
         format,
