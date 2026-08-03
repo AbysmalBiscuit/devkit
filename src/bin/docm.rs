@@ -52,6 +52,7 @@ enum Cmd {
         project: bool,
     },
     /// Remove a library from the manifest (checkouts are reclaimed by prune).
+    #[command(visible_alias = "remove", visible_alias = "delete")]
     Rm {
         name: String,
         #[arg(long)]
@@ -163,7 +164,7 @@ fn cmd_add(
             }
             (Some(e), None) => (e, lookup::Registry::repo_url(&lookup::Http, e, &pkg)?),
             (None, r) => {
-                let (e, url) = lookup::detect(&lookup::Http, &pkg)?;
+                let (e, url) = lookup::detect(&lookup::Http, &pkg, &cwd()?)?;
                 (e, r.unwrap_or(url))
             }
         };

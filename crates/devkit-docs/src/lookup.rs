@@ -4,6 +4,7 @@
 
 use crate::manifest::Ecosystem;
 use anyhow::{Context, Result, bail};
+use std::path::Path;
 
 pub trait Registry {
     fn repo_url(&self, eco: Ecosystem, package: &str) -> Result<String>;
@@ -34,19 +35,67 @@ impl Registry for Http {
     }
 }
 
-/// Probe registries in order (crates.io, npm, PyPI); first hit wins.
-pub fn detect(reg: &dyn Registry, package: &str) -> Result<(Ecosystem, String)> {
+/// Ecosystem markers checked closest-directory-first walking up from `cwd`.
+/// Within one directory, the first ecosystem with a present marker wins —
+/// an arbitrary but deterministic tie-break for a polyglot directory.
+const LOCAL_MARKERS: &[(Ecosystem, &[&str])] = &[
+    (
+        Ecosystem::Js,
+        &[
+            "bun.lock",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "package.json",
+        ],
+    ),
+    (Ecosystem::Rust, &["Cargo.toml"]),
+    (Ecosystem::Python, &["pyproject.toml", "uv.lock"]),
+];
+
+/// The ecosystem of the local project `cwd` sits in, if any, found by
+/// walking up from `cwd` looking for a package manifest or lockfile.
+fn local_ecosystem(cwd: &Path) -> Option<Ecosystem> {
+    cwd.ancestors().find_map(|dir| {
+        LOCAL_MARKERS
+            .iter()
+            .find(|(_, markers)| markers.iter().any(|m| dir.join(m).is_file()))
+            .map(|(eco, _)| *eco)
+    })
+}
+
+/// Probe crates.io, npm, and PyPI for `package`. A single hit wins; with no
+/// hits this is a hard error. Multiple hits are ambiguous — the local
+/// project's ecosystem (if any marker is found walking up from `cwd`)
+/// resolves it, otherwise this is a hard error naming every match.
+pub fn detect(reg: &dyn Registry, package: &str, cwd: &Path) -> Result<(Ecosystem, String)> {
+    let mut hits = Vec::new();
     let mut errs = Vec::new();
     for eco in [Ecosystem::Rust, Ecosystem::Js, Ecosystem::Python] {
         match reg.repo_url(eco, package) {
-            Ok(url) => return Ok((eco, url)),
+            Ok(url) => hits.push((eco, url)),
             Err(e) => errs.push(format!("{eco}: {e}")),
         }
     }
-    bail!(
-        "`{package}` not found on crates.io, npm, or PyPI ({}); pass --eco or a git URL",
-        errs.join("; ")
-    )
+    match hits.len() {
+        0 => bail!(
+            "`{package}` not found on crates.io, npm, or PyPI ({}); pass --eco or a git URL",
+            errs.join("; ")
+        ),
+        1 => Ok(hits.into_iter().next().expect("checked len == 1")),
+        _ => {
+            if let Some(local) = local_ecosystem(cwd)
+                && let Some(hit) = hits.iter().find(|(eco, _)| *eco == local)
+            {
+                return Ok(hit.clone());
+            }
+            let named = hits
+                .iter()
+                .map(|(eco, url)| format!("{eco} ({url})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!("`{package}` matches multiple ecosystems: {named}; pass --eco to disambiguate")
+        }
+    }
 }
 
 /// Pull the repository URL out of one registry's JSON response.
@@ -161,7 +210,8 @@ mod tests {
                 }
             }
         }
-        let (eco, url) = detect(&Stub, "react").unwrap();
+        let dir = std::env::temp_dir();
+        let (eco, url) = detect(&Stub, "react", &dir).unwrap();
         assert_eq!(eco, Ecosystem::Js);
         assert_eq!(url, "https://github.com/facebook/react");
 
@@ -171,6 +221,68 @@ mod tests {
                 anyhow::bail!("nope")
             }
         }
-        assert!(detect(&Never, "ghost").is_err());
+        assert!(detect(&Never, "ghost", &dir).is_err());
+    }
+
+    #[test]
+    fn a_name_in_two_registries_refuses_and_names_both() {
+        struct Both;
+        impl Registry for Both {
+            fn repo_url(&self, eco: Ecosystem, _p: &str) -> anyhow::Result<String> {
+                match eco {
+                    Ecosystem::Rust => Ok("https://github.com/hyperium/h3".into()),
+                    Ecosystem::Js => Ok("https://github.com/unjs/h3".into()),
+                    _ => anyhow::bail!("not found"),
+                }
+            }
+        }
+        let dir = std::env::temp_dir();
+        let err = detect(&Both, "h3", &dir).unwrap_err().to_string();
+        assert!(err.contains("hyperium"), "{err}");
+        assert!(err.contains("unjs"), "{err}");
+        assert!(err.contains("--eco"), "{err}");
+    }
+
+    #[test]
+    fn a_js_project_reports_js_when_only_npm_has_the_name() {
+        struct Npm;
+        impl Registry for Npm {
+            fn repo_url(&self, eco: Ecosystem, _p: &str) -> anyhow::Result<String> {
+                match eco {
+                    Ecosystem::Js => Ok("https://github.com/unjs/h3".into()),
+                    _ => anyhow::bail!("not found"),
+                }
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("docm-eco-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("bun.lock"), "{}").unwrap();
+        let (eco, _) = detect(&Npm, "h3", &dir).unwrap();
+        assert_eq!(eco, Ecosystem::Js);
+    }
+
+    /// The brief's `a_js_project_reports_js_when_only_npm_has_the_name` fixture
+    /// only ever produces one registry hit, so it passes with or without the
+    /// cwd probe wired in — it does not discriminate local-first ordering.
+    /// This variant makes Rust and Js both hit with different URLs so only a
+    /// working local-project probe picks Js.
+    #[test]
+    fn a_js_project_resolves_ambiguity_to_js() {
+        struct Both;
+        impl Registry for Both {
+            fn repo_url(&self, eco: Ecosystem, _p: &str) -> anyhow::Result<String> {
+                match eco {
+                    Ecosystem::Rust => Ok("https://github.com/hyperium/h3".into()),
+                    Ecosystem::Js => Ok("https://github.com/unjs/h3".into()),
+                    _ => anyhow::bail!("not found"),
+                }
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("docm-eco-amb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("bun.lock"), "{}").unwrap();
+        let (eco, url) = detect(&Both, "h3", &dir).unwrap();
+        assert_eq!(eco, Ecosystem::Js);
+        assert_eq!(url, "https://github.com/unjs/h3");
     }
 }
