@@ -15,7 +15,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub const SCHEMA: u32 = 1;
-pub const TEST_NOW_VAR: &str = "DEVKIT_DOCS_TEST_REGISTRY_NOW";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefRow {
@@ -24,6 +23,8 @@ pub struct RefRow {
     /// Worktree dirname: a lockfile version like `1.38.0`, or `default`.
     pub version: String,
     pub resolved_at: u64,
+    #[serde(default)]
+    pub revision: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -50,12 +51,6 @@ impl Document for Data {
 }
 
 fn now() -> u64 {
-    if let Some(value) = std::env::var_os(TEST_NOW_VAR) {
-        return value
-            .to_string_lossy()
-            .parse()
-            .expect("test registry timestamp must be an integer");
-    }
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -76,13 +71,15 @@ impl Data {
         {
             Some(r) => {
                 r.version = version.to_string();
-                r.resolved_at = timestamp.max(r.resolved_at.saturating_add(1));
+                r.resolved_at = timestamp;
+                r.revision = r.revision.wrapping_add(1);
             }
             None => self.rows.push(RefRow {
                 project: project.to_string(),
                 lib: lib.to_string(),
                 version: version.to_string(),
                 resolved_at: timestamp,
+                revision: 0,
             }),
         }
     }
@@ -249,9 +246,7 @@ pub fn reconcile(current: &mut Data, snapshot: &Data, keep: &[RefRow]) {
         .retain(|row| match snapshot_rows.get(&key(row)) {
             None => true,
             Some(snapshot_row) => {
-                keep_keys.contains(&key(row))
-                    || row.version != snapshot_row.version
-                    || row.resolved_at != snapshot_row.resolved_at
+                keep_keys.contains(&key(row)) || row.revision != snapshot_row.revision
             }
         });
 }
@@ -279,13 +274,45 @@ mod tests {
     }
 
     #[test]
-    fn repeated_same_key_and_version_record_advances_freshness() {
+    fn legacy_rows_default_revision_to_zero() {
+        let data: Data = serde_json::from_str(
+            r#"{
+                "version": 1,
+                "rows": [{
+                    "project": "/p1",
+                    "lib": "tokio",
+                    "version": "1.0.0",
+                    "resolved_at": 42
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(data.rows[0].revision, 0);
+    }
+
+    #[test]
+    fn repeated_same_key_and_version_record_advances_revision() {
         let mut data = Data::default();
         data.record_at("/p1", "tokio", "1.0.0", 42);
 
         data.record_at("/p1", "tokio", "1.0.0", 42);
 
-        assert_eq!(data.rows[0].resolved_at, 43);
+        assert_eq!(data.rows[0].resolved_at, 42);
+        assert_eq!(data.rows[0].revision, 1);
+    }
+
+    #[test]
+    fn revision_wraparound_remains_distinguishable_from_the_prior_row() {
+        let mut data = Data::default();
+        data.record_at("/p1", "tokio", "1.0.0", 42);
+        data.rows[0].revision = u64::MAX;
+        let prior = data.rows[0].clone();
+
+        data.record_at("/p1", "tokio", "1.0.0", 42);
+
+        assert_eq!(data.rows[0].revision, 0);
+        assert_ne!(data.rows[0], prior);
     }
 
     #[test]
@@ -403,7 +430,8 @@ mod tests {
         reconcile(&mut current, &snapshot, &[]);
 
         assert_eq!(current.rows.len(), 1);
-        assert_eq!(current.rows[0].resolved_at, 43);
+        assert_eq!(current.rows[0].resolved_at, 42);
+        assert_eq!(current.rows[0].revision, 1);
     }
 
     #[test]

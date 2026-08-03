@@ -112,7 +112,6 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
     let barrier = root.join("resolve");
     std::fs::create_dir_all(&project).unwrap();
     let exe = std::env::current_exe().unwrap();
-    let fixed_now = "42424242";
     let spawn_worker = |role: &str, pause: bool| {
         let mut command = Command::new(&exe);
         command
@@ -120,7 +119,6 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
             .env("DEVKIT_DOCS_TEST_CACHE_ROOT", &cache_root)
             .env("DEVKIT_DOCS_TEST_PROJECT", &project)
             .env("DEVKIT_DOCS_TEST_REPO", &repo)
-            .env(devkit_docs::refs::TEST_NOW_VAR, fixed_now)
             .args([
                 "--exact",
                 "prune_waits_for_an_in_flight_resolve_registry_commit",
@@ -137,9 +135,16 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
     };
 
     assert_worker_succeeded(wait_for_child(spawn_worker("seed", false), "seed"), "seed");
+    RefStore::at(&cache_root)
+        .commit(|data| {
+            data.rows[0].resolved_at = u64::MAX;
+            data.rows[0].revision = u64::MAX;
+            Ok(())
+        })
+        .unwrap();
     let stale = RefStore::at(&cache_root).snapshot();
     assert_eq!(stale.rows.len(), 1);
-    assert_eq!(stale.rows[0].resolved_at, 42_424_242);
+    assert_eq!(stale.rows[0].resolved_at, u64::MAX);
 
     let resolve = spawn_worker("resolve", true);
     wait_for(&barrier.with_extension("materialized"));
@@ -163,7 +168,8 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
     let data = RefStore::at(&cache_root).snapshot();
     assert_eq!(data.rows.len(), 1);
     assert_eq!(data.rows[0].version, "v1.0.0");
-    assert!(data.rows[0].resolved_at > stale.rows[0].resolved_at);
+    assert!(data.rows[0].resolved_at < stale.rows[0].resolved_at);
+    assert_eq!(data.rows[0].revision, 0);
 }
 
 // Bug #1 regression: pruning from project A must NOT delete project B's
@@ -365,7 +371,8 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
                 project: project.to_string_lossy().into_owned(),
                 lib: "up".into(),
                 version: "v1.0.0".into(),
-                resolved_at: 42_424_242,
+                resolved_at: u64::MAX,
+                revision: u64::MAX,
             });
             Ok(())
         })
@@ -378,7 +385,6 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
         .env("DEVKIT_DOCS_TEST_WHOLE_LIB_ABA", "1")
         .env("DEVKIT_DOCS_TEST_CACHE_ROOT", &cache_root)
         .env("DEVKIT_DOCS_TEST_PROJECT", &project)
-        .env(devkit_docs::refs::TEST_NOW_VAR, "42424242")
         .args([
             "--exact",
             "whole_library_deletion_detects_a_same_row_refresh",
@@ -403,7 +409,8 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
     assert!(cache_root.join("up").is_dir());
     let fresh = store.snapshot();
     assert_eq!(fresh.rows.len(), 1);
-    assert!(fresh.rows[0].resolved_at > snapshot.rows[0].resolved_at);
+    assert!(fresh.rows[0].resolved_at < snapshot.rows[0].resolved_at);
+    assert_eq!(fresh.rows[0].revision, 0);
 }
 
 #[test]
