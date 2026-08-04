@@ -10,7 +10,7 @@ See `README.md` for user-facing CLI docs.
 ```sh
 cargo build --release                       # all six binaries → target/release
 cargo install --path .                       # install all six into ~/.cargo/bin
-cargo test --workspace                       # full gate — 327 tests, must stay green
+cargo test --workspace                       # full gate — must stay green
 cargo clippy --workspace --all-targets -- -D warnings   # zero-warning policy
 cargo test -p devkit-ports --test registry   # multiprocess flock race test
 ```
@@ -37,7 +37,7 @@ install together via `cargo install --path .`. Three library crates are members.
 | `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
 | `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens), `doctor`, `brief` (session-hook project summary, silent outside a devkit project) |
-| `src/bin/docm.rs` | CLI over the docs cache: `add`, `rm`, `list`, `sync`, `path`, `info`, `prune` |
+| `src/bin/docm.rs` | CLI over the docs cache: `add`, `rm`, `list`, `sync`, `path`, `info`, `prune`, `completions` |
 | `src/bin/devkit-mcp` | meta-MCP stdio server exposing the port + lock facades to coding agents |
 | `src/bin/devkitd` | supervisor daemon serving both the port registry (`ports.sock`) and the lock registry (`locks.sock`), authoritative in memory, write-through to the files, gated by `devkitd.lock`; bin gated by the `daemon` feature (on by default) |
 
