@@ -39,6 +39,17 @@ fn lock_path_for_dir(cache_root: &Path, dirname: &str, display_name: &str) -> Re
     Ok(control_dir(cache_root).join(component))
 }
 
+/// The rendezvous suffix a contender on `path` signals. Naming the lock file's
+/// stem is what keeps a wait for one lock from being released by contention on
+/// a different one.
+pub fn contended_suffix(path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!("contended.{stem}")
+}
+
 fn hold<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let parent = path.parent().context("lock path has no parent")?;
     fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
@@ -52,10 +63,11 @@ fn hold<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let mut lock = RwLock::new(file);
     if std::env::var_os(crate::barrier::VAR).is_some() {
         // A race test must distinguish a blocked contender from a process
-        // that has merely started but has not attempted the lock yet.
+        // that has merely started but has not attempted the lock yet, and a
+        // contender blocked on this lock from one blocked on another.
         match lock.try_write() {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                crate::barrier::signal("contended")?;
+                crate::barrier::signal(&contended_suffix(path))?;
             }
             Err(error) => {
                 return Err(error).with_context(|| format!("probing {}", path.display()));

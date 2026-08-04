@@ -129,7 +129,7 @@ fn concurrent_adds_of_different_libraries_both_survive() {
 
     let second = spawn_upsert_worker(&exe, &manifest, &cache_root, &second_barrier, "beta");
     let second_ready = second_barrier.with_extension("manifest-ready");
-    let second_contended = second_barrier.with_extension("contended");
+    let second_contended = second_barrier.with_extension("contended.manifest");
     if wait_for_either(&second_ready, &second_contended) {
         std::fs::write(second_barrier.with_extension("manifest-go"), "").unwrap();
         assert_worker_succeeded(wait_for_child(second, "second"), "second");

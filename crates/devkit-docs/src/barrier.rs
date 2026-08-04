@@ -12,12 +12,13 @@
 //! | `ready`, `go` | signal, wait | `add_library`, between the manifest read and the manifest write, holding only the library lock |
 //! | `manifest-ready`, `manifest-go` | signal, wait | `manifest::upsert_global`, between its read and its write, holding the manifest lock |
 //! | `materialized`, `commit` | signal, wait | `resolve::resolve_locked`, after materialization and before the reference-registry commit |
-//! | `contended` | signal | `locks::hold`, after a non-blocking acquisition fails — reachable only while another process holds that same lock |
+//! | `contended.<stem>` | signal | `locks::hold`, after a non-blocking acquisition of `<stem>.lock` fails — reachable only while another process holds that same lock |
 //!
-//! The two manifest rendezvous are named apart deliberately. Sharing one name
-//! lets a pause taken *inside* the manifest lock satisfy a wait meant for a
-//! pause taken outside it, and a race test then cannot tell a contender
-//! blocked on the lock it is about from one blocked on a different lock.
+//! The two manifest rendezvous are named apart deliberately, and the
+//! contention signal carries its lock file's stem. Sharing one name lets a
+//! pause taken *inside* the manifest lock satisfy a wait meant for a pause
+//! taken outside it, and a race test then cannot tell a contender blocked on
+//! the lock it is about from one blocked on a different lock.
 
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;

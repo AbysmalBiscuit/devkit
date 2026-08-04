@@ -147,7 +147,8 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
     assert!(checkout.is_dir());
 
     let mut prune = spawn_worker("prune", "main", true);
-    let contended = wait_for_contention_or_exit(&mut prune, &barrier.with_extension("contended"));
+    let contended =
+        wait_for_contention_or_exit(&mut prune, &barrier.with_extension("contended.up"));
     let in_flight_checkout_survived = checkout.is_dir();
 
     std::fs::write(barrier.with_extension("commit"), "").unwrap();

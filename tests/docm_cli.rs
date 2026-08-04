@@ -518,13 +518,14 @@ fn rm_blocks_until_a_concurrent_add_of_the_same_library_completes() {
     );
 
     let remover = env.spawn(&["rm", "up"], &barrier);
-    // Proof that the remover is *blocked on a lock*, not merely running:
-    // `.contended` is written from inside the lock acquisition after a
-    // non-blocking attempt fails, which can only happen while the adder holds
-    // the same lock. Waiting on the remover merely starting would pass against
-    // a remover that takes no lock at all.
+    // Proof that the remover is *blocked on `up`'s library lock*, not merely
+    // running: `.contended.up` is written from inside the acquisition of that
+    // lock after a non-blocking attempt fails, which can only happen while the
+    // adder holds it. Waiting on the remover merely starting would pass
+    // against a remover that takes no lock at all, and an unscoped signal
+    // would also be satisfied by contention on the manifest lock.
     wait_for(
-        &barrier.with_extension("contended"),
+        &barrier.with_extension("contended.up"),
         CONTENTION,
         "the remover never contended for the library lock — it is not taking one",
     );
