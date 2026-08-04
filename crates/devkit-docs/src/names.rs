@@ -27,6 +27,21 @@ fn reject_traversal(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// A reserved name reaches this check from two directions, and each needs a
+/// different action. Registering a fresh library is redirected to another name;
+/// a name already recorded in a manifest or already holding a cache directory
+/// cannot be unregistered by `docm rm`, which runs this same check and fails,
+/// so the only route out is a hand edit of both.
+fn reserved_recovery(name: &str) -> String {
+    format!(
+        "Register a new one under another name with `docm add <other-name> --package {name}`. \
+         An entry already recorded as `{name}` fails this same check under `docm rm`: delete it \
+         from the manifest holding it (docs.toml or a project devkit.toml) and delete \
+         <cache>/{} by hand.",
+        encode(name)
+    )
+}
+
 pub fn validate_lib(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("library name is empty");
@@ -42,15 +57,16 @@ pub fn validate_lib(name: &str) -> Result<()> {
     if folded == "registry" || folded.starts_with("registry.") {
         bail!(
             "library name `{name}` is reserved: the docs cache keeps its reference registry \
-             at <cache>/registry.* and a library directory there would shadow it"
+             at <cache>/registry.* and a library directory there would shadow it. {}",
+            reserved_recovery(name)
         );
     }
     if crate::locks::is_control_stem(&folded) {
         bail!(
             "library name `{name}` is reserved: the docs cache locks its own bookkeeping at \
              <cache>/registry.locks/{folded}.lock, which is where a library named `{name}` \
-             would lock; register it under another name with \
-             `docm add <other-name> --package {name}`"
+             would lock. {}",
+            reserved_recovery(name)
         );
     }
     representable(&encode(name))

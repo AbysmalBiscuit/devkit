@@ -245,6 +245,19 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap()
 }
 
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
 fn wait_for(path: &Path, timeout: Duration, message: &str) {
     let deadline = Instant::now() + timeout;
     while !path.try_exists().unwrap() {
@@ -808,5 +821,53 @@ fn an_npm_alias_is_refused_rather_than_resolved_to_the_wrong_repo() {
         ),
         "{}",
         stdout(&plain)
+    );
+}
+
+/// A cache carrying a library whose name docm reserves fails every command,
+/// including the `docm rm` that would unregister it. The error therefore has
+/// to describe the recovery that works — a hand edit of the manifest and a
+/// hand deletion of the cache directory — and this test performs exactly the
+/// recovery the error names.
+#[test]
+fn a_reserved_library_name_names_a_recovery_that_works() {
+    let env = Env::new("reserved-name");
+    assert_ran(&env.add("other", "v1.0.0"), "docm add other");
+
+    let manifest = env.global();
+    let registered = read(&manifest);
+    std::fs::write(
+        &manifest,
+        format!(
+            "{registered}\n[[libs]]\nname = \"manifest\"\necosystem = \"git\"\n\
+             repo = {:?}\nref = \"v1.0.0\"\n",
+            env.upstream
+        ),
+    )
+    .unwrap();
+    copy_tree(&env.cache().join("other"), &env.cache().join("manifest"));
+
+    let bricked = env.docm(&["list"]);
+    assert!(!bricked.status.success(), "{}", stdout(&bricked));
+    let error = stderr(&bricked);
+    assert!(error.contains("`manifest`"), "{error}");
+    assert!(error.contains("docm rm"), "{error}");
+    assert!(error.contains("docs.toml"), "{error}");
+    assert!(error.contains("<cache>/manifest"), "{error}");
+
+    assert!(
+        !env.docm(&["rm", "manifest"]).status.success(),
+        "docm rm unregistered a reserved name"
+    );
+
+    std::fs::write(&manifest, &registered).unwrap();
+    std::fs::remove_dir_all(env.cache().join("manifest")).unwrap();
+
+    let recovered = env.docm(&["list"]);
+    assert_ran(&recovered, "docm list after the recovery the error names");
+    assert!(
+        stdout(&recovered).contains("other"),
+        "{}",
+        stdout(&recovered)
     );
 }
