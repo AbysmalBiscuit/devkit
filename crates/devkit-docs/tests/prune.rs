@@ -252,9 +252,13 @@ fn whole_library_deletion_rechecks_fresh_references() {
     assert!(cache_root.join("up").is_dir());
 }
 
+/// `docm prune` offers an unregistered library for deletion, then reads the
+/// registry again after the confirmation before removing it. Another process
+/// resolving the library in that window re-creates the row prune dropped, and
+/// the deletion has to see it across the process boundary.
 #[test]
-fn whole_library_deletion_detects_a_same_row_refresh() {
-    if std::env::var_os("DEVKIT_DOCS_TEST_WHOLE_LIB_ABA").is_some() {
+fn whole_library_deletion_spares_a_library_another_process_re_resolved() {
+    if std::env::var_os("DEVKIT_DOCS_TEST_WHOLE_LIB_RERESOLVE").is_some() {
         let cache_root =
             std::path::PathBuf::from(std::env::var_os("DEVKIT_DOCS_TEST_CACHE_ROOT").unwrap());
         let project = std::env::var("DEVKIT_DOCS_TEST_PROJECT").unwrap();
@@ -267,7 +271,7 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
         return;
     }
 
-    let root = unique_tmp("whole-lib-same-row-race");
+    let root = unique_tmp("whole-lib-reresolve-race");
     let cache_root = root.join("cache");
     let project = root.join("project");
     let global = root.join("docs.toml");
@@ -276,46 +280,40 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
     let store = RefStore::at(&cache_root);
     store
         .commit(|data| {
-            data.rows.push(refs::RefRow {
-                project: project.to_string_lossy().into_owned(),
-                lib: "up".into(),
-                version: "v1.0.0".into(),
-                git_ref: "v1.0.0".into(),
-                commit: "aaa".into(),
-                resolved_at: u64::MAX,
-                revision: u64::MAX,
-            });
+            data.record(project.to_str().unwrap(), "up", "v1.0.0", "v1.0.0", "aaa");
             Ok(())
         })
         .unwrap();
-    let snapshot = store.snapshot();
+
     let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
     assert_eq!(pruned.removable_libs, ["up"]);
+    // The registry prune leaves behind is what the deletion measures against.
+    let snapshot = store.snapshot();
+    assert!(snapshot.rows.is_empty(), "prune kept an unreferenced row");
 
     let output = Command::new(std::env::current_exe().unwrap())
-        .env("DEVKIT_DOCS_TEST_WHOLE_LIB_ABA", "1")
+        .env("DEVKIT_DOCS_TEST_WHOLE_LIB_RERESOLVE", "1")
         .env("DEVKIT_DOCS_TEST_CACHE_ROOT", &cache_root)
         .env("DEVKIT_DOCS_TEST_PROJECT", &project)
         .args([
             "--exact",
-            "whole_library_deletion_detects_a_same_row_refresh",
+            "whole_library_deletion_spares_a_library_another_process_re_resolved",
             "--nocapture",
         ])
         .output()
         .unwrap();
-    assert_worker_succeeded(output, "refresh");
+    assert_worker_succeeded(output, "re-resolve");
 
     let removed = devkit_docs::cache::LibCache::new(&cache_root, "up")
         .unwrap()
         .remove_if_unreferenced(&snapshot)
         .unwrap();
 
-    assert!(!removed, "whole-library prune missed the refreshed row");
+    assert!(!removed, "whole-library deletion missed the re-created row");
     assert!(cache_root.join("up").is_dir());
     let fresh = store.snapshot();
     assert_eq!(fresh.rows.len(), 1);
-    assert!(fresh.rows[0].resolved_at < snapshot.rows[0].resolved_at);
-    assert_eq!(fresh.rows[0].revision, 0);
+    assert_eq!(fresh.rows[0].lib, "up");
 }
 
 #[test]
