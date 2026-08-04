@@ -64,15 +64,30 @@ pub fn run(cache_root: &Path) -> Result<Vec<String>> {
             apply_rename(cache_root, rename)
         })?);
     }
+    // Each library is surveyed and healed independently of every other, so
+    // stopping at the first failure would cost a reader one run per broken
+    // library to clear a cache. Every failure is collected and reported
+    // together, and the libraries that are fine are still attended to.
+    let mut problems = Vec::new();
     for dirname in &survey.libraries {
-        if !needs_attention(cache_root, dirname)? {
-            continue;
+        match attend(cache_root, dirname) {
+            Ok(attended) => lines.extend(attended),
+            Err(error) => problems.push(format!("{dirname}: {error:#}")),
         }
-        lines.extend(locks::with_lib_dir(cache_root, dirname, || {
-            heal_and_backfill(cache_root, dirname)
-        })?);
+    }
+    if !problems.is_empty() {
+        bail!("the docs cache is not usable:\n  {}", problems.join("\n  "));
     }
     Ok(lines)
+}
+
+fn attend(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
+    if !needs_attention(cache_root, dirname)? {
+        return Ok(Vec::new());
+    }
+    locks::with_lib_dir(cache_root, dirname, || {
+        heal_and_backfill(cache_root, dirname)
+    })
 }
 
 #[derive(Debug, Default)]

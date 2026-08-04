@@ -857,3 +857,51 @@ fn a_capture_failure_refuses_the_run_before_any_library_is_touched() {
         "no journal outlives a run that never renamed anything"
     );
 }
+
+/// Every sidecar is read independently of every other, so a run that stops at
+/// the first unreadable one costs the reader a round per library to recover a
+/// cache. Each failure is named in one run instead, and a library the run can
+/// still read is not held back by a sibling it cannot.
+#[test]
+fn every_unreadable_sidecar_is_named_in_one_run() {
+    let base = common::unique_tmp("upgrade-aggregate");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+
+    for lib in ["alpha", "beta", "gamma"] {
+        seed_library(&repo, &cache.join(lib), &["v1.0.0"]);
+        std::fs::write(
+            cache.join(lib).join("meta.toml"),
+            "tag_pattern = \"name-dash-v\"\n",
+        )
+        .unwrap();
+    }
+    let readable = cache.join("delta");
+    seed_library(&repo, &readable, &["v1.0.0"]);
+
+    let error = format!("{:#}", devkit_docs::upgrade::run(&cache).unwrap_err());
+
+    for lib in ["alpha", "beta", "gamma"] {
+        assert!(error.contains(lib), "{lib} is missing from:\n{error}");
+        assert!(
+            error.contains(&cache.join(lib).join("meta.toml").display().to_string()),
+            "{lib}'s sidecar path is missing from:\n{error}"
+        );
+    }
+    assert!(error.contains("name-dash-v"), "{error}");
+
+    // The readable library's origin is backfilled in the same run rather than
+    // waiting for the unreadable ones to be cleared.
+    assert!(
+        devkit_docs::cache::read_meta(&readable)
+            .unwrap()
+            .origin
+            .is_some(),
+        "a readable library was skipped over a sibling's failure"
+    );
+
+    for lib in ["alpha", "beta", "gamma"] {
+        std::fs::remove_file(cache.join(lib).join("meta.toml")).unwrap();
+    }
+    devkit_docs::upgrade::run(&cache).unwrap();
+}
