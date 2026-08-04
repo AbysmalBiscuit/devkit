@@ -179,7 +179,7 @@ fn cmd_add(
             }
             (Some(e), None) => (e, lookup::Registry::repo_url(&lookup::Http, e, &pkg)?),
             (None, r) => {
-                let (e, url) = lookup::detect(&lookup::Http, &pkg, &cwd()?)?;
+                let (e, url) = lookup::detect(&lookup::Http, &pkg)?;
                 (e, r.unwrap_or(url))
             }
         };

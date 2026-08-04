@@ -4,7 +4,6 @@
 
 use crate::manifest::Ecosystem;
 use anyhow::{Context, Result, bail};
-use std::path::Path;
 
 pub trait Registry {
     fn repo_url(&self, eco: Ecosystem, package: &str) -> Result<String>;
@@ -35,49 +34,9 @@ impl Registry for Http {
     }
 }
 
-/// Ecosystem markers checked closest-directory-first walking up from `cwd`.
-const LOCAL_MARKERS: &[(Ecosystem, &[&str])] = &[
-    (
-        Ecosystem::Js,
-        &[
-            "bun.lock",
-            "package-lock.json",
-            "pnpm-lock.yaml",
-            "package.json",
-        ],
-    ),
-    (Ecosystem::Rust, &["Cargo.toml"]),
-    (Ecosystem::Python, &["pyproject.toml", "uv.lock"]),
-];
-
-/// The ecosystem of the local project `cwd` sits in, found by walking up
-/// from `cwd` to the closest directory carrying any ecosystem marker. A
-/// directory carrying markers for more than one ecosystem (a polyglot
-/// monorepo root) is an ambiguous signal, not a tie to break — this returns
-/// `None` for it rather than picking one, so the caller's ambiguous-hits
-/// hard error fires instead of a silent guess.
-fn local_ecosystem(cwd: &Path) -> Option<Ecosystem> {
-    for dir in cwd.ancestors() {
-        let mut matched = LOCAL_MARKERS
-            .iter()
-            .filter(|(_, markers)| markers.iter().any(|m| dir.join(m).is_file()))
-            .map(|(eco, _)| *eco);
-        if let Some(eco) = matched.next() {
-            return if matched.next().is_none() {
-                Some(eco)
-            } else {
-                None
-            };
-        }
-    }
-    None
-}
-
-/// Probe crates.io, npm, and PyPI for `package`. A single hit wins; with no
-/// hits this is a hard error. Multiple hits are ambiguous — the local
-/// project's ecosystem (if any marker is found walking up from `cwd`)
-/// resolves it, otherwise this is a hard error naming every match.
-pub fn detect(reg: &dyn Registry, package: &str, cwd: &Path) -> Result<(Ecosystem, String)> {
+/// Probe crates.io, npm, and PyPI for `package`. A single hit wins; no hits
+/// is a hard error; two or more hits is a hard error naming every match.
+pub fn detect(reg: &dyn Registry, package: &str) -> Result<(Ecosystem, String)> {
     let mut hits = Vec::new();
     let mut errs = Vec::new();
     for eco in [Ecosystem::Rust, Ecosystem::Js, Ecosystem::Python] {
@@ -93,11 +52,6 @@ pub fn detect(reg: &dyn Registry, package: &str, cwd: &Path) -> Result<(Ecosyste
         ),
         1 => Ok(hits.into_iter().next().expect("checked len == 1")),
         _ => {
-            if let Some(local) = local_ecosystem(cwd)
-                && let Some(hit) = hits.iter().find(|(eco, _)| *eco == local)
-            {
-                return Ok(hit.clone());
-            }
             let named = hits
                 .iter()
                 .map(|(eco, url)| format!("{eco} ({url})"))
@@ -210,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_probes_ecosystems_in_order() {
+    fn detect_returns_the_single_hit() {
         struct Stub;
         impl Registry for Stub {
             fn repo_url(&self, eco: Ecosystem, _p: &str) -> anyhow::Result<String> {
@@ -220,8 +174,7 @@ mod tests {
                 }
             }
         }
-        let dir = std::env::temp_dir();
-        let (eco, url) = detect(&Stub, "react", &dir).unwrap();
+        let (eco, url) = detect(&Stub, "react").unwrap();
         assert_eq!(eco, Ecosystem::Js);
         assert_eq!(url, "https://github.com/facebook/react");
 
@@ -231,9 +184,11 @@ mod tests {
                 anyhow::bail!("nope")
             }
         }
-        assert!(detect(&Never, "ghost", &dir).is_err());
+        assert!(detect(&Never, "ghost").is_err());
     }
 
+    /// Two or more registry hits are always a hard error naming every match
+    /// — no local project marker or heuristic ever picks one for the caller.
     #[test]
     fn a_name_in_two_registries_refuses_and_names_both() {
         struct Both;
@@ -246,83 +201,9 @@ mod tests {
                 }
             }
         }
-        let dir = std::env::temp_dir().join(format!("docm-eco-none-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let err = detect(&Both, "h3", &dir).unwrap_err().to_string();
+        let err = detect(&Both, "h3").unwrap_err().to_string();
         assert!(err.contains("hyperium"), "{err}");
         assert!(err.contains("unjs"), "{err}");
         assert!(err.contains("--eco"), "{err}");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_js_project_reports_js_when_only_npm_has_the_name() {
-        struct Npm;
-        impl Registry for Npm {
-            fn repo_url(&self, eco: Ecosystem, _p: &str) -> anyhow::Result<String> {
-                match eco {
-                    Ecosystem::Js => Ok("https://github.com/unjs/h3".into()),
-                    _ => anyhow::bail!("not found"),
-                }
-            }
-        }
-        let dir = std::env::temp_dir().join(format!("docm-eco-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("bun.lock"), "{}").unwrap();
-        let (eco, _) = detect(&Npm, "h3", &dir).unwrap();
-        assert_eq!(eco, Ecosystem::Js);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// The brief's `a_js_project_reports_js_when_only_npm_has_the_name` fixture
-    /// only ever produces one registry hit, so it passes with or without the
-    /// cwd probe wired in — it does not discriminate local-first ordering.
-    /// This variant makes Rust and Js both hit with different URLs so only a
-    /// working local-project probe picks Js.
-    #[test]
-    fn a_js_project_resolves_ambiguity_to_js() {
-        struct Both;
-        impl Registry for Both {
-            fn repo_url(&self, eco: Ecosystem, _p: &str) -> anyhow::Result<String> {
-                match eco {
-                    Ecosystem::Rust => Ok("https://github.com/hyperium/h3".into()),
-                    Ecosystem::Js => Ok("https://github.com/unjs/h3".into()),
-                    _ => anyhow::bail!("not found"),
-                }
-            }
-        }
-        let dir = std::env::temp_dir().join(format!("docm-eco-amb-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("bun.lock"), "{}").unwrap();
-        let (eco, url) = detect(&Both, "h3", &dir).unwrap();
-        assert_eq!(eco, Ecosystem::Js);
-        assert_eq!(url, "https://github.com/unjs/h3");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// A directory carrying markers for two ecosystems at once (an ordinary
-    /// monorepo root) must not silently pick one by array order — that is
-    /// exactly the ambiguous state the hard-error path exists for.
-    #[test]
-    fn a_polyglot_directory_does_not_resolve_ambiguity() {
-        struct Both;
-        impl Registry for Both {
-            fn repo_url(&self, eco: Ecosystem, _p: &str) -> anyhow::Result<String> {
-                match eco {
-                    Ecosystem::Rust => Ok("https://github.com/hyperium/h3".into()),
-                    Ecosystem::Js => Ok("https://github.com/unjs/h3".into()),
-                    _ => anyhow::bail!("not found"),
-                }
-            }
-        }
-        let dir = std::env::temp_dir().join(format!("docm-eco-poly-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("Cargo.toml"), "").unwrap();
-        std::fs::write(dir.join("package.json"), "{}").unwrap();
-        let err = detect(&Both, "h3", &dir).unwrap_err().to_string();
-        assert!(err.contains("hyperium"), "{err}");
-        assert!(err.contains("unjs"), "{err}");
-        assert!(err.contains("--eco"), "{err}");
-        std::fs::remove_dir_all(&dir).ok();
     }
 }
