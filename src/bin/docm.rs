@@ -63,7 +63,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Fetch cloned repos and move default worktrees to their target.
+    /// Fetch, re-resolve, re-materialize and verify registered libraries.
     Sync { names: Vec<String> },
     /// Print the version-resolved checkout path (exactly one line on stdout).
     Path { name: String },
