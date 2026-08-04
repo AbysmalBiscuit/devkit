@@ -229,15 +229,26 @@ root for the reference registry, `manifest` is reserved for the lock the
 cache takes while editing a manifest, and `repo.git`/`meta.toml` are
 reserved inside each library's own directory. Register a package whose
 name is reserved under a different one with
-`docm add <other-name> --package <package>`.
+`docm add <other-name> --package <package>`. A library already registered
+under a reserved name cannot be removed with `docm rm`, which fails the same
+check: delete its entry from the manifest holding it and delete its cache
+directory by hand.
 
-A cache built by devkit 0.12.x migrates automatically the first time any
+A cache built by devkit 0.12.x has its layout migrated the first time any
 `docm` command runs against it: nested scoped library directories
 (`@scope/pkg/`) are renamed to the new encoding and their worktrees
 repaired, and legacy entries keep protecting their existing checkout until
 the library re-resolves under the new layout. `docm prune` then reclaims
 what the migration leaves behind, including retired `default` checkouts
 once nothing references them any longer.
+
+A 0.12.x `meta.toml` is not migrated. Three of the five tag patterns 0.12.x
+could record — `name-dash`, `name-dash-v` and `name-at` — no longer parse,
+and guessing which of the current patterns they meant would resolve a wrong
+git tag and serve wrong docs. Every `docm` command against such a cache
+fails instead, naming each `meta.toml` it cannot read in one run: delete
+those files and run `docm` again. The origin, layouts, tag pattern and
+commit records they hold are all re-derived.
 
 ## devkit-mcp (MCP server)
 
