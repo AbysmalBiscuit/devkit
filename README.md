@@ -186,9 +186,12 @@ devkit completions <shell>
 ### `docm`: Library Docs
 
 Version-correct local library checkouts backing the `devkit:docs` skill.
-Register a library once; every lookup resolves the version the current
-project's lockfile pins and materializes a detached worktree for it under
-`~/.local/share/devkit/docs/`.
+Register a library once; every lookup resolves the version the requesting
+workspace's own manifest and lockfile pin and materializes a checkout for it
+under `~/.local/share/devkit/docs/`, named for the exact ref it holds rather
+than a bare version (`h3/v1.15.11`, `openapi-ts/@hey-api~client-fetch@0.13.1`
+— `/` encodes as `~`). `docm info`'s `commit` field is the proof of what a
+checkout actually has, not the printed `version` string.
 
 ```sh
 docm add tokio                    # registry lookup (crates.io/npm/PyPI)
@@ -196,15 +199,36 @@ docm add https://github.com/godotengine/godot --ref 4.3-stable
 docm add react --project          # write to this repo's devkit.toml [docs]
 docm info tokio                   # path + version + layout map + notes
 docm path tokio                   # just the checkout path
-docm sync                         # fetch clones, move default worktrees
+docm sync                         # fetch, re-resolve, re-materialize, verify
+docm rm tokio                     # drop from the manifest (aliases: remove, delete)
 docm prune                        # drop checkouts no live project references
 ```
 
 Global manifest: `~/.config/devkit/docs.toml`. Per-project overlay:
 `[[docs.libs]]` entries in `devkit.toml` (same fields; partial entries
 override the global entry field-by-field). Resolution: manual `ref` pin →
-lockfile version (`Cargo.lock`, `pnpm-lock.yaml`, `package-lock.json`,
-`bun.lock`, `uv.lock`) → git tag → default branch fallback.
+the requesting workspace's own dependency graph (`Cargo.lock`,
+`pnpm-lock.yaml`, `package-lock.json`, `bun.lock`, `uv.lock`) matched against
+the repo's git tags. When nothing pins a version — no tag matches the
+lockfile's version, no importer manifest is found, the ecosystem is
+ambiguous, or a lockfile's own state conflicts with itself — `docm` fails
+with the specific cause and the fix rather than silently checking out the
+default branch. Pass `--allow-default-branch` (a global flag, valid on
+`add`, `sync`, `path`, and `info`) to opt into that checkout for one run
+instead.
+
+A library or ref name cannot collide with the cache's own control files:
+`registry` (and anything starting `registry.`) is reserved at the cache
+root for the reference registry, and `repo.git`/`meta.toml` are reserved
+inside each library's own directory.
+
+A cache built by devkit 0.12.x migrates automatically the first time any
+`docm` command runs against it: nested scoped library directories
+(`@scope/pkg/`) are renamed to the new encoding and their worktrees
+repaired, and legacy entries keep protecting their existing checkout until
+the library re-resolves under the new layout. `docm prune` then reclaims
+what the migration leaves behind, including retired `default` checkouts
+once nothing references them any longer.
 
 ## devkit-mcp (MCP server)
 

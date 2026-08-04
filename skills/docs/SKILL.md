@@ -9,34 +9,46 @@ allowed-tools: Bash(docm list)
 Answer library-usage questions from a local, version-correct checkout of the
 library's own source and docs — not from memory.
 
-Registered libraries (name, ecosystem, pinned ref, synced versions):
+Registered libraries — name, ecosystem, pinned ref, and origin on the first
+line, each synced checkout's directory, commit, and ref indented below it:
 
 !`docm list`
 
 If the block above shows an error or literal backtick text instead of a
-table, the command did not run — run `docm list` yourself before step 1.
+listing, the command did not run — run `docm list` yourself before step 1.
 
 ## Steps
 
 1. Identify which library the question is about and match it against the
    registered names above. If it is not registered: `docm add <package>`
-   (registry lookup) or `docm add <git-url>`, then continue. Ask before
-   adding with `--project` (that edits the repo's devkit.toml).
-2. Run `docm info <lib>`. It prints the checkout path (version-matched to the
-   current project's lockfile), the resolved version, a layout map
-   (docs/src/examples dirs, doc system), and any notes. The first resolution
-   of a new version fetches git blobs and can take a few seconds. Warnings on
-   stderr (e.g. "falling back to default branch") are context — relay them if
-   the answer depends on the version.
-3. Search ONLY under the printed path: the docs dir for guides and concepts,
+   (registry lookup) or `docm add <git-url>`, always with
+   `--notes "<workspace>: <why this version>"` recording which workspace's
+   manifest/lockfile the version came from. Ask before adding with
+   `--project` (that edits the repo's devkit.toml).
+2. Run `docm info <lib>`. It resolves the checkout path from the requesting
+   workspace's own manifest and lockfile, not a bare version match — `commit`
+   in the output is the proof of what is actually checked out, the printed
+   `version` string is not. It also prints a layout map (docs/src/examples
+   dirs, doc system) and any notes. The first resolution of a new ref fetches
+   git blobs and can take a few seconds.
+3. Any stderr line `docm` prints is a hard stop: read and understand it
+   before doing anything else. `docm` fails hard rather than silently
+   falling back to a wrong version, so a stderr line is never optional
+   context to relay only if it seems relevant — it means something needs
+   your attention, or the human's, before the answer can be trusted.
+4. Search ONLY under the printed path: the docs dir for guides and concepts,
    the source dir for API ground truth, examples for usage patterns. Use
    `rg` for text and `ast-grep` for structural queries.
-4. Answer with `file:line` citations relative to the checkout.
+5. Answer with `file:line` citations relative to the checkout.
 
 ## Rules
 
 - Never reuse a checkout path from memory or an earlier session — versions
   differ per project. Always re-run `docm info`.
 - `docm path <lib>` prints just the path when that is all you need.
+- If a checkout looks wrong for reasons `docm` cannot see (e.g. an upstream
+  repo whose root manifest is decoupled from its release tags), compare
+  against the installed package under `node_modules` (or the ecosystem's
+  equivalent) — that is ground truth for what actually runs.
 - If `docm` is not on PATH, tell the user to `cargo install --path .` in the
   devkit repo.
