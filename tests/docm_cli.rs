@@ -146,7 +146,27 @@ impl Env {
         .unwrap();
         path
     }
+
+    /// A migration record naming a checkout at a commit the bare clone does
+    /// not have — what an interrupted rebuild leaves behind once a fetch with
+    /// `--prune-tags` has dropped the tag the checkout was pinned to.
+    fn write_unsatisfiable_journal(&self, lib: &str) -> PathBuf {
+        let path = self
+            .cache()
+            .join("registry.locks")
+            .join(format!("{lib}.migration.json"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(r#"{{"worktrees":[{{"dirname":"v0.9.0","commit":"{GONE_COMMIT}"}}]}}"#),
+        )
+        .unwrap();
+        path
+    }
 }
+
+/// A well-formed object id no fixture repository contains.
+const GONE_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -543,5 +563,33 @@ fn rm_blocks_until_a_concurrent_add_of_the_same_library_completes() {
     assert!(
         manifest.contains("\"keep\""),
         "the unrelated entry must survive a lost update:\n{manifest}"
+    );
+}
+
+/// `completions` writes a script to stdout and never reads the cache, and a
+/// shell rc sources it on every new shell — so it must not be gated behind a
+/// cache migration that can warn or fail.
+#[test]
+fn completions_neither_migrates_the_cache_nor_writes_to_stderr() {
+    let env = Env::new("completions-no-migration");
+    assert_ran(&env.add("up", "v1.0.0"), "docm add up");
+    let journal = env.write_unsatisfiable_journal("up");
+
+    let completions = env.docm(&["completions", "bash"]);
+
+    assert_ran(&completions, "docm completions bash");
+    assert!(
+        stderr(&completions).is_empty(),
+        "a shell sources this at startup: {}",
+        stderr(&completions)
+    );
+    assert!(
+        stdout(&completions).contains("docm"),
+        "{}",
+        stdout(&completions)
+    );
+    assert!(
+        journal.exists(),
+        "completions must not touch the cache at all"
     );
 }

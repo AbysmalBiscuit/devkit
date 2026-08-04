@@ -86,8 +86,13 @@ enum Cmd {
 fn main() -> Result<()> {
     devkit_common::report::install_panic_hook("docm");
     let cli = Cli::parse();
-    for line in upgrade::run(&cache::docs_root())? {
-        eprintln!("docm: {line}");
+    // A shell rc sources the completion script on every new shell, and the
+    // script is written from the CLI definition alone — migrating the cache
+    // for it would put cache diagnostics, or a cache failure, in shell startup.
+    if !matches!(cli.cmd, Cmd::Completions { .. }) {
+        for line in upgrade::run(&cache::docs_root())? {
+            eprintln!("docm: {line}");
+        }
     }
     match cli.cmd {
         Cmd::Add {
