@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -31,15 +32,41 @@ fn fixture_repo(dir: &Path) {
     git(dir, &["tag", "v1.1.0"]);
 }
 
-fn run_docm(home: &Path, data_home: &Path, project: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_docm"))
+fn docm_command(root: &Path, project: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_docm"));
+    command
         .args(["path", "up"])
         .current_dir(project)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", data_home)
-        .env_remove(devkit_docs::barrier::VAR)
-        .output()
-        .unwrap()
+        .env("HOME", root.join("home"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        // Without this, `docs_root` computes its legacy path from the
+        // caller's cache home and moves a real store into the temp tree.
+        .env("XDG_CACHE_HOME", root.join("xdg-cache"))
+        .env_remove(devkit_docs::barrier::VAR);
+    command
+}
+
+fn run_docm(root: &Path, project: &Path) -> Output {
+    docm_command(root, project).output().unwrap()
+}
+
+/// `docs_root` migrates a legacy store by renaming it, so a harness that
+/// leaves the cache home pointing at the caller's own relocates the real
+/// store the moment the suite runs.
+#[test]
+fn the_harness_confines_the_cache_home_to_its_sandbox() {
+    let root = Path::new("/sandbox-root");
+    let command = docm_command(root, Path::new("/sandbox-root/project"));
+    let cache_home = command
+        .get_envs()
+        .find(|(key, _)| *key == OsStr::new("XDG_CACHE_HOME"))
+        .and_then(|(_, value)| value)
+        .expect("harness must set XDG_CACHE_HOME");
+    assert!(
+        Path::new(cache_home).starts_with(root),
+        "cache home {cache_home:?} escapes the sandbox at {}",
+        root.display()
+    );
 }
 
 #[test]
@@ -62,7 +89,7 @@ fn moved_tag_reporting_only_claims_success_after_repair() {
     )
     .unwrap();
 
-    let initial = run_docm(&home, &data_home, &project);
+    let initial = run_docm(&root, &project);
     assert!(initial.status.success());
     let checkout = std::path::PathBuf::from(
         String::from_utf8(initial.stdout)
@@ -77,7 +104,7 @@ fn moved_tag_reporting_only_claims_success_after_repair() {
         .unwrap()
         .fetch()
         .unwrap();
-    let repaired = run_docm(&home, &data_home, &project);
+    let repaired = run_docm(&root, &project);
     assert!(repaired.status.success());
     assert!(
         String::from_utf8_lossy(&repaired.stderr).contains("re-pointed"),
@@ -91,7 +118,7 @@ fn moved_tag_reporting_only_claims_success_after_repair() {
         .fetch()
         .unwrap();
     std::fs::write(checkout.join("src/lib.rs"), "// local change").unwrap();
-    let failed = run_docm(&home, &data_home, &project);
+    let failed = run_docm(&root, &project);
     assert!(!failed.status.success());
     assert!(
         !String::from_utf8_lossy(&failed.stderr).contains("re-pointed"),
