@@ -546,10 +546,9 @@ fn cmd_prune(yes: bool) -> Result<()> {
             pruned.removable_libs.join(", ")
         );
         if yes || confirm("delete them entirely? [y/N] ")? {
-            let snapshot = refs::RefStore::at(&root).snapshot();
             for lib in &pruned.removable_libs {
                 if cache::LibCache::from_dir(&root, &devkit_docs::names::encode(lib))
-                    .remove_if_unreferenced(&snapshot)?
+                    .remove_if_unreferenced()?
                 {
                     println!("deleted {lib}");
                 }

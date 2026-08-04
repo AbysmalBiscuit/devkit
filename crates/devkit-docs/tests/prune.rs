@@ -232,7 +232,6 @@ fn whole_library_deletion_rechecks_fresh_references() {
     std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
     std::fs::create_dir_all(&project).unwrap();
 
-    let snapshot = RefStore::at(&cache_root).snapshot();
     let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
     assert_eq!(pruned.removable_libs, ["up"]);
 
@@ -245,7 +244,7 @@ fn whole_library_deletion_rechecks_fresh_references() {
 
     let removed = devkit_docs::cache::LibCache::new(&cache_root, "up")
         .unwrap()
-        .remove_if_unreferenced(&snapshot)
+        .remove_if_unreferenced()
         .unwrap();
 
     assert!(!removed);
@@ -306,7 +305,7 @@ fn whole_library_deletion_spares_a_library_another_process_re_resolved() {
 
     let removed = devkit_docs::cache::LibCache::new(&cache_root, "up")
         .unwrap()
-        .remove_if_unreferenced(&snapshot)
+        .remove_if_unreferenced()
         .unwrap();
 
     assert!(!removed, "whole-library deletion missed the re-created row");
@@ -314,6 +313,70 @@ fn whole_library_deletion_spares_a_library_another_process_re_resolved() {
     let fresh = store.snapshot();
     assert_eq!(fresh.rows.len(), 1);
     assert_eq!(fresh.rows[0].lib, "up");
+}
+
+/// `docm prune` takes its registry snapshot only after the interactive
+/// confirmation prompt returns (`docm.rs:548-549`), so a library resolved by
+/// another process while the human is deciding commits a row that lands on
+/// both sides of a snapshot-relative guard: the fresh read and the snapshot
+/// itself. This mirrors that ordering — the concurrent commit happens
+/// *before* the snapshot is taken, unlike
+/// `whole_library_deletion_spares_a_library_another_process_re_resolved`,
+/// where the snapshot precedes the concurrent commit.
+#[test]
+fn whole_library_deletion_spares_a_library_resolved_before_the_snapshot() {
+    if std::env::var_os("DEVKIT_DOCS_TEST_WHOLE_LIB_RESOLVED_BEFORE_SNAPSHOT").is_some() {
+        let cache_root =
+            std::path::PathBuf::from(std::env::var_os("DEVKIT_DOCS_TEST_CACHE_ROOT").unwrap());
+        let project = std::env::var("DEVKIT_DOCS_TEST_PROJECT").unwrap();
+        RefStore::at(&cache_root)
+            .commit(|data| {
+                data.record(&project, "up", "v1.0.0", "v1.0.0", "aaa");
+                Ok(())
+            })
+            .unwrap();
+        return;
+    }
+
+    let root = unique_tmp("whole-lib-resolved-before-snapshot-race");
+    let cache_root = root.join("cache");
+    let project = root.join("project");
+    let global = root.join("docs.toml");
+    std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+
+    let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
+    assert_eq!(pruned.removable_libs, ["up"]);
+
+    let output = Command::new(std::env::current_exe().unwrap())
+        .env("DEVKIT_DOCS_TEST_WHOLE_LIB_RESOLVED_BEFORE_SNAPSHOT", "1")
+        .env("DEVKIT_DOCS_TEST_CACHE_ROOT", &cache_root)
+        .env("DEVKIT_DOCS_TEST_PROJECT", &project)
+        .args([
+            "--exact",
+            "whole_library_deletion_spares_a_library_resolved_before_the_snapshot",
+            "--nocapture",
+        ])
+        .output()
+        .unwrap();
+    assert_worker_succeeded(output, "resolve-before-snapshot");
+
+    // The concurrent row is already committed by the time the snapshot is
+    // taken, so it lands in the snapshot too — exactly what the confirmation
+    // prompt's timing produces in production.
+    let snapshot = RefStore::at(&cache_root).snapshot();
+    assert_eq!(snapshot.rows.len(), 1);
+
+    let removed = devkit_docs::cache::LibCache::new(&cache_root, "up")
+        .unwrap()
+        .remove_if_unreferenced()
+        .unwrap();
+
+    assert!(
+        !removed,
+        "whole-library deletion missed a row committed before the snapshot"
+    );
+    assert!(cache_root.join("up").is_dir());
 }
 
 #[test]
@@ -330,13 +393,12 @@ fn whole_library_deletion_ignores_rows_already_rejected_by_the_plan() {
         })
         .unwrap();
 
-    let snapshot = store.snapshot();
     let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
     assert_eq!(pruned.removable_libs, ["up"]);
 
     let removed = devkit_docs::cache::LibCache::new(&cache_root, "up")
         .unwrap()
-        .remove_if_unreferenced(&snapshot)
+        .remove_if_unreferenced()
         .unwrap();
 
     assert!(removed);

@@ -148,6 +148,10 @@ impl RefStore {
         }
     }
 
+    /// Callers recording a row must hold the library's lock while calling
+    /// this. Whole-library deletion decides from a registry read taken under
+    /// that same lock; a row written without it can land after that read and
+    /// be missed, reopening the deletion race it is meant to close.
     pub fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
         store::with_lock(&self.lock_path, &self.data_path, f)
     }

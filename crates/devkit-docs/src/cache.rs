@@ -3,7 +3,7 @@
 
 use crate::layout::Layout;
 use crate::locks;
-use crate::refs::{Data as RefData, RefStore};
+use crate::refs::RefStore;
 use crate::tags::TagPattern;
 use anyhow::{Context, Result, bail};
 use devkit_common::cmd;
@@ -419,7 +419,13 @@ impl LibCache {
         Ok(())
     }
 
-    pub fn remove_if_unreferenced(&self, snapshot: &RefData) -> Result<bool> {
+    /// Delete the whole library directory if no registry row still
+    /// references it. The caller offers a library for deletion only because
+    /// `refs::plan` found zero references at plan time, so under this
+    /// library's lock the check is absolute: any row for the library at all
+    /// means it has been referenced again since, and the deletion is
+    /// skipped.
+    pub fn remove_if_unreferenced(&self) -> Result<bool> {
         let cache_root = self
             .dir
             .parent()
@@ -434,11 +440,7 @@ impl LibCache {
         let lib = crate::names::decode(&lib_dir);
         locks::with_lib_dir(&cache_root, &lib_dir, || {
             let fresh = RefStore::at(&cache_root).snapshot();
-            if fresh
-                .rows
-                .iter()
-                .any(|row| row.lib == lib && !snapshot.rows.contains(row))
-            {
+            if fresh.rows.iter().any(|row| row.lib == lib) {
                 return Ok(false);
             }
             std::fs::remove_dir_all(&self.dir)
