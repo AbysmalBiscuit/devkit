@@ -147,6 +147,25 @@ impl Env {
         path
     }
 
+    /// A `devkit.toml` whose entry carries a key docm does not model and a
+    /// comment *inside* the entry table. Both sit where a re-serialization of
+    /// the entry destroys them.
+    fn write_devkit_toml_with_extras(&self, registered: &str) -> PathBuf {
+        let path = self.project.join("devkit.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "# keep me\n[defaults]\napps_dir = 'apps' # inline\n\n\
+                 [[docs.libs]]\nname = {registered:?}\necosystem = \"git\"\n\
+                 repo = {:?}\n# pinned until the codegen rewrite lands\n\
+                 ref = \"v1.0.0\"\nnotes = \"stale\"\nowner = \"platform-team\"\n",
+                self.upstream
+            ),
+        )
+        .unwrap();
+        path
+    }
+
     /// A migration record naming a checkout at a commit the bare clone does
     /// not have — what an interrupted rebuild leaves behind once a fetch with
     /// `--prune-tags` has dropped the tag the checkout was pinned to.
@@ -623,5 +642,39 @@ fn completions_neither_migrates_the_cache_nor_writes_to_stderr() {
     assert!(
         journal.exists(),
         "completions must not touch the cache at all"
+    );
+}
+
+/// A `devkit.toml` is repo-committed and hand-maintained, so a re-pin that
+/// succeeds has to leave everything it did not change: keys docm does not
+/// model, and the comments and ordering around them.
+#[test]
+fn a_successful_project_repin_keeps_unmodeled_keys_and_inner_comments() {
+    let env = Env::new("project-repin-keeps");
+    let devkit_toml = env.write_devkit_toml_with_extras("keep");
+
+    let repinned = env.add_project("keep", "v1.1.0");
+
+    assert_ran(&repinned, "docm add keep --project --ref v1.1.0");
+    let after = read(&devkit_toml);
+    assert!(
+        after.contains("ref = \"v1.1.0\""),
+        "the re-pin must land:\n{after}"
+    );
+    assert!(
+        after.contains("owner = \"platform-team\""),
+        "a key docm does not model must survive its own re-pin:\n{after}"
+    );
+    assert!(
+        after.contains("# pinned until the codegen rewrite lands"),
+        "a comment inside the entry must survive:\n{after}"
+    );
+    assert!(
+        after.contains("# keep me") && after.contains("# inline"),
+        "content outside the entry must survive:\n{after}"
+    );
+    assert!(
+        !after.contains("stale"),
+        "a key docm models is docm's to drop when the registration omits it:\n{after}"
     );
 }

@@ -269,14 +269,60 @@ fn atomic_write(path: &Path, contents: String) -> Result<()> {
     std::fs::rename(&tmp, path).with_context(|| format!("replacing manifest {}", path.display()))
 }
 
+/// Every key `LibEntry` models. A `[[docs.libs]]` table may carry others; an
+/// upsert owns only these, so anything else the file holds stays as written.
+const ENTRY_KEYS: [&str; 8] = [
+    "name",
+    "ecosystem",
+    "package",
+    "repo",
+    "ref",
+    "src_dir",
+    "docs_dir",
+    "notes",
+];
+
 /// devkit.toml is hand-maintained — edit via toml_edit so comments and
-/// formatting survive.
+/// formatting survive, and patch the existing entry rather than replacing it,
+/// so a key docm does not model survives a re-registration of its library.
 pub fn upsert_project(devkit_toml: &Path, entry: &LibEntry, cache_root: &Path) -> Result<()> {
-    let tbl = toml_edit::ser::to_document(entry)
+    let fresh = toml_edit::ser::to_document(entry)
         .context("serializing lib entry")?
         .as_table()
         .clone();
-    put_project_entry(devkit_toml, &entry.name, &tbl, cache_root)
+    let table = match project_entry(devkit_toml, &entry.name)? {
+        Some(mut existing) => {
+            patch_entry(&mut existing, &fresh);
+            existing
+        }
+        None => fresh,
+    };
+    put_project_entry(devkit_toml, &entry.name, &table, cache_root)
+}
+
+/// Apply `fresh`'s modeled keys to `entry` one at a time: update a key the
+/// entry already has in place so its comments and position hold, append one it
+/// lacks, and drop one the registration no longer sets.
+fn patch_entry(entry: &mut toml_edit::Table, fresh: &toml_edit::Table) {
+    for key in ENTRY_KEYS {
+        let Some(item) = fresh.get(key) else {
+            entry.remove(key);
+            continue;
+        };
+        match (
+            entry.get_mut(key).and_then(toml_edit::Item::as_value_mut),
+            item.as_value(),
+        ) {
+            (Some(slot), Some(value)) => {
+                let decor = slot.decor().clone();
+                *slot = value.clone();
+                *slot.decor_mut() = decor;
+            }
+            _ => {
+                entry.insert(key, item.clone());
+            }
+        }
+    }
 }
 
 /// The `[[docs.libs]]` table for `name` exactly as the file carries it — key
@@ -467,6 +513,27 @@ mod tests {
         assert!(remove_global(&path, "tokio", &root).unwrap());
         assert!(!remove_global(&path, "tokio", &root).unwrap());
         assert!(load_global(&path).unwrap().libs.is_empty());
+    }
+
+    /// `patch_entry` drops a modeled key the registration no longer sets, so
+    /// a field added to `LibEntry` without a matching key here would be
+    /// written and then deleted by the next upsert.
+    #[test]
+    fn entry_keys_covers_every_field_lib_entry_serializes() {
+        let full = LibEntry {
+            name: "n".into(),
+            ecosystem: Some(Ecosystem::Rust),
+            package: Some("p".into()),
+            repo: Some("r".into()),
+            r#ref: Some("v".into()),
+            src_dir: Some("s".into()),
+            docs_dir: Some("d".into()),
+            notes: Some("note".into()),
+            origin_file: Some("/ignored".into()),
+        };
+        let serialized = toml_edit::ser::to_document(&full).unwrap();
+        let keys: Vec<&str> = serialized.as_table().iter().map(|(key, _)| key).collect();
+        assert_eq!(keys, ENTRY_KEYS);
     }
 
     #[test]
