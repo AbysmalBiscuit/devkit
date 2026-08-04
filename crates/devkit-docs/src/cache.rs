@@ -424,7 +424,8 @@ impl LibCache {
     /// `refs::plan` found zero references at plan time, so under this
     /// library's lock the check is absolute: any row for the library at all
     /// means it has been referenced again since, and the deletion is
-    /// skipped.
+    /// skipped. Reads the registry strictly: an unreadable registry aborts
+    /// the deletion rather than being mistaken for one with no rows.
     pub fn remove_if_unreferenced(&self) -> Result<bool> {
         let cache_root = self
             .dir
@@ -439,7 +440,7 @@ impl LibCache {
             .to_string();
         let lib = crate::names::decode(&lib_dir);
         locks::with_lib_dir(&cache_root, &lib_dir, || {
-            let fresh = RefStore::at(&cache_root).snapshot();
+            let fresh = RefStore::at(&cache_root).try_snapshot()?;
             if fresh.rows.iter().any(|row| row.lib == lib) {
                 return Ok(false);
             }

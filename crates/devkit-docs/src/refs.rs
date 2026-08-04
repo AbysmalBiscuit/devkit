@@ -152,12 +152,23 @@ impl RefStore {
     /// this. Whole-library deletion decides from a registry read taken under
     /// that same lock; a row written without it can land after that read and
     /// be missed, reopening the deletion race it is meant to close.
+    ///
+    /// Reads strictly: a registry that exists but cannot be read or parsed
+    /// aborts the commit instead of loading a default document and writing
+    /// it back over the unreadable one.
     pub fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
-        store::with_lock(&self.lock_path, &self.data_path, f)
+        store::with_lock_strict(&self.lock_path, &self.data_path, f)
     }
 
     pub fn snapshot(&self) -> Data {
         store::load(&self.data_path)
+    }
+
+    /// Strict counterpart to `snapshot`, for callers whose decision is
+    /// destructive: an unreadable or unparsable registry must never be read
+    /// as an empty one.
+    pub fn try_snapshot(&self) -> Result<Data> {
+        store::try_load(&self.data_path)
     }
 }
 
@@ -268,18 +279,24 @@ pub fn plan(
 
 /// What a live project selects for `entry`: an explicit/git entry remains
 /// referenced, while a package entry requires a matching lockfile version.
-/// Prune uses only presence here; the registry row owns the materialized dirname.
-pub fn current_version(entry: &manifest::LibEntry, project: &Path) -> Option<String> {
+/// Prune uses only presence here; the registry row owns the materialized
+/// dirname. `Err` means the lockfile that would answer this couldn't be read
+/// or parsed — not evidence the project stopped selecting the package.
+pub fn current_version(entry: &manifest::LibEntry, project: &Path) -> Result<Option<String>> {
     use manifest::Ecosystem;
     if entry.r#ref.is_some() {
-        return Some("default".into());
+        return Ok(Some("default".into()));
     }
-    let eco = entry.ecosystem?;
+    let Some(eco) = entry.ecosystem else {
+        return Ok(None);
+    };
     if eco == Ecosystem::Git {
-        return Some("default".into());
+        return Ok(Some("default".into()));
     }
-    let (_, versions) = lockfiles::find_version(project, eco, &entry.package_name())?;
-    lockfiles::highest(versions)
+    let Some((_, versions)) = lockfiles::find_version(project, eco, &entry.package_name())? else {
+        return Ok(None);
+    };
+    Ok(lockfiles::highest(versions))
 }
 
 fn checkouts(cache_root: &Path, dirname: &str) -> Vec<String> {
@@ -290,6 +307,17 @@ fn checkouts(cache_root: &Path, dirname: &str) -> Vec<String> {
         .collect()
 }
 
+/// A registry row is not proof a project still wants a library, but it is
+/// what a project the fix could not evaluate falls back to, so its checkout
+/// is never silently reclaimed while the reason it stayed unresolved is
+/// unclear.
+fn keep_existing_row(data: &Data, project: &str, lib: &str) -> Option<String> {
+    data.rows
+        .iter()
+        .find(|r| r.project == project && r.lib == lib)
+        .map(row_dirname)
+}
+
 /// The checkout a live project still selects for `lib`, or `None` once it
 /// stopped referencing the library.
 fn live_reference(data: &Data, project: &str, lib: &str, global: Option<&Path>) -> Option<String> {
@@ -297,17 +325,26 @@ fn live_reference(data: &Data, project: &str, lib: &str, global: Option<&Path>) 
     match manifest::discover(proj, global) {
         Ok(disc) => {
             let entry = disc.manifest.libs.iter().find(|l| l.name == lib)?;
-            current_version(entry, proj)
+            match current_version(entry, proj) {
+                Ok(v) => v,
+                Err(e) => {
+                    // A live project whose lockfile can't be read or parsed is
+                    // not evidence it stopped referencing the lib. Keep the
+                    // existing reference (so its checkout is never silently
+                    // reclaimed) and warn.
+                    eprintln!(
+                        "docm: cannot read {project}'s lockfile for {lib} ({e}); keeping its checkout"
+                    );
+                    keep_existing_row(data, project, lib)
+                }
+            }
         }
         Err(e) => {
             // A live project whose manifest can't be read is not evidence it
             // stopped referencing the lib. Keep the existing reference (so
             // its checkout is never silently reclaimed) and warn.
             eprintln!("docm: cannot read {project}'s manifest ({e}); keeping its {lib} checkout");
-            data.rows
-                .iter()
-                .find(|r| r.project == project && r.lib == lib)
-                .map(row_dirname)
+            keep_existing_row(data, project, lib)
         }
     }
 }
@@ -363,7 +400,7 @@ fn prune_library_locked(
 ) -> Result<(Vec<String>, Option<String>)> {
     let name = crate::names::decode(dirname);
     let store = RefStore::at(cache_root);
-    let fresh = store.snapshot();
+    let fresh = store.try_snapshot()?;
     let scoped = Data {
         version: fresh.version,
         rows: fresh.rows.into_iter().filter(|r| r.lib == name).collect(),

@@ -198,7 +198,7 @@ fn lockfile_resolved_from_subdir_records_selected_workspace() {
         "reference must be attributed to the selected member workspace"
     );
     assert_eq!(
-        devkit_docs::refs::current_version(&entry, &member),
+        devkit_docs::refs::current_version(&entry, &member).unwrap(),
         Some("1.0.0".to_string())
     );
 }

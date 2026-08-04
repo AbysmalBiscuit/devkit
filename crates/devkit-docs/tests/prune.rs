@@ -811,3 +811,215 @@ fn prune_drops_a_row_whose_project_directory_is_gone() {
          directory exists to reach it through"
     );
 }
+
+// Regression: an unreadable registry must never read as an empty one. A
+// directory in registry.json's place is the portable way to make it
+// unreadable across all three CI platforms — `chmod 000` is a no-op when the
+// suite runs as root (common in CI containers), and Windows does not honor
+// POSIX permission bits at all. `fs::read_to_string` on a directory fails
+// with an I/O error on every platform, so this exercises the same failure
+// mode a permission-denied file or a mid-migration mount would.
+#[test]
+fn prune_aborts_when_the_registry_is_unreadable() {
+    let tmp = unique_tmp("unreadable-registry");
+    let repo = common::fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("devkit.toml"), "[defaults]\n").unwrap();
+
+    let entry = LibEntry {
+        name: "up".into(),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let resolved = devkit_docs::resolve::resolve(
+        &entry,
+        &project,
+        &cache_root,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
+    assert!(
+        resolved.path.is_dir(),
+        "fixture must materialize a checkout"
+    );
+    assert!(
+        cache_root.join("up/repo.git").is_dir(),
+        "fixture must produce a real library (repo.git) or prune never reaches the registry read"
+    );
+
+    let registry_path = cache_root.join("registry.json");
+    assert!(
+        registry_path.is_file(),
+        "fixture must have a real registry file to shadow with a directory"
+    );
+    std::fs::remove_file(&registry_path).unwrap();
+    std::fs::create_dir_all(&registry_path).unwrap();
+
+    let manifest_libs = BTreeSet::from(["up".to_string()]);
+    let result = refs::prune_with_lock(&cache_root, &manifest_libs, None);
+
+    assert!(
+        result.is_err(),
+        "prune must fail closed on an unreadable registry instead of treating it as empty"
+    );
+    assert!(
+        resolved.path.is_dir(),
+        "prune deleted a live checkout while the registry was unreadable"
+    );
+    assert!(
+        registry_path.is_dir(),
+        "prune mutated the unreadable registry path"
+    );
+}
+
+// Regression: an unparsable lockfile must not read as "package no longer
+// referenced". A live project whose Cargo.lock fails to parse must keep its
+// checkout, the same protection `live_reference` already gives an unreadable
+// devkit.toml.
+#[test]
+fn prune_keeps_checkout_when_a_lockfile_fails_to_parse() {
+    let tmp = unique_tmp("bad-lockfile");
+    let repo = common::fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("project");
+    let manifest_path = project.join("devkit.toml");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(&manifest_path, "[defaults]\n").unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlocked = \"1\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"locked\"]\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    let entry = LibEntry {
+        name: "locked".into(),
+        ecosystem: Some(Ecosystem::Rust),
+        repo: Some(repo),
+        ..Default::default()
+    };
+    devkit_docs::manifest::upsert_project(&manifest_path, &entry, &cache_root).unwrap();
+
+    let resolved = devkit_docs::resolve::resolve(
+        &entry,
+        &project,
+        &cache_root,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
+    assert!(
+        resolved.path.is_dir(),
+        "fixture must materialize a checkout"
+    );
+    assert!(
+        cache_root.join("locked/repo.git").is_dir(),
+        "fixture must produce a real library (repo.git) or prune never reaches the lockfile read"
+    );
+
+    let global = tmp.join("docs.toml");
+    std::fs::write(&global, "").unwrap();
+    let manifest_libs = BTreeSet::from(["locked".to_string()]);
+
+    // Control: with the lockfile still valid, prune must actually reach and
+    // exercise `current_version`'s lockfile branch — otherwise the negative
+    // assertion below would pass vacuously.
+    let control = refs::prune_with_lock(&cache_root, &manifest_libs, Some(&global)).unwrap();
+    assert!(
+        control.removed.is_empty(),
+        "fixture is not live: a valid lockfile should already keep the checkout: {:?}",
+        control.removed
+    );
+    assert!(resolved.path.is_dir());
+
+    std::fs::write(project.join("Cargo.lock"), "this = = not valid toml [[[").unwrap();
+
+    let pruned = refs::prune_with_lock(&cache_root, &manifest_libs, Some(&global)).unwrap();
+
+    assert!(
+        pruned.removed.is_empty(),
+        "a live project's checkout was reclaimed because its lockfile failed to parse: {:?}",
+        pruned.removed
+    );
+    assert!(resolved.path.is_dir());
+}
+
+// Negative case for the fix above: a lockfile that still parses fine, and
+// genuinely no longer lists the package, is real evidence the project
+// stopped referencing it — that checkout must still be reclaimed.
+#[test]
+fn prune_reclaims_a_checkout_once_the_valid_lockfile_drops_the_package() {
+    let tmp = unique_tmp("dropped-from-lockfile");
+    let repo = common::fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("project");
+    let manifest_path = project.join("devkit.toml");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(&manifest_path, "[defaults]\n").unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlocked = \"1\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"locked\"]\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    let entry = LibEntry {
+        name: "locked".into(),
+        ecosystem: Some(Ecosystem::Rust),
+        repo: Some(repo),
+        ..Default::default()
+    };
+    devkit_docs::manifest::upsert_project(&manifest_path, &entry, &cache_root).unwrap();
+
+    let resolved = devkit_docs::resolve::resolve(
+        &entry,
+        &project,
+        &cache_root,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
+    assert!(
+        resolved.path.is_dir(),
+        "fixture must materialize a checkout"
+    );
+
+    let global = tmp.join("docs.toml");
+    std::fs::write(&global, "").unwrap();
+    let manifest_libs = BTreeSet::from(["locked".to_string()]);
+
+    let control = refs::prune_with_lock(&cache_root, &manifest_libs, Some(&global)).unwrap();
+    assert!(
+        control.removed.is_empty(),
+        "fixture is not live: a valid lockfile listing the package should keep the checkout: {:?}",
+        control.removed
+    );
+
+    // Still valid TOML, but "locked" is no longer a `[[package]]` entry.
+    std::fs::write(
+        project.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+
+    let pruned = refs::prune_with_lock(&cache_root, &manifest_libs, Some(&global)).unwrap();
+
+    assert_eq!(
+        pruned.removed,
+        vec!["locked/v1.0.0".to_string()],
+        "a package genuinely dropped from a valid lockfile must still be reclaimed"
+    );
+    assert!(
+        !resolved.path.is_dir(),
+        "the checkout should have been reclaimed once the valid lockfile stopped listing it"
+    );
+}

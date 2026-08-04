@@ -15,6 +15,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
+use std::io::ErrorKind;
 use std::path::Path;
 
 /// A JSON payload persisted under an advisory file lock.
@@ -70,6 +71,34 @@ pub fn load<D: Document>(path: &Path) -> D {
     read(path)
 }
 
+/// Read a file's contents, distinguishing "does not exist" from every other
+/// failure. `Ok(None)` is the expected shape of a first run or an absent
+/// candidate file. Any other error — permission denied, a directory sitting
+/// where a file was expected, a transient I/O failure — comes back as `Err`,
+/// because the caller cannot tell whether the content it would have read
+/// still means what an absent file would mean.
+pub fn read_strict(path: &Path) -> Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+/// Load a document strictly, for callers whose decision is destructive
+/// enough that an unreadable input must never be mistaken for an absent one.
+/// `NotFound` or a genuinely empty file still yields the default — that is
+/// the legitimate first-run shape — but every other read or parse failure
+/// returns `Err` instead of `load`'s silent fallback. Performs no salvage or
+/// corruption recovery; a caller that needs those stays on `load`.
+pub fn try_load<D: Document>(path: &Path) -> Result<D> {
+    match read_strict(path)? {
+        None => Ok(D::default()),
+        Some(s) if s.trim().is_empty() => Ok(D::default()),
+        Some(s) => serde_json::from_str(&s).with_context(|| format!("parsing {}", D::label())),
+    }
+}
+
 /// Persist a document with a crash-safe atomic rename. Takes no lock and does not
 /// stamp the version — a caller that mutated the document should call
 /// `Document::stamp_version` first (as `with_lock` does).
@@ -121,13 +150,14 @@ fn write<D: Document>(path: &Path, data: &D) -> Result<()> {
     Ok(())
 }
 
-/// Run `f` while holding the exclusive advisory lock at `lock_path`, against the
-/// JSON document at `data_path`; persists the (version-stamped) result. The
-/// parent directory is created on demand. Keep the work inside `f` minimal —
-/// the lock is held for its whole duration.
-pub fn with_lock<D: Document, T>(
+/// Acquire the exclusive advisory lock at `lock_path`, load the document at
+/// `data_path` via `load`, run `f`, and persist the (version-stamped)
+/// result. The parent directory is created on demand. Shared by `with_lock`
+/// and `with_lock_strict`, which differ only in how the pre-`f` load can fail.
+fn with_lock_via<D: Document, T>(
     lock_path: &Path,
     data_path: &Path,
+    load: impl FnOnce(&Path) -> Result<D>,
     f: impl FnOnce(&mut D) -> Result<T>,
 ) -> Result<T> {
     if let Some(parent) = lock_path.parent() {
@@ -140,11 +170,35 @@ pub fn with_lock<D: Document, T>(
         .open(lock_path)?;
     let mut lock = RwLock::new(File::open(lock_path)?);
     let _guard = lock.write()?; // blocks until exclusive
-    let mut data = read::<D>(data_path);
+    let mut data = load(data_path)?;
     let out = f(&mut data)?;
     data.stamp_version();
     write(data_path, &data)?;
     Ok(out)
+}
+
+/// Run `f` while holding the exclusive advisory lock at `lock_path`, against the
+/// JSON document at `data_path`; persists the (version-stamped) result. The
+/// parent directory is created on demand. Keep the work inside `f` minimal —
+/// the lock is held for its whole duration.
+pub fn with_lock<D: Document, T>(
+    lock_path: &Path,
+    data_path: &Path,
+    f: impl FnOnce(&mut D) -> Result<T>,
+) -> Result<T> {
+    with_lock_via(lock_path, data_path, |p| Ok(read::<D>(p)), f)
+}
+
+/// As `with_lock`, but the pre-`f` load goes through `try_load`: an
+/// unreadable or unparsable document aborts with `Err` — leaving both the
+/// lock and the on-disk file untouched — rather than silently committing a
+/// default document over it.
+pub fn with_lock_strict<D: Document, T>(
+    lock_path: &Path,
+    data_path: &Path,
+    f: impl FnOnce(&mut D) -> Result<T>,
+) -> Result<T> {
+    with_lock_via(lock_path, data_path, try_load::<D>, f)
 }
 
 #[cfg(test)]

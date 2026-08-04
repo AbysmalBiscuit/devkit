@@ -1,39 +1,48 @@
-//! Tolerant lockfile version discovery used by conservative prune liveness checks.
+//! Lockfile version discovery used by conservative prune liveness checks.
 //!
 //! Importer-aware checkout resolution lives in `crate::importers`. These parsers
-//! only answer whether a live project still has a lockfile reference, so an
-//! unreadable or unparsable lockfile yields no versions.
+//! only answer whether a live project still has a lockfile reference. A lockfile
+//! that is genuinely absent yields no versions, but one that exists and fails to
+//! read or parse is not evidence of that — it comes back as `Err`, and the
+//! caller (`refs::live_reference`) keeps the project's existing reference rather
+//! than treating the failure as "no versions".
 
 use crate::manifest::Ecosystem;
+use anyhow::{Context, Result};
+use devkit_common::store::read_strict;
 use std::path::{Path, PathBuf};
 
-pub fn versions_in_dir(dir: &Path, eco: Ecosystem, package: &str) -> Vec<String> {
+pub fn versions_in_dir(dir: &Path, eco: Ecosystem, package: &str) -> Result<Vec<String>> {
     match eco {
         Ecosystem::Rust => toml_packages(&dir.join("Cargo.lock"), package),
         Ecosystem::Python => toml_packages(&dir.join("uv.lock"), package),
         Ecosystem::Js => {
-            let mut v = npm_versions(&dir.join("package-lock.json"), package);
-            v.extend(pnpm_versions(&dir.join("pnpm-lock.yaml"), package));
-            v.extend(bun_versions(&dir.join("bun.lock"), package));
-            v
+            let mut v = npm_versions(&dir.join("package-lock.json"), package)?;
+            v.extend(pnpm_versions(&dir.join("pnpm-lock.yaml"), package)?);
+            v.extend(bun_versions(&dir.join("bun.lock"), package)?);
+            Ok(v)
         }
-        Ecosystem::Git => Vec::new(),
+        Ecosystem::Git => Ok(Vec::new()),
     }
 }
 
 /// Walk up from `start`; the first directory whose lockfile mentions
 /// `package` wins. Returns that directory (the project root for registry
 /// purposes) and every version it pins.
-pub fn find_version(start: &Path, eco: Ecosystem, package: &str) -> Option<(PathBuf, Vec<String>)> {
+pub fn find_version(
+    start: &Path,
+    eco: Ecosystem,
+    package: &str,
+) -> Result<Option<(PathBuf, Vec<String>)>> {
     let mut dir = Some(start);
     while let Some(d) = dir {
-        let vs = versions_in_dir(d, eco, package);
+        let vs = versions_in_dir(d, eco, package)?;
         if !vs.is_empty() {
-            return Some((d.to_path_buf(), vs));
+            return Ok(Some((d.to_path_buf(), vs)));
         }
         dir = d.parent();
     }
-    None
+    Ok(None)
 }
 
 /// Highest version by numeric dot-segment comparison (`10.0.0` > `9.0.1`).
@@ -50,31 +59,31 @@ fn ver_key(v: &str) -> Vec<u64> {
 }
 
 /// `Cargo.lock` and `uv.lock` share the `[[package]] name/version` shape.
-fn toml_packages(path: &Path, package: &str) -> Vec<String> {
-    let Ok(s) = std::fs::read_to_string(path) else {
-        return Vec::new();
+fn toml_packages(path: &Path, package: &str) -> Result<Vec<String>> {
+    let Some(s) = read_strict(path)? else {
+        return Ok(Vec::new());
     };
-    let Ok(t) = s.parse::<toml::Table>() else {
-        return Vec::new();
-    };
+    let t: toml::Table = s
+        .parse()
+        .with_context(|| format!("parsing {}", path.display()))?;
     let Some(pkgs) = t.get("package").and_then(|p| p.as_array()) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    pkgs.iter()
+    Ok(pkgs
+        .iter()
         .filter(|p| p.get("name").and_then(|n| n.as_str()) == Some(package))
         .filter_map(|p| p.get("version").and_then(|v| v.as_str()).map(String::from))
-        .collect()
+        .collect())
 }
 
 /// package-lock.json v2/v3 `packages` map, falling back to the ancient v1
 /// top-level `dependencies` map.
-fn npm_versions(path: &Path, package: &str) -> Vec<String> {
-    let Ok(s) = std::fs::read_to_string(path) else {
-        return Vec::new();
+fn npm_versions(path: &Path, package: &str) -> Result<Vec<String>> {
+    let Some(s) = read_strict(path)? else {
+        return Ok(Vec::new());
     };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) else {
-        return Vec::new();
-    };
+    let v: serde_json::Value =
+        serde_json::from_str(&s).with_context(|| format!("parsing {}", path.display()))?;
     let mut out = Vec::new();
     if let Some(pkgs) = v.get("packages").and_then(|p| p.as_object()) {
         let suffix = format!("node_modules/{package}");
@@ -95,20 +104,19 @@ fn npm_versions(path: &Path, package: &str) -> Vec<String> {
     {
         out.push(ver.to_string());
     }
-    out
+    Ok(out)
 }
 
 /// pnpm-lock.yaml `packages` keys: v9 `name@1.2.3` / `@scope/name@1.2.3`,
 /// v6 `/name@1.2.3(peer@x)`, v5 `/name/1.2.3`.
-fn pnpm_versions(path: &Path, package: &str) -> Vec<String> {
-    let Ok(s) = std::fs::read_to_string(path) else {
-        return Vec::new();
+fn pnpm_versions(path: &Path, package: &str) -> Result<Vec<String>> {
+    let Some(s) = read_strict(path)? else {
+        return Ok(Vec::new());
     };
-    let Ok(y) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&s) else {
-        return Vec::new();
-    };
+    let y: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&s).with_context(|| format!("parsing {}", path.display()))?;
     let Some(pkgs) = y.get("packages").and_then(|p| p.as_mapping()) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut out = Vec::new();
     for key in pkgs.keys().filter_map(|k| k.as_str()) {
@@ -124,29 +132,30 @@ fn pnpm_versions(path: &Path, package: &str) -> Vec<String> {
             out.push(ver.to_string());
         }
     }
-    out
+    Ok(out)
 }
 
 /// bun.lock `packages` map: each value is an array whose first element is the
 /// resolved `name@version` spec. The spec — not the map key — identifies the
 /// package: a key like `parent/kysely` is a nested copy of `kysely`, while
 /// `@scope/kysely` is a different package, and only the spec tells them apart.
-fn bun_versions(path: &Path, package: &str) -> Vec<String> {
-    let Ok(s) = std::fs::read_to_string(path) else {
-        return Vec::new();
+fn bun_versions(path: &Path, package: &str) -> Result<Vec<String>> {
+    let Some(s) = read_strict(path)? else {
+        return Ok(Vec::new());
     };
-    let Ok(Some(v)) = jsonc_parser::parse_to_serde_value(&s, &Default::default()) else {
-        return Vec::new();
-    };
+    let v = jsonc_parser::parse_to_serde_value(&s, &Default::default())
+        .with_context(|| format!("parsing {}", path.display()))?
+        .with_context(|| format!("{} has no content", path.display()))?;
     let Some(pkgs) = v.get("packages").and_then(|p| p.as_object()) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    pkgs.values()
+    Ok(pkgs
+        .values()
         .filter_map(|e| e.get(0).and_then(|x| x.as_str()))
         .filter_map(|spec| spec.rsplit_once('@').filter(|(n, _)| !n.is_empty()))
         .filter(|(name, _)| *name == package)
         .map(|(_, ver)| ver.to_string())
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -194,10 +203,14 @@ mod tests {
         let d = unique_tmp("cargo");
         std::fs::write(d.join("Cargo.lock"), CARGO_LOCK).unwrap();
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Rust, "tokio"),
+            versions_in_dir(&d, Ecosystem::Rust, "tokio").unwrap(),
             vec!["1.38.0"]
         );
-        assert!(versions_in_dir(&d, Ecosystem::Rust, "absent").is_empty());
+        assert!(
+            versions_in_dir(&d, Ecosystem::Rust, "absent")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -205,7 +218,7 @@ mod tests {
         let d = unique_tmp("uv");
         std::fs::write(d.join("uv.lock"), UV_LOCK).unwrap();
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Python, "requests"),
+            versions_in_dir(&d, Ecosystem::Python, "requests").unwrap(),
             vec!["2.32.3"]
         );
     }
@@ -214,7 +227,7 @@ mod tests {
     fn npm_lock_collects_all_copies() {
         let d = unique_tmp("npm");
         std::fs::write(d.join("package-lock.json"), NPM_LOCK).unwrap();
-        let mut v = versions_in_dir(&d, Ecosystem::Js, "react");
+        let mut v = versions_in_dir(&d, Ecosystem::Js, "react").unwrap();
         v.sort();
         assert_eq!(v, vec!["17.0.2", "18.3.1"]);
     }
@@ -223,32 +236,42 @@ mod tests {
     fn pnpm_v9_and_scoped_and_v6_keys() {
         let d = unique_tmp("pnpm9");
         std::fs::write(d.join("pnpm-lock.yaml"), PNPM_V9).unwrap();
-        assert_eq!(versions_in_dir(&d, Ecosystem::Js, "react"), vec!["18.3.1"]);
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Js, "@types/node"),
+            versions_in_dir(&d, Ecosystem::Js, "react").unwrap(),
+            vec!["18.3.1"]
+        );
+        assert_eq!(
+            versions_in_dir(&d, Ecosystem::Js, "@types/node").unwrap(),
             vec!["20.12.0"]
         );
         let d6 = unique_tmp("pnpm6");
         std::fs::write(d6.join("pnpm-lock.yaml"), PNPM_V6).unwrap();
-        assert_eq!(versions_in_dir(&d6, Ecosystem::Js, "react"), vec!["18.2.0"]);
+        assert_eq!(
+            versions_in_dir(&d6, Ecosystem::Js, "react").unwrap(),
+            vec!["18.2.0"]
+        );
     }
 
     #[test]
     fn bun_lock_collects_all_copies_despite_trailing_commas() {
         let d = unique_tmp("bun");
         std::fs::write(d.join("bun.lock"), BUN_LOCK).unwrap();
-        let mut v = versions_in_dir(&d, Ecosystem::Js, "kysely");
+        let mut v = versions_in_dir(&d, Ecosystem::Js, "kysely").unwrap();
         v.sort();
         assert_eq!(v, vec!["0.28.14", "0.28.17"]);
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Js, "@types/node"),
+            versions_in_dir(&d, Ecosystem::Js, "@types/node").unwrap(),
             vec!["20.12.0"]
         );
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Js, "@scope/kysely"),
+            versions_in_dir(&d, Ecosystem::Js, "@scope/kysely").unwrap(),
             vec!["9.9.9"]
         );
-        assert!(versions_in_dir(&d, Ecosystem::Js, "absent").is_empty());
+        assert!(
+            versions_in_dir(&d, Ecosystem::Js, "absent")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -257,10 +280,16 @@ mod tests {
         std::fs::write(root.join("Cargo.lock"), CARGO_LOCK).unwrap();
         let deep = root.join("crates/app/src");
         std::fs::create_dir_all(&deep).unwrap();
-        let (dir, vs) = find_version(&deep, Ecosystem::Rust, "tokio").unwrap();
+        let (dir, vs) = find_version(&deep, Ecosystem::Rust, "tokio")
+            .unwrap()
+            .unwrap();
         assert_eq!(dir, root);
         assert_eq!(vs, vec!["1.38.0"]);
-        assert!(find_version(&deep, Ecosystem::Rust, "absent").is_none());
+        assert!(
+            find_version(&deep, Ecosystem::Rust, "absent")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
