@@ -13,6 +13,7 @@ use devkit_common::cmd;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const JOURNAL_SUFFIX: &str = ".migration.json";
 
@@ -262,14 +263,32 @@ fn journal_satisfied(lib_dir: &Path, bare: &Path, journal: &[JournalEntry]) -> b
 /// Make every checkout of one library resolve again: repair the ones whose
 /// links a rename invalidated, rebuild the ones repair cannot fix, and
 /// recreate the ones an interrupted rebuild left with no trace but a journal.
+///
+/// A checkout whose commit the repository no longer has is given up on rather
+/// than bailed on. The migration runs before every command, so a hard failure
+/// here takes `rm` and `prune` — the commands that clear a broken cache — down
+/// with it, while the abandoned checkout is rebuildable by re-resolving.
 fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     let lib_dir = cache_root.join(dirname);
     let bare = lib_dir.join("repo.git");
     let bare_str = bare.to_string_lossy().into_owned();
-    let journal = read_journal(&journal_path(cache_root, dirname))?;
+    let journal_file = journal_path(cache_root, dirname);
     let admin = capture_commits(&bare)?;
 
     let mut lines = Vec::new();
+    let (journal, unreachable): (Vec<JournalEntry>, Vec<JournalEntry>) =
+        read_journal(&journal_file)?
+            .into_iter()
+            .partition(|entry| has_commit(&bare_str, &entry.commit));
+    for entry in &unreachable {
+        lines.push(abandoned(
+            dirname,
+            &entry.dirname,
+            &entry.commit,
+            &journal_file,
+        ));
+    }
+
     let mut pending: Vec<Pending> = Vec::new();
     for (checkout, path) in checkouts(cache_root, dirname) {
         if resolves(&bare, &path) || !is_worktree(&path) {
@@ -282,6 +301,10 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
                 path.display()
             )
         })?;
+        if !has_commit(&bare_str, &commit) {
+            lines.push(abandoned(dirname, &checkout, &commit, &journal_file));
+            continue;
+        }
         let path_str = path.to_string_lossy().into_owned();
         // Repair has to precede any prune: while a worktree's administrative
         // back-pointer is stale, prune reads it as abandoned and deletes the
@@ -346,8 +369,12 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     }
     // A directory removed outside git leaves its administrative entry behind,
     // and `worktree add` refuses a name that is still registered.
-    cmd::git(&["worktree", "prune"], &bare_str)
-        .with_context(|| format!("pruning worktrees of {dirname}"))?;
+    cmd::git(&["worktree", "prune"], &bare_str).with_context(|| {
+        format!(
+            "pruning worktrees of {dirname}, listed by {}",
+            journal_file.display()
+        )
+    })?;
     for step in &pending {
         let Pending {
             checkout, commit, ..
@@ -357,13 +384,42 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
             &["worktree", "add", "--detach", path_str.as_str(), commit],
             &bare_str,
         )
-        .with_context(|| format!("recreating {dirname}/{checkout} at {commit}"))?;
+        .with_context(|| {
+            format!(
+                "recreating {dirname}/{checkout} at {commit}, recorded in {}; delete that file \
+                 to abandon the record and re-resolve the library instead",
+                journal_file.display()
+            )
+        })?;
         lines.push(format!("{} {dirname}/{checkout} at {commit}", step.verb));
     }
     if journal_satisfied(&lib_dir, &bare, &journal) {
         clear_journal(cache_root, dirname)?;
     }
     Ok(lines)
+}
+
+/// What one abandoned checkout is reported as: which commit is gone, which
+/// file recorded it, and what puts the checkout back.
+fn abandoned(dirname: &str, checkout: &str, commit: &str, journal_file: &Path) -> String {
+    format!(
+        "{dirname}/{checkout} was recorded at {commit}, which repo.git no longer has; dropping \
+         that record from {} — re-resolve the library to rebuild the checkout",
+        journal_file.display()
+    )
+}
+
+/// Whether the bare repository holds `commit` locally. A fetch that prunes a
+/// deleted tag can leave a record pointing at objects git has since collected,
+/// and `worktree add` cannot recreate what is gone. `GIT_NO_LAZY_FETCH` keeps
+/// the probe from asking the remote for an object it is about to give up on.
+fn has_commit(bare: &str, commit: &str) -> bool {
+    let spec = format!("{commit}^{{commit}}");
+    Command::new("git")
+        .args(["-C", bare, "cat-file", "-e", spec.as_str()])
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 fn backfill_origin(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {

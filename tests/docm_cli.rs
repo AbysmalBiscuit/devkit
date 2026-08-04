@@ -566,6 +566,38 @@ fn rm_blocks_until_a_concurrent_add_of_the_same_library_completes() {
     );
 }
 
+/// `rm` and `prune` are the recovery commands for a cache the migration
+/// cannot finish, so a migration that fails hard takes the recovery with it.
+/// A record naming a commit the repository no longer has is dropped instead:
+/// the checkout it describes is rebuildable by re-resolving, while a cache
+/// with no working CLI is not.
+#[test]
+fn an_unsatisfiable_migration_record_does_not_disable_the_cli() {
+    let env = Env::new("journal-unsatisfiable");
+    assert_ran(&env.add("up", "v1.0.0"), "docm add up");
+    let journal = env.write_unsatisfiable_journal("up");
+
+    let listed = env.docm(&["list"]);
+
+    assert_ran(&listed, "docm list");
+    assert!(
+        stderr(&listed).contains(&journal.display().to_string()),
+        "the dropped record must name the file it came from: {}",
+        stderr(&listed)
+    );
+    assert!(
+        stderr(&listed).contains(GONE_COMMIT),
+        "the dropped record must name the commit that is gone: {}",
+        stderr(&listed)
+    );
+    assert!(
+        !journal.exists(),
+        "a record nothing can satisfy must not survive the run that dropped it"
+    );
+    assert_ran(&env.docm(&["prune"]), "docm prune");
+    assert_ran(&env.docm(&["rm", "up"]), "docm rm up");
+}
+
 /// `completions` writes a script to stdout and never reads the cache, and a
 /// shell rc sources it on every new shell — so it must not be gated behind a
 /// cache migration that can warn or fail.
