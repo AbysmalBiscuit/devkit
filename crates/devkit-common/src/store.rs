@@ -95,7 +95,14 @@ pub fn try_load<D: Document>(path: &Path) -> Result<D> {
     match read_strict(path)? {
         None => Ok(D::default()),
         Some(s) if s.trim().is_empty() => Ok(D::default()),
-        Some(s) => serde_json::from_str(&s).with_context(|| format!("parsing {}", D::label())),
+        Some(s) => serde_json::from_str(&s).with_context(|| {
+            format!(
+                "parsing {} at {}; delete the file (or restore it from a backup) to reinitialise it, \
+                 then retry",
+                D::label(),
+                path.display()
+            )
+        }),
     }
 }
 

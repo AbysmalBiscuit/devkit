@@ -403,6 +403,37 @@ fn whole_library_deletion_ignores_rows_already_rejected_by_the_plan() {
     assert!(!cache_root.join("up").exists());
 }
 
+// Regression: whole-library deletion must fail closed on an unreadable
+// registry, not read it as having no rows and delete the library directory.
+// A directory in registry.json's place is the CI-portable way to make it
+// unreadable (see `prune_aborts_when_the_registry_is_unreadable` for why
+// `chmod` is not portable here).
+#[test]
+fn whole_library_deletion_aborts_when_the_registry_is_unreadable() {
+    let root = unique_tmp("whole-lib-unreadable-registry");
+    let cache_root = root.join("cache");
+    std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
+    std::fs::create_dir_all(cache_root.join("registry.json")).unwrap();
+
+    let result = devkit_docs::cache::LibCache::new(&cache_root, "up")
+        .unwrap()
+        .remove_if_unreferenced();
+
+    assert!(
+        result.is_err(),
+        "whole-library deletion must fail closed on an unreadable registry \
+         instead of treating it as having no rows"
+    );
+    assert!(
+        cache_root.join("up").is_dir(),
+        "whole-library deletion removed the library despite the unreadable registry"
+    );
+    assert!(
+        cache_root.join("registry.json").is_dir(),
+        "whole-library deletion mutated the unreadable registry path"
+    );
+}
+
 #[test]
 fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
     let tmp = unique_tmp("live-ref-checkouts");
@@ -825,8 +856,9 @@ fn prune_aborts_when_the_registry_is_unreadable() {
     let repo = common::fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("project");
+    let manifest_path = project.join("devkit.toml");
     std::fs::create_dir_all(&project).unwrap();
-    std::fs::write(project.join("devkit.toml"), "[defaults]\n").unwrap();
+    std::fs::write(&manifest_path, "[defaults]\n").unwrap();
 
     let entry = LibEntry {
         name: "up".into(),
@@ -834,6 +866,11 @@ fn prune_aborts_when_the_registry_is_unreadable() {
         r#ref: Some("v1.0.0".into()),
         ..Default::default()
     };
+    // Without this, the project's manifest never lists "up", `live_reference`
+    // finds no entry regardless of the registry's readability, and prune
+    // deletes the checkout either way — proving nothing about the registry.
+    devkit_docs::manifest::upsert_project(&manifest_path, &entry, &cache_root).unwrap();
+
     let resolved = devkit_docs::resolve::resolve(
         &entry,
         &project,
@@ -850,6 +887,20 @@ fn prune_aborts_when_the_registry_is_unreadable() {
         "fixture must produce a real library (repo.git) or prune never reaches the registry read"
     );
 
+    let manifest_libs = BTreeSet::from(["up".to_string()]);
+
+    // Control: with the registry still readable, the manifest entry above
+    // genuinely keeps the checkout. This proves the deletion this test
+    // guards against comes from registry unreadability specifically, not
+    // from a fixture that was never live in the first place.
+    let control = refs::prune_with_lock(&cache_root, &manifest_libs, None).unwrap();
+    assert!(
+        control.removed.is_empty(),
+        "fixture is not live: a readable registry should already keep the checkout: {:?}",
+        control.removed
+    );
+    assert!(resolved.path.is_dir());
+
     let registry_path = cache_root.join("registry.json");
     assert!(
         registry_path.is_file(),
@@ -858,7 +909,6 @@ fn prune_aborts_when_the_registry_is_unreadable() {
     std::fs::remove_file(&registry_path).unwrap();
     std::fs::create_dir_all(&registry_path).unwrap();
 
-    let manifest_libs = BTreeSet::from(["up".to_string()]);
     let result = refs::prune_with_lock(&cache_root, &manifest_libs, None);
 
     assert!(
@@ -950,9 +1000,9 @@ fn prune_keeps_checkout_when_a_lockfile_fails_to_parse() {
     assert!(resolved.path.is_dir());
 }
 
-// Negative case for the fix above: a lockfile that still parses fine, and
-// genuinely no longer lists the package, is real evidence the project
-// stopped referencing it — that checkout must still be reclaimed.
+// A lockfile that still parses fine, and genuinely no longer lists the
+// package, is real evidence the project stopped referencing it — that
+// checkout must still be reclaimed.
 #[test]
 fn prune_reclaims_a_checkout_once_the_valid_lockfile_drops_the_package() {
     let tmp = unique_tmp("dropped-from-lockfile");

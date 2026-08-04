@@ -308,9 +308,9 @@ fn checkouts(cache_root: &Path, dirname: &str) -> Vec<String> {
 }
 
 /// A registry row is not proof a project still wants a library, but it is
-/// what a project the fix could not evaluate falls back to, so its checkout
-/// is never silently reclaimed while the reason it stayed unresolved is
-/// unclear.
+/// the fallback for a project whose manifest or lockfile could not be
+/// evaluated, so its checkout is never silently reclaimed while the reason
+/// it stayed unresolved is unclear.
 fn keep_existing_row(data: &Data, project: &str, lib: &str) -> Option<String> {
     data.rows
         .iter()
@@ -520,6 +520,50 @@ mod tests {
         assert_eq!(snap.rows.len(), 1);
         assert_eq!(snap.version, SCHEMA);
         assert!(root.join("registry.json").is_file());
+    }
+
+    // Regression: a commit against an unreadable registry must abort instead
+    // of loading a default document and writing it back over the unreadable
+    // one, which would silently destroy every row an earlier commit wrote. A
+    // directory in registry.json's place is the CI-portable way to make it
+    // unreadable (see the prune tests for why `chmod` is not portable here).
+    #[test]
+    fn commit_aborts_when_the_registry_is_unreadable() {
+        let root = unique_tmp("commit-unreadable");
+        let store = RefStore::at(&root);
+        store
+            .commit(|d| {
+                d.record("/p", "tokio", "1.0.0", "v1.0.0", "aaa");
+                Ok(())
+            })
+            .unwrap();
+
+        let registry_path = root.join("registry.json");
+        std::fs::remove_file(&registry_path).unwrap();
+        std::fs::create_dir_all(&registry_path).unwrap();
+
+        let result = store.commit(|d| {
+            d.record("/q", "tokio", "2.0.0", "v2.0.0", "bbb");
+            Ok(())
+        });
+
+        assert!(
+            result.is_err(),
+            "commit must fail closed on an unreadable registry instead of \
+             committing a defaulted document over it"
+        );
+        assert!(
+            registry_path.is_dir(),
+            "commit replaced the unreadable registry path with something else"
+        );
+        assert!(
+            std::fs::read_dir(&registry_path).unwrap().next().is_none(),
+            "commit wrote into the unreadable registry's directory"
+        );
+        assert!(
+            !root.join("registry.json.tmp").exists(),
+            "commit left behind a write attempt's temp file"
+        );
     }
 
     #[test]

@@ -58,9 +58,21 @@ fn ver_key(v: &str) -> Vec<u64> {
         .collect()
 }
 
+/// `read_strict`, but a lockfile that exists and is empty (or whitespace-only)
+/// reads the same as one that does not exist: `npm init` and similar
+/// scaffolding can leave a placeholder in that state, and empty carries no
+/// more evidence than absent does — the same rule `store::try_load` applies
+/// to the registry.
+fn read_lockfile(path: &Path) -> Result<Option<String>> {
+    match read_strict(path)? {
+        Some(s) if !s.trim().is_empty() => Ok(Some(s)),
+        _ => Ok(None),
+    }
+}
+
 /// `Cargo.lock` and `uv.lock` share the `[[package]] name/version` shape.
 fn toml_packages(path: &Path, package: &str) -> Result<Vec<String>> {
-    let Some(s) = read_strict(path)? else {
+    let Some(s) = read_lockfile(path)? else {
         return Ok(Vec::new());
     };
     let t: toml::Table = s
@@ -79,7 +91,7 @@ fn toml_packages(path: &Path, package: &str) -> Result<Vec<String>> {
 /// package-lock.json v2/v3 `packages` map, falling back to the ancient v1
 /// top-level `dependencies` map.
 fn npm_versions(path: &Path, package: &str) -> Result<Vec<String>> {
-    let Some(s) = read_strict(path)? else {
+    let Some(s) = read_lockfile(path)? else {
         return Ok(Vec::new());
     };
     let v: serde_json::Value =
@@ -110,7 +122,7 @@ fn npm_versions(path: &Path, package: &str) -> Result<Vec<String>> {
 /// pnpm-lock.yaml `packages` keys: v9 `name@1.2.3` / `@scope/name@1.2.3`,
 /// v6 `/name@1.2.3(peer@x)`, v5 `/name/1.2.3`.
 fn pnpm_versions(path: &Path, package: &str) -> Result<Vec<String>> {
-    let Some(s) = read_strict(path)? else {
+    let Some(s) = read_lockfile(path)? else {
         return Ok(Vec::new());
     };
     let y: serde_yaml_ng::Value =
@@ -140,12 +152,17 @@ fn pnpm_versions(path: &Path, package: &str) -> Result<Vec<String>> {
 /// package: a key like `parent/kysely` is a nested copy of `kysely`, while
 /// `@scope/kysely` is a different package, and only the spec tells them apart.
 fn bun_versions(path: &Path, package: &str) -> Result<Vec<String>> {
-    let Some(s) = read_strict(path)? else {
+    let Some(s) = read_lockfile(path)? else {
         return Ok(Vec::new());
     };
-    let v = jsonc_parser::parse_to_serde_value(&s, &Default::default())
+    // `s` is non-empty (`read_lockfile` already filtered blank content), but
+    // a file of only comments/whitespace-after-trim-non-blank JSONC can still
+    // parse to no value; treat that the same as no versions.
+    let Some(v) = jsonc_parser::parse_to_serde_value(&s, &Default::default())
         .with_context(|| format!("parsing {}", path.display()))?
-        .with_context(|| format!("{} has no content", path.display()))?;
+    else {
+        return Ok(Vec::new());
+    };
     let Some(pkgs) = v.get("packages").and_then(|p| p.as_object()) else {
         return Ok(Vec::new());
     };
@@ -290,6 +307,33 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn an_empty_lockfile_is_no_versions_not_an_error() {
+        let d = unique_tmp("empty");
+        std::fs::write(d.join("Cargo.lock"), "").unwrap();
+        std::fs::write(d.join("package-lock.json"), "   \n").unwrap();
+        std::fs::write(d.join("pnpm-lock.yaml"), "").unwrap();
+        std::fs::write(d.join("bun.lock"), "// nothing here yet\n").unwrap();
+
+        assert!(
+            versions_in_dir(&d, Ecosystem::Rust, "tokio")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            versions_in_dir(&d, Ecosystem::Js, "react")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_unparsable_lockfile_is_an_error_not_no_versions() {
+        let d = unique_tmp("unparsable");
+        std::fs::write(d.join("Cargo.lock"), "this = = not valid toml [[[").unwrap();
+        assert!(versions_in_dir(&d, Ecosystem::Rust, "tokio").is_err());
     }
 
     #[test]
