@@ -219,8 +219,11 @@ instead.
 
 A library or ref name cannot collide with the cache's own control files:
 `registry` (and anything starting `registry.`) is reserved at the cache
-root for the reference registry, and `repo.git`/`meta.toml` are reserved
-inside each library's own directory.
+root for the reference registry, `manifest` is reserved for the lock the
+cache takes while editing a manifest, and `repo.git`/`meta.toml` are
+reserved inside each library's own directory. Register a package whose
+name is reserved under a different one with
+`docm add <other-name> --package <package>`.
 
 A cache built by devkit 0.12.x migrates automatically the first time any
 `docm` command runs against it: nested scoped library directories
