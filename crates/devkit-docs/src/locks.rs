@@ -13,8 +13,22 @@ const DIR: &str = "registry.locks";
 const SUFFIX: &str = ".lock";
 const MAX_COMPONENT_BYTES: usize = 255;
 
+/// Stems of the fixed lock files the cache keeps in [`control_dir`], where the
+/// per-library locks also live. A library lock is `<dirname>.lock`, so a
+/// library whose folded name appears here would resolve to a control lock's
+/// own path and a transaction taking both would block on itself. Every entry
+/// is rejected by `names::validate_lib`; a lock file added here needs its stem
+/// added too.
+const MANIFEST_STEM: &str = "manifest";
+const CONTROL_STEMS: [&str; 1] = [MANIFEST_STEM];
+
 pub fn is_control(component: &str) -> bool {
     component == "registry" || component.starts_with("registry.")
+}
+
+/// Whether `folded` (a `names::fold_key` output) names a control lock.
+pub fn is_control_stem(folded: &str) -> bool {
+    CONTROL_STEMS.contains(&folded)
 }
 
 /// Where the cache keeps its own bookkeeping. `is_control` holds for its name,
@@ -28,7 +42,7 @@ pub fn lock_path(cache_root: &Path, lib: &str) -> Result<PathBuf> {
 }
 
 pub fn manifest_lock_path(cache_root: &Path) -> PathBuf {
-    control_dir(cache_root).join("manifest.lock")
+    control_dir(cache_root).join(format!("{MANIFEST_STEM}{SUFFIX}"))
 }
 
 fn lock_path_for_dir(cache_root: &Path, dirname: &str, display_name: &str) -> Result<PathBuf> {

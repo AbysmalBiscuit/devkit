@@ -45,6 +45,14 @@ pub fn validate_lib(name: &str) -> Result<()> {
              at <cache>/registry.* and a library directory there would shadow it"
         );
     }
+    if crate::locks::is_control_stem(&folded) {
+        bail!(
+            "library name `{name}` is reserved: the docs cache locks its own bookkeeping at \
+             <cache>/registry.locks/{folded}.lock, which is where a library named `{name}` \
+             would lock; register it under another name with \
+             `docm add <other-name> --package {name}`"
+        );
+    }
     representable(&encode(name))
 }
 

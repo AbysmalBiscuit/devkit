@@ -24,7 +24,7 @@ fn lib_names_reject_tilde_so_encoding_is_injective() {
 /// compiler consumes, so nothing about the wrapping reaches the reader.
 #[test]
 fn a_rejection_message_reaches_the_reader_unwrapped() {
-    for name in ["a~b", "registry"] {
+    for name in ["a~b", "registry", "manifest"] {
         let message = names::validate_lib(name).unwrap_err().to_string();
         assert!(
             !message.contains('\\'),
@@ -59,6 +59,19 @@ fn lib_names_reject_the_registry_stem_however_it_is_cased() {
         );
     }
     assert!(names::validate_lib("registryfoo").is_ok());
+}
+
+#[test]
+fn lib_names_reject_a_control_lock_stem_however_it_is_cased() {
+    for name in ["manifest", "Manifest", "MANIFEST"] {
+        let message = names::validate_lib(name).unwrap_err().to_string();
+        assert!(
+            message.contains("--package"),
+            "`{name}`'s rejection must name the escape: {message}"
+        );
+    }
+    assert!(names::validate_lib("manifests").is_ok());
+    assert!(names::validate_lib("manifest.json").is_ok());
 }
 
 #[test]

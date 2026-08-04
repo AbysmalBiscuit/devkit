@@ -14,6 +14,55 @@ fn the_lock_path_sits_under_the_reserved_stem_and_outside_the_library_dir() {
     assert!(!devkit_docs::locks::is_control("registryfoo"));
 }
 
+/// Every fixed control file in the lock directory shares that directory with
+/// the per-library lock files, whose names come from user input. A control
+/// file whose stem a library could claim is one lock reached by two paths.
+#[test]
+fn no_library_can_claim_the_name_of_a_control_lock() {
+    let root = Path::new("/tmp/docm-lockpath");
+    let manifest_lock = devkit_docs::locks::manifest_lock_path(root);
+    assert_eq!(
+        manifest_lock.parent().unwrap(),
+        devkit_docs::locks::control_dir(root)
+    );
+    let stem = manifest_lock.file_stem().unwrap().to_str().unwrap();
+    assert!(
+        devkit_docs::names::validate_lib(stem).is_err(),
+        "a library named `{stem}` would lock {}",
+        manifest_lock.display()
+    );
+}
+
+/// `rm` takes the library lock and then the manifest lock. A library name that
+/// resolves to the manifest lock's own path makes those one file, and the
+/// advisory lock behind them is not reentrant.
+#[test]
+fn removing_a_library_named_after_a_control_lock_returns_instead_of_blocking() {
+    let root =
+        std::env::temp_dir().join(format!("devkit-docs-control-name-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let manifest = root.join("docs.toml");
+    let cache_root = root.join("cache");
+
+    let (finished, outcome) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let removed = devkit_docs::rm_library(
+            devkit_docs::ManifestTarget::Global(&manifest),
+            &cache_root,
+            "manifest",
+        );
+        let _ = finished.send(removed.map_err(|error| format!("{error:#}")));
+    });
+
+    let removed = outcome
+        .recv_timeout(PROCESS_TIMEOUT)
+        .expect("`docm rm manifest` never returned");
+    let error = removed.expect_err("a name that resolves to a control lock must be rejected");
+    assert!(error.contains("manifest"), "{error}");
+    assert!(error.contains("--package"), "{error}");
+}
+
 #[test]
 fn a_long_library_name_is_rejected_before_the_lock_suffix_overflows() {
     let root = Path::new("/tmp/docm-lockpath");
