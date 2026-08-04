@@ -538,7 +538,7 @@ fn cmd_prune(yes: bool) -> Result<()> {
         println!("removed {removed}");
     }
     for entry in &pruned.skipped {
-        println!("skipped {entry}: no repo.git, so it is not a library");
+        println!("skipped {}: {}", entry.entry, entry.reason);
     }
     if !pruned.removable_libs.is_empty() {
         println!(

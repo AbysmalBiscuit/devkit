@@ -172,12 +172,19 @@ pub struct PrunePlan {
     pub removable_libs: Vec<String>,
 }
 
+/// A cache-root directory prune leaves alone, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skipped {
+    pub entry: String,
+    pub reason: String,
+}
+
 /// What a cache root holds: library directories, and directories that are not
 /// libraries. A control entry belongs to the registry and is neither.
 #[derive(Debug, Default)]
 pub struct CacheScan {
     pub libs: Vec<String>,
-    pub skipped: Vec<String>,
+    pub skipped: Vec<Skipped>,
 }
 
 /// Classify every cache-root entry. A stray directory makes prune do less
@@ -194,14 +201,23 @@ pub fn scan_cache(cache_root: &Path) -> Result<CacheScan> {
         if locks::is_control(&dirname) {
             continue;
         }
-        if cache::LibCache::from_dir(cache_root, &dirname).cloned() {
-            scan.libs.push(dirname);
-        } else {
-            scan.skipped.push(dirname);
+        if !cache::LibCache::from_dir(cache_root, &dirname).cloned() {
+            scan.skipped.push(Skipped {
+                entry: dirname,
+                reason: "no repo.git, so it is not a library".to_string(),
+            });
+            continue;
+        }
+        match crate::names::lib_dir(&crate::names::decode(&dirname)) {
+            Ok(_) => scan.libs.push(dirname),
+            Err(err) => scan.skipped.push(Skipped {
+                entry: dirname,
+                reason: format!("{err:#}; delete {} to remove it", entry.path().display()),
+            }),
         }
     }
     scan.libs.sort();
-    scan.skipped.sort();
+    scan.skipped.sort_by(|a, b| a.entry.cmp(&b.entry));
     Ok(scan)
 }
 
@@ -304,8 +320,8 @@ pub struct Pruned {
     /// Libs absent from every manifest with zero references — deleted only
     /// after confirmation.
     pub removable_libs: Vec<String>,
-    /// Cache-root directories left alone for holding no `repo.git`.
-    pub skipped: Vec<String>,
+    /// Cache-root directories left alone, and why.
+    pub skipped: Vec<Skipped>,
 }
 
 /// Reclaim unreferenced checkouts, holding each library's lock across planning

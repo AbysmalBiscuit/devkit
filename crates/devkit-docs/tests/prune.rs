@@ -697,12 +697,54 @@ fn prune_reports_a_cache_entry_that_is_not_a_library() {
     let pruned = refs::prune_with_lock(&root, &BTreeSet::new(), None).unwrap();
 
     assert_eq!(
-        pruned.skipped,
+        pruned.skipped.iter().map(|s| &s.entry).collect::<Vec<_>>(),
         ["@scope"],
         "a directory without repo.git must be reported, not silently ignored"
     );
+    assert_eq!(
+        pruned.skipped[0].reason,
+        "no repo.git, so it is not a library"
+    );
     assert!(pruned.removed.is_empty() && pruned.removable_libs.is_empty());
     assert!(root.join("@scope/pkg").is_dir());
+}
+
+#[test]
+fn prune_reports_an_unmanageable_directory_and_keeps_going() {
+    let root = unique_tmp("unmanageable");
+    let cache_root = root.join("cache");
+    let project = root.join("project");
+    let global = root.join("docs.toml");
+    std::fs::create_dir_all(cache_root.join("manifest/repo.git")).unwrap();
+    std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+
+    let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
+
+    assert!(
+        pruned.removable_libs.contains(&"up".to_string()),
+        "the unmanageable directory stopped the normal library from being processed: {:?}",
+        pruned.removable_libs
+    );
+    let manifest_entry = pruned
+        .skipped
+        .iter()
+        .find(|s| s.entry == "manifest")
+        .unwrap_or_else(|| panic!("manifest not reported as skipped: {:?}", pruned.skipped));
+    assert!(
+        manifest_entry.reason.contains("reserved"),
+        "reason does not mention the name is reserved: {}",
+        manifest_entry.reason
+    );
+    let expected_path = cache_root.join("manifest");
+    assert!(
+        manifest_entry
+            .reason
+            .contains(&expected_path.display().to_string()),
+        "reason does not mention the absolute path {}: {}",
+        expected_path.display(),
+        manifest_entry.reason
+    );
 }
 
 #[test]
