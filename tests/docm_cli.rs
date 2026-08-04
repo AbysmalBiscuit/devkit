@@ -166,6 +166,28 @@ impl Env {
         path
     }
 
+    /// A cargo workspace whose lockfile pins `package`, so resolution goes
+    /// through the importer rather than a `--ref` pin.
+    fn write_cargo_project(&self, package: &str, version: &str) {
+        std::fs::write(
+            self.project.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n\
+                 [dependencies]\n{package} = \"1\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            self.project.join("Cargo.lock"),
+            format!(
+                "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\
+                 dependencies = [\"{package}\"]\n\n\
+                 [[package]]\nname = \"{package}\"\nversion = \"{version}\"\n"
+            ),
+        )
+        .unwrap();
+    }
+
     /// A migration record naming a checkout at a commit the bare clone does
     /// not have — what an interrupted rebuild leaves behind once a fetch with
     /// `--prune-tags` has dropped the tag the checkout was pinned to.
@@ -676,5 +698,51 @@ fn a_successful_project_repin_keeps_unmodeled_keys_and_inner_comments() {
     assert!(
         !after.contains("stale"),
         "a key docm models is docm's to drop when the registration omits it:\n{after}"
+    );
+}
+
+/// stdout carries the answer and everything that explains it; stderr carries
+/// only what needs attention. Where the version came from is provenance for a
+/// correct answer, so a fully successful lockfile resolution says nothing on
+/// stderr — the channel readers are told to treat as a stop signal.
+#[test]
+fn a_lockfile_resolution_reports_its_provenance_on_stdout_only() {
+    let env = Env::new("lockfile-provenance");
+    env.write_cargo_project("up", "1.0.0");
+
+    let added = env.docm(&["add", "up", "--eco", "rust", "--repo", &env.upstream]);
+
+    assert_ran(&added, "docm add up");
+    assert!(
+        stderr(&added).is_empty(),
+        "a successful add wrote to stderr: {}",
+        stderr(&added)
+    );
+    assert!(
+        stdout(&added).contains("source    the root workspace installs it (Cargo.lock)"),
+        "provenance belongs with the result:\n{}",
+        stdout(&added)
+    );
+
+    let path = env.docm(&["path", "up"]);
+    assert_ran(&path, "docm path up");
+    assert!(
+        stderr(&path).is_empty(),
+        "a successful path lookup wrote to stderr: {}",
+        stderr(&path)
+    );
+    assert_eq!(
+        stdout(&path).trim(),
+        env.cache().join("up/v1.0.0").to_string_lossy(),
+        "path prints exactly the checkout"
+    );
+
+    let info = env.docm(&["info", "up"]);
+    assert_ran(&info, "docm info up");
+    assert!(stderr(&info).is_empty(), "{}", stderr(&info));
+    assert!(
+        stdout(&info).contains("source   the root workspace installs it (Cargo.lock)"),
+        "{}",
+        stdout(&info)
     );
 }

@@ -47,6 +47,12 @@ pub struct Resolved {
     pub name: String,
     /// Human-facing version: lockfile version, the pinned ref, or the branch name.
     pub version: String,
+    /// Where `version` came from — which workspace installs the library, and
+    /// from which lockfile. `None` when a ref pin or the default branch
+    /// decided the version, since neither leaves a lockfile to name. This is
+    /// provenance for a successful resolution, not a warning about it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     /// Worktree dirname — also the version recorded in the reference registry.
     pub worktree: String,
     pub git_ref: String,
@@ -98,6 +104,7 @@ pub fn resolve_locked(
         .with_context(|| format!("lib `{}` has no repo url", entry.name))?;
     let lib = LibCache::new(cache_root, &entry.name)?;
     let mut warnings = Vec::new();
+    let mut source: Option<String> = None;
     let mut meta = cache::read_meta(&lib.dir);
     lib.ensure_clone(repo, &mut meta)?;
     let origin = meta
@@ -119,8 +126,7 @@ pub fn resolve_locked(
         match selection {
             Some(selection) => {
                 let v = selection.version;
-                let source = selection.source.clone();
-                warnings.push(selection.source);
+                source = Some(selection.source.clone());
                 match locate_tag(&lib, &mut meta, &entry.package_name(), &v)? {
                     Some(tag) => (tag, v, selection.workspace),
                     None => {
@@ -134,11 +140,12 @@ pub fn resolve_locked(
                             }
                             let tried = tried.join(", ");
                             bail!(
-                                "no git tag found for {} {v} ({source}; tried {tried}); \
-                                 pin a ref explicitly with `docm add --ref`, or pass \
+                                "no git tag found for {} {v}; {}; tried {tried}; pin a ref \
+                                 explicitly with `docm add --ref`, or pass \
                                  --allow-default-branch to check out the default branch \
                                  for this run",
-                                entry.name
+                                entry.name,
+                                selection.source
                             );
                         }
                         warnings.push(format!(
@@ -246,6 +253,7 @@ pub fn resolve_locked(
     Ok(Resolved {
         name: entry.name.clone(),
         version,
+        source,
         worktree,
         git_ref,
         commit,

@@ -46,8 +46,15 @@ fn rel_key(lock_dir: &Path, workspace: &Path) -> Result<String> {
         .join("/"))
 }
 
+/// A workspace's path relative to its lockfile, named for a reader. The root
+/// workspace's relative path is empty, and rendering it as `.` reads as a
+/// formatting fault rather than a location.
 fn display_key(key: &str) -> &str {
-    if key.is_empty() { "." } else { key }
+    if key.is_empty() {
+        "the root workspace"
+    } else {
+        key
+    }
 }
 
 #[derive(Default)]

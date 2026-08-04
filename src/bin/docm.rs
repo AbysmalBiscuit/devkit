@@ -223,6 +223,9 @@ fn cmd_add(
         ""
     };
     println!("  ref       {}{inferred}", r.git_ref);
+    if let Some(source) = &r.source {
+        println!("  source    {source}");
+    }
     println!("  commit    {}", r.commit);
     println!("  path      {}", r.path.display());
     println!("  manifest  {}", dest.display());
@@ -496,6 +499,9 @@ fn cmd_info(name: &str, json: bool, allow_default_branch: bool) -> Result<()> {
     println!("repo     {}", r.origin);
     println!("ref      {}", r.git_ref);
     println!("version  {}", r.version);
+    if let Some(source) = &r.source {
+        println!("source   {source}");
+    }
     println!("commit   {}", r.commit);
     println!("status   {}", r.status);
     println!("path     {}", r.path.display());

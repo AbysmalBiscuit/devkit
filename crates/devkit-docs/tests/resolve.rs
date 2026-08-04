@@ -38,8 +38,17 @@ fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
         "// v1"
     );
     assert_eq!(r.layout.docs_dir.as_deref(), Some("docs"));
-    assert_eq!(r.warnings.len(), 1);
-    assert!(r.warnings[0].contains("Cargo.lock"), "{:?}", r.warnings);
+    // Where the version came from is provenance for a correct answer, so it
+    // rides its own field; `warnings` stays empty on a resolution with
+    // nothing wrong with it.
+    assert!(
+        r.source
+            .as_deref()
+            .is_some_and(|source| source.contains("Cargo.lock")),
+        "{:?}",
+        r.source
+    );
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
 
     let data = RefStore::at(&cache_root).snapshot();
     assert_eq!(data.rows.len(), 1);
@@ -611,6 +620,24 @@ fn a_ref_published_after_the_last_fetch_resolves_without_a_manual_sync() {
     assert!(r.path.ends_with("v3.0.0"));
 }
 
+/// How deeply the message parenthesizes. Anything above one is an aside
+/// inside an aside, which a reader has to unpick before acting on it.
+fn max_paren_depth(message: &str) -> usize {
+    let mut depth = 0usize;
+    let mut deepest = 0usize;
+    for character in message.chars() {
+        match character {
+            '(' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
+}
+
 #[test]
 fn a_version_with_no_tag_is_a_hard_error_listing_what_was_tried() {
     let base = common::unique_tmp("notag");
@@ -659,6 +686,16 @@ fn a_version_with_no_tag_is_a_hard_error_listing_what_was_tried() {
         1,
         "the tried-patterns list must not repeat a candidate the package-scoped \
          and leaf-scoped forms collapse to when the name has no `/`: {err}"
+    );
+    assert!(
+        err.contains("the root workspace installs it"),
+        "the workspace that pinned the version must be named, not rendered as \
+         a bare `.` that reads as a formatting fault: {err}"
+    );
+    assert_eq!(
+        max_paren_depth(&err),
+        1,
+        "the error nests one parenthetical inside another: {err}"
     );
 
     let opts = devkit_docs::resolve::Options {
