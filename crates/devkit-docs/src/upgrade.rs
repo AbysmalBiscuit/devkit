@@ -65,7 +65,7 @@ pub fn run(cache_root: &Path) -> Result<Vec<String>> {
         })?);
     }
     for dirname in &survey.libraries {
-        if !needs_attention(cache_root, dirname) {
+        if !needs_attention(cache_root, dirname)? {
             continue;
         }
         lines.extend(locks::with_lib_dir(cache_root, dirname, || {
@@ -231,18 +231,18 @@ fn heal_and_backfill(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
 
 /// Whether a library is worth taking its lock for. A read-only probe, so the
 /// steady state costs no lock, no subprocess, and no write.
-fn needs_attention(cache_root: &Path, dirname: &str) -> bool {
+fn needs_attention(cache_root: &Path, dirname: &str) -> Result<bool> {
     if journal_path(cache_root, dirname).exists() {
-        return true;
+        return Ok(true);
     }
     let lib_dir = cache_root.join(dirname);
-    if cache::read_meta(&lib_dir).origin.is_none() {
-        return true;
+    if cache::read_meta(&lib_dir)?.origin.is_none() {
+        return Ok(true);
     }
     let bare = lib_dir.join("repo.git");
-    checkouts(cache_root, dirname)
+    Ok(checkouts(cache_root, dirname)
         .iter()
-        .any(|(_, path)| is_worktree(path) && !links_ok(&bare, path))
+        .any(|(_, path)| is_worktree(path) && !links_ok(&bare, path)))
 }
 
 /// A checkout git can still use: present, a worktree, and linked to its
@@ -276,10 +276,15 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     let admin = capture_commits(&bare)?;
 
     let mut lines = Vec::new();
-    let (journal, unreachable): (Vec<JournalEntry>, Vec<JournalEntry>) =
-        read_journal(&journal_file)?
-            .into_iter()
-            .partition(|entry| has_commit(&bare_str, &entry.commit));
+    let mut journal = Vec::new();
+    let mut unreachable = Vec::new();
+    for entry in read_journal(&journal_file)? {
+        if has_commit(&bare_str, &entry.commit)? {
+            journal.push(entry);
+        } else {
+            unreachable.push(entry);
+        }
+    }
     for entry in &unreachable {
         lines.push(abandoned(
             dirname,
@@ -301,7 +306,7 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
                 path.display()
             )
         })?;
-        if !has_commit(&bare_str, &commit) {
+        if !has_commit(&bare_str, &commit)? {
             lines.push(abandoned(dirname, &checkout, &commit, &journal_file));
             continue;
         }
@@ -413,18 +418,23 @@ fn abandoned(dirname: &str, checkout: &str, commit: &str, journal_file: &Path) -
 /// deleted tag can leave a record pointing at objects git has since collected,
 /// and `worktree add` cannot recreate what is gone. `GIT_NO_LAZY_FETCH` keeps
 /// the probe from asking the remote for an object it is about to give up on.
-fn has_commit(bare: &str, commit: &str) -> bool {
+///
+/// A `git` that will not spawn is an error rather than a `false`: the caller
+/// gives up on the checkouts this answers `false` for, and losing the record
+/// of a commit the repository still has is not recoverable.
+fn has_commit(bare: &str, commit: &str) -> Result<bool> {
     let spec = format!("{commit}^{{commit}}");
-    Command::new("git")
+    let output = Command::new("git")
         .args(["-C", bare, "cat-file", "-e", spec.as_str()])
         .env("GIT_NO_LAZY_FETCH", "1")
         .output()
-        .is_ok_and(|output| output.status.success())
+        .with_context(|| format!("spawning git to look for {commit} in {bare}"))?;
+    Ok(output.status.success())
 }
 
 fn backfill_origin(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     let lib_dir = cache_root.join(dirname);
-    let mut meta = cache::read_meta(&lib_dir);
+    let mut meta = cache::read_meta(&lib_dir)?;
     if meta.origin.is_some() {
         return Ok(Vec::new());
     }
@@ -513,8 +523,15 @@ fn capture_commits(bare: &Path) -> Result<BTreeMap<String, String>> {
         .with_context(|| format!("{} has no library directory", bare.display()))?;
     let admin_root = bare.join("worktrees");
     let mut commits = BTreeMap::new();
-    let Ok(entries) = std::fs::read_dir(&admin_root) else {
-        return Ok(commits);
+    // A library with no checkouts has no administration directory. Any other
+    // failure to list it is not evidence that it holds nothing: the commits it
+    // records are the only ones a rebuild can put a checkout back at.
+    let entries = match std::fs::read_dir(&admin_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(commits),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", admin_root.display()));
+        }
     };
     let mut listed: Option<BTreeMap<String, String>> = None;
     for entry in entries {
@@ -604,8 +621,18 @@ fn journal_path(cache_root: &Path, dirname: &str) -> PathBuf {
     locks::control_dir(cache_root).join(format!("{dirname}{JOURNAL_SUFFIX}"))
 }
 
+/// The checkouts a previous run recorded, or none when no run left a journal.
+/// A journal that exists but cannot be read is an error: an empty one leaves
+/// `heal` with nothing pending, and a journal with nothing pending is deleted.
 fn read_journal(path: &Path) -> Result<Vec<JournalEntry>> {
-    let Ok(raw) = std::fs::read_to_string(path) else {
+    let raw = devkit_common::store::read_strict(path).with_context(|| {
+        format!(
+            "{} exists but cannot be read as a migration record; inspect it, then delete it to \
+             continue",
+            path.display()
+        )
+    })?;
+    let Some(raw) = raw else {
         return Ok(Vec::new());
     };
     let journal: Journal = serde_json::from_str(&raw).with_context(|| {

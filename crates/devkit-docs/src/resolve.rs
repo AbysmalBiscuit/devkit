@@ -105,7 +105,7 @@ pub fn resolve_locked(
     let lib = LibCache::new(cache_root, &entry.name)?;
     let mut warnings = Vec::new();
     let mut source: Option<String> = None;
-    let mut meta = cache::read_meta(&lib.dir);
+    let mut meta = cache::read_meta(&lib.dir)?;
     lib.ensure_clone(repo, &mut meta)?;
     let origin = meta
         .origin

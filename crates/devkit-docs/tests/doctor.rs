@@ -96,6 +96,36 @@ fn a_checkout_whose_head_drifted_from_its_recorded_commit_is_named() {
     );
 }
 
+/// `doctor` is the command run to diagnose a broken cache, so a library whose
+/// sidecar cannot be read is a row in the report rather than the end of it.
+#[test]
+fn a_library_whose_meta_cannot_be_read_is_reported_and_the_sweep_continues() {
+    let (cache, checkout) = materialize("doctor-unreadable-meta", "v1.0.0");
+    let meta = cache.join("up/meta.toml");
+    std::fs::write(&meta, "tag_pattern = \"name-dash-v\"\n").unwrap();
+    std::fs::write(checkout.join("src/lib.rs"), "// local edit").unwrap();
+
+    let summary = devkit_docs::doctor_summary(&cache);
+
+    assert_eq!(summary.libs, 1);
+    assert!(
+        summary
+            .problems
+            .iter()
+            .any(|p| p.contains(&meta.display().to_string())),
+        "the unreadable sidecar must be reported: {:?}",
+        summary.problems
+    );
+    assert!(
+        summary
+            .problems
+            .iter()
+            .any(|p| p.contains("up/v1.0.0") && p.contains("src/lib.rs")),
+        "the sweep must carry on past the unreadable sidecar: {:?}",
+        summary.problems
+    );
+}
+
 #[test]
 fn the_sweep_never_descends_into_a_control_directory() {
     let (cache, _) = materialize("doctor-controls", "v1.0.0");

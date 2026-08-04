@@ -275,7 +275,7 @@ struct LibState {
 
 fn lib_state(root: &Path, name: &str) -> Result<LibState> {
     let lib = cache::LibCache::new(root, name)?;
-    let meta = cache::read_meta(&lib.dir);
+    let meta = cache::read_meta(&lib.dir)?;
     Ok(LibState {
         origin: meta.origin.clone(),
         checkouts: lib
@@ -457,7 +457,7 @@ fn record_default_branch(
         .repo
         .as_deref()
         .with_context(|| format!("lib `{}` has no repo url", entry.name))?;
-    let mut meta = cache::read_meta(&lib.dir);
+    let mut meta = cache::read_meta(&lib.dir)?;
     lib.ensure_clone(repo, &mut meta)?;
     entry.r#ref = Some(lib.default_branch()?);
     manifest::upsert_global(&global, entry, cache_root)?;

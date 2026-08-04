@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::Command;
 
 mod common;
 
@@ -74,7 +75,7 @@ fn a_nested_scoped_cache_migrates_and_its_worktree_still_works() {
 
     // The exact origin, not merely "some origin": a wrong URL here would make
     // the mismatch guard reject the library forever after.
-    let meta = devkit_docs::cache::read_meta(&new);
+    let meta = devkit_docs::cache::read_meta(&new).unwrap();
     assert_eq!(meta.origin.as_deref(), Some(repo.as_str()));
 
     // Idempotent.
@@ -612,6 +613,142 @@ fn a_husk_left_by_an_interrupted_removal_is_rebuilt_rather_than_forgotten() {
         "the journal is cleared only once its checkout is back and resolving"
     );
     assert!(devkit_docs::upgrade::run(&cache).unwrap().is_empty());
+}
+
+/// A journal `read_to_string` rejects is not a journal with nothing in it: an
+/// empty one leaves `heal` with nothing pending, and a spent journal is
+/// deleted. Deleting needs write permission on the directory rather than on
+/// the file, so the delete lands in exactly the case the read failed.
+#[test]
+fn a_journal_that_cannot_be_read_survives_the_heal_pass() {
+    let base = common::unique_tmp("upgrade-unreadable-journal");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let lib = cache.join("@scope~pkg");
+    let head = seed_library(&repo, &lib, &["v1.0.0"]).remove(0);
+    let journal = write_journal(&cache, "@scope~pkg", "v1.0.0", &head);
+    // Bytes no `read_to_string` accepts. Every platform reports this as a read
+    // failure that is not `NotFound`, it survives the suite running as root,
+    // and the file stays an ordinary file — so a fail-soft read still reaches
+    // the delete and the assertion below is about the read, not the delete.
+    std::fs::write(&journal, [0xff, 0xfe, 0x00, 0xff]).unwrap();
+
+    let result = devkit_docs::upgrade::run(&cache);
+
+    assert!(
+        result.is_err(),
+        "a journal that cannot be read must not pass as one with nothing pending"
+    );
+    assert!(
+        journal.is_file(),
+        "the record of which checkouts an interrupted removal left behind was deleted"
+    );
+}
+
+/// `git` failing to spawn is not the repository having lost a commit. Routing
+/// a spawn failure to `abandoned` drops the checkout's record from the journal,
+/// permanently giving up on a checkout git could still have rebuilt.
+#[test]
+fn a_git_that_cannot_spawn_is_not_a_commit_the_repository_lost() {
+    if let Some(cache) = std::env::var_os("DEVKIT_DOCS_TEST_NO_GIT_CACHE") {
+        let cache = PathBuf::from(cache);
+        let journal = cache.join("registry.locks/@scope~pkg.migration.json");
+        assert!(
+            journal.is_file(),
+            "the fixture journal did not survive setup"
+        );
+
+        let result = devkit_docs::upgrade::run(&cache);
+
+        assert!(
+            result.is_err(),
+            "a `git` that cannot be spawned must not read as a commit repo.git no longer has"
+        );
+        assert!(
+            journal.is_file(),
+            "the checkout's commit record was dropped because git could not be spawned"
+        );
+        return;
+    }
+
+    let base = common::unique_tmp("upgrade-no-git");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let lib = cache.join("@scope~pkg");
+    seed_library(&repo, &lib, &[]);
+    let head = devkit_common::cmd::capture(
+        "git",
+        &["rev-parse", "v1.0.0^{commit}"],
+        Some(lib.join("repo.git").to_str().unwrap()),
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    // Nothing on disk names the checkout but the journal, so dropping its
+    // record is unrecoverable rather than merely wasteful.
+    let journal = write_journal(&cache, "@scope~pkg", "v1.0.0", &head);
+    assert!(!lib.join("v1.0.0").exists());
+
+    // A PATH with no `git` on it is the portable way to make the spawn fail:
+    // it needs no permission bits and behaves the same on every platform. It
+    // has to be a child process, because PATH is per-process state and the
+    // rest of the suite runs git concurrently.
+    let no_git = base.join("empty-path");
+    std::fs::create_dir_all(&no_git).unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .env("DEVKIT_DOCS_TEST_NO_GIT_CACHE", &cache)
+        .env("PATH", &no_git)
+        .args([
+            "--exact",
+            "a_git_that_cannot_spawn_is_not_a_commit_the_repository_lost",
+            "--nocapture",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "worker failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        journal.is_file(),
+        "the checkout's commit record was dropped because git could not be spawned"
+    );
+}
+
+/// A worktree administration `read_dir` cannot list is not one with no
+/// checkouts in it. An empty map leaves `heal` with no commit for a checkout
+/// it must rebuild — and a stale journal entry filling that gap rebuilds it at
+/// the wrong commit.
+#[test]
+fn a_worktree_administration_that_cannot_be_listed_is_not_an_empty_one() {
+    let base = common::unique_tmp("upgrade-unreadable-admin");
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let old = cache.join("@scope/pkg");
+    seed_library(&repo, &old, &["v1.0.0"]);
+    // A file where the administration directory belongs: `read_dir` fails on
+    // every platform, including for root, which `chmod 000` does not.
+    let admin_root = old.join("repo.git/worktrees");
+    std::fs::remove_dir_all(&admin_root).unwrap();
+    std::fs::write(&admin_root, "not a directory\n").unwrap();
+
+    let error = devkit_docs::upgrade::run(&cache).unwrap_err();
+
+    let report = format!("{error:#}");
+    assert!(
+        report.contains(&admin_root.display().to_string()),
+        "the error must name the administration it could not read: {report}"
+    );
+    assert!(
+        old.join("repo.git").is_dir(),
+        "a run that cannot read the administration recording every commit must move nothing"
+    );
+    assert!(
+        !cache.join("@scope~pkg").exists(),
+        "the library was migrated on the strength of an administration that could not be read"
+    );
 }
 
 #[test]

@@ -154,8 +154,11 @@ fn meta_round_trips() {
         },
     );
     cache::write_meta(&tmp, &m).unwrap();
-    assert_eq!(cache::read_meta(&tmp), m);
-    assert_eq!(cache::read_meta(&tmp.join("missing")), Meta::default());
+    assert_eq!(cache::read_meta(&tmp).unwrap(), m);
+    assert_eq!(
+        cache::read_meta(&tmp.join("missing")).unwrap(),
+        Meta::default()
+    );
 }
 
 #[test]
@@ -163,9 +166,87 @@ fn meta_without_identity_fields_keeps_backward_compatible_defaults() {
     let tmp = unique_tmp("legacy-meta");
     std::fs::write(tmp.join("meta.toml"), "tag_pattern = \"v\"\n").unwrap();
 
-    let meta = cache::read_meta(&tmp);
+    let meta = cache::read_meta(&tmp).unwrap();
 
     assert_eq!(meta.tag_pattern, Some(TagPattern::V));
     assert_eq!(meta.origin, None);
     assert!(meta.worktrees.is_empty());
+}
+
+/// A `tag_pattern` written by 0.12.x whose variant no longer exists. Reading it
+/// as `Meta::default()` would discard the origin, the layouts and every
+/// checkout's commit record, and the next `write_meta` would then persist that
+/// loss over the file.
+const ZERO_TWELVE_META: &str = "origin = \"https://example.test/up.git\"\n\
+                                tag_pattern = \"name-dash-v\"\n\
+                                \n\
+                                [worktrees.\"v1.0.0\"]\n\
+                                raw_ref = \"v1.0.0\"\n\
+                                resolved_ref = \"refs/tags/v1.0.0\"\n\
+                                commit = \"0123456789012345678901234567890123456789\"\n";
+
+#[test]
+fn a_meta_from_an_older_docm_is_an_error_rather_than_an_empty_one() {
+    let tmp = unique_tmp("meta-unparsable");
+    let path = tmp.join("meta.toml");
+    std::fs::write(&path, ZERO_TWELVE_META).unwrap();
+
+    let error = cache::read_meta(&tmp).expect_err(
+        "a meta.toml that does not parse must not read as a cache with no recorded state",
+    );
+
+    let report = format!("{error:#}");
+    assert!(
+        report.contains(&path.display().to_string()),
+        "the error must name the file to delete: {report}"
+    );
+    assert!(
+        report.contains("delete"),
+        "the error must state the recovery: {report}"
+    );
+}
+
+#[test]
+fn resolve_leaves_a_meta_it_cannot_parse_on_disk() {
+    let tmp = unique_tmp("meta-unparsable-resolve");
+    let repo = fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cacheroot");
+    let project = tmp.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("devkit.toml"), "[defaults]\n").unwrap();
+    let entry = devkit_docs::manifest::LibEntry {
+        name: "mylib".into(),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    // A real cache first, so the resolve below gets past the clone and reaches
+    // the write — a fixture with no bare clone would prove nothing about it.
+    devkit_docs::resolve::resolve(
+        &entry,
+        &project,
+        &cache_root,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
+    let path = cache_root.join("mylib/meta.toml");
+    assert!(path.is_file(), "fixture must produce a meta.toml to shadow");
+    std::fs::write(&path, ZERO_TWELVE_META).unwrap();
+
+    let result = devkit_docs::resolve::resolve(
+        &entry,
+        &project,
+        &cache_root,
+        &devkit_docs::resolve::Options::default(),
+    );
+
+    assert!(
+        result.is_err(),
+        "resolve must refuse a meta.toml it cannot parse instead of rebuilding it from nothing"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        ZERO_TWELVE_META,
+        "resolve overwrote the meta.toml it could not read"
+    );
 }

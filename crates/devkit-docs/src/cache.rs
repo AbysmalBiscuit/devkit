@@ -79,11 +79,23 @@ pub struct Meta {
     pub worktrees: BTreeMap<String, WorktreeMeta>,
 }
 
-pub fn read_meta(lib_dir: &Path) -> Meta {
-    std::fs::read_to_string(lib_dir.join("meta.toml"))
-        .ok()
-        .and_then(|s| toml::from_str(&s).ok())
-        .unwrap_or_default()
+/// The library's sidecar, or the default when it does not exist yet — which is
+/// what a first resolution finds. A file that exists but cannot be read or
+/// parsed is an error instead: `write_meta` replaces this file wholesale, so
+/// reading an unreadable one as "nothing recorded" destroys it. Everything it
+/// holds is reconstructible, which is what the error tells the reader to do.
+pub fn read_meta(lib_dir: &Path) -> Result<Meta> {
+    let path = lib_dir.join("meta.toml");
+    let Some(raw) = devkit_common::store::read_strict(&path)? else {
+        return Ok(Meta::default());
+    };
+    toml::from_str(&raw).with_context(|| {
+        format!(
+            "parsing {}; delete it and run docm again — the origin, layouts, tag pattern and \
+             commit records it holds are all re-derived",
+            path.display()
+        )
+    })
 }
 
 pub fn write_meta(lib_dir: &Path, m: &Meta) -> Result<()> {

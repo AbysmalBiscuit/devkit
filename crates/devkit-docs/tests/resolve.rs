@@ -56,7 +56,7 @@ fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
     assert_eq!(data.rows[0].version, "v1.0.0");
 
     // Cached tag pattern short-circuits the next probe.
-    let meta = devkit_docs::cache::read_meta(&cache_root.join("mylib"));
+    let meta = devkit_docs::cache::read_meta(&cache_root.join("mylib")).unwrap();
     assert_eq!(meta.tag_pattern, Some(devkit_docs::tags::TagPattern::V));
 }
 
@@ -117,7 +117,7 @@ fn layout_override_applies_and_meta_caches_detection() {
     };
     let r = resolve(&entry, &tmp, &cache_root, &Options::default()).unwrap();
     assert_eq!(r.layout.docs_dir.as_deref(), Some("docs/special")); // override wins
-    let meta = devkit_docs::cache::read_meta(&cache_root.join("mylib"));
+    let meta = devkit_docs::cache::read_meta(&cache_root.join("mylib")).unwrap();
     // meta stores the DETECTED layout (docs), not the override.
     assert_eq!(meta.layouts["v1.0.0"].docs_dir.as_deref(), Some("docs"));
 }

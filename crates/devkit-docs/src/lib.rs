@@ -162,7 +162,7 @@ fn pin_default_branch(
         .as_deref()
         .with_context(|| format!("lib `{}` has no repo url", entry.name))?;
     let lib = cache::LibCache::new(cache_root, &entry.name)?;
-    let mut meta = cache::read_meta(&lib.dir);
+    let mut meta = cache::read_meta(&lib.dir)?;
     lib.ensure_clone(repo, &mut meta)?;
     entry.r#ref = Some(lib.default_branch()?);
     Ok(true)
@@ -228,7 +228,17 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
         let name = names::decode(&dirname);
         out.libs += 1;
         let lib = cache::LibCache::from_dir(cache_root, &dirname);
-        let meta = cache::read_meta(&lib.dir);
+        // `doctor` is the command run to diagnose a broken cache, so one
+        // library's unreadable sidecar is a row in the report rather than the
+        // end of it. Without the recorded commits, the checkouts below are
+        // still swept for local modifications.
+        let meta = match cache::read_meta(&lib.dir) {
+            Ok(meta) => meta,
+            Err(error) => {
+                out.problems.push(format!("{dirname}: {error:#}"));
+                cache::Meta::default()
+            }
+        };
         for (wt, path) in lib.version_worktrees() {
             if !referenced.contains(&(name.clone(), wt.clone())) {
                 out.unreferenced += 1;
