@@ -772,8 +772,11 @@ fn npm_candidates(packages: &JsonMap<String, JsonValue>, package: &str) -> Resul
                 .with_context(|| format!("{location} must be an object"))?;
             // A `link` entry points at a workspace directory and records no
             // version of its own, so it contributes no candidate; the row it
-            // points at is rejected by name when it is the selected one.
-            if object.get("link").and_then(JsonValue::as_bool) != Some(true) {
+            // points at is rejected by name when it is the selected one. A slot
+            // holding an aliased package carries that package's release number,
+            // which is no version of the queried package to suggest.
+            let aliased = npm_row_identity(object, key)?.is_some_and(|name| name != package);
+            if object.get("link").and_then(JsonValue::as_bool) != Some(true) && !aliased {
                 let version = object
                     .get("version")
                     .and_then(JsonValue::as_str)
@@ -808,6 +811,37 @@ fn assert_npm_registry_row(row: &JsonMap<String, JsonValue>, key: &str) -> Resul
 
 fn is_web_url(value: &str) -> bool {
     value.starts_with("https://") || value.starts_with("http://")
+}
+
+/// npm names an install slot after the dependency key, not after the package
+/// installed into it, so an `npm:` alias fills `node_modules/<key>` with a
+/// different package and records that package's own release number. Mapping
+/// that number onto the queried package's git tags would serve an unrelated
+/// repository's tree, so a row carrying another package's `name` is refused.
+/// An ordinary registry install records no `name` at all, and one that records
+/// its own is equally ordinary; only a mismatch is a different package.
+fn npm_row_identity<'a>(row: &'a JsonMap<String, JsonValue>, key: &str) -> Result<Option<&'a str>> {
+    match row.get("name") {
+        Some(value) => {
+            Ok(Some(value.as_str().with_context(|| {
+                format!("packages.{key}.name must be a string")
+            })?))
+        }
+        None => Ok(None),
+    }
+}
+
+fn assert_npm_row_is_package(
+    row: &JsonMap<String, JsonValue>,
+    key: &str,
+    package: &str,
+) -> Result<()> {
+    if let Some(name) = npm_row_identity(row, key)?
+        && name != package
+    {
+        bail!("npm package `{key}` installs `{name}`, not `{package}`; pin it with --ref");
+    }
+    Ok(())
 }
 
 /// A remote-tarball install writes an ordinary https `resolved` — for a tarball
@@ -872,6 +906,7 @@ fn npm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Resu
                 .as_object()
                 .with_context(|| format!("packages.{probe} must be an object"))?;
             assert_npm_registry_row(row, &probe)?;
+            assert_npm_row_is_package(row, &probe, package)?;
             let version = row
                 .get("version")
                 .and_then(JsonValue::as_str)

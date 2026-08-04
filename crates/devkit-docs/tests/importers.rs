@@ -1125,8 +1125,8 @@ fn npm_rejects_a_remote_tarball_declaration_for_the_selected_package() {
         assert!(error.contains("--ref"), "{error}");
     }
 
-    // A semver range and an alias are both registry installs and must keep
-    // resolving; the alias spec carries its own `@` and target name.
+    // A semver range and an `npm:` spec naming the same package are both
+    // registry installs and must keep resolving.
     write_npm_app_declaring(
         &root,
         "h3",
@@ -1142,14 +1142,105 @@ fn npm_rejects_a_remote_tarball_declaration_for_the_selected_package() {
 
     write_npm_app_declaring(
         &root,
-        "h3-fork",
+        "h3",
         "npm:h3@^1.15.11",
         r#"{"name":"h3","version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
     );
     assert_eq!(
-        importers::select(&root, Ecosystem::Js, "h3-fork")
+        importers::select(&root, Ecosystem::Js, "h3")
             .unwrap()
             .version,
         "1.15.11"
+    );
+}
+
+/// An npm alias fills the install slot named by the dependency key with a
+/// different package, and the version in that row is the *target's* release
+/// number. Mapping it onto the queried package's git tags serves an unrelated
+/// repository's tree under a plausible version, so a row naming another
+/// package is refused.
+#[test]
+fn npm_rejects_an_install_slot_holding_another_package() {
+    let root = common::unique_tmp("npm-alias-identity");
+
+    // A project depending on a fork through the upstream name.
+    write_npm_app_declaring(
+        &root,
+        "h3",
+        "npm:h3-fork@^1.0.0",
+        r#"{"name":"h3-fork","version":"1.4.0","resolved":"https://registry.npmjs.org/h3-fork/-/h3-fork-1.4.0.tgz","integrity":"sha512-x"}"#,
+    );
+    let error = importers::select(&root, Ecosystem::Js, "h3")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("h3-fork"), "{error}");
+    assert!(error.contains("node_modules/h3"), "{error}");
+    assert!(error.contains("--ref"), "{error}");
+
+    // The same shape the other way round: a fork name serving upstream.
+    write_npm_app_declaring(
+        &root,
+        "h3-fork",
+        "npm:h3@^1.15.11",
+        r#"{"name":"h3","version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
+    );
+    let error = importers::select(&root, Ecosystem::Js, "h3-fork")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("node_modules/h3-fork"), "{error}");
+    assert!(error.contains("--ref"), "{error}");
+
+    // An alias whose target is a tarball: the `npm:` prefix keeps the spec out
+    // of the tarball check, and the row's `resolved` is an ordinary https URL.
+    write_npm_app_declaring(
+        &root,
+        "h3-fork",
+        "npm:h3@https://example.com/h3.tgz",
+        r#"{"name":"h3","version":"1.15.11","resolved":"https://example.com/h3.tgz","integrity":"sha512-x"}"#,
+    );
+    let error = importers::select(&root, Ecosystem::Js, "h3-fork")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("node_modules/h3-fork"), "{error}");
+    assert!(error.contains("--ref"), "{error}");
+
+    // An alias under a different key does not fill the queried slot at all.
+    write_npm_app_declaring(
+        &root,
+        "h3-alias",
+        "npm:h3@^1.15.11",
+        r#"{"name":"h3","version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
+    );
+    let error = importers::select(&root, Ecosystem::Js, "h3")
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains("1.15.11"), "{error}");
+
+    // An ordinary registry install records no `name`, and one that records a
+    // matching `name` is equally ordinary: neither may be refused.
+    write_npm_app_declaring(
+        &root,
+        "h3",
+        "^1.15.11",
+        r#"{"version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
+    );
+    assert_eq!(
+        importers::select(&root, Ecosystem::Js, "h3")
+            .unwrap()
+            .version,
+        "1.15.11"
+    );
+
+    write_npm_app_declaring(
+        &root,
+        "@scope/pkg",
+        "^2.0.0",
+        r#"{"name":"@scope/pkg","version":"2.0.1","resolved":"https://registry.npmjs.org/@scope/pkg/-/pkg-2.0.1.tgz","integrity":"sha512-x"}"#,
+    );
+    assert_eq!(
+        importers::select(&root, Ecosystem::Js, "@scope/pkg")
+            .unwrap()
+            .version,
+        "2.0.1"
     );
 }

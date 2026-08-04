@@ -189,6 +189,20 @@ impl Env {
         .unwrap();
     }
 
+    /// An npm workspace whose lockfile pins `package` in the `node_modules`
+    /// slot of the same name, carrying `row` as that slot's entry.
+    fn write_npm_project(&self, package: &str, spec: &str, row: &str) {
+        let manifest = format!(r#"{{"name":"app","dependencies":{{"{package}":"{spec}"}}}}"#);
+        std::fs::write(self.project.join("package.json"), &manifest).unwrap();
+        std::fs::write(
+            self.project.join("package-lock.json"),
+            format!(
+                r#"{{"lockfileVersion":3,"packages":{{"":{manifest},"node_modules/{package}":{row}}}}}"#
+            ),
+        )
+        .unwrap();
+    }
+
     /// A migration record naming a checkout at a commit the bare clone does
     /// not have — what an interrupted rebuild leaves behind once a fetch with
     /// `--prune-tags` has dropped the tag the checkout was pinned to.
@@ -745,5 +759,54 @@ fn a_lockfile_resolution_reports_its_provenance_on_stdout_only() {
         stdout(&info).contains("source   the root workspace installs it (Cargo.lock)"),
         "{}",
         stdout(&info)
+    );
+}
+
+/// An npm alias fills `node_modules/<key>` with a different package, so the
+/// version recorded there is the alias target's release number. Serving that
+/// number as the queried library's version answers with an unrelated
+/// repository's tree; the CLI refuses instead, naming the package actually
+/// installed and the pin that overrides it.
+#[test]
+fn an_npm_alias_is_refused_rather_than_resolved_to_the_wrong_repo() {
+    let env = Env::new("npm-alias");
+    env.write_npm_project(
+        "up",
+        "npm:up-fork@^1.0.0",
+        r#"{"name":"up-fork","version":"1.0.0","resolved":"https://registry.npmjs.org/up-fork/-/up-fork-1.0.0.tgz","integrity":"sha512-x"}"#,
+    );
+
+    let aliased = env.docm(&["add", "up", "--eco", "js", "--repo", &env.upstream]);
+
+    assert!(
+        !aliased.status.success(),
+        "an alias resolved instead of failing:\n{}",
+        stdout(&aliased)
+    );
+    let error = stderr(&aliased);
+    assert!(error.contains("up-fork"), "{error}");
+    assert!(error.contains("node_modules/up"), "{error}");
+    assert!(error.contains("--ref"), "{error}");
+    assert!(
+        !stdout(&aliased).contains("1.0.0"),
+        "a refused alias still reported a version:\n{}",
+        stdout(&aliased)
+    );
+
+    env.write_npm_project(
+        "up",
+        "^1.0.0",
+        r#"{"version":"1.0.0","resolved":"https://registry.npmjs.org/up/-/up-1.0.0.tgz","integrity":"sha512-x"}"#,
+    );
+
+    let plain = env.docm(&["add", "up", "--eco", "js", "--repo", &env.upstream]);
+
+    assert_ran(&plain, "docm add up");
+    assert!(
+        stdout(&plain).contains(
+            "source    the root workspace installs it (node_modules/up; package-lock.json)"
+        ),
+        "{}",
+        stdout(&plain)
     );
 }
