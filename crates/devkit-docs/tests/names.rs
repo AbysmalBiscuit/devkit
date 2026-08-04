@@ -20,6 +20,27 @@ fn lib_names_reject_tilde_so_encoding_is_injective() {
     assert_eq!(names::lib_dir("a/b").unwrap(), "a~b");
 }
 
+/// A wrapped message is one logical line: the continuation is a `\` the
+/// compiler consumes, so nothing about the wrapping reaches the reader.
+#[test]
+fn a_rejection_message_reaches_the_reader_unwrapped() {
+    for name in ["a~b", "registry"] {
+        let message = names::validate_lib(name).unwrap_err().to_string();
+        assert!(
+            !message.contains('\\'),
+            "`{name}`'s rejection renders a literal backslash: {message}"
+        );
+        assert!(
+            !message.contains('\n'),
+            "`{name}`'s rejection renders on more than one line: {message}"
+        );
+        assert!(
+            !message.contains("  "),
+            "`{name}`'s rejection renders a run of source indentation: {message}"
+        );
+    }
+}
+
 #[test]
 fn lib_names_reject_the_registry_stem_however_it_is_cased() {
     for name in [

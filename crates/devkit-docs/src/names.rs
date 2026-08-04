@@ -33,7 +33,7 @@ pub fn validate_lib(name: &str) -> Result<()> {
     }
     if name.contains('~') {
         bail!(
-            "library name `{name}` contains `~`, which docm uses to encode `/` in cache paths; \\
+            "library name `{name}` contains `~`, which docm uses to encode `/` in cache paths; \
              pass --package to register it under a different name"
         );
     }
@@ -41,7 +41,7 @@ pub fn validate_lib(name: &str) -> Result<()> {
     let folded = fold_key(name);
     if folded == "registry" || folded.starts_with("registry.") {
         bail!(
-            "library name `{name}` is reserved: the docs cache keeps its reference registry \\
+            "library name `{name}` is reserved: the docs cache keeps its reference registry \
              at <cache>/registry.* and a library directory there would shadow it"
         );
     }

@@ -125,7 +125,7 @@ fn assert_dir_exact(parent: &Path, name: &str) -> Result<()> {
         .filter(|entry| crate::names::fold_key(entry) == crate::names::fold_key(name))
         .collect();
     bail!(
-        "this filesystem folds `{name}` onto {existing:?}; docm cannot keep them apart — \\
+        "this filesystem folds `{name}` onto {existing:?}; docm cannot keep them apart — \
          rename the library or pin a ref whose name does not collide"
     );
 }
