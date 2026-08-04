@@ -747,6 +747,52 @@ fn prune_reports_an_unmanageable_directory_and_keeps_going() {
     );
 }
 
+/// `names::representable` allows a directory name up to 255 bytes, but
+/// `locks::lock_path_for_dir` appends `.lock` and then re-applies the same
+/// 255-byte ceiling, so a name from 251 to 255 bytes passes name validation
+/// yet still cannot be locked. `scan_cache` has to reject on the full
+/// `with_lib_dir` precondition (`locks::lock_path`), not just `names::lib_dir`,
+/// or this directory reaches `scan.libs` and aborts the whole prune the same
+/// way an outright-invalid name does.
+#[test]
+fn prune_reports_a_directory_too_long_for_its_lock_file_and_keeps_going() {
+    let root = unique_tmp("toolong");
+    let cache_root = root.join("cache");
+    let project = root.join("project");
+    let global = root.join("docs.toml");
+    let too_long = "a".repeat(255);
+    std::fs::create_dir_all(cache_root.join(&too_long).join("repo.git")).unwrap();
+    std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+
+    let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
+
+    assert!(
+        pruned.removable_libs.contains(&"up".to_string()),
+        "the too-long directory stopped the normal library from being processed: {:?}",
+        pruned.removable_libs
+    );
+    let skipped_entry = pruned
+        .skipped
+        .iter()
+        .find(|s| s.entry == too_long)
+        .unwrap_or_else(|| {
+            panic!(
+                "too-long name not reported as skipped: {:?}",
+                pruned.skipped
+            )
+        });
+    let expected_path = cache_root.join(&too_long);
+    assert!(
+        skipped_entry
+            .reason
+            .contains(&expected_path.display().to_string()),
+        "reason does not mention the absolute path {}: {}",
+        expected_path.display(),
+        skipped_entry.reason
+    );
+}
+
 #[test]
 fn prune_drops_a_row_whose_project_directory_is_gone() {
     let root = unique_tmp("dead-holder");

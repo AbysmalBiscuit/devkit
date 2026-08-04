@@ -208,7 +208,7 @@ pub fn scan_cache(cache_root: &Path) -> Result<CacheScan> {
             });
             continue;
         }
-        match crate::names::lib_dir(&crate::names::decode(&dirname)) {
+        match crate::locks::lock_path(cache_root, &crate::names::decode(&dirname)) {
             Ok(_) => scan.libs.push(dirname),
             Err(err) => scan.skipped.push(Skipped {
                 entry: dirname,

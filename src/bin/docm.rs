@@ -537,8 +537,8 @@ fn cmd_prune(yes: bool) -> Result<()> {
     for removed in &pruned.removed {
         println!("removed {removed}");
     }
-    for entry in &pruned.skipped {
-        println!("skipped {}: {}", entry.entry, entry.reason);
+    for skipped in &pruned.skipped {
+        println!("skipped {}: {}", skipped.entry, skipped.reason);
     }
     if !pruned.removable_libs.is_empty() {
         println!(
