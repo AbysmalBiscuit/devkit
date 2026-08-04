@@ -450,7 +450,7 @@ fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
     .unwrap();
     std::fs::write(
         project.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"locked\"]\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\n",
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"locked\"]\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
     )
     .unwrap();
 
@@ -945,7 +945,7 @@ fn prune_keeps_checkout_when_a_lockfile_fails_to_parse() {
     .unwrap();
     std::fs::write(
         project.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"locked\"]\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\n",
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"locked\"]\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
     )
     .unwrap();
 
@@ -1019,7 +1019,7 @@ fn prune_reclaims_a_checkout_once_the_valid_lockfile_drops_the_package() {
     .unwrap();
     std::fs::write(
         project.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"locked\"]\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\n",
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"locked\"]\n\n[[package]]\nname = \"locked\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
     )
     .unwrap();
 

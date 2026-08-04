@@ -421,6 +421,7 @@ source = { registry = "https://example.invalid/simple" }
 [[package]]
 name = "httpx"
 version = "0.28.1"
+source = { registry = "https://pypi.org/simple" }
 "#,
     )
     .unwrap();
@@ -458,14 +459,17 @@ lint = [{ name = "ruff" }]
 [[package]]
 name = "pytest"
 version = "8.3.2"
+source = { registry = "https://pypi.org/simple" }
 
 [[package]]
 name = "uvloop"
 version = "0.21.0"
+source = { registry = "https://pypi.org/simple" }
 
 [[package]]
 name = "ruff"
 version = "0.9.1"
+source = { registry = "https://pypi.org/simple" }
 "#,
     )
     .unwrap();
@@ -504,10 +508,12 @@ dependencies = [{ name = "rich" }]
 [[package]]
 name = "httpx"
 version = "0.28.1"
+source = { registry = "https://pypi.org/simple" }
 
 [[package]]
 name = "rich"
 version = "13.9.4"
+source = { registry = "https://pypi.org/simple" }
 "#,
     )
     .unwrap();
@@ -544,10 +550,12 @@ dependencies = [{ name = "rich" }]
 [[package]]
 name = "httpx"
 version = "0.28.1"
+source = { registry = "https://pypi.org/simple" }
 
 [[package]]
 name = "rich"
 version = "13.9.4"
+source = { registry = "https://pypi.org/simple" }
 "#,
     )
     .unwrap();
@@ -581,6 +589,7 @@ version = "0.1.0"
 [[package]]
 name = "serde"
 version = "1.0.210"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 "#,
     )
     .unwrap();
@@ -636,10 +645,12 @@ dependencies = ["serde 0.9.15"]
 [[package]]
 name = "serde"
 version = "1.0.210"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "serde"
 version = "0.9.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 "#,
     )
     .unwrap();
@@ -668,10 +679,12 @@ dependencies = ["serde 0.9.15"]
 [[package]]
 name = "serde"
 version = "1.0.210"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "serde"
 version = "0.9.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 "#,
     )
     .unwrap();
@@ -691,8 +704,8 @@ fn npm_resolves_the_nearest_nested_copy_walking_up_from_the_workspace() {
   "packages": {
     "": { "name": "root" },
     "apps/api": { "name": "@app/api", "dependencies": { "h3": "^1.0.0" } },
-    "apps/api/node_modules/h3": { "version": "1.15.11" },
-    "node_modules/h3": { "version": "2.0.1" }
+    "apps/api/node_modules/h3": { "version": "1.15.11", "resolved": "https://registry.npmjs.org/h3/-/h3-1.15.11.tgz" },
+    "node_modules/h3": { "version": "2.0.1", "resolved": "https://registry.npmjs.org/h3/-/h3-2.0.1.tgz" }
   }
 }"#,
     )
@@ -833,7 +846,7 @@ fn every_direct_dependency_class_resolves_in_its_js_format() {
     let npm = common::unique_tmp("js-classes-npm");
     std::fs::write(
         npm.join("package-lock.json"),
-        r#"{"lockfileVersion":3,"packages":{"":{"name":"root","devDependencies":{"vitest":"^3"},"optionalDependencies":{"fsevents":"^2"},"peerDependencies":{"react":"^19"}},"node_modules/vitest":{"version":"3.2.4"},"node_modules/fsevents":{"version":"2.3.3"},"node_modules/react":{"version":"19.1.0"}}}"#,
+        r#"{"lockfileVersion":3,"packages":{"":{"name":"root","devDependencies":{"vitest":"^3"},"optionalDependencies":{"fsevents":"^2"},"peerDependencies":{"react":"^19"}},"node_modules/vitest":{"version":"3.2.4","resolved":"https://registry.npmjs.org/vitest/-/vitest-3.2.4.tgz"},"node_modules/fsevents":{"version":"2.3.3","resolved":"https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz"},"node_modules/react":{"version":"19.1.0","resolved":"https://registry.npmjs.org/react/-/react-19.1.0.tgz"}}}"#,
     )
     .unwrap();
     write_package_json(
@@ -852,4 +865,229 @@ fn every_direct_dependency_class_resolves_in_its_js_format() {
             version
         );
     }
+}
+
+const CARGO_REGISTRY: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
+fn write_cargo_app(root: &std::path::Path, lock_packages: &str) {
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmylib = \"1\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("Cargo.lock"),
+        format!(
+            "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\
+             dependencies = [\"mylib\"]\n{lock_packages}"
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn cargo_rejects_a_non_registry_source_for_the_selected_package() {
+    let root = common::unique_tmp("cargo-non-registry");
+
+    write_cargo_app(
+        &root,
+        &format!(
+            "\n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{CARGO_REGISTRY}\"\n"
+        ),
+    );
+    assert_eq!(
+        importers::select(&root, Ecosystem::Rust, "mylib")
+            .unwrap()
+            .version,
+        "1.2.3"
+    );
+
+    let git = "git+https://github.com/me/mylib?branch=x#abc123";
+    write_cargo_app(
+        &root,
+        &format!("\n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{git}\"\n"),
+    );
+    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("non-registry"), "{error}");
+    assert!(error.contains(git), "{error}");
+    assert!(error.contains("--ref"), "{error}");
+}
+
+#[test]
+fn cargo_rejects_a_path_dependency_for_the_selected_package() {
+    let root = common::unique_tmp("cargo-path-dep");
+    write_cargo_app(
+        &root,
+        "\n[[package]]\nname = \"mylib\"\nversion = \"0.3.0\"\n",
+    );
+
+    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("mylib"), "{error}");
+    assert!(error.contains("0.3.0"), "{error}");
+    assert!(error.contains("no registry source"), "{error}");
+    assert!(error.contains("--ref"), "{error}");
+}
+
+#[test]
+fn a_cargo_registry_and_git_pair_is_named_by_source_not_by_fork() {
+    let root = common::unique_tmp("cargo-registry-vs-git");
+    let git = "git+https://github.com/me/mylib#abc123";
+
+    // Same version: the version keys collapse to one, so the resolution-fork
+    // error cannot fire and the git row must be what the user is told about.
+    write_cargo_app(
+        &root,
+        &format!(
+            "\n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{CARGO_REGISTRY}\"\n\
+             \n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{git}\"\n"
+        ),
+    );
+    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("non-registry"), "{error}");
+    assert!(error.contains(git), "{error}");
+    assert!(!error.contains("fork"), "{error}");
+
+    // Different versions with an unpinned edge: the fork error already names
+    // both versions and the escape hatch, which is actionable as it stands.
+    write_cargo_app(
+        &root,
+        &format!(
+            "\n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{CARGO_REGISTRY}\"\n\
+             \n[[package]]\nname = \"mylib\"\nversion = \"2.0.0\"\nsource = \"{git}\"\n"
+        ),
+    );
+    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("fork"), "{error}");
+    assert!(error.contains("1.2.3"), "{error}");
+    assert!(error.contains("2.0.0"), "{error}");
+    assert!(error.contains("--ref"), "{error}");
+
+    // Different versions with the edge pinning the git row: the pin resolves,
+    // so the source check is what has to stop it.
+    std::fs::write(
+        root.join("Cargo.lock"),
+        format!(
+            "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\
+             dependencies = [\"mylib 2.0.0\"]\n\
+             \n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{CARGO_REGISTRY}\"\n\
+             \n[[package]]\nname = \"mylib\"\nversion = \"2.0.0\"\nsource = \"{git}\"\n"
+        ),
+    )
+    .unwrap();
+    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("non-registry"), "{error}");
+    assert!(error.contains(git), "{error}");
+    assert!(error.contains("2.0.0"), "{error}");
+}
+
+fn write_uv_app(root: &std::path::Path, httpx_source: &str) {
+    std::fs::write(
+        root.join("pyproject.toml"),
+        "[project]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"httpx\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("uv.lock"),
+        format!(
+            "version = 1\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\
+             source = {{ editable = \".\" }}\ndependencies = [{{ name = \"httpx\" }}]\n\
+             \n[[package]]\nname = \"httpx\"\nversion = \"0.28.1\"\n{httpx_source}"
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn uv_rejects_a_non_registry_source_for_the_selected_package() {
+    let root = common::unique_tmp("uv-non-registry");
+
+    write_uv_app(
+        &root,
+        "source = { registry = \"https://pypi.org/simple\" }\n",
+    );
+    assert_eq!(
+        importers::select(&root, Ecosystem::Python, "httpx")
+            .unwrap()
+            .version,
+        "0.28.1"
+    );
+
+    for locator in [
+        "git = \"https://github.com/me/httpx?rev=abc123\"",
+        "directory = \"vendor/httpx\"",
+        "url = \"https://example.invalid/httpx.tar.gz\"",
+    ] {
+        write_uv_app(&root, &format!("source = {{ {locator} }}\n"));
+        let error = importers::select(&root, Ecosystem::Python, "httpx")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("non-registry"), "{error}");
+        assert!(error.contains(locator), "{error}");
+        assert!(error.contains("--ref"), "{error}");
+    }
+}
+
+fn write_npm_app(root: &std::path::Path, h3_row: &str) {
+    write_package_json(root, r#"{"name":"root","dependencies":{"h3":"^1"}}"#);
+    std::fs::write(
+        root.join("package-lock.json"),
+        format!(
+            r#"{{"lockfileVersion":3,"packages":{{"":{{"name":"root","dependencies":{{"h3":"^1"}}}},"node_modules/h3":{h3_row}}}}}"#
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn npm_rejects_a_non_registry_resolution_for_the_selected_package() {
+    let root = common::unique_tmp("npm-non-registry");
+
+    write_npm_app(
+        &root,
+        r#"{"version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
+    );
+    assert_eq!(
+        importers::select(&root, Ecosystem::Js, "h3")
+            .unwrap()
+            .version,
+        "1.15.11"
+    );
+
+    for (row, locator) in [
+        (
+            r#"{"version":"1.15.11","resolved":"git+https://github.com/me/h3.git#abc123"}"#,
+            "git+https://github.com/me/h3.git#abc123",
+        ),
+        (
+            r#"{"version":"1.15.11","resolved":"file:../h3"}"#,
+            "file:../h3",
+        ),
+        (r#"{"resolved":"packages/h3","link":true}"#, "packages/h3"),
+    ] {
+        write_npm_app(&root, row);
+        let error = importers::select(&root, Ecosystem::Js, "h3")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("non-registry"), "{error}");
+        assert!(error.contains(locator), "{error}");
+        assert!(error.contains("--ref"), "{error}");
+    }
+
+    write_npm_app(&root, r#"{"version":"1.15.11"}"#);
+    let error = importers::select(&root, Ecosystem::Js, "h3")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no registry resolution"), "{error}");
+    assert!(error.contains("node_modules/h3"), "{error}");
+    assert!(error.contains("--ref"), "{error}");
 }

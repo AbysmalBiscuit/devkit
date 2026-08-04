@@ -748,19 +748,43 @@ fn npm_candidates(packages: &JsonMap<String, JsonValue>, package: &str) -> Resul
     for (key, row) in packages {
         let location = format!("packages.{key}");
         if key == &suffix || key.ends_with(&format!("/{suffix}")) {
-            let version = row
+            let object = row
                 .as_object()
-                .with_context(|| format!("{location} must be an object"))?
-                .get("version")
-                .and_then(JsonValue::as_str)
-                .with_context(|| format!("{location}.version must be a string"))?;
-            candidates.add_version(version, &location);
+                .with_context(|| format!("{location} must be an object"))?;
+            // A `link` entry points at a workspace directory and records no
+            // version of its own, so it contributes no candidate; the row it
+            // points at is rejected by name when it is the selected one.
+            if object.get("link").and_then(JsonValue::as_bool) != Some(true) {
+                let version = object
+                    .get("version")
+                    .and_then(JsonValue::as_str)
+                    .with_context(|| format!("{location}.version must be a string"))?;
+                candidates.add_version(version, &location);
+            }
         }
         if json_declares(row, &NPM_DEP_CLASSES, package, &location)? {
             candidates.add_declarer(display_key(key));
         }
     }
     Ok(candidates)
+}
+
+/// A version number identifies upstream's code only when the row that carries
+/// it was installed from the registry the docs repository publishes to. A git,
+/// path, link or archive install can carry any version number over an
+/// unrelated tree, so it is refused rather than mapped to an upstream tag.
+fn assert_npm_registry_row(row: &JsonMap<String, JsonValue>, key: &str) -> Result<()> {
+    let resolved = match row.get("resolved") {
+        Some(value) => value
+            .as_str()
+            .with_context(|| format!("packages.{key}.resolved must be a string"))?,
+        None => bail!("npm package `{key}` has no registry resolution; pin it with --ref"),
+    };
+    let linked = row.get("link").and_then(JsonValue::as_bool) == Some(true);
+    if linked || !(resolved.starts_with("https://") || resolved.starts_with("http://")) {
+        bail!("npm package `{key}` uses non-registry resolution `{resolved}`; pin it with --ref");
+    }
+    Ok(())
 }
 
 fn npm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Result<Selection> {
@@ -800,9 +824,11 @@ fn npm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Resu
             format!("{directory}/node_modules/{package}")
         };
         if let Some(row) = packages.get(&probe) {
-            let version = row
+            let row = row
                 .as_object()
-                .with_context(|| format!("packages.{probe} must be an object"))?
+                .with_context(|| format!("packages.{probe} must be an object"))?;
+            assert_npm_registry_row(row, &probe)?;
+            let version = row
                 .get("version")
                 .and_then(JsonValue::as_str)
                 .with_context(|| format!("packages.{probe}.version must be a string"))?;
@@ -1102,6 +1128,67 @@ fn package_candidates(
     Ok(candidates)
 }
 
+/// Cargo source prefixes that name a package registry. `registry+` is the git
+/// index form and `sparse+` the HTTP index form; every other prefix, and a
+/// missing source, is a git, path or workspace install.
+const CARGO_REGISTRY_PREFIXES: [&str; 2] = ["registry+", "sparse+"];
+
+/// A version number identifies upstream's code only when the row that carries
+/// it was installed from the registry the docs repository publishes to. A git,
+/// path or URL install can carry any version number over an unrelated tree, so
+/// it is refused rather than mapped to an upstream tag.
+///
+/// This runs on the rows that supply the already-selected version, so a
+/// non-registry row is never quietly dropped from candidate collection — the
+/// refusal names the locator instead of surfacing as a missing version.
+fn assert_registry_source(
+    packages: &[LockPackage],
+    format: PackageFormat,
+    package: &str,
+    version: &str,
+) -> Result<()> {
+    let supplying = packages
+        .iter()
+        .filter(|row| row.name == package && row.version.as_deref() == Some(version));
+    for row in supplying {
+        match (format, &row.source) {
+            (PackageFormat::Cargo, Some(source)) => {
+                let source = source.as_str().with_context(|| {
+                    format!("Cargo package `{package}` has a non-string source")
+                })?;
+                if !CARGO_REGISTRY_PREFIXES
+                    .iter()
+                    .any(|prefix| source.starts_with(prefix))
+                {
+                    bail!(
+                        "Cargo package `{package}` {version} uses non-registry source `{source}`; \
+                         pin it with --ref"
+                    );
+                }
+            }
+            (PackageFormat::Cargo, None) => bail!(
+                "Cargo package `{package}` {version} has no registry source (it is a path or \
+                 workspace dependency); pin it with --ref"
+            ),
+            (PackageFormat::Uv, Some(source)) => {
+                let table = source
+                    .as_table()
+                    .with_context(|| format!("uv package `{package}` source must be a table"))?;
+                if !table.contains_key("registry") {
+                    bail!(
+                        "uv package `{package}` {version} uses non-registry source `{source}`; \
+                         pin it with --ref"
+                    );
+                }
+            }
+            (PackageFormat::Uv, None) => {
+                bail!("uv package `{package}` {version} has no registry source; pin it with --ref")
+            }
+        }
+    }
+    Ok(())
+}
+
 fn from_package_array(
     lock: &Path,
     lock_dir: &Path,
@@ -1172,6 +1259,7 @@ fn from_package_array(
             ),
         }
     };
+    assert_registry_source(&parsed.packages, format, package, &version)?;
     let relative = rel_key(lock_dir, workspace)?;
     let detail = lock
         .file_name()

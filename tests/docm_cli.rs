@@ -182,7 +182,8 @@ impl Env {
             format!(
                 "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n\
                  dependencies = [\"{package}\"]\n\n\
-                 [[package]]\nname = \"{package}\"\nversion = \"{version}\"\n"
+                 [[package]]\nname = \"{package}\"\nversion = \"{version}\"\n\
+                 source = \"registry+https://github.com/rust-lang/crates.io-index\"\n"
             ),
         )
         .unwrap();

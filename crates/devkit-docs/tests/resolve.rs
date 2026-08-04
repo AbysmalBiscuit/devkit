@@ -19,7 +19,7 @@ fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
     .unwrap();
     std::fs::write(
         project.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"mylib\"]\n\n[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\n",
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"mylib\"]\n\n[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
     )
     .unwrap();
 
@@ -177,7 +177,7 @@ fn lockfile_resolved_from_subdir_records_selected_workspace() {
     .unwrap();
     std::fs::write(
         project.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"mylib\"]\n\n[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\n",
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"mylib\"]\n\n[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
     )
     .unwrap();
 
@@ -648,7 +648,7 @@ fn a_version_with_no_tag_is_a_hard_error_listing_what_was_tried() {
     // proving nothing about the missing tag it exists to check.
     std::fs::write(
         base.join("Cargo.lock"),
-        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\n \"up\",\n]\n\n[[package]]\nname = \"up\"\nversion = \"9.9.9\"\n",
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\n \"up\",\n]\n\n[[package]]\nname = \"up\"\nversion = \"9.9.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
     )
     .unwrap();
     std::fs::write(
