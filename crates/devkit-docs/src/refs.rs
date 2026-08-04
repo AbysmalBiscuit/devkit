@@ -262,30 +262,6 @@ pub fn current_version(entry: &manifest::LibEntry, project: &Path) -> Option<Str
     lockfiles::highest(versions)
 }
 
-/// Build a prune plan for a whole cache root, re-discovering each referenced
-/// project's own manifest so a lib registered only in another project's
-/// `[docs]` overlay is never treated as unreferenced. `manifest_libs` is the
-/// invoking CWD's lib set (used only for whole-lib removability). `global` is
-/// the global-manifest path override (None = the default `~/.config/devkit/docs.toml`).
-pub fn plan_for_cache(
-    cache_root: &Path,
-    snapshot: &Data,
-    manifest_libs: &BTreeSet<String>,
-    global: Option<&Path>,
-) -> anyhow::Result<PrunePlan> {
-    let scan = scan_cache(cache_root)?;
-    let mut worktrees: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for dirname in &scan.libs {
-        worktrees.insert(
-            crate::names::decode(dirname),
-            checkouts(cache_root, dirname),
-        );
-    }
-    Ok(plan(snapshot, &worktrees, manifest_libs, |project, lib| {
-        live_reference(snapshot, project, lib, global)
-    }))
-}
-
 fn checkouts(cache_root: &Path, dirname: &str) -> Vec<String> {
     cache::LibCache::from_dir(cache_root, dirname)
         .version_worktrees()

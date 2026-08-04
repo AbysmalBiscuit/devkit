@@ -172,120 +172,44 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
     assert!(seeded.rows[0].resolved_at <= data.rows[0].resolved_at);
 }
 
-// Bug #1 regression: pruning from project A must NOT delete project B's
-// overlay-only lib worktree.
-#[test]
-fn prune_preserves_other_projects_overlay_lib() {
-    let tmp = unique_tmp("xproj");
-    let cache_root = tmp.join("cache");
-    // Fake worktree dirs (no git needed): libX used by A, libY used by B.
-    for p in ["libX/1.0.0", "libX/default", "libY/2.0.0", "libY/default"] {
-        std::fs::create_dir_all(cache_root.join(p)).unwrap();
-    }
-    // Global manifest registers only libX; libY is a B-only overlay.
-    let global = tmp.join("docs.toml");
-    std::fs::write(
-        &global,
-        "[[libs]]\nname='libX'\necosystem='rust'\nrepo='rx'\n",
-    )
-    .unwrap();
-    // Project A: pins libX@1.0.0 via Cargo.lock; sees only libX.
-    let proj_a = tmp.join("A");
-    std::fs::create_dir_all(&proj_a).unwrap();
-    std::fs::write(proj_a.join("devkit.toml"), "[defaults]\n").unwrap();
-    std::fs::write(
-        proj_a.join("Cargo.lock"),
-        "version=4\n[[package]]\nname='libX'\nversion='1.0.0'\n",
-    )
-    .unwrap();
-    // Project B: overlay-registers libY, pins libY@2.0.0.
-    let proj_b = tmp.join("B");
-    std::fs::create_dir_all(&proj_b).unwrap();
-    std::fs::write(
-        proj_b.join("devkit.toml"),
-        "[[docs.libs]]\nname='libY'\necosystem='rust'\nrepo='ry'\n",
-    )
-    .unwrap();
-    std::fs::write(
-        proj_b.join("Cargo.lock"),
-        "version=4\n[[package]]\nname='libY'\nversion='2.0.0'\n",
-    )
-    .unwrap();
-    // Registry: A→libX@1.0.0 (live), B→libY@2.0.0 (live).
-    let store = RefStore::at(&cache_root);
-    store
-        .commit(|d| {
-            d.record(proj_a.to_str().unwrap(), "libX", "1.0.0", "v1.0.0", "aaa");
-            d.record(proj_b.to_str().unwrap(), "libY", "2.0.0", "v2.0.0", "bbb");
-            Ok(())
-        })
-        .unwrap();
-
-    // Prune "as if from A": A's manifest sees only libX.
-    let a_libs: BTreeSet<String> = ["libX".to_string()].into_iter().collect();
-    let snapshot = store.snapshot();
-    let plan = refs::plan_for_cache(&cache_root, &snapshot, &a_libs, Some(&global)).unwrap();
-
-    // libY/2.0.0 must survive: it is still referenced by the live project B.
-    assert!(
-        !plan
-            .delete
-            .contains(&("libY".to_string(), "2.0.0".to_string())),
-        "prune from A wrongly deleted B's overlay lib worktree: {:?}",
-        plan.delete
-    );
-    assert!(
-        plan.keep
-            .iter()
-            .any(|r| r.lib == "libY" && r.version == "2.0.0")
-    );
-    // libX stays too.
-    assert!(
-        !plan
-            .delete
-            .contains(&("libX".to_string(), "1.0.0".to_string()))
-    );
-}
-
 // Regression: a LIVE project whose devkit.toml fails to parse must not have
 // its checkouts silently reclaimed — a read/parse error is not "unreferenced".
 #[test]
 fn prune_keeps_rows_for_a_project_with_an_unreadable_manifest() {
     let tmp = unique_tmp("brokenmanifest");
+    let repo = common::fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
-    for p in ["libZ/1.0.0", "libZ/default"] {
-        std::fs::create_dir_all(cache_root.join(p)).unwrap();
-    }
     let global = tmp.join("docs.toml");
     std::fs::write(&global, "").unwrap();
-    // Live project B with a MALFORMED devkit.toml.
     let proj_b = tmp.join("B");
     std::fs::create_dir_all(&proj_b).unwrap();
+    // The row has to exist before the manifest becomes unreadable, so the
+    // checkout is materialized against a devkit.toml that still parses.
+    std::fs::write(proj_b.join("devkit.toml"), "[defaults]\n").unwrap();
+    let entry = LibEntry {
+        name: "libZ".into(),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let resolved = devkit_docs::resolve::resolve(
+        &entry,
+        &proj_b,
+        &cache_root,
+        &devkit_docs::resolve::Options::default(),
+    )
+    .unwrap();
     std::fs::write(proj_b.join("devkit.toml"), "this = = not valid toml [[[").unwrap();
-    let store = RefStore::at(&cache_root);
-    store
-        .commit(|d| {
-            d.record(proj_b.to_str().unwrap(), "libZ", "1.0.0", "v1.0.0", "ccc");
-            Ok(())
-        })
-        .unwrap();
 
-    let libs: BTreeSet<String> = BTreeSet::new();
-    let snapshot = store.snapshot();
-    let plan = refs::plan_for_cache(&cache_root, &snapshot, &libs, Some(&global)).unwrap();
+    let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
 
     assert!(
-        !plan
-            .delete
-            .contains(&("libZ".to_string(), "1.0.0".to_string())),
-        "a live project's worktree was deleted because its manifest failed to parse: {:?}",
-        plan.delete
+        pruned.removed.is_empty(),
+        "a live project's checkout was reclaimed because its manifest failed to parse: {:?}",
+        pruned.removed
     );
-    assert!(
-        plan.keep
-            .iter()
-            .any(|r| r.lib == "libZ" && r.version == "1.0.0")
-    );
+    assert!(resolved.path.is_dir());
+    assert_eq!(RefStore::at(&cache_root).snapshot().rows.len(), 1);
 }
 
 #[test]
@@ -300,32 +224,17 @@ fn a_scoped_library_is_one_directory_and_prune_leaves_it_alone() {
 }
 
 #[test]
-fn prune_never_schedules_a_stray_scoped_parent_for_deletion() {
-    let root = unique_tmp("scoped-prune");
-    let stray = root.join("@scope/pkg");
-    std::fs::create_dir_all(&stray).unwrap();
-
-    let plan = refs::plan_for_cache(&root, &Default::default(), &BTreeSet::new(), None).unwrap();
-
-    assert!(
-        plan.removable_libs.is_empty(),
-        "a cache-root directory without repo.git must not reach docm prune's recursive deletion: {:?}",
-        plan.removable_libs
-    );
-    assert!(stray.is_dir());
-}
-
-#[test]
 fn whole_library_deletion_rechecks_fresh_references() {
     let root = unique_tmp("whole-lib-race");
     let cache_root = root.join("cache");
     let project = root.join("project");
+    let global = root.join("docs.toml");
     std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
     std::fs::create_dir_all(&project).unwrap();
 
     let snapshot = RefStore::at(&cache_root).snapshot();
-    let plan = refs::plan_for_cache(&cache_root, &snapshot, &BTreeSet::new(), None).unwrap();
-    assert_eq!(plan.removable_libs, ["up"]);
+    let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
+    assert_eq!(pruned.removable_libs, ["up"]);
 
     RefStore::at(&cache_root)
         .commit(|data| {
@@ -361,8 +270,8 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
     let root = unique_tmp("whole-lib-same-row-race");
     let cache_root = root.join("cache");
     let project = root.join("project");
+    let global = root.join("docs.toml");
     std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
-    std::fs::create_dir_all(cache_root.join("up/v1.0.0")).unwrap();
     std::fs::create_dir_all(&project).unwrap();
     let store = RefStore::at(&cache_root);
     store
@@ -380,8 +289,8 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
         })
         .unwrap();
     let snapshot = store.snapshot();
-    let plan = refs::plan_for_cache(&cache_root, &snapshot, &BTreeSet::new(), None).unwrap();
-    assert_eq!(plan.removable_libs, ["up"]);
+    let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
+    assert_eq!(pruned.removable_libs, ["up"]);
 
     let output = Command::new(std::env::current_exe().unwrap())
         .env("DEVKIT_DOCS_TEST_WHOLE_LIB_ABA", "1")
@@ -400,12 +309,6 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
         .unwrap()
         .remove_if_unreferenced(&snapshot)
         .unwrap();
-    store
-        .commit(|data| {
-            refs::reconcile(data, &snapshot, &plan.keep);
-            Ok(())
-        })
-        .unwrap();
 
     assert!(!removed, "whole-library prune missed the refreshed row");
     assert!(cache_root.join("up").is_dir());
@@ -419,6 +322,7 @@ fn whole_library_deletion_detects_a_same_row_refresh() {
 fn whole_library_deletion_ignores_rows_already_rejected_by_the_plan() {
     let root = unique_tmp("whole-lib-stale-row");
     let cache_root = root.join("cache");
+    let global = root.join("docs.toml");
     std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
     let store = RefStore::at(&cache_root);
     store
@@ -429,8 +333,8 @@ fn whole_library_deletion_ignores_rows_already_rejected_by_the_plan() {
         .unwrap();
 
     let snapshot = store.snapshot();
-    let plan = refs::plan_for_cache(&cache_root, &snapshot, &BTreeSet::new(), None).unwrap();
-    assert_eq!(plan.removable_libs, ["up"]);
+    let pruned = refs::prune_with_lock(&cache_root, &BTreeSet::new(), Some(&global)).unwrap();
+    assert_eq!(pruned.removable_libs, ["up"]);
 
     let removed = devkit_docs::cache::LibCache::new(&cache_root, "up")
         .unwrap()

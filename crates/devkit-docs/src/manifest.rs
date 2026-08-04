@@ -222,11 +222,6 @@ pub fn load_global(path: &Path) -> Result<DocsManifest> {
     }
 }
 
-/// The `[docs]` section of one `devkit.toml`, empty when the file has none.
-pub fn load_project(devkit_toml: &Path) -> Result<DocsManifest> {
-    Ok(docs_layer(devkit_toml)?.unwrap_or_default())
-}
-
 /// The global file is docm-owned and machine-written — a full serialize is fine.
 pub fn upsert_global(path: &Path, entry: &LibEntry, cache_root: &Path) -> Result<()> {
     crate::locks::with_manifest(cache_root, || {
