@@ -315,14 +315,13 @@ fn whole_library_deletion_spares_a_library_another_process_re_resolved() {
     assert_eq!(fresh.rows[0].lib, "up");
 }
 
-/// `docm prune` takes its registry snapshot only after the interactive
-/// confirmation prompt returns (`docm.rs:548-549`), so a library resolved by
-/// another process while the human is deciding commits a row that lands on
-/// both sides of a snapshot-relative guard: the fresh read and the snapshot
-/// itself. This mirrors that ordering — the concurrent commit happens
-/// *before* the snapshot is taken, unlike
-/// `whole_library_deletion_spares_a_library_another_process_re_resolved`,
-/// where the snapshot precedes the concurrent commit.
+/// `docm prune` offers a whole library for deletion, then waits for an
+/// interactive confirmation before acting. Another process resolving that
+/// library while the human decides commits its row inside that interval, so
+/// the recheck guarding the deletion has to refuse on the row's mere presence.
+/// A recheck that instead asked whether the row was new relative to some
+/// earlier registry read would find it already present in both and delete a
+/// live checkout.
 #[test]
 fn whole_library_deletion_spares_a_library_resolved_before_the_snapshot() {
     if std::env::var_os("DEVKIT_DOCS_TEST_WHOLE_LIB_RESOLVED_BEFORE_SNAPSHOT").is_some() {
@@ -361,9 +360,8 @@ fn whole_library_deletion_spares_a_library_resolved_before_the_snapshot() {
         .unwrap();
     assert_worker_succeeded(output, "resolve-before-snapshot");
 
-    // The concurrent row is already committed by the time the snapshot is
-    // taken, so it lands in the snapshot too — exactly what the confirmation
-    // prompt's timing produces in production.
+    // Establishes that the child's row is committed and visible before the
+    // deletion runs, so a refusal below is the recheck and not a lost write.
     let snapshot = RefStore::at(&cache_root).snapshot();
     assert_eq!(snapshot.rows.len(), 1);
 
