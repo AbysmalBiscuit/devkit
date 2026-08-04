@@ -246,6 +246,11 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
 /// What is wrong with one materialized checkout, if anything: source that
 /// differs from the commit, or a HEAD that is not the recorded one. Reported
 /// rather than repaired — `doctor` diagnoses, it does not mutate the cache.
+///
+/// The sweep takes no library lock, so it reads a checkout a concurrent
+/// `docm` is still materializing. Blocking a diagnostic behind a network
+/// clone costs more than a warning the reader can re-run, so the drift row
+/// says it may be transient rather than claiming a settled mismatch.
 fn inspect(label: &str, path: &Path, recorded: Option<&cache::WorktreeMeta>) -> Vec<String> {
     let mut problems = Vec::new();
     let dir = path.to_string_lossy().into_owned();
@@ -262,7 +267,8 @@ fn inspect(label: &str, path: &Path, recorded: Option<&cache::WorktreeMeta>) -> 
     };
     match devkit_common::cmd::git(&["rev-parse", "HEAD"], &dir) {
         Ok(head) if head.trim() != recorded.commit => problems.push(format!(
-            "{label} is at {}, but {} resolved to {}",
+            "{label} is at {}, but {} resolved to {} (may be transient during a \
+             concurrent `docm` run)",
             head.trim(),
             recorded.raw_ref,
             recorded.commit
