@@ -315,6 +315,25 @@ fn json_declares(row: &JsonValue, classes: &[&str], package: &str, location: &st
         .any(|dependencies| dependencies.contains_key(package)))
 }
 
+/// The specs a row declares for one package, across every dependency class it
+/// appears in. The spec is what the depender asked for, which carries
+/// provenance the installed row can lose.
+fn json_declared_specs<'a>(
+    row: &'a JsonValue,
+    classes: &[&str],
+    package: &str,
+    location: &str,
+) -> Result<Vec<&'a str>> {
+    json_class_maps(row, classes, location)?
+        .iter()
+        .filter_map(|dependencies| dependencies.get(package))
+        .map(|spec| {
+            spec.as_str()
+                .with_context(|| format!("{location} dependency `{package}` must be a string spec"))
+        })
+        .collect()
+}
+
 /// Resolution prefixes a Bun package spec's `name@resolution` tail may start
 /// with. A git+ssh or basic-auth URL resolution can carry its own `@` (the
 /// ssh-user marker in `git@github.com`, or userinfo in `user:pass@host`), so
@@ -781,8 +800,29 @@ fn assert_npm_registry_row(row: &JsonMap<String, JsonValue>, key: &str) -> Resul
         None => bail!("npm package `{key}` has no registry resolution; pin it with --ref"),
     };
     let linked = row.get("link").and_then(JsonValue::as_bool) == Some(true);
-    if linked || !(resolved.starts_with("https://") || resolved.starts_with("http://")) {
+    if linked || !is_web_url(resolved) {
         bail!("npm package `{key}` uses non-registry resolution `{resolved}`; pin it with --ref");
+    }
+    Ok(())
+}
+
+fn is_web_url(value: &str) -> bool {
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
+/// A remote-tarball install writes an ordinary https `resolved` — for a tarball
+/// served by the registry host, byte-identical to what a registry range install
+/// writes — so the installed row cannot tell the two apart. npm copies the
+/// tarball URL verbatim into the declaring dependency spec, where a registry
+/// install leaves a semver range, dist-tag or `npm:` alias, so the spec
+/// distinguishes them exactly. The tarball's own version number describes
+/// whatever tree it holds, which need not be upstream's release of that number.
+fn assert_npm_registry_spec(spec: &str, package: &str, declarer: &str) -> Result<()> {
+    if is_web_url(spec) {
+        bail!(
+            "npm dependency `{package}` in {declarer} uses non-registry tarball spec `{spec}`; \
+             pin it with --ref"
+        );
     }
     Ok(())
 }
@@ -807,13 +847,17 @@ fn npm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Resu
         .get(relative)
         .with_context(|| format!("package-lock.json has no entry for `{relative}`"))?;
     let candidates = npm_candidates(packages, package)?;
-    if !json_declares(
+    let specs = json_declared_specs(
         entry,
         &NPM_DEP_CLASSES,
         package,
         &format!("packages.{relative}"),
-    )? {
+    )?;
+    if specs.is_empty() {
         return Err(undeclared(workspace, package, &candidates));
+    }
+    for spec in specs {
+        assert_npm_registry_spec(spec, package, display_key(relative))?;
     }
 
     let mut directory = relative.to_string();

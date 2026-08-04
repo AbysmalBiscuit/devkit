@@ -210,9 +210,12 @@ override the global entry field-by-field). Resolution: manual `ref` pin →
 the requesting workspace's own dependency graph (`Cargo.lock`,
 `pnpm-lock.yaml`, `package-lock.json`, `bun.lock`, `uv.lock`) matched against
 the repo's git tags. Only a registry install resolves this way: a version
-number identifies upstream's code just when the lockfile row that carries it
-came from the registry the repo publishes to, so a git, path, workspace, link
-or archive dependency is refused by name and needs `--ref`. When nothing pins
+number identifies upstream's code just when the lockfile says it came from the
+registry the repo publishes to, so a git, path, workspace, link or archive
+dependency is refused by name and needs `--ref`. A remote tarball is judged by
+the spec that declares it rather than by the row it installed, because npm
+records the same `resolved` URL for a tarball fetched from the registry host as
+for an ordinary version range. When nothing pins
 a version — no tag matches the lockfile's version, no importer manifest is
 found, the ecosystem is ambiguous, or a lockfile's own state conflicts with
 itself — `docm` fails with the specific cause and the fix rather than silently

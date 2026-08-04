@@ -1037,15 +1037,20 @@ fn uv_rejects_a_non_registry_source_for_the_selected_package() {
     }
 }
 
-fn write_npm_app(root: &std::path::Path, h3_row: &str) {
-    write_package_json(root, r#"{"name":"root","dependencies":{"h3":"^1"}}"#);
+fn write_npm_app_declaring(root: &std::path::Path, package: &str, spec: &str, row: &str) {
+    let manifest = format!(r#"{{"name":"root","dependencies":{{"{package}":"{spec}"}}}}"#);
+    write_package_json(root, &manifest);
     std::fs::write(
         root.join("package-lock.json"),
         format!(
-            r#"{{"lockfileVersion":3,"packages":{{"":{{"name":"root","dependencies":{{"h3":"^1"}}}},"node_modules/h3":{h3_row}}}}}"#
+            r#"{{"lockfileVersion":3,"packages":{{"":{manifest},"node_modules/{package}":{row}}}}}"#
         ),
     )
     .unwrap();
+}
+
+fn write_npm_app(root: &std::path::Path, h3_row: &str) {
+    write_npm_app_declaring(root, "h3", "^1", h3_row);
 }
 
 #[test]
@@ -1090,4 +1095,61 @@ fn npm_rejects_a_non_registry_resolution_for_the_selected_package() {
     assert!(error.contains("no registry resolution"), "{error}");
     assert!(error.contains("node_modules/h3"), "{error}");
     assert!(error.contains("--ref"), "{error}");
+}
+
+/// A remote-tarball install writes an ordinary https `resolved` — for a
+/// tarball fetched from the registry host, one byte-identical to what a
+/// registry range install writes — so the installed row cannot tell the two
+/// apart. The declaring spec can: npm copies the tarball URL into it verbatim,
+/// where a registry install leaves a semver range or dist-tag.
+#[test]
+fn npm_rejects_a_remote_tarball_declaration_for_the_selected_package() {
+    let root = common::unique_tmp("npm-tarball-spec");
+
+    for spec in [
+        "https://example.com/h3-fork.tgz",
+        "https://registry.npmjs.org/h3/-/h3-1.15.1.tgz",
+        "http://internal.invalid/h3-1.15.11.tgz",
+    ] {
+        write_npm_app_declaring(
+            &root,
+            "h3",
+            spec,
+            &format!(r#"{{"version":"1.15.11","resolved":"{spec}","integrity":"sha512-x"}}"#),
+        );
+        let error = importers::select(&root, Ecosystem::Js, "h3")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("non-registry"), "{error}");
+        assert!(error.contains(spec), "{error}");
+        assert!(error.contains("--ref"), "{error}");
+    }
+
+    // A semver range and an alias are both registry installs and must keep
+    // resolving; the alias spec carries its own `@` and target name.
+    write_npm_app_declaring(
+        &root,
+        "h3",
+        "^1.15.11",
+        r#"{"version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
+    );
+    assert_eq!(
+        importers::select(&root, Ecosystem::Js, "h3")
+            .unwrap()
+            .version,
+        "1.15.11"
+    );
+
+    write_npm_app_declaring(
+        &root,
+        "h3-fork",
+        "npm:h3@^1.15.11",
+        r#"{"name":"h3","version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
+    );
+    assert_eq!(
+        importers::select(&root, Ecosystem::Js, "h3-fork")
+            .unwrap()
+            .version,
+        "1.15.11"
+    );
 }
