@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use super::{
     PrAction, Target, action_for, base_ctx, deliver, guard_branch, is_human_login, parse_args,
-    person_by_login, render_review, require_pr_title, resolve_target, target_from_person,
-    with_fields,
+    person_by_login, render_review, require_pr_title, require_reviewer, resolve_target,
+    target_from_person, with_fields,
 };
 
 pub struct Args {
@@ -253,9 +253,7 @@ pub fn run(args: Args) -> Result<()> {
         }
         PrAction::Create => {
             require_pr_title(&pr_title)?;
-            if explicit.is_empty() {
-                bail!("at least one --to is required to create a PR");
-            }
+            require_reviewer(&explicit, loaded.config.defaults.require_pr_reviewer)?;
             let (logins, warnings) = reviewer_logins(&explicit);
             for w in &warnings {
                 eprintln!("warning: {w}");

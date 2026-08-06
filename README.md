@@ -92,6 +92,7 @@ issue review request                                          # re-ping the PR's
 ```
 
 - `--to <alias|#channel>` (repeatable). People are added as GitHub reviewers (those with a `github` handle) and Slacked; `#channels` are Slack-only. Omit `--to` to re-request and Slack the PR's current human reviewers.
+- Opening a new PR without `--to` creates it unreviewed and notifies nobody. Set `defaults.require_pr_reviewer = true` in `devkit.toml` to make `--to` mandatory on that path.
 - `--base`, `--pr-title`, `--pr-body`, `--no-push` as before.
 - `--arg key=value` (repeatable) overrides a variable declared in `[templates.variables]`.
 

@@ -95,6 +95,10 @@ pub struct Defaults {
     /// Base branch used when opening PRs (e.g. "staging", "main").
     #[serde(default = "default_pr_base")]
     pub pr_base: String,
+    /// Refuse `issue review request` when it would open a PR with no `--to`
+    /// reviewer. Off by default: a PR opens unreviewed and nobody is Slacked.
+    #[serde(default)]
+    pub require_pr_reviewer: bool,
     /// Glob patterns for status-check names to discount from a PR's CHECK
     /// verdict — e.g. a deploy left red by an unfinished PR. Matched
     /// case-insensitively against each check's name; a PR reads green when only
@@ -635,6 +639,22 @@ launch = ["nitro", "dev", "--port", "{{ port }}"]
 "#;
         let c = Config::parse(src).unwrap();
         assert_eq!(c.defaults.ignored_checks, vec!["vercel*", "*Preview*"]);
+    }
+    #[test]
+    fn require_pr_reviewer_parses_and_defaults_off() {
+        assert!(!Config::parse(SAMPLE).unwrap().defaults.require_pr_reviewer);
+        let src = r#"
+[defaults]
+worktree_root = "~/Git/example"
+branch_prefix = "lev/"
+baseline_ref = "origin/staging"
+baseline_path = "~/Git/example/_baseline"
+require_pr_reviewer = true
+[apps.api]
+base_port = 9100
+launch = ["nitro", "dev", "--port", "{{ port }}"]
+"#;
+        assert!(Config::parse(src).unwrap().defaults.require_pr_reviewer);
     }
     #[test]
     fn doppler_yaml_optional() {

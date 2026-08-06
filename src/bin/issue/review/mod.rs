@@ -55,6 +55,15 @@ pub(crate) fn require_pr_title(title: &str) -> Result<()> {
     Ok(())
 }
 
+/// Reject a create-path invocation with no `--to` when `defaults.require_pr_reviewer`
+/// is set. Unset, a PR may open with no reviewer and no Slack notification.
+pub(crate) fn require_reviewer(targets: &[Target], required: bool) -> Result<()> {
+    if required && targets.is_empty() {
+        bail!("at least one --to is required to create a PR (defaults.require_pr_reviewer is set)");
+    }
+    Ok(())
+}
+
 /// Build a `Target` from a `[people]` alias and its entry.
 pub(crate) fn target_from_person(alias: &str, p: &Person) -> Target {
     Target {
@@ -256,6 +265,20 @@ mod tests {
         let ctx = serde_json::json!({"input": "please review", "pr_url": "https://gh/pr/1"});
         let out = devkit_common::template::render(t.review_request(), &ctx, &t.variables).unwrap();
         assert_eq!(out, "please review https://gh/pr/1");
+    }
+
+    #[test]
+    fn require_reviewer_only_gates_when_configured() {
+        let none: Vec<Target> = Vec::new();
+        let some = vec![Target {
+            channel: "U_LEV".into(),
+            name: "lev".into(),
+            slack_id: Some("U_LEV".into()),
+            github: Some("LevValle".into()),
+        }];
+        assert!(require_reviewer(&none, false).is_ok());
+        assert!(require_reviewer(&none, true).is_err());
+        assert!(require_reviewer(&some, true).is_ok());
     }
 
     #[test]
