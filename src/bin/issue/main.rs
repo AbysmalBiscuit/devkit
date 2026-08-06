@@ -173,6 +173,10 @@ enum ReviewCmd {
         pr_body: Option<String>,
         #[arg(long = "no-push")]
         no_push: bool,
+        /// Add no reviewer beyond `--to` and send no Slack: never falls back to the
+        /// PR's current reviewers.
+        #[arg(long = "no-notify")]
+        no_notify: bool,
         /// Override a declared template variable: `--arg key=value`. Repeatable.
         #[arg(long = "arg")]
         args: Vec<String>,
@@ -291,6 +295,7 @@ fn main() -> Result<()> {
                 pr_title,
                 pr_body,
                 no_push,
+                no_notify,
                 args,
             } => review::request::run(review::request::Args {
                 body,
@@ -299,6 +304,7 @@ fn main() -> Result<()> {
                 pr_title,
                 pr_body,
                 no_push,
+                no_notify,
                 args,
                 dir: cli.dir,
                 config: cli.config,

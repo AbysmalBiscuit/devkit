@@ -66,7 +66,7 @@ issue info [selector] [--json] [--cache-only] # one worktree's PR number + Linea
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size <N>] [--retries <N>]
 issue dashboard [--bucket auto|day|week|month] [--chart bar|line] [--mode absolute|proportional] [--all-roles] [--author <email>] [--no-plots] [--no-cache]
-issue review request [<body>] --to <alias|#channel> [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push] [--arg k=v]
+issue review request [<body>] [--to <alias|#channel>] [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push] [--no-notify] [--arg k=v]
 issue review finish  [<body>] [--pr <number>] [--to <alias|#channel>] [--arg k=v]
 ```
 
@@ -89,10 +89,12 @@ Push the branch, open or reuse the PR, request review on GitHub, and Slack the r
 issue review request "ready for a look" --to igor
 issue review request --to igor --to '#eng' --arg team=infra   # body optional; channel + people
 issue review request                                          # re-ping the PR's existing reviewers
+issue review request --no-notify                              # push + open/reuse the PR, tell nobody
 ```
 
 - `--to <alias|#channel>` (repeatable). People are added as GitHub reviewers (those with a `github` handle) and Slacked; `#channels` are Slack-only. Omit `--to` to re-request and Slack the PR's current human reviewers.
 - Opening a new PR without `--to` creates it unreviewed and notifies nobody. Set `defaults.require_pr_reviewer = true` in `devkit.toml` to make `--to` mandatory on that path.
+- `--no-notify` sends no Slack and never falls back to the PR's current reviewers, so the branch can be pushed and the PR opened or reused silently. It prints the PR URL instead. Combined with `--to` it still adds those GitHub reviewers, just without the Slack. It does not bypass `require_pr_reviewer`.
 - `--base`, `--pr-title`, `--pr-body`, `--no-push` as before.
 - `--arg key=value` (repeatable) overrides a variable declared in `[templates.variables]`.
 

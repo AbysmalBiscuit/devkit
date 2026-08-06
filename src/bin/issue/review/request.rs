@@ -19,6 +19,7 @@ pub struct Args {
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
     pub no_push: bool,
+    pub no_notify: bool,
     pub args: Vec<String>,
     pub dir: Option<String>,
     pub config: Option<String>,
@@ -133,6 +134,13 @@ fn existing_pr(branch: &str, cwd: &str) -> Result<Option<PrView>> {
     Ok(v.into_iter().next())
 }
 
+/// `--no-notify` pins the targets to whatever `--to` resolved to — possibly none —
+/// instead of falling back to the PR's current reviewers. `None` means no override:
+/// resolve them as usual.
+pub(crate) fn pinned_targets(explicit: &[Target], no_notify: bool) -> Option<Vec<Target>> {
+    no_notify.then(|| explicit.to_vec())
+}
+
 /// Notify-targets on the AddReviewer path: explicit `--to`, else the PR's
 /// existing human reviewers (reverse-looked-up).
 fn resolve_request_targets(
@@ -225,9 +233,12 @@ pub fn run(args: Args) -> Result<()> {
         PrAction::Stop(reason) => bail!("{reason}"),
         PrAction::AddReviewer => {
             let pr = existing.expect("AddReviewer implies an existing PR");
-            let targets = steps.during_result("Resolving reviewers…", || {
-                resolve_request_targets(&explicit, pr.number, &start, people)
-            })?;
+            let targets = match pinned_targets(&explicit, args.no_notify) {
+                Some(t) => t,
+                None => steps.during_result("Resolving reviewers…", || {
+                    resolve_request_targets(&explicit, pr.number, &start, people)
+                })?,
+            };
             let (logins, warnings) = reviewer_logins(&targets);
             for w in &warnings {
                 eprintln!("warning: {w}");
@@ -307,6 +318,11 @@ pub fn run(args: Args) -> Result<()> {
         }
     };
 
+    if args.no_notify {
+        println!("{pr_url}");
+        return Ok(());
+    }
+
     let notify_ctx = with_fields(
         &base,
         &[
@@ -348,6 +364,20 @@ mod tests {
             slack_id: Some(format!("U_{name}")),
             github: gh.map(String::from),
         }
+    }
+
+    #[test]
+    fn no_notify_pins_targets_to_explicit() {
+        let igor = person("igor", Some("igoracc"));
+
+        let none = pinned_targets(&[], true).expect("--no-notify overrides the fallback");
+        assert!(none.is_empty());
+        assert!(reviewer_logins(&none).0.is_empty());
+
+        let one = pinned_targets(std::slice::from_ref(&igor), true).expect("override");
+        assert_eq!(reviewer_logins(&one).0, vec!["igoracc"]);
+
+        assert!(pinned_targets(&[igor], false).is_none());
     }
 
     #[test]
