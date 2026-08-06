@@ -71,7 +71,14 @@ impl Env {
     }
 
     fn cache(&self) -> PathBuf {
-        self.data.join("devkit/docs")
+        self.data.join("devkit").join("docs")
+    }
+
+    /// The checkout directory for `name` at `git_ref`. Joined a component at a
+    /// time: a `"name/git_ref"` join keeps its `/` on Windows, so the path
+    /// prints differently from the one the CLI reports for the same directory.
+    fn checkout(&self, name: &str, git_ref: &str) -> PathBuf {
+        self.cache().join(name).join(git_ref)
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -285,7 +292,7 @@ fn add_materializes_the_checkout_and_reports_ref_commit_and_path() {
         out.contains(&format!("manifest  {}", env.global().display())),
         "{out}"
     );
-    let checkout = env.cache().join("up/v1.0.0");
+    let checkout = env.checkout("up", "v1.0.0");
     assert!(
         out.contains(&format!("path      {}", checkout.display())),
         "{out}"
@@ -317,7 +324,7 @@ fn a_failed_repin_leaves_the_previous_entry_intact() {
     assert_ran(&path, "docm path up");
     assert_eq!(
         stdout(&path).trim(),
-        env.cache().join("up/v1.0.0").to_string_lossy(),
+        env.checkout("up", "v1.0.0").to_string_lossy(),
         "the restored entry must still resolve to the old pin"
     );
 }
@@ -387,7 +394,7 @@ fn a_failed_project_repin_restores_the_previous_entry() {
     assert_ran(&path, "docm path keep");
     assert_eq!(
         stdout(&path).trim(),
-        env.cache().join("keep/v1.0.0").to_string_lossy(),
+        env.checkout("keep", "v1.0.0").to_string_lossy(),
         "the restored entry must still resolve to the old pin"
     );
     assert_eq!(read(&devkit_toml), before);
@@ -425,7 +432,7 @@ fn add_of_a_ref_less_git_entry_pins_the_default_branch_globally() {
         "the inferred branch must be written into the manifest as an explicit ref: {}",
         read(&env.global())
     );
-    assert!(env.cache().join("up/main/src/lib.rs").is_file());
+    assert!(env.checkout("up", "main").join("src/lib.rs").is_file());
 }
 
 #[test]
@@ -478,7 +485,7 @@ fn sync_records_a_missing_ref_in_the_global_manifest() {
         "sync must record the inferred default branch: {}",
         read(&env.global())
     );
-    assert!(env.cache().join("up/main/src/lib.rs").is_file());
+    assert!(env.checkout("up", "main").join("src/lib.rs").is_file());
 }
 
 #[test]
@@ -554,7 +561,11 @@ fn info_and_list_report_the_ref_commit_and_clone_origin() {
 fn info_fails_instead_of_reporting_ok_for_a_dirty_checkout() {
     let env = Env::new("info-dirty");
     assert_ran(&env.add("up", "v1.0.0"), "docm add up");
-    std::fs::write(env.cache().join("up/v1.0.0/src/lib.rs"), "// local edit").unwrap();
+    std::fs::write(
+        env.checkout("up", "v1.0.0").join("src/lib.rs"),
+        "// local edit",
+    )
+    .unwrap();
 
     let info = env.docm(&["info", "up"]);
 
@@ -761,7 +772,7 @@ fn a_lockfile_resolution_reports_its_provenance_on_stdout_only() {
     );
     assert_eq!(
         stdout(&path).trim(),
-        env.cache().join("up/v1.0.0").to_string_lossy(),
+        env.checkout("up", "v1.0.0").to_string_lossy(),
         "path prints exactly the checkout"
     );
 

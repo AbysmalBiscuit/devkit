@@ -726,11 +726,11 @@ fn a_worktree_administration_that_cannot_be_listed_is_not_an_empty_one() {
     let base = common::unique_tmp("upgrade-unreadable-admin");
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
-    let old = cache.join("@scope/pkg");
+    let old = cache.join("@scope").join("pkg");
     seed_library(&repo, &old, &["v1.0.0"]);
     // A file where the administration directory belongs: `read_dir` fails on
     // every platform, including for root, which `chmod 000` does not.
-    let admin_root = old.join("repo.git/worktrees");
+    let admin_root = old.join("repo.git").join("worktrees");
     std::fs::remove_dir_all(&admin_root).unwrap();
     std::fs::write(&admin_root, "not a directory\n").unwrap();
 

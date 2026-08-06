@@ -101,7 +101,7 @@ fn a_checkout_whose_head_drifted_from_its_recorded_commit_is_named() {
 #[test]
 fn a_library_whose_meta_cannot_be_read_is_reported_and_the_sweep_continues() {
     let (cache, checkout) = materialize("doctor-unreadable-meta", "v1.0.0");
-    let meta = cache.join("up/meta.toml");
+    let meta = cache.join("up").join("meta.toml");
     std::fs::write(&meta, "tag_pattern = \"name-dash-v\"\n").unwrap();
     std::fs::write(checkout.join("src/lib.rs"), "// local edit").unwrap();
 
