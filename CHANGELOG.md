@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.13.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.12.1...v0.13.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **docs:** require --allow-default-branch
+
+### Features
+
+* **config:** add per-app url template ([fdaf7bf](https://github.com/AbysmalBiscuit/devkit/commit/fdaf7bfa9038d37e0b764bd0f11676f1cf7a5b3c))
+* **docs:** add atomic cache locks ([a8dc387](https://github.com/AbysmalBiscuit/devkit/commit/a8dc3872f799804b8c776bcd861854fe06617162))
+* **docs:** materialize on add, verify in info ([0c7cd97](https://github.com/AbysmalBiscuit/devkit/commit/0c7cd97120e4ee33bee64de80062743f9556c6ec))
+* **docs:** migrate 0.12 caches on first run ([62f663b](https://github.com/AbysmalBiscuit/devkit/commit/62f663ba121ddbbf6827b6ce1d0fd2b44982c080))
+* **docs:** require --allow-default-branch ([7604d20](https://github.com/AbysmalBiscuit/devkit/commit/7604d20ffb754c1317e518b94ac19b56dcaf2bb5))
+* **docs:** sweep every checkout in doctor ([b19b973](https://github.com/AbysmalBiscuit/devkit/commit/b19b973e402fc2bead8e038c7ffd488307404295))
+* **issue:** add --no-notify to review request ([31f7f8d](https://github.com/AbysmalBiscuit/devkit/commit/31f7f8d1c37c2c6ba84daadbec27b42d6b80fa8b))
+* **issue:** gate the review --to requirement on config ([eb0dca1](https://github.com/AbysmalBiscuit/devkit/commit/eb0dca1aa0ef422680debabcda1103891d7df109))
+
+
+### Bug Fixes
+
+* **docm:** keep completions out of the migration ([f6387da](https://github.com/AbysmalBiscuit/devkit/commit/f6387dafd048896891e1aaddcf4c6835aa34fafb))
+* **docs:** always error on multi-ecosystem add hit ([da8ad1f](https://github.com/AbysmalBiscuit/devkit/commit/da8ad1fc0203d9ceb4899e87108d24680bfa6d51))
+* **docs:** carry resolution provenance out of warnings ([8055718](https://github.com/AbysmalBiscuit/devkit/commit/805571828c8bcba29512c29a9a8b414a1679dfca))
+* **docs:** close four gaps in the upgrade pass ([45d2f88](https://github.com/AbysmalBiscuit/devkit/commit/45d2f881b304ea1b938fcbdd268881a52ae6e65e))
+* **docs:** close prune registry ABA ([884d5c8](https://github.com/AbysmalBiscuit/devkit/commit/884d5c8b1d91b338acb643a4f10a4ec74ef2eebf))
+* **docs:** correct hard-error messages ([563fb92](https://github.com/AbysmalBiscuit/devkit/commit/563fb929143441a9fee6ef771302a084426e7110))
+* **docs:** count default checkouts in doctor ([24e15f5](https://github.com/AbysmalBiscuit/devkit/commit/24e15f532789326ec7bd000f8f4ff818aecc84cd))
+* **docs:** cover and harden the fail-closed prune expansions ([b08794d](https://github.com/AbysmalBiscuit/devkit/commit/b08794dd59c4a0bcebb18de79cd462eba8be10a9))
+* **docs:** drop an unrecoverable migration record ([c64ec3b](https://github.com/AbysmalBiscuit/devkit/commit/c64ec3b24b8d4c53205691a19cd17130b93ee3a5))
+* **docs:** encode library cache names ([97a1557](https://github.com/AbysmalBiscuit/devkit/commit/97a15574873c00e58642a110e5825ef8ac75be6d))
+* **docs:** fail closed on unreadable prune inputs ([319419a](https://github.com/AbysmalBiscuit/devkit/commit/319419a2e88a18e25b8741a5bc0f91cf978160df))
+* **docs:** fail closed on unreadable sidecars ([5b26ef3](https://github.com/AbysmalBiscuit/devkit/commit/5b26ef380b68604319da8e77e3d2e1b74d0ffeec))
+* **docs:** guard cache-root prune scans ([d957552](https://github.com/AbysmalBiscuit/devkit/commit/d957552414f9ba92510c4b0a8631e286fed350fb))
+* **docs:** key refs by workspace, lock prune ([4d9b7e3](https://github.com/AbysmalBiscuit/devkit/commit/4d9b7e33c44f8fe41437d35393015cb2499a4709))
+* **docs:** let prune skip a directory its own name locks out ([0b32cd3](https://github.com/AbysmalBiscuit/devkit/commit/0b32cd39bf56dbf68e545b9c764b0160da436a39))
+* **docs:** make prune revisions ABA-safe ([9d0a9d9](https://github.com/AbysmalBiscuit/devkit/commit/9d0a9d9104a116e7a3d12d7075358f0dee9cdac7))
+* **docs:** make whole-library deletion recheck absolute ([b02a1a3](https://github.com/AbysmalBiscuit/devkit/commit/b02a1a36559b669e1f72bfca263955f355ad39cc))
+* **docs:** name a working reserved-name recovery ([eb90fac](https://github.com/AbysmalBiscuit/devkit/commit/eb90fac5b0392af9e0aa5728ab2e31541cd2df81))
+* **docs:** patch a project entry instead of replacing it ([eda8ff0](https://github.com/AbysmalBiscuit/devkit/commit/eda8ff0955229c2bf591a34fcb3cdbc4101beaf9))
+* **docs:** preserve live checkout refs ([0b48d72](https://github.com/AbysmalBiscuit/devkit/commit/0b48d726e38a30e258776c779fb34ace2c49c3cd))
+* **docs:** prioritize package-specific tags ([eb72305](https://github.com/AbysmalBiscuit/devkit/commit/eb723059def5891c1262f9e11db4fe85262014ce))
+* **docs:** qualify the doctor drift row ([1ee1265](https://github.com/AbysmalBiscuit/devkit/commit/1ee1265b6c604fb29715012a524d3eee80e88770))
+* **docs:** refuse ambiguous ecosystems and alias rm ([5512cf4](https://github.com/AbysmalBiscuit/devkit/commit/5512cf4fa561ec8cbc66c5b8985db179212594ca))
+* **docs:** refuse polyglot ecosystem markers ([d86357f](https://github.com/AbysmalBiscuit/devkit/commit/d86357f81db16c9b1be3fd3ec8eb1226a52bcb03))
+* **docs:** reject a prune candidate its lock file cannot fit ([b71410e](https://github.com/AbysmalBiscuit/devkit/commit/b71410e70fc7a83de37e74435c65d0122f577f74))
+* **docs:** reject an npm alias install slot ([c6f15ec](https://github.com/AbysmalBiscuit/devkit/commit/c6f15ecbb39ed7f77dec5a4f55c683b30e0b0f8d))
+* **docs:** reject non-registry lockfile rows ([3113acb](https://github.com/AbysmalBiscuit/devkit/commit/3113acbf07d92a1dd4115abeb5390aeb4636a2f5))
+* **docs:** reject npm remote-tarball installs ([cb8998d](https://github.com/AbysmalBiscuit/devkit/commit/cb8998dcbb030841d649fd941b2a071baafb49c2))
+* **docs:** report every unreadable library at once ([05430bf](https://github.com/AbysmalBiscuit/devkit/commit/05430bf6386d99b30d1c808671d362c737be5df2))
+* **docs:** reserve the manifest lock stem ([7f95c3c](https://github.com/AbysmalBiscuit/devkit/commit/7f95c3cb099d692171d72afb6e53927dd99e9f1f))
+* **docs:** resolve importer graph versions ([4d03143](https://github.com/AbysmalBiscuit/devkit/commit/4d031435ad89314f2afd13c4896b5c17f6b962fd))
+* **docs:** restore a project entry verbatim ([5f1628f](https://github.com/AbysmalBiscuit/devkit/commit/5f1628f252cbe9f605a249010aa12b58fa1f60b1))
+* **docs:** scope the contention barrier to its lock ([c81ff4a](https://github.com/AbysmalBiscuit/devkit/commit/c81ff4acbedcf809a2f208c69f081ec7b0b1c919))
+* **docs:** serialize prune with resolves ([46c8491](https://github.com/AbysmalBiscuit/devkit/commit/46c8491b9a5dea25bedca70c43a1b0711b8ab10d))
+* **docs:** skip lock controls in doctor ([8895c75](https://github.com/AbysmalBiscuit/devkit/commit/8895c754d159f35f9cb5b44fb7ae4cc1de4e1e45))
+* **docs:** split bun spec at scheme, not last @ ([f586f32](https://github.com/AbysmalBiscuit/devkit/commit/f586f3279a8f7860c59fad3cdb8213fa8acb6449))
+* **docs:** unwrap three rejection messages ([30e153f](https://github.com/AbysmalBiscuit/devkit/commit/30e153f314fea20aa991420815fb60d2a6951a06))
+* **docs:** validate importer targets ([2049ed9](https://github.com/AbysmalBiscuit/devkit/commit/2049ed901d6ac702d78fde9fa9c7cf7b9c0da4e1))
+* **docs:** validate loaded library names ([bb0c3d7](https://github.com/AbysmalBiscuit/devkit/commit/bb0c3d780cdd9f0e437d66c21e47c7938c842f46))
+* **docs:** verify ref-named checkouts ([2f688cf](https://github.com/AbysmalBiscuit/devkit/commit/2f688cffc7ae1aa6091b646f3eab40366329ef80))
+
 ## [0.12.1](https://github.com/AbysmalBiscuit/devkit/compare/v0.12.0...v0.12.1) (2026-07-22)
 
 
