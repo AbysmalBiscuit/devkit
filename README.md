@@ -200,6 +200,8 @@ checkout actually has, not the printed `version` string.
 docm add tokio                    # registry lookup (crates.io/npm/PyPI)
 docm add https://github.com/godotengine/godot --ref 4.3-stable
 docm add react --project          # write to this repo's devkit.toml [docs]
+docm list                         # merged catalog: name, ecosystem, ref, origin
+docm list --project               # only what this checkout evidences; --json emits {pins, dropped}
 docm info tokio                   # path + version + layout map + notes
 docm path tokio                   # just the checkout path
 docm sync                         # fetch, re-resolve, re-materialize, verify

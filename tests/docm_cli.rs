@@ -882,3 +882,137 @@ fn a_reserved_library_name_names_a_recovery_that_works() {
         stdout(&recovered)
     );
 }
+
+#[test]
+fn list_project_filters_to_the_checkout_and_counts_what_it_dropped() {
+    let env = Env::new("list-project");
+    // Two registered libraries; only one is declared by this project.
+    std::fs::write(
+        env.project.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.200\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        env.project.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"serde\"]\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.200\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"aa\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(env.home.join(".config/devkit")).unwrap();
+    std::fs::write(
+        env.home.join(".config/devkit/docs.toml"),
+        format!(
+            "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nrepo = \"{u}\"\n\n[[libs]]\nname = \"tokio\"\necosystem = \"rust\"\nrepo = \"{u}\"\n",
+            u = env.upstream
+        ),
+    )
+    .unwrap();
+
+    let listing = env.docm(&["list", "--project"]);
+    let text = String::from_utf8_lossy(&listing.stdout);
+    assert!(listing.status.success(), "{text}");
+    assert!(text.contains("serde"), "{text}");
+    assert!(text.contains("1.0.200"), "{text}");
+    assert!(
+        !text.contains("tokio"),
+        "machine-wide + undeclared is dropped: {text}"
+    );
+    assert!(
+        text.contains("1 registered library not evidenced here (1 undeclared)"),
+        "{text}"
+    );
+
+    // The unfiltered catalog is unchanged: it still lists tokio.
+    let catalog = String::from_utf8_lossy(&env.docm(&["list"]).stdout).into_owned();
+    assert!(catalog.contains("tokio"), "{catalog}");
+    assert!(!catalog.contains("not evidenced here"), "{catalog}");
+
+    // --project composes with --json rather than conflicting with it.
+    let json = env.docm(&["list", "--project", "--json"]);
+    let body: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("valid JSON envelope");
+    assert_eq!(body["pins"][0]["name"], "serde");
+    assert_eq!(body["pins"][0]["declared"], "declared");
+    assert_eq!(body["dropped"]["undeclared"], 1);
+    assert_eq!(body["dropped"]["unknown"], 0);
+}
+
+#[test]
+fn list_project_exits_non_zero_on_a_broken_manifest() {
+    let env = Env::new("list-project-broken");
+    std::fs::create_dir_all(env.home.join(".config/devkit")).unwrap();
+    std::fs::write(env.home.join(".config/devkit/docs.toml"), "not toml [[[").unwrap();
+
+    let listing = env.docm(&["list", "--project"]);
+    assert!(
+        !listing.status.success(),
+        "a broken manifest is not an empty listing"
+    );
+    let err = String::from_utf8_lossy(&listing.stderr);
+    assert!(err.contains("docs.toml"), "{err}");
+}
+
+#[test]
+fn list_project_and_info_select_the_same_version() {
+    // The test that replaces "correct by construction" for the part
+    // construction cannot guarantee: `pins` and `resolve` must name the same
+    // version for the same library from the same cwd.
+    let env = Env::new("list-project-agreement");
+    std::fs::write(
+        env.project.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nfixture = \"1.0.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        env.project.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"fixture\"]\n\n[[package]]\nname = \"fixture\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"aa\"\n",
+    )
+    .unwrap();
+    // The upstream fixture repo carries tags v1.0.0 and v1.1.0, so resolution
+    // finds a real tag for 1.0.0 rather than erroring.
+    assert!(
+        env.docm(&["add", "fixture", "--eco", "rust", "--repo", &env.upstream])
+            .status
+            .success()
+    );
+
+    let listing = String::from_utf8_lossy(&env.docm(&["list", "--project"]).stdout).into_owned();
+    assert!(listing.contains("1.0.0"), "{listing}");
+
+    let info = env.docm(&["info", "fixture"]);
+    let info_text = String::from_utf8_lossy(&info.stdout);
+    assert!(
+        info.status.success(),
+        "{}",
+        String::from_utf8_lossy(&info.stderr)
+    );
+    assert!(
+        info_text.contains("1.0.0"),
+        "pins and resolve disagree:\nlist --project: {listing}\ninfo: {info_text}"
+    );
+}
+
+#[test]
+fn a_ref_only_project_with_no_lockfile_renders_a_full_table() {
+    // The lockfile-less case is the shape a git-ecosystem project has, not a
+    // degradation: every row is a ref, and the table is not empty.
+    let env = Env::new("list-project-refs");
+    std::fs::write(
+        env.project.join("devkit.toml"),
+        format!(
+            "[config]\nroot = true\n\n[[docs.libs]]\nname = \"godot\"\necosystem = \"git\"\nref = \"v1.0.0\"\nrepo = \"{}\"\n",
+            env.upstream
+        ),
+    )
+    .unwrap();
+
+    let listing = env.docm(&["list", "--project"]);
+    let text = String::from_utf8_lossy(&listing.stdout);
+    assert!(listing.status.success(), "{text}");
+    assert!(text.contains("godot"), "{text}");
+    assert!(text.contains("v1.0.0"), "{text}");
+    assert!(text.contains("ref"), "source column says ref: {text}");
+    assert!(
+        !text.contains("not evidenced here"),
+        "nothing was dropped: {text}"
+    );
+}

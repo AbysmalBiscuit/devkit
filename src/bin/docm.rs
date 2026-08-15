@@ -62,6 +62,10 @@ enum Cmd {
     List {
         #[arg(long)]
         json: bool,
+        /// Show only what this checkout evidences, with the resolved version
+        /// each manifest and lockfile names, instead of the whole catalog.
+        #[arg(long)]
+        project: bool,
     },
     /// Fetch, re-resolve, re-materialize and verify registered libraries.
     Sync { names: Vec<String> },
@@ -118,7 +122,7 @@ fn main() -> Result<()> {
             cli.allow_default_branch,
         ),
         Cmd::Rm { name, project } => cmd_rm(&name, project),
-        Cmd::List { json } => cmd_list(json),
+        Cmd::List { json, project } => cmd_list(json, project),
         Cmd::Sync { names } => cmd_sync(&names, cli.allow_default_branch),
         Cmd::Path { name } => cmd_path(&name, cli.allow_default_branch),
         Cmd::Info { name, json } => cmd_info(&name, json, cli.allow_default_branch),
@@ -293,7 +297,21 @@ fn short(commit: &str) -> &str {
     &commit[..commit.len().min(12)]
 }
 
-fn cmd_list(json: bool) -> Result<()> {
+fn cmd_list(json: bool, project: bool) -> Result<()> {
+    if project {
+        // `pins` itself takes no lock and touches no cache; `main` still runs
+        // `upgrade::run` before every subcommand, including this one.
+        let pins = devkit_docs::pins::pins(&cwd()?, None)?;
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&devkit_docs::pins::envelope(&pins))?
+            );
+        } else {
+            print!("{}", devkit_docs::pins::render(&pins));
+        }
+        return Ok(());
+    }
     let d = discovered()?;
     let root = cache::docs_root();
     if json {
