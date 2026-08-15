@@ -1,0 +1,60 @@
+## pnpm-monorepo/apps/web/kysely
+ok version=0.28.17
+ok workspace=<ROOT>/apps/web
+ok source=apps/web installs it (pnpm-lock.yaml; 1 other version present)
+
+## pnpm-monorepo/apps/api/kysely
+ok version=0.27.3
+ok workspace=<ROOT>/apps/api
+ok source=apps/api installs it (pnpm-lock.yaml; 1 other version present)
+
+## pnpm-monorepo/apps/web/transitive
+err display=<ROOT>/apps/web does not declare `transitive` (it is transitive); pin the version with --ref.\nversions present in the lockfile: 3.2.1 (at packages.transitive@3.2.1)\ndeclared by: nothing in the lockfile declares it
+err alternate=<ROOT>/apps/web does not declare `transitive` (it is transitive); pin the version with --ref.\nversions present in the lockfile: 3.2.1 (at packages.transitive@3.2.1)\ndeclared by: nothing in the lockfile declares it
+err debug=<ROOT>/apps/web does not declare `transitive` (it is transitive); pin the version with --ref.\nversions present in the lockfile: 3.2.1 (at packages.transitive@3.2.1)\ndeclared by: nothing in the lockfile declares it
+
+## pnpm-monorepo/apps/web/nope
+err display=<ROOT>/apps/web does not declare `nope` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
+err alternate=<ROOT>/apps/web does not declare `nope` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
+err debug=<ROOT>/apps/web does not declare `nope` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
+
+## bun-workspace/apps/api/h3
+ok version=1.15.11
+ok workspace=<ROOT>/apps/api
+ok source=apps/api installs it (bun.lock)
+
+## bun-workspace/apps/api/transitive
+err display=<ROOT>/apps/api does not declare `transitive` (it is transitive); pin the version with --ref.\nversions present in the lockfile: 3.2.1 (at packages.transitive)\ndeclared by: nothing in the lockfile declares it
+err alternate=<ROOT>/apps/api does not declare `transitive` (it is transitive); pin the version with --ref.\nversions present in the lockfile: 3.2.1 (at packages.transitive)\ndeclared by: nothing in the lockfile declares it
+err debug=<ROOT>/apps/api does not declare `transitive` (it is transitive); pin the version with --ref.\nversions present in the lockfile: 3.2.1 (at packages.transitive)\ndeclared by: nothing in the lockfile declares it
+
+## npm-nested/apps/web/h3
+ok version=1.15.11
+ok workspace=<ROOT>/apps/web
+ok source=apps/web installs it (apps/web/node_modules/h3; package-lock.json; 1 other version present)
+
+## cargo-workspace/crates/app/serde
+ok version=1.0.200
+ok workspace=<ROOT>/crates/app
+ok source=crates/app installs it (Cargo.lock)
+
+## cargo-workspace/crates/app/tokio
+err display=<ROOT>/crates/app does not declare `tokio` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
+err alternate=<ROOT>/crates/app does not declare `tokio` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
+err debug=<ROOT>/crates/app does not declare `tokio` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
+
+## uv-project/./httpx
+ok version=0.27.2
+ok workspace=<ROOT>
+ok source=the root workspace installs it (uv.lock)
+
+## uv-project/./requests
+err display=<ROOT> does not declare `requests` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
+err alternate=<ROOT> does not declare `requests` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
+err debug=<ROOT> does not declare `requests` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
+
+## ambiguous-js/./h3
+err display=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock → 1.15.11; pnpm-lock.yaml → 1.0.0; add "packageManager" to package.json
+err alternate=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock → 1.15.11; pnpm-lock.yaml → 1.0.0; add "packageManager" to package.json
+err debug=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock → 1.15.11; pnpm-lock.yaml → 1.0.0; add "packageManager" to package.json
+
