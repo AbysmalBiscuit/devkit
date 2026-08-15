@@ -95,7 +95,11 @@ fn pin_for(
         .ecosystem
         .and_then(|ecosystem| selectors.get(&ecosystem))
         .map(|selector| match selector {
-            Ok(selector) => selector.inspect(&package),
+            // Undiagnosed: this readout renders neither the `undeclared`
+            // enumeration nor `Selection::source`, and collecting them costs a
+            // traversal of the whole lockfile for every registered library —
+            // including the ones the relevance filter drops.
+            Ok(selector) => selector.inspect_undiagnosed(&package),
             Err(reason) => Inspection {
                 evidence: Evidence::Unknown,
                 result: Err(anyhow::anyhow!(reason.clone())),

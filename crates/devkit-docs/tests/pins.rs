@@ -544,3 +544,128 @@ fn a_git_entry_without_a_ref_says_so_rather_than_reading_as_unregistered() {
     );
     assert_eq!(out[0].declared, Evidence::Unknown);
 }
+
+/// A pnpm workspace whose root importer declares `declared` libraries, over a
+/// lockfile padded with `filler` unrelated packages and their dependency
+/// edges — the shape of a large monorepo lockfile.
+fn pnpm_workspace(root: &Path, declared: usize, filler: usize) {
+    let mut lock = String::from("lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n");
+    for i in 0..declared {
+        lock.push_str(&format!(
+            "      lib-{i}:\n        specifier: ^1.0.0\n        version: 1.0.{i}\n"
+        ));
+    }
+    lock.push_str("packages:\n");
+    for i in 0..declared {
+        lock.push_str(&format!(
+            "  lib-{i}@1.0.{i}:\n    resolution: {{integrity: sha512-a{i}}}\n"
+        ));
+    }
+    for i in 0..filler {
+        lock.push_str(&format!(
+            "  '@scope{}/filler-{i}@2.{i}.0':\n    resolution: {{integrity: sha512-f{i}}}\n    engines: {{node: '>=18'}}\n",
+            i % 40
+        ));
+    }
+    lock.push_str("snapshots:\n");
+    for i in 0..declared {
+        lock.push_str(&format!("  lib-{i}@1.0.{i}: {{}}\n"));
+    }
+    for i in 0..filler {
+        lock.push_str(&format!(
+            "  '@scope{}/filler-{i}@2.{i}.0':\n    dependencies:\n",
+            i % 40
+        ));
+        for k in 0..4 {
+            let j = (i * 7 + k * 13) % filler.max(1);
+            lock.push_str(&format!("      '@scope{}/filler-{j}': 2.{j}.0\n", j % 40));
+        }
+    }
+    write(&root.join("pnpm-lock.yaml"), &lock);
+
+    let dependencies: Vec<String> = (0..declared)
+        .map(|i| format!("\"lib-{i}\":\"^1.0.0\""))
+        .collect();
+    write(
+        &root.join("package.json"),
+        &format!(
+            "{{\"name\":\"root\",\"packageManager\":\"pnpm@9.0.0\",\"dependencies\":{{{}}}}}",
+            dependencies.join(",")
+        ),
+    );
+    write(&root.join("devkit.toml"), "[config]\nroot = true\n");
+}
+
+fn js_manifest(count: usize, declared: usize) -> String {
+    (0..count)
+        .map(|i| {
+            let name = if i < declared {
+                format!("lib-{i}")
+            } else {
+                format!("absent-{i}")
+            };
+            format!(
+                "[[libs]]\nname = \"{name}\"\necosystem = \"js\"\nrepo = \"https://example.invalid/{name}\"\n"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn resolving_a_library_reads_only_the_rows_that_bear_on_it() {
+    // Every registered library costs one traversal of whatever the resolution
+    // touches, so a listing must touch only the rows that decide its own
+    // answer. A package row nothing in this workspace depends on is one of
+    // those: reaching it at all is the sweep this bounds.
+    let root = common::unique_tmp("pins-no-sweep");
+    pnpm_workspace(&root, 1, 4);
+    let mut lock = std::fs::read_to_string(root.join("pnpm-lock.yaml")).unwrap();
+    lock.push_str("  unrelated@9.9.9: not-a-mapping\n");
+    write(&root.join("pnpm-lock.yaml"), &lock);
+    write(&root.join("docs.toml"), &js_manifest(2, 1));
+
+    let out = pins::pins(&root, Some(&root.join("docs.toml"))).unwrap();
+    assert!(
+        matches!(&out[1].outcome, Outcome::Version { version, .. } if version == "1.0.0"),
+        "{:?}",
+        out[1].outcome
+    );
+    assert_eq!(
+        out[0].outcome,
+        Outcome::Undeclared,
+        "an absent package is a checked answer, not a lockfile complaint"
+    );
+}
+
+#[test]
+fn a_listing_does_not_cost_a_lockfile_traversal_per_library() {
+    // `devkit brief` runs this on a 10-second session hook against a machine-
+    // wide catalog that grows with every `/docs` lookup, so the cost must sit
+    // on the lockfile's size rather than on the product of that and the
+    // number of registrations.
+    let root = common::unique_tmp("pins-scaling");
+    pnpm_workspace(&root, 1, 3000);
+    let manifest = root.join("docs.toml");
+
+    let elapsed = |libraries: usize, declared: usize| {
+        write(&manifest, &js_manifest(libraries, declared));
+        (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let out = pins::pins(&root, Some(&manifest)).unwrap();
+                assert_eq!(out.len(), libraries);
+                started.elapsed()
+            })
+            .min()
+            .unwrap()
+    };
+
+    let one = elapsed(1, 1);
+    let many = elapsed(60, 1);
+    assert!(
+        many < one * 3,
+        "60 registrations cost {many:?} against {one:?} for one — \
+         the per-library term dominates the parse"
+    );
+}

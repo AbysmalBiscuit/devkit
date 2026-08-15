@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use serde_yaml_ng::{Mapping as YamlMap, Value as YamlValue};
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -128,10 +128,26 @@ impl Selector {
     /// of the checks that can fail afterwards, so a post-declaration failure
     /// still reports `Declared`.
     pub fn inspect(&self, package: &str) -> Inspection {
+        self.report(package, Diagnostics::Collect)
+    }
+
+    /// The same evidence and the same selected version, without the candidate
+    /// diagnostics: an `Undeclared` error enumerates no versions or declarers,
+    /// and `Selection::source` names no other versions present. Collecting
+    /// those costs a traversal of the whole lockfile per package, which a
+    /// caller resolving a whole catalog against one checkout pays even for the
+    /// packages that turn out to be undeclared. Rows outside the resolution's
+    /// own path are not read at all, so a lockfile this rejects for a malformed
+    /// unrelated row still resolves here.
+    pub fn inspect_undiagnosed(&self, package: &str) -> Inspection {
+        self.report(package, Diagnostics::Skip)
+    }
+
+    fn report(&self, package: &str, diagnostics: Diagnostics) -> Inspection {
         let mut evidence = Evidence::Unknown;
         let result = match &self.context {
-            LockContext::Js(context) => context.select(package, &mut evidence),
-            LockContext::Toml(context) => context.select(package, &mut evidence),
+            LockContext::Js(context) => context.select(package, diagnostics, &mut evidence),
+            LockContext::Toml(context) => context.select(package, diagnostics, &mut evidence),
         };
         Inspection { evidence, result }
     }
@@ -219,6 +235,27 @@ impl Candidates {
             .keys()
             .filter(|version| version.as_str() != selected)
             .count()
+    }
+}
+
+/// Whether a resolution collects the candidate set behind the `undeclared`
+/// diagnostic and `selection_source`'s "N other versions present" suffix.
+///
+/// Collecting it walks the whole lockfile once per package, so a caller
+/// resolving every registered library against one checkout pays a full
+/// traversal for each — including the ones it drops unread.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Diagnostics {
+    Collect,
+    Skip,
+}
+
+impl Diagnostics {
+    fn collect(self, gather: impl FnOnce() -> Result<Candidates>) -> Result<Candidates> {
+        match self {
+            Diagnostics::Collect => gather(),
+            Diagnostics::Skip => Ok(Candidates::default()),
+        }
     }
 }
 
@@ -367,7 +404,11 @@ impl JsContext {
     /// The parsed lockfile for `manager`, parsing on first use. The result —
     /// success or failure — is memoized, so a malformed lockfile yields the
     /// same error to every package that asks for it.
-    fn parsed(&self, manager: &str) -> Result<ParsedLock> {
+    ///
+    /// Borrowed rather than cloned: a monorepo lockfile parses into tens of
+    /// megabytes of `Value` tree, and handing out a copy per query would make
+    /// resolving a whole catalog cost one deep clone per library.
+    fn parsed(&self, manager: &str) -> Result<Ref<'_, ParsedLock>> {
         let index = self
             .present
             .borrow()
@@ -381,14 +422,23 @@ impl JsContext {
             let parsed = parse_js_lock(manager, &self.lock_dir).map_err(cache_err);
             self.present.borrow_mut()[index].1 = Some(parsed);
         }
-        match self.present.borrow()[index]
+        // The failure case is taken before the borrow is mapped: `Ref::map`
+        // cannot fail, and the replay needs the error by reference too.
+        if let Err(error) = self.present.borrow()[index]
             .1
             .as_ref()
             .expect("just filled")
         {
-            Ok(lock) => Ok(lock.clone()),
-            Err(error) => Err(replay(error)),
+            return Err(replay(error));
         }
+        Ok(Ref::map(self.present.borrow(), |slots| {
+            slots[index]
+                .1
+                .as_ref()
+                .expect("just filled")
+                .as_ref()
+                .expect("the error case returned above")
+        }))
     }
 
     /// Which present lockfile governs. Ambiguity is only reportable per
@@ -427,7 +477,10 @@ impl JsContext {
                     .map(|manager| {
                         let file = js_lock_file(manager);
                         let mut probe = Evidence::Unknown;
-                        let outcome = self.select_from(manager, package, &mut probe);
+                        // The message enumerates what each lockfile would have
+                        // answered, and each answer is the diagnosed one.
+                        let outcome =
+                            self.select_from(manager, package, Diagnostics::Collect, &mut probe);
                         match outcome {
                             Ok(selection) => format!("{file} → {}", selection.version),
                             Err(error) => format!("{file} → {error}"),
@@ -453,16 +506,18 @@ impl JsContext {
         &self,
         manager: &str,
         package: &str,
+        diagnostics: Diagnostics,
         evidence: &mut Evidence,
     ) -> Result<Selection> {
         let lock = self.parsed(manager)?;
-        match &lock {
+        match &*lock {
             ParsedLock::Bun(value) => bun(
                 value,
                 &self.lock_dir,
                 &self.workspace,
                 &self.relative,
                 package,
+                diagnostics,
                 evidence,
             ),
             ParsedLock::Pnpm(value) => pnpm(
@@ -471,6 +526,7 @@ impl JsContext {
                 &self.workspace,
                 &self.relative,
                 package,
+                diagnostics,
                 evidence,
             ),
             ParsedLock::Npm(value) => npm(
@@ -479,14 +535,20 @@ impl JsContext {
                 &self.workspace,
                 &self.relative,
                 package,
+                diagnostics,
                 evidence,
             ),
         }
     }
 
-    fn select(&self, package: &str, evidence: &mut Evidence) -> Result<Selection> {
+    fn select(
+        &self,
+        package: &str,
+        diagnostics: Diagnostics,
+        evidence: &mut Evidence,
+    ) -> Result<Selection> {
         let manager = self.choose(package)?;
-        self.select_from(manager, package, evidence)
+        self.select_from(manager, package, diagnostics, evidence)
     }
 }
 
@@ -760,6 +822,7 @@ fn bun(
     workspace: &Path,
     relative: &str,
     package: &str,
+    diagnostics: Diagnostics,
     evidence: &mut Evidence,
 ) -> Result<Selection> {
     let workspaces = value
@@ -769,7 +832,7 @@ fn bun(
     let entry = workspaces
         .get(relative)
         .with_context(|| format!("bun.lock has no workspace entry for `{relative}`"))?;
-    let candidates = bun_candidates(value, package)?;
+    let candidates = diagnostics.collect(|| bun_candidates(value, package))?;
     if !json_declares(
         entry,
         &BUN_DEP_CLASSES,
@@ -1010,6 +1073,7 @@ fn pnpm(
     workspace: &Path,
     relative: &str,
     package: &str,
+    diagnostics: Diagnostics,
     evidence: &mut Evidence,
 ) -> Result<Selection> {
     let importer_key = if relative.is_empty() { "." } else { relative };
@@ -1017,7 +1081,7 @@ fn pnpm(
         .get("importers")
         .and_then(|importers| importers.get(importer_key))
         .with_context(|| format!("pnpm-lock.yaml has no importer `{importer_key}`"))?;
-    let candidates = pnpm_candidates(value, package)?;
+    let candidates = diagnostics.collect(|| pnpm_candidates(value, package))?;
     let package_key = YamlValue::String(package.to_string());
     let mut matches = Vec::new();
     for (class, dependencies) in yaml_class_maps(
@@ -1165,6 +1229,7 @@ fn npm(
     workspace: &Path,
     relative: &str,
     package: &str,
+    diagnostics: Diagnostics,
     evidence: &mut Evidence,
 ) -> Result<Selection> {
     let packages = value
@@ -1174,7 +1239,7 @@ fn npm(
     let entry = packages
         .get(relative)
         .with_context(|| format!("package-lock.json has no entry for `{relative}`"))?;
-    let candidates = npm_candidates(packages, package)?;
+    let candidates = diagnostics.collect(|| npm_candidates(packages, package))?;
     let specs = json_declared_specs(
         entry,
         &NPM_DEP_CLASSES,
@@ -1479,11 +1544,19 @@ fn choose_member(
     }
 }
 
+/// The versions and declarers of `package` across a `[[package]]` lockfile.
+///
+/// `versions` is load-bearing — `TomlContext::select` picks the version out of
+/// it — so it is collected either way; matching a row costs one name compare.
+/// The declarer and resolved-edge halves feed the `undeclared` diagnostic
+/// alone, and decoding every row's dependency edges to build them is what
+/// makes this a traversal rather than a scan.
 fn package_candidates(
     packages: &[LockPackage],
     format: PackageFormat,
     package: &str,
     lock: &Path,
+    diagnostics: Diagnostics,
 ) -> Result<Candidates> {
     let mut candidates = Candidates::default();
     for row in packages {
@@ -1496,6 +1569,9 @@ fn package_candidates(
                 )
             })?;
             candidates.add_version(version, lock.display().to_string());
+        }
+        if diagnostics == Diagnostics::Skip {
+            continue;
         }
         for edge in package_edges(row, format)? {
             if edge.name == package {
@@ -1688,12 +1764,23 @@ impl TomlContext {
         )
     }
 
-    fn select(&self, package: &str, evidence: &mut Evidence) -> Result<Selection> {
+    fn select(
+        &self,
+        package: &str,
+        diagnostics: Diagnostics,
+        evidence: &mut Evidence,
+    ) -> Result<Selection> {
         let lock = self.lock_path.as_path();
         let member = self.member.as_str();
         let workspace = self.workspace.as_path();
         let own = &self.parsed.packages[self.own_index];
-        let candidates = package_candidates(&self.parsed.packages, self.format, package, lock)?;
+        let candidates = package_candidates(
+            &self.parsed.packages,
+            self.format,
+            package,
+            lock,
+            diagnostics,
+        )?;
         let matching_edges = package_edges(own, self.format)?
             .into_iter()
             .filter(|edge| edge.name == package)
