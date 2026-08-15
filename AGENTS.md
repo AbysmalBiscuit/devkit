@@ -185,7 +185,8 @@ When multiple sessions share one checkout, claim files before editing them with 
 
 ## Registry facade
 
-Go through `registry::{alloc, record_pid, release, release_ports, snapshot, prune, status_table}` — they
+Go through `registry::{alloc, record_pid, release, release_ports, snapshot, prune, listening_view,
+status_table, status_table_with}` — they
 keep liveness syscalls (bind/stat/kill) out of the exclusive lock. Don't reintroduce
 probing inside `with_lock`. This facade is also the seam the `devkitd` daemon plugs into.
 

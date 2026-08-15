@@ -176,9 +176,14 @@ fn relative_workspace(workspace: &Path, project_root: Option<&Path>, lock_dir: &
 }
 
 /// Registrations the filter withheld, split by why. The split matters:
-/// `undeclared` is a checked answer, `unknown` means the check could not run,
-/// and a project seeing several `unknown` has a configuration problem rather
-/// than a short dependency list.
+/// `undeclared` is a checked answer, `unknown` means no check ran.
+///
+/// `unknown` has both a benign and a diagnostic contributor, and the count
+/// alone cannot separate them. A git-ecosystem or ref-only registration has no
+/// importer to ask, so it lands here permanently and by design — a machine-wide
+/// `docm add <git-url> --ref <tag>` shows up in every checkout on the machine.
+/// A registration whose ecosystem does have an importer lands here only when
+/// that importer could not run: no manifest, or a lockfile that would not parse.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Dropped {
     pub undeclared: usize,

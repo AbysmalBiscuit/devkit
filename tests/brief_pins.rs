@@ -416,8 +416,8 @@ fn a_docs_only_project_renders_pins() {
 
 #[test]
 fn a_pins_only_brief_makes_no_devrun_claim() {
-    // Task 8 review finding: "This checkout is a devkit-managed project:
-    // dev servers, ports, canned tasks, and cross-session file locks are
+    // "This checkout is a devkit-managed project: dev servers,
+    // ports, canned tasks, and cross-session file locks are
     // coordinated by the devkit CLIs" is false for a checkout with no
     // devkit.toml at all — an agent would act on that claim as fact.
     let project = Project::docs_only("no-devrun-claim");
