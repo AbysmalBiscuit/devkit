@@ -279,6 +279,14 @@ switches decide whether it produces anything.
 |---|---|---|
 | `enabled` | `true` | The whole brief. `false` suppresses every section, and is read before any work is done. |
 | `pins` | `true` | The library-versions section only. |
+| `locks` | `true` | The `lockm status` line. Turn it off where only one session ever works in a checkout at a time. |
+
+The other sections need no switch: they are omitted when the checkout has
+nothing to report. A project with no configured apps gets neither the `devrun
+up` bullet, the `portm status` line, nor an `Apps` line; one with no `[tasks]`
+table gets no `devrun task` bullet and no task table; a worktree holding no
+ports gets no server table. The intro names only the facilities that survive,
+and a project left with none of them produces no devrun section at all.
 
 Set it in `~/.config/devkit/config.toml` as a personal default and override it
 per project in that project's `devkit.toml`. A malformed `[brief]` table falls

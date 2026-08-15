@@ -136,7 +136,7 @@ fn pins_only_emits_just_the_library_section() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("serde"), "{text}");
     assert!(!text.contains("tests"), "no tasks section: {text}");
-    assert!(!text.contains("devrun up"), "no devrun preamble: {text}");
+    assert!(!text.contains("devrun task"), "no devrun preamble: {text}");
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn pins_only_clears_the_watermark_so_the_next_if_changed_call_re_emits_the_full_
     let after_compaction = brief_with_stdin(&project, &["--if-changed"], session, "100");
     let text = String::from_utf8_lossy(&after_compaction.stdout);
     assert!(
-        text.contains("devrun up"),
+        text.contains("devrun task"),
         "the devrun half must come back after a compaction: {text}"
     );
 }

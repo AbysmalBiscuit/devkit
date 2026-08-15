@@ -7,6 +7,13 @@
 //! nothing when neither applies, so a SessionStart hook can call it
 //! unconditionally from any repository.
 //!
+//! Within the devrun half every section earns its place: a project with no
+//! configured apps is not told about `devrun up` or `portm`, one with no
+//! `[tasks]` table is not told about `devrun task`, and the intro names only
+//! the facilities that survive. The one section the checkout cannot answer for
+//! is `lockm` — whether sessions share this checkout is not observable — so
+//! that line is governed by `[brief] locks`.
+//!
 //! Two narrower emission modes let other hook events call it without spamming
 //! the session: `--pins-only` emits the library table alone, and `--if-changed`
 //! emits only when this checkout's state differs from what the session was last
@@ -106,6 +113,7 @@ struct BriefSnapshot {
     apps: Vec<String>,
     tasks: Vec<(String, String, String, String)>,
     servers: Vec<ServerKey>,
+    locks: bool,
     pins: Vec<PinKey>,
 }
 
@@ -126,6 +134,51 @@ struct PinKey {
     outcome: String,
 }
 
+/// The devrun half's content, each part absent when there is nothing to say.
+struct DevrunBrief {
+    apps: Option<String>,
+    tasks: Option<String>,
+    servers: Option<String>,
+    locks: bool,
+}
+
+/// Which devrun facilities a checkout has anything to say about. `render` and
+/// `snapshot` both decide the devrun half's existence through `any`: a
+/// snapshot that reports content for a brief `render` refuses to emit would
+/// stamp a watermark against text nobody was shown, and the session would
+/// never be told again.
+#[derive(Clone, Copy)]
+struct Facilities {
+    apps: bool,
+    tasks: bool,
+    servers: bool,
+    locks: bool,
+}
+
+impl Facilities {
+    /// A registry row is a port this worktree holds whether or not the catalog
+    /// still names the app that bound it, so either one keeps `devrun down`
+    /// and `portm status` relevant.
+    fn ports(self) -> bool {
+        self.apps || self.servers
+    }
+
+    fn any(self) -> bool {
+        self.ports() || self.tasks || self.locks
+    }
+}
+
+impl DevrunBrief {
+    fn facilities(&self) -> Facilities {
+        Facilities {
+            apps: self.apps.is_some(),
+            tasks: self.tasks.is_some(),
+            servers: self.servers.is_some(),
+            locks: self.locks,
+        }
+    }
+}
+
 impl BriefSnapshot {
     /// A stable byte string, so the digest does not depend on struct layout.
     fn canonical(&self) -> String {
@@ -142,6 +195,7 @@ impl BriefSnapshot {
                 s.port, s.app, s.role, s.pid, s.listening
             ));
         }
+        out.push_str(&format!("locks\t{}\n", self.locks));
         for p in &self.pins {
             out.push_str(&format!(
                 "pin\t{}\t{}\t{}\t{}\n",
@@ -241,9 +295,6 @@ fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
     let (relevant, _) = devkit_docs::pins::relevant(&pins);
     let pin_keys: Vec<PinKey> = relevant.iter().map(|pin| PinKey::of(pin)).collect();
     let devrun = devrun_project(&root, cwd);
-    if pin_keys.is_empty() && devrun.is_none() {
-        return None;
-    }
 
     let (apps, tasks) = match &devrun {
         Some(loaded) => {
@@ -268,7 +319,9 @@ fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
     // going down between them would make the watermark certify text nobody
     // was shown.
     let mut servers = Vec::new();
-    if let Ok(data) = registry::snapshot() {
+    if devrun.is_some()
+        && let Ok(data) = registry::snapshot()
+    {
         let view = registry::listening_view(&data, Some(&root));
         for (port, entry) in &data.entries {
             if entry.holder != root {
@@ -288,11 +341,23 @@ fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
     }
     servers.sort_by_key(|s| s.port);
 
+    let locks = devrun.is_some() && settings.locks;
+    let facilities = Facilities {
+        apps: !apps.is_empty(),
+        tasks: !tasks.is_empty(),
+        servers: !servers.is_empty(),
+        locks,
+    };
+    if pin_keys.is_empty() && !facilities.any() {
+        return None;
+    }
+
     Some(BriefSnapshot {
         root,
         apps,
         tasks,
         servers,
+        locks,
         pins: pin_keys,
     })
 }
@@ -317,37 +382,63 @@ fn render(cwd: &Path, settings: &BriefConfig) -> Option<String> {
     // Pins are computed before `load`: a devkit.toml carrying [docs] and
     // nothing devrun can use must still produce a brief.
     let pins = pins_section(&checkout_pins(cwd, settings));
-    let devrun = devrun_sections(&root, cwd);
+    let devrun = devrun_sections(&root, cwd, settings);
     if pins.is_none() && devrun.is_none() {
         return None;
     }
 
     let mut out = String::new();
     out.push_str("## devkit project context\n\n");
-    // The devrun claim ("dev servers, ports... are coordinated by the devkit
-    // CLIs") is only true when `devrun` resolved; a pins-only checkout has no
-    // devrun setup at all, so asserting it here would be a false claim
-    // injected into an agent's context.
-    let intro = if devrun.is_some() {
-        format!(
-            "This checkout ({root}) is a devkit-managed project: dev servers, ports, \
-             canned tasks, and cross-session file locks are coordinated by the devkit \
-             CLIs. Load the `using-devkit` skill before using them."
-        )
-    } else {
-        "This checkout has libraries registered with devkit; the table below is \
-         what its lockfiles pin."
-            .to_string()
+    // The devrun claim is only true when `devrun` resolved; a pins-only
+    // checkout has no devrun setup at all, so asserting it here would be a
+    // false claim injected into an agent's context.
+    let intro = match &devrun {
+        Some(sections) => devrun_intro(&root, sections.facilities()),
+        None => "This checkout has libraries registered with devkit; the table below is \
+                 what its lockfiles pin."
+            .to_string(),
     };
     out.push_str(&wrap(&intro));
     out.push_str("\n\n");
-    if let Some((apps, tasks, servers)) = devrun {
-        out.push_str(&devrun_text(&apps, &tasks, servers.as_deref()));
+    if let Some(sections) = &devrun {
+        out.push_str(&devrun_text(sections));
     }
     if let Some(section) = pins {
         out.push_str(&section);
     }
     Some(out)
+}
+
+/// The devrun claim, naming only the facilities this checkout actually has.
+/// Naming all four unconditionally would tell an agent about canned tasks a
+/// project has never configured, and about file locks its owner switched off.
+fn devrun_intro(root: &str, facilities: Facilities) -> String {
+    let mut named = Vec::new();
+    if facilities.ports() {
+        named.push("dev servers");
+        named.push("ports");
+    }
+    if facilities.tasks {
+        named.push("canned tasks");
+    }
+    if facilities.locks {
+        named.push("cross-session file locks");
+    }
+    format!(
+        "This checkout ({root}) is a devkit-managed project: {} are coordinated by the \
+         devkit CLIs. Load the `using-devkit` skill before using them.",
+        join_and(&named)
+    )
+}
+
+/// `["a"] → "a"`, `["a", "b"] → "a and b"`, `["a", "b", "c"] → "a, b, and c"`.
+fn join_and(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
 }
 
 /// Every registered library's pin for this checkout, empty when the `[brief]`
@@ -439,14 +530,17 @@ fn devrun_project(root: &str, cwd: &Path) -> Option<load::Loaded> {
 }
 
 /// Apps, tasks and live servers, or `None` when this checkout is not a
-/// devrun-configured project.
-fn devrun_sections(root: &str, cwd: &Path) -> Option<(String, String, Option<String>)> {
+/// devrun-configured project or has nothing to report about being one.
+fn devrun_sections(root: &str, cwd: &Path, settings: &BriefConfig) -> Option<DevrunBrief> {
     let loaded = devrun_project(root, cwd)?;
-    Some((
-        apps_line(&loaded.catalog),
-        task::tasks_text(&task::list(&loaded.config)),
-        live_servers(root),
-    ))
+    let rows = task::list(&loaded.config);
+    let sections = DevrunBrief {
+        apps: apps_line(&loaded.catalog),
+        tasks: (!rows.is_empty()).then(|| task::tasks_text(&rows)),
+        servers: live_servers(root),
+        locks: settings.locks,
+    };
+    sections.facilities().any().then_some(sections)
 }
 
 /// Whether the checkout at `root` is part of the configured project: either a
@@ -472,16 +566,21 @@ fn is_project_member(
         })
 }
 
-fn apps_line(catalog: &HashMap<String, App>) -> String {
+/// The configured apps, or `None` when none resolve — a line whose only
+/// content is that there is nothing to say is worth less than the space it
+/// takes in an agent's context.
+fn apps_line(catalog: &HashMap<String, App>) -> Option<String> {
     if catalog.is_empty() {
-        return "none resolved".into();
+        return None;
     }
     let mut apps: Vec<&App> = catalog.values().collect();
     apps.sort_by(|a, b| a.name.cmp(&b.name));
-    apps.iter()
-        .map(|a| format!("{} ({})", a.name, a.path))
-        .collect::<Vec<_>>()
-        .join(", ")
+    Some(
+        apps.iter()
+            .map(|a| format!("{} ({})", a.name, a.path))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 /// The port-registry rows held by this worktree, or `None` when it holds
@@ -495,21 +594,60 @@ fn live_servers(root: &str) -> Option<String> {
         .then(|| registry::status_table_with(&data, Some(root), &view))
 }
 
-fn devrun_text(apps: &str, tasks: &str, servers: Option<&str>) -> String {
+fn devrun_text(sections: &DevrunBrief) -> String {
+    let facilities = sections.facilities();
     let mut out = String::new();
-    out.push_str(
-        "- `devrun up <app>` / `devrun down` — start/stop supervised dev servers for this worktree\n",
-    );
-    out.push_str("- `devrun task <name> [--dry-run]` — run a canned project task (table below)\n");
-    out.push_str("- `portm status` — port registry; `lockm status` — advisory file locks\n\n");
-    out.push_str(&format!("Apps (`devrun up`): {apps}\n\n"));
-    out.push_str("### Tasks (`devrun task <name>`)\n\n");
-    out.push_str(tasks);
-    if let Some(s) = servers {
-        out.push_str("\n### Live servers in this worktree\n\n");
-        out.push_str(s);
+    if facilities.ports() {
+        out.push_str(
+            "- `devrun up <app>` / `devrun down` — start/stop supervised dev servers for this worktree\n",
+        );
+    }
+    if facilities.tasks {
+        out.push_str(
+            "- `devrun task <name> [--dry-run]` — run a canned project task (table below)\n",
+        );
+    }
+    let mut tools = Vec::new();
+    if facilities.ports() {
+        tools.push("`portm status` — port registry");
+    }
+    if facilities.locks {
+        tools.push("`lockm status` — advisory file locks");
+    }
+    if !tools.is_empty() {
+        out.push_str(&format!("- {}\n", tools.join("; ")));
+    }
+
+    if let Some(apps) = &sections.apps {
+        separate(&mut out);
+        out.push_str(&format!("Apps (`devrun up`): {apps}\n"));
+    }
+    if let Some(tasks) = &sections.tasks {
+        separate(&mut out);
+        out.push_str("### Tasks (`devrun task <name>`)\n\n");
+        out.push_str(tasks);
+    }
+    if let Some(servers) = &sections.servers {
+        separate(&mut out);
+        out.push_str("### Live servers in this worktree\n\n");
+        out.push_str(servers);
+    }
+    // `ui::table` renders without a trailing newline, so a half ending in a
+    // table would otherwise butt the library section's heading against its
+    // last row.
+    if !out.ends_with('\n') {
+        out.push('\n');
     }
     out
+}
+
+/// Open a blank line before the next block, unless one is already there.
+/// Sections appear or not independently, so no block can know whether it is
+/// following another one.
+fn separate(out: &mut String) {
+    if !out.is_empty() && !out.ends_with("\n\n") {
+        out.push('\n');
+    }
 }
 
 #[cfg(test)]
@@ -541,6 +679,7 @@ mod tests {
             "an unreadable config costs a brief, never withholds one"
         );
         assert!(cfg.pins);
+        assert!(cfg.locks);
     }
 
     #[test]
@@ -569,15 +708,105 @@ mod tests {
         assert!(is_project_member(root, &layers, Some(&home), &catalog));
     }
 
+    fn brief(
+        apps: Option<&str>,
+        tasks: Option<&str>,
+        servers: Option<&str>,
+        locks: bool,
+    ) -> DevrunBrief {
+        DevrunBrief {
+            apps: apps.map(str::to_string),
+            tasks: tasks.map(str::to_string),
+            servers: servers.map(str::to_string),
+            locks,
+        }
+    }
+
     #[test]
     fn render_text_sections_and_optional_servers() {
-        let text = devrun_text("api (apps/api)", "NAME KIND\n", None);
+        let text = devrun_text(&brief(
+            Some("api (apps/api)"),
+            Some("NAME KIND\n"),
+            None,
+            true,
+        ));
         assert!(text.contains("api (apps/api)"), "{text}");
         assert!(text.contains("devrun task"), "{text}");
         assert!(!text.contains("Live servers"), "{text}");
 
-        let with = devrun_text("api (apps/api)", "NAME KIND\n", Some("PORT APP\n"));
+        let with = devrun_text(&brief(
+            Some("api (apps/api)"),
+            Some("NAME KIND\n"),
+            Some("PORT APP\n"),
+            true,
+        ));
         assert!(with.contains("Live servers in this worktree"), "{with}");
         assert!(with.contains("PORT APP"), "{with}");
+    }
+
+    #[test]
+    fn no_apps_drops_the_server_and_port_lines() {
+        let text = devrun_text(&brief(None, Some("NAME KIND\n"), None, true));
+        assert!(!text.contains("Apps (`devrun up`)"), "{text}");
+        assert!(!text.contains("devrun up"), "{text}");
+        assert!(!text.contains("portm status"), "{text}");
+        assert!(text.contains("devrun task"), "{text}");
+        assert!(text.contains("lockm status"), "{text}");
+    }
+
+    #[test]
+    fn no_tasks_drops_the_task_bullet_and_section() {
+        let text = devrun_text(&brief(Some("api (apps/api)"), None, None, true));
+        assert!(!text.contains("devrun task"), "{text}");
+        assert!(text.contains("Apps (`devrun up`)"), "{text}");
+    }
+
+    #[test]
+    fn locks_off_drops_the_lockm_line_and_keeps_portm() {
+        let text = devrun_text(&brief(
+            Some("api (apps/api)"),
+            Some("NAME KIND\n"),
+            None,
+            false,
+        ));
+        assert!(!text.contains("lockm"), "{text}");
+        assert!(text.contains("portm status"), "{text}");
+    }
+
+    #[test]
+    fn a_live_server_claims_ports_without_a_catalog_entry() {
+        let text = devrun_text(&brief(None, None, Some("PORT APP\n"), false));
+        assert!(text.contains("devrun down"), "{text}");
+        assert!(text.contains("portm status"), "{text}");
+        assert!(text.contains("Live servers"), "{text}");
+    }
+
+    #[test]
+    fn the_intro_names_only_the_facilities_present() {
+        let full = devrun_intro("/w", brief(Some("a"), Some("t"), None, true).facilities());
+        assert!(
+            full.contains("dev servers, ports, canned tasks, and cross-session file locks"),
+            "{full}"
+        );
+
+        let ports = devrun_intro("/w", brief(Some("a"), None, None, false).facilities());
+        assert!(
+            ports.contains("dev servers and ports are coordinated"),
+            "{ports}"
+        );
+        assert!(!ports.contains("canned tasks"), "{ports}");
+        assert!(!ports.contains("file locks"), "{ports}");
+
+        let locks = devrun_intro("/w", brief(None, None, None, true).facilities());
+        assert!(
+            locks.contains("cross-session file locks are coordinated"),
+            "{locks}"
+        );
+    }
+
+    #[test]
+    fn a_member_with_nothing_to_report_has_no_devrun_half() {
+        assert!(!brief(None, None, None, false).facilities().any());
+        assert!(brief(None, None, None, true).facilities().any());
     }
 }
