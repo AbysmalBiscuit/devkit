@@ -378,11 +378,7 @@ pub fn envelope(pins: &[Pin]) -> serde_json::Value {
             serde_json::json!({
                 "name": pin.name,
                 "project_scoped": pin.project_scoped,
-                "declared": match pin.declared {
-                    Evidence::Declared => "declared",
-                    Evidence::Undeclared => "undeclared",
-                    Evidence::Unknown => "unknown",
-                },
+                "declared": pin.declared.as_str(),
                 "outcome": outcome_json(&pin.outcome),
             })
         })

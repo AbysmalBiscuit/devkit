@@ -91,6 +91,20 @@ pub enum Evidence {
     Unknown,
 }
 
+impl Evidence {
+    /// The name every reader of a pin uses for this evidence. The JSON
+    /// envelope and the brief's change watermark both carry it and both
+    /// describe the same pin; two hand-written maps in two crates drift apart
+    /// silently, and a drifted watermark changes what "changed" means.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Evidence::Declared => "declared",
+            Evidence::Undeclared => "undeclared",
+            Evidence::Unknown => "unknown",
+        }
+    }
+}
+
 pub struct Inspection {
     pub evidence: Evidence,
     pub result: Result<Selection>,

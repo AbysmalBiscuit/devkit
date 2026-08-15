@@ -151,16 +151,11 @@ impl BriefSnapshot {
 
 impl PinKey {
     fn of(pin: &devkit_docs::pins::Pin) -> Self {
-        use devkit_docs::importers::Evidence;
         use devkit_docs::pins::Outcome;
         PinKey {
             name: pin.name.clone(),
             project_scoped: pin.project_scoped,
-            declared: match pin.declared {
-                Evidence::Declared => "declared",
-                Evidence::Undeclared => "undeclared",
-                Evidence::Unknown => "unknown",
-            },
+            declared: pin.declared.as_str(),
             outcome: match &pin.outcome {
                 Outcome::Version {
                     version,
