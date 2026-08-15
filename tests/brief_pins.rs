@@ -63,9 +63,13 @@ impl Project {
             .current_dir(&self.root)
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
-            // Isolate the state dir so a test never reads or writes the
-            // machine's real registry and watermarks.
+            // Isolate the state and data dirs so a test never reads or writes
+            // the machine's real registry, watermarks, or docs cache. `devkit
+            // brief` doesn't reach the data dir today, but isolating only one
+            // of the two helpers invites the next caller to copy the wrong
+            // one.
             .env("XDG_STATE_HOME", self.home.join("state"))
+            .env("XDG_DATA_HOME", self.home.join("data"))
             .env("COLUMNS", "100")
             .output()
             .unwrap()
@@ -78,6 +82,11 @@ impl Project {
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .env("XDG_STATE_HOME", self.home.join("state"))
+            // `docm`'s main() runs upgrade::run(cache::docs_root()) before
+            // dispatching most subcommands, and docs_root() resolves through
+            // XDG_DATA_HOME when the parent process has it set — without
+            // this, the migration runs against the developer's real cache.
+            .env("XDG_DATA_HOME", self.home.join("data"))
             .env("COLUMNS", "100")
             .output()
             .unwrap()
@@ -139,6 +148,36 @@ fn a_docs_only_project_renders_pins() {
 }
 
 #[test]
+fn a_pins_only_brief_makes_no_devrun_claim() {
+    // Task 8 review finding: "This checkout is a devkit-managed project:
+    // dev servers, ports, canned tasks, and cross-session file locks are
+    // coordinated by the devkit CLIs" is false for a checkout with no
+    // devkit.toml at all — an agent would act on that claim as fact.
+    let project = Project::docs_only("no-devrun-claim");
+    std::fs::remove_file(project.root.join("devkit.toml")).unwrap();
+
+    let text = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
+    assert!(text.contains("serde"), "{text}");
+    assert!(
+        !text.contains("coordinated by the devkit"),
+        "pins-only brief still makes the devrun claim: {text}"
+    );
+}
+
+#[test]
+fn a_devrun_brief_still_makes_the_devrun_claim() {
+    // The inverse of the above: the claim is accurate and must not
+    // disappear when this checkout does have a devrun setup.
+    let project = Project::docs_only("devrun-claim");
+    project.set_config(&format!(
+        "[config]\nroot = true\n\n{DEFAULTS}[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
+    ));
+
+    let text = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
+    assert!(text.contains("coordinated by the devkit"), "{text}");
+}
+
+#[test]
 fn a_broken_docs_manifest_leaves_the_rest_of_the_brief() {
     let project = Project::docs_only("broken-manifest");
     write(
@@ -152,7 +191,10 @@ fn a_broken_docs_manifest_leaves_the_rest_of_the_brief() {
     let out = project.brief(&[]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success());
-    assert!(text.contains("check"), "tasks still render: {text}");
+    // "check" alone is also a substring of the always-present "checkout" in
+    // the intro sentence; the task's own description column is what only the
+    // Tasks section can produce.
+    assert!(text.contains("tests"), "tasks still render: {text}");
     assert!(
         !text.contains("Library versions"),
         "the pins section is omitted: {text}"
@@ -182,7 +224,10 @@ fn brief_pins_false_suppresses_only_that_section() {
     ));
     let out = project.brief(&[]);
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("check"), "{text}");
+    // "check" alone is also a substring of the always-present "checkout" in
+    // the intro sentence; the task's own description column is what only the
+    // Tasks section can produce.
+    assert!(text.contains("tests"), "tasks still render: {text}");
     assert!(!text.contains("serde"), "{text}");
 }
 

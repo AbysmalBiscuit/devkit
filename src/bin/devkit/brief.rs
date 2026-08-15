@@ -55,11 +55,22 @@ fn render(cwd: &Path) -> Option<String> {
 
     let mut out = String::new();
     out.push_str("## devkit project context\n\n");
-    out.push_str(&wrap(&format!(
-        "This checkout ({root}) is a devkit-managed project: dev servers, ports, \
-         canned tasks, and cross-session file locks are coordinated by the devkit \
-         CLIs. Load the `using-devkit` skill before using them."
-    )));
+    // The devrun claim ("dev servers, ports... are coordinated by the devkit
+    // CLIs") is only true when `devrun` resolved; a pins-only checkout has no
+    // devrun setup at all, so asserting it here would be a false claim
+    // injected into an agent's context.
+    let intro = if devrun.is_some() {
+        format!(
+            "This checkout ({root}) is a devkit-managed project: dev servers, ports, \
+             canned tasks, and cross-session file locks are coordinated by the devkit \
+             CLIs. Load the `using-devkit` skill before using them."
+        )
+    } else {
+        "This checkout has libraries registered with devkit; the table below is \
+         what its lockfiles pin."
+            .to_string()
+    };
+    out.push_str(&wrap(&intro));
     out.push_str("\n\n");
     if let Some((apps, tasks, servers)) = devrun {
         out.push_str(&devrun_text(&apps, &tasks, servers.as_deref()));
@@ -104,6 +115,10 @@ fn pins_text(table: &str) -> String {
 /// token longer than the width still overflows its line. Prose in this file
 /// embeds a run-time path of unbounded length, so a fixed-width literal
 /// cannot stand in for wrapping.
+///
+/// Takes a single paragraph: `split_whitespace` treats `\n` as ordinary
+/// whitespace, so any line breaks already in `text` are not preserved —
+/// multi-line input is rejoined and re-wrapped as one paragraph.
 fn wrap(text: &str) -> String {
     let width = devkit_common::ui::term_width();
     let mut out = String::new();
