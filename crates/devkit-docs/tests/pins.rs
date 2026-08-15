@@ -396,7 +396,7 @@ fn a_pathological_cell_is_truncated_visibly() {
     let text = pins::render(&all);
     assert!(text.contains('…'), "truncation marker present: {text}");
     assert!(
-        text.len() < 4_500,
+        text.len() <= 4_096,
         "section stays inside its budget: {}",
         text.len()
     );
@@ -407,20 +407,56 @@ fn a_pathological_cell_is_truncated_visibly() {
 }
 
 #[test]
+fn a_wide_cell_forces_column_widening_that_the_budget_still_respects() {
+    // `ui::table`'s dynamic arrangement sizes each column to its widest cell
+    // across every row, so one cell approaching CELL_BUDGET widens (and
+    // wraps) every row in the table at once. A per-row cost estimate that
+    // only looks at each row's own cells cannot see this coming; only a
+    // render-then-measure pass can. Cell widths climb from 10 to 194 bytes
+    // across 24 rows — a spread wide enough to actually trigger wrapping,
+    // where the old estimate-only render undercounted the true cost by more
+    // than 10% and landed at 4593 bytes.
+    let all: Vec<Pin> = (0..24)
+        .map(|i| {
+            pin(
+                &format!("lib{i:02}"),
+                Outcome::Unresolved("x".repeat(10 + i * 8)),
+                true,
+                Ev::Unknown,
+            )
+        })
+        .collect();
+    let text = pins::render(&all);
+    assert!(text.len() <= 4_096, "section budget: {}", text.len());
+}
+
+#[test]
 fn a_multibyte_cell_is_truncated_on_a_char_boundary() {
     // "本" is 3 bytes in UTF-8; 67 repeats is 201 bytes, one past
-    // CELL_BUDGET, so a naive 200-byte cut lands mid-character. A String can
-    // never hold invalid UTF-8, so getting this wrong panics rather than
-    // corrupts — this test's job is to make sure render() returns at all.
+    // CELL_BUDGET (200). CELL_BUDGET - '…'.len_utf8() = 197, and the
+    // largest 3-byte-aligned boundary at or below 197 is 195 (65 chars) — a
+    // naive 200-byte cut instead lands mid-character.
     let reason = "本".repeat(67);
     let all = vec![pin(
         "multibyte",
-        Outcome::Unresolved(reason),
+        Outcome::Unresolved(reason.clone()),
         true,
         Ev::Unknown,
     )];
     let text = pins::render(&all);
+
+    // `ui::table`'s dynamic arrangement may wrap this long cell across
+    // physical lines, so a contiguous substring check would be sensitive to
+    // wrapping rather than to the truncation boundary. Counting characters
+    // is not: exactly 65 survive the cut, never 64 (off by one short) or 66
+    // (sliced past the boundary).
+    let survivors = text.chars().filter(|&c| c == '本').count();
+    assert_eq!(survivors, 65, "char-aligned cut keeps exactly 65: {text}");
     assert!(text.contains('…'), "truncation marker present: {text}");
+    assert!(
+        !text.contains(&reason),
+        "the untruncated reason must not appear: {text}"
+    );
 }
 
 #[test]

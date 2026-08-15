@@ -185,24 +185,48 @@ pub fn relevant(pins: &[Pin]) -> (Vec<&Pin>, Dropped) {
 /// 100 columns yields 400 lines, not a truncation. These bound bytes.
 const CELL_BUDGET: usize = 200;
 const SECTION_BUDGET: usize = 4096;
-/// Reserved out of `SECTION_BUDGET` so the marker row never competes with the
-/// rows it is reporting on.
+/// Reserved out of `SECTION_BUDGET` when estimating how many rows to try, so
+/// the estimate leaves room for the marker line. The final output is
+/// measured and shrunk to fit regardless, so this reserve affects only how
+/// many shrink iterations that fitting pass needs, never correctness.
 const MARKER_RESERVE: usize = 64;
 
-/// The §5 table plus the dropped-count footer. Newline-terminated.
+/// Renders the pins table plus the dropped-count footer, fit to
+/// `SECTION_BUDGET` bytes. Newline-terminated.
 pub fn render(pins: &[Pin]) -> String {
     let (relevant_pins, dropped) = relevant(pins);
     let rows: Vec<[String; 3]> = relevant_pins.iter().map(|pin| row(pin)).collect();
 
+    let mut shown = estimate_fit(&rows);
+    let mut out = render_section(&rows, shown, &dropped);
+    // `ui::table`'s dynamic arrangement sizes each column to the widest cell
+    // across *every* row, so a single near-`CELL_BUDGET` cell can widen (and
+    // wrap) every admitted row at once — `estimate_fit` prices each row only
+    // against itself and cannot see that. Measure the real rendered output
+    // and drop whole rows until it fits; the estimate errs low (it ignores
+    // shared-column widening, which only ever adds bytes), so this usually
+    // converges in a few steps rather than one per row. At `shown == 0` the
+    // loop stops regardless: the marker and footer alone are the floor this
+    // function can reach, and that floor is not itself budget-checked.
+    while out.len() > SECTION_BUDGET && shown > 0 {
+        shown -= 1;
+        out = render_section(&rows, shown, &dropped);
+    }
+    out
+}
+
+/// A cheap starting guess for how many rows fit in `SECTION_BUDGET`, pricing
+/// each row from its own cell lengths. `render` treats this as a starting
+/// point only and re-measures the actual output, so under- or over-shooting
+/// here costs iterations, never correctness.
+fn estimate_fit(rows: &[[String; 3]]) -> usize {
     // comfy-table pads and separates each of the 3 columns (2 chars padding
-    // per column plus a 1-char separator between columns) and joins rows with
-    // a newline; this constant approximates that measured per-row overhead so
-    // the whole-row budget below holds even though `ui::table` itself bounds
-    // line width, not total size.
+    // per column plus a 1-char separator between columns) and joins rows
+    // with a newline; this approximates that per-row overhead.
     const ROW_OVERHEAD: usize = 16;
     let mut budget = SECTION_BUDGET.saturating_sub(MARKER_RESERVE);
     let mut shown = 0usize;
-    for row in &rows {
+    for row in rows {
         let cost = row.iter().map(String::len).sum::<usize>() + ROW_OVERHEAD;
         if cost > budget {
             break;
@@ -210,7 +234,12 @@ pub fn render(pins: &[Pin]) -> String {
         budget -= cost;
         shown += 1;
     }
+    shown
+}
 
+/// Renders `shown` of `rows` as a table, a marker line naming how many were
+/// left out, and the dropped-count footer.
+fn render_section(rows: &[[String; 3]], shown: usize, dropped: &Dropped) -> String {
     let mut out = String::new();
     if rows.is_empty() {
         out.push_str("no registered libraries are evidenced in this checkout\n");
@@ -230,7 +259,7 @@ pub fn render(pins: &[Pin]) -> String {
             ));
         }
     }
-    if let Some(footer) = footer(&dropped) {
+    if let Some(footer) = footer(dropped) {
         out.push_str(&footer);
         out.push('\n');
     }
