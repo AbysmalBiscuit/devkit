@@ -17,6 +17,11 @@ pub struct Selection {
     /// `Cargo.lock`, …). Carried rather than derived: `source` is prose and
     /// `workspace` alone cannot say which of three JS lockfiles was consulted.
     pub lockfile: String,
+    /// The directory containing `lockfile`. An ancestor of `workspace` by
+    /// construction (every manager resolves `workspace` by walking up from
+    /// it to find the lockfile), so a caller can name `workspace` relative to
+    /// something even when it has no project root of its own to anchor on.
+    pub lock_dir: PathBuf,
 }
 
 /// `package` is present in the lockfile only transitively, or not at all —
@@ -587,6 +592,7 @@ fn bun(
         version: version.to_string(),
         source: selection_source(relative, "bun.lock", &candidates, version),
         lockfile: "bun.lock".to_string(),
+        lock_dir: lock_dir.to_path_buf(),
     })
 }
 
@@ -844,6 +850,7 @@ fn pnpm(
         source: selection_source(relative, "pnpm-lock.yaml", &candidates, &version),
         version,
         lockfile: "pnpm-lock.yaml".to_string(),
+        lock_dir: lock_dir.to_path_buf(),
     })
 }
 
@@ -1015,6 +1022,7 @@ fn npm(
                     version,
                 ),
                 lockfile: "package-lock.json".to_string(),
+                lock_dir: lock_dir.to_path_buf(),
             });
         }
         match directory.rsplit_once('/') {
@@ -1455,6 +1463,7 @@ fn from_package_array(
         source: selection_source(&relative, detail, &candidates, &version),
         version,
         lockfile: detail.to_string(),
+        lock_dir: lock_dir.to_path_buf(),
     })
 }
 

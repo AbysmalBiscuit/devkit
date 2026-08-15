@@ -190,6 +190,81 @@ fn a_broken_manifest_is_an_error_not_an_empty_list() {
 }
 
 #[test]
+fn a_globally_registered_library_stays_relative_without_any_devkit_toml() {
+    // Root-level resolution: the workspace is also the lockfile's own
+    // directory, so there is no project root anywhere above `start`.
+    let root = common::unique_tmp("pins-no-devkit-root");
+    write(
+        &root.join("app/Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.200\"\n",
+    );
+    write(
+        &root.join("app/Cargo.lock"),
+        r#"version = 4
+
+[[package]]
+name = "app"
+version = "0.1.0"
+dependencies = ["serde"]
+
+[[package]]
+name = "serde"
+version = "1.0.200"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa"
+"#,
+    );
+    write(
+        &root.join("docs.toml"),
+        "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nrepo = \"https://example.invalid/serde\"\n",
+    );
+
+    let out = pins::pins(&root.join("app"), Some(&root.join("docs.toml"))).unwrap();
+    match &out[0].outcome {
+        Outcome::Version { workspace, .. } => assert_eq!(workspace, Path::new(".")),
+        other => panic!("expected a version, got {other:?}"),
+    }
+
+    // Member resolution: the workspace sits below the lockfile's directory,
+    // and still no `devkit.toml` exists anywhere above `start`.
+    let root = common::unique_tmp("pins-no-devkit-member");
+    write(
+        &root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/app\"]\nresolver = \"2\"\n",
+    );
+    write(
+        &root.join("crates/app/Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.200\"\n",
+    );
+    write(
+        &root.join("Cargo.lock"),
+        r#"version = 4
+
+[[package]]
+name = "app"
+version = "0.1.0"
+dependencies = ["serde"]
+
+[[package]]
+name = "serde"
+version = "1.0.200"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa"
+"#,
+    );
+    write(
+        &root.join("docs.toml"),
+        "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nrepo = \"https://example.invalid/serde\"\n",
+    );
+
+    let out = pins::pins(&root.join("crates/app"), Some(&root.join("docs.toml"))).unwrap();
+    match &out[0].outcome {
+        Outcome::Version { workspace, .. } => assert_eq!(workspace, Path::new("crates/app")),
+        other => panic!("expected a version, got {other:?}"),
+    }
+}
+
+#[test]
 fn an_unresolved_reason_is_one_line() {
     // The `undeclared` diagnostic is three lines; that belongs in `docm info`,
     // not in injected context. Unresolved carries `{err}`, never `{err:#}`.

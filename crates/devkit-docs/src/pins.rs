@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// The importer graph named a version. `workspace` is the directory whose
-    /// manifest selected it, relative to the project root where it is under
-    /// one; `lockfile` is the file that carried it.
+    /// manifest selected it, relative to the project root when there is one,
+    /// else to the lockfile's own directory; `lockfile` is the file that
+    /// carried it.
     Version {
         version: String,
         workspace: PathBuf,
@@ -88,17 +89,24 @@ fn pin_for(start: &Path, entry: &LibEntry, global_path: &Path, project_root: Opt
             Ok(()) => Outcome::Ref(pin.to_string()),
             Err(error) => Outcome::Unresolved(format!("{error}")),
         },
-        None => match (entry.ecosystem, inspection) {
-            (None, _) => {
+        // `inspection` is `entry.ecosystem.map(..)`, so zipping the two
+        // collapses the "no ecosystem" and "ecosystem present" cases into
+        // exactly the two states that are actually reachable.
+        None => match entry.ecosystem.zip(inspection) {
+            None => {
                 Outcome::Unresolved("no ecosystem and no ref; add one with `docm add`".to_string())
             }
-            (Some(Ecosystem::Git), _) => {
+            Some((Ecosystem::Git, _)) => {
                 Outcome::Unresolved("git entry with no ref pinned".to_string())
             }
-            (Some(_), Some(inspection)) => match inspection.result {
+            Some((_, inspection)) => match inspection.result {
                 Ok(selection) => Outcome::Version {
                     version: selection.version,
-                    workspace: relative_workspace(&selection.workspace, project_root),
+                    workspace: relative_workspace(
+                        &selection.workspace,
+                        project_root,
+                        &selection.lock_dir,
+                    ),
                     lockfile: selection.lockfile,
                 },
                 Err(error) if error.downcast_ref::<Undeclared>().is_some() => Outcome::Undeclared,
@@ -106,7 +114,6 @@ fn pin_for(start: &Path, entry: &LibEntry, global_path: &Path, project_root: Opt
                 // lines, and that belongs in `docm info`, not injected context.
                 Err(error) => Outcome::Unresolved(format!("{error}")),
             },
-            (Some(_), None) => Outcome::Unresolved("no ecosystem resolved".to_string()),
         },
     };
 
@@ -120,8 +127,18 @@ fn pin_for(start: &Path, entry: &LibEntry, global_path: &Path, project_root: Opt
 
 /// A workspace named the way a reader of this project sees it. Absolute paths
 /// are noise in a table injected into a session that already knows its root.
-fn relative_workspace(workspace: &Path, project_root: Option<&Path>) -> PathBuf {
-    match project_root.and_then(|root| workspace.strip_prefix(root).ok()) {
+///
+/// Anchored on the project root first, falling back to the lockfile's own
+/// directory when there is no project root (a globally-registered library
+/// resolved outside any `devkit.toml`) or the workspace sits outside it.
+/// `lock_dir` is an ancestor of `workspace` by construction — every importer
+/// resolves `workspace` by walking up from it to find the lockfile — so the
+/// absolute fallback below is unreachable and kept only as a safety net.
+fn relative_workspace(workspace: &Path, project_root: Option<&Path>, lock_dir: &Path) -> PathBuf {
+    let relative = project_root
+        .and_then(|root| workspace.strip_prefix(root).ok())
+        .or_else(|| workspace.strip_prefix(lock_dir).ok());
+    match relative {
         Some(relative) if relative.as_os_str().is_empty() => PathBuf::from("."),
         Some(relative) => relative.to_path_buf(),
         None => workspace.to_path_buf(),
