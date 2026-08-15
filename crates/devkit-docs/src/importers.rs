@@ -145,14 +145,18 @@ impl Selector {
         self.report(package, Diagnostics::Collect)
     }
 
-    /// The same evidence and the same selected version, without the candidate
-    /// diagnostics: an `Undeclared` error enumerates no versions or declarers,
-    /// and `Selection::source` names no other versions present. Collecting
-    /// those costs a traversal of the whole lockfile per package, which a
-    /// caller resolving a whole catalog against one checkout pays even for the
-    /// packages that turn out to be undeclared. Rows outside the resolution's
-    /// own path are not read at all, so a lockfile this rejects for a malformed
-    /// unrelated row still resolves here.
+    /// The same evidence and the same selected version, without the full
+    /// candidate diagnostics. For the JS lockfiles, gathering the candidate
+    /// set is a second, diagnostics-only traversal of the whole lockfile;
+    /// skipping it means an `Undeclared` error there enumerates no versions or
+    /// declarers, and `Selection::source` names no other versions present. For
+    /// cargo and uv, resolution itself has to scan the lockfile to build the
+    /// version set — a pinned version is checked against it and an unpinned
+    /// one needs it to detect a fork — so that scan and its versions stay;
+    /// only the declarer indexing on top of it is skipped, and there
+    /// `Selection::source` can still report other versions present. Rows
+    /// outside the resolution's own path are not read at all, so a lockfile
+    /// this rejects for a malformed unrelated row still resolves here.
     pub fn inspect_undiagnosed(&self, package: &str) -> Inspection {
         self.report(package, Diagnostics::Skip)
     }

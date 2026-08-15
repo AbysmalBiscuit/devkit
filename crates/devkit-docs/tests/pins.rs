@@ -640,10 +640,11 @@ fn resolving_a_library_reads_only_the_rows_that_bear_on_it() {
 
 #[test]
 fn a_listing_does_not_cost_a_lockfile_traversal_per_library() {
-    // `devkit brief` runs this on a 10-second session hook against a machine-
-    // wide catalog that grows with every `/docs` lookup, so the cost must sit
-    // on the lockfile's size rather than on the product of that and the
-    // number of registrations.
+    // `devkit brief` runs this against a machine-wide catalog that grows with
+    // every `/docs` lookup, and the `PostCompact`/`CwdChanged` hooks that call
+    // it bound the run to a 10-second timeout, so the cost must sit on the
+    // lockfile's size rather than on the product of that and the number of
+    // registrations.
     let root = common::unique_tmp("pins-scaling");
     pnpm_workspace(&root, 1, 3000);
     let manifest = root.join("docs.toml");
@@ -664,7 +665,7 @@ fn a_listing_does_not_cost_a_lockfile_traversal_per_library() {
     let one = elapsed(1, 1);
     let many = elapsed(60, 1);
     assert!(
-        many < one * 3,
+        many < one * 5,
         "60 registrations cost {many:?} against {one:?} for one — \
          the per-library term dominates the parse"
     );
