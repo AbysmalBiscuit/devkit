@@ -116,9 +116,19 @@ Claude and Cursor still need a live test.
     `hooks/hooks-codex.json` behind a `hooks:` pointer Codex ignores, uses
     `${PLUGIN_ROOT}`, and keys on `SessionStart`, which no curated Codex plugin
     uses. The hook is silently inert, but native skill registration already covers
-    the awareness goal, so no Codex-side fix is pursued. (The same root-discovery
-    rule means the lockm `hooks/hooks.json` does not fire on Codex either — a
-    separate question if Codex ever needs the file-lock hooks.)
+    the awareness goal. (The same root-discovery rule means the lockm
+    `hooks/hooks.json` does not fire on Codex either — a separate question if
+    Codex ever needs the file-lock hooks.)
+  - **Post-compaction pins on Codex — WIRED, UNVERIFIED IN HOST.**
+    `hooks/hooks-codex.json` carries a second `SessionStart` block matching
+    `compact` that runs `brief-context --pins-only`; Codex re-fires `SessionStart`
+    with `source: "compact"` after compacting, and `PostCompact` has no
+    `additionalContext` field to inject through. Whether it runs at all depends on
+    the discovery question above, last checked against Codex v0.142.0 while the
+    installed CLI is now v0.147.0. To verify: start a Codex session in a devkit
+    project with a registered library, force a compaction, and look for the
+    library table. If the pointer is still ignored, the fix is a root-level
+    `hooks.json` with relative paths, which would also revive `announce-skill`.
 - **Claude marketplace install — NOT DONE (ready).** The repo is public; a fresh
   clone resolves `.claude-plugin/marketplace.json` (`source: "./"`) and
   `skills/using-devkit/SKILL.md`. Remaining is the live smoke test only a fresh
@@ -131,7 +141,10 @@ Claude and Cursor still need a live test.
   the plugin in Cursor, start a session, and confirm the "A 'using-devkit' skill is
   available" notice appears (or that Cursor registers the skill natively, as Codex
   does). On Windows, confirm `run-hook.cmd` locates Git Bash. If the envelope is
-  rejected, adjust `hooks/announce-skill`. Also confirm which marketplace manifest
+  rejected, adjust `hooks/announce-skill`. `sessionStart` is the only Cursor event
+  that can inject context — `preCompact` is observational and `workspaceOpen`
+  fires outside a session and returns only `pluginPaths` — so Cursor gets the
+  brief once per session and has no analogue of `--pins-only` or `--if-changed`. Also confirm which marketplace manifest
   Cursor's "Import from Repo" reads — `.cursor-plugin/marketplace.json` ships on
   the assumption it mirrors the `.cursor-plugin/plugin.json` convention, but the
   location is unverified (Codex, for comparison, ignores `.codex-plugin/` for the

@@ -15,6 +15,18 @@
             "async": false
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/hooks/run-hook.cmd\" brief-context --pins-only",
+            "async": false,
+            "timeout": 10,
+            "statusMessage": "Re-injecting devkit library versions"
+          }
+        ]
       }
     ]
   }
