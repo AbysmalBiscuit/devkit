@@ -374,7 +374,10 @@ impl JsContext {
             .iter()
             .position(|(m, _)| *m == manager)
             .with_context(|| format!("no {manager} lockfile in {}", self.lock_dir.display()))?;
-        if self.present.borrow()[index].1.is_none() {
+        // Hoisted so the shared borrow visibly ends before the mutable borrow
+        // below, rather than resting on the `if` condition's temporary scope.
+        let needs_parse = self.present.borrow()[index].1.is_none();
+        if needs_parse {
             let parsed = parse_js_lock(manager, &self.lock_dir).map_err(cache_err);
             self.present.borrow_mut()[index].1 = Some(parsed);
         }
@@ -487,8 +490,8 @@ impl JsContext {
     }
 }
 
-/// Read and parse one lockfile, gates included: the read-and-parse prefix each
-/// manager's traversal used to run for itself.
+/// Read and parse one lockfile, including its `lockfileVersion` gate. This is
+/// the only IO on the JS path: each manager's traversal takes the parsed value.
 fn parse_js_lock(manager: &str, lock_dir: &Path) -> Result<ParsedLock> {
     match manager {
         "bun" => {

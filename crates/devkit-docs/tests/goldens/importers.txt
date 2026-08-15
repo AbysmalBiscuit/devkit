@@ -58,3 +58,23 @@ err display=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` fie
 err alternate=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock → 1.15.11; pnpm-lock.yaml → 1.0.0; add "packageManager" to package.json
 err debug=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock → 1.15.11; pnpm-lock.yaml → 1.0.0; add "packageManager" to package.json
 
+## pnpm-malformed/./h3
+err display=parsing pnpm-lock.yaml
+err alternate=parsing pnpm-lock.yaml: found character that cannot start any token, while scanning for the next token
+err debug=parsing pnpm-lock.yaml\n\nCaused by:\n    found character that cannot start any token, while scanning for the next token
+
+## bun-malformed/./h3
+err display=parsing bun.lock as JSONC
+err alternate=parsing bun.lock as JSONC: Expected colon after the string or word in object property on line 1 column 8
+err debug=parsing bun.lock as JSONC\n\nCaused by:\n    Expected colon after the string or word in object property on line 1 column 8
+
+## bun-bad-lockfile-version/./h3
+err display=bun.lock has no numeric `lockfileVersion`
+err alternate=bun.lock has no numeric `lockfileVersion`
+err debug=bun.lock has no numeric `lockfileVersion`
+
+## cargo-malformed/./serde
+err display=parsing <ROOT>/Cargo.lock
+err alternate=parsing <ROOT>/Cargo.lock: TOML parse error at line 3, column 10\n  |\n3 | [[package\n  |          ^\ninvalid table header\nexpected `.`, `]]`\n
+err debug=parsing <ROOT>/Cargo.lock\n\nCaused by:\n    TOML parse error at line 3, column 10\n      |\n    3 | [[package\n      |          ^\n    invalid table header\n    expected `.`, `]]`\n    
+

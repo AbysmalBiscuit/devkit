@@ -170,6 +170,46 @@ fn ambiguous_js(root: &Path) {
     );
 }
 
+/// A lockfile the YAML parser rejects outright. A parse failure is the one
+/// class of outcome the fixtures above cannot reach, and it is the class that
+/// travels through the selector's error cache — so its `{}`, `{:#}` and `{:?}`
+/// belong in the record too.
+fn pnpm_malformed(root: &Path) {
+    write(&root.join("pnpm-lock.yaml"), "\tnot: [valid: yaml");
+    write(
+        &root.join("package.json"),
+        r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#,
+    );
+}
+
+/// Rejected by the JSONC parser, so the failure carries `json5_ish`'s context
+/// over the parser's own error.
+fn bun_malformed(root: &Path) {
+    write(&root.join("bun.lock"), "{ this is not json");
+    write(&root.join("package.json"), r#"{"name":"root"}"#);
+}
+
+/// Parses as JSONC but fails the `lockfileVersion` gate — a bare context with
+/// no cause beneath it, where the malformed cases carry a chain.
+fn bun_bad_lockfile_version(root: &Path) {
+    write(
+        &root.join("bun.lock"),
+        r#"{"lockfileVersion":"1","workspaces":{"":{"name":"root"}},"packages":{}}"#,
+    );
+    write(&root.join("package.json"), r#"{"name":"root"}"#);
+}
+
+fn cargo_malformed(root: &Path) {
+    write(
+        &root.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        &root.join("Cargo.lock"),
+        "version = 4\n\n[[package\nname =\n",
+    );
+}
+
 const CASES: &[Case] = &[
     Case {
         name: "pnpm-monorepo",
@@ -216,6 +256,26 @@ const CASES: &[Case] = &[
         name: "ambiguous-js",
         build: ambiguous_js,
         probes: &[(Ecosystem::Js, "", "h3")],
+    },
+    Case {
+        name: "pnpm-malformed",
+        build: pnpm_malformed,
+        probes: &[(Ecosystem::Js, "", "h3")],
+    },
+    Case {
+        name: "bun-malformed",
+        build: bun_malformed,
+        probes: &[(Ecosystem::Js, "", "h3")],
+    },
+    Case {
+        name: "bun-bad-lockfile-version",
+        build: bun_bad_lockfile_version,
+        probes: &[(Ecosystem::Js, "", "h3")],
+    },
+    Case {
+        name: "cargo-malformed",
+        build: cargo_malformed,
+        probes: &[(Ecosystem::Rust, "", "serde")],
     },
 ];
 

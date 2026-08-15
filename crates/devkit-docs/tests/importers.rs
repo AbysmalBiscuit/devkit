@@ -1366,6 +1366,8 @@ fn a_selector_reads_each_lockfile_once() {
     // A count assertion without instrumentation: after the first package
     // forces the parse, the lockfile is deleted. Every later package must
     // still resolve, which is only possible if nothing re-reads the file.
+    // The later packages are all differently named, so a cache keyed by
+    // (lockfile, package) would have to re-read the deleted file too.
     let root = common::unique_tmp("selector-one-read");
     std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
     let ws = root.join("apps/api");
@@ -1378,7 +1380,13 @@ fn a_selector_reads_each_lockfile_once() {
     assert_eq!(selector.select("h3").unwrap().version, "1.15.11");
 
     std::fs::remove_file(root.join("bun.lock")).unwrap();
-    for _ in 0..19 {
+    for index in 0..19 {
+        // An undeclared diagnostic is only reachable once the lockfile has
+        // parsed and the workspace entry has been found; a re-read would fail
+        // with `reading …` long before naming the workspace.
+        let absent = format!("absent-{index}");
+        let error = selector.select(&absent).unwrap_err().to_string();
+        assert!(error.contains("does not declare `absent-"), "{error}");
         assert_eq!(selector.select("h3").unwrap().version, "1.15.11");
     }
 }
@@ -1413,14 +1421,21 @@ fn a_malformed_unselected_lockfile_is_still_ignored() {
 fn a_cached_parse_error_replays_identically() {
     // Two packages against one malformed lockfile: an `anyhow::Error` handed
     // out once would move or reconstruct, so the second caller must get the
-    // same three renderings as the first.
+    // same three renderings as the first. The lockfile is deleted in between,
+    // so only a memoized *failure* can produce the second error at all — a
+    // re-parse would report `reading …` instead.
     let root = common::unique_tmp("selector-error-replay");
     std::fs::write(root.join("pnpm-lock.yaml"), "\tnot: [valid: yaml").unwrap();
     write_package_json(&root, r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#);
 
     let selector = importers::Selector::new(&root, Ecosystem::Js).unwrap();
     let first = selector.select("h3").unwrap_err();
+    std::fs::remove_file(root.join("pnpm-lock.yaml")).unwrap();
     let second = selector.select("kysely").unwrap_err();
+    assert!(
+        format!("{first}").contains("parsing pnpm-lock.yaml"),
+        "{first}"
+    );
     assert_eq!(format!("{first}"), format!("{second}"));
     assert_eq!(format!("{first:#}"), format!("{second:#}"));
     assert_eq!(format!("{first:?}"), format!("{second:?}"));
