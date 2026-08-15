@@ -13,15 +13,71 @@ pub struct Selection {
     pub workspace: PathBuf,
     pub version: String,
     pub source: String,
+    /// The lockfile that carried the version, by file name (`pnpm-lock.yaml`,
+    /// `Cargo.lock`, …). Carried rather than derived: `source` is prose and
+    /// `workspace` alone cannot say which of three JS lockfiles was consulted.
+    pub lockfile: String,
 }
 
-pub fn select(start: &Path, ecosystem: Ecosystem, package: &str) -> Result<Selection> {
-    match ecosystem {
-        Ecosystem::Js => js(start, package),
-        Ecosystem::Rust => cargo(start, package),
-        Ecosystem::Python => uv(start, package),
-        Ecosystem::Git => bail!("git entries resolve by ref, not by lockfile"),
+/// `package` is present in the lockfile only transitively, or not at all —
+/// this workspace does not declare it. Typed so a caller resolving many
+/// libraries can tell an uninteresting miss from a broken lockfile.
+#[derive(Debug)]
+pub struct Undeclared {
+    pub package: String,
+    pub workspace: PathBuf,
+    /// The full diagnostic, rendered verbatim by `Display` so no output
+    /// changes. Keeping this the outer error with no cause is what keeps
+    /// `{:#}` and `Debug` byte-identical to the untyped form.
+    message: String,
+}
+
+impl std::fmt::Display for Undeclared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
     }
+}
+
+impl std::error::Error for Undeclared {}
+
+/// What the importer graph can say about this workspace depending on a
+/// package, independent of whether a version was produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Evidence {
+    /// A manifest in this workspace declares the package.
+    Declared,
+    /// The importer graph ran and the package is transitive-only or absent.
+    Undeclared,
+    /// Nothing could be established — no importer manifest, a malformed
+    /// lockfile, or an ecosystem with no importer to ask.
+    Unknown,
+}
+
+pub struct Inspection {
+    pub evidence: Evidence,
+    pub result: Result<Selection>,
+}
+
+/// The full report: declaration evidence plus the resolution result. Evidence
+/// is recorded where each manager establishes declaration, ahead of the checks
+/// that can fail afterwards, so a post-declaration failure still reports
+/// `Declared`.
+pub fn inspect(start: &Path, ecosystem: Ecosystem, package: &str) -> Inspection {
+    let mut evidence = Evidence::Unknown;
+    let result = match ecosystem {
+        Ecosystem::Js => js(start, package, &mut evidence),
+        Ecosystem::Rust => cargo(start, package, &mut evidence),
+        Ecosystem::Python => uv(start, package, &mut evidence),
+        Ecosystem::Git => Err(anyhow::anyhow!(
+            "git entries resolve by ref, not by lockfile"
+        )),
+    };
+    Inspection { evidence, result }
+}
+
+/// Compatibility projection — every existing caller keeps this shape.
+pub fn select(start: &Path, ecosystem: Ecosystem, package: &str) -> Result<Selection> {
+    inspect(start, ecosystem, package).result
 }
 
 fn find_up(start: &Path, file: &str) -> Option<PathBuf> {
@@ -127,12 +183,17 @@ fn undeclared(workspace: &Path, package: &str, candidates: &Candidates) -> anyho
                 .join(", ")
         )
     };
-    anyhow::anyhow!(
+    let message = format!(
         "{} does not declare `{package}` (it is transitive); pin the version with --ref.\n\
          versions present in the lockfile: {versions}\n\
          declared by: {declarers}{resolved}",
         workspace.display()
-    )
+    );
+    anyhow::Error::new(Undeclared {
+        package: package.to_string(),
+        workspace: workspace.to_path_buf(),
+        message,
+    })
 }
 
 fn selection_source(
@@ -160,7 +221,7 @@ const JS_LOCKS: [(&str, &str); 3] = [
     ("npm", "package-lock.json"),
 ];
 
-fn js(start: &Path, package: &str) -> Result<Selection> {
+fn js(start: &Path, package: &str, evidence: &mut Evidence) -> Result<Selection> {
     let workspace = find_up(start, "package.json")
         .with_context(|| format!("no package.json at or above {}", start.display()))?;
     let lock_dir = workspace
@@ -206,8 +267,10 @@ fn js(start: &Path, package: &str) -> Result<Selection> {
             let outcomes = present
                 .iter()
                 .map(|(manager, file)| {
-                    let outcome =
-                        select_js_lock(manager, &lock_dir, &workspace, &relative, package);
+                    let mut probe = Evidence::Unknown;
+                    let outcome = select_js_lock(
+                        manager, &lock_dir, &workspace, &relative, package, &mut probe,
+                    );
                     match outcome {
                         Ok(selection) => format!("{file} → {}", selection.version),
                         Err(error) => format!("{file} → {error}"),
@@ -228,7 +291,9 @@ fn js(start: &Path, package: &str) -> Result<Selection> {
         }
     };
 
-    select_js_lock(chosen.0, &lock_dir, &workspace, &relative, package)
+    select_js_lock(
+        chosen.0, &lock_dir, &workspace, &relative, package, evidence,
+    )
 }
 
 fn nearest_package_manager(workspace: &Path, lock_dir: &Path) -> Result<Option<String>> {
@@ -272,11 +337,12 @@ fn select_js_lock(
     workspace: &Path,
     relative: &str,
     package: &str,
+    evidence: &mut Evidence,
 ) -> Result<Selection> {
     match manager {
-        "bun" => bun(lock_dir, workspace, relative, package),
-        "pnpm" => pnpm(lock_dir, workspace, relative, package),
-        "npm" => npm(lock_dir, workspace, relative, package),
+        "bun" => bun(lock_dir, workspace, relative, package, evidence),
+        "pnpm" => pnpm(lock_dir, workspace, relative, package, evidence),
+        "npm" => npm(lock_dir, workspace, relative, package, evidence),
         _ => bail!("unsupported JS package manager `{manager}`"),
     }
 }
@@ -460,7 +526,13 @@ fn bun_package_row<'a>(row: &'a JsonValue, location: &str) -> Result<BunPackageR
     })
 }
 
-fn bun(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Result<Selection> {
+fn bun(
+    lock_dir: &Path,
+    workspace: &Path,
+    relative: &str,
+    package: &str,
+    evidence: &mut Evidence,
+) -> Result<Selection> {
     let lock_path = lock_dir.join("bun.lock");
     let raw = std::fs::read_to_string(&lock_path)
         .with_context(|| format!("reading {}", lock_path.display()))?;
@@ -483,8 +555,10 @@ fn bun(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Resu
         package,
         &format!("workspaces.{relative}"),
     )? {
+        *evidence = Evidence::Undeclared;
         return Err(undeclared(workspace, package, &candidates));
     }
+    *evidence = Evidence::Declared;
 
     let packages = value
         .get("packages")
@@ -512,6 +586,7 @@ fn bun(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Resu
         workspace: workspace.to_path_buf(),
         version: version.to_string(),
         source: selection_source(relative, "bun.lock", &candidates, version),
+        lockfile: "bun.lock".to_string(),
     })
 }
 
@@ -707,7 +782,13 @@ fn pnpm_candidates(value: &YamlValue, package: &str) -> Result<Candidates> {
     Ok(candidates)
 }
 
-fn pnpm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Result<Selection> {
+fn pnpm(
+    lock_dir: &Path,
+    workspace: &Path,
+    relative: &str,
+    package: &str,
+    evidence: &mut Evidence,
+) -> Result<Selection> {
     let lock_path = lock_dir.join("pnpm-lock.yaml");
     let raw = std::fs::read_to_string(&lock_path)
         .with_context(|| format!("reading {}", lock_path.display()))?;
@@ -734,6 +815,7 @@ fn pnpm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Res
         &format!("importers.{importer_key}"),
     )? {
         if let Some(entry) = dependencies.get(&package_key) {
+            *evidence = Evidence::Declared;
             let location = format!("importers.{importer_key}.{class}.{package}");
             let locator = pnpm_entry_locator(entry, true, &location)?;
             let (identity, version) = pnpm_locator(locator)?;
@@ -747,7 +829,10 @@ fn pnpm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Res
         }
     }
     let version = match matches.as_slice() {
-        [] => return Err(undeclared(workspace, package, &candidates)),
+        [] => {
+            *evidence = Evidence::Undeclared;
+            return Err(undeclared(workspace, package, &candidates));
+        }
         [version] => version.clone(),
         versions => bail!(
             "pnpm importer `{importer_key}` maps `{package}` through multiple dependency classes: {}",
@@ -758,6 +843,7 @@ fn pnpm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Res
         workspace: workspace.to_path_buf(),
         source: selection_source(relative, "pnpm-lock.yaml", &candidates, &version),
         version,
+        lockfile: "pnpm-lock.yaml".to_string(),
     })
 }
 
@@ -861,7 +947,13 @@ fn assert_npm_registry_spec(spec: &str, package: &str, declarer: &str) -> Result
     Ok(())
 }
 
-fn npm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Result<Selection> {
+fn npm(
+    lock_dir: &Path,
+    workspace: &Path,
+    relative: &str,
+    package: &str,
+    evidence: &mut Evidence,
+) -> Result<Selection> {
     let lock_path = lock_dir.join("package-lock.json");
     let raw = std::fs::read_to_string(&lock_path)
         .with_context(|| format!("reading {}", lock_path.display()))?;
@@ -888,8 +980,10 @@ fn npm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Resu
         &format!("packages.{relative}"),
     )?;
     if specs.is_empty() {
+        *evidence = Evidence::Undeclared;
         return Err(undeclared(workspace, package, &candidates));
     }
+    *evidence = Evidence::Declared;
     for spec in specs {
         assert_npm_registry_spec(spec, package, display_key(relative))?;
     }
@@ -920,6 +1014,7 @@ fn npm(lock_dir: &Path, workspace: &Path, relative: &str, package: &str) -> Resu
                     &candidates,
                     version,
                 ),
+                lockfile: "package-lock.json".to_string(),
             });
         }
         match directory.rsplit_once('/') {
@@ -1268,6 +1363,7 @@ fn assert_registry_source(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn from_package_array(
     lock: &Path,
     lock_dir: &Path,
@@ -1276,6 +1372,7 @@ fn from_package_array(
     member: &str,
     manifest_version: Option<&str>,
     package: &str,
+    evidence: &mut Evidence,
 ) -> Result<Selection> {
     let raw =
         std::fs::read_to_string(lock).with_context(|| format!("reading {}", lock.display()))?;
@@ -1306,12 +1403,21 @@ fn from_package_array(
         .filter(|edge| edge.name == package)
         .collect::<Vec<_>>();
     let pinned = match matching_edges.as_slice() {
-        [] => return Err(undeclared(workspace, package, &candidates)),
-        [edge] => edge.version.as_deref(),
-        _ => bail!(
-            "{member} maps `{package}` through multiple dependency edges in {}",
-            lock.display()
-        ),
+        [] => {
+            *evidence = Evidence::Undeclared;
+            return Err(undeclared(workspace, package, &candidates));
+        }
+        [edge] => {
+            *evidence = Evidence::Declared;
+            edge.version.as_deref()
+        }
+        _ => {
+            *evidence = Evidence::Declared;
+            bail!(
+                "{member} maps `{package}` through multiple dependency edges in {}",
+                lock.display()
+            )
+        }
     };
     let versions = candidates.versions.keys().cloned().collect::<Vec<_>>();
     let version = if let Some(pinned) = pinned {
@@ -1348,10 +1454,11 @@ fn from_package_array(
         workspace: workspace.to_path_buf(),
         source: selection_source(&relative, detail, &candidates, &version),
         version,
+        lockfile: detail.to_string(),
     })
 }
 
-fn cargo(start: &Path, package: &str) -> Result<Selection> {
+fn cargo(start: &Path, package: &str, evidence: &mut Evidence) -> Result<Selection> {
     let workspace = find_up(start, "Cargo.toml")
         .with_context(|| format!("no Cargo.toml at or above {}", start.display()))?;
     let manifest_path = workspace.join("Cargo.toml");
@@ -1375,10 +1482,11 @@ fn cargo(start: &Path, package: &str) -> Result<Selection> {
         member,
         manifest_version.as_deref(),
         package,
+        evidence,
     )
 }
 
-fn uv(start: &Path, package: &str) -> Result<Selection> {
+fn uv(start: &Path, package: &str, evidence: &mut Evidence) -> Result<Selection> {
     let workspace = find_up(start, "pyproject.toml")
         .with_context(|| format!("no pyproject.toml at or above {}", start.display()))?;
     let manifest_path = workspace.join("pyproject.toml");
@@ -1413,6 +1521,7 @@ fn uv(start: &Path, package: &str) -> Result<Selection> {
         member,
         manifest_version,
         package,
+        evidence,
     )
 }
 

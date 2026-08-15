@@ -1244,3 +1244,119 @@ fn npm_rejects_an_install_slot_holding_another_package() {
         "2.0.1"
     );
 }
+
+#[test]
+fn undeclared_is_downcastable_and_renders_unchanged() {
+    let root = common::unique_tmp("undeclared-typed");
+    std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
+    let ws = root.join("apps/web");
+    write_package_json(&ws, r#"{"name":"@app/web","dependencies":{}}"#);
+
+    let error = importers::select(&ws, Ecosystem::Js, "transitive").unwrap_err();
+    let marker = error
+        .downcast_ref::<importers::Undeclared>()
+        .expect("transitive misses are typed");
+    assert_eq!(marker.package, "transitive");
+    assert_eq!(marker.workspace, ws);
+
+    // The three renderings must stay identical to the untyped anyhow! form:
+    // a cause attached in the wrong place changes the last two only.
+    let display = format!("{error}");
+    assert_eq!(format!("{error:#}"), display);
+    assert_eq!(format!("{error:?}"), display);
+    assert!(
+        display.contains("does not declare `transitive`"),
+        "{display}"
+    );
+}
+
+#[test]
+fn selection_names_the_lockfile_that_carried_the_version() {
+    let root = common::unique_tmp("selection-lockfile");
+    std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
+    let ws = root.join("apps/api");
+    write_package_json(
+        &ws,
+        r#"{"name":"@app/api","dependencies":{"h3":"^1.15.5"}}"#,
+    );
+
+    let selection = importers::select(&ws, Ecosystem::Js, "h3").unwrap();
+    assert_eq!(selection.lockfile, "bun.lock");
+}
+
+#[test]
+fn evidence_survives_a_failure_that_runs_after_declaration() {
+    // A workspace that declares the package from a non-registry source: the
+    // importer establishes declaration, then rejects the resolution. `select`
+    // errors; `inspect` still reports Declared. This is the case whose error
+    // text recommends --ref, so a globally ref-pinned library in this state
+    // must still be judged relevant to the checkout.
+    let root = common::unique_tmp("evidence-post-decl");
+    std::fs::write(
+        root.join("bun.lock"),
+        r#"{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": { "name": "root", "dependencies": { "h3": "github:unjs/h3" } }
+  },
+  "packages": {
+    "h3": ["h3@git+https://github.com/unjs/h3.git#abc", {}, "github:unjs/h3#abc"]
+  }
+}"#,
+    )
+    .unwrap();
+    write_package_json(
+        &root,
+        r#"{"name":"root","dependencies":{"h3":"github:unjs/h3"}}"#,
+    );
+
+    let inspection = importers::inspect(&root, Ecosystem::Js, "h3");
+    assert!(inspection.result.is_err(), "non-registry must not resolve");
+    assert_eq!(inspection.evidence, importers::Evidence::Declared);
+}
+
+#[test]
+fn evidence_reports_undeclared_and_unknown_distinctly() {
+    let root = common::unique_tmp("evidence-tristate");
+    std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
+    let ws = root.join("apps/web");
+    write_package_json(&ws, r#"{"name":"@app/web","dependencies":{}}"#);
+
+    // Checked and absent.
+    assert_eq!(
+        importers::inspect(&ws, Ecosystem::Js, "transitive").evidence,
+        importers::Evidence::Undeclared
+    );
+    // No importer manifest for this ecosystem — the check could not run.
+    assert_eq!(
+        importers::inspect(&ws, Ecosystem::Rust, "serde").evidence,
+        importers::Evidence::Unknown
+    );
+    // Git has no importer to ask.
+    assert_eq!(
+        importers::inspect(&ws, Ecosystem::Git, "anything").evidence,
+        importers::Evidence::Unknown
+    );
+}
+
+#[test]
+fn an_ambiguity_probe_does_not_leak_evidence() {
+    // Two lockfiles, no packageManager: resolution bails without deciding.
+    // The per-lockfile probes that build the message must not set evidence.
+    let root = common::unique_tmp("evidence-ambiguous");
+    std::fs::write(
+        root.join("bun.lock"),
+        r#"{"lockfileVersion":1,"workspaces":{"":{"name":"root","dependencies":{"h3":"^1"}}},"packages":{"h3":["h3@1.15.11","",{},"sha512-a"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3:\n        specifier: ^1\n        version: 1.0.0\npackages:\n  h3@1.0.0: {}\n",
+    )
+    .unwrap();
+    write_package_json(&root, r#"{"name":"root","dependencies":{"h3":"^1"}}"#);
+
+    let inspection = importers::inspect(&root, Ecosystem::Js, "h3");
+    assert!(inspection.result.is_err());
+    assert_eq!(inspection.evidence, importers::Evidence::Unknown);
+}
