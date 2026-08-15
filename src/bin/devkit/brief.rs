@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use devkit_ports::apps::App;
+use devkit_ports::config::BriefConfig;
 use devkit_ports::{config, load, registry, task};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,7 +21,21 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// The `[brief]` settings for `cwd`, defaulting to on. `config::resolve` and
+/// not `load::load`: `load` also reads doppler.yaml and builds the app
+/// catalog, which is what fails on a docs-only project. An unreadable config
+/// falls open to the defaults.
+fn brief_config(cwd: &Path) -> BriefConfig {
+    config::resolve(None, cwd)
+        .map(|(cfg, _)| cfg.brief)
+        .unwrap_or_default()
+}
+
 fn render(cwd: &Path) -> Option<String> {
+    let settings = brief_config(cwd);
+    if !settings.enabled {
+        return None;
+    }
     let cwd_str = cwd.to_str()?;
     let root = devkit_common::cmd::git(&["rev-parse", "--show-toplevel"], cwd_str)
         .ok()?
@@ -131,6 +146,18 @@ mod tests {
             prep_files: vec![],
             setup: vec![],
         }
+    }
+
+    #[test]
+    fn a_malformed_config_falls_back_to_the_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("devkit.toml"), "this is not toml [[[").unwrap();
+        let cfg = brief_config(tmp.path());
+        assert!(
+            cfg.enabled,
+            "an unreadable config costs a brief, never withholds one"
+        );
+        assert!(cfg.pins);
     }
 
     #[test]

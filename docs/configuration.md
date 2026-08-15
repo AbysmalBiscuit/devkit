@@ -53,6 +53,12 @@ live API before saving) and inspect it with `devkit doctor`.
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
 | `worktree_include` | no | Glob patterns (relative to the monorepo root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten; copy failures warn and are skipped (fail-open). Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
 
+`worktree_root`, `branch_prefix`, `baseline_ref`, and `baseline_path` are
+required for `issue`/`devrun` to do anything useful, but `config::resolve`
+itself no longer hard-errors when `[defaults]` is absent or partial — a
+docs-only checkout with nothing devrun can use resolves to empty strings for
+these keys rather than failing to parse.
+
 ### `[apps.<name>]`
 
 One table per runnable app. `<name>` is the app id passed to `issue setup --apps`.
@@ -269,6 +275,20 @@ enforce_writes = true
 Or per-checkout, add the same table to that checkout's own `devkit.toml`; only the
 `[harness]` table is read, so it may be an otherwise-empty file or a full project
 config. Or skip both files and set `DEVKIT_ENFORCE_WRITES=1` in the environment.
+
+### `[brief]`
+
+What `devkit brief` emits. The plugin's hooks call it unconditionally; these
+switches decide whether it produces anything.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | The whole brief. `false` suppresses every section, and is read before any work is done. |
+| `pins` | `true` | The library-versions section only. |
+
+Set it in `~/.config/devkit/config.toml` as a personal default and override it
+per project in that project's `devkit.toml`. A malformed `[brief]` table falls
+back to these defaults rather than withholding the brief.
 
 ### `[linear]`
 

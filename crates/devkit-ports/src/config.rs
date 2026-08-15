@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Config {
+    #[serde(default)]
     pub defaults: Defaults,
     #[serde(default)]
     pub apps: HashMap<String, AppConfig>,
@@ -18,6 +19,8 @@ pub struct Config {
     pub templates: Templates,
     #[serde(default)]
     pub tasks: HashMap<String, TaskConfig>,
+    #[serde(default)]
+    pub brief: BriefConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -72,6 +75,27 @@ impl Default for DaemonConfig {
     }
 }
 
+/// What `devkit brief` emits. Both default on: the hooks ship enabled and
+/// config decides whether they produce anything, so turning the output off is
+/// one line rather than a hook-wiring task.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BriefConfig {
+    /// The whole brief.
+    pub enabled: bool,
+    /// The library-versions section.
+    pub pins: bool,
+}
+
+impl Default for BriefConfig {
+    fn default() -> Self {
+        BriefConfig {
+            enabled: true,
+            pins: true,
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct LinearConfig {
@@ -82,9 +106,13 @@ pub struct LinearConfig {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Defaults {
+    #[serde(default)]
     pub worktree_root: String,
+    #[serde(default)]
     pub branch_prefix: String,
+    #[serde(default)]
     pub baseline_ref: String,
+    #[serde(default)]
     pub baseline_path: String,
     #[serde(default)]
     pub doppler_yaml: String,
@@ -1058,6 +1086,45 @@ steps = [
         assert_eq!(t["run"][0].as_str(), Some("git"));
         assert_eq!(t["env"]["A"].as_str(), Some("9"));
         assert_eq!(t["env"]["B"].as_str(), Some("2"));
+    }
+
+    #[test]
+    fn brief_defaults_on_and_the_project_layer_wins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home.toml");
+        std::fs::write(&home, "[brief]\npins = true\n").unwrap();
+        let project = tmp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("devkit.toml"), "[brief]\npins = false\n").unwrap();
+
+        let (cfg, _) = resolve_with_home(None, &project, Some(&home)).unwrap();
+        assert!(cfg.brief.enabled, "enabled defaults on");
+        assert!(!cfg.brief.pins, "the project layer wins");
+
+        // A config with no [brief] table at all gets both defaults.
+        let bare = tmp.path().join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::write(bare.join("devkit.toml"), "[defaults]\n").unwrap();
+        let (cfg, _) = resolve_with_home(None, &bare, None).unwrap();
+        assert!(cfg.brief.enabled);
+        assert!(cfg.brief.pins);
+    }
+
+    #[test]
+    fn brief_merges_per_key_not_per_section() {
+        // Home sets `enabled` only; the project layer sets `pins` only. If the
+        // project's [brief] table replaced home's wholesale, `enabled` would
+        // fall back to the type default (true) instead of home's `false`.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home.toml");
+        std::fs::write(&home, "[brief]\nenabled = false\n").unwrap();
+        let project = tmp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("devkit.toml"), "[brief]\npins = false\n").unwrap();
+
+        let (cfg, _) = resolve_with_home(None, &project, Some(&home)).unwrap();
+        assert!(!cfg.brief.enabled, "the home-layer key survives");
+        assert!(!cfg.brief.pins, "the project-layer key overrides");
     }
 
     #[test]
