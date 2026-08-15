@@ -53,12 +53,6 @@ live API before saving) and inspect it with `devkit doctor`.
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
 | `worktree_include` | no | Glob patterns (relative to the monorepo root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten; copy failures warn and are skipped (fail-open). Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
 
-`worktree_root`, `branch_prefix`, `baseline_ref`, and `baseline_path` are
-required for `issue`/`devrun` to do anything useful, but `config::resolve`
-itself no longer hard-errors when `[defaults]` is absent or partial — a
-docs-only checkout with nothing devrun can use resolves to empty strings for
-these keys rather than failing to parse.
-
 ### `[apps.<name>]`
 
 One table per runnable app. `<name>` is the app id passed to `issue setup --apps`.

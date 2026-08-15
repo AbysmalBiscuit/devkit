@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Config {
-    #[serde(default)]
     pub defaults: Defaults,
     #[serde(default)]
     pub apps: HashMap<String, AppConfig>,
@@ -106,13 +105,9 @@ pub struct LinearConfig {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Defaults {
-    #[serde(default)]
     pub worktree_root: String,
-    #[serde(default)]
     pub branch_prefix: String,
-    #[serde(default)]
     pub baseline_ref: String,
-    #[serde(default)]
     pub baseline_path: String,
     #[serde(default)]
     pub doppler_yaml: String,
@@ -1090,9 +1085,21 @@ steps = [
 
     #[test]
     fn brief_defaults_on_and_the_project_layer_wins() {
+        // A devkit.toml with only [brief] does not resolve on its own — every
+        // config layer merges into one Config, deserialized once, and
+        // Defaults's worktree_root/branch_prefix/baseline_ref/baseline_path
+        // stay required. A real user always has a [defaults] table somewhere
+        // in the layer stack (their home config or their project's
+        // devkit.toml); a fixture that wants to isolate [brief] merging
+        // supplies a minimal one, same as every other resolve_with_home test
+        // in this module.
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home.toml");
-        std::fs::write(&home, "[brief]\npins = true\n").unwrap();
+        std::fs::write(
+            &home,
+            format!("[defaults]\n{FULL_DEFAULTS}[brief]\npins = true\n"),
+        )
+        .unwrap();
         let project = tmp.path().join("proj");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("devkit.toml"), "[brief]\npins = false\n").unwrap();
@@ -1104,7 +1111,11 @@ steps = [
         // A config with no [brief] table at all gets both defaults.
         let bare = tmp.path().join("bare");
         std::fs::create_dir_all(&bare).unwrap();
-        std::fs::write(bare.join("devkit.toml"), "[defaults]\n").unwrap();
+        std::fs::write(
+            bare.join("devkit.toml"),
+            format!("[defaults]\n{FULL_DEFAULTS}"),
+        )
+        .unwrap();
         let (cfg, _) = resolve_with_home(None, &bare, None).unwrap();
         assert!(cfg.brief.enabled);
         assert!(cfg.brief.pins);
@@ -1117,7 +1128,11 @@ steps = [
         // fall back to the type default (true) instead of home's `false`.
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home.toml");
-        std::fs::write(&home, "[brief]\nenabled = false\n").unwrap();
+        std::fs::write(
+            &home,
+            format!("[defaults]\n{FULL_DEFAULTS}[brief]\nenabled = false\n"),
+        )
+        .unwrap();
         let project = tmp.path().join("proj");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("devkit.toml"), "[brief]\npins = false\n").unwrap();
