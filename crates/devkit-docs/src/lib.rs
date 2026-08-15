@@ -7,6 +7,7 @@ pub mod locks;
 pub mod lookup;
 pub mod manifest;
 pub mod names;
+pub mod pins;
 pub mod refs;
 pub mod resolve;
 pub mod tags;
