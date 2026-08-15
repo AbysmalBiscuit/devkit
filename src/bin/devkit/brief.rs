@@ -12,7 +12,11 @@
 //! emits only when this checkout's state differs from what the session was last
 //! told, tracked by a per-session watermark over a structured snapshot. A full
 //! brief stamps that watermark itself, so the session that received one is not
-//! handed the same thing again by the next `--if-changed` call.
+//! handed the same thing again by the next `--if-changed` call. `--pins-only`
+//! carries neither the apps, tasks nor server sections, so it clears any
+//! existing stamp instead of leaving it in place — otherwise a later
+//! `--if-changed` would find the checkout's state unchanged since that stamp
+//! and stay silent, leaving the rest of the brief permanently owed.
 
 use anyhow::Result;
 use devkit_ports::apps::App;
@@ -37,9 +41,14 @@ pub fn run(pins_only: bool, if_changed: bool) -> Result<()> {
 
     if !if_changed {
         if pins_only {
-            // No stamp: this carries neither the apps, tasks nor server
-            // sections, so recording it as delivered would suppress a full
-            // brief the session never saw.
+            // This carries neither the apps, tasks nor server sections, so an
+            // earlier full-brief stamp must not survive it: left in place, the
+            // next `--if-changed` would compare against a watermark that
+            // already matches the current state and stay silent, leaving the
+            // devrun half of the brief permanently owed.
+            if let Some(session) = session_id() {
+                let _ = std::fs::remove_file(watermark_path(&session));
+            }
             if let Some(text) = pins_only_text(&cwd, &settings) {
                 print!("{text}");
             }

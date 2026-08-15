@@ -223,6 +223,33 @@ fn a_pins_only_emission_leaves_the_full_brief_owed() {
 }
 
 #[test]
+fn pins_only_clears_the_watermark_so_the_next_if_changed_call_re_emits_the_full_brief() {
+    // SessionStart runs the bare brief and stamps the watermark; PostCompact
+    // then runs `--pins-only`. If that leaves the bare stamp in place,
+    // CwdChanged's `--if-changed` compares against a watermark that already
+    // matches the current state and stays silent — so a session coming out of
+    // a compaction never gets the devrun half of its brief back.
+    let project = Project::docs_only("pins-only-clears-watermark");
+    project.set_config(&format!(
+        "[config]\nroot = true\n\n{DEFAULTS}[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
+    ));
+    let session = r#"{"session_id":"compaction"}"#;
+
+    let start = brief_with_stdin(&project, &[], session, "100");
+    assert!(!start.stdout.is_empty(), "the session received a brief");
+
+    let pins_only = brief_with_stdin(&project, &["--pins-only"], session, "100");
+    assert!(!pins_only.stdout.is_empty(), "the pins table is printed");
+
+    let after_compaction = brief_with_stdin(&project, &["--if-changed"], session, "100");
+    let text = String::from_utf8_lossy(&after_compaction.stdout);
+    assert!(
+        text.contains("devrun up"),
+        "the devrun half must come back after a compaction: {text}"
+    );
+}
+
+#[test]
 fn two_session_ids_do_not_share_a_watermark() {
     let project = Project::docs_only("watermark-sessions");
     let a = brief_with_stdin(&project, &["--if-changed"], r#"{"session_id":"a"}"#, "100");
