@@ -144,3 +144,215 @@ fn relative_workspace(workspace: &Path, project_root: Option<&Path>, lock_dir: &
         None => workspace.to_path_buf(),
     }
 }
+
+/// Registrations the filter withheld, split by why. The split matters:
+/// `undeclared` is a checked answer, `unknown` means the check could not run,
+/// and a project seeing several `unknown` has a configuration problem rather
+/// than a short dependency list.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Dropped {
+    pub undeclared: usize,
+    pub unknown: usize,
+}
+
+impl Dropped {
+    pub fn total(&self) -> usize {
+        self.undeclared + self.unknown
+    }
+}
+
+/// A project-scoped registration always renders. A machine-wide one renders
+/// only when the importer graph confirms this workspace declares the package —
+/// read off `declared`, never off `outcome`.
+pub fn relevant(pins: &[Pin]) -> (Vec<&Pin>, Dropped) {
+    let mut rows = Vec::new();
+    let mut dropped = Dropped::default();
+    for pin in pins {
+        if pin.project_scoped {
+            rows.push(pin);
+            continue;
+        }
+        match pin.declared {
+            Evidence::Declared => rows.push(pin),
+            Evidence::Undeclared => dropped.undeclared += 1,
+            Evidence::Unknown => dropped.unknown += 1,
+        }
+    }
+    (rows, dropped)
+}
+
+/// `ui::table` bounds line width, not total size: wrapping a 40 KB cell across
+/// 100 columns yields 400 lines, not a truncation. These bound bytes.
+const CELL_BUDGET: usize = 200;
+const SECTION_BUDGET: usize = 4096;
+/// Reserved out of `SECTION_BUDGET` so the marker row never competes with the
+/// rows it is reporting on.
+const MARKER_RESERVE: usize = 64;
+
+/// The §5 table plus the dropped-count footer. Newline-terminated.
+pub fn render(pins: &[Pin]) -> String {
+    let (relevant_pins, dropped) = relevant(pins);
+    let rows: Vec<[String; 3]> = relevant_pins.iter().map(|pin| row(pin)).collect();
+
+    // comfy-table pads and separates each of the 3 columns (2 chars padding
+    // per column plus a 1-char separator between columns) and joins rows with
+    // a newline; this constant approximates that measured per-row overhead so
+    // the whole-row budget below holds even though `ui::table` itself bounds
+    // line width, not total size.
+    const ROW_OVERHEAD: usize = 16;
+    let mut budget = SECTION_BUDGET.saturating_sub(MARKER_RESERVE);
+    let mut shown = 0usize;
+    for row in &rows {
+        let cost = row.iter().map(String::len).sum::<usize>() + ROW_OVERHEAD;
+        if cost > budget {
+            break;
+        }
+        budget -= cost;
+        shown += 1;
+    }
+
+    let mut out = String::new();
+    if rows.is_empty() {
+        out.push_str("no registered libraries are evidenced in this checkout\n");
+    } else {
+        let mut table = devkit_common::ui::table(&["LIBRARY", "VERSION", "SOURCE"]);
+        for row in rows.iter().take(shown) {
+            table.add_row(row.to_vec());
+        }
+        out.push_str(&format!("{table}\n"));
+        // A marker line, not a table row: folding it into the table would let
+        // its own width widen every column, which can itself blow the
+        // section budget it exists to protect.
+        if shown < rows.len() {
+            out.push_str(&format!(
+                "… {} more (see `docm list --project`)\n",
+                rows.len() - shown
+            ));
+        }
+    }
+    if let Some(footer) = footer(&dropped) {
+        out.push_str(&footer);
+        out.push('\n');
+    }
+    out
+}
+
+fn row(pin: &Pin) -> [String; 3] {
+    let (version, source) = match &pin.outcome {
+        Outcome::Version {
+            version,
+            workspace,
+            lockfile,
+        } => (
+            version.clone(),
+            format!("{lockfile} ({})", workspace.display()),
+        ),
+        Outcome::Ref(git_ref) => (git_ref.clone(), "ref".to_string()),
+        Outcome::Undeclared => (
+            "—".to_string(),
+            "not declared by this workspace".to_string(),
+        ),
+        Outcome::Unresolved(reason) => ("—".to_string(), reason.clone()),
+    };
+    [cell(&pin.name), cell(&version), cell(&source)]
+}
+
+/// A filtered listing must not read as an empty catalog: `skills/docs/SKILL.md`
+/// tells an agent that a library absent from the listing is unregistered, and
+/// against this view that inference is false.
+fn footer(dropped: &Dropped) -> Option<String> {
+    let total = dropped.total();
+    if total == 0 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if dropped.undeclared > 0 {
+        parts.push(format!("{} undeclared", dropped.undeclared));
+    }
+    if dropped.unknown > 0 {
+        parts.push(format!("{} unknown", dropped.unknown));
+    }
+    let noun = if total == 1 { "library" } else { "libraries" };
+    Some(format!(
+        "{total} registered {noun} not evidenced here ({}) — see `docm list`",
+        parts.join(", ")
+    ))
+}
+
+/// Sanitize then bound one cell. Values come from checked-in manifests and
+/// land in agent context; control and bidi characters are the hazard being
+/// closed, and the reason text is lockfile-derived so it gets the same
+/// treatment as names, versions and refs.
+fn cell(value: &str) -> String {
+    let mut clean = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\n' | '\r' | '\t' => clean.push(' '),
+            '\u{061c}' | '\u{200e}' | '\u{200f}' => {}
+            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => {}
+            c if c.is_control() => {}
+            c => clean.push(c),
+        }
+    }
+    if clean.len() <= CELL_BUDGET {
+        return clean;
+    }
+    let mut end = CELL_BUDGET - '…'.len_utf8();
+    while !clean.is_char_boundary(end) {
+        end -= 1;
+    }
+    clean.truncate(end);
+    clean.push('…');
+    clean
+}
+
+/// The `--project --json` envelope. An array cannot distinguish an empty
+/// catalog from a catalog whose every entry went unevidenced, and those call
+/// for opposite responses: register something, versus find out why the check
+/// could not run. Values here are untruncated — truncation is a property of
+/// the context-injection rendering, not of the data.
+pub fn envelope(pins: &[Pin]) -> serde_json::Value {
+    let (relevant_pins, dropped) = relevant(pins);
+    let rows: Vec<serde_json::Value> = relevant_pins
+        .iter()
+        .map(|pin| {
+            serde_json::json!({
+                "name": pin.name,
+                "project_scoped": pin.project_scoped,
+                "declared": match pin.declared {
+                    Evidence::Declared => "declared",
+                    Evidence::Undeclared => "undeclared",
+                    Evidence::Unknown => "unknown",
+                },
+                "outcome": outcome_json(&pin.outcome),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "pins": rows,
+        "dropped": {
+            "undeclared": dropped.undeclared,
+            "unknown": dropped.unknown,
+        },
+    })
+}
+
+fn outcome_json(outcome: &Outcome) -> serde_json::Value {
+    match outcome {
+        Outcome::Version {
+            version,
+            workspace,
+            lockfile,
+        } => serde_json::json!({
+            "kind": "version",
+            "version": version,
+            "lockfile": lockfile,
+            "workspace": workspace.to_string_lossy().replace('\\', "/"),
+        }),
+        Outcome::Ref(git_ref) => serde_json::json!({ "kind": "ref", "ref": git_ref }),
+        Outcome::Unresolved(reason) => {
+            serde_json::json!({ "kind": "unresolved", "reason": reason })
+        }
+        Outcome::Undeclared => serde_json::json!({ "kind": "undeclared" }),
+    }
+}

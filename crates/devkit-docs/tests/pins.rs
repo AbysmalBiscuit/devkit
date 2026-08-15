@@ -2,7 +2,8 @@
 //! manifest and lockfile reads only.
 
 use devkit_docs::importers::Evidence;
-use devkit_docs::pins::{self, Outcome};
+use devkit_docs::importers::Evidence as Ev;
+use devkit_docs::pins::{self, Dropped, Outcome, Pin};
 use std::path::Path;
 
 #[allow(dead_code)]
@@ -280,4 +281,211 @@ fn an_unresolved_reason_is_one_line() {
         Outcome::Unresolved(reason) => assert!(!reason.contains('\n'), "{reason}"),
         other => panic!("expected unresolved, got {other:?}"),
     }
+}
+
+fn pin(name: &str, outcome: Outcome, project_scoped: bool, declared: Ev) -> Pin {
+    Pin {
+        name: name.into(),
+        outcome,
+        project_scoped,
+        declared,
+    }
+}
+
+fn version(v: &str, ws: &str, lock: &str) -> Outcome {
+    Outcome::Version {
+        version: v.into(),
+        workspace: Path::new(ws).to_path_buf(),
+        lockfile: lock.into(),
+    }
+}
+
+#[test]
+fn a_machine_wide_undeclared_pin_is_dropped_and_counted() {
+    let all = vec![
+        pin(
+            "kysely",
+            version("0.28.17", "apps/web", "pnpm-lock.yaml"),
+            false,
+            Ev::Declared,
+        ),
+        pin("zod", Outcome::Undeclared, false, Ev::Undeclared),
+        pin(
+            "mystery",
+            Outcome::Unresolved("no lockfile".into()),
+            false,
+            Ev::Unknown,
+        ),
+    ];
+    let (rows, dropped) = pins::relevant(&all);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "kysely");
+    assert_eq!(
+        dropped,
+        Dropped {
+            undeclared: 1,
+            unknown: 1
+        }
+    );
+
+    let text = pins::render(&all);
+    assert!(text.contains("kysely"), "{text}");
+    assert!(!text.contains("zod"), "{text}");
+    assert!(
+        text.contains("2 registered libraries not evidenced here (1 undeclared, 1 unknown)"),
+        "{text}"
+    );
+    assert!(text.contains("see `docm list`"), "{text}");
+}
+
+#[test]
+fn a_project_scoped_pin_renders_whatever_its_evidence() {
+    let all = vec![
+        pin("zod", Outcome::Undeclared, true, Ev::Undeclared),
+        pin(
+            "godot",
+            Outcome::Ref("4.3-stable".into()),
+            true,
+            Ev::Unknown,
+        ),
+    ];
+    let (rows, dropped) = pins::relevant(&all);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(dropped, Dropped::default());
+
+    let text = pins::render(&all);
+    assert!(text.contains("not declared by this workspace"), "{text}");
+    assert!(text.contains("4.3-stable"), "{text}");
+}
+
+#[test]
+fn a_machine_wide_ref_pin_the_workspace_declares_still_renders() {
+    // The inverse of the drop rule, and it must hold at the same time: this is
+    // the false negative an `Outcome::Version`-only filter would introduce.
+    let all = vec![pin(
+        "serde",
+        Outcome::Ref("v1.0.200".into()),
+        false,
+        Ev::Declared,
+    )];
+    let (rows, _) = pins::relevant(&all);
+    assert_eq!(rows.len(), 1);
+    assert!(pins::render(&all).contains("ref"), "source column says ref");
+}
+
+#[test]
+fn an_empty_relevant_set_says_so_explicitly() {
+    let all = vec![pin("zod", Outcome::Undeclared, false, Ev::Undeclared)];
+    let text = pins::render(&all);
+    assert!(text.contains("no registered libraries"), "{text}");
+    assert!(
+        text.contains("1 registered library not evidenced here"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_pathological_cell_is_truncated_visibly() {
+    let reason = "x".repeat(5_000);
+    let all = vec![pin(
+        "huge",
+        Outcome::Unresolved(reason.clone()),
+        true,
+        Ev::Unknown,
+    )];
+    let text = pins::render(&all);
+    assert!(text.contains('…'), "truncation marker present: {text}");
+    assert!(
+        text.len() < 4_500,
+        "section stays inside its budget: {}",
+        text.len()
+    );
+
+    // The JSON envelope carries the untruncated value.
+    let json = pins::envelope(&all).to_string();
+    assert!(json.contains(&reason), "envelope keeps the full value");
+}
+
+#[test]
+fn a_multibyte_cell_is_truncated_on_a_char_boundary() {
+    // "本" is 3 bytes in UTF-8; 67 repeats is 201 bytes, one past
+    // CELL_BUDGET, so a naive 200-byte cut lands mid-character. A String can
+    // never hold invalid UTF-8, so getting this wrong panics rather than
+    // corrupts — this test's job is to make sure render() returns at all.
+    let reason = "本".repeat(67);
+    let all = vec![pin(
+        "multibyte",
+        Outcome::Unresolved(reason),
+        true,
+        Ev::Unknown,
+    )];
+    let text = pins::render(&all);
+    assert!(text.contains('…'), "truncation marker present: {text}");
+}
+
+#[test]
+fn the_section_budget_truncates_whole_rows_with_a_marker() {
+    let all: Vec<Pin> = (0..400)
+        .map(|i| {
+            pin(
+                &format!("lib{i:04}"),
+                version("1.2.3", "apps/web", "pnpm-lock.yaml"),
+                true,
+                Ev::Declared,
+            )
+        })
+        .collect();
+    let text = pins::render(&all);
+    assert!(text.len() <= 4_096, "section budget: {}", text.len());
+    assert!(text.contains("more (see `docm list --project`)"), "{text}");
+    // Whole rows only: the last data row is intact.
+    for line in text.lines().filter(|l| l.starts_with("lib")) {
+        assert!(line.contains("1.2.3"), "clipped row: {line}");
+    }
+}
+
+#[test]
+fn control_and_bidi_characters_never_reach_the_table() {
+    let all = vec![pin(
+        "evil",
+        Outcome::Unresolved("line\none\u{202e}reversed\u{7}".into()),
+        true,
+        Ev::Unknown,
+    )];
+    let text = pins::render(&all);
+    assert!(!text.contains('\u{202e}'), "bidi override stripped");
+    assert!(!text.contains('\u{7}'), "control char stripped");
+    assert!(text.contains("line one"), "newline became a space: {text}");
+}
+
+#[test]
+fn the_envelope_distinguishes_empty_from_unevidenced() {
+    let none = pins::envelope(&[]);
+    assert_eq!(none["pins"].as_array().unwrap().len(), 0);
+    assert_eq!(none["dropped"]["undeclared"], 0);
+    assert_eq!(none["dropped"]["unknown"], 0);
+
+    let all = vec![pin("zod", Outcome::Undeclared, false, Ev::Unknown)];
+    let some = pins::envelope(&all);
+    assert_eq!(some["pins"].as_array().unwrap().len(), 0);
+    assert_eq!(some["dropped"]["unknown"], 1);
+}
+
+#[test]
+fn the_envelope_carries_the_discriminant_per_pin() {
+    let all = vec![pin(
+        "kysely",
+        version("0.28.17", "apps/web", "pnpm-lock.yaml"),
+        false,
+        Ev::Declared,
+    )];
+    let json = pins::envelope(&all);
+    let row = &json["pins"][0];
+    assert_eq!(row["name"], "kysely");
+    assert_eq!(row["project_scoped"], false);
+    assert_eq!(row["declared"], "declared");
+    assert_eq!(row["outcome"]["kind"], "version");
+    assert_eq!(row["outcome"]["version"], "0.28.17");
+    assert_eq!(row["outcome"]["lockfile"], "pnpm-lock.yaml");
+    assert_eq!(row["outcome"]["workspace"], "apps/web");
 }
