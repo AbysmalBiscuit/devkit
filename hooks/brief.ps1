@@ -1,6 +1,6 @@
 # Emit the devkit project brief when devkit is installed. Silent and exit 0
 # otherwise. PowerShell twin of `brief`, for Windows hosts with no bash.
-# Stdin is forwarded so --if-changed can read session_id.
+# Stdin is forwarded so the brief can read session_id.
 
 $ErrorActionPreference = 'SilentlyContinue'
 

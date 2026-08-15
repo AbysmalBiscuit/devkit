@@ -10,7 +10,9 @@
 //! Two narrower emission modes let other hook events call it without spamming
 //! the session: `--pins-only` emits the library table alone, and `--if-changed`
 //! emits only when this checkout's state differs from what the session was last
-//! told, tracked by a per-session watermark over a structured snapshot.
+//! told, tracked by a per-session watermark over a structured snapshot. A full
+//! brief stamps that watermark itself, so the session that received one is not
+//! handed the same thing again by the next `--if-changed` call.
 
 use anyhow::Result;
 use devkit_ports::apps::App;
@@ -34,13 +36,18 @@ pub fn run(pins_only: bool, if_changed: bool) -> Result<()> {
     }
 
     if !if_changed {
-        let text = if pins_only {
-            pins_only_text(&cwd, &settings)
-        } else {
-            render(&cwd, &settings)
-        };
-        if let Some(text) = text {
+        if pins_only {
+            // No stamp: this carries neither the apps, tasks nor server
+            // sections, so recording it as delivered would suppress a full
+            // brief the session never saw.
+            if let Some(text) = pins_only_text(&cwd, &settings) {
+                print!("{text}");
+            }
+            return Ok(());
+        }
+        if let Some(text) = render(&cwd, &settings) {
             print!("{text}");
+            stamp(&cwd, &settings);
         }
         return Ok(());
     }
@@ -63,11 +70,8 @@ pub fn run(pins_only: bool, if_changed: bool) -> Result<()> {
     if previous.is_some() && previous.as_deref() == current.as_deref() {
         return Ok(());
     }
-    // Fails open: an unreadable or unwritable state directory reports
-    // "changed", costing a duplicate brief rather than withholding one.
     if let Some(current) = &current {
-        let _ = std::fs::create_dir_all(path.parent().expect("watermark has a parent"));
-        let _ = std::fs::write(&path, current);
+        write_watermark(&path, current);
     }
     match render(&cwd, &settings) {
         Some(text) => print!("{text}"),
@@ -169,6 +173,26 @@ impl PinKey {
             },
         }
     }
+}
+
+/// Record the full brief this session has just been told, so `--if-changed`
+/// has something to compare against. Without a session id — an interactive run
+/// — there is no session to record it for.
+fn stamp(cwd: &Path, settings: &BriefConfig) {
+    let Some(session) = session_id() else {
+        return;
+    };
+    let Some(digest) = snapshot(cwd, settings).map(|s| s.digest()) else {
+        return;
+    };
+    write_watermark(&watermark_path(&session), &format!("{digest:016x}"));
+}
+
+/// Fails open: an unreadable or unwritable state directory reports "changed",
+/// costing a duplicate brief rather than withholding one.
+fn write_watermark(path: &Path, digest: &str) {
+    let _ = std::fs::create_dir_all(path.parent().expect("watermark has a parent"));
+    let _ = std::fs::write(path, digest);
 }
 
 /// The session id from the hook's stdin JSON. `None` when there is no stdin

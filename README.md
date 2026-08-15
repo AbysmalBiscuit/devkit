@@ -187,8 +187,11 @@ devkit completions <shell>
   when neither applies, so a hook can call it from any repository.
   `--pins-only` emits just the library table; `--if-changed` prints nothing when
   this session already received the same brief, keyed on the `session_id` in the
-  hook's stdin JSON. The plugin runs all three: `SessionStart` (full),
-  `PostCompact` (`--pins-only`), and `CwdChanged` (`--if-changed`).
+  hook's stdin JSON. A full brief records itself against that key, so the first
+  `--if-changed` after one stays silent. `--pins-only` does not record: it carries
+  only the library table, and a full brief is still owed. The plugin runs all
+  three: `SessionStart` (full), `PostCompact` (`--pins-only`), and `CwdChanged`
+  (`--if-changed`).
 
 ### `docm`: Library Docs
 

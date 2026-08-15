@@ -176,6 +176,53 @@ fn if_changed_emits_once_per_session_and_ignores_width() {
 }
 
 #[test]
+fn a_full_brief_is_not_repeated_to_the_session_that_received_it() {
+    // SessionStart runs the bare brief and CwdChanged runs `--if-changed` in
+    // the same checkout. Without a stamp on the bare path the second call
+    // finds no watermark and re-emits everything the first already delivered.
+    let project = Project::docs_only("watermark-session-start");
+    let session = r#"{"session_id":"start-then-cd"}"#;
+
+    let start = brief_with_stdin(&project, &[], session, "100");
+    assert!(!start.stdout.is_empty(), "the session received a brief");
+
+    let changed = brief_with_stdin(&project, &["--if-changed"], session, "100");
+    assert!(
+        changed.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&changed.stdout)
+    );
+
+    // A session that has not received it still does.
+    let other = brief_with_stdin(
+        &project,
+        &["--if-changed"],
+        r#"{"session_id":"cd-only"}"#,
+        "100",
+    );
+    assert!(!other.stdout.is_empty());
+}
+
+#[test]
+fn a_pins_only_emission_leaves_the_full_brief_owed() {
+    // `--pins-only` carries neither the apps, tasks nor server sections, so
+    // stamping after it would suppress a full brief the session never saw.
+    let project = Project::docs_only("watermark-pins-only");
+    let session = r#"{"session_id":"pins-then-cd"}"#;
+
+    assert!(
+        !brief_with_stdin(&project, &["--pins-only"], session, "100")
+            .stdout
+            .is_empty()
+    );
+    assert!(
+        !brief_with_stdin(&project, &["--if-changed"], session, "100")
+            .stdout
+            .is_empty()
+    );
+}
+
+#[test]
 fn two_session_ids_do_not_share_a_watermark() {
     let project = Project::docs_only("watermark-sessions");
     let a = brief_with_stdin(&project, &["--if-changed"], r#"{"session_id":"a"}"#, "100");
