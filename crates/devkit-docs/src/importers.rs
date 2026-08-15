@@ -5,8 +5,41 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use serde_yaml_ng::{Mapping as YamlMap, Value as YamlValue};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// A parse failure kept for replay. `anyhow::Error` is neither `Clone` nor
+/// itself a `std::error::Error`, so neither it nor an `Arc` of it can be
+/// handed out twice; a boxed std error can.
+type CachedErr = Arc<dyn std::error::Error + Send + Sync + 'static>;
+
+/// Re-wraps a cached error so `anyhow` can walk its cause chain again, which
+/// is what keeps `{:#}` and `Debug` identical across replays.
+#[derive(Debug, Clone)]
+struct Replay(CachedErr);
+
+impl std::fmt::Display for Replay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for Replay {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+fn cache_err(error: anyhow::Error) -> CachedErr {
+    let boxed: Box<dyn std::error::Error + Send + Sync + 'static> = error.into();
+    Arc::from(boxed)
+}
+
+fn replay(error: &CachedErr) -> anyhow::Error {
+    anyhow::Error::new(Replay(Arc::clone(error)))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
@@ -63,21 +96,61 @@ pub struct Inspection {
     pub result: Result<Selection>,
 }
 
-/// The full report: declaration evidence plus the resolution result. Evidence
-/// is recorded where each manager establishes declaration, ahead of the checks
-/// that can fail afterwards, so a post-declaration failure still reports
-/// `Declared`.
+/// One checkout's importer graph, ready to answer about any number of
+/// packages. Everything that does not depend on the package — manifest
+/// discovery, lockfile location, and the lockfile parse itself — happens once
+/// per `Selector` rather than once per query.
+pub struct Selector {
+    context: LockContext,
+}
+
+enum LockContext {
+    Js(JsContext),
+    Toml(TomlContext),
+}
+
+impl Selector {
+    /// Locate the ecosystem's lockfile and manifest for the workspace at
+    /// `start`. JS lockfiles are parsed on first use rather than here, so a
+    /// malformed lockfile `packageManager` did not select stays ignored.
+    pub fn new(start: &Path, ecosystem: Ecosystem) -> Result<Self> {
+        let context = match ecosystem {
+            Ecosystem::Js => LockContext::Js(JsContext::new(start)?),
+            Ecosystem::Rust => LockContext::Toml(TomlContext::cargo(start)?),
+            Ecosystem::Python => LockContext::Toml(TomlContext::uv(start)?),
+            Ecosystem::Git => bail!("git entries resolve by ref, not by lockfile"),
+        };
+        Ok(Selector { context })
+    }
+
+    /// The full report: declaration evidence plus the resolution result.
+    /// Evidence is recorded where each manager establishes declaration, ahead
+    /// of the checks that can fail afterwards, so a post-declaration failure
+    /// still reports `Declared`.
+    pub fn inspect(&self, package: &str) -> Inspection {
+        let mut evidence = Evidence::Unknown;
+        let result = match &self.context {
+            LockContext::Js(context) => context.select(package, &mut evidence),
+            LockContext::Toml(context) => context.select(package, &mut evidence),
+        };
+        Inspection { evidence, result }
+    }
+
+    pub fn select(&self, package: &str) -> Result<Selection> {
+        self.inspect(package).result
+    }
+}
+
+/// The full report for a single package. A projection of [`Selector`], which a
+/// caller resolving several packages against one checkout should build itself.
 pub fn inspect(start: &Path, ecosystem: Ecosystem, package: &str) -> Inspection {
-    let mut evidence = Evidence::Unknown;
-    let result = match ecosystem {
-        Ecosystem::Js => js(start, package, &mut evidence),
-        Ecosystem::Rust => cargo(start, package, &mut evidence),
-        Ecosystem::Python => uv(start, package, &mut evidence),
-        Ecosystem::Git => Err(anyhow::anyhow!(
-            "git entries resolve by ref, not by lockfile"
-        )),
-    };
-    Inspection { evidence, result }
+    match Selector::new(start, ecosystem) {
+        Ok(selector) => selector.inspect(package),
+        Err(error) => Inspection {
+            evidence: Evidence::Unknown,
+            result: Err(error),
+        },
+    }
 }
 
 /// Compatibility projection — every existing caller keeps this shape.
@@ -226,79 +299,242 @@ const JS_LOCKS: [(&str, &str); 3] = [
     ("npm", "package-lock.json"),
 ];
 
-fn js(start: &Path, package: &str, evidence: &mut Evidence) -> Result<Selection> {
-    let workspace = find_up(start, "package.json")
-        .with_context(|| format!("no package.json at or above {}", start.display()))?;
-    let lock_dir = workspace
-        .ancestors()
-        .find(|directory| {
-            JS_LOCKS
-                .iter()
-                .any(|(_, file)| directory.join(file).is_file())
-        })
-        .with_context(|| format!("no JS lockfile at or above {}", workspace.display()))?
-        .to_path_buf();
-    let relative = rel_key(&lock_dir, &workspace)?;
-    let present = JS_LOCKS
+/// The lockfile one JS package manager writes.
+fn js_lock_file(manager: &str) -> &'static str {
+    JS_LOCKS
         .iter()
-        .copied()
-        .filter(|(_, file)| lock_dir.join(file).is_file())
-        .collect::<Vec<_>>();
-    let package_manager = nearest_package_manager(&workspace, &lock_dir)?;
+        .find(|(supported, _)| *supported == manager)
+        .map_or("lockfile", |(_, file)| *file)
+}
 
-    let chosen = match (present.as_slice(), package_manager.as_deref()) {
-        ([(manager, file)], None) => (*manager, *file),
-        ([(manager, file)], Some(selected)) if *manager == selected => (*manager, *file),
-        ([(manager, file)], Some(selected)) => bail!(
-            "packageManager selects `{selected}`, but {} contains only {file} for `{manager}`",
-            lock_dir.display()
-        ),
-        (_, Some(selected)) => present
+#[derive(Clone)]
+enum ParsedLock {
+    Bun(JsonValue),
+    Pnpm(YamlValue),
+    Npm(JsonValue),
+}
+
+/// One lockfile present in a lock directory: the manager that writes it, and
+/// its parse outcome once something has asked for it.
+type LockSlot = (&'static str, Option<Result<ParsedLock, CachedErr>>);
+
+struct JsContext {
+    workspace: PathBuf,
+    lock_dir: PathBuf,
+    relative: String,
+    package_manager: Option<String>,
+    /// Lockfiles present in `lock_dir`, parsed on first use and cached.
+    /// A parse failure is stored, not propagated: the ambiguity arm needs it
+    /// as one lockfile's *outcome*, and the non-ambiguous path must keep
+    /// ignoring lockfiles `packageManager` did not select.
+    present: RefCell<Vec<LockSlot>>,
+}
+
+impl JsContext {
+    fn new(start: &Path) -> Result<Self> {
+        let workspace = find_up(start, "package.json")
+            .with_context(|| format!("no package.json at or above {}", start.display()))?;
+        let lock_dir = workspace
+            .ancestors()
+            .find(|directory| {
+                JS_LOCKS
+                    .iter()
+                    .any(|(_, file)| directory.join(file).is_file())
+            })
+            .with_context(|| format!("no JS lockfile at or above {}", workspace.display()))?
+            .to_path_buf();
+        let relative = rel_key(&lock_dir, &workspace)?;
+        let package_manager = nearest_package_manager(&workspace, &lock_dir)?;
+        let present = JS_LOCKS
             .iter()
             .copied()
-            .find(|(manager, _)| *manager == selected)
-            .with_context(|| {
-                format!(
-                    "packageManager selects `{selected}`, but {} holds only {}",
-                    lock_dir.display(),
+            .filter(|(_, file)| lock_dir.join(file).is_file())
+            .map(|(manager, _)| (manager, None))
+            .collect::<Vec<_>>();
+        Ok(JsContext {
+            workspace,
+            lock_dir,
+            relative,
+            package_manager,
+            present: RefCell::new(present),
+        })
+    }
+
+    fn present_managers(&self) -> Vec<&'static str> {
+        self.present.borrow().iter().map(|(m, _)| *m).collect()
+    }
+
+    /// The parsed lockfile for `manager`, parsing on first use. The result —
+    /// success or failure — is memoized, so a malformed lockfile yields the
+    /// same error to every package that asks for it.
+    fn parsed(&self, manager: &str) -> Result<ParsedLock> {
+        let index = self
+            .present
+            .borrow()
+            .iter()
+            .position(|(m, _)| *m == manager)
+            .with_context(|| format!("no {manager} lockfile in {}", self.lock_dir.display()))?;
+        if self.present.borrow()[index].1.is_none() {
+            let parsed = parse_js_lock(manager, &self.lock_dir).map_err(cache_err);
+            self.present.borrow_mut()[index].1 = Some(parsed);
+        }
+        match self.present.borrow()[index]
+            .1
+            .as_ref()
+            .expect("just filled")
+        {
+            Ok(lock) => Ok(lock.clone()),
+            Err(error) => Err(replay(error)),
+        }
+    }
+
+    /// Which present lockfile governs. Ambiguity is only reportable per
+    /// package, because the message enumerates what each lockfile would have
+    /// answered.
+    fn choose(&self, package: &str) -> Result<&'static str> {
+        let present = self.present_managers();
+        match (present.as_slice(), self.package_manager.as_deref()) {
+            ([manager], None) => Ok(*manager),
+            ([manager], Some(selected)) if *manager == selected => Ok(*manager),
+            ([manager], Some(selected)) => {
+                let file = js_lock_file(manager);
+                bail!(
+                    "packageManager selects `{selected}`, but {} contains only {file} for `{manager}`",
+                    self.lock_dir.display()
+                )
+            }
+            (_, Some(selected)) => present
+                .iter()
+                .copied()
+                .find(|manager| *manager == selected)
+                .with_context(|| {
+                    format!(
+                        "packageManager selects `{selected}`, but {} holds only {}",
+                        self.lock_dir.display(),
+                        present
+                            .iter()
+                            .map(|manager| js_lock_file(manager))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }),
+            (_, None) => {
+                let outcomes = present
+                    .iter()
+                    .map(|manager| {
+                        let file = js_lock_file(manager);
+                        let mut probe = Evidence::Unknown;
+                        let outcome = self.select_from(manager, package, &mut probe);
+                        match outcome {
+                            Ok(selection) => format!("{file} → {}", selection.version),
+                            Err(error) => format!("{file} → {error}"),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                bail!(
+                    "{} holds {} and no `packageManager` field says which one governs: {}; \
+                     add \"packageManager\" to package.json",
+                    self.lock_dir.display(),
                     present
                         .iter()
-                        .map(|(_, file)| *file)
+                        .map(|manager| js_lock_file(manager))
                         .collect::<Vec<_>>()
-                        .join(", ")
+                        .join(" and "),
+                    outcomes.join("; ")
                 )
-            })?,
-        (_, None) => {
-            let outcomes = present
-                .iter()
-                .map(|(manager, file)| {
-                    let mut probe = Evidence::Unknown;
-                    let outcome = select_js_lock(
-                        manager, &lock_dir, &workspace, &relative, package, &mut probe,
-                    );
-                    match outcome {
-                        Ok(selection) => format!("{file} → {}", selection.version),
-                        Err(error) => format!("{file} → {error}"),
-                    }
-                })
-                .collect::<Vec<_>>();
-            bail!(
-                "{} holds {} and no `packageManager` field says which one governs: {}; \
-                 add \"packageManager\" to package.json",
-                lock_dir.display(),
-                present
-                    .iter()
-                    .map(|(_, file)| *file)
-                    .collect::<Vec<_>>()
-                    .join(" and "),
-                outcomes.join("; ")
-            )
+            }
         }
-    };
+    }
 
-    select_js_lock(
-        chosen.0, &lock_dir, &workspace, &relative, package, evidence,
-    )
+    fn select_from(
+        &self,
+        manager: &str,
+        package: &str,
+        evidence: &mut Evidence,
+    ) -> Result<Selection> {
+        let lock = self.parsed(manager)?;
+        match &lock {
+            ParsedLock::Bun(value) => bun(
+                value,
+                &self.lock_dir,
+                &self.workspace,
+                &self.relative,
+                package,
+                evidence,
+            ),
+            ParsedLock::Pnpm(value) => pnpm(
+                value,
+                &self.lock_dir,
+                &self.workspace,
+                &self.relative,
+                package,
+                evidence,
+            ),
+            ParsedLock::Npm(value) => npm(
+                value,
+                &self.lock_dir,
+                &self.workspace,
+                &self.relative,
+                package,
+                evidence,
+            ),
+        }
+    }
+
+    fn select(&self, package: &str, evidence: &mut Evidence) -> Result<Selection> {
+        let manager = self.choose(package)?;
+        self.select_from(manager, package, evidence)
+    }
+}
+
+/// Read and parse one lockfile, gates included: the read-and-parse prefix each
+/// manager's traversal used to run for itself.
+fn parse_js_lock(manager: &str, lock_dir: &Path) -> Result<ParsedLock> {
+    match manager {
+        "bun" => {
+            let lock_path = lock_dir.join("bun.lock");
+            let raw = std::fs::read_to_string(&lock_path)
+                .with_context(|| format!("reading {}", lock_path.display()))?;
+            let value = json5_ish(&raw)?;
+            value
+                .get("lockfileVersion")
+                .and_then(JsonValue::as_u64)
+                .context("bun.lock has no numeric `lockfileVersion`")?;
+            Ok(ParsedLock::Bun(value))
+        }
+        "pnpm" => {
+            let lock_path = lock_dir.join("pnpm-lock.yaml");
+            let raw = std::fs::read_to_string(&lock_path)
+                .with_context(|| format!("reading {}", lock_path.display()))?;
+            let value: YamlValue =
+                serde_yaml_ng::from_str(&raw).context("parsing pnpm-lock.yaml")?;
+            let lockfile_version = value
+                .get("lockfileVersion")
+                .context("pnpm-lock.yaml has no `lockfileVersion`")?;
+            match lockfile_version {
+                YamlValue::String(version) if !version.is_empty() => {}
+                YamlValue::Number(_) => {}
+                _ => bail!("pnpm-lock.yaml `lockfileVersion` must be a string or numeric scalar"),
+            }
+            Ok(ParsedLock::Pnpm(value))
+        }
+        "npm" => {
+            let lock_path = lock_dir.join("package-lock.json");
+            let raw = std::fs::read_to_string(&lock_path)
+                .with_context(|| format!("reading {}", lock_path.display()))?;
+            let value: JsonValue =
+                serde_json::from_str(&raw).context("parsing package-lock.json")?;
+            let lockfile_version = value
+                .get("lockfileVersion")
+                .and_then(JsonValue::as_u64)
+                .context("package-lock.json has no numeric `lockfileVersion`")?;
+            if !matches!(lockfile_version, 2 | 3) {
+                bail!("unsupported package-lock.json version {lockfile_version}; expected 2 or 3");
+            }
+            Ok(ParsedLock::Npm(value))
+        }
+        _ => bail!("unsupported JS package manager `{manager}`"),
+    }
 }
 
 fn nearest_package_manager(workspace: &Path, lock_dir: &Path) -> Result<Option<String>> {
@@ -334,22 +570,6 @@ fn nearest_package_manager(workspace: &Path, lock_dir: &Path) -> Result<Option<S
         }
     }
     Ok(None)
-}
-
-fn select_js_lock(
-    manager: &str,
-    lock_dir: &Path,
-    workspace: &Path,
-    relative: &str,
-    package: &str,
-    evidence: &mut Evidence,
-) -> Result<Selection> {
-    match manager {
-        "bun" => bun(lock_dir, workspace, relative, package, evidence),
-        "pnpm" => pnpm(lock_dir, workspace, relative, package, evidence),
-        "npm" => npm(lock_dir, workspace, relative, package, evidence),
-        _ => bail!("unsupported JS package manager `{manager}`"),
-    }
 }
 
 const BUN_DEP_CLASSES: [&str; 4] = [
@@ -532,20 +752,13 @@ fn bun_package_row<'a>(row: &'a JsonValue, location: &str) -> Result<BunPackageR
 }
 
 fn bun(
+    value: &JsonValue,
     lock_dir: &Path,
     workspace: &Path,
     relative: &str,
     package: &str,
     evidence: &mut Evidence,
 ) -> Result<Selection> {
-    let lock_path = lock_dir.join("bun.lock");
-    let raw = std::fs::read_to_string(&lock_path)
-        .with_context(|| format!("reading {}", lock_path.display()))?;
-    let value = json5_ish(&raw)?;
-    value
-        .get("lockfileVersion")
-        .and_then(JsonValue::as_u64)
-        .context("bun.lock has no numeric `lockfileVersion`")?;
     let workspaces = value
         .get("workspaces")
         .and_then(JsonValue::as_object)
@@ -553,7 +766,7 @@ fn bun(
     let entry = workspaces
         .get(relative)
         .with_context(|| format!("bun.lock has no workspace entry for `{relative}`"))?;
-    let candidates = bun_candidates(&value, package)?;
+    let candidates = bun_candidates(value, package)?;
     if !json_declares(
         entry,
         &BUN_DEP_CLASSES,
@@ -789,30 +1002,19 @@ fn pnpm_candidates(value: &YamlValue, package: &str) -> Result<Candidates> {
 }
 
 fn pnpm(
+    value: &YamlValue,
     lock_dir: &Path,
     workspace: &Path,
     relative: &str,
     package: &str,
     evidence: &mut Evidence,
 ) -> Result<Selection> {
-    let lock_path = lock_dir.join("pnpm-lock.yaml");
-    let raw = std::fs::read_to_string(&lock_path)
-        .with_context(|| format!("reading {}", lock_path.display()))?;
-    let value: YamlValue = serde_yaml_ng::from_str(&raw).context("parsing pnpm-lock.yaml")?;
-    let lockfile_version = value
-        .get("lockfileVersion")
-        .context("pnpm-lock.yaml has no `lockfileVersion`")?;
-    match lockfile_version {
-        YamlValue::String(version) if !version.is_empty() => {}
-        YamlValue::Number(_) => {}
-        _ => bail!("pnpm-lock.yaml `lockfileVersion` must be a string or numeric scalar"),
-    }
     let importer_key = if relative.is_empty() { "." } else { relative };
     let importer = value
         .get("importers")
         .and_then(|importers| importers.get(importer_key))
         .with_context(|| format!("pnpm-lock.yaml has no importer `{importer_key}`"))?;
-    let candidates = pnpm_candidates(&value, package)?;
+    let candidates = pnpm_candidates(value, package)?;
     let package_key = YamlValue::String(package.to_string());
     let mut matches = Vec::new();
     for (class, dependencies) in yaml_class_maps(
@@ -826,7 +1028,7 @@ fn pnpm(
             let locator = pnpm_entry_locator(entry, true, &location)?;
             let (identity, version) = pnpm_locator(locator)?;
             let target = identity.as_deref().unwrap_or(package);
-            if !pnpm_has_package_row(&value, target, &version)? {
+            if !pnpm_has_package_row(value, target, &version)? {
                 bail!(
                     "pnpm locator `{locator}` has no matching package row for `{target}@{version}`"
                 );
@@ -955,23 +1157,13 @@ fn assert_npm_registry_spec(spec: &str, package: &str, declarer: &str) -> Result
 }
 
 fn npm(
+    value: &JsonValue,
     lock_dir: &Path,
     workspace: &Path,
     relative: &str,
     package: &str,
     evidence: &mut Evidence,
 ) -> Result<Selection> {
-    let lock_path = lock_dir.join("package-lock.json");
-    let raw = std::fs::read_to_string(&lock_path)
-        .with_context(|| format!("reading {}", lock_path.display()))?;
-    let value: JsonValue = serde_json::from_str(&raw).context("parsing package-lock.json")?;
-    let lockfile_version = value
-        .get("lockfileVersion")
-        .and_then(JsonValue::as_u64)
-        .context("package-lock.json has no numeric `lockfileVersion`")?;
-    if !matches!(lockfile_version, 2 | 3) {
-        bail!("unsupported package-lock.json version {lockfile_version}; expected 2 or 3");
-    }
     let packages = value
         .get("packages")
         .and_then(JsonValue::as_object)
@@ -1188,24 +1380,28 @@ fn uv_local_match(source: &Option<toml::Value>, lock_dir: &Path, workspace: &Pat
     Ok(false)
 }
 
-fn choose_member<'a>(
-    packages: &'a [LockPackage],
+/// The index of the `[[package]]` row that is this workspace itself. An index
+/// rather than a borrow so a caller can keep it alongside the lock it points
+/// into.
+fn choose_member(
+    packages: &[LockPackage],
     format: PackageFormat,
     member: &str,
     manifest_version: Option<&str>,
     lock_dir: &Path,
     workspace: &Path,
-) -> Result<&'a LockPackage> {
+) -> Result<usize> {
     let named = packages
         .iter()
-        .filter(|package| package.name == member)
+        .enumerate()
+        .filter(|(_, package)| package.name == member)
         .collect::<Vec<_>>();
     if named.is_empty() {
         bail!("{} has no [[package]] for `{member}`", lock_dir.display());
     }
 
     if format == PackageFormat::Cargo {
-        for package in &named {
+        for (_, package) in &named {
             if let Some(source) = &package.source
                 && source.as_str().is_none()
             {
@@ -1215,13 +1411,13 @@ fn choose_member<'a>(
         let local = named
             .iter()
             .copied()
-            .filter(|package| package.source.is_none())
-            .filter(|package| {
+            .filter(|(_, package)| package.source.is_none())
+            .filter(|(_, package)| {
                 manifest_version.is_none_or(|version| package.version.as_deref() == Some(version))
             })
             .collect::<Vec<_>>();
         return match local.as_slice() {
-            [package] => Ok(*package),
+            [(index, _)] => Ok(*index),
             [] => bail!(
                 "{} has no local [[package]] matching Cargo member `{member}`{}",
                 lock_dir.display(),
@@ -1238,15 +1434,15 @@ fn choose_member<'a>(
         .iter()
         .copied()
         .filter_map(
-            |package| match uv_local_match(&package.source, lock_dir, workspace) {
-                Ok(true) => Some(Ok(package)),
+            |(index, package)| match uv_local_match(&package.source, lock_dir, workspace) {
+                Ok(true) => Some(Ok(index)),
                 Ok(false) => None,
                 Err(error) => Some(Err(error)),
             },
         )
         .collect::<Result<Vec<_>>>()?;
     match local.as_slice() {
-        [package] => return Ok(*package),
+        [index] => return Ok(*index),
         [] => {}
         _ => bail!(
             "{} has ambiguous local [[package]] rows for uv member `{member}`",
@@ -1257,10 +1453,10 @@ fn choose_member<'a>(
         let matching = named
             .iter()
             .copied()
-            .filter(|package| package.version.as_deref() == Some(version))
+            .filter(|(_, package)| package.version.as_deref() == Some(version))
             .collect::<Vec<_>>();
         match matching.as_slice() {
-            [package] => return Ok(*package),
+            [(index, _)] => return Ok(*index),
             [] => bail!(
                 "{} has no [[package]] matching uv member `{member}` {version}",
                 lock_dir.display()
@@ -1272,7 +1468,7 @@ fn choose_member<'a>(
         }
     }
     match named.as_slice() {
-        [package] => Ok(*package),
+        [(index, _)] => Ok(*index),
         _ => bail!(
             "{} has ambiguous [[package]] rows for uv member `{member}`",
             lock_dir.display()
@@ -1371,167 +1567,190 @@ fn assert_registry_source(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn from_package_array(
-    lock: &Path,
-    lock_dir: &Path,
-    workspace: &Path,
+/// One `[[package]]`-array lockfile — `Cargo.lock` or `uv.lock` — read, parsed
+/// and located against the workspace that asked for it.
+struct TomlContext {
+    lock_path: PathBuf,
+    lock_dir: PathBuf,
+    workspace: PathBuf,
     format: PackageFormat,
-    member: &str,
-    manifest_version: Option<&str>,
-    package: &str,
-    evidence: &mut Evidence,
-) -> Result<Selection> {
-    let raw =
-        std::fs::read_to_string(lock).with_context(|| format!("reading {}", lock.display()))?;
-    let parsed: PackageLock =
-        toml::from_str(&raw).with_context(|| format!("parsing {}", lock.display()))?;
-    if format == PackageFormat::Cargo {
-        for package in &parsed.packages {
-            if package.version.is_none() {
-                bail!(
-                    "{} Cargo package `{}` has no version",
-                    lock.display(),
-                    package.name
-                );
+    member: String,
+    parsed: PackageLock,
+    own_index: usize,
+}
+
+impl TomlContext {
+    fn new(
+        lock_path: PathBuf,
+        lock_dir: PathBuf,
+        workspace: PathBuf,
+        format: PackageFormat,
+        member: String,
+        manifest_version: Option<&str>,
+    ) -> Result<Self> {
+        let raw = std::fs::read_to_string(&lock_path)
+            .with_context(|| format!("reading {}", lock_path.display()))?;
+        let parsed: PackageLock =
+            toml::from_str(&raw).with_context(|| format!("parsing {}", lock_path.display()))?;
+        if format == PackageFormat::Cargo {
+            for package in &parsed.packages {
+                if package.version.is_none() {
+                    bail!(
+                        "{} Cargo package `{}` has no version",
+                        lock_path.display(),
+                        package.name
+                    );
+                }
             }
         }
+        let own_index = choose_member(
+            &parsed.packages,
+            format,
+            &member,
+            manifest_version,
+            &lock_dir,
+            &workspace,
+        )?;
+        Ok(TomlContext {
+            lock_path,
+            lock_dir,
+            workspace,
+            format,
+            member,
+            parsed,
+            own_index,
+        })
     }
-    let own = choose_member(
-        &parsed.packages,
-        format,
-        member,
-        manifest_version,
-        lock_dir,
-        workspace,
-    )?;
-    let candidates = package_candidates(&parsed.packages, format, package, lock)?;
-    let matching_edges = package_edges(own, format)?
-        .into_iter()
-        .filter(|edge| edge.name == package)
-        .collect::<Vec<_>>();
-    let pinned = match matching_edges.as_slice() {
-        [] => {
-            *evidence = Evidence::Undeclared;
-            return Err(undeclared(workspace, package, &candidates));
-        }
-        [edge] => {
-            *evidence = Evidence::Declared;
-            edge.version.as_deref()
-        }
-        _ => {
-            *evidence = Evidence::Declared;
-            bail!(
-                "{member} maps `{package}` through multiple dependency edges in {}",
-                lock.display()
-            )
-        }
-    };
-    let versions = candidates.versions.keys().cloned().collect::<Vec<_>>();
-    let version = if let Some(pinned) = pinned {
-        if !candidates.versions.contains_key(pinned) {
-            bail!(
-                "{member} pins `{package}` {pinned}, but {} records no matching package row",
-                lock.display()
-            );
-        }
-        pinned.to_string()
-    } else {
-        match versions.as_slice() {
-            [] => bail!(
-                "{} declares `{package}` but {} records no version",
-                workspace.display(),
-                lock.display()
-            ),
-            [version] => version.clone(),
-            _ => bail!(
-                "{} records a resolution fork for `{package}` ({}) and the dependency edge from \
-                 `{member}` does not name one; pin one with --ref",
-                lock.display(),
-                versions.join(", ")
-            ),
-        }
-    };
-    assert_registry_source(&parsed.packages, format, package, &version)?;
-    let relative = rel_key(lock_dir, workspace)?;
-    let detail = lock
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("lockfile");
-    Ok(Selection {
-        workspace: workspace.to_path_buf(),
-        source: selection_source(&relative, detail, &candidates, &version),
-        version,
-        lockfile: detail.to_string(),
-        lock_dir: lock_dir.to_path_buf(),
-    })
-}
 
-fn cargo(start: &Path, package: &str, evidence: &mut Evidence) -> Result<Selection> {
-    let workspace = find_up(start, "Cargo.toml")
-        .with_context(|| format!("no Cargo.toml at or above {}", start.display()))?;
-    let manifest_path = workspace.join("Cargo.toml");
-    let raw = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let manifest: toml::Value =
-        toml::from_str(&raw).with_context(|| format!("parsing {}", manifest_path.display()))?;
-    let member = manifest
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(toml::Value::as_str)
-        .with_context(|| format!("{} has no [package] name", manifest_path.display()))?;
-    let lock_dir = find_up(&workspace, "Cargo.lock")
-        .with_context(|| format!("no Cargo.lock at or above {}", workspace.display()))?;
-    let manifest_version = cargo_manifest_version(&manifest, &lock_dir)?;
-    from_package_array(
-        &lock_dir.join("Cargo.lock"),
-        &lock_dir,
-        &workspace,
-        PackageFormat::Cargo,
-        member,
-        manifest_version.as_deref(),
-        package,
-        evidence,
-    )
-}
+    fn cargo(start: &Path) -> Result<Self> {
+        let workspace = find_up(start, "Cargo.toml")
+            .with_context(|| format!("no Cargo.toml at or above {}", start.display()))?;
+        let manifest_path = workspace.join("Cargo.toml");
+        let raw = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("reading {}", manifest_path.display()))?;
+        let manifest: toml::Value =
+            toml::from_str(&raw).with_context(|| format!("parsing {}", manifest_path.display()))?;
+        let member = manifest
+            .get("package")
+            .and_then(|package| package.get("name"))
+            .and_then(toml::Value::as_str)
+            .with_context(|| format!("{} has no [package] name", manifest_path.display()))?;
+        let lock_dir = find_up(&workspace, "Cargo.lock")
+            .with_context(|| format!("no Cargo.lock at or above {}", workspace.display()))?;
+        let manifest_version = cargo_manifest_version(&manifest, &lock_dir)?;
+        TomlContext::new(
+            lock_dir.join("Cargo.lock"),
+            lock_dir,
+            workspace,
+            PackageFormat::Cargo,
+            member.to_string(),
+            manifest_version.as_deref(),
+        )
+    }
 
-fn uv(start: &Path, package: &str, evidence: &mut Evidence) -> Result<Selection> {
-    let workspace = find_up(start, "pyproject.toml")
-        .with_context(|| format!("no pyproject.toml at or above {}", start.display()))?;
-    let manifest_path = workspace.join("pyproject.toml");
-    let raw = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let manifest: toml::Value =
-        toml::from_str(&raw).with_context(|| format!("parsing {}", manifest_path.display()))?;
-    let project = manifest
-        .get("project")
-        .and_then(toml::Value::as_table)
-        .with_context(|| format!("{} has no [project] table", manifest_path.display()))?;
-    let member = project
-        .get("name")
-        .and_then(toml::Value::as_str)
-        .with_context(|| format!("{} has no [project] name", manifest_path.display()))?;
-    let manifest_version = match project.get("version") {
-        Some(version) => Some(version.as_str().with_context(|| {
-            format!(
-                "{} project.version must be a string",
-                manifest_path.display()
-            )
-        })?),
-        None => None,
-    };
-    let lock_dir = find_up(&workspace, "uv.lock")
-        .with_context(|| format!("no uv.lock at or above {}", workspace.display()))?;
-    from_package_array(
-        &lock_dir.join("uv.lock"),
-        &lock_dir,
-        &workspace,
-        PackageFormat::Uv,
-        member,
-        manifest_version,
-        package,
-        evidence,
-    )
+    fn uv(start: &Path) -> Result<Self> {
+        let workspace = find_up(start, "pyproject.toml")
+            .with_context(|| format!("no pyproject.toml at or above {}", start.display()))?;
+        let manifest_path = workspace.join("pyproject.toml");
+        let raw = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("reading {}", manifest_path.display()))?;
+        let manifest: toml::Value =
+            toml::from_str(&raw).with_context(|| format!("parsing {}", manifest_path.display()))?;
+        let project = manifest
+            .get("project")
+            .and_then(toml::Value::as_table)
+            .with_context(|| format!("{} has no [project] table", manifest_path.display()))?;
+        let member = project
+            .get("name")
+            .and_then(toml::Value::as_str)
+            .with_context(|| format!("{} has no [project] name", manifest_path.display()))?;
+        let manifest_version = match project.get("version") {
+            Some(version) => Some(version.as_str().with_context(|| {
+                format!(
+                    "{} project.version must be a string",
+                    manifest_path.display()
+                )
+            })?),
+            None => None,
+        };
+        let lock_dir = find_up(&workspace, "uv.lock")
+            .with_context(|| format!("no uv.lock at or above {}", workspace.display()))?;
+        TomlContext::new(
+            lock_dir.join("uv.lock"),
+            lock_dir,
+            workspace,
+            PackageFormat::Uv,
+            member.to_string(),
+            manifest_version,
+        )
+    }
+
+    fn select(&self, package: &str, evidence: &mut Evidence) -> Result<Selection> {
+        let lock = self.lock_path.as_path();
+        let member = self.member.as_str();
+        let workspace = self.workspace.as_path();
+        let own = &self.parsed.packages[self.own_index];
+        let candidates = package_candidates(&self.parsed.packages, self.format, package, lock)?;
+        let matching_edges = package_edges(own, self.format)?
+            .into_iter()
+            .filter(|edge| edge.name == package)
+            .collect::<Vec<_>>();
+        let pinned = match matching_edges.as_slice() {
+            [] => {
+                *evidence = Evidence::Undeclared;
+                return Err(undeclared(workspace, package, &candidates));
+            }
+            [edge] => {
+                *evidence = Evidence::Declared;
+                edge.version.as_deref()
+            }
+            _ => {
+                *evidence = Evidence::Declared;
+                bail!(
+                    "{member} maps `{package}` through multiple dependency edges in {}",
+                    lock.display()
+                )
+            }
+        };
+        let versions = candidates.versions.keys().cloned().collect::<Vec<_>>();
+        let version = if let Some(pinned) = pinned {
+            if !candidates.versions.contains_key(pinned) {
+                bail!(
+                    "{member} pins `{package}` {pinned}, but {} records no matching package row",
+                    lock.display()
+                );
+            }
+            pinned.to_string()
+        } else {
+            match versions.as_slice() {
+                [] => bail!(
+                    "{} declares `{package}` but {} records no version",
+                    workspace.display(),
+                    lock.display()
+                ),
+                [version] => version.clone(),
+                _ => bail!(
+                    "{} records a resolution fork for `{package}` ({}) and the dependency edge from \
+                     `{member}` does not name one; pin one with --ref",
+                    lock.display(),
+                    versions.join(", ")
+                ),
+            }
+        };
+        assert_registry_source(&self.parsed.packages, self.format, package, &version)?;
+        let relative = rel_key(&self.lock_dir, workspace)?;
+        let detail = lock
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("lockfile");
+        Ok(Selection {
+            workspace: workspace.to_path_buf(),
+            source: selection_source(&relative, detail, &candidates, &version),
+            version,
+            lockfile: detail.to_string(),
+            lock_dir: self.lock_dir.clone(),
+        })
+    }
 }
 
 #[cfg(test)]

@@ -525,3 +525,22 @@ fn the_envelope_carries_the_discriminant_per_pin() {
     assert_eq!(row["outcome"]["lockfile"], "pnpm-lock.yaml");
     assert_eq!(row["outcome"]["workspace"], "apps/web");
 }
+
+#[test]
+fn a_git_entry_without_a_ref_says_so_rather_than_reading_as_unregistered() {
+    // A git entry has no importer to ask, so it never reaches a selector; the
+    // row must still name why, not fall through to the "no ecosystem" reason.
+    let root = common::unique_tmp("pins-git-no-ref");
+    cargo_project(
+        &root,
+        "[config]\nroot = true\n\n[[docs.libs]]\nname = \"godot\"\necosystem = \"git\"\nrepo = \"https://example.invalid/godot\"\n",
+    );
+    write(&root.join("docs.toml"), "");
+
+    let out = pins::pins(&root.join("project"), Some(&root.join("docs.toml"))).unwrap();
+    assert_eq!(
+        out[0].outcome,
+        Outcome::Unresolved("git entry with no ref pinned".to_string())
+    );
+    assert_eq!(out[0].declared, Evidence::Unknown);
+}

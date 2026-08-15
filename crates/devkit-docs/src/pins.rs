@@ -4,10 +4,11 @@
 //! importer graph consults. No clone, no fetch, no worktree, no cache lock —
 //! so a session-start hook can call this on a cold machine.
 
-use crate::importers::{self, Evidence, Undeclared};
+use crate::importers::{Evidence, Inspection, Selector, Undeclared};
 use crate::manifest::{self, Ecosystem, LibEntry};
 use crate::names;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,22 +60,47 @@ pub fn pins(start: &Path, global: Option<&Path>) -> Result<Vec<Pin>> {
         .and_then(Path::parent)
         .map(Path::to_path_buf);
 
+    // One selector per ecosystem present, so each lockfile is read and parsed
+    // once for the whole listing rather than once per library. A construction
+    // failure is per-ecosystem data, not fatal: every library of that
+    // ecosystem gets the construction error as its unresolved reason.
+    let mut selectors: HashMap<Ecosystem, Result<Selector, String>> = HashMap::new();
+    for entry in &discovered.manifest.libs {
+        if let Some(ecosystem) = entry.ecosystem {
+            selectors
+                .entry(ecosystem)
+                .or_insert_with(|| Selector::new(start, ecosystem).map_err(|e| format!("{e}")));
+        }
+    }
+
     let mut out: Vec<Pin> = discovered
         .manifest
         .libs
         .iter()
-        .map(|entry| pin_for(start, entry, &global_path, project_root.as_deref()))
+        .map(|entry| pin_for(entry, &selectors, &global_path, project_root.as_deref()))
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }
 
-fn pin_for(start: &Path, entry: &LibEntry, global_path: &Path, project_root: Option<&Path>) -> Pin {
+fn pin_for(
+    entry: &LibEntry,
+    selectors: &HashMap<Ecosystem, Result<Selector, String>>,
+    global_path: &Path,
+    project_root: Option<&Path>,
+) -> Pin {
     let project_scoped = entry.origin_file.as_deref() != Some(global_path);
     let package = entry.package_name();
     let inspection = entry
         .ecosystem
-        .map(|ecosystem| importers::inspect(start, ecosystem, &package));
+        .and_then(|ecosystem| selectors.get(&ecosystem))
+        .map(|selector| match selector {
+            Ok(selector) => selector.inspect(&package),
+            Err(reason) => Inspection {
+                evidence: Evidence::Unknown,
+                result: Err(anyhow::anyhow!(reason.clone())),
+            },
+        });
     let declared = inspection
         .as_ref()
         .map(|i| i.evidence)
@@ -89,9 +115,9 @@ fn pin_for(start: &Path, entry: &LibEntry, global_path: &Path, project_root: Opt
             Ok(()) => Outcome::Ref(pin.to_string()),
             Err(error) => Outcome::Unresolved(format!("{error}")),
         },
-        // `inspection` is `entry.ecosystem.map(..)`, so zipping the two
-        // collapses the "no ecosystem" and "ecosystem present" cases into
-        // exactly the two states that are actually reachable.
+        // `selectors` holds an entry for every ecosystem the manifest names,
+        // so `inspection` is `Some` exactly when `ecosystem` is; zipping the
+        // two collapses them into the states that are actually reachable.
         None => match entry.ecosystem.zip(inspection) {
             None => {
                 Outcome::Unresolved("no ecosystem and no ref; add one with `docm add`".to_string())

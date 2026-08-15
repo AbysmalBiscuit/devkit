@@ -1360,3 +1360,90 @@ fn an_ambiguity_probe_does_not_leak_evidence() {
     assert!(inspection.result.is_err());
     assert_eq!(inspection.evidence, importers::Evidence::Unknown);
 }
+
+#[test]
+fn a_selector_reads_each_lockfile_once() {
+    // A count assertion without instrumentation: after the first package
+    // forces the parse, the lockfile is deleted. Every later package must
+    // still resolve, which is only possible if nothing re-reads the file.
+    let root = common::unique_tmp("selector-one-read");
+    std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
+    let ws = root.join("apps/api");
+    write_package_json(
+        &ws,
+        r#"{"name":"@app/api","dependencies":{"h3":"^1.15.5"}}"#,
+    );
+
+    let selector = importers::Selector::new(&ws, Ecosystem::Js).unwrap();
+    assert_eq!(selector.select("h3").unwrap().version, "1.15.11");
+
+    std::fs::remove_file(root.join("bun.lock")).unwrap();
+    for _ in 0..19 {
+        assert_eq!(selector.select("h3").unwrap().version, "1.15.11");
+    }
+}
+
+#[test]
+fn a_malformed_unselected_lockfile_is_still_ignored() {
+    // packageManager names pnpm; a corrupt bun.lock sits beside it. Eager
+    // parsing would make this a hard failure for a project that resolves fine.
+    let root = common::unique_tmp("selector-unselected-malformed");
+    std::fs::write(root.join("bun.lock"), "{ this is not json").unwrap();
+    std::fs::write(
+        root.join("pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3:\n        specifier: ^1\n        version: 1.0.0\npackages:\n  h3@1.0.0: {}\n",
+    )
+    .unwrap();
+    write_package_json(
+        &root,
+        r#"{"name":"root","packageManager":"pnpm@9.0.0","dependencies":{"h3":"^1"}}"#,
+    );
+
+    assert_eq!(
+        importers::select(&root, Ecosystem::Js, "h3")
+            .unwrap()
+            .version,
+        "1.0.0"
+    );
+    let selector = importers::Selector::new(&root, Ecosystem::Js).unwrap();
+    assert_eq!(selector.select("h3").unwrap().version, "1.0.0");
+}
+
+#[test]
+fn a_cached_parse_error_replays_identically() {
+    // Two packages against one malformed lockfile: an `anyhow::Error` handed
+    // out once would move or reconstruct, so the second caller must get the
+    // same three renderings as the first.
+    let root = common::unique_tmp("selector-error-replay");
+    std::fs::write(root.join("pnpm-lock.yaml"), "\tnot: [valid: yaml").unwrap();
+    write_package_json(&root, r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#);
+
+    let selector = importers::Selector::new(&root, Ecosystem::Js).unwrap();
+    let first = selector.select("h3").unwrap_err();
+    let second = selector.select("kysely").unwrap_err();
+    assert_eq!(format!("{first}"), format!("{second}"));
+    assert_eq!(format!("{first:#}"), format!("{second:#}"));
+    assert_eq!(format!("{first:?}"), format!("{second:?}"));
+}
+
+#[test]
+fn a_cargo_selector_resolves_two_packages_from_one_parse() {
+    let root = common::unique_tmp("selector-cargo");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.200\"\nanyhow = \"1.0.90\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("Cargo.lock"),
+        format!(
+            "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"anyhow\", \"serde\"]\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.200\"\nsource = \"{CARGO_REGISTRY}\"\nchecksum = \"aa\"\n\n[[package]]\nname = \"anyhow\"\nversion = \"1.0.90\"\nsource = \"{CARGO_REGISTRY}\"\nchecksum = \"bb\"\n"
+        ),
+    )
+    .unwrap();
+
+    let selector = importers::Selector::new(&root, Ecosystem::Rust).unwrap();
+    assert_eq!(selector.select("serde").unwrap().version, "1.0.200");
+    std::fs::remove_file(root.join("Cargo.lock")).unwrap();
+    assert_eq!(selector.select("anyhow").unwrap().version, "1.0.90");
+}
