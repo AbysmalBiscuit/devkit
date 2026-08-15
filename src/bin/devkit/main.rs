@@ -26,10 +26,24 @@ enum Cmd {
         #[arg(long)]
         token: Option<String>,
     },
-    /// Print a compact project brief (apps, tasks, live servers) for the
-    /// current checkout; silent outside a devkit-managed project. Intended
-    /// for coding-agent session-start hooks.
-    Brief,
+    /// Print a compact project brief (apps, tasks, live servers, library
+    /// versions) for the current checkout; silent outside a devkit-managed
+    /// project. Intended for coding-agent session hooks.
+    Brief {
+        /// Emit only the library-versions section — what a post-compaction
+        /// re-injection wants, without respending the context compaction
+        /// just reclaimed.
+        #[arg(long)]
+        pins_only: bool,
+        /// Print nothing when this session already received the same brief.
+        /// Reads `session_id` from the hook's stdin JSON.
+        ///
+        /// Rejected with `--pins-only`: the watermark records the whole brief,
+        /// so suppressing on it after emitting only the library table would
+        /// tell the session it had seen a brief it never got.
+        #[arg(long, conflicts_with = "pins_only")]
+        if_changed: bool,
+    },
     /// Check configured credentials and report what is missing.
     Doctor {
         /// Emit the report as JSON instead of a table.
@@ -60,7 +74,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Auth { provider, token } => auth::run(provider, token),
-        Cmd::Brief => brief::run(),
+        Cmd::Brief {
+            pins_only,
+            if_changed,
+        } => brief::run(pins_only, if_changed),
         Cmd::Doctor { json } => doctor::run(json),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "devkit", &mut std::io::stdout());

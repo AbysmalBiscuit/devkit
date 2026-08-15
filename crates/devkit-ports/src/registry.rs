@@ -232,6 +232,29 @@ mod tests {
         let back: Data = serde_json::from_str(&s).unwrap();
         assert_eq!(back.entries[&9100].app, "api");
     }
+
+    #[test]
+    fn status_table_renders_from_a_supplied_listening_view() {
+        let mut data = Data::default();
+        data.entries.insert(
+            4100,
+            Entry {
+                app: "api".into(),
+                holder: "/w/root".into(),
+                role: Role::Issue,
+                pid: Some(42),
+                logfile: None,
+                ts: now(),
+            },
+        );
+        let view: std::collections::BTreeMap<u16, bool> = [(4100u16, true)].into_iter().collect();
+        let text = status_table_with(&data, Some("/w/root"), &view);
+        assert!(text.contains("4100"), "{text}");
+        assert!(
+            text.contains("yes"),
+            "the supplied view wins over a re-probe: {text}"
+        );
+    }
 }
 
 use std::net::{SocketAddr, TcpStream};
@@ -666,9 +689,22 @@ pub fn release_ports(ports: &[u16]) -> Result<Vec<u16>> {
     release_ports_with(&FlockStore::new(), ports)
 }
 
-/// Render the port-status table shared by `portm status` and `devrun status`.
-/// `only_holder = Some(h)` limits rows to that holder; `None` shows every port.
-pub fn status_table(data: &Data, only_holder: Option<&str>) -> String {
+/// One liveness probe per rendered row, taken once so a caller that both
+/// hashes and renders sees a single consistent state.
+pub fn listening_view(data: &Data, only_holder: Option<&str>) -> BTreeMap<u16, bool> {
+    data.entries
+        .iter()
+        .filter(|(_, e)| only_holder.is_none_or(|h| e.holder == h))
+        .map(|(port, _)| (*port, listening(*port)))
+        .collect()
+}
+
+/// `status_table` against an already-taken liveness view.
+pub fn status_table_with(
+    data: &Data,
+    only_holder: Option<&str>,
+    view: &BTreeMap<u16, bool>,
+) -> String {
     let mut t =
         devkit_common::ui::table(&["PORT", "APP", "ROLE", "HOLDER", "PID", "LISTENING", "AGE"]);
     let now = now();
@@ -685,15 +721,22 @@ pub fn status_table(data: &Data, only_holder: Option<&str>) -> String {
             e.role.to_string(),
             label.to_string(),
             e.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-            if listening(*port) {
-                "yes".into()
+            if *view.get(port).unwrap_or(&false) {
+                "yes"
             } else {
-                "no".into()
-            },
+                "no"
+            }
+            .to_string(),
             format!("{}s", now.saturating_sub(e.ts)),
         ]);
     }
     format!("{t}")
+}
+
+/// Render the port-status table shared by `portm status` and `devrun status`.
+/// `only_holder = Some(h)` limits rows to that holder; `None` shows every port.
+pub fn status_table(data: &Data, only_holder: Option<&str>) -> String {
+    status_table_with(data, only_holder, &listening_view(data, only_holder))
 }
 
 /// Which holders a `down` selection considers.

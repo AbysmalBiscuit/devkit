@@ -166,7 +166,7 @@ still wins.
 ~~~
 devkit auth <linear|slack> [--token <value>]   # validate + store; prompts (no echo) by default
 devkit doctor [--json]                          # check configured credentials
-devkit brief                                    # compact project brief (apps, tasks, live servers)
+devkit brief [--pins-only] [--if-changed]       # compact project brief (apps, tasks, servers, versions)
 devkit completions <shell>
 ~~~
 
@@ -180,11 +180,15 @@ devkit completions <shell>
   for features the binaries lack), when servers run outside devrun, and when the
   docs cache holds unreferenced checkouts.
 - **`brief`**: prints a compact orientation for the current checkout — configured
-  apps, the `[tasks]` table, and this worktree's live servers — and prints nothing
-  outside a devkit-managed project (no project `devkit.toml` found and no
-  configured app directory present under the worktree root). The plugin's
-  `SessionStart` hook runs it so coding-agent sessions start already knowing the
-  project's apps and tasks.
+  apps, the `[tasks]` table, this worktree's live servers, and the versions this
+  checkout's lockfiles pin for each registered library. The two halves are
+  independent: a checkout with no devrun setup still gets the library table, and a
+  checkout that evidences no registered library still gets the rest. Prints nothing
+  when neither applies, so a hook can call it from any repository.
+  `--pins-only` emits just the library table; `--if-changed` prints nothing when
+  this session already received the same brief, keyed on the `session_id` in the
+  hook's stdin JSON. The plugin runs all three: `SessionStart` (full),
+  `PostCompact` (`--pins-only`), and `CwdChanged` (`--if-changed`).
 
 ### `docm`: Library Docs
 

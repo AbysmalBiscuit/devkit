@@ -97,6 +97,226 @@ impl Project {
     }
 }
 
+/// `brief` with a hook payload on stdin. The no-stdin path never reaches the
+/// watermark: `session_id` reads stdin only when it is not a terminal and the
+/// payload carries an id, so a run driven by `output()` with an inherited
+/// stdin exercises a different branch entirely.
+fn brief_with_stdin(project: &Project, args: &[&str], stdin: &str, columns: &str) -> Output {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .arg("brief")
+        .args(args)
+        .current_dir(&project.root)
+        .env("HOME", &project.home)
+        .env("USERPROFILE", &project.home)
+        .env("XDG_STATE_HOME", project.home.join("state"))
+        .env("XDG_DATA_HOME", project.home.join("data"))
+        .env("COLUMNS", columns)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn pins_only_emits_just_the_library_section() {
+    let project = Project::docs_only("pins-only");
+    project.set_config(&format!(
+        "[config]\nroot = true\n\n{DEFAULTS}[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
+    ));
+    let out = project.brief(&["--pins-only"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("serde"), "{text}");
+    assert!(!text.contains("tests"), "no tasks section: {text}");
+    assert!(!text.contains("devrun up"), "no devrun preamble: {text}");
+}
+
+#[test]
+fn the_two_emission_modes_are_mutually_exclusive() {
+    // The watermark records the whole brief. Honouring both flags at once
+    // would stamp it after emitting only the library table, and the next
+    // full --if-changed run would suppress a brief the session never saw.
+    let project = Project::docs_only("modes-exclusive");
+    let out = project.brief(&["--pins-only", "--if-changed"]);
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn if_changed_emits_once_per_session_and_ignores_width() {
+    let project = Project::docs_only("watermark");
+    let session = r#"{"session_id":"abc-123"}"#;
+
+    let first = brief_with_stdin(&project, &["--if-changed"], session, "100");
+    assert!(!first.stdout.is_empty(), "first emission");
+
+    // Same content, different terminal width: the digest is over data, not
+    // rendered text, so this must stay silent.
+    let second = brief_with_stdin(&project, &["--if-changed"], session, "60");
+    assert!(
+        second.stdout.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&second.stdout)
+    );
+
+    // A brief whose tasks changed while its pins held still must emit again.
+    project.set_config(&format!(
+        "[config]\nroot = true\n\n{DEFAULTS}[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
+    ));
+    let third = brief_with_stdin(&project, &["--if-changed"], session, "100");
+    assert!(!third.stdout.is_empty(), "content changed, emit again");
+}
+
+#[test]
+fn two_session_ids_do_not_share_a_watermark() {
+    let project = Project::docs_only("watermark-sessions");
+    let a = brief_with_stdin(&project, &["--if-changed"], r#"{"session_id":"a"}"#, "100");
+    assert!(!a.stdout.is_empty());
+    let b = brief_with_stdin(&project, &["--if-changed"], r#"{"session_id":"b"}"#, "100");
+    assert!(
+        !b.stdout.is_empty(),
+        "a second session gets its own watermark"
+    );
+
+    // Two ids differing only in characters an allowlist would strip must not
+    // collide: the filename is a hash of the complete raw id.
+    let x = brief_with_stdin(
+        &project,
+        &["--if-changed"],
+        r#"{"session_id":"s/1"}"#,
+        "100",
+    );
+    let y = brief_with_stdin(
+        &project,
+        &["--if-changed"],
+        r#"{"session_id":"s:1"}"#,
+        "100",
+    );
+    assert!(!x.stdout.is_empty());
+    assert!(!y.stdout.is_empty());
+}
+
+#[test]
+fn no_session_id_emits_every_time() {
+    // Falling back to a per-cwd key makes concurrent sessions share one
+    // watermark, so A → B → A would suppress A's re-injection even though B
+    // displaced it. A duplicate brief is the acceptable failure.
+    let project = Project::docs_only("watermark-anonymous");
+    assert!(
+        !brief_with_stdin(&project, &["--if-changed"], "", "100")
+            .stdout
+            .is_empty()
+    );
+    assert!(
+        !brief_with_stdin(&project, &["--if-changed"], "", "100")
+            .stdout
+            .is_empty()
+    );
+}
+
+#[test]
+fn an_unwritable_state_dir_fails_open() {
+    use std::io::Write;
+    let project = Project::docs_only("watermark-unwritable");
+    // A session id is supplied, so this exercises the watermark path rather
+    // than the no-id path.
+    let run = || {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_devkit"))
+            .args(["brief", "--if-changed"])
+            .current_dir(&project.root)
+            .env("HOME", &project.home)
+            .env("USERPROFILE", &project.home)
+            // A regular file where the state dir should be, so every
+            // create_dir_all and write beneath it fails.
+            .env("XDG_STATE_HOME", project.root.join("Cargo.toml"))
+            .env("XDG_DATA_HOME", project.home.join("data"))
+            .env("COLUMNS", "100")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(br#"{"session_id":"unwritable"}"#)
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    assert!(!run().stdout.is_empty());
+    let second = run();
+    assert!(second.status.success());
+    assert!(
+        !second.stdout.is_empty(),
+        "an unwritable watermark costs a duplicate brief, never a withheld one"
+    );
+}
+
+#[test]
+fn leaving_a_project_says_so_once() {
+    let project = Project::docs_only("watermark-leaving");
+    let session = r#"{"session_id":"leaving"}"#;
+    assert!(
+        !brief_with_stdin(&project, &["--if-changed"], session, "100")
+            .stdout
+            .is_empty()
+    );
+
+    // A directory outside any devkit project, same session: the earlier
+    // brief's content is stale, and silence would leave it the most recent
+    // thing the agent was told.
+    let elsewhere = project.home.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let out = brief_from(&project, &elsewhere, session);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success());
+    assert!(text.contains("no longer applies"), "{text}");
+
+    // Announced once: the watermark is dropped with the notice, and a repeat
+    // from the same directory has nothing left to contradict.
+    let again = brief_from(&project, &elsewhere, session);
+    assert!(
+        again.stdout.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&again.stdout)
+    );
+}
+
+/// `brief --if-changed` from an arbitrary directory, with the project's home
+/// and isolated state so the watermark from a previous run is visible.
+fn brief_from(project: &Project, cwd: &Path, stdin: &str) -> Output {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .args(["brief", "--if-changed"])
+        .current_dir(cwd)
+        .env("HOME", &project.home)
+        .env("USERPROFILE", &project.home)
+        .env("XDG_STATE_HOME", project.home.join("state"))
+        .env("XDG_DATA_HOME", project.home.join("data"))
+        .env("COLUMNS", "100")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
 #[test]
 fn a_repo_with_no_devkit_toml_renders_pins() {
     // The case `load::load(..).ok()?` silently killed. `config::resolve` bails
