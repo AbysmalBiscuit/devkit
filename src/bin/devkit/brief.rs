@@ -1,8 +1,11 @@
 //! `devkit brief` — a compact project orientation for coding-agent session
 //! hooks. Prints the configured apps, canned tasks, and any live servers for
 //! the current worktree when the working directory belongs to a
-//! devkit-managed project, and nothing at all otherwise — so a SessionStart
-//! hook can call it unconditionally from any repository.
+//! devkit-managed project, plus a library-versions table for any registered
+//! library this checkout evidences — the two sections are independent, so a
+//! docs-only checkout with no devrun setup still gets the latter. Prints
+//! nothing when neither applies, so a SessionStart hook can call it
+//! unconditionally from any repository.
 
 use anyhow::Result;
 use devkit_ports::apps::App;
@@ -41,23 +44,105 @@ fn render(cwd: &Path) -> Option<String> {
         .ok()?
         .trim()
         .to_string();
+
+    // Pins are computed before `load`: a devkit.toml carrying [docs] and
+    // nothing devrun can use must still produce a brief.
+    let pins = settings.pins.then(|| pins_section(cwd)).flatten();
+    let devrun = devrun_sections(&root, cwd);
+    if pins.is_none() && devrun.is_none() {
+        return None;
+    }
+
+    let mut out = String::new();
+    out.push_str("## devkit project context\n\n");
+    out.push_str(&wrap(&format!(
+        "This checkout ({root}) is a devkit-managed project: dev servers, ports, \
+         canned tasks, and cross-session file locks are coordinated by the devkit \
+         CLIs. Load the `using-devkit` skill before using them."
+    )));
+    out.push_str("\n\n");
+    if let Some((apps, tasks, servers)) = devrun {
+        out.push_str(&devrun_text(&apps, &tasks, servers.as_deref()));
+    }
+    if let Some(section) = pins {
+        out.push_str(&section);
+    }
+    Some(out)
+}
+
+/// The library-versions section, or `None` when the manifest cannot be read or
+/// this checkout evidences nothing. A broken `docs.toml` omits this section; it
+/// never suppresses the rest. An empty relevant set is what keeps the section
+/// out of unrelated repositories — the machine-wide catalog accumulates every
+/// library ever asked about, and a checkout that evidences none of them is not
+/// a project this section has anything to say about.
+fn pins_section(cwd: &Path) -> Option<String> {
+    let pins = devkit_docs::pins::pins(cwd, None).ok()?;
+    let (relevant, _) = devkit_docs::pins::relevant(&pins);
+    if relevant.is_empty() {
+        return None;
+    }
+    Some(pins_text(&devkit_docs::pins::render(&pins)))
+}
+
+/// The caveat carried once, at O(1) rather than per row.
+fn pins_text(table: &str) -> String {
+    let mut out = String::from("\n### Library versions in this checkout\n\n");
+    out.push_str(table);
+    out.push('\n');
+    out.push_str(&wrap(
+        "These are the versions this checkout's manifests and lockfiles name. \
+         `docm info <lib>` resolves the matching source and reports the version it \
+         actually serves. Answer questions about these libraries from those \
+         checkouts; training-set recall is a different version.",
+    ));
+    out.push('\n');
+    out
+}
+
+/// Greedy word-wrap to the terminal width: never splits a word, so a single
+/// token longer than the width still overflows its line. Prose in this file
+/// embeds a run-time path of unbounded length, so a fixed-width literal
+/// cannot stand in for wrapping.
+fn wrap(text: &str) -> String {
+    let width = devkit_common::ui::term_width();
+    let mut out = String::new();
+    let mut line_len = 0usize;
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+        if line_len == 0 {
+            out.push_str(word);
+            line_len = word_len;
+        } else if line_len + 1 + word_len <= width {
+            out.push(' ');
+            out.push_str(word);
+            line_len += 1 + word_len;
+        } else {
+            out.push('\n');
+            out.push_str(word);
+            line_len = word_len;
+        }
+    }
+    out
+}
+
+/// Apps, tasks and live servers, or `None` when this checkout is not a
+/// devrun-configured project.
+fn devrun_sections(root: &str, cwd: &Path) -> Option<(String, String, Option<String>)> {
     let loaded = load::load(None, cwd).ok()?;
     let home = config::home_config_path();
     if !is_project_member(
-        &root,
+        root,
         &loaded.provenance.layers,
         home.as_deref(),
         &loaded.catalog,
     ) {
         return None;
     }
-    let tasks = task::tasks_text(&task::list(&loaded.config));
-    let servers = live_servers(&root);
-    Some(render_text(
-        &root,
-        &apps_line(&loaded.catalog),
-        &tasks,
-        servers.as_deref(),
+    Some((
+        apps_line(&loaded.catalog),
+        task::tasks_text(&task::list(&loaded.config)),
+        live_servers(root),
     ))
 }
 
@@ -106,14 +191,8 @@ fn live_servers(root: &str) -> Option<String> {
         .then(|| registry::status_table(&data, Some(root)))
 }
 
-fn render_text(root: &str, apps: &str, tasks: &str, servers: Option<&str>) -> String {
+fn devrun_text(apps: &str, tasks: &str, servers: Option<&str>) -> String {
     let mut out = String::new();
-    out.push_str("## devkit project context\n\n");
-    out.push_str(&format!(
-        "This checkout ({root}) is a devkit-managed project: dev servers, ports, \
-         canned tasks, and cross-session file locks are coordinated by the devkit \
-         CLIs. Load the `using-devkit` skill before using them.\n\n"
-    ));
     out.push_str(
         "- `devrun up <app>` / `devrun down` — start/stop supervised dev servers for this worktree\n",
     );
@@ -188,19 +267,12 @@ mod tests {
 
     #[test]
     fn render_text_sections_and_optional_servers() {
-        let text = render_text("/w/root", "api (apps/api)", "NAME KIND\n", None);
-        assert!(text.contains("devkit project context"), "{text}");
-        assert!(text.contains("using-devkit"), "{text}");
+        let text = devrun_text("api (apps/api)", "NAME KIND\n", None);
         assert!(text.contains("api (apps/api)"), "{text}");
         assert!(text.contains("devrun task"), "{text}");
         assert!(!text.contains("Live servers"), "{text}");
 
-        let with = render_text(
-            "/w/root",
-            "api (apps/api)",
-            "NAME KIND\n",
-            Some("PORT APP\n"),
-        );
+        let with = devrun_text("api (apps/api)", "NAME KIND\n", Some("PORT APP\n"));
         assert!(with.contains("Live servers in this worktree"), "{with}");
         assert!(with.contains("PORT APP"), "{with}");
     }
