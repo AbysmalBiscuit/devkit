@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.13.1](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.0...v0.13.1) (2026-08-16)
+
+
+### Features
+
+* **brief:** add --pins-only and --if-changed ([a444f56](https://github.com/AbysmalBiscuit/devkit/commit/a444f56afc0512034f35d5d55c39e3fd482dc233))
+* **brief:** add apps and tasks section switches ([a142559](https://github.com/AbysmalBiscuit/devkit/commit/a14255923fb3726e46541e8c84f2ea3af7892bae))
+* **brief:** add the library-pins section ([7187be0](https://github.com/AbysmalBiscuit/devkit/commit/7187be0a309932f70741ea74d26a35477c6c0c58))
+* **brief:** drop sections with nothing to report ([538a702](https://github.com/AbysmalBiscuit/devkit/commit/538a702149c23b3c2271875f65ae178a74394634))
+* **brief:** gate output on [brief] config ([37269b8](https://github.com/AbysmalBiscuit/devkit/commit/37269b84dfe84e681276614c0b0fdd48a29ca75c))
+* **brief:** report a config that does not load ([5eebb49](https://github.com/AbysmalBiscuit/devkit/commit/5eebb49f5510b78a7397aceb0b69d89d0c158640))
+* **config:** add devkit schema init ([4a1a249](https://github.com/AbysmalBiscuit/devkit/commit/4a1a249b4e6217befcad0ed6cb78dbf150cdca9b))
+* **config:** publish a json schema for devkit.toml ([53783f0](https://github.com/AbysmalBiscuit/devkit/commit/53783f00553cba09eaaecb5b26bb610b483517d5))
+* **docm:** add list --project ([9c344ea](https://github.com/AbysmalBiscuit/devkit/commit/9c344ea1181db3e08290e3f87045113b65aedabf))
+* **docs:** add inspect, evidence, typed undeclared ([1d5c90a](https://github.com/AbysmalBiscuit/devkit/commit/1d5c90a050f79b191507ed78e3a9e643440b7e51))
+* **docs:** add pins readout for a checkout ([77b5568](https://github.com/AbysmalBiscuit/devkit/commit/77b556839eacfffb91e6e1d28d98bde7c8ce2169))
+* **docs:** render the pins table ([9a1ca41](https://github.com/AbysmalBiscuit/devkit/commit/9a1ca41b50ca1d8678ce07beab66ac0b2712b9e1))
+* **hooks:** re-inject pins after a codex compaction ([bc23052](https://github.com/AbysmalBiscuit/devkit/commit/bc23052278e1e31e1bd53b762997812e2771fc8a))
+* **hooks:** wire write enforcement on codex ([2f44b48](https://github.com/AbysmalBiscuit/devkit/commit/2f44b4854411c36b23c4f598797ee6f71e840cd6))
+
+
+### Bug Fixes
+
+* **brief:** clear the watermark on --pins-only ([7e43d28](https://github.com/AbysmalBiscuit/devkit/commit/7e43d28bc63a359fe3da68b0ef1fd943fc1f54c7))
+* **brief:** drop [defaults]-optionality, fix fixtures instead ([94c3e40](https://github.com/AbysmalBiscuit/devkit/commit/94c3e402b78eec552ea94aad8c5562e7b951fe7d))
+* **brief:** isolate test cache, fix devrun claim ([c0a1368](https://github.com/AbysmalBiscuit/devkit/commit/c0a136858402ea8252f1fcf4f15b94f36c10d124))
+* **brief:** stamp the watermark on a full brief ([05c6d83](https://github.com/AbysmalBiscuit/devkit/commit/05c6d83068cff24abc89affadbb97c4418a871d6))
+* **ci:** pin the schema file to lf line endings ([39b7c8e](https://github.com/AbysmalBiscuit/devkit/commit/39b7c8e553087b49a580238f91698f1dfa7716f9))
+* **config:** let a standalone section stand alone ([0bf8bea](https://github.com/AbysmalBiscuit/devkit/commit/0bf8bea02aec19d20a6db03906f67a66f0c1507e))
+* **docs:** anchor pin workspace on the lockfile dir ([2e02b95](https://github.com/AbysmalBiscuit/devkit/commit/2e02b9525b5c82945c1282cf5300b850b16c041a))
+* **docs:** measure and shrink the pins render to its budget ([963c2d7](https://github.com/AbysmalBiscuit/devkit/commit/963c2d766474c634e75bb0e63e8c50d6e9bf4a35))
+
+
+### Performance Improvements
+
+* **docs:** bound pins on lockfile size ([904f88a](https://github.com/AbysmalBiscuit/devkit/commit/904f88a3cd37256f8c96e1bf3b19ab0265c8a295))
+* **docs:** parse each lockfile once per selector ([af94d74](https://github.com/AbysmalBiscuit/devkit/commit/af94d74886440613d57ea55a2c1281967940be3b))
+
 ## [0.13.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.12.1...v0.13.0) (2026-08-07)
 
 

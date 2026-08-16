@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "devkit"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-common"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-docs"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-issue"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-locks"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-mcp"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-ports"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "clap",
