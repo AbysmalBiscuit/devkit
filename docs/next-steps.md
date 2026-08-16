@@ -133,11 +133,10 @@ still need a live test.
     `additionalProperties: false` over `continue`/`stopReason`/`suppressOutput`/
     `systemMessage`, with no `hookSpecificOutput` — there is no way to inject
     context through it.
-  - **Codex startup hook injects the brief, not the skill notice.** Codex
-    registers `using-devkit` natively, so the hardcoded notice in
-    `hooks/announce-skill` duplicates it; the startup block runs `brief-context`
-    instead. `announce-skill` remains for Cursor, which has no verified native
-    skill registration.
+  - **Session hooks inject the brief, not a skill notice.** Codex and Cursor
+    both register `using-devkit` natively from the manifest's `skills:`
+    pointer, so a hardcoded "this skill exists" notice only duplicates it. Both
+    startup blocks run `brief-context`; the notice emitter is gone.
   - **Write enforcement on Codex — WIRED 2026-08-16, UNVERIFIED IN HOST.**
     `hooks/hooks-codex.json` now carries the same `PreToolUse`/`SubagentStop`/
     `SessionEnd` handlers as the Claude Code file. Codex's edit tool is
@@ -156,30 +155,40 @@ still need a live test.
   `skills/using-devkit/SKILL.md`; `claude plugin marketplace add
   AbysmalBiscuit/devkit` then `claude plugin install devkit@devkit` installs and
   `using-devkit` resolves. Confirmed on a second machine.
-- **Cursor install — NOT DONE.** Cursor is not installed on the dev machine, so
-  the SessionStart context injection (`additional_context` envelope from
-  `hooks/announce-skill`) has not been exercised in a running Cursor host. Install
-  the plugin in Cursor, start a session, and confirm the "A 'using-devkit' skill is
-  available" notice appears (or that Cursor registers the skill natively, as Codex
-  does). On Windows, confirm `run-hook.cmd` locates Git Bash. If the envelope is
-  rejected, adjust `hooks/announce-skill`. `sessionStart` is the only Cursor event
-  that can inject context — `preCompact` is observational and `workspaceOpen`
-  fires outside a session and returns only `pluginPaths` — so Cursor gets the
-  brief once per session and has no analogue of `--pins-only` or `--if-changed`. Also confirm which marketplace manifest
-  Cursor's "Import from Repo" reads — `.cursor-plugin/marketplace.json` ships on
-  the assumption it mirrors the `.cursor-plugin/plugin.json` convention, but the
-  location is unverified (Codex, for comparison, ignores `.codex-plugin/` for the
-  marketplace manifest and wants `.agents/plugins/`).
-- **Cursor hook command path resolution — NOT DONE (depends on the Cursor test).**
-  `hooks/hooks-cursor.json` invokes the runner as the relative `./hooks/run-hook.cmd`
-  (matching the obra/superpowers reference), whereas `hooks/hooks-codex.json` uses
-  `${PLUGIN_ROOT}/hooks/run-hook.cmd`. The relative form only resolves if Cursor runs
-  the hook with its working directory set to the plugin root; otherwise it silently
-  no-ops (and looks like an envelope bug). Doc research (2026-06-24) suggests Cursor
-  has **no** `${CURSOR_PLUGIN_ROOT}` expansion in manifest command position — a known
-  structural gap — which would make the relative form the *only* working option and
-  rule out the previously-proposed root-anchored switch. Confirm Cursor's hook cwd and
-  variable-expansion behavior on the first live install before changing anything.
+- **Cursor manifests — MATCH THE DOCS 2026-08-16.** The reference confirms what
+  ships: the marketplace manifest belongs at `.cursor-plugin/marketplace.json`
+  in the repo root, requiring `name`, `owner{name}`, and `plugins[]`; the plugin
+  manifest at `.cursor-plugin/plugin.json` takes `hooks` as either a file path
+  or inline config, so pointing it at `hooks/hooks-cursor.json` instead of the
+  conventional `hooks/hooks.json` is supported; and `skills` registers the skill
+  natively, exactly as Codex does. Still unverified in a running host, because
+  Cursor is not installed on the dev machine.
+- **Cursor context injection is broken upstream — BLOCKED, NOT ON US.**
+  `sessionStart`'s `additional_context` is silently dropped: a Cursor developer
+  confirmed on 2026-04-20 that the hook runs before the composer handle exists,
+  so the field is discarded even when the log reports it merged. No fix version
+  and no ETA as of the last report on 2026-08-03; the only offered workaround is
+  duplicating static text into `.cursor/rules`, which a dynamic brief cannot use.
+  The same pipeline drops `postToolUse` context. Nothing devkit ships can work
+  around this, and `sessionStart` is Cursor's only context-injecting session
+  event — `preCompact` is observational and `workspaceOpen` fires outside a
+  session and returns only `pluginPaths`. Native skill registration is therefore
+  the whole delivery path on Cursor today, as it already is on Codex. Re-test
+  when Cursor announces a fix.
+- **Cursor hook command path resolution — STILL UNKNOWN.** `hooks/hooks-cursor.json`
+  invokes the runner as the relative `./hooks/run-hook.cmd`, whereas
+  `hooks/hooks-codex.json` uses `${PLUGIN_ROOT}/hooks/run-hook.cmd`. The docs give a
+  working directory for user, project, and enterprise hooks but say nothing about
+  plugin hooks, and document no plugin-root expansion — only `${VAR}` plugin
+  *variables*. So the relative form remains the only option available, and whether it
+  resolves depends on a cwd only a live install can reveal.
+- **Write enforcement is not portable to Cursor.** Its `preToolUse` returns
+  `permission`/`user_message`/`agent_message`, not
+  `hookSpecificOutput.permissionDecision`, and its payload carries
+  `conversation_id` rather than `session_id` — so both `devkit_locks::hook`'s
+  parser and its deny envelope miss. Supporting Cursor means a third adapter,
+  not a config port. Cursor also exposes `afterFileEdit` (post hoc) and
+  `beforeReadFile`, neither of which gates a write the way `PreToolUse` does.
 
 ## Setup help/oauth for linear and slack
 
