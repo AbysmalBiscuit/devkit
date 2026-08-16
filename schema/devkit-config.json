@@ -1,14 +1,17 @@
 {
   "$defs": {
     "AppConfig": {
+      "description": "One runnable app. `base_port` and `launch` are required; `path` is required\ntoo whenever `defaults.doppler_yaml` cannot infer the directory.",
       "properties": {
         "base_port": {
+          "description": "Start of the app's port band. Each worktree is allocated its own port\nfrom here by the registry, so two worktrees never collide.",
           "format": "uint16",
           "maximum": 65535,
           "minimum": 0,
           "type": "integer"
         },
         "launch": {
+          "description": "The complete launch command as one argv, run verbatim — devkit builds no\nprefix of its own, so any `doppler run -c <config> --` wrapper belongs\nhere. Rendered as minijinja over `{{ port }}`, `ports['<app>']`, and\n`[templates.variables]`.",
           "items": {
             "type": "string"
           },
@@ -16,6 +19,7 @@
         },
         "path": {
           "default": null,
+          "description": "App subdirectory relative to the repo root, when it differs from the\napp's own name. Required unless `defaults.doppler_yaml` infers it.",
           "type": [
             "string",
             "null"
@@ -50,6 +54,7 @@
             "type": "string"
           },
           "default": {},
+          "description": "Env vars always set for this app, rendered as minijinja over the same\nvariables as `launch`. The lowest layer: a task's `env` and the CLI's\n`--env` both win over it.",
           "type": "object"
         },
         "url": {
@@ -62,6 +67,7 @@
         },
         "url_env": {
           "default": null,
+          "description": "Env var this app receives the `provides_url` app's URL through.",
           "type": [
             "string",
             "null"
@@ -106,6 +112,7 @@
       "type": "object"
     },
     "DaemonConfig": {
+      "description": "The `devkitd` supervisor: whether it starts, how long it lingers, and the\ncrash-loop, memory, and health policies it applies to supervised servers.",
       "properties": {
         "enabled": {
           "default": false,
@@ -175,6 +182,7 @@
         },
         "restart_window_secs": {
           "default": 60,
+          "description": "Length of the sliding window the `max_restarts` budget is counted over.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -183,6 +191,7 @@
       "type": "object"
     },
     "Defaults": {
+      "description": "Project-wide paths and branch conventions. The first four keys are required —\nwithout them no worktree, branch, or baseline resolves.",
       "properties": {
         "apps_dir": {
           "default": "apps",
@@ -190,16 +199,20 @@
           "type": "string"
         },
         "baseline_path": {
+          "description": "Checkout path for the baseline server. `~` is expanded.",
           "type": "string"
         },
         "baseline_ref": {
+          "description": "Git ref the baseline server tracks, e.g. `origin/staging`.",
           "type": "string"
         },
         "branch_prefix": {
+          "description": "Prefix on branches created by `issue setup`, e.g. `you/`.",
           "type": "string"
         },
         "doppler_yaml": {
           "default": "",
+          "description": "Path to the repo's `doppler.yaml`; its `setup` paths seed app path\ninference. `~` is expanded. Leave empty and every app needs its own\n`path`.",
           "type": "string"
         },
         "ignored_checks": {
@@ -237,6 +250,7 @@
           "type": "array"
         },
         "worktree_root": {
+          "description": "Directory issue worktrees are created under. `~` is expanded.",
           "type": "string"
         }
       },
@@ -249,9 +263,11 @@
       "type": "object"
     },
     "DocsManifest": {
+      "description": "Libraries whose source is checked out at the version this project resolves.\nA project's `[docs]` section overlays the global `docs.toml` entry by entry.",
       "properties": {
         "libs": {
           "default": [],
+          "description": "One entry per managed library. Every field except `name` is optional so\nan overlay can override a single field of a global entry.",
           "items": {
             "$ref": "#/$defs/LibEntry"
           },
@@ -261,6 +277,7 @@
       "type": "object"
     },
     "Ecosystem": {
+      "description": "Which importer graph resolves a library's version, and therefore which\nlockfile is consulted.",
       "oneOf": [
         {
           "enum": [
@@ -303,6 +320,7 @@
       "description": "One managed library. Every field except `name` is optional so a project\noverlay entry can override a single field of a global entry.",
       "properties": {
         "docs_dir": {
+          "description": "Docs directory inside the checkout, overriding layout detection.",
           "type": [
             "string",
             "null"
@@ -316,12 +334,15 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Which importer graph resolves the version. Omit to detect it from the\nproject's lockfiles."
         },
         "name": {
+          "description": "Id this library is addressed by on the `docm` command line, and the\nkey an overlay entry merges onto.",
           "type": "string"
         },
         "notes": {
+          "description": "Freeform note surfaced by `docm info` and `docm list` — what this\nlibrary is here for.",
           "type": [
             "string",
             "null"
@@ -342,12 +363,14 @@
           ]
         },
         "repo": {
+          "description": "Git URL to clone, skipping the registry lookup that would find it.",
           "type": [
             "string",
             "null"
           ]
         },
         "src_dir": {
+          "description": "Source directory inside the checkout, overriding layout detection.",
           "type": [
             "string",
             "null"
@@ -360,6 +383,7 @@
       "type": "object"
     },
     "LinearConfig": {
+      "description": "Linear lookups that cost an extra API round trip, so each is opt-in.",
       "properties": {
         "resolve_pr_links": {
           "default": false,
@@ -374,12 +398,14 @@
       "properties": {
         "github": {
           "default": null,
+          "description": "GitHub login requested as the PR reviewer when this alias is passed to\n`issue review request --to`. Omit and the alias only gets Slacked.",
           "type": [
             "string",
             "null"
           ]
         },
         "slack": {
+          "description": "Slack user or channel id, e.g. `U0XXXXXXXXX`.",
           "type": "string"
         }
       },
@@ -416,6 +442,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
+          "description": "Name of a sibling command task to run at this point in the sequence.",
           "properties": {
             "task": {
               "type": "string"
@@ -428,6 +455,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "Name of an app to bring up. Idempotent: an app already running in this\nworktree is reported rather than spawned again.",
           "properties": {
             "up": {
               "type": "string"
@@ -445,6 +473,7 @@
       "properties": {
         "app": {
           "default": null,
+          "description": "App whose directory the task runs in, inheriting that app's\n`static_env`. Omit to run at the repo root.",
           "type": [
             "string",
             "null"
@@ -452,6 +481,7 @@
         },
         "description": {
           "default": null,
+          "description": "One line shown in `devrun task --list` and the session brief.",
           "type": [
             "string",
             "null"
@@ -462,6 +492,7 @@
             "type": "string"
           },
           "default": {},
+          "description": "Env vars set for this task, layered over the app's `static_env` and\nunder the CLI's `--env-file` and `--env`.",
           "type": "object"
         },
         "require_live": {
@@ -474,6 +505,7 @@
         },
         "run": {
           "default": [],
+          "description": "The command as one argv (program + args), rendered as minijinja over\n`{{ port }}`, `ports['<app>']`, and `[templates.variables]`. Mutually\nexclusive with `steps`.",
           "items": {
             "type": "string"
           },
@@ -481,6 +513,7 @@
         },
         "steps": {
           "default": [],
+          "description": "A sequence run in order, each step either a command or an `up`. Each\nstep re-resolves its ports immediately before it runs. Mutually\nexclusive with `run`.",
           "items": {
             "$ref": "#/$defs/Step"
           },
@@ -493,36 +526,42 @@
       "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context.",
       "properties": {
         "branch": {
+          "description": "Branch name created by `issue setup`. Context: `prefix`, `issue`,\n`slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.",
           "type": [
             "string",
             "null"
           ]
         },
         "checkout_worktree_dir": {
+          "description": "Worktree directory name created by `issue checkout-pr`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are\nslugified, and the `linear_*` fields are empty on the PR-only path.",
           "type": [
             "string",
             "null"
           ]
         },
         "pr_body": {
+          "description": "Body of a PR opened by `issue review request`. `{{ input }}` is the\n`--pr-body` argument.",
           "type": [
             "string",
             "null"
           ]
         },
         "pr_title": {
+          "description": "Title of a PR opened by `issue review request`. `{{ input }}` is the\n`--pr-title` argument.",
           "type": [
             "string",
             "null"
           ]
         },
         "review_finish": {
+          "description": "Slack message sent by `issue review finish`. Same context as\n`review_request`, plus `author`.",
           "type": [
             "string",
             "null"
           ]
         },
         "review_request": {
+          "description": "Slack message sent by `issue review request`. Rendered once per\nrecipient with `name`, `slack_id`, `pr_url`, `pr_title`, and `input`.",
           "type": [
             "string",
             "null"
@@ -533,9 +572,11 @@
             "type": "string"
           },
           "default": {},
+          "description": "Constants available to every template above. A context field of the same\nname wins, and `--arg key=value` overrides either.",
           "type": "object"
         },
         "worktree_dir": {
+          "description": "Worktree directory name created by `issue setup`, relative to\n`defaults.worktree_root`. Same context as `branch`; defaults to\n`{{ slug }}`.",
           "type": [
             "string",
             "null"
@@ -554,6 +595,7 @@
         "$ref": "#/$defs/AppConfig"
       },
       "default": {},
+      "description": "One table per runnable app, keyed by the app id passed to\n`issue setup --apps` and `devrun up`.",
       "type": "object"
     },
     "brief": {
@@ -564,7 +606,8 @@
         "locks": true,
         "pins": true,
         "tasks": true
-      }
+      },
+      "description": "Which sections `devkit brief` emits at session start."
     },
     "config": {
       "$ref": "#/$defs/LayerMarker",
@@ -587,10 +630,12 @@
         "memory_max_mb": 0,
         "memory_warn_mb": 0,
         "restart_window_secs": 60
-      }
+      },
+      "description": "The `devkitd` supervisor: autostart gate, crash-loop budget, and the\nmemory and health policies applied to supervised servers."
     },
     "defaults": {
-      "$ref": "#/$defs/Defaults"
+      "$ref": "#/$defs/Defaults",
+      "description": "Project-wide paths and branch conventions. Required: nothing resolves\nwithout it."
     },
     "docs": {
       "$ref": "#/$defs/DocsManifest",
@@ -607,13 +652,15 @@
       "$ref": "#/$defs/LinearConfig",
       "default": {
         "resolve_pr_links": false
-      }
+      },
+      "description": "Linear lookups that cost an extra API round trip."
     },
     "people": {
       "additionalProperties": {
         "$ref": "#/$defs/Person"
       },
       "default": {},
+      "description": "Reviewer/recipient aliases, keyed by the short name passed to\n`issue review --to`.",
       "type": "object"
     },
     "tasks": {
@@ -621,6 +668,7 @@
         "$ref": "#/$defs/TaskConfig"
       },
       "default": {},
+      "description": "Canned oneshot commands, keyed by the name passed to `devrun task`.",
       "type": "object"
     },
     "templates": {
@@ -634,7 +682,8 @@
         "review_request": null,
         "variables": {},
         "worktree_dir": null
-      }
+      },
+      "description": "Minijinja templates for the strings `issue setup` and `issue review`\ngenerate — branch names, worktree directories, PR fields, Slack bodies."
     }
   },
   "title": "devkit.toml",

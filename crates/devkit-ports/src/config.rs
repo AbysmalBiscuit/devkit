@@ -6,23 +6,38 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Config {
+    /// Project-wide paths and branch conventions. Required: nothing resolves
+    /// without it.
     pub defaults: Defaults,
+    /// One table per runnable app, keyed by the app id passed to
+    /// `issue setup --apps` and `devrun up`.
     #[serde(default)]
     pub apps: HashMap<String, AppConfig>,
+    /// Reviewer/recipient aliases, keyed by the short name passed to
+    /// `issue review --to`.
     #[serde(default)]
     pub people: HashMap<String, Person>,
+    /// The `devkitd` supervisor: autostart gate, crash-loop budget, and the
+    /// memory and health policies applied to supervised servers.
     #[serde(default)]
     pub daemon: DaemonConfig,
+    /// Linear lookups that cost an extra API round trip.
     #[serde(default)]
     pub linear: LinearConfig,
+    /// Minijinja templates for the strings `issue setup` and `issue review`
+    /// generate — branch names, worktree directories, PR fields, Slack bodies.
     #[serde(default)]
     pub templates: Templates,
+    /// Canned oneshot commands, keyed by the name passed to `devrun task`.
     #[serde(default)]
     pub tasks: HashMap<String, TaskConfig>,
+    /// Which sections `devkit brief` emits at session start.
     #[serde(default)]
     pub brief: BriefConfig,
 }
 
+/// The `devkitd` supervisor: whether it starts, how long it lingers, and the
+/// crash-loop, memory, and health policies it applies to supervised servers.
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DaemonConfig {
@@ -32,6 +47,7 @@ pub struct DaemonConfig {
     pub idle_timeout_secs: u64,
     /// Crash-loop guard: restarts allowed within `restart_window_secs`.
     pub max_restarts: u32,
+    /// Length of the sliding window the `max_restarts` budget is counted over.
     pub restart_window_secs: u64,
     /// Log a loud line past this supervised tree-RSS in MB (0 = off).
     pub memory_warn_mb: u64,
@@ -110,6 +126,7 @@ impl Default for BriefConfig {
     }
 }
 
+/// Linear lookups that cost an extra API round trip, so each is opt-in.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct LinearConfig {
@@ -118,12 +135,21 @@ pub struct LinearConfig {
     pub resolve_pr_links: bool,
 }
 
+/// Project-wide paths and branch conventions. The first four keys are required —
+/// without them no worktree, branch, or baseline resolves.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Defaults {
+    /// Directory issue worktrees are created under. `~` is expanded.
     pub worktree_root: String,
+    /// Prefix on branches created by `issue setup`, e.g. `you/`.
     pub branch_prefix: String,
+    /// Git ref the baseline server tracks, e.g. `origin/staging`.
     pub baseline_ref: String,
+    /// Checkout path for the baseline server. `~` is expanded.
     pub baseline_path: String,
+    /// Path to the repo's `doppler.yaml`; its `setup` paths seed app path
+    /// inference. `~` is expanded. Leave empty and every app needs its own
+    /// `path`.
     #[serde(default)]
     pub doppler_yaml: String,
     /// Repo-relative directory apps live under (e.g. "apps"). Used to infer app
@@ -172,7 +198,10 @@ fn default_stray_scan_width() -> u16 {
 /// A team member's handle mapping (Slack user-id, GitHub login, etc.).
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct Person {
+    /// Slack user or channel id, e.g. `U0XXXXXXXXX`.
     pub slack: String,
+    /// GitHub login requested as the PR reviewer when this alias is passed to
+    /// `issue review request --to`. Omit and the alias only gets Slacked.
     #[serde(default)]
     pub github: Option<String>,
 }
@@ -196,7 +225,10 @@ pub struct PrepFile {
 #[derive(Debug, Clone, JsonSchema, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Step {
+    /// Name of a sibling command task to run at this point in the sequence.
     Task(String),
+    /// Name of an app to bring up. Idempotent: an app already running in this
+    /// worktree is reported rather than spawned again.
     Up(String),
 }
 
@@ -206,14 +238,25 @@ pub enum Step {
 /// carries no `app`/`env`. Validated at resolution, not at parse.
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 pub struct TaskConfig {
+    /// One line shown in `devrun task --list` and the session brief.
     #[serde(default)]
     pub description: Option<String>,
+    /// App whose directory the task runs in, inheriting that app's
+    /// `static_env`. Omit to run at the repo root.
     #[serde(default)]
     pub app: Option<String>,
+    /// The command as one argv (program + args), rendered as minijinja over
+    /// `{{ port }}`, `ports['<app>']`, and `[templates.variables]`. Mutually
+    /// exclusive with `steps`.
     #[serde(default)]
     pub run: Vec<String>,
+    /// A sequence run in order, each step either a command or an `up`. Each
+    /// step re-resolves its ports immediately before it runs. Mutually
+    /// exclusive with `run`.
     #[serde(default)]
     pub steps: Vec<Step>,
+    /// Env vars set for this task, layered over the app's `static_env` and
+    /// under the CLI's `--env-file` and `--env`.
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
     /// Apps whose server must be live in this worktree when the task executes.
@@ -238,13 +281,31 @@ pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
 /// every render context.
 #[derive(Debug, JsonSchema, Deserialize, Serialize, Default)]
 pub struct Templates {
+    /// Branch name created by `issue setup`. Context: `prefix`, `issue`,
+    /// `slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.
     pub branch: Option<String>,
+    /// Worktree directory name created by `issue setup`, relative to
+    /// `defaults.worktree_root`. Same context as `branch`; defaults to
+    /// `{{ slug }}`.
     pub worktree_dir: Option<String>,
+    /// Worktree directory name created by `issue checkout-pr`. Context:
+    /// `pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are
+    /// slugified, and the `linear_*` fields are empty on the PR-only path.
     pub checkout_worktree_dir: Option<String>,
+    /// Title of a PR opened by `issue review request`. `{{ input }}` is the
+    /// `--pr-title` argument.
     pub pr_title: Option<String>,
+    /// Body of a PR opened by `issue review request`. `{{ input }}` is the
+    /// `--pr-body` argument.
     pub pr_body: Option<String>,
+    /// Slack message sent by `issue review request`. Rendered once per
+    /// recipient with `name`, `slack_id`, `pr_url`, `pr_title`, and `input`.
     pub review_request: Option<String>,
+    /// Slack message sent by `issue review finish`. Same context as
+    /// `review_request`, plus `author`.
     pub review_finish: Option<String>,
+    /// Constants available to every template above. A context field of the same
+    /// name wins, and `--arg key=value` overrides either.
     #[serde(default)]
     pub variables: std::collections::BTreeMap<String, String>,
 }
@@ -282,9 +343,17 @@ impl Templates {
 /// The `url` an app is addressed at when it sets none of its own.
 pub const DEFAULT_APP_URL: &str = "http://localhost:{{ port }}";
 
+/// One runnable app. `base_port` and `launch` are required; `path` is required
+/// too whenever `defaults.doppler_yaml` cannot infer the directory.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct AppConfig {
+    /// Start of the app's port band. Each worktree is allocated its own port
+    /// from here by the registry, so two worktrees never collide.
     pub base_port: u16,
+    /// The complete launch command as one argv, run verbatim — devkit builds no
+    /// prefix of its own, so any `doppler run -c <config> --` wrapper belongs
+    /// here. Rendered as minijinja over `{{ port }}`, `ports['<app>']`, and
+    /// `[templates.variables]`.
     pub launch: Vec<String>,
     /// Address the app serves on, as a template over the same variables as
     /// `launch` (`{{ port }}`, `ports['<app>']`, `[templates.variables]`).
@@ -292,6 +361,7 @@ pub struct AppConfig {
     /// custom host, or a path prefix — devkit never terminates TLS itself.
     #[serde(default)]
     pub url: Option<String>,
+    /// Env var this app receives the `provides_url` app's URL through.
     #[serde(default)]
     pub url_env: Option<String>,
     /// This app serves the URL that consumer apps wire to via their `url_env`.
@@ -304,12 +374,17 @@ pub struct AppConfig {
     /// `[["doppler","run","-c","local","--","bun","install"]]`.
     #[serde(default)]
     pub setup: Vec<Vec<String>>,
+    /// App subdirectory relative to the repo root, when it differs from the
+    /// app's own name. Required unless `defaults.doppler_yaml` infers it.
     #[serde(default)]
     pub path: Option<String>,
     // Table-like fields (`static_env`, `prep_files`) kept last so the serialized
     // TOML groups scalars/arrays before the nested table and array-of-tables —
     // readable, stable output. (toml 0.8 also orders values before tables on its
     // own, so this is for source layout, not a serializer requirement.)
+    /// Env vars always set for this app, rendered as minijinja over the same
+    /// variables as `launch`. The lowest layer: a task's `env` and the CLI's
+    /// `--env` both win over it.
     #[serde(default)]
     pub static_env: HashMap<String, String>,
     /// Files written into the app's directory during `issue setup` (before `setup`).

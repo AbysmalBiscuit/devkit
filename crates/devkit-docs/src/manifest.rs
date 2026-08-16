@@ -10,6 +10,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Which importer graph resolves a library's version, and therefore which
+/// lockfile is consulted.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, JsonSchema, Deserialize, clap::ValueEnum,
 )]
@@ -37,21 +39,30 @@ impl std::fmt::Display for Ecosystem {
 /// overlay entry can override a single field of a global entry.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema, Deserialize)]
 pub struct LibEntry {
+    /// Id this library is addressed by on the `docm` command line, and the
+    /// key an overlay entry merges onto.
     pub name: String,
+    /// Which importer graph resolves the version. Omit to detect it from the
+    /// project's lockfiles.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ecosystem: Option<Ecosystem>,
     /// Registry package name when it differs from `name` (e.g. `@types/node`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
+    /// Git URL to clone, skipping the registry lookup that would find it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
     /// Manual pin (tag/branch/sha); wins over lockfile resolution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub r#ref: Option<String>,
+    /// Source directory inside the checkout, overriding layout detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub src_dir: Option<String>,
+    /// Docs directory inside the checkout, overriding layout detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub docs_dir: Option<String>,
+    /// Freeform note surfaced by `docm info` and `docm list` — what this
+    /// library is here for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     /// Which file this entry was read from. Set during `discover`, never
@@ -67,8 +78,12 @@ impl LibEntry {
     }
 }
 
+/// Libraries whose source is checked out at the version this project resolves.
+/// A project's `[docs]` section overlays the global `docs.toml` entry by entry.
 #[derive(Debug, Default, PartialEq, Serialize, JsonSchema, Deserialize)]
 pub struct DocsManifest {
+    /// One entry per managed library. Every field except `name` is optional so
+    /// an overlay can override a single field of a global entry.
     #[serde(default)]
     pub libs: Vec<LibEntry>,
 }
