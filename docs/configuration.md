@@ -25,12 +25,12 @@ you prefer to keep a copy inside a checkout.)
 Credentials are **not** stored in `config.toml`. They resolve env-first, then from
 a separate `~/.config/devkit/secrets.toml` written `0600`:
 
-~~~toml
+```toml
 # ~/.config/devkit/secrets.toml  (chmod 600)
 linear_api_key   = "lin_api_…"
 linear_workspace = "adaptyv"
 slack_token      = "xoxb-…"
-~~~
+```
 
 Resolution order for each credential is `$ENV` → `secrets.toml` → unset, so a
 shell export or a Doppler-injected variable always overrides the file. Populate
