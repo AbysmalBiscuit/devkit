@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# SessionStart hook for the devkit plugin (Codex/Cursor).
+# sessionStart hook for the devkit plugin on Cursor.
 # Injects a short notice that the using-devkit skill exists and where to read it,
 # rather than the full skill body (the skill is only conditionally relevant).
+# Codex has no need for it: it registers the skill natively from the plugin
+# manifest's `skills:` pointer, so its session hook runs `brief-context` instead.
 
 set -euo pipefail
 source "$(dirname "$0")/hook-json"

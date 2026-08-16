@@ -6,8 +6,17 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-/// Tool names whose writes the harness governs.
-const WRITE_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
+/// Tool names whose writes the harness governs. The Claude Code names carry one
+/// target in `tool_input.file_path`; Codex's `apply_patch` carries a whole patch
+/// envelope in `tool_input.command` and may name several.
+const WRITE_TOOLS: [&str; 5] = ["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"];
+
+/// Codex's `apply_patch` tool name, whose payload needs the envelope parser.
+const APPLY_PATCH: &str = "apply_patch";
+
+/// Envelope headers that name a file, in the order `apply_patch` writes them.
+/// `Move to` is a rename's destination, so a rename claims both ends.
+const PATCH_VERBS: [&str; 4] = ["Add File", "Update File", "Delete File", "Move to"];
 
 /// Two-level holder id: top-level agents are `session_id`; sub-agents are
 /// `session_id/agent_id`. The Claude Code payload exposes no deeper ancestry.
@@ -22,7 +31,7 @@ pub fn holder_from_fields(session_id: &str, agent_id: Option<&str>) -> String {
 pub enum HookEvent {
     Write {
         tool_name: String,
-        file_path: String,
+        file_paths: Vec<String>,
         holder: String,
     },
     ReleaseSubagent {
@@ -36,6 +45,24 @@ pub enum HookEvent {
 
 fn str_field<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
     p.get(k).and_then(Value::as_str).filter(|s| !s.is_empty())
+}
+
+/// Every file an `apply_patch` envelope writes, in the order it names them. Paths
+/// are taken verbatim — they are relative to the invoking session's cwd, which the
+/// caller supplies; this parser does not resolve them.
+pub fn apply_patch_paths(command: &str) -> Vec<String> {
+    command
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("*** ")?;
+            let (verb, path) = rest.split_once(": ")?;
+            PATCH_VERBS
+                .contains(&verb)
+                .then(|| path.trim())
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 /// Classify a hook payload. `event` is the subcommand arg
@@ -52,16 +79,25 @@ pub fn parse_event(event: &str, p: &Value) -> HookEvent {
             if !WRITE_TOOLS.contains(&tool) {
                 return HookEvent::Ignore;
             }
-            match p
-                .get("tool_input")
-                .and_then(|ti| str_field(ti, "file_path"))
-            {
-                Some(fp) => HookEvent::Write {
-                    tool_name: tool.to_string(),
-                    file_path: fp.to_string(),
-                    holder,
-                },
-                None => HookEvent::Ignore,
+            let input = p.get("tool_input");
+            let file_paths = if tool == APPLY_PATCH {
+                input
+                    .and_then(|ti| str_field(ti, "command"))
+                    .map(apply_patch_paths)
+                    .unwrap_or_default()
+            } else {
+                input
+                    .and_then(|ti| str_field(ti, "file_path"))
+                    .map(|fp| vec![fp.to_string()])
+                    .unwrap_or_default()
+            };
+            if file_paths.is_empty() {
+                return HookEvent::Ignore;
+            }
+            HookEvent::Write {
+                tool_name: tool.to_string(),
+                file_paths,
+                holder,
             }
         }
         "subagent-stop" => HookEvent::ReleaseSubagent { holder },
@@ -188,11 +224,11 @@ mod tests {
         match parse_event("pretooluse", &p) {
             HookEvent::Write {
                 tool_name,
-                file_path,
+                file_paths,
                 holder,
             } => {
                 assert_eq!(tool_name, "Edit");
-                assert_eq!(file_path, "/repo/src/a.rs");
+                assert_eq!(file_paths, vec!["/repo/src/a.rs"]);
                 assert_eq!(holder, "S");
             }
             other => panic!("expected Write, got {other:?}"),
@@ -221,6 +257,65 @@ mod tests {
     #[test]
     fn parse_write_event_ignores_missing_file_path() {
         let p = json!({ "session_id": "S", "tool_name": "Edit", "tool_input": {} });
+        assert!(matches!(parse_event("pretooluse", &p), HookEvent::Ignore));
+    }
+
+    #[test]
+    fn apply_patch_paths_covers_every_envelope_verb() {
+        let patch = "*** Begin Patch\n\
+                     *** Add File: src/new.rs\n\
+                     +fn main() {}\n\
+                     *** Update File: src/old.rs\n\
+                     @@\n\
+                     -a\n\
+                     +b\n\
+                     *** Delete File: src/gone.rs\n\
+                     *** End Patch\n";
+        assert_eq!(
+            apply_patch_paths(patch),
+            vec!["src/new.rs", "src/old.rs", "src/gone.rs"]
+        );
+    }
+
+    #[test]
+    fn apply_patch_paths_includes_both_ends_of_a_rename() {
+        let patch = "*** Begin Patch\n\
+                     *** Update File: src/from.rs\n\
+                     *** Move to: src/to.rs\n\
+                     *** End Patch\n";
+        assert_eq!(apply_patch_paths(patch), vec!["src/from.rs", "src/to.rs"]);
+    }
+
+    #[test]
+    fn parse_apply_patch_event_pulls_every_target() {
+        let p = json!({
+            "session_id": "S",
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": "*** Begin Patch\n*** Update File: a.rs\n*** Add File: b.rs\n*** End Patch\n"
+            }
+        });
+        match parse_event("pretooluse", &p) {
+            HookEvent::Write {
+                tool_name,
+                file_paths,
+                holder,
+            } => {
+                assert_eq!(tool_name, "apply_patch");
+                assert_eq!(file_paths, vec!["a.rs", "b.rs"]);
+                assert_eq!(holder, "S");
+            }
+            other => panic!("expected Write, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_apply_patch_event_ignores_a_patch_naming_no_file() {
+        let p = json!({
+            "session_id": "S",
+            "tool_name": "apply_patch",
+            "tool_input": { "command": "*** Begin Patch\n*** End Patch\n" }
+        });
         assert!(matches!(parse_event("pretooluse", &p), HookEvent::Ignore));
     }
 

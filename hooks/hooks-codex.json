@@ -11,8 +11,10 @@
           },
           {
             "type": "command",
-            "command": "\"${PLUGIN_ROOT}/hooks/run-hook.cmd\" announce-skill",
-            "async": false
+            "command": "\"${PLUGIN_ROOT}/hooks/run-hook.cmd\" brief-context",
+            "async": false,
+            "timeout": 10,
+            "statusMessage": "Loading the devkit project brief"
           }
         ]
       },
@@ -26,6 +28,28 @@
             "timeout": 10,
             "statusMessage": "Re-injecting devkit library versions"
           }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch|Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "lockm hook pretooluse" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "lockm hook subagent-stop" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "lockm hook session-end" }
         ]
       }
     ]

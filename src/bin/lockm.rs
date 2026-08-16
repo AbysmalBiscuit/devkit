@@ -88,6 +88,25 @@ fn print_conflicts(conflicts: &[Conflict]) {
     }
 }
 
+/// Anchor a write target to the session's own cwd. `apply_patch` names paths
+/// relative to the session, not to wherever the harness spawned the hook process.
+fn resolve_against(payload: &serde_json::Value, path: &str) -> String {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return path.to_string();
+    }
+    payload
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(|cwd| {
+            std::path::Path::new(cwd)
+                .join(p)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|| path.to_string())
+}
+
 /// Map a write decision to the optional stdout envelope. `None` = allow silently.
 fn write_output(d: &WriteDecision) -> Option<serde_json::Value> {
     match d {
@@ -131,21 +150,28 @@ fn run_hook(event: &str) {
 
     match hook::parse_event(event, &payload) {
         HookEvent::Write {
-            file_path, holder, ..
+            file_paths, holder, ..
         } => {
-            match devkit_locks::decide_write(&file_path, &holder, Some("write-harness"), 1800) {
-                Ok(decision) => {
-                    if let Some(out) = write_output(&decision) {
+            let mut conflicts = Vec::new();
+            for path in &file_paths {
+                let target = resolve_against(&payload, path);
+                match devkit_locks::decide_write(&target, &holder, Some("write-harness"), 1800) {
+                    Ok(WriteDecision::Denied(c)) => conflicts.extend(c),
+                    Ok(_) => {}
+                    Err(e) => {
+                        // fail closed: a registry error must not silently reopen the window
+                        let out = hook::deny_json(&format!(
+                            "devkit write-harness: registry error (fail-closed): {e:#}"
+                        ));
                         println!("{out}");
+                        return;
                     }
                 }
-                Err(e) => {
-                    // fail closed: a registry error must not silently reopen the window
-                    let out = hook::deny_json(&format!(
-                        "devkit write-harness: registry error (fail-closed): {e:#}"
-                    ));
-                    println!("{out}");
-                }
+            }
+            if !conflicts.is_empty()
+                && let Some(out) = write_output(&WriteDecision::Denied(conflicts))
+            {
+                println!("{out}");
             }
         }
         HookEvent::ReleaseSubagent { holder } | HookEvent::ReleaseSession { holder } => {
