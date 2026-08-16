@@ -1,0 +1,5 @@
+# `devkit schema` emits LF, and `tests/config_schema.rs` compares its output to
+# this file byte for byte. Without this, Git for Windows checks it out as CRLF
+# and the drift test fails over line endings Git itself introduced. The file
+# also ships as a GitHub Release asset, where LF is what consumers expect.
+schema/devkit-config.json text eol=lf
