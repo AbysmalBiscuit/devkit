@@ -186,8 +186,9 @@ devkit completions <shell>
   checkout that evidences no registered library still gets the rest. Prints nothing
   when neither applies, so a hook can call it from any repository. Every section
   earns its place: a project with no apps is not told about `devrun up` or
-  `portm`, one with no tasks is not told about `devrun task`, and the `lockm`
-  line is governed by `[brief] locks` — see [Configuration](docs/configuration.md#brief).
+  `portm`, and one with no tasks is not told about `devrun task`. `[brief]`
+  suppresses a section the checkout does have — `apps`, `tasks`, `locks` — see
+  [Configuration](docs/configuration.md#brief).
   `--pins-only` emits just the library table; `--if-changed` prints nothing when
   this session already received the same brief, keyed on the `session_id` in the
   hook's stdin JSON. A full brief records itself against that key, so the first

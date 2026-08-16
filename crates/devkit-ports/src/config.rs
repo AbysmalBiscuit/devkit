@@ -76,9 +76,9 @@ impl Default for DaemonConfig {
 
 /// What `devkit brief` emits. All default on: the hooks ship enabled and
 /// config decides whether they produce anything, so turning the output off is
-/// one line rather than a hook-wiring task. Sections the checkout's own state
-/// answers for — apps, tasks, live servers — carry no switch; they are omitted
-/// when there is nothing to report.
+/// one line rather than a hook-wiring task. A section with nothing to report
+/// is omitted whatever its switch says; a switch turned off suppresses the
+/// section even when the checkout has something to put in it.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct BriefConfig {
@@ -89,6 +89,12 @@ pub struct BriefConfig {
     /// The `lockm` line. Whether sessions ever share this checkout is not
     /// something devkit can observe, so it is a switch rather than a probe.
     pub locks: bool,
+    /// The apps line and the `devrun up` / `portm` bullets. Live servers this
+    /// worktree holds are reported regardless: a bound port is a fact about
+    /// the machine, not a listing the brief chose to carry.
+    pub apps: bool,
+    /// The task table and the `devrun task` bullet.
+    pub tasks: bool,
 }
 
 impl Default for BriefConfig {
@@ -97,6 +103,8 @@ impl Default for BriefConfig {
             enabled: true,
             pins: true,
             locks: true,
+            apps: true,
+            tasks: true,
         }
     }
 }
@@ -1126,21 +1134,27 @@ steps = [
         assert!(cfg.brief.enabled);
         assert!(cfg.brief.pins);
         assert!(cfg.brief.locks);
+        assert!(cfg.brief.apps);
+        assert!(cfg.brief.tasks);
     }
 
     #[test]
-    fn brief_locks_can_be_turned_off_per_project() {
+    fn brief_sections_can_be_turned_off_per_project() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("proj");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
             project.join("devkit.toml"),
-            format!("[defaults]\n{FULL_DEFAULTS}[brief]\nlocks = false\n"),
+            format!(
+                "[defaults]\n{FULL_DEFAULTS}[brief]\nlocks = false\napps = false\ntasks = false\n"
+            ),
         )
         .unwrap();
 
         let (cfg, _) = resolve_with_home(None, &project, None).unwrap();
         assert!(!cfg.brief.locks);
+        assert!(!cfg.brief.apps);
+        assert!(!cfg.brief.tasks);
         assert!(cfg.brief.enabled, "the other keys keep their defaults");
         assert!(cfg.brief.pins);
     }

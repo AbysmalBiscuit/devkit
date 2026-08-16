@@ -280,13 +280,21 @@ switches decide whether it produces anything.
 | `enabled` | `true` | The whole brief. `false` suppresses every section, and is read before any work is done. |
 | `pins` | `true` | The library-versions section only. |
 | `locks` | `true` | The `lockm status` line. Turn it off where only one session ever works in a checkout at a time. |
+| `apps` | `true` | The `Apps` line and the `devrun up` / `portm status` bullets. |
+| `tasks` | `true` | The task table and the `devrun task` bullet. |
 
-The other sections need no switch: they are omitted when the checkout has
-nothing to report. A project with no configured apps gets neither the `devrun
-up` bullet, the `portm status` line, nor an `Apps` line; one with no `[tasks]`
-table gets no `devrun task` bullet and no task table; a worktree holding no
-ports gets no server table. The intro names only the facilities that survive,
-and a project left with none of them produces no devrun section at all.
+A section is omitted when the checkout has nothing to report, whatever its
+switch says; the switch suppresses a section the checkout *does* have. Both
+read the same downstream, so the bullets introducing a section go with it:
+`apps = false` drops the `Apps` line, the `devrun up` bullet and the `portm
+status` line together, and `tasks = false` drops both the task table and its
+bullet. The intro names only the facilities that survive, and a project left
+with none of them produces no devrun section at all.
+
+Live servers have no switch. A port this worktree holds is a fact about the
+machine rather than a listing the brief chose to carry, so the server table
+appears whenever the registry has rows for the worktree — and it keeps the
+`devrun down` and `portm status` lines relevant even under `apps = false`.
 
 Set it in `~/.config/devkit/config.toml` as a personal default and override it
 per project in that project's `devkit.toml`. A malformed `[brief]` table falls

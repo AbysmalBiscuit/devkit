@@ -525,6 +525,53 @@ fn brief_pins_false_suppresses_only_that_section() {
     assert!(!text.contains("serde"), "{text}");
 }
 
+/// An app the catalog resolves without a doppler.yaml: `path` is what
+/// `apps::catalog` otherwise looks up there.
+const API_APP: &str =
+    "[apps.api]\nbase_port = 9100\npath = \"apps/api\"\nlaunch = [\"echo\", \"api\"]\n\n";
+
+#[test]
+fn brief_apps_false_drops_the_app_lines_that_are_configured() {
+    let project = Project::docs_only("apps-off");
+    project.set_config(&format!(
+        "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\napps = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
+    ));
+    let out = project.brief(&[]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!text.contains("apps/api"), "{text}");
+    assert!(!text.contains("devrun up"), "{text}");
+    assert!(!text.contains("portm status"), "{text}");
+    assert!(text.contains("tests"), "the other sections survive: {text}");
+}
+
+#[test]
+fn brief_tasks_false_drops_the_task_lines_that_are_configured() {
+    let project = Project::docs_only("tasks-off");
+    project.set_config(&format!(
+        "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\ntasks = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
+    ));
+    let out = project.brief(&[]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(!text.contains("devrun task"), "{text}");
+    assert!(!text.contains("tests"), "{text}");
+    assert!(text.contains("apps/api"), "the apps line survives: {text}");
+}
+
+#[test]
+fn every_devrun_section_switched_off_drops_the_devrun_half() {
+    let project = Project::docs_only("devrun-off");
+    project.set_config(&format!(
+        "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\napps = false\ntasks = false\nlocks = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
+    ));
+    let out = project.brief(&[]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !text.contains("devkit-managed project"),
+        "the devrun claim goes with the half it introduces: {text}"
+    );
+    assert!(text.contains("serde"), "pins still render: {text}");
+}
+
 #[test]
 fn the_gate_precedes_the_work() {
     // With enabled = false, no manifest is discovered and no importer runs:

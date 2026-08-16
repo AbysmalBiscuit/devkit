@@ -10,9 +10,10 @@
 //! Within the devrun half every section earns its place: a project with no
 //! configured apps is not told about `devrun up` or `portm`, one with no
 //! `[tasks]` table is not told about `devrun task`, and the intro names only
-//! the facilities that survive. The one section the checkout cannot answer for
-//! is `lockm` — whether sessions share this checkout is not observable — so
-//! that line is governed by `[brief] locks`.
+//! the facilities that survive. `[brief]` can suppress a section the checkout
+//! does have — `apps`, `tasks` and `locks` — which reads downstream exactly as
+//! an absent one, so the bullets introducing it go too. `locks` has no other
+//! way to be decided: whether sessions share this checkout is not observable.
 //!
 //! Two narrower emission modes let other hook events call it without spamming
 //! the session: `--pins-only` emits the library table alone, and `--if-changed`
@@ -296,18 +297,29 @@ fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
     let pin_keys: Vec<PinKey> = relevant.iter().map(|pin| PinKey::of(pin)).collect();
     let devrun = devrun_project(&root, cwd);
 
+    // A switched-off section hashes as absent, matching what `render` emits:
+    // a digest that counted suppressed rows would report "changed" for a brief
+    // whose visible text never moved.
     let (apps, tasks) = match &devrun {
         Some(loaded) => {
-            let mut apps: Vec<String> = loaded
-                .catalog
-                .values()
-                .map(|a| format!("{} ({})", a.name, a.path))
-                .collect();
+            let mut apps: Vec<String> = if settings.apps {
+                loaded
+                    .catalog
+                    .values()
+                    .map(|a| format!("{} ({})", a.name, a.path))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             apps.sort();
-            let mut tasks: Vec<(String, String, String, String)> = task::list(&loaded.config)
-                .into_iter()
-                .map(|r| (r.name, r.kind.to_string(), r.app, r.description))
-                .collect();
+            let mut tasks: Vec<(String, String, String, String)> = if settings.tasks {
+                task::list(&loaded.config)
+                    .into_iter()
+                    .map(|r| (r.name, r.kind.to_string(), r.app, r.description))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             tasks.sort();
             (apps, tasks)
         }
@@ -530,13 +542,16 @@ fn devrun_project(root: &str, cwd: &Path) -> Option<load::Loaded> {
 }
 
 /// Apps, tasks and live servers, or `None` when this checkout is not a
-/// devrun-configured project or has nothing to report about being one.
+/// devrun-configured project or has nothing to report about being one. A
+/// `[brief]` switch turned off reads here exactly as an empty catalog or task
+/// list does, so a suppressed section takes the bullets that introduce it with
+/// it.
 fn devrun_sections(root: &str, cwd: &Path, settings: &BriefConfig) -> Option<DevrunBrief> {
     let loaded = devrun_project(root, cwd)?;
     let rows = task::list(&loaded.config);
     let sections = DevrunBrief {
-        apps: apps_line(&loaded.catalog),
-        tasks: (!rows.is_empty()).then(|| task::tasks_text(&rows)),
+        apps: settings.apps.then(|| apps_line(&loaded.catalog)).flatten(),
+        tasks: (settings.tasks && !rows.is_empty()).then(|| task::tasks_text(&rows)),
         servers: live_servers(root),
         locks: settings.locks,
     };
@@ -680,6 +695,8 @@ mod tests {
         );
         assert!(cfg.pins);
         assert!(cfg.locks);
+        assert!(cfg.apps);
+        assert!(cfg.tasks);
     }
 
     #[test]
