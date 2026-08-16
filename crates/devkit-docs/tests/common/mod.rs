@@ -35,3 +35,17 @@ pub fn fixture_repo(dir: &Path) -> String {
     sh(&["tag", "v1.1.0"], dir);
     dir.to_str().unwrap().to_string()
 }
+
+/// `anyhow`'s `{:?}` appends a captured backtrace whenever `RUST_BACKTRACE` is
+/// set — CI sets it globally. Two errors raised at different call sites capture
+/// different ones, and the frames name registry paths and rustc hashes that no
+/// golden can record. Assertions about a message and its cause chain compare
+/// the part above it.
+// `common` compiles into each integration test binary separately, and only the
+// two comparing error renderings call this.
+#[allow(dead_code)]
+pub fn message(rendered: &str) -> &str {
+    rendered
+        .split_once("\n\nStack backtrace:")
+        .map_or(rendered, |(head, _)| head)
+}

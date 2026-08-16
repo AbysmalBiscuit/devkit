@@ -320,7 +320,7 @@ fn record() -> String {
                         "err display={}\nerr alternate={}\nerr debug={}\n",
                         scrub(&format!("{error}"), &root),
                         scrub(&format!("{error:#}"), &root),
-                        scrub(&format!("{error:?}"), &root),
+                        scrub(common::message(&format!("{error:?}")), &root),
                     ));
                 }
             }

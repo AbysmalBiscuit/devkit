@@ -1263,7 +1263,7 @@ fn undeclared_is_downcastable_and_renders_unchanged() {
     // a cause attached in the wrong place changes the last two only.
     let display = format!("{error}");
     assert_eq!(format!("{error:#}"), display);
-    assert_eq!(format!("{error:?}"), display);
+    assert_eq!(common::message(&format!("{error:?}")), display);
     assert!(
         display.contains("does not declare `transitive`"),
         "{display}"
@@ -1438,7 +1438,10 @@ fn a_cached_parse_error_replays_identically() {
     );
     assert_eq!(format!("{first}"), format!("{second}"));
     assert_eq!(format!("{first:#}"), format!("{second:#}"));
-    assert_eq!(format!("{first:?}"), format!("{second:?}"));
+    assert_eq!(
+        common::message(&format!("{first:?}")),
+        common::message(&format!("{second:?}"))
+    );
 }
 
 #[test]
