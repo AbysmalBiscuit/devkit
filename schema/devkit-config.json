@@ -545,7 +545,7 @@
       "type": "object"
     }
   },
-  "$id": "https://raw.githubusercontent.com/AbysmalBiscuit/devkit/v0.13.0/schema/devkit-config.json",
+  "$id": "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Configuration for the devkit CLIs (devrun, portm, issue, lockm, docm, devkit).",
   "properties": {

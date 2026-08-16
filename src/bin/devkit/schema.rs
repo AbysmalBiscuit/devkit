@@ -14,11 +14,15 @@
 use anyhow::Result;
 use schemars::JsonSchema;
 
-/// The published id. Editors fetch the schema from this URL, so it names a
-/// release tag rather than `main`: pointing at a moving branch would validate
-/// every user's config against unreleased keys.
+/// The published id. The release workflow attaches this file to every GitHub
+/// Release, so `releases/latest/download` always resolves to the newest
+/// released schema — and, unlike a URL naming one tag, never needs editing when
+/// a release ships. A user wanting to validate against the version they run
+/// substitutes their tag: `releases/download/v1.2.3/devkit-config.json`. Both
+/// beat pointing at `main`, which would validate every config against
+/// unreleased keys.
 const ID: &str =
-    "https://raw.githubusercontent.com/AbysmalBiscuit/devkit/v0.13.0/schema/devkit-config.json";
+    "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json";
 
 /// Every table a `devkit.toml` (or `~/.config/devkit/config.toml`) may carry.
 /// Never constructed — it exists to be reflected over.

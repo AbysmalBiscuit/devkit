@@ -1,7 +1,12 @@
 //! The committed `schema/devkit-config.json` must match what `devkit schema`
 //! generates. A stale schema is worse than none: editors would report valid
 //! config as invalid, and miss the keys it does not know about.
+//!
+//! `DEVKIT_UPDATE_SCHEMA=1 cargo test` rewrites the file instead of failing, so
+//! the run that catches the drift is also the one that fixes it.
 
+use similar::TextDiff;
+use std::path::PathBuf;
 use std::process::Command;
 
 fn generated() -> String {
@@ -13,21 +18,41 @@ fn generated() -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-fn committed() -> String {
-    std::fs::read_to_string(concat!(
+fn schema_path() -> PathBuf {
+    PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/schema/devkit-config.json"
     ))
-    .unwrap()
+}
+
+fn committed() -> String {
+    std::fs::read_to_string(schema_path()).unwrap()
 }
 
 #[test]
 fn the_committed_schema_matches_the_config_types() {
-    assert_eq!(
-        committed(),
-        generated(),
+    let generated = generated();
+    let committed = committed();
+    if committed == generated {
+        return;
+    }
+    if std::env::var("DEVKIT_UPDATE_SCHEMA").as_deref() == Ok("1") {
+        std::fs::write(schema_path(), &generated).unwrap();
+        return;
+    }
+    // The diff, not just the verdict: which key moved is what tells the reader
+    // whether the config types changed on purpose. Unified with a small context
+    // radius — the schema runs to hundreds of lines, and a full-file comparison
+    // buries the one line that moved.
+    let diff = TextDiff::from_lines(&committed, &generated)
+        .unified_diff()
+        .context_radius(3)
+        .header("committed", "generated")
+        .to_string();
+    panic!(
         "schema/devkit-config.json is stale — regenerate with \
-         `cargo run --bin devkit -- schema > schema/devkit-config.json`"
+         `DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema` \
+         (or `cargo run --bin devkit -- schema > schema/devkit-config.json`)\n\n{diff}"
     );
 }
 

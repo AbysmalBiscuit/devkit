@@ -45,7 +45,7 @@ docs and inline validation. Point a file at it with a `#:schema` directive —
 taplo requires it on the **first** line, preceded only by comments:
 
 ```toml
-#:schema https://raw.githubusercontent.com/AbysmalBiscuit/devkit/v0.13.0/schema/devkit-config.json
+#:schema https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json
 
 [defaults]
 worktree_root = "~/Git/example-worktrees"
@@ -59,11 +59,19 @@ instead:
 [[rule]]
 include = ["**/devkit.toml"]
 [rule.schema]
-url = "https://raw.githubusercontent.com/AbysmalBiscuit/devkit/v0.13.0/schema/devkit-config.json"
+url = "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json"
 ```
 
-Pin a release tag rather than `main`: a moving branch validates your config
-against keys that are not in the devkit you have installed.
+Every release attaches the schema as an asset, so `latest/download` always
+resolves to the newest released version. To validate against the devkit you
+actually have installed, name its tag instead:
+
+```
+https://github.com/AbysmalBiscuit/devkit/releases/download/v1.2.3/devkit-config.json
+```
+
+Either beats pointing at `main`, which validates your config against keys no
+released binary accepts yet.
 
 The schema is generated from the same Rust types serde reads — the doc comments
 in `crates/devkit-ports/src/config.rs` become the hover text — so it cannot
@@ -94,10 +102,13 @@ enough to be worth the check.
 Regenerate it after changing any config type:
 
 ```sh
-cargo run --bin devkit -- schema > schema/devkit-config.json
+DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 ```
 
-`cargo test` fails if the committed file is stale.
+`cargo test` fails if the committed file is stale, printing a unified diff of
+what moved; the env var makes that same run rewrite the file instead.
+`cargo run --bin devkit -- schema` prints it to stdout without touching
+anything.
 
 ## Sections
 
