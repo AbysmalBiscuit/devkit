@@ -48,10 +48,10 @@ Deferred follow-ups:
   Registration configs ship for all three hosts (`.mcp.json`, `.cursor/mcp.json`,
   `.codex/config.toml`), each pointing at `devkit-mcp`. Claude Code is confirmed
   live — it connects and both tools are callable (`devkit_describe`/`devkit_call`).
-  Codex registers the server via the installed plugin (`codex mcp list` shows
-  `devkit` enabled, 2026-07-02), though an in-session `tools/call` has not been
-  exercised. Cursor is **not yet verified in a running host**. When it is,
-  verify end-to-end:
+  Codex is confirmed live too (2026-08-16): `codex mcp list` shows `devkit`
+  enabled, and an in-session `devkit_describe` returns the full action catalog
+  with `isError: false`. Cursor is **not yet verified in a running host**. When
+  it is, verify end-to-end:
     1. `cargo install --path .` so `devkit-mcp` is on `PATH`.
     2. Open the host in this repo (Codex: trust the project); run `/mcp` (Codex) or
        check Settings → MCP (Cursor) and confirm `devkit` lists both tools.
@@ -137,19 +137,29 @@ still need a live test.
     both register `using-devkit` natively from the manifest's `skills:`
     pointer, so a hardcoded "this skill exists" notice only duplicates it. Both
     startup blocks run `brief-context`; the notice emitter is gone.
-  - **Write enforcement on Codex — WIRED 2026-08-16, UNVERIFIED IN HOST.**
-    `hooks/hooks-codex.json` now carries the same `PreToolUse`/`SubagentStop`/
+  - **Write enforcement on Codex — VERIFIED 2026-08-16.**
+    `hooks/hooks-codex.json` carries the same `PreToolUse`/`SubagentStop`/
     `SessionEnd` handlers as the Claude Code file. Codex's edit tool is
     `apply_patch`, whose payload is a whole patch envelope in
     `tool_input.command` rather than a single `tool_input.file_path`, so
     `devkit_locks::hook` parses the envelope and claims every file it names
     (`Add File`/`Update File`/`Delete File`/`Move to`, both ends of a rename).
     `Write` and `Edit` stay in the matcher because Codex accepts them as
-    aliases for `apply_patch` (`core/src/tools/hook_names.rs`). To verify: two
-    Codex sessions in one checkout, one holding a lock, the other attempting an
-    `apply_patch` on the held file — expect the deny. Note the multi-path
-    decision is per file, so a patch that is half-blocked leaves the free
-    halves claimed by the denied session; they release on `SessionEnd`.
+    aliases for `apply_patch` (`core/src/tools/hook_names.rs`). All three
+    confirmed in a live session: a held path was refused with the
+    write-harness reason while a free path in the same turn was auto-claimed
+    under the Codex session id; the session's own rows cleared on exit with
+    TTL remaining; and a subagent's edit was claimed as `<session>/<agent>`
+    and released while the parent session was still running, which is
+    `SubagentStop` rather than `SessionEnd`. Subagents need
+    `codex --enable multi_agent_v2`.
+
+    One rough edge, seen unprompted: a model that bundles several files into
+    one `apply_patch` gets the whole patch denied when any single path is
+    held, because the decision is per file with no batch rollback — the free
+    paths in that patch stay claimed by the denied session until it ends. Codex
+    recovered on its own by retrying the unblocked file alone. Fixing it
+    properly means an all-or-nothing batch decision in `devkit-locks`.
 - **Claude marketplace install — VERIFIED 2026-08-16.** A fresh clone resolves
   `.claude-plugin/marketplace.json` (`source: "./"`) and
   `skills/using-devkit/SKILL.md`; `claude plugin marketplace add
