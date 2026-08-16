@@ -4,8 +4,18 @@ Full command/flag reference for the devkit binaries. `SKILL.md` covers the
 coordination *discipline*; this file is the lookup table. Every user-facing CLI
 also has `--help` on each subcommand and a `completions <shell>` subcommand.
 
-Global on `issue` and `devrun`: `-C/--dir <path>` and `--config <file>` go **before**
-the subcommand (e.g. `issue -C ~/Git/acme/monorepo status`).
+`lockm` lives in `SKILL.md` (Lock command reference) — it is the collaboration
+tool, not a lookup. `docm`, the version-correct library-docs cache, belongs to
+the separate `docs` skill; go there rather than duplicating its flags here.
+
+Global flags go **before** the subcommand (e.g. `issue -C ~/Git/acme/monorepo status`):
+
+| Flag | Where |
+|---|---|
+| `-C/--dir <path>` | `issue`, `devrun`, `portm` |
+| `--config <file>` | `issue`, `devrun` |
+| `--timing[=trace]` | `issue`, `devrun` — IO timing to stderr (`--timing` = summary). Also `DEVKIT_TIMING`. |
+| `--timing-log <FILE>` | `issue`, `devrun` — one JSON record per timed IO op |
 
 ## `portm` — port registry
 
@@ -41,7 +51,8 @@ automatically and wires its URL. Run from inside the worktree (or pass `-C <dir>
 devrun up [apps…] [--role issue|baseline|both] [--env K=V] [--env-file F] [--supervise] [--dry-run]
 devrun down [selector] [--role …] [--all|--others|--holder <path>] [--app …] [--older-than 30m]
 devrun status [--all]                                 # tracked servers (this worktree, or all)
-devrun logs <app> [-f]                                # print or follow one app's log
+devrun reap [--all]                                   # kill servers running OUTSIDE devrun (needs a TTY)
+devrun logs <app> [--role …] [-f]                     # print or follow one app's log
 devrun config show [--origin] [--json]                # effective merged config
 devrun config apps [--json]                           # list configured apps
 devrun config tasks [--json]                          # list configured [tasks]
@@ -68,7 +79,15 @@ servers.
 | `devrun down --holder ../wt/feat-x` | one specific worktree |
 
 A bare positional selector substring-matches across holder/app/port/role/pid and is
-mutually exclusive with the column filters. `--older-than` accepts `90s`/`30m`/`2h`/`1d`.
+mutually exclusive with the column filters, which are `--app`, `--port`, `--role`,
+`--pid`, `--listening` / `--not-listening`, and `--older-than` (`90s`/`30m`/`2h`/`1d`).
+`--batch` collapses cross-worktree confirmation into one prompt.
+
+**`reap`** — kills dev servers running *outside* the registry (started by hand, or
+orphaned). It **always requires an interactive terminal** and has no `--yes`/`--force`
+bypass, so an agent cannot run it. Agents get detection only: the untracked section of
+`devrun status`, `devkit doctor`'s `devrun_strays` row, and the `ports.strays` MCP
+action. Ask the user to reap.
 
 **`task`** — runs a canned `[tasks]` entry from the config: a **command** task in the
 foreground (exit code propagated), or a **sequence** of `{ task = … }` / `{ up = … }`
@@ -92,12 +111,14 @@ app's `static_env`, same as `devrun up --env`. `--dry-run` prints each rendered 
 
 ```sh
 issue setup <ID> --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore]
+issue checkout-pr <target> [<worktree-path>] [--setup] [--apps a,b]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue info [selector] [--json] [--cache-only]         # one worktree's PR number + Linear id
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
-issue prs [-m|--mine] [-r|--reviews] [-R owner/repo]
-issue dashboard [--chart bar|line] [--no-plots] [--no-cache]
-issue review "<message>" --to <alias> [--reviewer <gh>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push]
+issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size N] [--retries N]
+issue dashboard [--chart bar|line] [--bucket B] [--mode M] [--all-roles] [--author gh] [--no-plots] [--no-cache]
+issue review request ["<message>"] [--to <alias|#channel>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--no-notify] [--arg k=v]
+issue review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg k=v]
 ```
 
 ### `issue setup`
@@ -121,21 +142,39 @@ allocates them dynamically when the worktree's servers start.
 | `--dry-run` | print what it would do without creating the worktree. |
 | `--no-gitignore` | skip updating the global gitignore (normally ensures devkit artifacts like `ISSUE_*.md` are ignored). |
 
+### `issue checkout-pr`
+
+Check out an **existing** PR into a new worktree — the review-side counterpart of
+`setup`. The target is `#3340`, `3340`, `PREFIX-3340`, a GitHub PR URL, or a Linear
+issue URL. The optional second positional overrides the worktree path (default: the
+config-resolved placement). `--setup` also runs the per-app setup commands;
+`--apps a,b` narrows which apps that covers.
+
 ### `issue review`
 
-Ship the branch for review. Pushes the current branch (**never force-pushes**), opens
-or reuses its PR, adds a reviewer, and Slack-messages them the PR link plus your body.
-With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON
+Two subcommands, not one command.
+
+**`issue review request`** ships the branch: pushes it (**never force-pushes**), opens
+or reuses its PR, requests the reviewers, and Slack-messages them the PR link plus your
+body. With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON
 object for an agent to forward.
 
 | Arg / flag | Meaning |
 |---|---|
-| `[BODY]` | positional Slack message body; fills the `slack` template's `{{ input }}`. |
-| `--to <alias>` | a `[people]` alias from the config — the Slack recipient. **Required.** |
-| `--reviewer <gh>` | GitHub handle to request review from on the PR. |
+| `[BODY]` | positional Slack body; fills the `review_request` template's `{{ input }}`. |
+| `--to <alias\|#channel>` | **repeatable.** A `[people]` alias (which carries both `slack` and an optional `github`, so one flag sets reviewer *and* recipient) or a literal `#channel`. |
 | `--base <branch>` | PR base branch (defaults to the configured baseline). |
 | `--pr-title T` / `--pr-body B` | override the PR title/body. |
 | `--no-push` | open/update the PR without pushing first. |
+| `--no-notify` | pin targets to what `--to` resolved to — possibly none — instead of falling back to the PR's current reviewers. |
+| `--arg k=v` | **repeatable.** Override a declared template variable. |
+
+On an existing PR with no `--to`, it resolves the PR's current human reviewers and
+notifies them; `--no-notify` is how you suppress that.
+
+**`issue review finish`** announces over Slack that you finished reviewing. `--to`
+(repeatable) defaults to the PR author. `--pr <n>` is required when you are not inside
+the PR's worktree. `[BODY]` fills the `review_finish` template's `{{ input }}`.
 
 ### Other `issue` subcommands
 
@@ -154,22 +193,49 @@ object for an agent to forward.
   `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree
   guard; `-y` skips confirmation.
 - **`prs`** — GitHub PR triage of your open PRs and PRs awaiting your review.
-- **`dashboard`** — the triage + PR tables plus terminal timelines; `--no-plots` shows
-  only tables, `--no-cache` forces a fresh fetch.
+  `--no-cache` forces a fresh fetch. On a repo with many open PRs GitHub can return
+  HTTP 504: lower `--batch-size` (PRs per search page, 1–100) and raise `--retries`
+  (extra attempts per page with backoff, 0–10).
+- **`dashboard`** — the triage + PR tables plus terminal timelines. `--chart bar|line`,
+  `--bucket` (default `auto`) and `--mode` (default `absolute`) shape the plots;
+  `--all-roles` widens beyond your own, `--author <gh>` targets someone else;
+  `--no-plots` shows only tables, `--no-cache` forces a fresh fetch.
 
 ## `devkit` — toolkit setup & diagnostics
 
 ```sh
 devkit auth <linear|slack> [--token <value>]   # validate + store a credential
-devkit doctor [--json]                          # check configured credentials
-devkit brief                                    # compact project brief (apps, tasks, live servers)
+devkit doctor [--json]                          # check configured credentials + diagnostics
+devkit brief [--pins-only|--if-changed]         # compact project brief
+devkit schema                                   # JSON Schema for devkit.toml, to stdout
+devkit schema init [<path>]                     # point a devkit.toml at the published schema
 ```
 
-**`brief`** prints the current checkout's devkit orientation — configured apps,
-the `[tasks]` table, and this worktree's live servers — and prints **nothing**
-outside a devkit-managed project. The plugin's `SessionStart` hook runs it so
-sessions start already knowing the project's apps and tasks; run it by hand to
-re-orient mid-session.
+**`brief`** prints the current checkout's devkit orientation — configured apps, the
+`[tasks]` table, this worktree's live servers, and registered library versions — and
+prints **nothing** outside a devkit-managed project. A config that fails to load is
+reported rather than swallowed, so a broken `devkit.toml` is diagnosable from the brief.
+The plugin's `SessionStart` hook runs it so sessions start already knowing the project;
+run it by hand to re-orient mid-session.
+
+- `--pins-only` emits only the library-versions section — what a post-compaction
+  re-injection wants, without respending the context compaction just reclaimed.
+- `--if-changed` prints nothing when this session already received the same brief
+  (it reads `session_id` from the hook's stdin JSON). Rejected with `--pins-only`:
+  the watermark records the *whole* brief, so suppressing on it after emitting only
+  the library table would tell the session it had seen a brief it never got.
+
+Which sections appear is config-driven — `[brief]` has `enabled`, `pins`, `locks`,
+`apps`, and `tasks` switches, all defaulting on. A section with nothing to report is
+omitted whatever its switch says; a switch turned off suppresses the section even when
+the checkout has something to put in it. Live servers this worktree holds are reported
+regardless of the `apps` switch — a bound port is a fact about the machine.
+
+**`schema`** prints the JSON Schema derived from the config types. **`schema init`**
+prepends the taplo header directive (`#:schema <url>`, first line — *not* a
+`# $schema = "…"` key) to the config at `<path>` (default `devkit.toml`), writing a
+fully-commented starter when the file does not exist, and leaving a file that already
+names a schema alone. See `docs/configuration.md`.
 
 ## Enforced mode — mechanics
 

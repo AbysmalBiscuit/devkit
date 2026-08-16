@@ -110,9 +110,9 @@ Add `--json` to `acquire`/`check`/`status` for machine-readable output. Run
 |---|---|
 | `lockm` | Advisory file locks for parallel sessions — the collaboration tool above. |
 | `portm` | Port registry: `alloc`/`release`/`status`/`prune` dev-server ports without collisions. |
-| `devrun` | Run and supervise local dev servers for a worktree: `up`, `down`, `status`, `logs`, `config`, `task` (canned `[tasks]` oneshots). |
-| `issue` | Issue lifecycle: `setup` a worktree, `status`, `end`, `prs`, `dashboard`, `review`. |
-| `devkit` | Toolkit setup + diagnostics: `auth`, `doctor`, `brief` (the session-start project summary). |
+| `devrun` | Run and supervise local dev servers for a worktree: `up`, `down`, `status`, `logs`, `config`, `task` (canned `[tasks]` oneshots). `reap` kills servers started outside devrun, and needs an interactive terminal — an agent gets detection only, via `devrun status`. |
+| `issue` | Issue lifecycle: `setup` a worktree, `checkout-pr` an existing PR into one, `status`, `end`, `prs`, `dashboard`, `review`. |
+| `devkit` | Toolkit setup + diagnostics: `auth`, `doctor`, `brief` (the session-start project summary), `schema` (JSON Schema for `devkit.toml`; `schema init` points a config at it). |
 | `devkitd` | Background daemon owning the port registry. Started automatically by `portm`/`devrun`; you rarely invoke it directly. |
 
 **Full command and flag reference → `cli-reference.md`** (in this skill directory).
@@ -165,12 +165,17 @@ Reaching another worktree needs an explicit scope flag (`--all`/`--others`/`--ho
 servers. The holder is the **worktree root path**; get yours with
 `git rev-parse --show-toplevel`.
 
-**Ship for review.** `issue review` pushes (never force-pushes), opens/reuses the PR,
-requests a reviewer, and Slacks them the link:
+**Ship for review.** `issue review request` pushes (never force-pushes), opens/reuses
+the PR, requests the reviewers, and Slacks them the link. `--to` is repeatable and takes
+a `[people]` alias — which carries both a Slack handle and an optional GitHub login, so
+one flag sets reviewer *and* recipient — or a literal `#channel`:
 
 ```sh
-issue review "Auth fix ready — please review session handling." --to bob --reviewer octocat
+issue review request "Auth fix ready — please review session handling." --to bob
 ```
+
+`issue review finish` is the other half: it announces over Slack that you finished
+reviewing, defaulting to the PR author.
 
 See `cli-reference.md` for every flag of `setup`, `review`, `down`, and the rest.
 
