@@ -81,10 +81,12 @@ pub fn deny_json(reason: &str) -> Value {
     })
 }
 
-#[derive(Deserialize, Default)]
-struct HarnessSection {
+/// The `[harness]` table of a checkout's `devkit.toml`.
+#[derive(Deserialize, Default, schemars::JsonSchema)]
+pub struct HarnessSection {
+    /// Refuse writes to paths this checkout has not claimed with `lockm`.
     #[serde(default)]
-    enforce_writes: bool,
+    pub enforce_writes: bool,
 }
 
 #[derive(Deserialize, Default)]

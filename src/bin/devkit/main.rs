@@ -5,6 +5,7 @@ use clap_complete::Shell;
 mod auth;
 mod brief;
 mod doctor;
+mod schema;
 
 #[derive(Parser)]
 #[command(
@@ -50,6 +51,10 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Print the JSON Schema for `devkit.toml` to stdout. Editors that speak
+    /// the TOML language server use it for completion and validation; see
+    /// `docs/configuration.md`.
+    Schema,
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
     Completions { shell: Shell },
 }
@@ -78,6 +83,7 @@ fn main() -> Result<()> {
             pins_only,
             if_changed,
         } => brief::run(pins_only, if_changed),
+        Cmd::Schema => schema::run(),
         Cmd::Doctor { json } => doctor::run(json),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "devkit", &mut std::io::stdout());

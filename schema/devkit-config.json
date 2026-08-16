@@ -1,0 +1,642 @@
+{
+  "$defs": {
+    "AppConfig": {
+      "properties": {
+        "base_port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "launch": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prep_files": {
+          "default": [],
+          "description": "Files written into the app's directory during `issue setup` (before `setup`).",
+          "items": {
+            "$ref": "#/$defs/PrepFile"
+          },
+          "type": "array"
+        },
+        "provides_url": {
+          "default": false,
+          "description": "This app serves the URL that consumer apps wire to via their `url_env`.\nExactly one app (the API) is normally marked; consumers reference it by role,\nnot by a hardcoded name.",
+          "type": "boolean"
+        },
+        "setup": {
+          "default": [],
+          "description": "Commands run in the app's directory during `issue setup`, in order. Each\ninner array is one argv (program + args), e.g.\n`[[\"doppler\",\"run\",\"-c\",\"local\",\"--\",\"bun\",\"install\"]]`.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "static_env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "url": {
+          "default": null,
+          "description": "Address the app serves on, as a template over the same variables as\n`launch` (`{{ port }}`, `ports['<app>']`, `[templates.variables]`).\nDefaults to `DEFAULT_APP_URL`; set it for an app that serves https, a\ncustom host, or a path prefix — devkit never terminates TLS itself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url_env": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "base_port",
+        "launch"
+      ],
+      "type": "object"
+    },
+    "BriefConfig": {
+      "description": "What `devkit brief` emits. All default on: the hooks ship enabled and\nconfig decides whether they produce anything, so turning the output off is\none line rather than a hook-wiring task. A section with nothing to report\nis omitted whatever its switch says; a switch turned off suppresses the\nsection even when the checkout has something to put in it.",
+      "properties": {
+        "apps": {
+          "default": true,
+          "description": "The apps line and the `devrun up` / `portm` bullets. Live servers this\nworktree holds are reported regardless: a bound port is a fact about\nthe machine, not a listing the brief chose to carry.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "description": "The whole brief.",
+          "type": "boolean"
+        },
+        "locks": {
+          "default": true,
+          "description": "The `lockm` line. Whether sessions ever share this checkout is not\nsomething devkit can observe, so it is a switch rather than a probe.",
+          "type": "boolean"
+        },
+        "pins": {
+          "default": true,
+          "description": "The library-versions section.",
+          "type": "boolean"
+        },
+        "tasks": {
+          "default": true,
+          "description": "The task table and the `devrun task` bullet.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DaemonConfig": {
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Run gate: autostart the daemon only when true (or via DEVKIT_DAEMON=1 / --supervise).",
+          "type": "boolean"
+        },
+        "health_fail_threshold": {
+          "default": 3,
+          "description": "Consecutive post-arming probe failures before a server is judged hung.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "health_probe_secs": {
+          "default": 0,
+          "description": "Health-probe interval in seconds; 0 disables probing (no probe thread).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idle_timeout_secs": {
+          "default": 1800,
+          "description": "Exit after this many idle seconds with zero clients AND zero supervised children.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_restarts": {
+          "default": 5,
+          "description": "Crash-loop guard: restarts allowed within `restart_window_secs`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_action": {
+          "default": "warn",
+          "description": "Action when tree-RSS crosses `memory_limit_mb`: \"warn\" (log a line) or\n\"restart\" (SIGTERM and let the crash path respawn). Any other value falls\nback to warn.",
+          "type": "string"
+        },
+        "memory_limit_mb": {
+          "default": 0,
+          "description": "Take `memory_action` past this tree-RSS in MB (0 = off).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_limit_ticks": {
+          "default": 3,
+          "description": "Consecutive supervision ticks at or over `memory_limit_mb` before the\nrestart action fires (debounces transient allocation spikes).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_max_mb": {
+          "default": 0,
+          "description": "Hard kernel memory ceiling per supervised tree, in MB (0 = off,\nLinux-only). Enforced via a cgroup-v2 leaf with memory.max; a breach\nOOM-kills the tree and the crash path respawns it. Set above\nmemory_limit_mb so the soft poll-based action stays the graceful first\nresponder. Falls back to the soft action where cgroup-v2 delegation is\nunavailable.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_warn_mb": {
+          "default": 0,
+          "description": "Log a loud line past this supervised tree-RSS in MB (0 = off).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "restart_window_secs": {
+          "default": 60,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Defaults": {
+      "properties": {
+        "apps_dir": {
+          "default": "apps",
+          "description": "Repo-relative directory apps live under (e.g. \"apps\"). Used to infer app\npaths from doppler.yaml and to detect changed apps in a diff.",
+          "type": "string"
+        },
+        "baseline_path": {
+          "type": "string"
+        },
+        "baseline_ref": {
+          "type": "string"
+        },
+        "branch_prefix": {
+          "type": "string"
+        },
+        "doppler_yaml": {
+          "default": "",
+          "type": "string"
+        },
+        "ignored_checks": {
+          "default": [],
+          "description": "Glob patterns for status-check names to discount from a PR's CHECK\nverdict — e.g. a deploy left red by an unfinished PR. Matched\ncase-insensitively against each check's name; a PR reads green when only\nignored checks fail, and the ignored failures are still surfaced in the\ntriage output rather than hidden.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pr_base": {
+          "default": "staging",
+          "description": "Base branch used when opening PRs (e.g. \"staging\", \"main\").",
+          "type": "string"
+        },
+        "require_pr_reviewer": {
+          "default": false,
+          "description": "Refuse `issue review request` when it would open a PR with no `--to`\nreviewer. Off by default: a PR opens unreviewed and nobody is Slacked.",
+          "type": "boolean"
+        },
+        "stray_scan_width": {
+          "default": 64,
+          "description": "Width of each app's port-band scan window for stray detection:\nports `[base_port, base_port + stray_scan_width)`. Default 64.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "worktree_include": {
+          "default": [],
+          "description": "Glob patterns (relative to the monorepo root) for untracked local files to\ncopy into a newly created worktree. Each match is copied to the same\nrelative path; a match that is a directory (or a pattern ending in `/`) is\ncopied recursively. Existing destinations are never clobbered. Empty by\ndefault — the backfill is opt-in.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "worktree_root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "worktree_root",
+        "branch_prefix",
+        "baseline_ref",
+        "baseline_path"
+      ],
+      "type": "object"
+    },
+    "DocsManifest": {
+      "properties": {
+        "libs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LibEntry"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Ecosystem": {
+      "oneOf": [
+        {
+          "enum": [
+            "rust",
+            "js",
+            "python"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "git",
+          "description": "No package registry or lockfile; pinned by `ref` or default branch.",
+          "type": "string"
+        }
+      ]
+    },
+    "HarnessSection": {
+      "description": "The `[harness]` table of a checkout's `devkit.toml`.",
+      "properties": {
+        "enforce_writes": {
+          "default": false,
+          "description": "Refuse writes to paths this checkout has not claimed with `lockm`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "LayerMarker": {
+      "description": "The `[config]` table. Read straight off the raw layer by `is_root_layer`\nrather than through `Config`, because it decides which layers exist before\nthere is a merged config to deserialize; this type exists so the published\nJSON Schema can still describe it.",
+      "properties": {
+        "root": {
+          "default": false,
+          "description": "Stop walking upward at this file, and drop `~/.config/devkit/config.toml`\nfrom the layer stack.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "LibEntry": {
+      "description": "One managed library. Every field except `name` is optional so a project\noverlay entry can override a single field of a global entry.",
+      "properties": {
+        "docs_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ecosystem": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ecosystem"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "description": "Registry package name when it differs from `name` (e.g. `@types/node`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref": {
+          "description": "Manual pin (tag/branch/sha); wins over lockfile resolution.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "LinearConfig": {
+      "properties": {
+        "resolve_pr_links": {
+          "default": false,
+          "description": "Query Linear for the issues linked to each PR in `issue prs` (one\nextra batched round trip per run). Off by default.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Person": {
+      "description": "A team member's handle mapping (Slack user-id, GitHub login, etc.).",
+      "properties": {
+        "github": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slack": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slack"
+      ],
+      "type": "object"
+    },
+    "PrepFile": {
+      "description": "A file written into an app's directory during `issue setup`, before the app's\n`setup` commands run. `content` is written verbatim — no format assembly or\nnewline injection. Parent directories are created. Existing files are left\nuntouched unless `overwrite` is set.",
+      "properties": {
+        "content": {
+          "description": "File contents, written byte-for-byte.",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "description": "Overwrite an existing file rather than skipping it.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Target path, relative to the app's directory.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "type": "object"
+    },
+    "Step": {
+      "description": "One step of a sequence task: run a sibling command task, or bring an app up.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "task": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "up": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "up"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TaskConfig": {
+      "description": "A canned oneshot invoked by name via `devrun task`: either a command\n(`run`, optionally scoped to an `app` for cwd + static_env) or a sequence\n(`steps`). Exactly one of `run`/`steps` must be set; a sequence task\ncarries no `app`/`env`. Validated at resolution, not at parse.",
+      "properties": {
+        "app": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "require_live": {
+          "default": [],
+          "description": "Apps whose server must be live in this worktree when the task executes.\nEach name must be referenced by the task's templates via `ports[...]`;\na user `--env` override of every referencing value waives the check.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "steps": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Templates": {
+      "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context.",
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checkout_worktree_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pr_body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pr_title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_finish": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_request": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variables": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "worktree_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/AbysmalBiscuit/devkit/v0.13.0/schema/devkit-config.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Configuration for the devkit CLIs (devrun, portm, issue, lockm, docm, devkit).",
+  "properties": {
+    "apps": {
+      "additionalProperties": {
+        "$ref": "#/$defs/AppConfig"
+      },
+      "default": {},
+      "type": "object"
+    },
+    "brief": {
+      "$ref": "#/$defs/BriefConfig",
+      "default": {
+        "apps": true,
+        "enabled": true,
+        "locks": true,
+        "pins": true,
+        "tasks": true
+      }
+    },
+    "config": {
+      "$ref": "#/$defs/LayerMarker",
+      "default": {
+        "root": false
+      },
+      "description": "Layer-stack control: `root = true` stops the upward walk here."
+    },
+    "daemon": {
+      "$ref": "#/$defs/DaemonConfig",
+      "default": {
+        "enabled": false,
+        "health_fail_threshold": 3,
+        "health_probe_secs": 0,
+        "idle_timeout_secs": 1800,
+        "max_restarts": 5,
+        "memory_action": "warn",
+        "memory_limit_mb": 0,
+        "memory_limit_ticks": 3,
+        "memory_max_mb": 0,
+        "memory_warn_mb": 0,
+        "restart_window_secs": 60
+      }
+    },
+    "defaults": {
+      "$ref": "#/$defs/Defaults"
+    },
+    "docs": {
+      "$ref": "#/$defs/DocsManifest",
+      "default": {
+        "libs": []
+      },
+      "description": "Libraries `docm` resolves version-correct checkouts for."
+    },
+    "harness": {
+      "$ref": "#/$defs/HarnessSection",
+      "description": "Write-enforcement opt-in for this checkout."
+    },
+    "linear": {
+      "$ref": "#/$defs/LinearConfig",
+      "default": {
+        "resolve_pr_links": false
+      }
+    },
+    "people": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Person"
+      },
+      "default": {},
+      "type": "object"
+    },
+    "tasks": {
+      "additionalProperties": {
+        "$ref": "#/$defs/TaskConfig"
+      },
+      "default": {},
+      "type": "object"
+    },
+    "templates": {
+      "$ref": "#/$defs/Templates",
+      "default": {
+        "branch": null,
+        "checkout_worktree_dir": null,
+        "pr_body": null,
+        "pr_title": null,
+        "review_finish": null,
+        "review_request": null,
+        "variables": {},
+        "worktree_dir": null
+      }
+    }
+  },
+  "title": "devkit.toml",
+  "type": "object"
+}

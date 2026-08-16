@@ -167,6 +167,7 @@ still wins.
 devkit auth <linear|slack> [--token <value>]   # validate + store; prompts (no echo) by default
 devkit doctor [--json]                          # check configured credentials
 devkit brief [--pins-only] [--if-changed]       # compact project brief (apps, tasks, servers, versions)
+devkit schema                                   # JSON Schema for devkit.toml, for editor validation
 devkit completions <shell>
 ~~~
 

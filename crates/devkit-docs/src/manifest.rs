@@ -6,10 +6,13 @@
 //! deeper (more project-specific) layer winning.
 
 use anyhow::{Context, Result, bail};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, JsonSchema, Deserialize, clap::ValueEnum,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Ecosystem {
     Rust,
@@ -32,7 +35,7 @@ impl std::fmt::Display for Ecosystem {
 
 /// One managed library. Every field except `name` is optional so a project
 /// overlay entry can override a single field of a global entry.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema, Deserialize)]
 pub struct LibEntry {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,7 +67,7 @@ impl LibEntry {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Serialize, JsonSchema, Deserialize)]
 pub struct DocsManifest {
     #[serde(default)]
     pub libs: Vec<LibEntry>,

@@ -37,6 +37,68 @@ shell export or a Doppler-injected variable always overrides the file. Populate
 the file with `devkit auth <linear|slack>` (it validates the token against the
 live API before saving) and inspect it with `devkit doctor`.
 
+## Editor support
+
+`devkit.toml` has a published JSON Schema, so an editor running the TOML
+language server ([taplo](https://taplo.tamasfe.dev)) gives completion, hover
+docs and inline validation. Point a file at it with a `#:schema` directive —
+taplo requires it on the **first** line, preceded only by comments:
+
+```toml
+#:schema https://raw.githubusercontent.com/AbysmalBiscuit/devkit/v0.13.0/schema/devkit-config.json
+
+[defaults]
+worktree_root = "~/Git/example-worktrees"
+```
+
+To cover every `devkit.toml` without editing each one, use a taplo rule
+instead:
+
+```toml
+# .taplo.toml
+[[rule]]
+include = ["**/devkit.toml"]
+[rule.schema]
+url = "https://raw.githubusercontent.com/AbysmalBiscuit/devkit/v0.13.0/schema/devkit-config.json"
+```
+
+Pin a release tag rather than `main`: a moving branch validates your config
+against keys that are not in the devkit you have installed.
+
+The schema is generated from the same Rust types serde reads — the doc comments
+in `crates/devkit-ports/src/config.rs` become the hover text — so it cannot
+describe a shape the binaries do not accept. It catches what config resolution
+would otherwise only report at run time, and only through `devrun config show`:
+an `[apps.x]` without `base_port` or `launch`, a value of the wrong type, a
+task step that is neither `task` nor `up`, an unknown `ecosystem`.
+
+Three things it deliberately does not do:
+
+- **Nothing is required at the top level.** `[defaults]` is required of the
+  *merged* config, not of any one file — a layer carries only what it
+  overrides, and devkit's own `devkit.toml` is `[harness]` and nothing else.
+  An editor validates the file in front of it, so requiring `[defaults]` would
+  mark correct overlays as errors.
+- **Unknown keys pass.** devkit ignores keys it does not recognise, so a
+  schema that rejected them would be stricter than the parser. A misspelled
+  `lock = false` still silently does nothing.
+- **Post-parse rules are invisible to it**, such as an app needing a `path`
+  when there is no `doppler.yaml` to infer one, or a task setting exactly one
+  of `run`/`steps`.
+
+One caveat from layering: `base_port` and `launch` are marked required on each
+app, which is right for an app defined in one file and wrong for one whose keys
+are split across the home config and a project overlay. That split is rare
+enough to be worth the check.
+
+Regenerate it after changing any config type:
+
+```sh
+cargo run --bin devkit -- schema > schema/devkit-config.json
+```
+
+`cargo test` fails if the committed file is stale.
+
 ## Sections
 
 ### `[defaults]`

@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Config {
     pub defaults: Defaults,
     #[serde(default)]
@@ -22,7 +23,7 @@ pub struct Config {
     pub brief: BriefConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DaemonConfig {
     /// Run gate: autostart the daemon only when true (or via DEVKIT_DAEMON=1 / --supervise).
@@ -79,7 +80,7 @@ impl Default for DaemonConfig {
 /// one line rather than a hook-wiring task. A section with nothing to report
 /// is omitted whatever its switch says; a switch turned off suppresses the
 /// section even when the checkout has something to put in it.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct BriefConfig {
     /// The whole brief.
@@ -109,7 +110,7 @@ impl Default for BriefConfig {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct LinearConfig {
     /// Query Linear for the issues linked to each PR in `issue prs` (one
@@ -117,7 +118,7 @@ pub struct LinearConfig {
     pub resolve_pr_links: bool,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Defaults {
     pub worktree_root: String,
     pub branch_prefix: String,
@@ -169,7 +170,7 @@ fn default_stray_scan_width() -> u16 {
 }
 
 /// A team member's handle mapping (Slack user-id, GitHub login, etc.).
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct Person {
     pub slack: String,
     #[serde(default)]
@@ -180,7 +181,7 @@ pub struct Person {
 /// `setup` commands run. `content` is written verbatim — no format assembly or
 /// newline injection. Parent directories are created. Existing files are left
 /// untouched unless `overwrite` is set.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
 pub struct PrepFile {
     /// Target path, relative to the app's directory.
     pub path: String,
@@ -192,7 +193,7 @@ pub struct PrepFile {
 }
 
 /// One step of a sequence task: run a sibling command task, or bring an app up.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, JsonSchema, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Step {
     Task(String),
@@ -203,7 +204,7 @@ pub enum Step {
 /// (`run`, optionally scoped to an `app` for cwd + static_env) or a sequence
 /// (`steps`). Exactly one of `run`/`steps` must be set; a sequence task
 /// carries no `app`/`env`. Validated at resolution, not at parse.
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 pub struct TaskConfig {
     #[serde(default)]
     pub description: Option<String>,
@@ -235,7 +236,7 @@ pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
 /// `None` field falls back to its `DEFAULT_*` constant, which reproduces the
 /// historical hardcoded output. `variables` are user constants merged under
 /// every render context.
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Debug, JsonSchema, Deserialize, Serialize, Default)]
 pub struct Templates {
     pub branch: Option<String>,
     pub worktree_dir: Option<String>,
@@ -281,7 +282,7 @@ impl Templates {
 /// The `url` an app is addressed at when it sets none of its own.
 pub const DEFAULT_APP_URL: &str = "http://localhost:{{ port }}";
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct AppConfig {
     pub base_port: u16,
     pub launch: Vec<String>,
@@ -415,6 +416,18 @@ fn read_layer(p: &Path) -> Result<(PathBuf, toml::Table)> {
 pub fn home_config_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(PathBuf::from(home).join(".config/devkit/config.toml"))
+}
+
+/// The `[config]` table. Read straight off the raw layer by `is_root_layer`
+/// rather than through `Config`, because it decides which layers exist before
+/// there is a merged config to deserialize; this type exists so the published
+/// JSON Schema can still describe it.
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
+pub struct LayerMarker {
+    /// Stop walking upward at this file, and drop `~/.config/devkit/config.toml`
+    /// from the layer stack.
+    #[serde(default)]
+    pub root: bool,
 }
 
 /// Whether a parsed layer declares `[config] root = true` (stop walking upward).
