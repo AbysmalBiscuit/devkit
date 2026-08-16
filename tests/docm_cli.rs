@@ -901,15 +901,15 @@ fn list_project_filters_to_the_checkout_and_counts_what_it_dropped() {
     std::fs::write(
         env.home.join(".config/devkit/docs.toml"),
         format!(
-            "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nrepo = \"{u}\"\n\n[[libs]]\nname = \"tokio\"\necosystem = \"rust\"\nrepo = \"{u}\"\n",
+            "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nrepo = {u:?}\n\n[[libs]]\nname = \"tokio\"\necosystem = \"rust\"\nrepo = {u:?}\n",
             u = env.upstream
         ),
     )
     .unwrap();
 
     let listing = env.docm(&["list", "--project"]);
+    assert_ran(&listing, "docm list --project");
     let text = String::from_utf8_lossy(&listing.stdout);
-    assert!(listing.status.success(), "{text}");
     assert!(text.contains("serde"), "{text}");
     assert!(text.contains("1.0.200"), "{text}");
     assert!(
@@ -999,15 +999,15 @@ fn a_ref_only_project_with_no_lockfile_renders_a_full_table() {
     std::fs::write(
         env.project.join("devkit.toml"),
         format!(
-            "[config]\nroot = true\n\n[[docs.libs]]\nname = \"godot\"\necosystem = \"git\"\nref = \"v1.0.0\"\nrepo = \"{}\"\n",
+            "[config]\nroot = true\n\n[[docs.libs]]\nname = \"godot\"\necosystem = \"git\"\nref = \"v1.0.0\"\nrepo = {:?}\n",
             env.upstream
         ),
     )
     .unwrap();
 
     let listing = env.docm(&["list", "--project"]);
+    assert_ran(&listing, "docm list --project");
     let text = String::from_utf8_lossy(&listing.stdout);
-    assert!(listing.status.success(), "{text}");
     assert!(text.contains("godot"), "{text}");
     assert!(text.contains("v1.0.0"), "{text}");
     assert!(text.contains("ref"), "source column says ref: {text}");
