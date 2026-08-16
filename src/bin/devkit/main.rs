@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
+use std::path::PathBuf;
 
 mod auth;
 mod brief;
@@ -54,9 +55,23 @@ enum Cmd {
     /// Print the JSON Schema for `devkit.toml` to stdout. Editors that speak
     /// the TOML language server use it for completion and validation; see
     /// `docs/configuration.md`.
-    Schema,
+    Schema {
+        #[command(subcommand)]
+        cmd: Option<SchemaCmd>,
+    },
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
     Completions { shell: Shell },
+}
+
+#[derive(Subcommand)]
+enum SchemaCmd {
+    /// Point a `devkit.toml` at the published schema, creating a starter one
+    /// when it does not exist. Leaves a file that already names a schema alone.
+    Init {
+        /// The config to point at the schema.
+        #[arg(default_value = "devkit.toml")]
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -83,7 +98,10 @@ fn main() -> Result<()> {
             pins_only,
             if_changed,
         } => brief::run(pins_only, if_changed),
-        Cmd::Schema => schema::run(),
+        Cmd::Schema { cmd } => match cmd {
+            None => schema::run(),
+            Some(SchemaCmd::Init { path }) => schema::init(&path),
+        },
         Cmd::Doctor { json } => doctor::run(json),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "devkit", &mut std::io::stdout());

@@ -41,14 +41,38 @@ live API before saving) and inspect it with `devkit doctor`.
 
 `devkit.toml` has a published JSON Schema, so an editor running the TOML
 language server ([taplo](https://taplo.tamasfe.dev)) gives completion, hover
-docs and inline validation. Point a file at it with a `#:schema` directive —
-taplo requires it on the **first** line, preceded only by comments:
+docs and inline validation.
+
+```sh
+devkit schema init                # ./devkit.toml
+devkit schema init path/to/devkit.toml
+```
+
+That adds the `#:schema` directive to an existing config, or writes a starter
+one when there is none. It is idempotent — a file already naming a schema is
+left untouched — so it is safe to run against a config under review.
+
+The starter has every setting commented out, so nothing is active until you
+have read it, and `devkit brief` reports the config as not resolving until you
+uncomment `[defaults]`. The values are filled in from the checkout rather than
+left as placeholders, so what you uncomment is already right.
+
+To do it by hand, the directive is a taplo **header**: first line, preceded
+only by other directives and comments.
 
 ```toml
 #:schema https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json
 
 [defaults]
 worktree_root = "~/Git/example-worktrees"
+```
+
+A filesystem path works too, which is how to validate against an unreleased
+schema — including devkit's own checkout, where the release URL does not yet
+resolve:
+
+```toml
+#:schema /home/you/Git/devkit/schema/devkit-config.json
 ```
 
 To cover every `devkit.toml` without editing each one, use a taplo rule

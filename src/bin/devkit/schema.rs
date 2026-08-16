@@ -11,8 +11,9 @@
 //! document type with a flattened `Config` keeps `Config`'s field list in one
 //! place while still describing the whole file.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use schemars::JsonSchema;
+use std::path::Path;
 
 /// The published id. The release workflow attaches this file to every GitHub
 /// Release, so `releases/latest/download` always resolves to the newest
@@ -74,5 +75,68 @@ pub fn document() -> Result<String> {
 
 pub fn run() -> Result<()> {
     print!("{}", document()?);
+    Ok(())
+}
+
+/// taplo reads the schema association from a `#:schema` directive, which it
+/// honors only as a header — first line, preceded at most by other directives
+/// and comments.
+fn directive() -> String {
+    format!("#:schema {ID}")
+}
+
+/// A starter with every setting commented out, so nothing is active until its
+/// owner has read it: an uncommented `worktree_root` would have devkit creating
+/// worktrees somewhere nobody chose. Commented, the file resolves to nothing
+/// and `devkit brief` says exactly that.
+///
+/// The app carries `base_port`, `path` and `launch` together: an `[apps.x]`
+/// missing `base_port` stops the whole merged config from parsing, and one
+/// missing `path` is skipped at catalog build with only a stderr note.
+const STARTER: &str = r#"
+# Uncomment what this project uses and replace the <placeholders>. Until
+# [defaults] is uncommented the config does not resolve, and `devkit brief`
+# reports that rather than staying quiet.
+
+# [defaults]
+# worktree_root = "~/Git/<project>-worktrees"
+# branch_prefix = "<you>/"
+# baseline_ref = "origin/main"
+# baseline_path = "~/Git/<project>-worktrees/_baseline"
+
+# An app needs base_port and launch to parse at all, and path to resolve
+# without a doppler.yaml to infer it from.
+# [apps.web]
+# base_port = 9100
+# path = "apps/web"
+# launch = ["pnpm", "dev", "--port", "{{ port }}"]
+"#;
+
+/// Point `path` at the published schema, creating it from `STARTER` when it
+/// does not exist. Idempotent: a file that already carries a directive is left
+/// exactly as it is, so this is safe to run against a config under review.
+pub fn init(path: &Path) -> Result<()> {
+    let directive = directive();
+    let existing = match std::fs::read_to_string(path) {
+        Ok(body) => Some(body),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+
+    let body = match existing {
+        Some(body) if body.contains("#:schema") => {
+            println!("{} already points at a schema", path.display());
+            return Ok(());
+        }
+        Some(body) => format!("{directive}\n{body}"),
+        None => format!("{directive}\n{STARTER}"),
+    };
+
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::write(path, &body).with_context(|| format!("writing {}", path.display()))?;
+    println!("{} now points at {ID}", path.display());
     Ok(())
 }

@@ -168,6 +168,7 @@ devkit auth <linear|slack> [--token <value>]   # validate + store; prompts (no e
 devkit doctor [--json]                          # check configured credentials
 devkit brief [--pins-only] [--if-changed]       # compact project brief (apps, tasks, servers, versions)
 devkit schema                                   # JSON Schema for devkit.toml, for editor validation
+devkit schema init [PATH]                       # point a devkit.toml at that schema (starter if absent)
 devkit completions <shell>
 ~~~
 
