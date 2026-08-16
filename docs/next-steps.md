@@ -78,8 +78,9 @@ AbysmalBiscuit/devkit` followed by the host's install verb
 works from a public clone; Cursor installs from its Customize panel or a team
 marketplace import instead (no git-repo CLI install). See the README's
 "Installing for coding agents" for the user-facing steps. Codex is verified
-end-to-end (2026-06-24, re-verified 2026-07-02 against the native manifest);
-Claude and Cursor still need a live test.
+end-to-end (2026-06-24, re-verified 2026-07-02 against the native manifest, and
+2026-08-16 against v0.147.0 for hooks and context injection); Claude and Cursor
+still need a live test.
 
 - **Codex marketplace manifest location — VERIFIED 2026-07-02 (Codex v0.142.0).**
   Codex reads `.agents/plugins/marketplace.json` (preferred, its native schema)
@@ -109,32 +110,52 @@ Claude and Cursor still need a live test.
   appears in Codex's `<skills_instructions>` block in every fresh session, so the
   agent is told the skill exists. That native registration — not the SessionStart
   hook — is the working delivery path on Codex.
-  - **The `announce-skill` SessionStart hook does not fire on Codex, and is
-    redundant there.** Codex discovers hooks from a `hooks.json` at the *plugin
-    root* with *relative* command paths and tool-scoped events (`PostToolUse`,
-    `Stop` — per the curated `figma`/`replayio` plugins). devkit's hook sits at
-    `hooks/hooks-codex.json` behind a `hooks:` pointer Codex ignores, uses
-    `${PLUGIN_ROOT}`, and keys on `SessionStart`, which no curated Codex plugin
-    uses. The hook is silently inert, but native skill registration already covers
-    the awareness goal. (The same root-discovery rule means the lockm
-    `hooks/hooks.json` does not fire on Codex either — a separate question if
-    Codex ever needs the file-lock hooks.)
-  - **Post-compaction pins on Codex — WIRED, UNVERIFIED IN HOST.**
-    `hooks/hooks-codex.json` carries a second `SessionStart` block matching
-    `compact` that runs `brief-context --pins-only`; Codex re-fires `SessionStart`
-    with `source: "compact"` after compacting, and `PostCompact` has no
-    `additionalContext` field to inject through. Whether it runs at all depends on
-    the discovery question above, last checked against Codex v0.142.0 while the
-    installed CLI is now v0.147.0. To verify: start a Codex session in a devkit
-    project with a registered library, force a compaction, and look for the
-    library table. If the pointer is still ignored, the fix is a root-level
-    `hooks.json` with relative paths, which would also revive `announce-skill`.
-- **Claude marketplace install — NOT DONE (ready).** The repo is public; a fresh
-  clone resolves `.claude-plugin/marketplace.json` (`source: "./"`) and
-  `skills/using-devkit/SKILL.md`. Remaining is the live smoke test only a fresh
-  Claude Code session can run: `claude plugin marketplace add AbysmalBiscuit/devkit`
-  then `claude plugin install devkit@devkit` (or the same arguments via `/plugin`
-  in a session), confirm `using-devkit` resolves.
+  - **Codex session hooks — VERIFIED 2026-08-16 (Codex v0.147.0).** The
+    `hooks:` pointer in `.codex-plugin/plugin.json` is honored,
+    `${PLUGIN_ROOT}` expands, and `hookSpecificOutput.additionalContext` is
+    accepted, so `hooks/hooks-codex.json` delivers context exactly as written.
+    What makes a hook look inert is **hook trust**: Codex refuses to run a new
+    or modified hook until it is reviewed once in an interactive session
+    ("Hooks need review"), and the trust state lives in `$CODEX_HOME/state_*.sqlite`,
+    not `config.toml`. An untrusted hook is silently skipped, which reads
+    identically to an unsupported event. `codex exec` has
+    `--dangerously-bypass-hook-trust` for automation.
+  - **Post-compaction pins on Codex — VERIFIED 2026-08-16.**
+    `hooks/hooks-codex.json`'s second `SessionStart` block, matching `compact`,
+    runs `brief-context --pins-only` and its table reaches the model. The firing
+    is deferred by one turn: compaction *queues* the source
+    (`core/src/session/mod.rs`, `queue_pending_session_start_source(Compact)`) and
+    the turn path drains it (`core/src/session/turn.rs` →
+    `hook_runtime::run_pending_session_start_hooks`), so the hook runs when the
+    next message is sent, not at the moment of compaction. `PostCompact` is not an
+    alternative: its output schema
+    (`hooks/schema/generated/post-compact.command.output.schema.json`) is
+    `additionalProperties: false` over `continue`/`stopReason`/`suppressOutput`/
+    `systemMessage`, with no `hookSpecificOutput` — there is no way to inject
+    context through it.
+  - **Codex startup hook injects the brief, not the skill notice.** Codex
+    registers `using-devkit` natively, so the hardcoded notice in
+    `hooks/announce-skill` duplicates it; the startup block runs `brief-context`
+    instead. `announce-skill` remains for Cursor, which has no verified native
+    skill registration.
+  - **Write enforcement on Codex — WIRED 2026-08-16, UNVERIFIED IN HOST.**
+    `hooks/hooks-codex.json` now carries the same `PreToolUse`/`SubagentStop`/
+    `SessionEnd` handlers as the Claude Code file. Codex's edit tool is
+    `apply_patch`, whose payload is a whole patch envelope in
+    `tool_input.command` rather than a single `tool_input.file_path`, so
+    `devkit_locks::hook` parses the envelope and claims every file it names
+    (`Add File`/`Update File`/`Delete File`/`Move to`, both ends of a rename).
+    `Write` and `Edit` stay in the matcher because Codex accepts them as
+    aliases for `apply_patch` (`core/src/tools/hook_names.rs`). To verify: two
+    Codex sessions in one checkout, one holding a lock, the other attempting an
+    `apply_patch` on the held file — expect the deny. Note the multi-path
+    decision is per file, so a patch that is half-blocked leaves the free
+    halves claimed by the denied session; they release on `SessionEnd`.
+- **Claude marketplace install — VERIFIED 2026-08-16.** A fresh clone resolves
+  `.claude-plugin/marketplace.json` (`source: "./"`) and
+  `skills/using-devkit/SKILL.md`; `claude plugin marketplace add
+  AbysmalBiscuit/devkit` then `claude plugin install devkit@devkit` installs and
+  `using-devkit` resolves. Confirmed on a second machine.
 - **Cursor install — NOT DONE.** Cursor is not installed on the dev machine, so
   the SessionStart context injection (`additional_context` envelope from
   `hooks/announce-skill`) has not been exercised in a running Cursor host. Install
