@@ -174,17 +174,22 @@ devkit completions <shell>
   validates it, and saves it. For Linear it also stores the workspace slug derived
   from the API, so issue links work without setting `LINEAR_WORKSPACE`.
 - **`doctor`**: one row per credential — source (`env`/`file`/`unset`) and live
-  validity. Exits non-zero only when a credential that *is* set fails validation.
-  Also warns when the installed binaries are older than the newest devkit plugin
-  checkout in `~/.claude/plugins/cache` (skewed binaries make agents follow docs
-  for features the binaries lack), when servers run outside devrun, and when the
-  docs cache holds unreferenced checkouts.
+  validity. Exits non-zero when a credential that *is* set fails validation, or
+  when a `devkit.toml` exists that does not load — the `config` row carries the
+  cause, since a config that fails to deserialize makes every other devkit
+  command fail the same way. Having no `devkit.toml` at all is reported without
+  complaint. Also warns when the installed binaries are older than the newest
+  devkit plugin checkout in `~/.claude/plugins/cache` (skewed binaries make
+  agents follow docs for features the binaries lack), when servers run outside
+  devrun, and when the docs cache holds unreferenced checkouts.
 - **`brief`**: prints a compact orientation for the current checkout — configured
   apps, the `[tasks]` table, this worktree's live servers, and the versions this
   checkout's lockfiles pin for each registered library. The two halves are
   independent: a checkout with no devrun setup still gets the library table, and a
   checkout that evidences no registered library still gets the rest. Prints nothing
-  when neither applies, so a hook can call it from any repository. Every section
+  when neither applies, so a hook can call it from any repository — but a
+  `devkit.toml` that exists and does not load is a fault, not an absence, and is
+  reported with the cause instead. Every section
   earns its place: a project with no apps is not told about `devrun up` or
   `portm`, and one with no tasks is not told about `devrun task`. `[brief]`
   suppresses a section the checkout does have — `apps`, `tasks`, `locks` — see

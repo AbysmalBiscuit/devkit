@@ -22,8 +22,9 @@ const HINT_LINEAR: &str = "run: devkit auth linear   (https://linear.app/setting
 const HINT_SLACK: &str = "run: devkit auth slack    (Slack app → OAuth & Permissions)";
 const HINT_WORKSPACE: &str = "optional — falls back to the Linear API for issue links";
 
-/// Exit non-zero only when a credential that is set fails validation. An unset
-/// credential is a warning; an unreachable host is not a hard failure.
+/// Exit non-zero when a credential that is set fails validation, or when a
+/// config exists that does not load. An unset credential is a warning; an
+/// unreachable host is not a hard failure.
 fn worst_exit(rows: &[Row]) -> i32 {
     if rows.iter().any(|r| matches!(r.check, Check::Invalid(_))) {
         1
@@ -78,6 +79,23 @@ fn count_strays() -> usize {
         return 0;
     };
     devkit_ports::strays::scan(&loaded.config, &data).len()
+}
+
+/// Whether the config reachable from the cwd loads. A config that does not
+/// load makes every other devkit command fail, so it is a hard failure here
+/// rather than a warning; having none at all is how any non-devkit directory
+/// looks and is reported without complaint.
+fn config_check(start: &std::path::Path) -> Check {
+    match devkit_ports::config::health(start) {
+        devkit_ports::config::Health::Ok => Check::Ok("devkit.toml loads".into()),
+        devkit_ports::config::Health::Absent => {
+            Check::Ok("no devkit.toml — not a devkit project".into())
+        }
+        // A toml error breaks its own lines; the rows here are one line each.
+        devkit_ports::config::Health::Broken(why) => {
+            Check::Invalid(why.split_whitespace().collect::<Vec<_>>().join(" "))
+        }
+    }
 }
 
 fn docs_cache_check() -> Check {
@@ -190,6 +208,11 @@ fn gather(steps: &Steps) -> Vec<Row> {
             ),
         },
         Row {
+            key: "config",
+            source: Source::Unset,
+            check: config_check(std::path::Path::new(".")),
+        },
+        Row {
             key: "devrun_strays",
             source: Source::Unset,
             check: stray_check(count_strays()),
@@ -281,6 +304,23 @@ mod tests {
             row(Check::Invalid("bad".into())),
         ];
         assert_eq!(worst_exit(&rows), 1);
+    }
+
+    /// A config that exists and does not load is the one case that has to
+    /// fail: silence here is what sent users to `devrun config show` to find
+    /// out why every command was erroring. (`Health::Absent` is covered where
+    /// the home layer can be held out of the resolution — see
+    /// `config::health_tells_an_absent_config_from_a_broken_one`.)
+    #[test]
+    fn a_config_that_does_not_load_fails_doctor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let broken = tmp.path().join("broken");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join("devkit.toml"), "this is not toml [[[").unwrap();
+
+        let check = config_check(&broken);
+        assert!(matches!(check, Check::Invalid(_)), "{check:?}");
+        assert_eq!(worst_exit(&[row(check)]), 1);
     }
 
     #[test]

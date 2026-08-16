@@ -470,11 +470,59 @@ fn discover(
     layers.extend(stack);
 
     if layers.is_empty() {
-        anyhow::bail!(
-            "no devkit.toml found (--config / $DEVKIT_CONFIG / ./devkit.toml walking up / ~/.config/devkit/config.toml)"
-        );
+        return Err(anyhow::Error::new(NoConfig));
     }
     Ok(layers)
+}
+
+/// No config file exists anywhere the search looks. Carried as a distinct type
+/// so a caller can tell it apart from a config that exists and fails to load:
+/// the first means "not a devkit project" and warrants silence, the second is
+/// a fault the user needs told about.
+#[derive(Debug)]
+pub struct NoConfig;
+
+impl std::fmt::Display for NoConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "no devkit.toml found (--config / $DEVKIT_CONFIG / ./devkit.toml walking up / ~/.config/devkit/config.toml)",
+        )
+    }
+}
+
+impl std::error::Error for NoConfig {}
+
+/// What the config layers reachable from `start` amount to. `devkit brief` and
+/// `devkit doctor` both have to report a fault without failing on one, and
+/// both have to stay quiet outside a devkit project — neither is possible
+/// while every failure is one opaque `Err`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Health {
+    /// No devkit.toml anywhere: not a devkit project.
+    Absent,
+    Ok,
+    /// A config exists and does not load. The string is the full `anyhow`
+    /// cause chain, which names the offending file for a parse error and the
+    /// offending key for a deserialization error.
+    Broken(String),
+}
+
+/// Classify the config reachable from `start` without ever failing.
+pub fn health(start: &Path) -> Health {
+    health_with_home(start, home_config_path().as_deref())
+}
+
+pub(crate) fn health_with_home(start: &Path, home: Option<&Path>) -> Health {
+    match resolve_with_home(None, start, home) {
+        Ok(_) => Health::Ok,
+        Err(e) if e.downcast_ref::<NoConfig>().is_some() => Health::Absent,
+        Err(e) => Health::Broken(
+            e.chain()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(": "),
+        ),
+    }
 }
 
 /// Resolve the effective config by layering and deep-merging all applicable files.
@@ -1136,6 +1184,47 @@ steps = [
         assert!(cfg.brief.locks);
         assert!(cfg.brief.apps);
         assert!(cfg.brief.tasks);
+    }
+
+    #[test]
+    fn health_tells_an_absent_config_from_a_broken_one() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(health_with_home(&empty, None), Health::Absent);
+
+        let good = tmp.path().join("good");
+        std::fs::create_dir_all(&good).unwrap();
+        std::fs::write(
+            good.join("devkit.toml"),
+            format!("[config]\nroot = true\n[defaults]\n{FULL_DEFAULTS}"),
+        )
+        .unwrap();
+        assert_eq!(health_with_home(&good, None), Health::Ok);
+
+        // A required app key left out: the exact fault a user hits by adding
+        // an app entry by hand.
+        let missing_key = tmp.path().join("missing-key");
+        std::fs::create_dir_all(&missing_key).unwrap();
+        std::fs::write(
+            missing_key.join("devkit.toml"),
+            format!("[config]\nroot = true\n[defaults]\n{FULL_DEFAULTS}[apps.foobar]\nlaunch = ['echo']\n"),
+        )
+        .unwrap();
+        let Health::Broken(msg) = health_with_home(&missing_key, None) else {
+            panic!("a config that does not deserialize is Broken");
+        };
+        assert!(msg.contains("base_port"), "{msg}");
+        assert!(msg.contains("apps.foobar"), "{msg}");
+
+        let unparseable = tmp.path().join("unparseable");
+        std::fs::create_dir_all(&unparseable).unwrap();
+        std::fs::write(unparseable.join("devkit.toml"), "this is not toml [[[").unwrap();
+        let Health::Broken(msg) = health_with_home(&unparseable, None) else {
+            panic!("a config that does not parse is Broken");
+        };
+        assert!(msg.contains("parsing config layer"), "{msg}");
     }
 
     #[test]

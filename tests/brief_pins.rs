@@ -531,6 +531,39 @@ const API_APP: &str =
     "[apps.api]\nbase_port = 9100\npath = \"apps/api\"\nlaunch = [\"echo\", \"api\"]\n\n";
 
 #[test]
+fn a_config_that_does_not_load_is_reported_rather_than_swallowed() {
+    let project = Project::docs_only("broken-config");
+    // `base_port` left out of an app entry: deserialization of the merged
+    // config fails, which used to reach the user as an empty brief.
+    project.set_config(&format!(
+        "[config]\nroot = true\n\n{DEFAULTS}[apps.foobar]\nlaunch = [\"echo\", \"foobar\"]\n"
+    ));
+    let out = project.brief(&[]);
+    assert!(out.status.success(), "a brief never fails the hook");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("devkit.toml"),
+        "the fault names the file: {text}"
+    );
+    assert!(text.contains("base_port"), "and the offending key: {text}");
+    assert!(text.contains("apps.foobar"), "{text}");
+}
+
+#[test]
+fn a_checkout_with_no_config_stays_silent() {
+    let project = Project::docs_only("no-config-quiet");
+    std::fs::remove_file(project.root.join("devkit.toml")).unwrap();
+    write(&project.home.join(".config/devkit/docs.toml"), "");
+    let out = project.brief(&[]);
+    assert!(out.status.success());
+    assert!(
+        out.stdout.is_empty(),
+        "an absent config is not a fault: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
 fn brief_apps_false_drops_the_app_lines_that_are_configured() {
     let project = Project::docs_only("apps-off");
     project.set_config(&format!(

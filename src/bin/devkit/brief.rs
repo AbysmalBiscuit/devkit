@@ -7,6 +7,11 @@
 //! nothing when neither applies, so a SessionStart hook can call it
 //! unconditionally from any repository.
 //!
+//! Silence is for a checkout with nothing to say, never for one that cannot be
+//! read. A `devkit.toml` that exists and fails to load is reported with its
+//! cause chain: it makes every devkit command fail, and an empty brief would
+//! instead teach the session that this is not a devkit project.
+//!
 //! Within the devrun half every section earns its place: a project with no
 //! configured apps is not told about `devrun up` or `portm`, one with no
 //! `[tasks]` table is not told about `devrun task`, and the intro names only
@@ -116,6 +121,10 @@ struct BriefSnapshot {
     servers: Vec<ServerKey>,
     locks: bool,
     pins: Vec<PinKey>,
+    /// Why the config does not load, so that fixing it is a change
+    /// `--if-changed` can see — otherwise the session that was told about the
+    /// fault would never be told it is over.
+    config_fault: Option<String>,
 }
 
 /// Identity plus the probed listening state. `AGE` is excluded: it is computed
@@ -202,6 +211,9 @@ impl BriefSnapshot {
                 "pin\t{}\t{}\t{}\t{}\n",
                 p.name, p.project_scoped, p.declared, p.outcome
             ));
+        }
+        if let Some(fault) = &self.config_fault {
+            out.push_str(&format!("config-fault\t{fault}\n"));
         }
         out
     }
@@ -360,7 +372,8 @@ fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
         servers: !servers.is_empty(),
         locks,
     };
-    if pin_keys.is_empty() && !facilities.any() {
+    let config_fault = config_fault(cwd);
+    if pin_keys.is_empty() && !facilities.any() && config_fault.is_none() {
         return None;
     }
 
@@ -371,6 +384,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
         servers,
         locks,
         pins: pin_keys,
+        config_fault,
     })
 }
 
@@ -384,6 +398,36 @@ fn brief_config(cwd: &Path) -> BriefConfig {
         .unwrap_or_default()
 }
 
+/// The reason this checkout's config does not load, or `None` when it loads or
+/// does not exist. An absent config is how every non-devkit repository looks,
+/// so only a config that exists and fails is worth a word.
+fn config_fault(cwd: &Path) -> Option<String> {
+    match config::health(cwd) {
+        config::Health::Broken(why) => Some(why),
+        config::Health::Ok | config::Health::Absent => None,
+    }
+}
+
+/// The fault stated plainly, with the cause chain set off from the prose so an
+/// agent quoting it back to the user does not fold it into a sentence. Every
+/// devkit CLI fails on this config, so the brief says so rather than leaving
+/// the agent to discover it one command at a time.
+fn fault_text(why: &str) -> String {
+    let mut out = wrap(
+        "This checkout's devkit.toml does not load, so no project context follows. \
+         Every devkit CLI fails the same way until it is fixed.",
+    );
+    out.push_str("\n\n");
+    // A toml deserialization error carries its own line breaks (the key on one
+    // line, the table on the next); indenting per line keeps the whole cause
+    // inside the block rather than letting its tail escape to column zero.
+    for line in why.lines() {
+        out.push_str(&format!("    {}\n", line.trim_end()));
+    }
+    out.push('\n');
+    out
+}
+
 fn render(cwd: &Path, settings: &BriefConfig) -> Option<String> {
     let cwd_str = cwd.to_str()?;
     let root = devkit_common::cmd::git(&["rev-parse", "--show-toplevel"], cwd_str)
@@ -395,28 +439,44 @@ fn render(cwd: &Path, settings: &BriefConfig) -> Option<String> {
     // nothing devrun can use must still produce a brief.
     let pins = pins_section(&checkout_pins(cwd, settings));
     let devrun = devrun_sections(&root, cwd, settings);
-    if pins.is_none() && devrun.is_none() {
+    let fault = config_fault(cwd);
+    if pins.is_none() && devrun.is_none() && fault.is_none() {
         return None;
     }
 
     let mut out = String::new();
     out.push_str("## devkit project context\n\n");
+    if let Some(fault) = &fault {
+        out.push_str(&fault_text(fault));
+    }
     // The devrun claim is only true when `devrun` resolved; a pins-only
     // checkout has no devrun setup at all, so asserting it here would be a
-    // false claim injected into an agent's context.
-    let intro = match &devrun {
-        Some(sections) => devrun_intro(&root, sections.facilities()),
-        None => "This checkout has libraries registered with devkit; the table below is \
-                 what its lockfiles pin."
-            .to_string(),
+    // false claim injected into an agent's context. A checkout whose only
+    // content is the fault gets neither claim: what it has is a broken config,
+    // which the block above already stated.
+    let intro = match (&devrun, &pins, &fault) {
+        (Some(sections), _, _) => Some(devrun_intro(&root, sections.facilities())),
+        (None, Some(_), _) => Some(
+            "This checkout has libraries registered with devkit; the table below is \
+             what its lockfiles pin."
+                .to_string(),
+        ),
+        (None, None, _) => None,
     };
-    out.push_str(&wrap(&intro));
-    out.push_str("\n\n");
+    if let Some(intro) = intro {
+        out.push_str(&wrap(&intro));
+        out.push_str("\n\n");
+    }
     if let Some(sections) = &devrun {
         out.push_str(&devrun_text(sections));
     }
     if let Some(section) = pins {
         out.push_str(&section);
+    }
+    // Each block separates itself from the next by ending in a blank line; the
+    // last one has nothing to separate from.
+    while out.ends_with("\n\n") {
+        out.pop();
     }
     Some(out)
 }
