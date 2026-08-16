@@ -3,3 +3,8 @@
 # and the drift test fails over line endings Git itself introduced. The file
 # also ships as a GitHub Release asset, where LF is what consumers expect.
 schema/devkit-config.json text eol=lf
+
+# Recorded goldens are compared byte for byte against freshly rendered output,
+# which always uses LF. A CRLF checkout fails that comparison on line endings
+# Git itself introduced.
+crates/devkit-docs/tests/goldens/** text eol=lf
