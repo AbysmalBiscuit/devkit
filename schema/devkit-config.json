@@ -191,7 +191,7 @@
       "type": "object"
     },
     "Defaults": {
-      "description": "Project-wide paths and branch conventions. The first four keys are required —\nwithout them no worktree, branch, or baseline resolves.",
+      "description": "Project-wide paths and branch conventions. The first four keys are required\nof any config that configures a project — without them no worktree, branch,\nor baseline resolves. A config carrying only `[config]`, `[harness]`,\n`[docs]`, or `[brief]` omits the table entirely and takes the defaults.",
       "properties": {
         "apps_dir": {
           "default": "apps",
@@ -635,7 +635,20 @@
     },
     "defaults": {
       "$ref": "#/$defs/Defaults",
-      "description": "Project-wide paths and branch conventions. Required: nothing resolves\nwithout it."
+      "default": {
+        "apps_dir": "apps",
+        "baseline_path": "",
+        "baseline_ref": "",
+        "branch_prefix": "",
+        "doppler_yaml": "",
+        "ignored_checks": [],
+        "pr_base": "staging",
+        "require_pr_reviewer": false,
+        "stray_scan_width": 64,
+        "worktree_include": [],
+        "worktree_root": ""
+      },
+      "description": "Project-wide paths and branch conventions. Required of any config that\nconfigures a project; omitted only by one built entirely from\n`[config]`, `[harness]`, `[docs]`, and `[brief]`."
     },
     "docs": {
       "$ref": "#/$defs/DocsManifest",

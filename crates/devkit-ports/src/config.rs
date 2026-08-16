@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Config {
-    /// Project-wide paths and branch conventions. Required: nothing resolves
-    /// without it.
+    /// Project-wide paths and branch conventions. Required of any config that
+    /// configures a project; omitted only by one built entirely from
+    /// `[config]`, `[harness]`, `[docs]`, and `[brief]`.
+    #[serde(default)]
     pub defaults: Defaults,
     /// One table per runnable app, keyed by the app id passed to
     /// `issue setup --apps` and `devrun up`.
@@ -135,9 +137,11 @@ pub struct LinearConfig {
     pub resolve_pr_links: bool,
 }
 
-/// Project-wide paths and branch conventions. The first four keys are required —
-/// without them no worktree, branch, or baseline resolves.
-#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
+/// Project-wide paths and branch conventions. The first four keys are required
+/// of any config that configures a project — without them no worktree, branch,
+/// or baseline resolves. A config carrying only `[config]`, `[harness]`,
+/// `[docs]`, or `[brief]` omits the table entirely and takes the defaults.
+#[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct Defaults {
     /// Directory issue worktrees are created under. `~` is expanded.
     pub worktree_root: String,
@@ -181,6 +185,27 @@ pub struct Defaults {
     /// default — the backfill is opt-in.
     #[serde(default)]
     pub worktree_include: Vec<String>,
+}
+
+/// Written out rather than derived so the defaulted table matches what serde
+/// fills in for an omitted key; a derived `Default` would silently disagree on
+/// `apps_dir`, `pr_base`, and `stray_scan_width`.
+impl Default for Defaults {
+    fn default() -> Self {
+        Defaults {
+            worktree_root: String::new(),
+            branch_prefix: String::new(),
+            baseline_ref: String::new(),
+            baseline_path: String::new(),
+            doppler_yaml: String::new(),
+            apps_dir: default_apps_dir(),
+            pr_base: default_pr_base(),
+            require_pr_reviewer: false,
+            ignored_checks: Vec::new(),
+            stray_scan_width: default_stray_scan_width(),
+            worktree_include: Vec::new(),
+        }
+    }
 }
 
 fn default_apps_dir() -> String {
@@ -613,6 +638,13 @@ pub(crate) fn health_with_home(start: &Path, home: Option<&Path>) -> Health {
     }
 }
 
+/// Tables a devkit.toml may carry on its own, with no project configured around
+/// them. Each is read by a crate that needs no path or branch convention:
+/// `[harness]` by `devkit-locks`, `[docs]` by `devkit-docs`, `[config]` by the
+/// layer walk below, `[brief]` by the session summary. A config built only from
+/// these resolves without a `[defaults]` table; anything else demands one.
+const STANDALONE_SECTIONS: [&str; 4] = ["config", "harness", "docs", "brief"];
+
 /// Resolve the effective config by layering and deep-merging all applicable files.
 pub fn resolve(explicit: Option<&Path>, start: &Path) -> Result<(Config, Provenance)> {
     resolve_with_home(explicit, start, home_config_path().as_deref())
@@ -628,6 +660,16 @@ pub(crate) fn resolve_with_home(
     let layers = discover(explicit, start, home)?;
     let order: Vec<PathBuf> = layers.iter().map(|(p, _)| p.clone()).collect();
     let (merged, origin) = merge_layers(&layers);
+    if !merged.contains_key("defaults")
+        && let Some(section) = merged
+            .keys()
+            .find(|k| !STANDALONE_SECTIONS.contains(&k.as_str()))
+    {
+        anyhow::bail!(
+            "deserializing merged devkit config: missing field `defaults`, \
+             which `[{section}]` needs"
+        );
+    }
     let cfg: Config = toml::Value::Table(merged)
         .try_into()
         .context("deserializing merged devkit config")?;
@@ -1235,14 +1277,8 @@ steps = [
 
     #[test]
     fn brief_defaults_on_and_the_project_layer_wins() {
-        // A devkit.toml with only [brief] does not resolve on its own — every
-        // config layer merges into one Config, deserialized once, and
-        // Defaults's worktree_root/branch_prefix/baseline_ref/baseline_path
-        // stay required. A real user always has a [defaults] table somewhere
-        // in the layer stack (their home config or their project's
-        // devkit.toml); a fixture that wants to isolate [brief] merging
-        // supplies a minimal one, same as every other resolve_with_home test
-        // in this module.
+        // The home layer supplies [defaults] so this fixture exercises [brief]
+        // merging across two layers rather than the standalone-section path.
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home.toml");
         std::fs::write(
@@ -1272,6 +1308,49 @@ steps = [
         assert!(cfg.brief.locks);
         assert!(cfg.brief.apps);
         assert!(cfg.brief.tasks);
+    }
+
+    #[test]
+    fn a_config_of_standalone_sections_needs_no_defaults() {
+        // `[harness]`, `[docs]`, `[brief]`, and `[config]` are read without any
+        // path or branch convention — this repository's own devkit.toml is
+        // `[harness]` alone, and a `[docs]`-only overlay is the documented way
+        // to register a library for one project.
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("harness-only");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("devkit.toml"),
+            "[config]\nroot = true\n[harness]\nenforce_writes = true\n",
+        )
+        .unwrap();
+
+        let (cfg, _) = resolve_with_home(None, &project, None).unwrap();
+        assert_eq!(cfg.defaults.worktree_root, "");
+        assert_eq!(cfg.defaults.apps_dir, "apps");
+        assert_eq!(cfg.defaults.pr_base, "staging");
+        assert_eq!(cfg.defaults.stray_scan_width, 64);
+        assert_eq!(health_with_home(&project, None), Health::Ok);
+    }
+
+    #[test]
+    fn a_config_that_configures_a_project_still_needs_defaults() {
+        // Relaxing the requirement for standalone sections must not let an
+        // `[apps]` table through with empty paths — that would launch servers
+        // against a worktree root of "".
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("apps-no-defaults");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("devkit.toml"),
+            "[config]\nroot = true\n[apps.api]\nbase_port = 9100\nlaunch = ['echo']\n",
+        )
+        .unwrap();
+
+        match health_with_home(&project, None) {
+            Health::Broken(why) => assert!(why.contains("defaults"), "{why}"),
+            other => panic!("expected Broken, got {other:?}"),
+        }
     }
 
     #[test]
