@@ -9,10 +9,10 @@ allowed-tools: Bash(docm list), Bash(docm list --project)
 Answer library-usage questions from a local, version-correct checkout of the
 library's own source and docs — not from memory.
 
-Libraries this checkout evidences — name, the version its manifests and
-lockfiles name, and where that came from. A trailing count, when present, is
-of registered libraries this checkout does not evidence; they are still
-registered, and `docm list` shows them:
+Libraries this checkout evidences — name, version, and where that version
+came from. A trailing count, when present, is of registered libraries this
+checkout does not evidence; they are still registered, and `docm list`
+shows them:
 
 !`docm list --project`
 
