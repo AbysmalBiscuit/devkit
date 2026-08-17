@@ -173,6 +173,50 @@ impl Selector {
     pub fn select(&self, package: &str) -> Result<Selection> {
         self.inspect(package).result
     }
+
+    /// True when the directory this selector was built for is the one holding
+    /// the lockfile. A container directory declares nothing itself, so it is
+    /// the only place where reading the members instead is the right answer.
+    pub fn at_lock_root(&self) -> bool {
+        match &self.context {
+            LockContext::Js(context) => context.relative.is_empty(),
+            // Cargo and uv name their members in a manifest rather than in the
+            // lockfile, so there is no member list to roll up from here.
+            LockContext::Toml(_) => false,
+        }
+    }
+
+    /// Absolute directories of the member workspaces this lockfile names.
+    /// Empty for an ecosystem whose members live in a manifest rather than in
+    /// the lockfile.
+    pub fn member_dirs(&self) -> Vec<PathBuf> {
+        match &self.context {
+            LockContext::Js(context) => context.member_dirs(),
+            LockContext::Toml(_) => Vec::new(),
+        }
+    }
+
+    /// What each member workspace resolves `package` to, for the members that
+    /// declare it. Empty when the lockfile names no members besides this one,
+    /// or when the ecosystem carries no member list. Reuses the parse this
+    /// selector already holds, so the cost is one lockfile traversal per
+    /// member, not one parse.
+    pub fn rollup(&self, package: &str) -> Vec<MemberPin> {
+        match &self.context {
+            LockContext::Js(context) => context.rollup(package),
+            LockContext::Toml(_) => Vec::new(),
+        }
+    }
+}
+
+/// One member workspace's answer for a package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberPin {
+    /// The member's directory relative to the lockfile's own.
+    pub workspace: String,
+    pub version: String,
+    /// The lockfile that carried the version, by file name.
+    pub lockfile: String,
 }
 
 /// The full report for a single package. A projection of [`Selector`], which a
@@ -528,12 +572,33 @@ impl JsContext {
         evidence: &mut Evidence,
     ) -> Result<Selection> {
         let lock = self.parsed(manager)?;
-        match &*lock {
+        self.select_at(
+            &lock,
+            &self.workspace,
+            &self.relative,
+            package,
+            diagnostics,
+            evidence,
+        )
+    }
+
+    /// Resolve `package` as the workspace at `relative` sees it. Split out of
+    /// `select_from` so a roll-up can ask about a member without re-parsing.
+    fn select_at(
+        &self,
+        lock: &ParsedLock,
+        workspace: &Path,
+        relative: &str,
+        package: &str,
+        diagnostics: Diagnostics,
+        evidence: &mut Evidence,
+    ) -> Result<Selection> {
+        match lock {
             ParsedLock::Bun(value) => bun(
                 value,
                 &self.lock_dir,
-                &self.workspace,
-                &self.relative,
+                workspace,
+                relative,
                 package,
                 diagnostics,
                 evidence,
@@ -541,8 +606,8 @@ impl JsContext {
             ParsedLock::Pnpm(value) => pnpm(
                 value,
                 &self.lock_dir,
-                &self.workspace,
-                &self.relative,
+                workspace,
+                relative,
                 package,
                 diagnostics,
                 evidence,
@@ -550,13 +615,84 @@ impl JsContext {
             ParsedLock::Npm(value) => npm(
                 value,
                 &self.lock_dir,
-                &self.workspace,
-                &self.relative,
+                workspace,
+                relative,
                 package,
                 diagnostics,
                 evidence,
             ),
         }
+    }
+
+    /// Member workspaces the governing lockfile names, relative to its own
+    /// directory, excluding this context's workspace and the root key.
+    fn members(&self, lock: &ParsedLock) -> Vec<String> {
+        let keys: Vec<String> = match lock {
+            ParsedLock::Bun(value) => json_object_keys(value, "workspaces"),
+            ParsedLock::Pnpm(value) => yaml_mapping_keys(value, "importers"),
+            // package-lock.json holds workspaces and installed trees in one
+            // `packages` map; the workspaces are the keys outside any
+            // node_modules directory.
+            ParsedLock::Npm(value) => json_object_keys(value, "packages")
+                .into_iter()
+                .filter(|key| !key.split('/').any(|component| component == "node_modules"))
+                .collect(),
+        };
+        keys.into_iter()
+            .filter(|key| !key.is_empty() && key != "." && *key != self.relative)
+            .collect()
+    }
+
+    /// Member directories, from whichever lockfile governs. A lockfile that
+    /// will not parse names no members rather than failing: this feeds a
+    /// registry lookup, not a resolution.
+    fn member_dirs(&self) -> Vec<PathBuf> {
+        let Some(manager) = self.present_managers().first().copied() else {
+            return Vec::new();
+        };
+        let manager = self.package_manager.as_deref().unwrap_or(manager);
+        let Ok(lock) = self.parsed(manager) else {
+            return Vec::new();
+        };
+        self.members(&lock)
+            .into_iter()
+            .map(|member| self.lock_dir.join(member))
+            .collect()
+    }
+
+    /// Every member's version of `package`, skipping members that do not
+    /// declare it or whose row will not decode — a roll-up is a summary, and
+    /// one unreadable member must not cost the rest.
+    fn rollup(&self, package: &str) -> Vec<MemberPin> {
+        let Ok(manager) = self.choose(package) else {
+            return Vec::new();
+        };
+        let Ok(lock) = self.parsed(manager) else {
+            return Vec::new();
+        };
+        let file = js_lock_file(manager);
+        self.members(&lock)
+            .into_iter()
+            .filter_map(|member| {
+                let mut evidence = Evidence::Unknown;
+                let workspace = self.lock_dir.join(&member);
+                let selection = self
+                    .select_at(
+                        &lock,
+                        &workspace,
+                        &member,
+                        package,
+                        Diagnostics::Skip,
+                        &mut evidence,
+                    )
+                    .ok()?;
+                Some(MemberPin {
+                    workspace: member,
+                    version: selection.version,
+                    lockfile: file.to_string(),
+                })
+            })
+            .collect()
     }
 
     fn select(
@@ -928,6 +1064,30 @@ fn bun_candidates(value: &JsonValue, package: &str) -> Result<Candidates> {
         }
     }
     Ok(candidates)
+}
+
+/// Keys of a JSON object member, empty when it is missing or not an object.
+fn json_object_keys(value: &JsonValue, field: &str) -> Vec<String> {
+    value
+        .get(field)
+        .and_then(JsonValue::as_object)
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Keys of a YAML mapping member, empty when it is missing, not a mapping, or
+/// keyed by anything but strings.
+fn yaml_mapping_keys(value: &YamlValue, field: &str) -> Vec<String> {
+    value
+        .get(field)
+        .and_then(YamlValue::as_mapping)
+        .map(|mapping| {
+            mapping
+                .keys()
+                .filter_map(|key| key.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn yaml_mapping<'a>(value: &'a YamlValue, location: &str) -> Result<&'a YamlMap> {

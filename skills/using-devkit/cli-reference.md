@@ -220,6 +220,14 @@ run it by hand to re-orient mid-session.
 
 - `--pins-only` emits only the library-versions section — what a post-compaction
   re-injection wants, without respending the context compaction just reclaimed.
+- The library-versions section answers for the directory it runs in. At a
+  workspace root it rolls up the members the lockfile names, one row per version
+  they resolve; where members disagree, both versions appear with the workspaces
+  holding them, so an agent reads the right checkout for the app it is editing.
+  A library the reference registry records a checkout for under this project
+  shows even without lockfile evidence, sourced `resolved checkout`, and a
+  checkout whose version is not the one the lockfile names is flagged
+  `; checkout <version>`.
 - `--if-changed` prints nothing when this session already received the same brief
   (it reads `session_id` from the hook's stdin JSON). Rejected with `--pins-only`:
   the watermark records the *whole* brief, so suppressing on it after emitting only

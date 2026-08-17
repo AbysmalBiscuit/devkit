@@ -8,7 +8,7 @@ use crate::importers::{Evidence, Inspection, Selector, Undeclared};
 use crate::manifest::{self, Ecosystem, LibEntry};
 use crate::names;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +20,13 @@ pub enum Outcome {
     Version {
         version: String,
         workspace: PathBuf,
+        lockfile: String,
+    },
+    /// Members of this lockfile declare the library; the directory in hand —
+    /// a workspace container — does not. One entry per distinct version, each
+    /// with the members that resolve it, both sorted.
+    Rollup {
+        versions: Vec<(String, Vec<String>)>,
         lockfile: String,
     },
     /// A manual `ref` pin in the manifest. No lockfile is consulted.
@@ -42,6 +49,11 @@ pub struct Pin {
     /// short-circuits resolution and would otherwise carry no evidence in
     /// either direction.
     pub declared: Evidence,
+    /// The checkout this project last resolved for the library, from the
+    /// reference registry rather than from any lockfile. Evidence the project
+    /// uses the library, and — where it disagrees with the lockfile — the
+    /// version an agent reading that checkout would actually see.
+    pub resolved: Option<String>,
 }
 
 /// Every registered library's pin for the checkout at `start`, alphabetical.
@@ -50,6 +62,16 @@ pub struct Pin {
 /// must report that rather than print an empty listing. A single library
 /// failing to resolve is data, and lands in that row's `Outcome`.
 pub fn pins(start: &Path, global: Option<&Path>) -> Result<Vec<Pin>> {
+    pins_with_cache(start, global, None)
+}
+
+/// `pins` against a named cache root, for tests and for a caller that already
+/// resolved one. `None` reads the machine's own.
+pub fn pins_with_cache(
+    start: &Path,
+    global: Option<&Path>,
+    cache_root: Option<&Path>,
+) -> Result<Vec<Pin>> {
     let discovered = manifest::discover(start, global)?;
     let global_path = global
         .map(Path::to_path_buf)
@@ -73,14 +95,55 @@ pub fn pins(start: &Path, global: Option<&Path>) -> Result<Vec<Pin>> {
         }
     }
 
+    let resolved = resolved_here(start, &selectors, cache_root);
+
     let mut out: Vec<Pin> = discovered
         .manifest
         .libs
         .iter()
-        .map(|entry| pin_for(entry, &selectors, &global_path, project_root.as_deref()))
+        .map(|entry| {
+            let mut pin = pin_for(entry, &selectors, &global_path, project_root.as_deref());
+            pin.resolved = resolved.get(&pin.name).cloned();
+            pin
+        })
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
+}
+
+/// The checkout each library was last resolved to *for this project*, read from
+/// the reference registry. Keyed by library name.
+///
+/// Rows are matched on the project root in hand and on the member workspaces
+/// its lockfile names — never on an arbitrary descendant. Worktrees sit beside
+/// each other under a shared parent, and a prefix match run from that parent
+/// would report another branch's versions as this checkout's.
+///
+/// Fail-soft and lock-free: an unreadable registry reads as no rows, because a
+/// session-start summary must not fail on the cache's state.
+fn resolved_here(
+    start: &Path,
+    selectors: &HashMap<Ecosystem, Result<Selector, String>>,
+    cache_root: Option<&Path>,
+) -> HashMap<String, String> {
+    let cache_root = cache_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(crate::cache::docs_root);
+    let mut keys: Vec<PathBuf> = vec![start.to_path_buf()];
+    for selector in selectors.values().filter_map(|s| s.as_ref().ok()) {
+        keys.extend(selector.member_dirs());
+    }
+
+    crate::refs::RefStore::at(&cache_root)
+        .snapshot()
+        .rows
+        .into_iter()
+        .filter(|row| keys.iter().any(|key| Path::new(&row.project) == key))
+        // A row carries the checkout *directory*, where a ref's `/` is encoded
+        // as `~`. Decoding restores the ref, which is both what a reader
+        // recognises and what a comparison against a pin can be made against.
+        .map(|row| (row.lib, names::decode(&row.version)))
+        .collect()
 }
 
 fn pin_for(
@@ -105,7 +168,7 @@ fn pin_for(
                 result: Err(anyhow::anyhow!(reason.clone())),
             },
         });
-    let declared = inspection
+    let mut declared = inspection
         .as_ref()
         .map(|i| i.evidence)
         .unwrap_or(Evidence::Unknown);
@@ -139,7 +202,19 @@ fn pin_for(
                     ),
                     lockfile: selection.lockfile,
                 },
-                Err(error) if error.downcast_ref::<Undeclared>().is_some() => Outcome::Undeclared,
+                // A workspace container declares nothing of its own, so the
+                // undeclared answer is technically right and practically
+                // useless: the versions its members resolve are what a session
+                // started here needs.
+                Err(error) if error.downcast_ref::<Undeclared>().is_some() => {
+                    match rollup(entry, selectors, &package) {
+                        Some(outcome) => {
+                            declared = Evidence::Declared;
+                            outcome
+                        }
+                        None => Outcome::Undeclared,
+                    }
+                }
                 // Top-level message only: the `undeclared` diagnostic is three
                 // lines, and that belongs in `docm info`, not injected context.
                 Err(error) => Outcome::Unresolved(format!("{error}")),
@@ -152,7 +227,46 @@ fn pin_for(
         outcome,
         project_scoped,
         declared,
+        resolved: None,
     }
+}
+
+/// What the members of this entry's lockfile resolve `package` to, grouped by
+/// version. `None` when the directory in hand is not a lockfile root, when the
+/// lockfile names no other members, or when none of them declares the package.
+fn rollup(
+    entry: &LibEntry,
+    selectors: &HashMap<Ecosystem, Result<Selector, String>>,
+    package: &str,
+) -> Option<Outcome> {
+    let selector = entry
+        .ecosystem
+        .and_then(|ecosystem| selectors.get(&ecosystem))
+        .and_then(|selector| selector.as_ref().ok())
+        .filter(|selector| selector.at_lock_root())?;
+
+    let mut by_version: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut lockfile = String::new();
+    for pin in selector.rollup(package) {
+        lockfile = pin.lockfile;
+        by_version
+            .entry(pin.version)
+            .or_default()
+            .push(pin.workspace);
+    }
+    if by_version.is_empty() {
+        return None;
+    }
+    Some(Outcome::Rollup {
+        versions: by_version
+            .into_iter()
+            .map(|(version, mut workspaces)| {
+                workspaces.sort();
+                (version, workspaces)
+            })
+            .collect(),
+        lockfile,
+    })
 }
 
 /// A workspace named the way a reader of this project sees it. Absolute paths
@@ -203,7 +317,7 @@ pub fn relevant(pins: &[Pin]) -> (Vec<&Pin>, Dropped) {
     let mut rows = Vec::new();
     let mut dropped = Dropped::default();
     for pin in pins {
-        if pin.project_scoped {
+        if pin.project_scoped || pin.resolved.is_some() {
             rows.push(pin);
             continue;
         }
@@ -230,7 +344,7 @@ const MARKER_RESERVE: usize = 64;
 /// `SECTION_BUDGET` bytes. Newline-terminated.
 pub fn render(pins: &[Pin]) -> String {
     let (relevant_pins, dropped) = relevant(pins);
-    let rows: Vec<[String; 3]> = relevant_pins.iter().map(|pin| row(pin)).collect();
+    let rows: Vec<[String; 3]> = relevant_pins.iter().flat_map(|pin| rows_for(pin)).collect();
 
     let mut shown = estimate_fit(&rows);
     let mut out = render_section(&rows, shown, &dropped);
@@ -301,6 +415,73 @@ fn render_section(rows: &[[String; 3]], shown: usize, dropped: &Dropped) -> Stri
     out
 }
 
+/// The table rows one pin contributes. A roll-up contributes one row per
+/// version its members resolve: where they disagree, an agent needs to see
+/// both and which workspaces hold them, not a single version picked for it.
+fn rows_for(pin: &Pin) -> Vec<[String; 3]> {
+    match &pin.outcome {
+        Outcome::Rollup { versions, lockfile } => {
+            // Decorate only when the resolved checkout is none of the versions
+            // the members hold: naming it beside the very version it matches
+            // reads as a disagreement that is not there.
+            let stale = pin
+                .resolved
+                .as_deref()
+                .filter(|resolved| versions.iter().all(|(version, _)| version != resolved));
+            versions
+                .iter()
+                .map(|(version, workspaces)| {
+                    [
+                        cell(&pin.name),
+                        cell(version),
+                        cell(&decorate(
+                            &format!("{lockfile} ({})", members(workspaces)),
+                            stale,
+                        )),
+                    ]
+                })
+                .collect()
+        }
+        // The registry is the only evidence there is: it becomes the row.
+        Outcome::Undeclared | Outcome::Unresolved(_) if pin.resolved.is_some() => {
+            let version = pin.resolved.clone().unwrap_or_default();
+            vec![[cell(&pin.name), cell(&version), cell("resolved checkout")]]
+        }
+        _ => {
+            let mut row = row(pin);
+            let stale = pin.resolved.as_deref().filter(|r| *r != row[1]);
+            row[2] = cell(&decorate(&row[2], stale));
+            vec![row]
+        }
+    }
+}
+
+/// Name the resolved checkout beside a lockfile-derived version when the two
+/// disagree — that gap is the case where an agent reads one version and the
+/// project builds another.
+fn decorate(source: &str, stale: Option<&str>) -> String {
+    match stale {
+        Some(resolved) => format!("{source}; checkout {resolved}"),
+        None => source.to_string(),
+    }
+}
+
+/// Workspaces named for a source cell, bounded so one widely-used library
+/// cannot spend the whole section budget on directory names.
+fn members(workspaces: &[String]) -> String {
+    const NAMED: usize = 3;
+    let named = workspaces
+        .iter()
+        .take(NAMED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    match workspaces.len().saturating_sub(NAMED) {
+        0 => named,
+        rest => format!("{named}, +{rest}"),
+    }
+}
+
 fn row(pin: &Pin) -> [String; 3] {
     let (version, source) = match &pin.outcome {
         Outcome::Version {
@@ -311,6 +492,14 @@ fn row(pin: &Pin) -> [String; 3] {
             version.clone(),
             format!("{lockfile} ({})", workspace.display()),
         ),
+        // Rendered by `rows_for`, which expands it across versions.
+        Outcome::Rollup { versions, lockfile } => match versions.first() {
+            Some((version, workspaces)) => (
+                version.clone(),
+                format!("{lockfile} ({})", members(workspaces)),
+            ),
+            None => ("—".to_string(), lockfile.clone()),
+        },
         Outcome::Ref(git_ref) => (git_ref.clone(), "ref".to_string()),
         Outcome::Undeclared => (
             "—".to_string(),
@@ -384,6 +573,7 @@ pub fn envelope(pins: &[Pin]) -> serde_json::Value {
                 "name": pin.name,
                 "project_scoped": pin.project_scoped,
                 "declared": pin.declared.as_str(),
+                "resolved": pin.resolved,
                 "outcome": outcome_json(&pin.outcome),
             })
         })
@@ -408,6 +598,17 @@ fn outcome_json(outcome: &Outcome) -> serde_json::Value {
             "version": version,
             "lockfile": lockfile,
             "workspace": workspace.to_string_lossy().replace('\\', "/"),
+        }),
+        Outcome::Rollup { versions, lockfile } => serde_json::json!({
+            "kind": "rollup",
+            "lockfile": lockfile,
+            "versions": versions
+                .iter()
+                .map(|(version, workspaces)| serde_json::json!({
+                    "version": version,
+                    "workspaces": workspaces,
+                }))
+                .collect::<Vec<_>>(),
         }),
         Outcome::Ref(git_ref) => serde_json::json!({ "kind": "ref", "ref": git_ref }),
         Outcome::Unresolved(reason) => {

@@ -289,6 +289,7 @@ fn pin(name: &str, outcome: Outcome, project_scoped: bool, declared: Ev) -> Pin 
         outcome,
         project_scoped,
         declared,
+        resolved: None,
     }
 }
 
@@ -669,4 +670,175 @@ fn a_listing_does_not_cost_a_lockfile_traversal_per_library() {
         "60 registrations cost {many:?} against {one:?} for one — \
          the per-library term dominates the parse"
     );
+}
+
+const BUN_MONOREPO: &str = r#"{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": { "name": "root" },
+    "apps/api": { "name": "@app/api", "dependencies": { "h3": "^1.15.5" } },
+    "apps/web": { "name": "@app/web", "dependencies": { "h3": "^2.0.0" } },
+    "apps/docs": { "name": "@app/docs", "dependencies": {} }
+  },
+  "packages": {
+    "h3": ["h3@1.15.11", "", {}, "sha512-a"],
+    "@app/web/h3": ["h3@2.0.1", "", {}, "sha512-c"]
+  }
+}"#;
+
+/// A bun workspace root that declares nothing itself: every dependency lives
+/// in a member. This is the monorepo-root shape a session starts in.
+fn bun_monorepo(root: &Path) {
+    write(&root.join("package.json"), r#"{"name":"root"}"#);
+    write(&root.join("bun.lock"), BUN_MONOREPO);
+    write(
+        &root.join("docs.toml"),
+        "[[libs]]\nname = \"h3\"\necosystem = \"js\"\nrepo = \"https://example.invalid/h3\"\n",
+    );
+}
+
+#[test]
+fn a_workspace_root_rolls_up_its_members() {
+    let root = common::unique_tmp("pins-rollup");
+    bun_monorepo(&root);
+
+    let out = pins::pins(&root, Some(&root.join("docs.toml"))).unwrap();
+    match &out[0].outcome {
+        Outcome::Rollup { versions, lockfile } => {
+            assert_eq!(lockfile, "bun.lock");
+            assert_eq!(
+                versions,
+                &vec![
+                    ("1.15.11".to_string(), vec!["apps/api".to_string()]),
+                    ("2.0.1".to_string(), vec!["apps/web".to_string()]),
+                ]
+            );
+        }
+        other => panic!("expected a rollup, got {other:?}"),
+    }
+    assert_eq!(
+        out[0].declared,
+        Evidence::Declared,
+        "a rolled-up library must survive the relevance filter"
+    );
+}
+
+#[test]
+fn a_rolled_up_row_names_its_members() {
+    let root = common::unique_tmp("pins-rollup-render");
+    bun_monorepo(&root);
+
+    let out = pins::pins(&root, Some(&root.join("docs.toml"))).unwrap();
+    let table = pins::render(&out);
+    assert!(table.contains("apps/api"), "{table}");
+    assert!(table.contains("1.15.11"), "{table}");
+    assert!(table.contains("2.0.1"), "{table}");
+}
+
+#[test]
+fn a_leaf_workspace_reports_its_own_version_without_rolling_up() {
+    let root = common::unique_tmp("pins-rollup-leaf");
+    bun_monorepo(&root);
+    write(
+        &root.join("apps/api/package.json"),
+        r#"{"name":"@app/api","dependencies":{"h3":"^1.15.5"}}"#,
+    );
+
+    let out = pins::pins(&root.join("apps/api"), Some(&root.join("docs.toml"))).unwrap();
+    match &out[0].outcome {
+        Outcome::Version { version, .. } => assert_eq!(version, "1.15.11"),
+        other => panic!("expected a plain version, got {other:?}"),
+    }
+}
+
+/// A reference registry holding one row per (project, lib).
+fn registry(cache: &Path, rows: &[(&Path, &str, &str)]) {
+    let rows: Vec<String> = rows
+        .iter()
+        .map(|(project, lib, version)| {
+            format!(
+                r#"{{"project":{},"lib":"{lib}","version":"{version}","git_ref":"","commit":"c","resolved_at":1,"revision":0}}"#,
+                serde_json::to_string(&project.to_string_lossy()).unwrap()
+            )
+        })
+        .collect();
+    write(
+        &cache.join("registry.json"),
+        &format!(r#"{{"version":1,"rows":[{}]}}"#, rows.join(",")),
+    );
+}
+
+#[test]
+fn a_registry_row_surfaces_a_library_no_lockfile_evidences() {
+    // `docm` resolved a checkout for this project; that is evidence the
+    // project uses the library even when the importer graph cannot say so.
+    let root = common::unique_tmp("pins-registry");
+    let cache = root.join("cache");
+    bun_monorepo(&root);
+    write(
+        &root.join("docs.toml"),
+        "[[libs]]\nname = \"zod\"\necosystem = \"js\"\nrepo = \"https://example.invalid/zod\"\n",
+    );
+    registry(&cache, &[(root.as_path(), "zod", "4.4.3")]);
+
+    let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
+    assert_eq!(out[0].resolved.as_deref(), Some("4.4.3"));
+    let (rows, _) = pins::relevant(&out);
+    assert_eq!(rows.len(), 1, "a resolved row is relevant");
+    let table = pins::render(&out);
+    assert!(table.contains("4.4.3"), "{table}");
+}
+
+#[test]
+fn a_registry_row_that_disagrees_with_the_lockfile_is_flagged() {
+    // The checkout an agent would read is not the version this project
+    // resolves — silently showing the lockfile version would hide that.
+    let root = common::unique_tmp("pins-registry-stale");
+    let cache = root.join("cache");
+    bun_monorepo(&root);
+    registry(&cache, &[(root.as_path(), "h3", "1.0.0")]);
+
+    let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
+    let table = pins::render(&out);
+    assert!(table.contains("checkout 1.0.0"), "{table}");
+}
+
+#[test]
+fn a_registry_row_for_a_sibling_project_is_not_borrowed() {
+    // Worktrees sit beside each other under one parent; a row keyed to a
+    // sibling says nothing about the checkout in hand.
+    let root = common::unique_tmp("pins-registry-sibling");
+    let cache = root.join("cache");
+    bun_monorepo(&root);
+    write(
+        &root.join("docs.toml"),
+        "[[libs]]\nname = \"zod\"\necosystem = \"js\"\nrepo = \"https://example.invalid/zod\"\n",
+    );
+    registry(&cache, &[(&root.join("../other"), "zod", "4.4.3")]);
+
+    let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
+    assert_eq!(out[0].resolved, None);
+}
+
+#[test]
+fn an_encoded_checkout_dirname_is_not_a_disagreement() {
+    // The registry records the checkout *directory*, where a ref's `/` is
+    // encoded as `~`. Comparing that against the ref verbatim would report
+    // every slash-bearing ref as stale.
+    let root = common::unique_tmp("pins-registry-encoded");
+    let cache = root.join("cache");
+    bun_monorepo(&root);
+    write(
+        &root.join("docs.toml"),
+        "[[libs]]\nname = \"typescript-go\"\necosystem = \"git\"\nref = \"typescript/v7.0.2\"\nrepo = \"https://example.invalid/tsgo\"\n",
+    );
+    registry(
+        &cache,
+        &[(root.as_path(), "typescript-go", "typescript~v7.0.2")],
+    );
+
+    let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
+    assert_eq!(out[0].resolved.as_deref(), Some("typescript/v7.0.2"));
+    let table = pins::render(&out);
+    assert!(!table.contains("checkout"), "{table}");
 }

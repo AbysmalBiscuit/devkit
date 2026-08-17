@@ -196,6 +196,17 @@ devkit completions <shell>
   `portm`, and one with no tasks is not told about `devrun task`. `[brief]`
   suppresses a section the checkout does have — `apps`, `tasks`, `locks` — see
   [Configuration](docs/configuration.md#brief).
+  The library table answers for the directory it runs in. At a workspace root —
+  a monorepo container that declares nothing of its own — it rolls up the
+  members its lockfile names, one row per version they resolve, so a session
+  started there sees `kysely 0.28.17 — bun.lock (apps/api, packages/db-types,
+  +5)` and, where members disagree, both versions with the workspaces holding
+  them. A library the reference registry records a checkout for under this
+  project shows too, even with no lockfile evidence, and is flagged when the
+  checkout's version is not the one the lockfile names — that gap is where an
+  agent reads one version while the project builds another. Roll-up covers the
+  JS lockfiles, which name their members; cargo and uv keep theirs in a
+  manifest, so those resolve per workspace as before.
   `--pins-only` emits just the library table; `--if-changed` prints nothing when
   this session already received the same brief, keyed on the `session_id` in the
   hook's stdin JSON. A full brief records itself against that key, so the first

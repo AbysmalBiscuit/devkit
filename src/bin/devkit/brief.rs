@@ -142,6 +142,7 @@ struct PinKey {
     project_scoped: bool,
     declared: &'static str,
     outcome: String,
+    resolved: Option<String>,
 }
 
 /// The devrun half's content, each part absent when there is nothing to say.
@@ -208,8 +209,12 @@ impl BriefSnapshot {
         out.push_str(&format!("locks\t{}\n", self.locks));
         for p in &self.pins {
             out.push_str(&format!(
-                "pin\t{}\t{}\t{}\t{}\n",
-                p.name, p.project_scoped, p.declared, p.outcome
+                "pin\t{}\t{}\t{}\t{}\t{}\n",
+                p.name,
+                p.project_scoped,
+                p.declared,
+                p.outcome,
+                p.resolved.as_deref().unwrap_or("-")
             ));
         }
         if let Some(fault) = &self.config_fault {
@@ -238,10 +243,18 @@ impl PinKey {
                     workspace,
                     lockfile,
                 } => format!("version:{version}:{lockfile}:{}", workspace.display()),
+                Outcome::Rollup { versions, lockfile } => {
+                    let members: Vec<String> = versions
+                        .iter()
+                        .map(|(version, workspaces)| format!("{version}@{}", workspaces.join("+")))
+                        .collect();
+                    format!("rollup:{lockfile}:{}", members.join(","))
+                }
                 Outcome::Ref(git_ref) => format!("ref:{git_ref}"),
                 Outcome::Unresolved(reason) => format!("unresolved:{reason}"),
                 Outcome::Undeclared => "undeclared".to_string(),
             },
+            resolved: pin.resolved.clone(),
         }
     }
 }
