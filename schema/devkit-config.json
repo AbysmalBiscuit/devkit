@@ -305,6 +305,23 @@
       },
       "type": "object"
     },
+    "HooksConfig": {
+      "description": "Commands run on a devkit lifecycle event. Each key is named\n`{before,after}_<event>` and holds a list of argv arrays — no shell, so\npipes, `&&`, and globs are not available. A hook that fails to render,\nspawn, or exit zero warns on stderr and the remaining hooks still run.",
+      "properties": {
+        "after_worktree_create": {
+          "default": [],
+          "description": "Runs once in the root of a worktree `issue setup` or\n`issue checkout-pr` has just created, after its apps are prepared and\nbefore the command prints its JSON. Each argv element is rendered as\nminijinja over `worktree`, `branch`, `issue`, `slug`, `apps`, `prefix`,\nand `[templates.variables]`.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "LayerMarker": {
       "description": "The `[config]` table. Read straight off the raw layer by `is_root_layer`\nrather than through `Config`, because it decides which layers exist before\nthere is a merged config to deserialize; this type exists so the published\nJSON Schema can still describe it.",
       "properties": {
@@ -660,6 +677,13 @@
     "harness": {
       "$ref": "#/$defs/HarnessSection",
       "description": "Write-enforcement opt-in for this checkout."
+    },
+    "hooks": {
+      "$ref": "#/$defs/HooksConfig",
+      "default": {
+        "after_worktree_create": []
+      },
+      "description": "Commands devkit runs when a lifecycle event fires, keyed\n`{before,after}_<event>`."
     },
     "linear": {
       "$ref": "#/$defs/LinearConfig",

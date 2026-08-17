@@ -32,7 +32,7 @@ const ID: &str =
 #[allow(dead_code)]
 struct Document {
     /// `[defaults]`, `[apps]`, `[people]`, `[daemon]`, `[linear]`,
-    /// `[templates]`, `[tasks]`, `[brief]`.
+    /// `[templates]`, `[tasks]`, `[brief]`, `[hooks]`.
     #[serde(flatten)]
     core: devkit_ports::config::Config,
     // `#[serde(default)]` rather than `Option`, so each table is described by
@@ -110,6 +110,12 @@ const STARTER: &str = r#"
 # base_port = 9100
 # path = "apps/web"
 # launch = ["pnpm", "dev", "--port", "{{ port }}"]
+
+# Commands run on a lifecycle event, as argv arrays (no shell). Failures warn
+# and are skipped. after_worktree_create runs in a worktree `issue setup` or
+# `issue checkout-pr` has just created.
+# [hooks]
+# after_worktree_create = [["zoxide", "add", "{{ worktree }}"]]
 "#;
 
 /// Point `path` at the published schema, creating it from `STARTER` when it

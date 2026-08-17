@@ -410,6 +410,21 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         })?;
     }
 
+    let hook_ctx = serde_json::json!({
+        "prefix": cfg.defaults.branch_prefix,
+        "issue": issue,
+        "slug": slugify(&meta.title),
+        "apps": args.apps,
+        "branch": meta.head_ref_name,
+        "worktree": worktree_s,
+    });
+    crate::setup::run_after_worktree_create(
+        &worktree,
+        &cfg.hooks.after_worktree_create,
+        &hook_ctx,
+        &cfg.templates.variables,
+    );
+
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({

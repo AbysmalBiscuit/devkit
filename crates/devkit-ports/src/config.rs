@@ -36,6 +36,10 @@ pub struct Config {
     /// Which sections `devkit brief` emits at session start.
     #[serde(default)]
     pub brief: BriefConfig,
+    /// Commands devkit runs when a lifecycle event fires, keyed
+    /// `{before,after}_<event>`.
+    #[serde(default)]
+    pub hooks: HooksConfig,
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the
@@ -126,6 +130,21 @@ impl Default for BriefConfig {
             tasks: true,
         }
     }
+}
+
+/// Commands run on a devkit lifecycle event. Each key is named
+/// `{before,after}_<event>` and holds a list of argv arrays — no shell, so
+/// pipes, `&&`, and globs are not available. A hook that fails to render,
+/// spawn, or exit zero warns on stderr and the remaining hooks still run.
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HooksConfig {
+    /// Runs once in the root of a worktree `issue setup` or
+    /// `issue checkout-pr` has just created, after its apps are prepared and
+    /// before the command prints its JSON. Each argv element is rendered as
+    /// minijinja over `worktree`, `branch`, `issue`, `slug`, `apps`, `prefix`,
+    /// and `[templates.variables]`.
+    pub after_worktree_create: Vec<Vec<String>>,
 }
 
 /// Linear lookups that cost an extra API round trip, so each is opt-in.

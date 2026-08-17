@@ -417,6 +417,36 @@ text-derived id — `issue prs` never fails because of Linear. The MCP
 resolve_pr_links = true
 ```
 
+### `[hooks]`
+
+Commands devkit runs when a lifecycle event fires. Each key is named
+`{before,after}_<event>` and holds a list of argv arrays — the program plus its
+arguments, run directly with no shell, so pipes, `&&`, and globs are not
+available.
+
+| Key | Fires on | Cwd |
+|---|---|---|
+| `after_worktree_create` | `issue setup` and `issue checkout-pr`, once the worktree exists and its apps are prepared, before the command prints its JSON | the new worktree's root |
+
+Each argv element is a minijinja template over `worktree`, `branch`, `issue`,
+`slug`, `apps`, `prefix`, and `[templates.variables]`. Hooks run in the order
+listed.
+
+Failures are **fail-open**: a hook that cannot be rendered, cannot be spawned,
+or exits non-zero prints a `warning:` line to stderr, and the remaining hooks
+still run. The worktree already exists by the time hooks fire, so a missing
+program must not fail the command that created it. Hook output is captured and
+discarded, which keeps the JSON line the command prints last on stdout.
+
+As an array, a deeper `devkit.toml` replaces the whole list rather than
+appending — set machine-wide hooks in `~/.config/devkit/config.toml` and expect
+a project that defines the same key to take over entirely.
+
+```toml
+[hooks]
+after_worktree_create = [["zoxide", "add", "{{ worktree }}"]]
+```
+
 ### `[people.<alias>]`
 
 Teammate handle aliases used by `issue review` (`--to <alias>`). The alias maps
@@ -462,6 +492,9 @@ SOME_FEATURE_FLAG=dummy
 base_port = 8080
 path      = "services/worker"
 launch    = ["uv", "run", "uvicorn", "server.main:create_app", "--factory", "--reload", "--port", "{{ port }}"]
+
+[hooks]
+after_worktree_create = [["zoxide", "add", "{{ worktree }}"]]
 
 [people.alice]
 slack  = "U0XXXXXXXXX"

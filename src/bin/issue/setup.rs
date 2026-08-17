@@ -94,6 +94,48 @@ pub(crate) fn prep_apps(
     Ok(())
 }
 
+/// Render one hook's argv against `ctx`/`vars` and run it in `worktree`.
+fn run_hook(
+    worktree: &Path,
+    hook: &[String],
+    ctx: &serde_json::Value,
+    vars: &BTreeMap<String, String>,
+) -> Result<()> {
+    let mut argv = Vec::with_capacity(hook.len());
+    for part in hook {
+        argv.push(
+            devkit_common::template::render(part, ctx, vars)
+                .with_context(|| format!("rendering hook argument `{part}`"))?,
+        );
+    }
+    let (prog, rest) = argv.split_first().context("empty hook command")?;
+    capture(
+        prog,
+        &rest.iter().map(String::as_str).collect::<Vec<_>>(),
+        worktree.to_str(),
+    )?;
+    Ok(())
+}
+
+/// Run each `hooks.after_worktree_create` command in the new worktree, in
+/// order. Fail-open: the worktree already exists and is usable by the time
+/// these run, so a hook that fails warns on stderr and the rest still run.
+pub(crate) fn run_after_worktree_create(
+    worktree: &Path,
+    hooks: &[Vec<String>],
+    ctx: &serde_json::Value,
+    vars: &BTreeMap<String, String>,
+) {
+    for hook in hooks {
+        if let Err(e) = run_hook(worktree, hook, ctx, vars) {
+            eprintln!(
+                "warning: after_worktree_create hook `{}` failed: {e:#}",
+                hook.join(" ")
+            );
+        }
+    }
+}
+
 /// Copy the configured `worktree_include` globs from the monorepo into a freshly
 /// created worktree, printing each fail-open warning to stderr. A no-op when the
 /// include list is empty.
@@ -209,6 +251,13 @@ pub fn run(args: SetupArgs) -> Result<()> {
         })?;
     }
 
+    let mut hook_ctx = ctx.clone();
+    if let Some(obj) = hook_ctx.as_object_mut() {
+        obj.insert("branch".into(), serde_json::Value::String(branch.clone()));
+        obj.insert("worktree".into(), serde_json::Value::String(holder.clone()));
+    }
+    run_after_worktree_create(&worktree, &cfg.hooks.after_worktree_create, &hook_ctx, vars);
+
     // Ports are not reserved here. A worktree's servers get their ports
     // dynamically from `devrun up`, which allocates against the live registry at
     // start time — so the numbers always reflect what is actually free and no
@@ -243,6 +292,47 @@ mod tests {
 
     fn ctx() -> serde_json::Value {
         json!({"prefix": "lev/", "issue": "eng-1", "slug": "fix", "apps": ["web"], "app": "web"})
+    }
+
+    #[test]
+    fn hook_renders_args_and_runs_in_the_worktree() {
+        let dir = scratch("hook-render");
+        let hooks = vec![vec![
+            "git".to_string(),
+            "init".to_string(),
+            "{{ slug }}-wt".to_string(),
+        ]];
+        run_after_worktree_create(&dir, &hooks, &ctx(), &novars());
+        assert!(dir.join("fix-wt").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn failing_hook_does_not_stop_the_next_one() {
+        let dir = scratch("hook-failopen");
+        let hooks = vec![
+            vec!["devkit-no-such-program-xyz".to_string()],
+            vec!["git".to_string(), "init".to_string(), "after".to_string()],
+        ];
+        run_after_worktree_create(&dir, &hooks, &ctx(), &novars());
+        assert!(dir.join("after").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unrenderable_hook_does_not_stop_the_next_one() {
+        let dir = scratch("hook-badvar");
+        let hooks = vec![
+            vec![
+                "git".to_string(),
+                "init".to_string(),
+                "{{ nope }}".to_string(),
+            ],
+            vec!["git".to_string(), "init".to_string(), "after".to_string()],
+        ];
+        run_after_worktree_create(&dir, &hooks, &ctx(), &novars());
+        assert!(dir.join("after").exists());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
