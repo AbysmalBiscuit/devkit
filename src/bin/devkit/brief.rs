@@ -560,7 +560,8 @@ fn pins_text(table: &str) -> String {
     out.push_str(table);
     out.push('\n');
     out.push_str(&wrap(
-        "These are the versions this checkout's manifests and lockfiles name. \
+        "SOURCE says where each version came from: `resolved checkout` means this \
+         project resolved the library once, not that a manifest here declares it. \
          `docm info <lib>` resolves the matching source and reports the version it \
          actually serves. Answer questions about these libraries from those \
          checkouts; training-set recall is a different version.",
