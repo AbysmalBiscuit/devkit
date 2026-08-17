@@ -10,7 +10,7 @@
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" brief"
+            "command": "devkit brief"
           }
         ]
       }
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" brief --pins-only",
+            "command": "devkit brief --pins-only",
             "timeout": 10,
             "statusMessage": "Re-injecting devkit library versions"
           }
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" brief --if-changed",
+            "command": "devkit brief --if-changed",
             "timeout": 10,
             "statusMessage": "Refreshing devkit project brief"
           }

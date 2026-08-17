@@ -40,8 +40,8 @@ if exist "%HOOK_DIR%%~1.ps1" (
     exit /b %ERRORLEVEL%
 )
 
-REM Bash-only hook with no bash - exit silently rather than error
-REM (plugin still works, just without SessionStart context injection)
+REM Bash-only hook with no bash - exit silently rather than error, so the
+REM session still starts. Every hook shipped today has a .ps1 twin above.
 exit /b 0
 CMDBLOCK
 

@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-# Emit the devkit project brief when devkit is installed. Silent and exit 0
-# otherwise, so a checkout without the binaries still starts a session.
-# Hook payload arrives on stdin as JSON and is forwarded verbatim: the brief
-# reads session_id from it to track what a session has already been told.
-set -u
-command -v devkit >/dev/null 2>&1 || exit 0
-exec devkit brief "$@"
