@@ -436,6 +436,11 @@ available.
 |---|---|---|
 | `after_worktree_create` | `issue setup` and `issue checkout-pr`, once the worktree exists and its apps are prepared, before the command prints its JSON | the new worktree's root |
 
+The event names a state change, not the caller. `after_worktree_create` fires
+from both `issue setup` and `issue checkout-pr`; naming it after either command
+would have been wrong for the other. A new hook key fires from every command
+that reaches its state.
+
 Each argv element is a minijinja template over `worktree`, `branch`, `issue`,
 `slug`, `apps`, `prefix`, and `[templates.variables]`. Hooks run in the order
 listed.
