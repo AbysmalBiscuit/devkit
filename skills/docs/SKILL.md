@@ -24,7 +24,11 @@ step 1.
 
 1. Identify which library the question is about and match it against the
    listing above. Absence from that listing means "not evidenced in this
-   checkout", **not** "unregistered" — it is filtered to this project. Before
+   checkout", **not** "unregistered" — it is filtered to this project.
+   Presence is weaker than it looks: a row can come from a reference this
+   project resolved once rather than from any manifest here. `docm info
+   <lib>` names the version actually served; ask before clearing a reference
+   that outlived its use with `docm forget <lib>`. Before
    concluding a library is unregistered, run `docm list` (unfiltered). If it
    is genuinely absent there: `docm add <package>` (registry lookup) or
    `docm add <git-url>`, always with `--notes "<workspace>: <why this
