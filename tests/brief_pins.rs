@@ -56,9 +56,25 @@ impl Project {
         Project { root: repo, home }
     }
 
+    /// A directory the brief has nothing to say about: no devkit.toml, and a
+    /// home with no docs manifest, so neither half of the brief renders.
+    fn nothing_to_say(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!("devkit-brief-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        Project { root: repo, home }
+    }
+
     fn brief(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_devkit"))
-            .arg("brief")
+        self.brief_env(args, &[])
+    }
+
+    fn brief_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+        cmd.arg("brief")
             .args(args)
             .current_dir(&self.root)
             .env("HOME", &self.home)
@@ -70,9 +86,11 @@ impl Project {
             // one.
             .env("XDG_STATE_HOME", self.home.join("state"))
             .env("XDG_DATA_HOME", self.home.join("data"))
-            .env("COLUMNS", "100")
-            .output()
-            .unwrap()
+            .env("COLUMNS", "100");
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+        cmd.output().unwrap()
     }
 
     fn docm(&self, args: &[&str]) -> Output {
@@ -681,5 +699,65 @@ fn a_machine_wide_undeclared_library_never_reaches_the_brief() {
     assert!(
         text.contains("1 registered library not evidenced here"),
         "{text}"
+    );
+}
+
+/// Parse the brief's stdout as the JSON envelope, failing loudly on anything
+/// else — a raw brief here would reach Codex or Cursor as an unparseable
+/// payload rather than as context.
+fn envelope(out: &Output) -> serde_json::Value {
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("not JSON ({e}): {text}"))
+}
+
+#[test]
+fn additional_context_wraps_the_brief_in_codexs_envelope() {
+    let project = Project::docs_only("codex-envelope");
+    project.set_config(&format!("[config]\nroot = true\n\n{DEFAULTS}"));
+
+    let value = envelope(&project.brief(&["--pins-only", "--additional-context"]));
+
+    // Codex rejects an object carrying any key beside this one.
+    assert_eq!(value.as_object().unwrap().len(), 1, "{value}");
+    let inner = &value["hookSpecificOutput"];
+    assert_eq!(inner["hookEventName"], "SessionStart", "{value}");
+    let context = inner["additionalContext"].as_str().unwrap();
+    assert!(context.contains("serde"), "{context}");
+    assert!(
+        context.contains('\n'),
+        "the brief's own newlines survive the envelope: {context:?}"
+    );
+}
+
+#[test]
+fn additional_context_uses_cursors_field_when_cursor_runs_the_hook() {
+    // The two harnesses spell the field differently and Codex refuses a
+    // payload carrying both, so the host has to be told apart.
+    let project = Project::docs_only("cursor-envelope");
+    project.set_config(&format!("[config]\nroot = true\n\n{DEFAULTS}"));
+
+    let value = envelope(&project.brief_env(
+        &["--pins-only", "--additional-context"],
+        &[("CURSOR_PROJECT_DIR", "/w")],
+    ));
+
+    assert!(
+        value["additional_context"]
+            .as_str()
+            .is_some_and(|c| c.contains("serde")),
+        "{value}"
+    );
+}
+
+#[test]
+fn additional_context_stays_silent_when_there_is_no_brief() {
+    // An empty envelope is not the same as no output: it hands the session a
+    // context block with nothing in it.
+    let project = Project::nothing_to_say("no-brief");
+    let out = project.brief(&["--additional-context"]);
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
     );
 }

@@ -8,7 +8,7 @@
       },
       {
         "type": "command",
-        "command": "./hooks/run-hook.cmd brief-context"
+        "command": "devkit brief --additional-context"
       }
     ]
   }

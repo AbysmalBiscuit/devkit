@@ -30,6 +30,11 @@
 //! existing stamp instead of leaving it in place — otherwise a later
 //! `--if-changed` would find the checkout's state unchanged since that stamp
 //! and stay silent, leaving the rest of the brief permanently owed.
+//!
+//! `--additional-context` decides how the brief travels rather than what it
+//! says: Claude Code injects a hook's plain stdout, while Codex and Cursor read
+//! it out of a JSON field, so those two ask for the envelope and every emission
+//! mode above is available under either.
 
 use anyhow::Result;
 use devkit_ports::apps::App;
@@ -41,7 +46,57 @@ use std::hash::{Hash, Hasher};
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
-pub fn run(pins_only: bool, if_changed: bool) -> Result<()> {
+/// How the brief reaches the session. Claude Code injects a hook's plain
+/// stdout; Codex and Cursor read it out of a JSON field instead, and spell that
+/// field differently — Cursor `additional_context`, Codex
+/// `hookSpecificOutput.additionalContext`, which rejects an object carrying any
+/// other key, so one payload cannot serve both and the host has to be told
+/// apart.
+#[derive(Clone, Copy)]
+enum Emit {
+    Stdout,
+    AdditionalContext,
+}
+
+impl Emit {
+    fn text(self, text: &str) {
+        // An empty envelope is not the same as no output: it would hand the
+        // session a context block with nothing in it.
+        if text.is_empty() {
+            return;
+        }
+        match self {
+            Emit::Stdout => print!("{text}"),
+            Emit::AdditionalContext => println!("{}", envelope(text)),
+        }
+    }
+}
+
+/// `CURSOR_PROJECT_DIR` is the variable Cursor documents as passed to every
+/// hook process; `CURSOR_PLUGIN_ROOT` is accepted alongside it but is not
+/// documented anywhere.
+fn envelope(text: &str) -> serde_json::Value {
+    let cursor = ["CURSOR_PROJECT_DIR", "CURSOR_PLUGIN_ROOT"]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()));
+    if cursor {
+        serde_json::json!({ "additional_context": text })
+    } else {
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": text,
+            }
+        })
+    }
+}
+
+pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Result<()> {
+    let out = if additional_context {
+        Emit::AdditionalContext
+    } else {
+        Emit::Stdout
+    };
     // A brief is context injection, never a gate: any failure (no cwd, no git,
     // no config, unreadable registry) means no output, exit 0.
     let Ok(cwd) = std::env::current_dir() else {
@@ -63,12 +118,12 @@ pub fn run(pins_only: bool, if_changed: bool) -> Result<()> {
                 let _ = std::fs::remove_file(watermark_path(&session));
             }
             if let Some(text) = pins_only_text(&cwd, &settings) {
-                print!("{text}");
+                out.text(&text);
             }
             return Ok(());
         }
         if let Some(text) = render(&cwd, &settings) {
-            print!("{text}");
+            out.text(&text);
             stamp(&cwd, &settings);
         }
         return Ok(());
@@ -81,7 +136,7 @@ pub fn run(pins_only: bool, if_changed: bool) -> Result<()> {
         // one session's brief suppress another's re-injection, and a withheld
         // brief is the worse failure.
         if let Some(text) = render(&cwd, &settings) {
-            print!("{text}");
+            out.text(&text);
         }
         return Ok(());
     };
@@ -96,13 +151,13 @@ pub fn run(pins_only: bool, if_changed: bool) -> Result<()> {
         write_watermark(&path, current);
     }
     match render(&cwd, &settings) {
-        Some(text) => print!("{text}"),
+        Some(text) => out.text(&text),
         // Left the project: silence would leave the previous checkout's brief
         // as the most recent thing the agent was told.
         None if previous.is_some() => {
             let _ = std::fs::remove_file(&path);
-            println!(
-                "## devkit project context\n\nThis directory is not a devkit-managed project; the earlier project brief no longer applies."
+            out.text(
+                "## devkit project context\n\nThis directory is not a devkit-managed project; the earlier project brief no longer applies.\n",
             );
         }
         None => {}

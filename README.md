@@ -166,7 +166,7 @@ still wins.
 ~~~
 devkit auth <linear|slack> [--token <value>]   # validate + store; prompts (no echo) by default
 devkit doctor [--json]                          # check configured credentials
-devkit brief [--pins-only] [--if-changed]       # compact project brief (apps, tasks, servers, versions)
+devkit brief [--pins-only] [--if-changed] [--additional-context]   # compact project brief (apps, tasks, servers, versions)
 devkit schema                                   # JSON Schema for devkit.toml, for editor validation
 devkit schema init [PATH]                       # point a devkit.toml at that schema (starter if absent)
 devkit completions <shell>
@@ -213,7 +213,9 @@ devkit completions <shell>
   `--if-changed` after one stays silent. `--pins-only` does not record: it carries
   only the library table, and a full brief is still owed. The plugin runs all
   three: `SessionStart` (full), `PostCompact` (`--pins-only`), and `CwdChanged`
-  (`--if-changed`).
+  (`--if-changed`). `--additional-context` wraps whichever of those a run emits
+  in the JSON envelope Codex and Cursor read a hook's context from; Claude Code
+  injects plain stdout and takes the brief without it.
 
 ### `docm`: Library Docs
 

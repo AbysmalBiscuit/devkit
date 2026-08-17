@@ -45,6 +45,11 @@ enum Cmd {
         /// tell the session it had seen a brief it never got.
         #[arg(long, conflicts_with = "pins_only")]
         if_changed: bool,
+        /// Wrap the brief in the JSON envelope Codex and Cursor read it from,
+        /// instead of printing it bare. Claude Code injects a hook's plain
+        /// stdout and needs no envelope.
+        #[arg(long)]
+        additional_context: bool,
     },
     /// Check configured credentials and report what is missing.
     Doctor {
@@ -97,7 +102,8 @@ fn main() -> Result<()> {
         Cmd::Brief {
             pins_only,
             if_changed,
-        } => brief::run(pins_only, if_changed),
+            additional_context,
+        } => brief::run(pins_only, if_changed, additional_context),
         Cmd::Schema { cmd } => match cmd {
             None => schema::run(),
             Some(SchemaCmd::Init { path }) => schema::init(&path),
