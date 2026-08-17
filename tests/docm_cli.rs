@@ -252,6 +252,21 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap()
 }
 
+/// Every project root the reference registry still records for `lib`, sorted.
+fn referencing_projects(env: &Env, lib: &str) -> Vec<String> {
+    let data: serde_json::Value =
+        serde_json::from_str(&read(&env.cache().join("registry.json"))).unwrap();
+    let mut projects: Vec<String> = data["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["lib"] == lib)
+        .map(|row| row["project"].as_str().unwrap().to_string())
+        .collect();
+    projects.sort();
+    projects
+}
+
 fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
@@ -880,6 +895,77 @@ fn a_reserved_library_name_names_a_recovery_that_works() {
         stdout(&recovered).contains("other"),
         "{}",
         stdout(&recovered)
+    );
+}
+
+#[test]
+fn forget_releases_this_projects_reference_and_leaves_another_projects() {
+    let env = Env::new("forget");
+    assert_ran(&env.add("libx", "v1.0.0"), "docm add libx");
+    let other = env.root.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let elsewhere = env
+        .command(&["path", "libx"])
+        .current_dir(&other)
+        .output()
+        .unwrap();
+    assert_ran(&elsewhere, "docm path libx from another project");
+
+    let forgotten = env.docm(&["forget", "libx"]);
+    assert_ran(&forgotten, "docm forget libx");
+
+    assert_eq!(
+        referencing_projects(&env, "libx"),
+        vec![other.to_string_lossy().into_owned()],
+        "forget released only the project it ran in"
+    );
+    assert!(
+        env.checkout("libx", "v1.0.0").is_dir(),
+        "the checkout stays until prune reclaims it"
+    );
+    assert!(
+        stdout(&forgotten).contains("prune"),
+        "the report names what reclaims the checkout: {}",
+        stdout(&forgotten)
+    );
+}
+
+#[test]
+fn forget_releases_a_library_the_manifest_no_longer_lists() {
+    // A row outlives the registration that created it, and it alone keeps the
+    // library in this project's brief — so forget reads the registry, not the
+    // manifest.
+    let env = Env::new("forget-unregistered");
+    assert_ran(&env.add("libx", "v1.0.0"), "docm add libx");
+    assert_ran(&env.docm(&["rm", "libx"]), "docm rm libx");
+
+    let forgotten = env.docm(&["forget", "libx"]);
+
+    assert_ran(&forgotten, "docm forget libx after rm");
+    assert!(referencing_projects(&env, "libx").is_empty());
+}
+
+#[test]
+fn forget_of_an_unreferenced_library_fails_instead_of_reporting_success() {
+    let env = Env::new("forget-unreferenced");
+    assert_ran(&env.add("libx", "v1.0.0"), "docm add libx");
+
+    let forgotten = env.docm(&["forget", "liby"]);
+
+    assert!(
+        !forgotten.status.success(),
+        "a name with no reference here is an error, not a no-op: {}",
+        stdout(&forgotten)
+    );
+    assert!(
+        stderr(&forgotten).contains("liby"),
+        "{}",
+        stderr(&forgotten)
+    );
+    assert_eq!(
+        referencing_projects(&env, "libx"),
+        vec![env.project.to_string_lossy().into_owned()],
+        "the failing run left the other library's reference alone"
     );
 }
 

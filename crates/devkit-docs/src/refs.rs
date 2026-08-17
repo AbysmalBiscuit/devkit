@@ -135,6 +135,32 @@ pub fn row_dirname(row: &RefRow) -> String {
     row.version.clone()
 }
 
+/// Drop `lib`'s rows keyed by any of `projects`, returning what was dropped.
+///
+/// The checkout stays on disk: a reference is a claim on it, and releasing the
+/// last claim is what leaves `prune` free to reclaim it — the same split `rm`
+/// draws between the manifest and the cache. Held under the library lock, so a
+/// concurrent resolve of the same library either records its row before this
+/// read or takes the lock after this write.
+pub fn forget(cache_root: &Path, projects: &[PathBuf], lib: &str) -> Result<Vec<RefRow>> {
+    locks::with_lib(cache_root, lib, || {
+        RefStore::at(cache_root).commit(|data| {
+            let mut dropped = Vec::new();
+            data.rows.retain(|row| {
+                let mine = row.lib == lib
+                    && projects
+                        .iter()
+                        .any(|p| Path::new(&row.project) == p.as_path());
+                if mine {
+                    dropped.push(row.clone());
+                }
+                !mine
+            });
+            Ok(dropped)
+        })
+    })
+}
+
 pub struct RefStore {
     lock_path: PathBuf,
     data_path: PathBuf,

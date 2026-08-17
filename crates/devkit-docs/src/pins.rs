@@ -82,20 +82,8 @@ pub fn pins_with_cache(
         .and_then(Path::parent)
         .map(Path::to_path_buf);
 
-    // One selector per ecosystem present, so each lockfile is read and parsed
-    // once for the whole listing rather than once per library. A construction
-    // failure is per-ecosystem data, not fatal: every library of that
-    // ecosystem gets the construction error as its unresolved reason.
-    let mut selectors: HashMap<Ecosystem, Result<Selector, String>> = HashMap::new();
-    for entry in &discovered.manifest.libs {
-        if let Some(ecosystem) = entry.ecosystem {
-            selectors
-                .entry(ecosystem)
-                .or_insert_with(|| Selector::new(start, ecosystem).map_err(|e| format!("{e}")));
-        }
-    }
-
-    let resolved = resolved_here(start, &selectors, cache_root);
+    let selectors = selectors_for(&discovered, start);
+    let resolved = resolved_here(&project_keys_of(start, &selectors), cache_root);
 
     let mut out: Vec<Pin> = discovered
         .manifest
@@ -111,28 +99,55 @@ pub fn pins_with_cache(
     Ok(out)
 }
 
-/// The checkout each library was last resolved to *for this project*, read from
-/// the reference registry. Keyed by library name.
-///
-/// Rows are matched on the project root in hand and on the member workspaces
-/// its lockfile names — never on an arbitrary descendant. Worktrees sit beside
-/// each other under a shared parent, and a prefix match run from that parent
-/// would report another branch's versions as this checkout's.
-///
-/// Fail-soft and lock-free: an unreadable registry reads as no rows, because a
-/// session-start summary must not fail on the cache's state.
-fn resolved_here(
+/// One selector per ecosystem present, so each lockfile is read and parsed
+/// once for the whole listing rather than once per library. A construction
+/// failure is per-ecosystem data, not fatal: every library of that ecosystem
+/// gets the construction error as its unresolved reason.
+fn selectors_for(
+    discovered: &manifest::Discovered,
+    start: &Path,
+) -> HashMap<Ecosystem, Result<Selector, String>> {
+    let mut selectors: HashMap<Ecosystem, Result<Selector, String>> = HashMap::new();
+    for entry in &discovered.manifest.libs {
+        if let Some(ecosystem) = entry.ecosystem {
+            selectors
+                .entry(ecosystem)
+                .or_insert_with(|| Selector::new(start, ecosystem).map_err(|e| format!("{e}")));
+        }
+    }
+    selectors
+}
+
+/// The project roots a reference row must be keyed by to belong to the
+/// checkout at `start`: the directory itself and the workspace members its
+/// lockfiles name — never an arbitrary descendant. Worktrees sit beside each
+/// other under a shared parent, and a prefix match run from that parent would
+/// claim another branch's rows as this checkout's.
+pub fn project_keys(start: &Path, global: Option<&Path>) -> Result<Vec<PathBuf>> {
+    let discovered = manifest::discover(start, global)?;
+    Ok(project_keys_of(start, &selectors_for(&discovered, start)))
+}
+
+fn project_keys_of(
     start: &Path,
     selectors: &HashMap<Ecosystem, Result<Selector, String>>,
-    cache_root: Option<&Path>,
-) -> HashMap<String, String> {
-    let cache_root = cache_root
-        .map(Path::to_path_buf)
-        .unwrap_or_else(crate::cache::docs_root);
+) -> Vec<PathBuf> {
     let mut keys: Vec<PathBuf> = vec![start.to_path_buf()];
     for selector in selectors.values().filter_map(|s| s.as_ref().ok()) {
         keys.extend(selector.member_dirs());
     }
+    keys
+}
+
+/// The checkout each library was last resolved to *for this project*, read from
+/// the reference registry. Keyed by library name.
+///
+/// Fail-soft and lock-free: an unreadable registry reads as no rows, because a
+/// session-start summary must not fail on the cache's state.
+fn resolved_here(keys: &[PathBuf], cache_root: Option<&Path>) -> HashMap<String, String> {
+    let cache_root = cache_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(crate::cache::docs_root);
 
     crate::refs::RefStore::at(&cache_root)
         .snapshot()

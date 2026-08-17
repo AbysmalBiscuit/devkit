@@ -77,6 +77,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Release this project's reference to libraries (checkouts are reclaimed by prune).
+    Forget {
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
     /// Delete version checkouts no existing project references.
     Prune {
         /// Also delete unregistered libs without asking.
@@ -126,6 +131,7 @@ fn main() -> Result<()> {
         Cmd::Sync { names } => cmd_sync(&names, cli.allow_default_branch),
         Cmd::Path { name } => cmd_path(&name, cli.allow_default_branch),
         Cmd::Info { name, json } => cmd_info(&name, json, cli.allow_default_branch),
+        Cmd::Forget { names } => cmd_forget(&names),
         Cmd::Prune { yes } => cmd_prune(yes),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "docm", &mut std::io::stdout());
@@ -537,6 +543,42 @@ fn cmd_info(name: &str, json: bool, allow_default_branch: bool) -> Result<()> {
     }
     if let Some(n) = &r.notes {
         println!("notes    {n}");
+    }
+    Ok(())
+}
+
+/// Reads the reference registry, not the manifest: a row outlives the
+/// registration that created it, and on its own keeps a library in this
+/// project's `docm list --project`.
+fn cmd_forget(names: &[String]) -> Result<()> {
+    let root = cache::docs_root();
+    let keys = devkit_docs::pins::project_keys(&cwd()?, None)?;
+    let mut unreferenced: Vec<&str> = Vec::new();
+    let mut released = false;
+    for name in names {
+        let dropped = refs::forget(&root, &keys, name)?;
+        if dropped.is_empty() {
+            unreferenced.push(name);
+            continue;
+        }
+        released = true;
+        for row in dropped {
+            println!(
+                "forgot {} {} for {}",
+                row.lib,
+                devkit_docs::names::decode(&row.version),
+                row.project
+            );
+        }
+    }
+    if released {
+        println!("run `docm prune` to reclaim what nothing references now");
+    }
+    if !unreferenced.is_empty() {
+        anyhow::bail!(
+            "this project references no {} — `docm list --project` shows what it does reference",
+            unreferenced.join(", ")
+        );
     }
     Ok(())
 }

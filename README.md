@@ -235,6 +235,7 @@ docm info tokio                   # path + version + layout map + notes
 docm path tokio                   # just the checkout path
 docm sync                         # fetch, re-resolve, re-materialize, verify
 docm rm tokio                     # drop from the manifest (aliases: remove, delete)
+docm forget tokio                 # release this project's reference to it
 docm prune                        # drop checkouts no live project references
 ```
 
@@ -256,6 +257,14 @@ itself — `docm` fails with the specific cause and the fix rather than silently
 checking out the default branch. Pass `--allow-default-branch` (a global flag,
 valid on `add`, `sync`, `path`, and `info`) to opt into that checkout for one
 run instead.
+
+Resolving a library from a project records a *reference*: the project root, the
+library, and the checkout it received. A reference holds that checkout against
+`docm prune`, and puts the library in the project's `docm list --project` table
+even when nothing here declares it — which is how a `--ref` pin, or a library
+since dropped from the manifest, keeps appearing for a checkout that never used
+it. `docm forget <lib>` releases this project's reference and leaves the
+checkout for `prune` to reclaim once nothing references it.
 
 A library or ref name cannot collide with the cache's own control files:
 `registry` (and anything starting `registry.`) is reserved at the cache

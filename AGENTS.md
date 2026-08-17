@@ -37,7 +37,7 @@ install together via `cargo install --path .`. Three library crates are members.
 | `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
 | `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens), `doctor`, `brief` (session-hook project summary, silent outside a devkit project), `schema` (JSON Schema for `devkit.toml`, derived from the config types; `schema init` points a config at it, writing a fully-commented starter when absent; `schema/devkit-config.json` is committed, a test fails with a diff when it drifts, `DEVKIT_UPDATE_SCHEMA=1 cargo test` rewrites it, and release-please attaches it to each GitHub Release) |
-| `src/bin/docm.rs` | CLI over the docs cache: `add`, `rm`, `list`, `sync`, `path`, `info`, `prune`, `completions` |
+| `src/bin/docm.rs` | CLI over the docs cache: `add`, `rm`, `list`, `sync`, `path`, `info`, `forget`, `prune`, `completions` |
 | `src/bin/devkit-mcp` | meta-MCP stdio server exposing the port + lock facades to coding agents |
 | `src/bin/devkitd` | supervisor daemon serving both the port registry (`ports.sock`) and the lock registry (`locks.sock`), authoritative in memory, write-through to the files, gated by `devkitd.lock`; bin gated by the `daemon` feature (on by default) |
 
