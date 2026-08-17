@@ -12,13 +12,20 @@ The config is resolved from the first of:
 
 1. `--config <path>` (global flag on every binary)
 2. `$DEVKIT_CONFIG`
-3. `./devkit.toml` (searched upward from the working directory)
+3. `./devkit.toml` and `./devkit.local.toml` (searched upward from the working directory)
 4. `~/.config/devkit/config.toml`
 
 The recommended setup is to keep your real config at
 `~/.config/devkit/config.toml`, where every binary discovers it automatically —
 no flag or env var needed. (`.gitignore` also ignores `/configs/*.toml`, should
 you prefer to keep a copy inside a checkout.)
+
+`devkit.local.toml` is the untracked twin of `devkit.toml`: same shape, same
+schema, and it overrides the `devkit.toml` beside it. Settings one machine or
+one checkout needs go there, so the repository's `devkit.toml` carries only
+what the project shares. It stands alone too — a directory holding only a
+`devkit.local.toml` is a devkit project. Ignoring it is the repository's job;
+devkit does not write a `.gitignore` entry for you.
 
 ## Secrets
 
@@ -46,6 +53,7 @@ docs and inline validation.
 ```sh
 devkit schema init                # ./devkit.toml
 devkit schema init path/to/devkit.toml
+devkit schema init devkit.local.toml
 ```
 
 That adds the `#:schema` directive to an existing config, or writes a starter
@@ -81,7 +89,7 @@ instead:
 ```toml
 # .taplo.toml
 [[rule]]
-include = ["**/devkit.toml"]
+include = ["**/devkit.toml", "**/devkit.local.toml"]
 [rule.schema]
 url = "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json"
 ```

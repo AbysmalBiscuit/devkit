@@ -558,9 +558,17 @@ fn is_root_layer(t: &toml::Table) -> bool {
         .unwrap_or(false)
 }
 
+/// Tracked, committed config: the project's own settings.
+const CONFIG_FILE: &str = "devkit.toml";
+/// Untracked overrides beside it, for what one machine or checkout needs and
+/// the repository should not carry.
+const LOCAL_CONFIG_FILE: &str = "devkit.local.toml";
+
 /// Build the ordered layer list (lowest→highest precedence): the home config (unless
-/// a `root = true` marker cuts it off), then each `devkit.toml` from the filesystem
-/// root down to `start`. An explicit path or `$DEVKIT_CONFIG` is the sole layer.
+/// a `root = true` marker cuts it off), then each directory's `devkit.toml` and
+/// `devkit.local.toml` from the filesystem root down to `start`. Within one
+/// directory the local file wins; a deeper directory wins over both. An explicit
+/// path or `$DEVKIT_CONFIG` is the sole layer.
 fn discover(
     explicit: Option<&Path>,
     start: &Path,
@@ -573,20 +581,27 @@ fn discover(
         return Ok(vec![read_layer(&PathBuf::from(p))?]);
     }
 
-    // Walk upward collecting devkit.toml files (deepest first); stop at a root marker.
+    // Walk upward collecting config files (deepest first); stop at a root marker.
     let mut stack: Vec<(PathBuf, toml::Table)> = Vec::new();
     let mut rooted = false;
     let mut dir = Some(start);
     while let Some(d) = dir {
-        let c = d.join("devkit.toml");
-        if c.is_file() {
-            let layer = read_layer(&c)?;
-            let is_root = is_root_layer(&layer.1);
-            stack.push(layer);
-            if is_root {
-                rooted = true;
-                break;
+        let mut here: Vec<(PathBuf, toml::Table)> = Vec::new();
+        for name in [CONFIG_FILE, LOCAL_CONFIG_FILE] {
+            let c = d.join(name);
+            if c.is_file() {
+                here.push(read_layer(&c)?);
             }
+        }
+        let is_root = here.iter().any(|(_, t)| is_root_layer(t));
+        // The whole stack is built deepest-first and reversed at the end, so a
+        // directory's own files go in reversed too — that is what leaves the
+        // untracked local layer above the tracked one beside it.
+        here.reverse();
+        stack.extend(here);
+        if is_root {
+            rooted = true;
+            break;
         }
         dir = d.parent();
     }
@@ -617,7 +632,7 @@ pub struct NoConfig;
 impl std::fmt::Display for NoConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(
-            "no devkit.toml found (--config / $DEVKIT_CONFIG / ./devkit.toml walking up / ~/.config/devkit/config.toml)",
+            "no devkit.toml found (--config / $DEVKIT_CONFIG / ./devkit.toml + ./devkit.local.toml walking up / ~/.config/devkit/config.toml)",
         )
     }
 }
@@ -1102,6 +1117,92 @@ content = \"key = 1\\n\"\n"
         );
         // a field only the home layer sets still resolves, attributed to home
         assert_eq!(prov.layers.first(), Some(&home));
+    }
+
+    #[test]
+    fn local_layer_overrides_the_tracked_file_beside_it() {
+        let repo = unique_tmp("local-over");
+        std::fs::write(
+            repo.join("devkit.toml"),
+            format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=1\nlaunch=['a']\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join("devkit.local.toml"),
+            "[defaults]\nbranch_prefix='local/'\n",
+        )
+        .unwrap();
+        let (cfg, prov) = resolve_with_home(None, &repo, None).unwrap();
+        assert_eq!(cfg.defaults.branch_prefix, "local/");
+        assert_eq!(cfg.defaults.worktree_root, "/w"); // tracked layer still merges
+        assert_eq!(
+            prov.origin["defaults.branch_prefix"],
+            repo.join("devkit.local.toml")
+        );
+    }
+
+    #[test]
+    fn deeper_tracked_layer_beats_a_shallower_local_layer() {
+        let root = unique_tmp("local-depth");
+        let child = root.join("repo");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(
+            root.join("devkit.toml"),
+            format!("[defaults]\n{FULL_DEFAULTS}"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("devkit.local.toml"),
+            "[defaults]\nbranch_prefix='shallow-local/'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            child.join("devkit.toml"),
+            "[defaults]\nbranch_prefix='deep/'\n",
+        )
+        .unwrap();
+        let (cfg, _) = resolve_with_home(None, &child, None).unwrap();
+        assert_eq!(cfg.defaults.branch_prefix, "deep/");
+    }
+
+    #[test]
+    fn a_local_layer_alone_resolves() {
+        let repo = unique_tmp("local-only");
+        std::fs::write(
+            repo.join("devkit.local.toml"),
+            format!("[defaults]\n{FULL_DEFAULTS}"),
+        )
+        .unwrap();
+        let (cfg, prov) = resolve_with_home(None, &repo, None).unwrap();
+        assert_eq!(cfg.defaults.worktree_root, "/w");
+        assert_eq!(prov.layers, vec![repo.join("devkit.local.toml")]);
+    }
+
+    #[test]
+    fn root_marker_in_a_local_layer_stops_walk() {
+        let root = unique_tmp("local-rooted");
+        let child = root.join("repo");
+        std::fs::create_dir_all(&child).unwrap();
+        let home = root.join("home.toml");
+        std::fs::write(&home, "[defaults]\nbranch_prefix='HOME/'\n").unwrap();
+        std::fs::write(
+            root.join("devkit.toml"),
+            "[defaults]\nworktree_root='/PARENT'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            child.join("devkit.toml"),
+            format!("[defaults]\n{FULL_DEFAULTS}"),
+        )
+        .unwrap();
+        std::fs::write(child.join("devkit.local.toml"), "[config]\nroot=true\n").unwrap();
+        let (cfg, prov) = resolve_with_home(None, &child, Some(&home)).unwrap();
+        assert_eq!(cfg.defaults.worktree_root, "/w"); // parent's /PARENT dropped
+        assert_eq!(cfg.defaults.branch_prefix, "x/"); // home's HOME/ dropped
+        assert_eq!(
+            prov.layers,
+            vec![child.join("devkit.toml"), child.join("devkit.local.toml")]
+        );
     }
 
     #[test]

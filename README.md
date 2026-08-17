@@ -418,9 +418,11 @@ After wiring up any host, confirm `devkit_describe` and `devkit_call` appear.
 
 Config is layered. Every `devkit.toml` from the filesystem root down to the cwd is merged, with `~/.config/devkit/config.toml` as the lowest-precedence base layer beneath them all. Deeper files override shallower ones per value: tables merge key-by-key, while scalars and arrays replace wholesale. `devrun config show` prints the merged result; `--origin` traces each value to the file it came from.
 
+Each directory may also carry a `devkit.local.toml` — the untracked twin of its `devkit.toml`, same shape and schema, overriding the tracked file beside it. Settings one machine or one checkout needs go there; a deeper directory still wins over both. Ignoring it is the repository's job.
+
 Two escapes bypass the walk:
 
-- `[config] root = true` in a `devkit.toml` stops the upward walk at that file and drops every shallower layer, including the home config — full isolation.
+- `[config] root = true` in a `devkit.toml` or `devkit.local.toml` stops the upward walk at that directory and drops every shallower layer, including the home config — full isolation.
 - `--config <path>` or `$DEVKIT_CONFIG` selects a single file verbatim, with no layering or home base.
 
 App `path` is normally inferred from the monorepo's `doppler.yaml`; individual `[apps.<name>]` sections may override it with an explicit `path`. `launch` is run verbatim, so a Doppler wrapper lives in each app's `launch`; devkit refuses to start a Doppler launch whose config resolves to `prd`, so it can't run against production secrets.
