@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.13.2](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.1...v0.13.2) (2026-08-19)
+
+
+### Features
+
+* **brief:** emit the harness context envelope ([21568f0](https://github.com/AbysmalBiscuit/devkit/commit/21568f0a0d2bbeb0a69c68a5cf1e6b43cc905efe))
+* **config:** layer devkit.local.toml over devkit.toml ([fde8f55](https://github.com/AbysmalBiscuit/devkit/commit/fde8f551983bf4418b612de6b1e8c7e0793fb1da))
+* **docm:** add forget to release a reference ([462c022](https://github.com/AbysmalBiscuit/devkit/commit/462c0223a79bc251d8bd0bbe6b2aa8fbab4c9dac))
+* **docs:** roll up workspace members in the pins table ([46e312f](https://github.com/AbysmalBiscuit/devkit/commit/46e312f0f8cfe25c357533f9d32eeda322fcf77f))
+* **hooks:** add after_worktree_create hook ([dfdb214](https://github.com/AbysmalBiscuit/devkit/commit/dfdb214d89479fff4267d59d24a655d81638c578))
+
+
+### Bug Fixes
+
+* **brief:** stop claiming every pinned version comes from a manifest ([93ef2d6](https://github.com/AbysmalBiscuit/devkit/commit/93ef2d6faff737f4b03abf45fc5b73c86970c5fe))
+
+
+### Reverts
+
+* drop the stale-reference note from the docs skill ([d7daeb2](https://github.com/AbysmalBiscuit/devkit/commit/d7daeb2bba59e7840fef9bc79ec1357c7980ac10))
+
 ## [0.13.1](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.0...v0.13.1) (2026-08-16)
 
 
