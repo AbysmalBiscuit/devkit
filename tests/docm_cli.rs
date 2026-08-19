@@ -22,6 +22,23 @@ fn git(cwd: &Path, args: &[&str]) {
     );
 }
 
+/// A fresh temp directory named `name`, with every symlink on the way to it
+/// resolved. macOS puts `TMPDIR` under a `/var` -> `/private/var` symlink and a
+/// child process's cwd resolves through it, so a path the CLI reports would
+/// never equal one built from `temp_dir()`. Windows canonicalization instead
+/// prepends a `\\?\` verbatim prefix the CLI never prints, so it keeps the
+/// path as given.
+fn temp_root(name: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    if cfg!(windows) {
+        root
+    } else {
+        std::fs::canonicalize(&root).unwrap()
+    }
+}
+
 /// A repo on branch `main` with tags v1.0.0 and v1.1.0.
 fn fixture_repo(dir: &Path) {
     std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -50,8 +67,7 @@ struct Env {
 
 impl Env {
     fn new(tag: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("docm-cli-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = temp_root(&format!("docm-cli-{tag}-{}", std::process::id()));
         let env = Env {
             home: root.join("home"),
             data: root.join("data"),
