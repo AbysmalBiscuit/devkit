@@ -416,6 +416,14 @@ mod tests {
     #[test]
     fn find_root_falls_back_to_start_without_git() {
         let start = scratch("no-git");
+        // The fallback is only reachable when the walk exhausts every parent,
+        // so a stray `.git` above the temp dir — even an empty one, which the
+        // walk cannot tell from a repository — answers first.
+        assert!(
+            start.ancestors().skip(1).all(|d| !d.join(".git").exists()),
+            "a `.git` above {} decides the walk before the fallback runs",
+            start.display()
+        );
         assert_eq!(find_root_from(&start), start);
         let _ = std::fs::remove_dir_all(&start);
     }
