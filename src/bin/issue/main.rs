@@ -63,19 +63,19 @@ struct Cli {
 enum Cmd {
     /// Prepare an issue worktree: branch, per-app setup commands, reserved ports.
     Setup {
-        /// Linear issue id (equivalent to --issue).
+        /// Linear issue id or issue URL (equivalent to --issue).
         #[arg(
             value_name = "ISSUE",
             required_unless_present = "issue",
             conflicts_with = "issue"
         )]
         issue_pos: Option<String>,
-        /// Linear issue id (equivalent to the positional ISSUE).
+        /// Linear issue id or issue URL (equivalent to the positional ISSUE).
         #[arg(long)]
         issue: Option<String>,
         /// Short kebab title, without the issue id, rendered into the branch and
-        /// worktree names (e.g. `fix-bli-export`). Omit to slugify the issue's
-        /// Linear title.
+        /// worktree names (e.g. `fix-bli-export`). Omit to take the slug a
+        /// pasted issue URL already spells out, else the Linear title.
         #[arg(long)]
         slug: Option<String>,
         /// Apps to bootstrap: writes each one's prep files and runs its setup

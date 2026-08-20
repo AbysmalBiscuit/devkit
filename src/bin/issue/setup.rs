@@ -151,11 +151,16 @@ pub fn backfill_includes(monorepo: &str, worktree: &std::path::Path, patterns: &
     }
 }
 
-/// The explicit `--slug`, else the issue's Linear title slugified.
-fn resolve_slug(issue: &str, explicit: Option<String>) -> Result<String> {
+/// The explicit `--slug`, else the slug a pasted Linear URL already carries,
+/// else the issue's Linear title slugified. Only the last needs the network.
+fn resolve_slug(issue: &crate::slug::IssueRef, explicit: Option<String>) -> Result<String> {
     if let Some(s) = explicit {
         return Ok(s);
     }
+    if let Some(s) = &issue.slug {
+        return Ok(s.clone());
+    }
+    let issue = &issue.id;
     let key = crate::slug::linear_key()?;
     let steps = Steps::new();
     let title = steps
@@ -179,12 +184,14 @@ pub fn run(args: SetupArgs) -> Result<()> {
         anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
     }
 
-    let slug = resolve_slug(&args.issue, args.slug.clone())?;
+    let issue_ref = crate::slug::parse_issue_ref(&args.issue);
+    let slug = resolve_slug(&issue_ref, args.slug.clone())?;
+    let issue = issue_ref.id;
 
     let wt_root = expand_tilde(&cfg.defaults.worktree_root);
     let ctx = serde_json::json!({
         "prefix": cfg.defaults.branch_prefix,
-        "issue": args.issue,
+        "issue": issue,
         "slug": slug,
         "apps": args.apps,
     });
@@ -203,7 +210,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
     if args.dry_run {
         let out = Prepared {
-            issue: args.issue.clone(),
+            issue: issue.clone(),
             worktree: holder,
             branch,
         };
@@ -248,7 +255,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     crate::record::write(
         &worktree,
         &crate::record::IssueRecord {
-            issue: args.issue.clone(),
+            issue: issue.clone(),
             slug: slug.clone(),
             apps: args.apps.clone(),
         },
@@ -284,7 +291,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     // start time — so the numbers always reflect what is actually free and no
     // unused reservation can be reclaimed by another session in the meantime.
     let out = Prepared {
-        issue: args.issue.clone(),
+        issue: issue.clone(),
         worktree: holder,
         branch,
     };

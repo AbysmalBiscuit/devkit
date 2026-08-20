@@ -110,7 +110,7 @@ app's `static_env`, same as `devrun up --env`. `--dry-run` prints each rendered 
 ## `issue` — issue lifecycle
 
 ```sh
-issue setup <ID> [--slug <slug>] [--apps a,b] [--dry-run] [--no-gitignore]
+issue setup <ID|URL> [--slug <slug>] [--apps a,b] [--dry-run] [--no-gitignore]
 issue checkout-pr <target> [<worktree-path>] [--setup] [--apps a,b]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue info [selector] [--json] [--cache-only]         # one worktree's PR number + Linear id
@@ -136,8 +136,8 @@ allocates them dynamically when the worktree's servers start.
 
 | Flag | Meaning |
 |---|---|
-| `<ID>` / `--issue <ID>` | Linear issue id (positional or flag); drives the branch name and summary. **Required.** |
-| `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). Omit it to slugify the issue's Linear title, which needs a Linear key; a leading copy of the issue id is stripped so the branch does not repeat it. |
+| `<ID>` / `--issue <ID>` | Linear issue id or issue URL (positional or flag); drives the branch name and summary. **Required.** |
+| `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). Omit it and the slug comes from the pasted URL's own `…/issue/<ID>/<title-slug>` path, or failing that from the issue's Linear title, which needs a Linear key. A leading copy of the issue id is stripped so the branch does not repeat it. |
 | `--apps <a,b>` | comma-separated apps to bootstrap: writes each one's prep files and runs its setup commands. Omit for a worktree with no per-app setup. |
 | `--dry-run` | print what it would do without creating the worktree. |
 | `--no-gitignore` | skip updating the global gitignore (normally ensures devkit artifacts like `ISSUE_*.md` are ignored). |
