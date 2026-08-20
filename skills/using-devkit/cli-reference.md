@@ -137,7 +137,7 @@ allocates them dynamically when the worktree's servers start.
 | Flag | Meaning |
 |---|---|
 | `<ID>` / `--issue <ID>` | Linear issue id or issue URL (positional or flag); drives the branch name and summary. **Required.** |
-| `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). Omit it and the slug comes from the pasted URL's own `…/issue/<ID>/<title-slug>` path, or failing that from the issue's Linear title, which needs a Linear key. A leading copy of the issue id is stripped so the branch does not repeat it. |
+| `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). Omit it and the slug comes from the pasted URL's own `…/issue/<ID>/<title-slug>` path, or failing that from the issue's Linear title, which needs a Linear key. A leading copy of the issue id is stripped so the branch does not repeat it. A **derived** slug is then shortened on a word boundary so the branch fits the 46-char width `issue status` prints — the budget is measured against your own `branch` template, so a longer `branch_prefix` takes from the slug. A slug you pass here is used verbatim, however long. |
 | `--apps <a,b>` | comma-separated apps to bootstrap: writes each one's prep files and runs its setup commands. Omit for a worktree with no per-app setup. |
 | `--dry-run` | print what it would do without creating the worktree. |
 | `--no-gitignore` | skip updating the global gitignore (normally ensures devkit artifacts like `ISSUE_*.md` are ignored). |

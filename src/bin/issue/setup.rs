@@ -153,12 +153,19 @@ pub fn backfill_includes(monorepo: &str, worktree: &std::path::Path, patterns: &
 
 /// The explicit `--slug`, else the slug a pasted Linear URL already carries,
 /// else the issue's Linear title slugified. Only the last needs the network.
-fn resolve_slug(issue: &crate::slug::IssueRef, explicit: Option<String>) -> Result<String> {
+///
+/// A derived slug is capped to `budget`; an explicit one is taken verbatim,
+/// since a slug you typed is a decision, not a suggestion.
+fn resolve_slug(
+    issue: &crate::slug::IssueRef,
+    explicit: Option<String>,
+    budget: usize,
+) -> Result<String> {
     if let Some(s) = explicit {
         return Ok(s);
     }
     if let Some(s) = &issue.slug {
-        return Ok(s.clone());
+        return Ok(crate::slug::cap(s, budget));
     }
     let issue = &issue.id;
     let key = crate::slug::linear_key()?;
@@ -169,9 +176,43 @@ fn resolve_slug(issue: &crate::slug::IssueRef, explicit: Option<String>) -> Resu
         })
         .with_context(|| format!("fetching the Linear title for {issue}"))?
         .with_context(|| format!("Linear has no issue {issue} \u{2014} pass --slug"))?;
-    let slug = crate::slug::from_linear_title(issue, &title)?;
+    let slug = crate::slug::cap(&crate::slug::from_linear_title(issue, &title)?, budget);
     eprintln!("slug from Linear: {slug}");
     Ok(slug)
+}
+
+/// A slug this short has stopped being a reminder, so a `branch_prefix` long
+/// enough to eat the whole budget overflows the column instead.
+const MIN_SLUG: usize = 12;
+
+/// How many characters a derived slug may use before the rendered branch
+/// outgrows `ui::BRANCH_DISPLAY_MAX`.
+///
+/// Measured, not assumed: the branch template renders once with a
+/// one-character slug, and whatever else it produced is the fixed cost. A longer
+/// `branch_prefix`, a longer issue id, or a template that spells out more comes
+/// out of the slug rather than overflowing the column.
+fn slug_budget(
+    cfg: &devkit_ports::config::Config,
+    vars: &BTreeMap<String, String>,
+    issue: &str,
+    apps: &[String],
+) -> Result<usize> {
+    let probe = serde_json::json!({
+        "prefix": cfg.defaults.branch_prefix,
+        "issue": issue,
+        "slug": "x",
+        "apps": apps,
+    });
+    let fixed = devkit_common::template::render(cfg.templates.branch(), &probe, vars)
+        .context("rendering `branch` template")?
+        .trim()
+        .chars()
+        .count()
+        .saturating_sub(1);
+    Ok(devkit_common::ui::BRANCH_DISPLAY_MAX
+        .saturating_sub(fixed)
+        .max(MIN_SLUG))
 }
 
 pub fn run(args: SetupArgs) -> Result<()> {
@@ -185,8 +226,10 @@ pub fn run(args: SetupArgs) -> Result<()> {
     }
 
     let issue_ref = crate::slug::parse_issue_ref(&args.issue);
-    let slug = resolve_slug(&issue_ref, args.slug.clone())?;
-    let issue = issue_ref.id;
+    let issue = issue_ref.id.clone();
+    let vars = &cfg.templates.variables;
+    let budget = slug_budget(cfg, vars, &issue, &args.apps)?;
+    let slug = resolve_slug(&issue_ref, args.slug.clone(), budget)?;
 
     let wt_root = expand_tilde(&cfg.defaults.worktree_root);
     let ctx = serde_json::json!({
@@ -195,7 +238,6 @@ pub fn run(args: SetupArgs) -> Result<()> {
         "slug": slug,
         "apps": args.apps,
     });
-    let vars = &cfg.templates.variables;
     let branch = devkit_common::template::render(cfg.templates.branch(), &ctx, vars)
         .context("rendering `branch` template")?
         .trim()

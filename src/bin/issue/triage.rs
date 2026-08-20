@@ -11,7 +11,8 @@ fn pr_label(row: &IssueWorktree) -> String {
 
 /// Branch is secondary — the issue id identifies the worktree — so cap it with
 /// an ellipsis, letting the PR/LINEAR/VERDICT columns survive a narrow terminal.
-const BRANCH_MAX: usize = 46;
+/// `issue setup` fits the branches it creates to this same width.
+const BRANCH_MAX: usize = ui::BRANCH_DISPLAY_MAX;
 
 /// Column headers shared by the final render and the live table.
 pub(crate) const HEADERS: [&str; 6] = ["ISSUE", "BRANCH", "TREE", "PR", "LINEAR", "VERDICT"];

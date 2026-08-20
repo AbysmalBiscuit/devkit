@@ -69,6 +69,34 @@ pub(crate) fn parse_issue_ref(input: &str) -> IssueRef {
     }
 }
 
+/// Shorten `slug` to `budget` characters, dropping whole words so the result
+/// still reads. A first word longer than the budget has no boundary to cut on
+/// and is hard-cut instead.
+pub(crate) fn cap(slug: &str, budget: usize) -> String {
+    if slug.chars().count() <= budget {
+        return slug.to_string();
+    }
+    let mut out = String::new();
+    for word in slug.split('-') {
+        let need = if out.is_empty() {
+            word.chars().count()
+        } else {
+            out.chars().count() + 1 + word.chars().count()
+        };
+        if need > budget {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('-');
+        }
+        out.push_str(word);
+    }
+    if out.is_empty() {
+        return slug.chars().take(budget).collect();
+    }
+    out
+}
+
 /// The Linear API key, with the message a caller needs when it is missing.
 pub(crate) fn linear_key() -> Result<String> {
     devkit_common::secrets::resolve("LINEAR_API_KEY")
@@ -118,6 +146,32 @@ mod tests {
             from_linear_title("ENG-1234", "OPS-7 fix BLI export").unwrap(),
             "ops-7-fix-bli-export"
         );
+    }
+
+    #[test]
+    fn cap_keeps_a_short_slug_whole() {
+        assert_eq!(cap("fix-bli-export", 32), "fix-bli-export");
+        assert_eq!(cap("exactly-ten", 11), "exactly-ten");
+    }
+
+    #[test]
+    fn cap_cuts_on_a_word_boundary() {
+        // 34 chars; the budget lands mid-"entry", so the whole word goes.
+        let slug = "api-delete-the-dead-flag-entry-etc";
+        assert_eq!(cap(slug, 32), "api-delete-the-dead-flag-entry");
+    }
+
+    #[test]
+    fn cap_never_leaves_a_trailing_dash() {
+        assert_eq!(cap("one-two-three", 8), "one-two");
+        assert!(!cap("alpha-beta-gamma", 11).ends_with('-'));
+    }
+
+    /// A first word past the budget has no boundary to cut on; a hard cut beats
+    /// returning nothing.
+    #[test]
+    fn cap_hard_cuts_a_single_overlong_word() {
+        assert_eq!(cap("supercalifragilistic", 8), "supercal");
     }
 
     #[test]

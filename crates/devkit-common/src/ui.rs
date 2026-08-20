@@ -75,6 +75,11 @@ fn link_styled(supported: bool, label: &str, url: &str) -> String {
 ///
 /// Operates on plain text (no escape awareness); apply before adding colour or
 /// links so the ellipsis lands on a glyph boundary, not inside an escape.
+/// Width the branch column renders before eliding, and the width `issue setup`
+/// fits a branch into when it caps the slug. One number so a branch devkit
+/// created is never the one the table has to cut.
+pub const BRANCH_DISPLAY_MAX: usize = 46;
+
 pub fn truncate(s: &str, max: usize) -> String {
     if max == 0 || s.chars().count() <= max {
         return s.to_string();
