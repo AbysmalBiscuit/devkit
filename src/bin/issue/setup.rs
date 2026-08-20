@@ -13,6 +13,8 @@ pub struct SetupArgs {
     pub slug: Option<String>,
     pub apps: Vec<String>,
     pub dry_run: bool,
+    /// Also write the issue summary file named by `templates.issue_summary_path`.
+    pub summary: bool,
     pub no_gitignore: bool,
     pub dir: Option<String>,
     pub config: Option<String>,
@@ -23,6 +25,9 @@ struct Prepared {
     issue: String,
     worktree: String,
     branch: String,
+    /// The summary file's path, present only under `--summary`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
 }
 
 /// Write each prep file into `app_dir`. `content` is rendered as a minijinja
@@ -152,7 +157,9 @@ pub fn backfill_includes(monorepo: &str, worktree: &std::path::Path, patterns: &
 }
 
 /// The explicit `--slug`, else the slug a pasted Linear URL already carries,
-/// else the issue's Linear title slugified. Only the last needs the network.
+/// else the issue's Linear title slugified. Only the last needs the network,
+/// and `--summary` has already paid for it — `details` carries that title, so
+/// the two never cost two round trips.
 ///
 /// A derived slug is capped to `budget`; an explicit one is taken verbatim,
 /// since a slug you typed is a decision, not a suggestion.
@@ -160,6 +167,7 @@ fn resolve_slug(
     issue: &crate::slug::IssueRef,
     explicit: Option<String>,
     budget: usize,
+    details: Option<&devkit_common::linear::IssueDetails>,
 ) -> Result<String> {
     if let Some(s) = explicit {
         return Ok(s);
@@ -168,17 +176,37 @@ fn resolve_slug(
         return Ok(crate::slug::cap(s, budget));
     }
     let issue = &issue.id;
-    let key = crate::slug::linear_key()?;
-    let steps = Steps::new();
-    let title = steps
-        .during_result("Reading the Linear title\u{2026}", || {
-            devkit_common::linear::issue_title(issue, &key)
-        })
-        .with_context(|| format!("fetching the Linear title for {issue}"))?
-        .with_context(|| format!("Linear has no issue {issue} \u{2014} pass --slug"))?;
+    let title = match details {
+        Some(d) => d.title.clone(),
+        None => {
+            let key = crate::slug::linear_key()?;
+            let steps = Steps::new();
+            steps
+                .during_result("Reading the Linear title\u{2026}", || {
+                    devkit_common::linear::issue_title(issue, &key)
+                })
+                .with_context(|| format!("fetching the Linear title for {issue}"))?
+                .with_context(|| format!("Linear has no issue {issue} \u{2014} pass --slug"))?
+        }
+    };
     let slug = crate::slug::cap(&crate::slug::from_linear_title(issue, &title)?, budget);
     eprintln!("slug from Linear: {slug}");
     Ok(slug)
+}
+
+/// Every Linear fact the summary file needs, fetched before anything is
+/// created. A summary with holes in it is worse than a clear failure, so a
+/// missing key, an unknown issue, or an unreachable API stops `setup` here —
+/// while there is still no worktree and no branch to clean up.
+fn fetch_details(issue: &str) -> Result<devkit_common::linear::IssueDetails> {
+    let key = crate::slug::linear_key()?;
+    let steps = Steps::new();
+    steps
+        .during_result("Reading the Linear issue\u{2026}", || {
+            devkit_common::linear::issue_details(issue, &key)
+        })
+        .with_context(|| format!("fetching Linear issue {issue}"))?
+        .with_context(|| format!("Linear has no issue {issue}"))
 }
 
 /// A slug this short has stopped being a reminder, so a `branch_prefix` long
@@ -229,7 +257,8 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let issue = issue_ref.id.clone();
     let vars = &cfg.templates.variables;
     let budget = slug_budget(cfg, vars, &issue, &args.apps)?;
-    let slug = resolve_slug(&issue_ref, args.slug.clone(), budget)?;
+    let details = args.summary.then(|| fetch_details(&issue)).transpose()?;
+    let slug = resolve_slug(&issue_ref, args.slug.clone(), budget, details.as_ref())?;
 
     let wt_root = expand_tilde(&cfg.defaults.worktree_root);
     let ctx = serde_json::json!({
@@ -250,11 +279,17 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let monorepo = wt_root.join("monorepo");
     let holder = worktree.to_string_lossy().into_owned();
 
+    let summary_path = details
+        .as_ref()
+        .map(|d| crate::summary::plan_path(cfg, d, &wt_root, &holder, &branch, &slug, &args.apps))
+        .transpose()?;
+
     if args.dry_run {
         let out = Prepared {
             issue: issue.clone(),
             worktree: holder,
             branch,
+            summary: summary_path.map(|p| p.display().to_string()),
         };
         println!("{}", serde_json::to_string_pretty(&out)?);
         eprintln!("(dry-run: no worktree created)");
@@ -302,6 +337,17 @@ pub fn run(args: SetupArgs) -> Result<()> {
             apps: args.apps.clone(),
         },
     )?;
+    let summary_path = match &details {
+        Some(d) => {
+            let (path, written) =
+                crate::summary::write(cfg, d, &wt_root, &holder, &branch, &slug, &args.apps)?;
+            if !written {
+                eprintln!("summary already exists, left untouched: {}", path.display());
+            }
+            Some(path.display().to_string())
+        }
+        None => None,
+    };
     if !args.no_gitignore
         && let Err(e) = crate::gitignore::ensure_devkit_ignored()
     {
@@ -336,6 +382,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         issue: issue.clone(),
         worktree: holder,
         branch,
+        summary: summary_path,
     };
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())

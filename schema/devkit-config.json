@@ -556,6 +556,20 @@
             "null"
           ]
         },
+        "issue_summary": {
+          "description": "Body of the file `issue setup --summary` writes. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps` — every Linear field is the empty string when Linear\nhas nothing there.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issue_summary_path": {
+          "description": "Where `issue setup --summary` writes the issue summary file. A relative\npath is taken from `defaults.worktree_root`, so the file outlives the\nworktree; render `{{ worktree }}` into it to keep it inside instead.\nContext: the `issue_summary` context below.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "pr_body": {
           "description": "Body of a PR opened by `issue review request`. `{{ input }}` is the\n`--pr-body` argument.",
           "type": [
@@ -713,6 +727,8 @@
       "default": {
         "branch": null,
         "checkout_worktree_dir": null,
+        "issue_summary": null,
+        "issue_summary_path": null,
         "pr_body": null,
         "pr_title": null,
         "review_finish": null,

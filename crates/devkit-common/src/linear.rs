@@ -118,6 +118,93 @@ pub fn issue_title(id: &str, key: &str) -> Result<Option<String>> {
     Ok(parse_issue_title(&resp))
 }
 
+/// One issue's Linear-side facts, as `issue setup --summary` writes them into a
+/// summary file. Every optional field is `None` when Linear has nothing there,
+/// so a template can tell "no assignee" from an empty name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueDetails {
+    pub identifier: String,
+    pub title: String,
+    pub url: String,
+    /// Markdown, verbatim. Empty when the issue has no description.
+    pub description: String,
+    pub state: Option<String>,
+    pub assignee: Option<String>,
+    /// Linear's own words for the priority ("High", "No priority").
+    pub priority: Option<String>,
+    pub estimate: Option<String>,
+    pub labels: Vec<String>,
+    /// `IDENT \u{2014} title` of the parent issue.
+    pub parent: Option<String>,
+    pub project: Option<String>,
+}
+
+/// GraphQL fetching everything [`IssueDetails`] carries. Returns None for ids
+/// that are not in `TEAM-NUMBER` form.
+pub fn issue_details_query(id: &str) -> Option<String> {
+    let (team, num) = parse_id(id)?;
+    Some(format!(
+        "query {{ issues(filter: {{ team: {{ key: {{ eq: \"{team}\" }} }}, number: {{ eq: {num} }} }}) \
+         {{ nodes {{ identifier title url description priorityLabel estimate \
+         state {{ name }} assignee {{ name }} labels {{ nodes {{ name }} }} \
+         parent {{ identifier title }} project {{ name }} }} }} }}",
+    ))
+}
+
+/// A non-empty string at `node[key]`, or None.
+fn text(node: &serde_json::Value, key: &str) -> Option<String> {
+    node[key]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// The details from an `issue_details_query` response. None when the issue does
+/// not exist.
+pub fn parse_issue_details(resp: &serde_json::Value) -> Option<IssueDetails> {
+    let n = &resp["data"]["issues"]["nodes"][0];
+    let identifier = text(n, "identifier")?;
+    Some(IssueDetails {
+        identifier,
+        title: text(n, "title").unwrap_or_default(),
+        url: text(n, "url").unwrap_or_default(),
+        description: n["description"].as_str().unwrap_or_default().to_string(),
+        state: text(&n["state"], "name"),
+        assignee: text(&n["assignee"], "name"),
+        priority: text(n, "priorityLabel"),
+        estimate: n["estimate"].as_f64().map(|e| {
+            // Linear returns points as a float; whole points read better unsuffixed.
+            if e.fract() == 0.0 {
+                format!("{}", e as i64)
+            } else {
+                e.to_string()
+            }
+        }),
+        labels: n["labels"]["nodes"]
+            .as_array()
+            .map(|ls| ls.iter().filter_map(|l| text(l, "name")).collect())
+            .unwrap_or_default(),
+        parent: match (
+            text(&n["parent"], "identifier"),
+            text(&n["parent"], "title"),
+        ) {
+            (Some(id), Some(t)) => Some(format!("{id} \u{2014} {t}")),
+            (Some(id), None) => Some(id),
+            _ => None,
+        },
+        project: text(&n["project"], "name"),
+    })
+}
+
+/// Resolve a Linear id to its [`IssueDetails`]. `Ok(None)` means Linear has no
+/// such issue; an unreachable API or a rejected key is an error.
+pub fn issue_details(id: &str, key: &str) -> Result<Option<IssueDetails>> {
+    let query = issue_details_query(id).context("not a TEAM-NUMBER Linear id")?;
+    let resp = post_graphql(&query, key, "issue_details")?;
+    Ok(parse_issue_details(&resp))
+}
+
 /// GraphQL for every issue (any team) with `number == n`.
 pub fn issues_by_number_query(n: u64) -> String {
     format!(
@@ -708,5 +795,77 @@ mod tests {
             "zz": { "nodes": [ { "issue": { "identifier": "X-1" } } ] }
         }});
         assert!(parse_issues_for_prs(&resp, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn issue_details_query_targets_team_and_number() {
+        let q = issue_details_query("ENG-42").unwrap();
+        assert!(q.contains("key: { eq: \"ENG\" }"));
+        assert!(q.contains("number: { eq: 42 }"));
+        assert!(q.contains("description"));
+        assert!(q.contains("priorityLabel"));
+    }
+
+    #[test]
+    fn issue_details_query_rejects_leading_zero() {
+        assert!(issue_details_query("CONFIG-01").is_none());
+    }
+
+    #[test]
+    fn issue_details_parsed_in_full() {
+        let v = serde_json::json!({ "data": { "issues": { "nodes": [{
+            "identifier": "ENG-42",
+            "title": "Fix the login redirect",
+            "url": "https://linear.app/acme/issue/ENG-42/fix-the-login-redirect",
+            "description": "Steps:\n1. click\n",
+            "state": { "name": "Todo" },
+            "assignee": { "name": "Lev" },
+            "priorityLabel": "High",
+            "estimate": 3,
+            "labels": { "nodes": [{ "name": "auth" }, { "name": "web" }] },
+            "parent": { "identifier": "ENG-1", "title": "Login epic" },
+            "project": { "name": "Q3 hardening" }
+        }] } } });
+        let d = parse_issue_details(&v).unwrap();
+        assert_eq!(d.identifier, "ENG-42");
+        assert_eq!(d.title, "Fix the login redirect");
+        assert_eq!(d.description, "Steps:\n1. click\n");
+        assert_eq!(d.state.as_deref(), Some("Todo"));
+        assert_eq!(d.assignee.as_deref(), Some("Lev"));
+        assert_eq!(d.priority.as_deref(), Some("High"));
+        assert_eq!(d.estimate.as_deref(), Some("3"));
+        assert_eq!(d.labels, vec!["auth".to_string(), "web".to_string()]);
+        assert_eq!(d.parent.as_deref(), Some("ENG-1 \u{2014} Login epic"));
+        assert_eq!(d.project.as_deref(), Some("Q3 hardening"));
+    }
+
+    #[test]
+    fn issue_details_missing_fields_are_none_not_empty_strings() {
+        let v = serde_json::json!({ "data": { "issues": { "nodes": [{
+            "identifier": "ENG-7",
+            "title": "Bare issue",
+            "url": "https://linear.app/acme/issue/ENG-7/bare-issue",
+            "description": serde_json::Value::Null,
+            "state": { "name": "Backlog" },
+            "assignee": serde_json::Value::Null,
+            "priorityLabel": "No priority",
+            "estimate": serde_json::Value::Null,
+            "labels": { "nodes": [] },
+            "parent": serde_json::Value::Null,
+            "project": serde_json::Value::Null
+        }] } } });
+        let d = parse_issue_details(&v).unwrap();
+        assert_eq!(d.description, "");
+        assert!(d.assignee.is_none());
+        assert!(d.estimate.is_none());
+        assert!(d.parent.is_none());
+        assert!(d.project.is_none());
+        assert!(d.labels.is_empty());
+    }
+
+    #[test]
+    fn issue_details_absent_issue_is_none() {
+        let v = serde_json::json!({ "data": { "issues": { "nodes": [] } } });
+        assert!(parse_issue_details(&v).is_none());
     }
 }

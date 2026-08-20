@@ -316,6 +316,29 @@ pub const DEFAULT_PR_TITLE: &str = "{{ input }}";
 pub const DEFAULT_PR_BODY: &str = "{{ input }}";
 pub const DEFAULT_REVIEW_REQUEST: &str = "{{ input }} {{ pr_url }}";
 pub const DEFAULT_REVIEW_FINISH: &str = "{{ input }} {{ pr_url }}";
+pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "ISSUE_SUMMARY_{{ issue }}.md";
+pub const DEFAULT_ISSUE_SUMMARY: &str = "\
+# {{ issue }}: {{ title }}\n\
+\n\
+- **Linear:** {{ url }}\n\
+{% if parent %}- **Parent:** {{ parent }}\n{% endif %}\
+{% if project %}- **Project:** {{ project }}\n{% endif %}\
+- **Worktree:** {{ worktree }}\n\
+- **Branch:** {{ branch }}\n\
+{% if apps %}- **Apps in scope:** {{ apps | join(\", \") }}\n{% endif %}\
+- **State / assignee:** {{ state }} / {{ assignee }}\n\
+- **Priority{% if estimate %} / estimate{% endif %}:** {{ priority }}\
+{% if estimate %} / {{ estimate }}{% endif %}\n\
+{% if labels %}- **Labels:** {{ labels | join(\", \") }}\n{% endif %}\
+\n\
+## Linear description\n\
+\n\
+{{ description }}\n\
+\n\
+## Summary\n\
+\n\
+## Pointers\n";
+
 pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
     "{{ pr_number }}-{{ pr_title }}{% if linear_id %}_[{{ linear_id }}]{% endif %}";
 
@@ -348,6 +371,17 @@ pub struct Templates {
     /// Slack message sent by `issue review finish`. Same context as
     /// `review_request`, plus `author`.
     pub review_finish: Option<String>,
+    /// Where `issue setup --summary` writes the issue summary file. A relative
+    /// path is taken from `defaults.worktree_root`, so the file outlives the
+    /// worktree; render `{{ worktree }}` into it to keep it inside instead.
+    /// Context: the `issue_summary` context below.
+    pub issue_summary_path: Option<String>,
+    /// Body of the file `issue setup --summary` writes. Context: `issue`,
+    /// `title`, `url`, `description`, `state`, `assignee`, `priority`,
+    /// `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,
+    /// `prefix`, `apps` — every Linear field is the empty string when Linear
+    /// has nothing there.
+    pub issue_summary: Option<String>,
     /// Constants available to every template above. A context field of the same
     /// name wins, and `--arg key=value` overrides either.
     #[serde(default)]
@@ -376,6 +410,16 @@ impl Templates {
         self.review_request
             .as_deref()
             .unwrap_or(DEFAULT_REVIEW_REQUEST)
+    }
+    pub fn issue_summary_path(&self) -> &str {
+        self.issue_summary_path
+            .as_deref()
+            .unwrap_or(DEFAULT_ISSUE_SUMMARY_PATH)
+    }
+    pub fn issue_summary(&self) -> &str {
+        self.issue_summary
+            .as_deref()
+            .unwrap_or(DEFAULT_ISSUE_SUMMARY)
     }
     pub fn review_finish(&self) -> &str {
         self.review_finish

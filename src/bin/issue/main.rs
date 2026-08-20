@@ -16,6 +16,7 @@ mod select;
 mod setup;
 mod slug;
 mod status;
+mod summary;
 mod triage;
 
 /// `--timing` verbosity, parsed by clap. `--timing` alone = summary,
@@ -82,6 +83,12 @@ enum Cmd {
         /// commands. Omit for a worktree with no per-app setup.
         #[arg(long, value_delimiter = ',')]
         apps: Vec<String>,
+        /// Also write an issue summary file — the Linear facts and
+        /// description as a markdown scaffold, at the path
+        /// `templates.issue_summary_path` names. Needs a Linear key, and never
+        /// overwrites a summary that is already there.
+        #[arg(long)]
+        summary: bool,
         /// Print the resolved issue, worktree, and branch as JSON without
         /// creating anything.
         #[arg(long)]
@@ -262,6 +269,7 @@ fn main() -> Result<()> {
             issue,
             slug,
             apps,
+            summary,
             dry_run,
             no_gitignore,
         }) => setup::run(setup::SetupArgs {
@@ -269,6 +277,7 @@ fn main() -> Result<()> {
             issue: issue_pos.or(issue).expect("issue id"),
             slug,
             apps,
+            summary,
             dry_run,
             no_gitignore,
             dir: cli.dir,
