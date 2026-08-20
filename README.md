@@ -59,7 +59,7 @@ devrun task [<name>] [--env K=V] [--env-file F] [--dry-run]
 One command covering the whole issue lifecycle. Global `-C/--dir` and `--config` flags sit on `issue` itself, before the subcommand (e.g. `issue -C ~/Git/acme/monorepo status`).
 
 ```
-issue setup <ID> --slug <slug> --apps <a,b> [--dry-run]     # id also accepted as --issue <ID>
+issue setup <ID> [--slug <slug>] [--apps <a,b>] [--dry-run] # id also accepted as --issue <ID>
 issue checkout-pr <PR_LINEAR_ID_URL> [WORKTREE_PATH] [--setup [--apps a,b]]
 issue status [ids…]                           # read-only triage table (also the bare `issue`)
 issue info [selector] [--json] [--cache-only] # one worktree's PR number + Linear id (defaults to current)
@@ -70,7 +70,7 @@ issue review request [<body>] [--to <alias|#channel>] [--base <branch>] [--pr-ti
 issue review finish  [<body>] [--pr <number>] [--to <alias|#channel>] [--arg k=v]
 ```
 
-- **`setup`**: mechanical start of a Linear issue. Creates a worktree off the baseline ref, symlinks env files, runs `bun install`, and prints a JSON summary. It does not reserve ports — `devrun up` allocates them dynamically when the worktree's servers start.
+- **`setup`**: mechanical start of a Linear issue. Creates a worktree off the baseline ref, symlinks env files, runs `bun install`, and prints a JSON summary. Without `--slug` it reads the issue's Linear title and slugifies that, stripping a leading copy of the issue id so the branch template does not repeat it; this needs a Linear key (`devkit auth linear`). It does not reserve ports — `devrun up` allocates them dynamically when the worktree's servers start.
 - **`checkout-pr`**: checks out an existing PR branch into a new worktree (unlike `setup`, which creates a new branch). The target may be a GitHub PR number (`#3340`), a bare number (`3340` — probed against both GitHub and Linear when a Linear key is configured, prompting on a real collision in a TTY and erroring if ambiguous without one; treated as a GitHub PR when no Linear key is present), a Linear id (`ENG-3340`, whose attached PR is used — an issue with no attached PR is an error), or a GitHub/Linear URL. The worktree directory is named by the `templates.checkout_worktree_dir` template (variables: `pr_number`, `pr_title`, `linear_id`, `linear_title`; titles are slugified; `linear_*` are empty on the PR-only path); the default renders e.g. `3340-fix-login`, or `3340-fix-login_[ENG-42]` when reached via Linear. Pass `[WORKTREE_PATH]` to override the placement. The PR's own branch name is kept; the template governs only the directory. Add `--setup [--apps a,b]` to also run the per-app prep pipeline, exactly as `issue setup` does. The worktree gets a `.devkit/issue.toml` record so `issue status`/`issue end` recognise it.
 - **`status`** (the default when you run bare `issue`): triage table of every issue worktree. A worktree is FINISHED only when its PR is MERGED, its Linear issue is Done, and the working tree is clean.
 - **`info`**: shows one worktree's PR number and Linear id. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single machine-readable object (the `IssueWorktree` struct, with `pr_number`/`issue_id` for scripts). `--cache-only` skips the network — the PR number comes from the per-worktree cache at `<worktree>/.devkit/pr.json` and Linear state renders as `—`. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.

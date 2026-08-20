@@ -14,6 +14,7 @@ mod record;
 mod review;
 mod select;
 mod setup;
+mod slug;
 mod status;
 mod triage;
 
@@ -73,9 +74,10 @@ enum Cmd {
         #[arg(long)]
         issue: Option<String>,
         /// Short kebab title, without the issue id, rendered into the branch and
-        /// worktree names (e.g. `fix-bli-export`).
+        /// worktree names (e.g. `fix-bli-export`). Omit to slugify the issue's
+        /// Linear title.
         #[arg(long)]
-        slug: String,
+        slug: Option<String>,
         /// Apps to bootstrap: writes each one's prep files and runs its setup
         /// commands. Omit for a worktree with no per-app setup.
         #[arg(long, value_delimiter = ',')]

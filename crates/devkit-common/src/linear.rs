@@ -92,6 +92,32 @@ pub fn issue_pr(id: &str, key: &str) -> Result<(Option<LinearPr>, String)> {
     Ok(parse_issue_pr(&resp))
 }
 
+/// GraphQL fetching one issue's title alone. Returns None for ids that are not
+/// in `TEAM-NUMBER` form.
+pub fn issue_title_query(id: &str) -> Option<String> {
+    let (team, num) = parse_id(id)?;
+    Some(format!(
+        "query {{ issues(filter: {{ team: {{ key: {{ eq: \"{team}\" }} }}, number: {{ eq: {num} }} }}) \
+         {{ nodes {{ title }} }} }}",
+    ))
+}
+
+/// The title from an `issue_title_query` response. None when the issue does not
+/// exist or carries no title.
+pub fn parse_issue_title(resp: &serde_json::Value) -> Option<String> {
+    resp["data"]["issues"]["nodes"][0]["title"]
+        .as_str()
+        .filter(|t| !t.trim().is_empty())
+        .map(str::to_string)
+}
+
+/// Resolve a Linear id to its issue title.
+pub fn issue_title(id: &str, key: &str) -> Result<Option<String>> {
+    let query = issue_title_query(id).context("not a TEAM-NUMBER Linear id")?;
+    let resp = post_graphql(&query, key, "issue_title")?;
+    Ok(parse_issue_title(&resp))
+}
+
 /// GraphQL for every issue (any team) with `number == n`.
 pub fn issues_by_number_query(n: u64) -> String {
     format!(
@@ -553,6 +579,30 @@ mod tests {
         assert!(q.contains("number: { eq: 42 }"));
         assert!(q.contains("attachments"));
         assert!(issue_pr_query("nodash").is_none());
+    }
+
+    #[test]
+    fn issue_title_query_asks_only_for_the_title() {
+        let q = issue_title_query("ENG-42").unwrap();
+        assert!(q.contains("key: { eq: \"ENG\" }"));
+        assert!(q.contains("number: { eq: 42 }"));
+        assert!(q.contains("title"));
+        assert!(!q.contains("attachments"));
+        assert!(issue_title_query("nodash").is_none());
+    }
+
+    #[test]
+    fn parse_issue_title_reads_the_first_node() {
+        let v = serde_json::json!({"data": {"issues": {"nodes": [{"title": "Fix BLI export"}]}}});
+        assert_eq!(parse_issue_title(&v).as_deref(), Some("Fix BLI export"));
+    }
+
+    #[test]
+    fn parse_issue_title_none_for_unknown_or_untitled_issue() {
+        let empty = serde_json::json!({"data": {"issues": {"nodes": []}}});
+        assert_eq!(parse_issue_title(&empty), None);
+        let blank = serde_json::json!({"data": {"issues": {"nodes": [{"title": ""}]}}});
+        assert_eq!(parse_issue_title(&blank), None);
     }
 
     #[test]

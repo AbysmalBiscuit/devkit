@@ -9,7 +9,8 @@ use std::path::Path;
 
 pub struct SetupArgs {
     pub issue: String,
-    pub slug: String,
+    /// `None` asks Linear for the issue title and slugifies that.
+    pub slug: Option<String>,
     pub apps: Vec<String>,
     pub dry_run: bool,
     pub no_gitignore: bool,
@@ -150,6 +151,24 @@ pub fn backfill_includes(monorepo: &str, worktree: &std::path::Path, patterns: &
     }
 }
 
+/// The explicit `--slug`, else the issue's Linear title slugified.
+fn resolve_slug(issue: &str, explicit: Option<String>) -> Result<String> {
+    if let Some(s) = explicit {
+        return Ok(s);
+    }
+    let key = crate::slug::linear_key()?;
+    let steps = Steps::new();
+    let title = steps
+        .during_result("Reading the Linear title\u{2026}", || {
+            devkit_common::linear::issue_title(issue, &key)
+        })
+        .with_context(|| format!("fetching the Linear title for {issue}"))?
+        .with_context(|| format!("Linear has no issue {issue} \u{2014} pass --slug"))?;
+    let slug = crate::slug::from_linear_title(issue, &title)?;
+    eprintln!("slug from Linear: {slug}");
+    Ok(slug)
+}
+
 pub fn run(args: SetupArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
@@ -160,11 +179,13 @@ pub fn run(args: SetupArgs) -> Result<()> {
         anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
     }
 
+    let slug = resolve_slug(&args.issue, args.slug.clone())?;
+
     let wt_root = expand_tilde(&cfg.defaults.worktree_root);
     let ctx = serde_json::json!({
         "prefix": cfg.defaults.branch_prefix,
         "issue": args.issue,
-        "slug": args.slug,
+        "slug": slug,
         "apps": args.apps,
     });
     let vars = &cfg.templates.variables;
@@ -228,7 +249,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         &worktree,
         &crate::record::IssueRecord {
             issue: args.issue.clone(),
-            slug: args.slug.clone(),
+            slug: slug.clone(),
             apps: args.apps.clone(),
         },
     )?;

@@ -1,3 +1,4 @@
+use crate::slug::slugify;
 use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, gh_json, git};
 use devkit_common::gitfetch;
@@ -75,22 +76,6 @@ fn decide_fuzzy(pr_exists: bool, candidates: &[LinearIssueRef], is_tty: bool) ->
         _ if is_tty => FuzzyDecision::Prompt(candidates.to_vec()),
         _ => FuzzyDecision::ErrorAmbiguous,
     }
-}
-
-/// Lowercase, collapse non-alphanumerics to single dashes, trim dashes.
-fn slugify(s: &str) -> String {
-    let mut out = String::new();
-    let mut prev_dash = false;
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.extend(c.to_lowercase());
-            prev_dash = false;
-        } else if !prev_dash {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    out.trim_matches('-').to_string()
 }
 
 struct Resolved {
@@ -607,19 +592,6 @@ mod tests {
         assert_eq!(record_issue_id(Some("ENG-42"), "lev/eng-9-x"), "ENG-42");
         assert_eq!(record_issue_id(None, "lev/eng-9-fix"), "ENG-9");
         assert_eq!(record_issue_id(None, "no-id-here"), "UNKNOWN");
-    }
-
-    #[test]
-    fn slugify_cleans_titles() {
-        assert_eq!(slugify("Fix the Login!! page"), "fix-the-login-page");
-        assert_eq!(slugify("  Trailing  "), "trailing");
-        assert_eq!(slugify("ALL_CAPS"), "all-caps");
-    }
-
-    #[test]
-    fn slugify_empty_and_all_special() {
-        assert_eq!(slugify(""), "");
-        assert_eq!(slugify("!!!"), "");
     }
 
     #[test]
