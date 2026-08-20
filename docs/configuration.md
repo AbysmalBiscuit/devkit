@@ -156,6 +156,7 @@ anything.
 | `pr_base` | no (default `"staging"`) | Default base branch for PRs opened by `issue review`. |
 | `require_pr_reviewer` | no (default `false`) | Refuse `issue review request` when it would open a new PR without a `--to` reviewer. Left unset, the PR opens with no reviewer and nobody is Slacked. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
+| `issue_summary` | no (default `false`) | Write the issue summary file on every `issue setup`, as though `--summary` were passed. `--summary` / `--no-summary` still decide a single run. The file's path and body come from `templates.issue_summary_path` and `templates.issue_summary`. |
 | `worktree_include` | no | Glob patterns (relative to the monorepo root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten; copy failures warn and are skipped (fail-open). Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
 
 ### `[apps.<name>]`

@@ -223,6 +223,11 @@
           },
           "type": "array"
         },
+        "issue_summary": {
+          "default": false,
+          "description": "Write the issue summary file on every `issue setup`, as though\n`--summary` were passed. `--summary` / `--no-summary` still win for one\nrun. Off by default.",
+          "type": "boolean"
+        },
         "pr_base": {
           "default": "staging",
           "description": "Base branch used when opening PRs (e.g. \"staging\", \"main\").",
@@ -673,6 +678,7 @@
         "branch_prefix": "",
         "doppler_yaml": "",
         "ignored_checks": [],
+        "issue_summary": false,
         "pr_base": "staging",
         "require_pr_reviewer": false,
         "stray_scan_width": 64,

@@ -110,7 +110,7 @@ app's `static_env`, same as `devrun up --env`. `--dry-run` prints each rendered 
 ## `issue` — issue lifecycle
 
 ```sh
-issue setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary] [--dry-run] [--no-gitignore]
+issue setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary|--no-summary] [--dry-run] [--no-gitignore]
 issue checkout-pr <target> [<worktree-path>] [--setup] [--apps a,b]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue info [selector] [--json] [--cache-only]         # one worktree's PR number + Linear id
@@ -125,7 +125,8 @@ issue review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg k=v]
 
 Mechanical start of a Linear issue. Creates a worktree off the baseline ref, symlinks
 env files, runs the per-app setup commands (e.g. `bun install`), and **prints a JSON
-summary to stdout**:
+summary to stdout** — an agent's stdout is not a terminal, so JSON is what you get; a
+person at a terminal sees the same fields as a table instead:
 
 ```json
 { "issue": "ENG-123", "worktree": "/abs/path/to/worktree", "branch": "lev/eng-123-fix-auth" }
@@ -145,7 +146,8 @@ allocates them dynamically when the worktree's servers start.
 | `<ID>` / `--issue <ID>` | Linear issue id or issue URL (positional or flag); drives the branch name and summary. **Required.** |
 | `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). Omit it and the slug comes from the pasted URL's own `…/issue/<ID>/<title-slug>` path, or failing that from the issue's Linear title, which needs a Linear key. A leading copy of the issue id is stripped so the branch does not repeat it. A **derived** slug is then shortened on a word boundary so the branch fits the 46-char width `issue status` prints — the budget is measured against your own `branch` template, so a longer `branch_prefix` takes from the slug. A slug you pass here is used verbatim, however long. |
 | `--apps <a,b>` | comma-separated apps to bootstrap: writes each one's prep files and runs its setup commands. Omit for a worktree with no per-app setup. |
-| `--summary` | also write a markdown summary file: the issue's Linear facts (url, parent, project, state, assignee, priority, estimate, labels) and its description verbatim, then empty `## Summary` and `## Pointers` headings to fill in. Default path `ISSUE_SUMMARY_<ID>.md` under `worktree_root` — beside the worktree, so it survives `git worktree remove`; `templates.issue_summary_path` and `templates.issue_summary` override placement and body. Needs a Linear key. An existing file is left byte-for-byte and its path still reported. The fetch runs before the worktree is created, so an unknown issue fails clean. |
+| `--summary` | also write a markdown summary file: the issue's Linear facts (url, parent, project, state, assignee, priority, estimate, labels) and its description verbatim, then empty `## Summary` and `## Pointers` headings to fill in. Default path `ISSUE_SUMMARY_<ID>.md` under `worktree_root` — beside the worktree, so it survives `git worktree remove`; `templates.issue_summary_path` and `templates.issue_summary` override placement and body. Needs a Linear key. An existing file is left byte-for-byte and its path still reported. The fetch runs before the worktree is created, so an unknown issue fails clean. `issue end` removes the recorded file when it cleans the worktree up. `defaults.issue_summary = true` makes this the default. |
+| `--no-summary` | skip the summary file for this run, whatever `defaults.issue_summary` says. |
 | `--dry-run` | print what it would do without creating the worktree. Reports the resolved `summary` path under `--summary` without writing it. |
 | `--no-gitignore` | skip updating the global gitignore (normally adds `.devkit/`, the per-worktree record and cache directory). |
 
@@ -155,7 +157,8 @@ Check out an **existing** PR into a new worktree — the review-side counterpart
 `setup`. The target is `#3340`, `3340`, `PREFIX-3340`, a GitHub PR URL, or a Linear
 issue URL. The optional second positional overrides the worktree path (default: the
 config-resolved placement). `--setup` also runs the per-app setup commands;
-`--apps a,b` narrows which apps that covers.
+`--apps a,b` narrows which apps that covers. Prints `pr`, `worktree`, and `branch` — JSON
+to a pipe, a table to a terminal.
 
 ### `issue review`
 

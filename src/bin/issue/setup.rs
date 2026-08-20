@@ -15,6 +15,8 @@ pub struct SetupArgs {
     pub dry_run: bool,
     /// Also write the issue summary file named by `templates.issue_summary_path`.
     pub summary: bool,
+    /// Skip that file for this run even when `defaults.issue_summary` is set.
+    pub no_summary: bool,
     pub no_gitignore: bool,
     pub dir: Option<String>,
     pub config: Option<String>,
@@ -25,9 +27,43 @@ struct Prepared {
     issue: String,
     worktree: String,
     branch: String,
-    /// The summary file's path, present only under `--summary`.
+    /// The summary file's path, present only when one was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
+}
+
+impl Prepared {
+    /// A labelled table for a reader, the JSON a caller parses for anything
+    /// else. Both carry the same fields; only a terminal gets the one whose
+    /// paths can be double-clicked out of the line.
+    fn report(&self) -> Result<()> {
+        if !devkit_common::ui::stdout_is_tty() {
+            println!("{}", serde_json::to_string_pretty(self)?);
+            return Ok(());
+        }
+        let mut rows = vec![
+            ("issue", self.issue.clone()),
+            ("worktree", self.worktree.clone()),
+            ("branch", self.branch.clone()),
+        ];
+        if let Some(s) = &self.summary {
+            rows.push(("summary", s.clone()));
+        }
+        println!("{}", devkit_common::ui::kv_table(&rows));
+        Ok(())
+    }
+}
+
+/// Whether this run writes a summary file: each flag decides outright, and with
+/// neither `defaults.issue_summary` does.
+fn want_summary(args: &SetupArgs, cfg: &devkit_ports::config::Config) -> bool {
+    if args.summary {
+        return true;
+    }
+    if args.no_summary {
+        return false;
+    }
+    cfg.defaults.issue_summary
 }
 
 /// Write each prep file into `app_dir`. `content` is rendered as a minijinja
@@ -257,7 +293,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let issue = issue_ref.id.clone();
     let vars = &cfg.templates.variables;
     let budget = slug_budget(cfg, vars, &issue, &args.apps)?;
-    let details = args.summary.then(|| fetch_details(&issue)).transpose()?;
+    let details = want_summary(&args, cfg)
+        .then(|| fetch_details(&issue))
+        .transpose()?;
     let slug = resolve_slug(&issue_ref, args.slug.clone(), budget, details.as_ref())?;
 
     let wt_root = expand_tilde(&cfg.defaults.worktree_root);
@@ -291,7 +329,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
             branch,
             summary: summary_path.map(|p| p.display().to_string()),
         };
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        out.report()?;
         eprintln!("(dry-run: no worktree created)");
         return Ok(());
     }
@@ -329,14 +367,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
         )
     })?;
 
-    crate::record::write(
-        &worktree,
-        &crate::record::IssueRecord {
-            issue: issue.clone(),
-            slug: slug.clone(),
-            apps: args.apps.clone(),
-        },
-    )?;
+    // The summary lands before the record so the record can name it: that is
+    // how `issue end` knows which file to remove, whatever the path template
+    // said at setup time.
     let summary_path = match &details {
         Some(d) => {
             let (path, written) =
@@ -348,6 +381,15 @@ pub fn run(args: SetupArgs) -> Result<()> {
         }
         None => None,
     };
+    crate::record::write(
+        &worktree,
+        &crate::record::IssueRecord {
+            issue: issue.clone(),
+            slug: slug.clone(),
+            apps: args.apps.clone(),
+            summary: summary_path.clone(),
+        },
+    )?;
     if !args.no_gitignore
         && let Err(e) = crate::gitignore::ensure_devkit_ignored()
     {
@@ -384,7 +426,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         branch,
         summary: summary_path,
     };
-    println!("{}", serde_json::to_string_pretty(&out)?);
+    out.report()?;
     Ok(())
 }
 

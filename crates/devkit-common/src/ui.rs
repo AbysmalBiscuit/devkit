@@ -23,6 +23,28 @@ pub fn table_on(stream: Stream, headers: &[&str]) -> Table {
     t
 }
 
+/// Whether stdout is a terminal — the signal a command uses to render its
+/// result for a reader instead of emitting the JSON a caller would parse.
+pub fn stdout_is_tty() -> bool {
+    std::io::stdout().is_terminal()
+}
+
+/// A borderless two-column `label  value` table for a command's result.
+///
+/// Content arrangement is disabled on purpose: a wrapped path cannot be
+/// double-clicked out of the line, and a path that runs past the terminal edge
+/// is the lesser problem.
+pub fn kv_table(rows: &[(&str, String)]) -> Table {
+    let paint = Paint::on(Stream::Stdout);
+    let mut t = Table::new();
+    t.load_preset(NOTHING);
+    t.set_content_arrangement(ContentArrangement::Disabled);
+    for (label, value) in rows {
+        t.add_row(vec![paint.dim(label), value.clone()]);
+    }
+    t
+}
+
 /// OSC8 hyperlink when the terminal supports it; otherwise just the label.
 pub fn link(label: &str, url: &str) -> String {
     link_styled(hyperlinks_enabled_on(Stream::Stdout), label, url)
@@ -467,5 +489,18 @@ mod tests {
                 "URL leaked into visible output: {line:?}"
             );
         }
+    }
+
+    #[test]
+    fn kv_table_leaves_values_unwrapped_and_unquoted() {
+        let long = "/home/lev/Git/adaptyv/swe-11341-api-delete-the-dead-flag-entry-and-archive"
+            .to_string();
+        let t = kv_table(&[("worktree", long.clone()), ("branch", "lev/x".to_string())]);
+        let out = t.to_string();
+        assert!(
+            out.lines().any(|l| visible(l).contains(&long)),
+            "the path must survive on one line: {out}"
+        );
+        assert!(!out.contains('"'), "values are not quoted: {out}");
     }
 }

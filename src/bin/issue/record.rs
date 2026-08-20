@@ -9,6 +9,12 @@ pub struct IssueRecord {
     pub issue: String,
     pub slug: String,
     pub apps: Vec<String>,
+    /// The summary file `issue setup --summary` wrote, so `issue end` removes
+    /// the file that actually exists rather than re-deriving a path from a
+    /// template that may have changed since. Absent on records written before
+    /// the summary existed, and on setups that asked for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// `<worktree>/.devkit/issue.toml`.
@@ -45,9 +51,25 @@ mod tests {
             issue: "ABC-123".into(),
             slug: "fix-login".into(),
             apps: vec!["web".into(), "api".into()],
+            summary: Some("/w/ISSUE_SUMMARY_ABC-123.md".into()),
         };
         write(&dir, &rec).unwrap();
         assert_eq!(read(&dir), Some(rec));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_record_written_before_summaries_existed_still_reads() {
+        let dir = std::env::temp_dir().join(format!("devkit-rec-old-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".devkit")).unwrap();
+        std::fs::write(
+            dir.join(".devkit").join("issue.toml"),
+            "issue = \"ABC-1\"\nslug = \"fix\"\napps = []\n",
+        )
+        .unwrap();
+        let got = read(&dir).expect("legacy record parses");
+        assert_eq!(got.issue, "ABC-1");
+        assert!(got.summary.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -204,6 +204,11 @@ pub struct Defaults {
     /// default — the backfill is opt-in.
     #[serde(default)]
     pub worktree_include: Vec<String>,
+    /// Write the issue summary file on every `issue setup`, as though
+    /// `--summary` were passed. `--summary` / `--no-summary` still win for one
+    /// run. Off by default.
+    #[serde(default)]
+    pub issue_summary: bool,
 }
 
 /// Written out rather than derived so the defaulted table matches what serde
@@ -223,6 +228,7 @@ impl Default for Defaults {
             ignored_checks: Vec::new(),
             stray_scan_width: default_stray_scan_width(),
             worktree_include: Vec::new(),
+            issue_summary: false,
         }
     }
 }

@@ -369,6 +369,9 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
                 } else {
                     vec![]
                 },
+                // A PR checkout reviews someone else's work; there is no issue
+                // to scaffold notes for.
+                summary: None,
             },
         )?;
         Ok(issue)
@@ -410,14 +413,30 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         &cfg.templates.variables,
     );
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "pr": meta.number,
-            "branch": meta.head_ref_name,
-            "worktree": worktree_s,
-        }))?
-    );
+    report(meta.number, &meta.head_ref_name, worktree_s)?;
+    Ok(())
+}
+
+/// What `checkout-pr` prints: a labelled table for a reader, the JSON a caller
+/// parses for anything else.
+fn report(pr: u64, branch: &str, worktree: &str) -> Result<()> {
+    if !devkit_common::ui::stdout_is_tty() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "pr": pr,
+                "branch": branch,
+                "worktree": worktree,
+            }))?
+        );
+        return Ok(());
+    }
+    let rows = [
+        ("pr", format!("#{pr}")),
+        ("worktree", worktree.to_string()),
+        ("branch", branch.to_string()),
+    ];
+    println!("{}", devkit_common::ui::kv_table(&rows));
     Ok(())
 }
 

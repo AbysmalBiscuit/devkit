@@ -86,9 +86,14 @@ enum Cmd {
         /// Also write an issue summary file — the Linear facts and
         /// description as a markdown scaffold, at the path
         /// `templates.issue_summary_path` names. Needs a Linear key, and never
-        /// overwrites a summary that is already there.
+        /// overwrites a summary that is already there. Set
+        /// `defaults.issue_summary = true` to make this the default.
         #[arg(long)]
         summary: bool,
+        /// Skip the issue summary file for this run, whatever
+        /// `defaults.issue_summary` says.
+        #[arg(long = "no-summary", conflicts_with = "summary")]
+        no_summary: bool,
         /// Print the resolved issue, worktree, and branch as JSON without
         /// creating anything.
         #[arg(long)]
@@ -270,6 +275,7 @@ fn main() -> Result<()> {
             slug,
             apps,
             summary,
+            no_summary,
             dry_run,
             no_gitignore,
         }) => setup::run(setup::SetupArgs {
@@ -278,6 +284,7 @@ fn main() -> Result<()> {
             slug,
             apps,
             summary,
+            no_summary,
             dry_run,
             no_gitignore,
             dir: cli.dir,
