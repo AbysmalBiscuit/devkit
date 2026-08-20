@@ -6,6 +6,7 @@ use devkit_ports::registry::{self, Data, Role};
 #[derive(Parser)]
 #[command(version, about = "Port registry for local dev servers")]
 struct Cli {
+    /// Run as if portm had started in DIR instead of the current directory.
     #[arg(short = 'C', long = "dir")]
     dir: Option<String>,
     #[command(subcommand)]
@@ -22,8 +23,10 @@ enum Cmd {
         /// Worktree root the ports belong to; defaults to the current worktree.
         #[arg(long)]
         holder: Option<String>,
+        /// Role the reservation belongs to; issue and baseline get separate ports.
         #[arg(long, value_enum, default_value = "issue")]
         role: Role,
+        /// Apps to reserve a port for, one row each.
         apps: Vec<String>,
     },
     /// Release a holder's reservations (default: this worktree), optionally only the named apps.
@@ -33,13 +36,17 @@ enum Cmd {
         /// Worktree root whose ports to release; defaults to the current worktree.
         #[arg(long)]
         holder: Option<String>,
+        /// Only this role; omit to release both.
         #[arg(long, value_enum)]
         role: Option<Role>,
     },
     /// Drop stale reservations (dead pids, vanished holders).
     Prune,
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
-    Completions { shell: Shell },
+    Completions {
+        /// Shell to emit the script for.
+        shell: Shell,
+    },
 }
 
 /// The holder is the worktree root path; when `--holder` is omitted, resolve it

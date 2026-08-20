@@ -138,7 +138,7 @@ allocates them dynamically when the worktree's servers start.
 |---|---|
 | `<ID>` / `--issue <ID>` | Linear issue id (positional or flag); drives the branch name and summary. **Required.** |
 | `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). **Required.** |
-| `--apps <a,b>` | comma-separated apps to set up; omit to use the config default. |
+| `--apps <a,b>` | comma-separated apps to bootstrap: writes each one's prep files and runs its setup commands. Omit for a worktree with no per-app setup. |
 | `--dry-run` | print what it would do without creating the worktree. |
 | `--no-gitignore` | skip updating the global gitignore (normally ensures devkit artifacts like `ISSUE_*.md` are ignored). |
 

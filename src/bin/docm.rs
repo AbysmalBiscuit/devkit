@@ -25,6 +25,7 @@ struct Cli {
 enum Cmd {
     /// Register a library: a package name (looked up on crates.io/npm/PyPI) or a git URL.
     Add {
+        /// Package name to look up, or a git URL to clone directly.
         target: String,
         /// Ecosystem; omitted → probe crates.io, npm, PyPI in order.
         #[arg(long)]
@@ -54,12 +55,16 @@ enum Cmd {
     /// Remove a library from the manifest (checkouts are reclaimed by prune).
     #[command(visible_alias = "remove", visible_alias = "delete")]
     Rm {
+        /// Registered library to drop.
         name: String,
+        /// Remove from the nearest devkit.toml [docs] section instead of the
+        /// global manifest.
         #[arg(long)]
         project: bool,
     },
     /// List registered libraries and their synced checkouts.
     List {
+        /// Emit the rows as JSON instead of a table.
         #[arg(long)]
         json: bool,
         /// Show only what this checkout evidences, with the resolved version
@@ -68,17 +73,26 @@ enum Cmd {
         project: bool,
     },
     /// Fetch, re-resolve, re-materialize and verify registered libraries.
-    Sync { names: Vec<String> },
+    Sync {
+        /// Libraries to sync; omit for every registered library.
+        names: Vec<String>,
+    },
     /// Print the version-resolved checkout path (exactly one line on stdout).
-    Path { name: String },
+    Path {
+        /// Registered library to locate.
+        name: String,
+    },
     /// Print checkout path, resolved version, layout map, and notes.
     Info {
+        /// Registered library to describe.
         name: String,
+        /// Emit the report as JSON instead of a table.
         #[arg(long)]
         json: bool,
     },
     /// Release this project's reference to libraries (checkouts are reclaimed by prune).
     Forget {
+        /// Libraries this project no longer needs.
         #[arg(required = true)]
         names: Vec<String>,
     },
@@ -89,7 +103,10 @@ enum Cmd {
         yes: bool,
     },
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
-    Completions { shell: Shell },
+    Completions {
+        /// Shell to emit the script for.
+        shell: Shell,
+    },
 }
 
 fn main() -> Result<()> {

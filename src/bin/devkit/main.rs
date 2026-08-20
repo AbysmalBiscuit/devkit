@@ -23,6 +23,7 @@ struct Cli {
 enum Cmd {
     /// Validate and store a Linear or Slack credential.
     Auth {
+        /// Credential to validate and store.
         provider: Provider,
         /// Provide the token non-interactively instead of being prompted.
         #[arg(long)]
@@ -65,7 +66,10 @@ enum Cmd {
         cmd: Option<SchemaCmd>,
     },
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
-    Completions { shell: Shell },
+    Completions {
+        /// Shell to emit the script for.
+        shell: Shell,
+    },
 }
 
 #[derive(Subcommand)]

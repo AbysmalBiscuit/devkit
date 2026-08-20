@@ -19,30 +19,46 @@ struct Cli {
 enum Cmd {
     /// Claim one or more paths (files or directories). Fails if any is held by another session.
     Acquire {
+        /// Files or directories to claim.
         paths: Vec<String>,
+        /// Session identity to hold the claim under. Defaults to
+        /// $DEVKIT_SESSION, then $TMUX_PANE, then the controlling tty, then the
+        /// parent pid — pass the same value to acquire and release.
         #[arg(long = "as")]
         holder: Option<String>,
+        /// Why you hold these paths; shown to whoever the claim blocks.
         #[arg(long)]
         note: Option<String>,
         /// Lock lifetime, seconds (0 = no expiry). Default 1800 (30 min).
         #[arg(long, default_value_t = 1800)]
         ttl: u64,
+        /// Emit the result as JSON instead of a human-readable line.
         #[arg(long)]
         json: bool,
     },
     /// Read-only: would `acquire` of these paths succeed?
     Check {
+        /// Files or directories to test.
         paths: Vec<String>,
+        /// Session identity to hold the claim under. Defaults to
+        /// $DEVKIT_SESSION, then $TMUX_PANE, then the controlling tty, then the
+        /// parent pid — pass the same value to acquire and release.
         #[arg(long = "as")]
         holder: Option<String>,
+        /// Emit the result as JSON instead of a human-readable line.
         #[arg(long)]
         json: bool,
     },
     /// Release your claims on the named paths (or all of them with --all).
     Release {
+        /// Paths to release; ignored with --all.
         paths: Vec<String>,
+        /// Session identity to hold the claim under. Defaults to
+        /// $DEVKIT_SESSION, then $TMUX_PANE, then the controlling tty, then the
+        /// parent pid — pass the same value to acquire and release.
         #[arg(long = "as")]
         holder: Option<String>,
+        /// Release every path this holder claims.
         #[arg(long)]
         all: bool,
         /// Release even a path held by another session.
@@ -52,8 +68,10 @@ enum Cmd {
     /// Show held locks for this project (or every project with --all).
     #[command(visible_alias = "list")]
     Status {
+        /// List every project's locks, not only this repo's.
         #[arg(long)]
         all: bool,
+        /// Emit the rows as JSON instead of a table.
         #[arg(long)]
         json: bool,
         /// Not accepted — `status` lists everything; `check <paths…>` tests paths.
@@ -63,7 +81,10 @@ enum Cmd {
     /// Drop expired/dead locks.
     Prune,
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
-    Completions { shell: Shell },
+    Completions {
+        /// Shell to emit the script for.
+        shell: Shell,
+    },
     /// Internal: evaluate a coding-agent hook payload (stdin JSON) and emit a
     /// PreToolUse decision (stdout). Events: pretooluse | subagent-stop | session-end.
     #[command(hide = true)]

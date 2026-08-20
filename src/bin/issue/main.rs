@@ -42,8 +42,10 @@ fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
     about = "Issue lifecycle: setup, status, info, end, prs, dashboard, review"
 )]
 struct Cli {
+    /// Run as if issue had started in DIR instead of the current directory.
     #[arg(short = 'C', long = "dir", global = true)]
     dir: Option<String>,
+    /// devkit.toml to load instead of the one discovered from the start directory.
     #[arg(long, global = true)]
     config: Option<String>,
     /// Print IO timing to stderr. `--timing` = summary, `--timing=trace` = per-op.
@@ -67,14 +69,23 @@ enum Cmd {
             conflicts_with = "issue"
         )]
         issue_pos: Option<String>,
+        /// Linear issue id (equivalent to the positional ISSUE).
         #[arg(long)]
         issue: Option<String>,
+        /// Short kebab title, without the issue id, rendered into the branch and
+        /// worktree names (e.g. `fix-bli-export`).
         #[arg(long)]
         slug: String,
+        /// Apps to bootstrap: writes each one's prep files and runs its setup
+        /// commands. Omit for a worktree with no per-app setup.
         #[arg(long, value_delimiter = ',')]
         apps: Vec<String>,
+        /// Print the resolved issue, worktree, and branch as JSON without
+        /// creating anything.
         #[arg(long)]
         dry_run: bool,
+        /// Leave the global gitignore alone instead of adding devkit's
+        /// per-worktree artifacts to it.
         #[arg(long = "no-gitignore")]
         no_gitignore: bool,
     },
@@ -84,42 +95,64 @@ enum Cmd {
         target: String,
         /// Worktree path; defaults to the config-resolved placement.
         worktree_path: Option<String>,
+        /// Also write each app's prep files and run its setup commands.
         #[arg(long)]
         setup: bool,
+        /// Apps to bootstrap under --setup. Omit for a worktree with no per-app
+        /// setup.
         #[arg(long, value_delimiter = ',')]
         apps: Vec<String>,
     },
     /// Read-only report of every issue worktree (optionally filtered by ID).
-    Status { ids: Vec<String> },
+    Status {
+        /// Issue ids to report on; omit for every issue worktree.
+        ids: Vec<String>,
+    },
     /// Show one worktree's PR + Linear id (current worktree, or a SELECTOR).
     Info {
         /// Issue id, branch, worktree basename, or path. Defaults to cwd.
         selector: Option<String>,
+        /// Emit the worktree as one JSON object instead of a table.
         #[arg(long)]
         json: bool,
+        /// Skip the network: take the PR number from the worktree's cache and
+        /// leave the Linear state blank.
         #[arg(long = "cache-only")]
         cache_only: bool,
     },
     /// Remove FINISHED worktrees (PR merged + Linear done + clean).
     End {
+        /// Issue ids, branches, or worktree paths to consider; omit to scan
+        /// every issue worktree.
         ids: Vec<String>,
+        /// Remove without asking for confirmation.
         #[arg(short = 'y', long)]
         yes: bool,
+        /// Discard uncommitted changes instead of refusing to remove a dirty
+        /// worktree.
         #[arg(long)]
         force: bool,
+        /// Count a merged PR plus a clean tree as finished, ignoring the Linear
+        /// state and the issue-id gate.
         #[arg(long = "pr-only")]
         pr_only: bool,
+        /// Remove the selected worktrees whether or not they are finished.
+        /// Requires at least one selector.
         #[arg(long = "clean-worktree")]
         clean_worktree: bool,
     },
     /// At-a-glance triage of your GitHub PRs via gh.
     Prs {
+        /// Show only your open PRs. Neither flag prints both sections.
         #[arg(short = 'm', long)]
         mine: bool,
+        /// Show only PRs awaiting your review. Neither flag prints both sections.
         #[arg(short = 'r', long)]
         reviews: bool,
+        /// owner/repo to triage instead of the current repository.
         #[arg(short = 'R', long)]
         repo: Option<String>,
+        /// Refetch from GitHub instead of rendering the last run's cached rows.
         #[arg(long = "no-cache")]
         no_cache: bool,
         /// PRs fetched per GitHub search page. Lower this if GitHub returns
@@ -132,18 +165,26 @@ enum Cmd {
     },
     /// Combined at-a-glance view plus issue/PR/commit timelines.
     Dashboard {
+        /// Timeline bucket width: auto, day, week, or month.
         #[arg(long, default_value = "auto")]
         bucket: String,
+        /// Plot style: bar or line.
         #[arg(long, default_value = "bar")]
         chart: String,
+        /// Issue-status plot scale: absolute counts or proportional shares.
         #[arg(long, default_value = "absolute")]
         mode: String,
+        /// Count PRs you reviewed in the timelines, not only the ones you
+        /// authored.
         #[arg(long = "all-roles")]
         all_roles: bool,
+        /// Git author to count commits for; defaults to your local git email.
         #[arg(long)]
         author: Option<String>,
+        /// Print the tables without the timelines.
         #[arg(long = "no-plots")]
         no_plots: bool,
+        /// Refetch from GitHub instead of rendering the last run's cached rows.
         #[arg(long = "no-cache")]
         no_cache: bool,
     },
@@ -153,7 +194,10 @@ enum Cmd {
         cmd: ReviewCmd,
     },
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
-    Completions { shell: Shell },
+    Completions {
+        /// Shell to emit the script for.
+        shell: Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -165,12 +209,16 @@ enum ReviewCmd {
         /// Recipient: a `[people]` alias or `#channel`. Repeatable.
         #[arg(long = "to")]
         to: Vec<String>,
+        /// PR base branch, instead of the configured baseline ref.
         #[arg(long)]
         base: Option<String>,
+        /// PR title, instead of the one the template renders.
         #[arg(long = "pr-title")]
         pr_title: Option<String>,
+        /// PR body, instead of the one the template renders.
         #[arg(long = "pr-body")]
         pr_body: Option<String>,
+        /// Open or update the PR without pushing the branch first.
         #[arg(long = "no-push")]
         no_push: bool,
         /// Add no reviewer beyond `--to` and send no Slack: never falls back to the

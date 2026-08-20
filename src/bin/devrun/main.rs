@@ -39,8 +39,10 @@ fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
     about = "Run local dev servers for an issue worktree (with optional baseline A/B)"
 )]
 struct Cli {
+    /// Run as if devrun had started in DIR instead of the current directory.
     #[arg(short = 'C', long = "dir", global = true)]
     dir: Option<String>,
+    /// devkit.toml to load instead of the one discovered from the start directory.
     #[arg(long, global = true)]
     config: Option<String>,
     /// Print IO timing to stderr. `--timing` = summary, `--timing=trace` = per-op.
@@ -57,13 +59,21 @@ struct Cli {
 enum Cmd {
     /// Bring up dev servers for the selected apps.
     Up {
+        /// Apps to start; omit to infer them from the diff against the baseline
+        /// ref. A fresh worktree has no diff yet, so name them there.
         apps: Vec<String>,
+        /// Which side to run.
         #[arg(long, value_enum, default_value = "issue")]
         role: RoleSelector,
+        /// Environment override for the launched servers, above the app's
+        /// `static_env`. Repeatable.
         #[arg(long = "env", value_name = "K=V")]
         env: Vec<String>,
+        /// Read K=V overrides from a file (blank lines and `#` comments
+        /// skipped). A key also passed with --env wins.
         #[arg(long = "env-file")]
         env_file: Option<String>,
+        /// Print the launch plan without starting anything.
         #[arg(long)]
         dry_run: bool,
         /// Hand servers to the supervisor daemon (autostarting it) so they restart on crash.
@@ -113,20 +123,25 @@ enum Cmd {
     },
     /// Show tracked servers (this worktree, or --all).
     Status {
+        /// Report every worktree's servers, not only this one's.
         #[arg(long)]
         all: bool,
     },
     /// Kill dev servers running outside devrun. This worktree by default; `--all`
     /// reaches every worktree. Requires an interactive terminal (no agent path).
     Reap {
+        /// Reach every worktree, not only this one.
         #[arg(long)]
         all: bool,
     },
     /// Print (or follow) the log for one app.
     Logs {
+        /// App whose log to read.
         app: String,
+        /// Which side's log; omit to take whichever role is tracked.
         #[arg(long, value_enum)]
         role: Option<RoleSelector>,
+        /// Follow the log instead of printing the last 200 lines.
         #[arg(short = 'f', long)]
         follow: bool,
     },
@@ -136,12 +151,19 @@ enum Cmd {
         cmd: ConfigCmd,
     },
     /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
-    Completions { shell: Shell },
+    Completions {
+        /// Shell to emit the script for.
+        shell: Shell,
+    },
     /// Run a canned task from `[tasks]` (no name: list the configured tasks).
     Task {
+        /// Task to run; omit to list the configured tasks.
         name: Option<String>,
+        /// Environment override applied to every step of the task. Repeatable.
         #[arg(long = "env", value_name = "K=V")]
         env: Vec<String>,
+        /// Read K=V overrides from a file (blank lines and `#` comments
+        /// skipped). A key also passed with --env wins.
         #[arg(long = "env-file")]
         env_file: Option<String>,
         /// Print the rendered plan (cwd, argv, env, resolved ports) without executing.
@@ -179,8 +201,12 @@ enum ConfigCmd {
 /// fresh baseline side-by-side; it is not itself a registry `Role`.
 #[derive(Clone, Copy, ValueEnum, PartialEq)]
 enum RoleSelector {
+    /// The issue branch's servers.
     Issue,
+    /// The baseline checkout's servers, for A/B comparison.
     Baseline,
+    /// Both roles: `up` runs them side-by-side on separate ports, filters match
+    /// either.
     Both,
 }
 
