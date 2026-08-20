@@ -35,8 +35,8 @@ fn classify(input: &str) -> Result<Ident> {
         return Ok(Ident::Pr(n));
     }
     if s.contains("linear.app") {
-        let id = devkit_common::worktree::find_id(s).context("no issue id in Linear URL")?;
-        return Ok(Ident::Linear(id.to_uppercase()));
+        let parsed = crate::slug::from_linear_url(s).context("no issue id in Linear URL")?;
+        return Ok(Ident::Linear(parsed.id.to_uppercase()));
     }
     if let Some(rest) = s.strip_prefix('#')
         && !rest.is_empty()
@@ -530,6 +530,19 @@ mod tests {
             classify("https://linear.app/acme/issue/ENG-42/fix").unwrap(),
             Ident::Linear("ENG-42".into())
         );
+    }
+    /// A workspace whose name ends in `-<digits>` reads as an issue id, so the
+    /// id has to come from the path position rather than the first match.
+    #[test]
+    fn classify_linear_url_ignores_a_workspace_named_like_an_id() {
+        assert_eq!(
+            classify("https://linear.app/acme-2/issue/ENG-42/fix").unwrap(),
+            Ident::Linear("ENG-42".into())
+        );
+    }
+    #[test]
+    fn classify_linear_url_without_an_issue_segment_errors() {
+        assert!(classify("https://linear.app/acme/team/ENG/active").is_err());
     }
     #[test]
     fn classify_bare_number_is_fuzzy() {

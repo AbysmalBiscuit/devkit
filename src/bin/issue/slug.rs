@@ -41,31 +41,40 @@ pub(crate) struct IssueRef {
     pub(crate) slug: Option<String>,
 }
 
-/// Split CLI input into an issue id and, for a Linear URL, the title slug its
-/// path spells out. A Linear issue URL is `…/issue/<ID>/<title-slug>`, so
-/// pasting one supplies both without a network call. Anything else is taken
-/// as a bare id; `issue_title_query` rejects a malformed one downstream.
-pub(crate) fn parse_issue_ref(input: &str) -> IssueRef {
-    let trimmed = input.trim();
-    let bare = || IssueRef {
-        id: trimmed.to_string(),
-        slug: None,
-    };
-    if !trimmed.contains("linear.app") {
-        return bare();
-    }
-    let path = trimmed.split_once('#').map_or(trimmed, |(head, _)| head);
+/// The id and title slug in a Linear issue URL's `…/issue/<ID>/<title-slug>`
+/// path. `None` when there is no `issue/<ID>` pair to read.
+///
+/// Both values come from their path position. Scanning for the first
+/// letters-dash-digits run instead would read a workspace named `acme-2` as
+/// the issue id.
+pub(crate) fn from_linear_url(url: &str) -> Option<IssueRef> {
+    let path = url.trim();
+    let path = path.split_once('#').map_or(path, |(head, _)| head);
     let path = path.split_once('?').map_or(path, |(head, _)| head);
     let mut segments = path
         .split('/')
         .skip_while(|s| !s.eq_ignore_ascii_case("issue"));
-    let Some(id) = segments.nth(1).filter(|s| !s.is_empty()) else {
-        return bare();
-    };
-    let slug = segments.next().map(slugify).filter(|s| !s.is_empty());
-    IssueRef {
+    let id = segments.nth(1).filter(|s| !s.is_empty())?;
+    Some(IssueRef {
         id: id.to_string(),
-        slug,
+        slug: segments.next().map(slugify).filter(|s| !s.is_empty()),
+    })
+}
+
+/// Split CLI input into an issue id and, for a Linear URL, the title slug its
+/// path spells out. Pasting a URL supplies both without a network call.
+/// Anything else is taken as a bare id; `issue_title_query` rejects a
+/// malformed one downstream.
+pub(crate) fn parse_issue_ref(input: &str) -> IssueRef {
+    let trimmed = input.trim();
+    if trimmed.contains("linear.app")
+        && let Some(parsed) = from_linear_url(trimmed)
+    {
+        return parsed;
+    }
+    IssueRef {
+        id: trimmed.to_string(),
+        slug: None,
     }
 }
 
