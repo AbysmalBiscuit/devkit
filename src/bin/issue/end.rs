@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::triage::render;
-use devkit_issue::status::{IssueWorktree, gather, reason_not_finished};
+use devkit_issue::status::{IssueWorktree, gather, label, reason_not_finished};
 
 fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWorktree> {
     let mut chosen = Vec::new();
@@ -179,8 +179,7 @@ pub fn run(
             !ids.is_empty(),
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
-        let report =
-            steps.during_result("Fetching PR + Linear status…", || gather(start, &[]))?;
+        let report = steps.during_result("Fetching PR + issue status…", || gather(start, &[]))?;
         render(&report, false);
         let t = select_explicit(&report.worktrees, ids);
         if t.is_empty() {
@@ -188,16 +187,18 @@ pub fn run(
             return Ok(());
         }
         println!(
-            "\n--clean-worktree: removing {} selected worktree(s), ignoring the PR/Linear/finished gate.",
+            "\n--clean-worktree: removing {} selected worktree(s), ignoring the PR/state/finished gate.",
             t.len()
         );
         t
     } else {
-        let report =
-            steps.during_result("Fetching PR + Linear status…", || gather(start, ids))?;
+        let report = steps.during_result("Fetching PR + issue status…", || gather(start, ids))?;
         render(&report, false);
         if pr_only {
-            println!("--pr-only: Linear 'Done' and issue-id gates skipped.");
+            println!(
+                "--pr-only: the {} state and issue-id gates are skipped.",
+                label(report.tracker.kind)
+            );
         }
         let t: Vec<IssueWorktree> = report
             .worktrees

@@ -153,15 +153,22 @@ pub trait Tracker: Send + Sync {
 /// config predating `[tracker]` keeps behaving exactly as it did.
 ///
 /// This crate has no GitHub implementation yet, so that arm falls back to
-/// `NoneTracker`.
+/// `NoneTracker`. It warns only when the caller named GitHub explicitly —
+/// detection choosing it is not something the user did wrong, and the read-only
+/// paths that resolve a tracker per run would otherwise print on every call.
 pub fn resolve(kind: Option<TrackerKind>, repo: Option<&str>, cwd: &Path) -> Box<dyn Tracker> {
     let _ = repo; // only the GitHub tracker reads this
+    let explicitly_github = kind == Some(TrackerKind::Github);
     match kind.unwrap_or_else(|| detect(cwd)) {
         TrackerKind::Linear => Box::new(linear::LinearTracker::new(crate::secrets::resolve(
             "LINEAR_API_KEY",
         ))),
         TrackerKind::Github => {
-            eprintln!("devkit: the GitHub tracker is not implemented yet — running without one");
+            if explicitly_github {
+                eprintln!(
+                    "devkit: the GitHub tracker is not implemented yet — running without one"
+                );
+            }
             Box::new(none::NoneTracker)
         }
         TrackerKind::None => Box::new(none::NoneTracker),

@@ -62,11 +62,7 @@ pub(crate) fn pr_cell(row: &IssueWorktree) -> String {
 
 pub(crate) fn state_cell(row: &IssueWorktree, ready: bool) -> String {
     match row.state.as_ref() {
-        None => ui::dim(if ready {
-            "tracker state unknown"
-        } else {
-            "no tracker"
-        }),
+        None => ui::dim(if ready { "unknown" } else { "no tracker" }),
         Some(s) => match s.kind {
             StateKind::Completed => ui::green(&s.name),
             StateKind::Started => ui::yellow(&s.name),
@@ -161,7 +157,7 @@ mod tests {
     #[test]
     fn state_cell_no_tracker_vs_unknown() {
         assert_eq!(state_cell(&row("OPEN"), false), "no tracker");
-        assert_eq!(state_cell(&row("OPEN"), true), "tracker state unknown");
+        assert_eq!(state_cell(&row("OPEN"), true), "unknown");
         let mut r = row("OPEN");
         r.state = Some(devkit_common::tracker::State {
             kind: StateKind::Completed,

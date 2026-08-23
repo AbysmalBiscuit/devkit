@@ -9,21 +9,26 @@ use std::collections::HashMap;
 pub struct FakeTracker {
     pub states: HashMap<String, State>,
     pub ready: bool,
+    /// What `kind()` reports. Set it to a kind that ambient resolution could
+    /// never pair with this `ready` flag to prove a report came from an
+    /// injected tracker rather than a resolved one.
+    pub kind: TrackerKind,
 }
 
 impl FakeTracker {
-    /// A ready tracker knowing exactly these issue states.
-    pub fn ready<const N: usize>(rows: [(&str, State); N]) -> Self {
+    /// A ready Linear-kind tracker knowing exactly these issue states.
+    pub fn with_states<const N: usize>(rows: [(&str, State); N]) -> Self {
         Self {
             states: rows.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
             ready: true,
+            kind: TrackerKind::Linear,
         }
     }
 }
 
 impl Tracker for FakeTracker {
     fn kind(&self) -> TrackerKind {
-        TrackerKind::Linear
+        self.kind
     }
     fn ready(&self) -> bool {
         self.ready

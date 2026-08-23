@@ -309,10 +309,10 @@ pub fn assemble(
     }
 }
 
-/// How a tracker names itself in a verdict reason. `None` never reaches a
-/// reason that names a state — no tracker means no state — so it answers with
-/// the neutral word rather than claiming a provider.
-fn label(kind: TrackerKind) -> &'static str {
+/// How a tracker names itself in user-facing text. `TrackerKind::None` answers
+/// with the neutral word: a tracker-less project has no state gate, so nothing
+/// that names a state ever reaches it.
+pub fn label(kind: TrackerKind) -> &'static str {
     match kind {
         TrackerKind::Linear => "Linear",
         TrackerKind::Github => "GitHub",
@@ -320,9 +320,17 @@ fn label(kind: TrackerKind) -> &'static str {
     }
 }
 
-/// None when finished; otherwise a short reason it is not. With `pr_only`, the
-/// tracker-state and issue-id gates are dropped (finished = PR merged + clean),
-/// so repos whose branches carry no issue id still qualify.
+/// None when finished; otherwise a short reason it is not.
+///
+/// The state gate has three shapes. A project whose tracker kind is
+/// `TrackerKind::None` has no state to wait for, so its verdict rests on the PR
+/// and a clean tree. A tracker that answered gates on the issue having reached a
+/// completed state. A tracker that is configured but did not answer holds the
+/// gate open, so an unset key or an unreachable API never promotes a worktree to
+/// finished.
+///
+/// With `pr_only` both the state and issue-id gates are dropped (finished = PR
+/// merged + clean), so repos whose branches carry no issue id still qualify.
 pub fn reason_not_finished(
     wt: &IssueWorktree,
     tracker: &TrackerInfo,
@@ -339,14 +347,16 @@ pub fn reason_not_finished(
             "no PR".into()
         });
     }
-    if !pr_only {
+    // A tracker-less project has no state to wait for; every other kind gates on
+    // the issue's state, and says so when it could not read one.
+    if !pr_only && tracker.kind != TrackerKind::None {
         match wt.state.as_ref() {
-            None if tracker.ready => bits.push("tracker state unknown".into()),
-            None => bits.push("no tracker".into()),
             Some(s) if s.kind != StateKind::Completed => {
                 bits.push(format!("{} {}", label(tracker.kind), s.name))
             }
             Some(_) => {}
+            None if tracker.ready => bits.push("tracker state unknown".into()),
+            None => bits.push("no tracker key".into()),
         }
     }
     if wt.dirty {
@@ -385,8 +395,8 @@ pub fn gather_with(start: &str, ids: &[String], t: &dyn Tracker) -> Result<Statu
     let (dirty, prs, states, link_base) = std::thread::scope(|s| {
         let dt = s.spawn(|| dirty_many(&paths));
         let pt = s.spawn(|| fetch_prs(&d));
-        // Both tracker calls can reach the network, so they share the one
-        // thread the state fetch already occupied.
+        // The state fetch and the link base share a thread: both go through the
+        // tracker, and both can reach the network.
         let tt = s.spawn(|| (t.states(&ids_v), t.issue_url("")));
         let dirty = dt.join().expect("dirty thread panicked");
         let prs = pt.join().expect("prs thread panicked")?;
@@ -456,7 +466,7 @@ mod tests {
 
     #[test]
     fn a_merged_clean_worktree_with_a_completed_issue_is_finished() {
-        let t = FakeTracker::ready([("ENG-1", done("Done"))]);
+        let t = FakeTracker::with_states([("ENG-1", done("Done"))]);
         let report = assemble(
             discovered("ENG-1", "lev/eng-1-fix"),
             vec![false],
@@ -492,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn with_no_tracker_a_merged_clean_worktree_is_not_finished() {
+    fn with_no_tracker_a_merged_clean_worktree_is_finished_without_a_state() {
         let report = assemble(
             discovered("ENG-3", "lev/some-branch"),
             vec![false],
@@ -502,10 +512,28 @@ mod tests {
         );
         let row = &report.worktrees[0];
         assert!(row.state.is_none());
+        assert!(
+            row.finished,
+            "a project with no tracker still finishes on PR merged + clean"
+        );
+    }
+
+    #[test]
+    fn with_a_tracker_and_no_key_a_merged_clean_worktree_is_not_finished() {
+        let report = assemble(
+            discovered("ENG-4", "lev/other-branch"),
+            vec![false],
+            Prs::for_test(vec![pr(13, "MERGED", "lev/other-branch")]),
+            HashMap::new(),
+            tracker(TrackerKind::Linear, false),
+        );
+        let row = &report.worktrees[0];
+        assert!(!row.finished);
         assert_eq!(
             row.reason_not_finished.as_deref(),
-            Some("no tracker"),
-            "the state gate holds without a tracker; --pr-only is how a              tracker-less repo finishes on PR evidence alone"
+            Some("no tracker key"),
+            "a configured tracker that cannot answer holds the gate, so an unset \
+             key never promotes a worktree to finished"
         );
     }
 
@@ -709,15 +737,15 @@ mod tests {
             .as_deref(),
             Some("not an issue worktree")
         );
-        // No PR + no tracker, all reasons join with ", ".
+        // No PR + a tracker with no key, all reasons join with ", ".
         assert_eq!(
             reason_not_finished(
                 &wt("ENG-2", "NO_PR", false, None),
-                &tracker(TrackerKind::None, false),
+                &tracker(TrackerKind::Linear, false),
                 false
             )
             .as_deref(),
-            Some("no PR, no tracker")
+            Some("no PR, no tracker key")
         );
         // Open PR + started state + dirty; the reason names the tracker.
         assert_eq!(

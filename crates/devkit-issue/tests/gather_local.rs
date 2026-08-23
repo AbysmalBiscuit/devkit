@@ -64,10 +64,14 @@ fn gather_local_returns_offline_rows_without_network() {
 
 #[test]
 fn gather_with_builds_tracker_info_from_the_injected_tracker() {
-    // No worktree matches the filter, so nothing is fetched: the report carries
-    // the tracker's own answers and no link base to resolve.
+    // Ready plus a `None` kind is a pairing `tracker::resolve` cannot produce —
+    // `NoneTracker::ready()` is always false — so finding it in the report
+    // proves the injected tracker answered, whatever the environment holds. No
+    // worktree matches the filter, so nothing is fetched and no link base is
+    // resolved.
     let base = fixture_repo("gw");
-    let t = FakeTracker::ready([]);
+    let mut t = FakeTracker::with_states([]);
+    t.kind = TrackerKind::None;
     let report = devkit_issue::status::gather_with(
         base.join("main").to_str().unwrap(),
         &["NOPE-1".into()],
@@ -75,7 +79,7 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
     )
     .unwrap();
     assert!(report.worktrees.is_empty());
-    assert_eq!(report.tracker.kind, TrackerKind::Linear);
+    assert_eq!(report.tracker.kind, TrackerKind::None);
     assert!(report.tracker.ready);
     assert_eq!(report.tracker.link_base, None);
 
