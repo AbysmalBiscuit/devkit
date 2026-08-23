@@ -47,6 +47,16 @@ fn recorded_summary(worktree: &Path) -> Option<String> {
     devkit_common::record::read(worktree)?.summary
 }
 
+/// Whether `name` is an `ISSUE_*.md` file belonging to `issue_id`, for records
+/// written before they carried an exact summary path. The filename spells the
+/// tracker's canonical id while the record spells whatever setup was given, so
+/// the id match ignores case.
+fn is_legacy_summary(name: &str, issue_id: &str) -> bool {
+    name.starts_with("ISSUE_")
+        && name.ends_with(".md")
+        && name.to_lowercase().contains(&issue_id.to_lowercase())
+}
+
 /// Sentinel error for a worktree refused because it has uncommitted changes;
 /// the caller downcasts to it to suggest `--force` instead of a generic failure.
 #[derive(Debug)]
@@ -157,7 +167,7 @@ fn cleanup(
     if let Ok(read) = std::fs::read_dir(parent) {
         for ent in read.flatten() {
             let name = ent.file_name().to_string_lossy().into_owned();
-            if name.starts_with("ISSUE_") && name.contains(issue_id) && name.ends_with(".md") {
+            if is_legacy_summary(&name, issue_id) {
                 let _ = std::fs::remove_file(ent.path());
             }
         }
@@ -284,6 +294,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The summary filename carries the tracker's canonical id, which Linear
+    /// spells in caps, while the record carries whatever spelling setup was
+    /// given. The sweep has to bridge that.
+    #[test]
+    fn the_legacy_sweep_matches_a_lowercase_id_against_an_uppercase_filename() {
+        assert!(is_legacy_summary("ISSUE_SUMMARY_ENG-1234.md", "eng-1234"));
+        assert!(is_legacy_summary("ISSUE_SUMMARY_ENG-1234.md", "ENG-1234"));
+        assert!(is_legacy_summary("ISSUE_NOTES_eng-1234.md", "ENG-1234"));
+    }
+
+    /// Case is the only thing that widened. The substring rule still matches a
+    /// prefix of a longer id, and still rejects an unrelated one.
+    #[test]
+    fn the_legacy_sweep_rejects_a_different_issue() {
+        assert!(!is_legacy_summary("ISSUE_SUMMARY_ENG-1234.md", "ops-99"));
+        assert!(!is_legacy_summary("NOTES_ENG-1234.md", "eng-1234"));
+        assert!(!is_legacy_summary("ISSUE_SUMMARY_ENG-1234.txt", "eng-1234"));
     }
 
     #[test]
