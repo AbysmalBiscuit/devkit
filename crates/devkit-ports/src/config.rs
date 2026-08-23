@@ -741,6 +741,19 @@ pub(crate) fn resolve_with_home(
     start: &Path,
     home: Option<&Path>,
 ) -> Result<(Config, Provenance)> {
+    // Every discovered layer path, and every `[defaults]` path resolved against
+    // it, must be absolute — `strays/mod.rs` uses `worktree_root` as holder
+    // identity and for prefix matching, so a relative `start` (e.g. `doctor`
+    // passing `.`) must not leak into that value.
+    let start_buf;
+    let start = if start.is_absolute() {
+        start
+    } else {
+        let cwd = std::env::current_dir()
+            .context("resolving the current directory to absolutize the config start path")?;
+        start_buf = normalize_lexically(&cwd.join(start));
+        start_buf.as_path()
+    };
     let layers = discover(explicit, start, home)?;
     let order: Vec<PathBuf> = layers.iter().map(|(p, _)| p.clone()).collect();
     let (merged, origin) = merge_layers(&layers);
@@ -803,20 +816,37 @@ fn expand_vars(raw: &str, key: &str) -> Result<String> {
 /// routinely a directory that does not exist yet, so `fs::canonicalize` is not
 /// available; and the ports registry compares holder paths as strings, so a
 /// surviving `..` would let one directory have two spellings.
+///
+/// `PathBuf::pop`'s boolean return can't drive this: it pops a trailing `..`
+/// just as readily as a real component (`Path::new("..").parent()` is
+/// `Some("")`), which would let a second `ParentDir` cancel the first instead
+/// of accumulating. Components are tracked explicitly instead: a `ParentDir`
+/// pops only when the top of the stack is a real named component; otherwise it
+/// is either appended (relative, nothing to pop) or dropped (already at root).
 fn normalize_lexically(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
+    use std::path::Component;
+    let mut stack: Vec<Component> = Vec::new();
+    let mut has_root = false;
     for c in p.components() {
         match c {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                if !out.pop() && !out.has_root() {
-                    out.push("..");
-                }
+            Component::CurDir => {}
+            Component::RootDir | Component::Prefix(_) => {
+                has_root = true;
+                stack.push(c);
             }
-            other => out.push(other),
+            Component::ParentDir => match stack.last() {
+                Some(Component::Normal(_)) => {
+                    stack.pop();
+                }
+                Some(Component::ParentDir) | None if !has_root => {
+                    stack.push(c);
+                }
+                _ => {}
+            },
+            Component::Normal(_) => stack.push(c),
         }
     }
-    out
+    stack.into_iter().collect()
 }
 
 /// The directory of the config layer that supplied `key`, from the per-leaf
@@ -827,12 +857,14 @@ fn layer_dir<'a>(origin: &'a HashMap<String, PathBuf>, key: &str) -> Option<&'a 
 
 /// Expand `${VAR}`, then `~`, then anchor a still-relative path to the config
 /// layer that declared it. Empty stays empty — an unset optional path must not
-/// silently become the layer's own directory.
+/// silently become the layer's own directory. Emptiness is checked after
+/// expansion: a variable that is set but empty (`export FOO=`) must resolve to
+/// `""`, not to the layer directory `dir.join("")` would otherwise produce.
 fn resolve_path_key(raw: &str, key: &str, origin: &HashMap<String, PathBuf>) -> Result<String> {
-    if raw.is_empty() {
+    let expanded = expand_vars(raw, key)?;
+    if expanded.is_empty() {
         return Ok(String::new());
     }
-    let expanded = expand_vars(raw, key)?;
     let p = expand_tilde(&expanded);
     let joined = match (p.is_absolute(), layer_dir(origin, key)) {
         (true, _) | (false, None) => p,
@@ -1773,6 +1805,31 @@ steps = [
             normalize_lexically(Path::new("/a/../..")),
             PathBuf::from("/")
         );
+        assert_eq!(
+            normalize_lexically(Path::new("/a/../../..")),
+            PathBuf::from("/")
+        );
+    }
+
+    #[test]
+    fn normalize_lexically_accumulates_leading_dotdot_in_a_relative_path() {
+        // `PathBuf::pop()`'s boolean can't drive this: it happily pops a
+        // trailing `..` (`Path::new("..").parent()` is `Some("")`), so a naive
+        // implementation lets the second `ParentDir` cancel the first instead
+        // of appending another.
+        assert_eq!(normalize_lexically(Path::new("..")), PathBuf::from(".."));
+        assert_eq!(
+            normalize_lexically(Path::new("../..")),
+            PathBuf::from("../..")
+        );
+        assert_eq!(
+            normalize_lexically(Path::new("../a/../..")),
+            PathBuf::from("../..")
+        );
+        assert_eq!(
+            normalize_lexically(Path::new("a/../../b")),
+            PathBuf::from("../b")
+        );
     }
 
     #[test]
@@ -1831,10 +1888,15 @@ steps = [
              worktree_root = \"/srv/trees\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
-             baseline_path = \"\"\n",
+             baseline_path = \"~/wt/_baseline\"\n",
         );
         let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, "/srv/trees");
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        assert_eq!(
+            cfg.defaults.baseline_path,
+            home.join("wt/_baseline").to_string_lossy()
+        );
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -1890,6 +1952,62 @@ steps = [
             err.to_string().contains("DEVKIT_TEST_MISSING_ROOT"),
             "{err}"
         );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_set_but_empty_var_stays_empty_not_the_layer_dir() {
+        // `std::env::var` only errors on an *unset* variable — a variable set
+        // to the empty string (`export FOO=`, common under direnv/CI) expands
+        // to `""` and must be treated the same as an unset optional path, not
+        // silently resolved to the declaring layer's own directory.
+        unsafe { std::env::set_var("DEVKIT_TEST_EMPTY", "") };
+        let tmp = std::env::temp_dir().join(format!("devkit-emptyvarcfg-{}", std::process::id()));
+        write_cfg(
+            &tmp,
+            "[defaults]\n\
+             worktree_root = \"/srv/trees\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"${DEVKIT_TEST_EMPTY}\"\n",
+        );
+        let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
+        assert_eq!(
+            cfg.defaults.baseline_path, "",
+            "a set-but-empty variable must not become the layer dir"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_relative_start_still_resolves_to_an_absolute_path() {
+        // `devkit doctor` calls `load(None, Path::new("."))` — a relative
+        // `start` must not leak into the resolved `worktree_root`, since the
+        // ports registry uses it as holder identity and for prefix matching.
+        let tmp = std::env::temp_dir().join(format!("devkit-relstart-{}", std::process::id()));
+        write_cfg(
+            &tmp,
+            "[defaults]\n\
+             worktree_root = \"../proj-worktrees\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"\"\n",
+        );
+        // `resolve_with_home` absolutizes a relative `start` against the
+        // process's current directory, so this test drives that path the same
+        // way `devkit doctor` does. Other tests in this suite only ever *read*
+        // `current_dir()` (to build an already-absolute path), so a transient
+        // cwd change here does not corrupt them even if `cargo test` runs
+        // threads concurrently.
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&tmp).unwrap();
+        let result = resolve_with_home(None, Path::new("."), None);
+        std::env::set_current_dir(&cwd).unwrap();
+        let (cfg, _) = result.unwrap();
+        let root = Path::new(&cfg.defaults.worktree_root);
+        assert!(root.is_absolute(), "{root:?} must be absolute");
+        let expected = tmp.parent().unwrap().join("proj-worktrees");
+        assert_eq!(cfg.defaults.worktree_root, expected.to_string_lossy());
         std::fs::remove_dir_all(&tmp).ok();
     }
 }
