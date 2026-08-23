@@ -306,8 +306,8 @@ mod tests {
         assert!(is_legacy_summary("ISSUE_NOTES_eng-1234.md", "ENG-1234"));
     }
 
-    /// Case is the only thing that widened. The substring rule still matches a
-    /// prefix of a longer id, and still rejects an unrelated one.
+    /// Case is the only thing that widened: an unrelated id, a filename without
+    /// the prefix, and a non-markdown extension are all still rejected.
     #[test]
     fn the_legacy_sweep_rejects_a_different_issue() {
         assert!(!is_legacy_summary("ISSUE_SUMMARY_ENG-1234.md", "ops-99"));
