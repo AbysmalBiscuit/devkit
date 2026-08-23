@@ -102,7 +102,7 @@ in the wrong crate (next section). Either way the entry point takes primitives,
 which keeps it constructible in a test without a whole `Config`:
 
 ```rust
-pub fn resolve(kind: Option<Kind>, repo: Option<&str>, cwd: &Path) -> Box<dyn Tracker>;
+pub fn resolve(kind: Option<TrackerKind>, repo: Option<&str>, cwd: &Path) -> Box<dyn Tracker>;
 ```
 
 ### A `devkit-config` crate
@@ -142,9 +142,9 @@ already pulls, and would add `schemars` to that path for `devkit-locks` and
 `devkit-issue`, neither of which needs it. A leaf crate keeps each crate's role
 the way `AGENTS.md`'s table describes them.
 
-One consequence to accept deliberately: `Kind` needs `JsonSchema`, because
+One consequence to accept deliberately: `TrackerKind` needs `JsonSchema`, because
 `[tracker] kind` appears in the published schema and taplo's completion depends
-on the enum constraint. So `Kind` lives in `devkit-config` and
+on the enum constraint. So `TrackerKind` lives in `devkit-config` and
 `devkit-common` depends on it, giving back part of the "keep `schemars` off the
 common path" benefit. The alternative is a duplicated three-variant enum plus a
 conversion — worse code for an unmeasured compile-time saving.
@@ -161,11 +161,11 @@ are the port and app catalog, which is that crate's job.
 The state vocabulary stops being strings:
 
 ```rust
-pub enum Kind { Triage, Backlog, Unstarted, Started, Completed, Canceled }
-pub struct State { pub kind: Kind, pub name: String, pub color: String }
+pub enum StateKind { Triage, Backlog, Unstarted, Started, Completed, Canceled }
+pub struct State { pub kind: StateKind, pub name: String, pub color: String }
 ```
 
-`Kind` serializes to the same lowercase strings it replaces, so the dashboard's
+`StateKind` serializes to the same lowercase strings it replaces, so the dashboard's
 cached JSON stays readable across the upgrade and the four match sites above
 become exhaustive instead of catch-all. Per `AGENTS.md`, no `_ =>` arms.
 
@@ -173,7 +173,7 @@ The trait, one method per existing function:
 
 ```rust
 pub trait Tracker {
-    fn kind(&self) -> Kind;                                   // which provider
+    fn kind(&self) -> TrackerKind;                            // which provider
     fn ready(&self) -> bool;                                  // configured + can auth
     fn issue_ref(&self, input: &str) -> IssueRef;             // id | #n | URL → id (+ slug)
     fn title(&self, id: &str) -> Result<Option<String>>;
@@ -201,7 +201,7 @@ provider, if it is ever built, is then a file rather than a redesign.
 
 ### The GitHub mapping
 
-| GitHub | `Kind` | `State.name` | colour |
+| GitHub | `StateKind` | `State.name` | colour |
 |---|---|---|---|
 | `OPEN` | `Started` | `Open` | GitHub's `open` green, rendered yellow by `triage.rs` |
 | `CLOSED` + `COMPLETED` | `Completed` | `Done` | purple |
@@ -289,7 +289,7 @@ JSON, which is accepted.
 ```rust
 pub struct IssueWorktree { /* … */ pub state: Option<State> }
 pub struct StatusReport  { /* … */ pub tracker: TrackerInfo }
-pub struct TrackerInfo { pub kind: Kind, pub ready: bool, pub link_base: Option<String> }
+pub struct TrackerInfo { pub kind: TrackerKind, pub ready: bool, pub link_base: Option<String> }
 ```
 
 `ready` carries what `has_linear_key` meant. `link_base` generalizes
@@ -403,7 +403,7 @@ resolution on four `[defaults]` keys. Schema regen, docs. Self-contained.
 **Phase 2 — the tracker seam, Linear and None only.** A pure refactor whose
 proof is that `cargo test --workspace` stays green and every command behaves
 identically. First commit extracts `config` into a new `devkit-config` crate.
-Then `Kind` becomes an enum, the four match sites become exhaustive, the status
+Then `StateKind` replaces the state strings, the four match sites become exhaustive, the status
 report is reshaped, the MCP field rename lands, `IssueRecord` moves, id recovery
 becomes record-first, `classify` delegates to `issue_ref`, and the fake tracker
 arrives with the tests it unblocks. Nothing new is user-visible except the
