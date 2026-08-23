@@ -1031,11 +1031,10 @@ pub trait Tracker: Send + Sync {
 /// such a machine must set `kind` explicitly. What detection buys is that every
 /// config predating `[tracker]` keeps behaving exactly as it did.
 ///
-/// Both non-`None` arms return `NoneTracker` for now: Task 6 fills in Linear,
-/// and phase 3 fills in GitHub.
-```rust
+/// Both non-`None` arms currently return `NoneTracker`; the Linear and GitHub
+/// implementations replace them.
 pub fn resolve(kind: Option<TrackerKind>, repo: Option<&str>, cwd: &Path) -> Box<dyn Tracker> {
-    let _ = repo; // consumed by the GitHub tracker in phase 3
+    let _ = repo; // only the GitHub tracker reads this
     match kind.unwrap_or_else(|| detect(cwd)) {
         TrackerKind::Linear => Box::new(none::NoneTracker),
         TrackerKind::Github => {
