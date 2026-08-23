@@ -1,9 +1,9 @@
 use crate::{
     apps::{self, App},
-    config::{self, Config, Provenance},
     doppler,
 };
 use anyhow::Result;
+use devkit_config::{self as config, Config, Provenance};
 use std::collections::HashMap;
 use std::path::Path;
 

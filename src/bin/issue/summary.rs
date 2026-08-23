@@ -79,7 +79,7 @@ fn write_if_absent(path: &Path, body: &str) -> Result<bool> {
 /// The path `issue setup --summary` will write, without writing it — what
 /// `--dry-run` reports.
 pub(crate) fn plan_path(
-    cfg: &devkit_ports::config::Config,
+    cfg: &devkit_config::Config,
     d: &IssueDetails,
     worktree_root: &Path,
     worktree: &str,
@@ -100,7 +100,7 @@ pub(crate) fn plan_path(
 /// Render the summary and write it if nothing is there yet. Returns the path
 /// and whether this run created it.
 pub(crate) fn write(
-    cfg: &devkit_ports::config::Config,
+    cfg: &devkit_config::Config,
     d: &IssueDetails,
     worktree_root: &Path,
     worktree: &str,
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn default_template_carries_the_facts_and_the_empty_sections() {
         let out = devkit_common::template::render(
-            devkit_ports::config::DEFAULT_ISSUE_SUMMARY,
+            devkit_config::DEFAULT_ISSUE_SUMMARY,
             &ctx(),
             &BTreeMap::new(),
         )
@@ -216,7 +216,7 @@ mod tests {
         d.assignee = None;
         let c = context(&d, "/w/eng-42", "b", "s", "lev/", &[]);
         let out = devkit_common::template::render(
-            devkit_ports::config::DEFAULT_ISSUE_SUMMARY,
+            devkit_config::DEFAULT_ISSUE_SUMMARY,
             &c,
             &BTreeMap::new(),
         )

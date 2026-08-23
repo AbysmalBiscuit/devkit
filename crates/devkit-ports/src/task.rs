@@ -10,9 +10,9 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use devkit_common::template;
 
 use crate::apps::App;
-use crate::config::{Config, Step, TaskConfig};
 use crate::registry::{self, Role};
 use crate::run;
+use devkit_config::{Config, Step, TaskConfig};
 
 /// A command task resolved to a runnable process: rendered argv, cwd, env.
 #[derive(Debug, Clone)]
@@ -377,7 +377,7 @@ pub fn exec(plan: &CommandPlan) -> Result<std::process::ExitStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, Step, TaskConfig};
+    use devkit_config::{Config, Step, TaskConfig};
 
     #[test]
     fn tasks_text_renders_rows_or_hint() {

@@ -34,13 +34,13 @@ struct Document {
     /// `[defaults]`, `[apps]`, `[people]`, `[daemon]`, `[linear]`,
     /// `[templates]`, `[tasks]`, `[brief]`, `[hooks]`.
     #[serde(flatten)]
-    core: devkit_ports::config::Config,
+    core: devkit_config::Config,
     // `#[serde(default)]` rather than `Option`, so each table is described by
     // its own schema directly. An `Option` would render as `anyOf [T, null]`,
     // and TOML has no null for the second branch to ever match.
     /// Layer-stack control: `root = true` stops the upward walk here.
     #[serde(default)]
-    config: devkit_ports::config::LayerMarker,
+    config: devkit_config::LayerMarker,
     /// Libraries `docm` resolves version-correct checkouts for.
     #[serde(default)]
     docs: devkit_docs::manifest::DocsManifest,

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use devkit_common::progress::Steps;
 use devkit_common::slack;
-use devkit_ports::config::Person;
+use devkit_config::Person;
 use std::collections::{BTreeMap, HashMap};
 
 pub(crate) mod finish;
@@ -222,7 +222,7 @@ pub(crate) fn deliver(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devkit_ports::config::Person;
+    use devkit_config::Person;
     use std::collections::{BTreeMap, HashMap};
 
     fn person(slack: &str, gh: Option<&str>) -> Person {
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn default_review_request_appends_url() {
-        let t = devkit_ports::config::Templates::default();
+        let t = devkit_config::Templates::default();
         let ctx = serde_json::json!({"input": "please review", "pr_url": "https://gh/pr/1"});
         let out = devkit_common::template::render(t.review_request(), &ctx, &t.variables).unwrap();
         assert_eq!(out, "please review https://gh/pr/1");

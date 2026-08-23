@@ -240,7 +240,7 @@ fn monorepo_dir(args: &DashboardArgs) -> anyhow::Result<String> {
         args.config.as_deref().map(std::path::Path::new),
         std::path::Path::new(&start),
     )?;
-    let yaml = devkit_ports::config::expand_tilde(&loaded.config.defaults.doppler_yaml);
+    let yaml = devkit_config::expand_tilde(&loaded.config.defaults.doppler_yaml);
     let dir = yaml
         .parent()
         .context("doppler_yaml has no parent directory to locate the monorepo")?;

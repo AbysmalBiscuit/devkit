@@ -7,7 +7,7 @@ use clap_complete::Shell;
 use devkit_common::progress::Steps;
 use devkit_common::supervise;
 use devkit_common::{cmd::git, ui};
-use devkit_ports::config::expand_tilde;
+use devkit_config::expand_tilde;
 use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
 use devkit_ports::run;

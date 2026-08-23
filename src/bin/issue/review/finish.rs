@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_json, git};
 use devkit_common::github;
 use devkit_common::progress::Steps;
-use devkit_ports::config::Person;
+use devkit_config::Person;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -167,7 +167,7 @@ pub fn run(args: Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devkit_ports::config::Person;
+    use devkit_config::Person;
     use std::collections::HashMap;
 
     #[test]

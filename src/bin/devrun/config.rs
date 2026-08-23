@@ -1,8 +1,8 @@
 use crate::Cli;
 use anyhow::{Context, Result};
 use devkit_common::ui;
+use devkit_config::{self as config, Config, Provenance};
 use devkit_ports::apps::App;
-use devkit_ports::config::{self, Config, Provenance};
 use devkit_ports::load;
 use devkit_ports::task::{self, TaskRow};
 use std::collections::{BTreeMap, HashMap};
@@ -151,14 +151,14 @@ fn origin_json(cfg: &Config, prov: &Provenance) -> Result<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_config::{Config, Provenance};
     use devkit_ports::apps::App;
-    use devkit_ports::config::{Config, Provenance};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
     // Build the sample inline: `config::tests_sample()` is `#[cfg(test)]` in
-    // devkit-ports, so it is NOT compiled into the crate when the devrun binary
-    // builds its tests (a dependency builds without its own test cfg).
+    // devkit-config, so it is NOT compiled into the crate when the devrun
+    // binary builds its tests (a dependency builds without its own test cfg).
     fn sample_cfg() -> Config {
         Config::parse(
             "[defaults]\nworktree_root='/w'\nbranch_prefix='x/'\nbaseline_ref='r'\nbaseline_path='/b'\n[apps.api]\nbase_port=1\nlaunch=['a']\n",

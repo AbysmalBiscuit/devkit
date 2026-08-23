@@ -4,8 +4,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use devkit_config::{Config, TaskConfig};
 use devkit_ports::apps::App;
-use devkit_ports::config::{Config, TaskConfig};
 use devkit_ports::registry::{self, Role};
 use devkit_ports::task;
 

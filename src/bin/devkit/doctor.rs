@@ -86,13 +86,11 @@ fn count_strays() -> usize {
 /// rather than a warning; having none at all is how any non-devkit directory
 /// looks and is reported without complaint.
 fn config_check(start: &std::path::Path) -> Check {
-    match devkit_ports::config::health(start) {
-        devkit_ports::config::Health::Ok => Check::Ok("devkit.toml loads".into()),
-        devkit_ports::config::Health::Absent => {
-            Check::Ok("no devkit.toml — not a devkit project".into())
-        }
+    match devkit_config::health(start) {
+        devkit_config::Health::Ok => Check::Ok("devkit.toml loads".into()),
+        devkit_config::Health::Absent => Check::Ok("no devkit.toml — not a devkit project".into()),
         // A toml error breaks its own lines; the rows here are one line each.
-        devkit_ports::config::Health::Broken(why) => {
+        devkit_config::Health::Broken(why) => {
             Check::Invalid(why.split_whitespace().collect::<Vec<_>>().join(" "))
         }
     }

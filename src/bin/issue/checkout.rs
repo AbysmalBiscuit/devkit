@@ -5,7 +5,7 @@ use devkit_common::gitfetch;
 use devkit_common::github;
 use devkit_common::linear::{self, LinearIssueRef};
 use devkit_common::progress::Steps;
-use devkit_ports::config::expand_tilde;
+use devkit_config::expand_tilde;
 use devkit_ports::load;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn checkout_template_drops_linear_when_absent() {
-        use devkit_ports::config::Templates;
+        use devkit_config::Templates;
         let t = Templates::default();
         let pr_only = serde_json::json!({
             "pr_number": 3340, "pr_title": "fix-login", "linear_id": "", "linear_title": ""

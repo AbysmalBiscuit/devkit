@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, git};
 use devkit_common::gitfetch;
 use devkit_common::progress::Steps;
-use devkit_ports::config::{PrepFile, expand_tilde};
+use devkit_config::{PrepFile, expand_tilde};
 use devkit_ports::load;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -56,7 +56,7 @@ impl Prepared {
 
 /// Whether this run writes a summary file: each flag decides outright, and with
 /// neither `defaults.issue_summary` does.
-fn want_summary(args: &SetupArgs, cfg: &devkit_ports::config::Config) -> bool {
+fn want_summary(args: &SetupArgs, cfg: &devkit_config::Config) -> bool {
     if args.summary {
         return true;
     }
@@ -257,7 +257,7 @@ const MIN_SLUG: usize = 12;
 /// `branch_prefix`, a longer issue id, or a template that spells out more comes
 /// out of the slug rather than overflowing the column.
 fn slug_budget(
-    cfg: &devkit_ports::config::Config,
+    cfg: &devkit_config::Config,
     vars: &BTreeMap<String, String>,
     issue: &str,
     apps: &[String],
@@ -433,7 +433,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devkit_ports::config::Templates;
+    use devkit_config::Templates;
     use serde_json::json;
     use std::path::PathBuf;
 

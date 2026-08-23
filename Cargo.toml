@@ -33,6 +33,7 @@ chrono.workspace = true
 textplots.workspace = true
 rgb.workspace = true
 indicatif.workspace = true
+devkit-config.workspace = true
 devkit-common.workspace = true
 devkit-ports.workspace = true
 devkit-locks.workspace = true
@@ -51,7 +52,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs"]
 
 [workspace.package]
 edition = "2024"
@@ -93,6 +94,7 @@ ureq = { version = "2", features = ["json"] }
 rpassword = "7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry"] }
+devkit-config = { path = "crates/devkit-config" }
 devkit-common = { path = "crates/devkit-common" }
 devkit-ports = { path = "crates/devkit-ports" }
 devkit-locks = { path = "crates/devkit-locks" }

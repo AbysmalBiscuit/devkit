@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use devkit_ports::config::expand_tilde;
+use devkit_config::expand_tilde;
 use std::path::{Path, PathBuf};
 
 /// Resolve git's global excludes file. A configured `core.excludesfile` wins

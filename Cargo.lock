@@ -242,6 +242,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "devkit-common",
+ "devkit-config",
  "devkit-docs",
  "devkit-issue",
  "devkit-locks",
@@ -285,6 +286,17 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "devkit-config"
+version = "0.13.2"
+dependencies = [
+ "anyhow",
+ "schemars",
+ "serde",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -349,6 +361,7 @@ dependencies = [
  "anyhow",
  "clap",
  "devkit-common",
+ "devkit-config",
  "fd-lock",
  "interprocess",
  "nix",
@@ -356,7 +369,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "tempfile",
  "toml",
 ]
 

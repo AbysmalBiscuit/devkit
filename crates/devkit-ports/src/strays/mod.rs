@@ -6,8 +6,8 @@ pub use signature::{argv_matches, signature};
 
 pub mod os;
 
-use crate::config::Config;
 use crate::registry::Data;
+use devkit_config::Config;
 
 /// Which signal(s) flagged a stray.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -226,7 +226,7 @@ fn direct_root(start: u32, base: &str, by_pid: &std::collections::BTreeMap<u32, 
 /// Managed roots a stray's cwd must fall under (config-driven).
 #[cfg(unix)]
 fn managed_roots(cfg: &Config) -> Vec<String> {
-    use crate::config::expand_tilde;
+    use devkit_config::expand_tilde;
     let mut roots = Vec::new();
     if !cfg.defaults.worktree_root.is_empty() {
         roots.push(
@@ -370,8 +370,8 @@ fn port_from_argv(argv: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, Config};
     use crate::registry::{Data, Entry, Role};
+    use devkit_config::{AppConfig, Config};
 
     struct NoPorts;
     impl PortProbe for NoPorts {

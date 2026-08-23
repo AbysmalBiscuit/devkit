@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use devkit_common::cmd::{capture, gh_json, git};
 use devkit_common::github;
 use devkit_common::progress::Steps;
-use devkit_ports::config::Person;
+use devkit_config::Person;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn targets_from_logins_reverse_looks_up_and_warns() {
-        use devkit_ports::config::Person;
+        use devkit_config::Person;
         use std::collections::HashMap;
         let people = HashMap::from([(
             "lev".to_string(),

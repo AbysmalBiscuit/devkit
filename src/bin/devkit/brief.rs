@@ -37,9 +37,10 @@
 //! mode above is available under either.
 
 use anyhow::Result;
+use devkit_config as config;
+use devkit_config::BriefConfig;
 use devkit_ports::apps::App;
-use devkit_ports::config::BriefConfig;
-use devkit_ports::{config, load, registry, task};
+use devkit_ports::{load, registry, task};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
