@@ -414,7 +414,7 @@ pub fn gather_with(start: &str, ids: &[String], t: &dyn Tracker) -> Result<Statu
 /// `gather`, and like it the tracker is detected rather than read from config.
 pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = discover(start, ids)?;
-    let t = devkit_common::tracker::resolve(None, None, Path::new(start));
+    let t = devkit_common::tracker::resolve(None, Path::new(start));
     let dirty = dirty_many(&d.worktree_paths());
     Ok(assemble(
         d,

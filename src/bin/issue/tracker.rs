@@ -13,7 +13,7 @@ pub fn configured(config: Option<&str>, start: &str) -> Box<dyn Tracker> {
     let kind = load::load(config.map(Path::new), dir)
         .ok()
         .and_then(|l| l.config.tracker.kind);
-    devkit_common::tracker::resolve(kind, None, dir)
+    devkit_common::tracker::resolve(kind, dir)
 }
 
 #[cfg(test)]

@@ -156,8 +156,7 @@ pub trait Tracker: Send + Sync {
 /// `NoneTracker`. It warns only when the caller named GitHub explicitly —
 /// detection choosing it is not something the user did wrong, and the read-only
 /// paths that resolve a tracker per run would otherwise print on every call.
-pub fn resolve(kind: Option<TrackerKind>, repo: Option<&str>, cwd: &Path) -> Box<dyn Tracker> {
-    let _ = repo; // only the GitHub tracker reads this
+pub fn resolve(kind: Option<TrackerKind>, cwd: &Path) -> Box<dyn Tracker> {
     let explicitly_github = kind == Some(TrackerKind::Github);
     match kind.unwrap_or_else(|| detect(cwd)) {
         TrackerKind::Linear => Box::new(linear::LinearTracker::new(crate::secrets::resolve(
@@ -243,7 +242,7 @@ mod tests {
 
     #[test]
     fn the_none_tracker_answers_empty_and_is_never_ready() {
-        let t = resolve(Some(TrackerKind::None), None, Path::new("/nowhere"));
+        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere"));
         assert_eq!(t.kind(), TrackerKind::None);
         assert!(!t.ready());
         assert!(t.states(&["ENG-1".into()]).is_empty());
@@ -256,7 +255,7 @@ mod tests {
 
     #[test]
     fn the_none_tracker_passes_an_id_through_unchanged() {
-        let t = resolve(Some(TrackerKind::None), None, Path::new("/nowhere"));
+        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere"));
         let r = t.issue_ref("  eng-1  ");
         assert_eq!(r.id, "eng-1");
         assert_eq!(r.slug, None);
@@ -269,11 +268,11 @@ mod tests {
     fn the_same_directory_yields_whichever_kind_is_named() {
         let dir = Path::new("/nonexistent-devkit-tracker-probe");
         assert_eq!(
-            resolve(Some(TrackerKind::Linear), None, dir).kind(),
+            resolve(Some(TrackerKind::Linear), dir).kind(),
             TrackerKind::Linear
         );
         assert_eq!(
-            resolve(Some(TrackerKind::None), None, dir).kind(),
+            resolve(Some(TrackerKind::None), dir).kind(),
             TrackerKind::None
         );
     }

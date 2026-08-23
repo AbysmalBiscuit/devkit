@@ -305,7 +305,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
 
     let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
-    let tracker = devkit_common::tracker::resolve(cfg.tracker.kind, None, Path::new(&start));
+    let tracker = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start));
     let steps = Steps::persistent();
     let resolved = resolve(
         &args.target,
