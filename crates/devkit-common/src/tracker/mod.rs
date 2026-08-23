@@ -253,19 +253,19 @@ mod tests {
         assert_eq!(r.slug, None);
     }
 
-    /// Pinned against whatever this machine detects: the explicit kind under
-    /// test is chosen to differ from the detected one, so the assertion holds
-    /// with or without a `LINEAR_API_KEY` in the environment.
+    /// One directory, two explicit kinds, two different trackers: only the
+    /// explicit argument can account for the difference, so detection cannot be
+    /// deciding it. Nothing here reads the environment.
     #[test]
-    fn an_explicit_kind_is_never_overridden_by_detection() {
-        let cwd = Path::new("/nowhere");
-        let detected = resolve(None, None, cwd).kind();
-        let explicit = if detected == TrackerKind::Linear {
-            TrackerKind::None
-        } else {
+    fn the_same_directory_yields_whichever_kind_is_named() {
+        let dir = Path::new("/nonexistent-devkit-tracker-probe");
+        assert_eq!(
+            resolve(Some(TrackerKind::Linear), None, dir).kind(),
             TrackerKind::Linear
-        };
-        assert_ne!(explicit, detected, "the kinds under test must differ");
-        assert_eq!(resolve(Some(explicit), None, cwd).kind(), explicit);
+        );
+        assert_eq!(
+            resolve(Some(TrackerKind::None), None, dir).kind(),
+            TrackerKind::None
+        );
     }
 }

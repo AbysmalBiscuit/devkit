@@ -9,6 +9,7 @@ pub mod progress;
 pub mod report;
 pub mod secrets;
 pub mod slack;
+pub mod slug;
 pub mod store;
 pub mod supervise;
 pub mod sys;

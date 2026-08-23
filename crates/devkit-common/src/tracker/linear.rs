@@ -468,13 +468,6 @@ fn assigned_query(after: Option<&str>) -> String {
     )
 }
 
-/// Every issue assigned to me, paginated. Empty on no key / network error.
-pub fn assigned_issue_history(key: &str) -> Result<Vec<AssignedIssue>> {
-    assigned_issue_history_with_progress(key, |_| {})
-}
-
-/// As [`assigned_issue_history`], calling `on_page` with the running total after
-/// each fetched page — lets a caller show a rising count while pages stream in.
 /// One `issues.nodes[]` entry from [`assigned_query`]. Pure → testable.
 fn parse_assigned_node(n: &serde_json::Value) -> AssignedIssue {
     let history = n["history"]["nodes"]
@@ -503,6 +496,13 @@ fn optional_state(v: &serde_json::Value) -> Option<State> {
     (!v.is_null()).then(|| parse_state(v))
 }
 
+/// Every issue assigned to me, paginated. Empty on no key / network error.
+pub fn assigned_issue_history(key: &str) -> Result<Vec<AssignedIssue>> {
+    assigned_issue_history_with_progress(key, |_| {})
+}
+
+/// As [`assigned_issue_history`], calling `on_page` with the running total after
+/// each fetched page — lets a caller show a rising count while pages stream in.
 pub fn assigned_issue_history_with_progress(
     key: &str,
     mut on_page: impl FnMut(usize),
@@ -560,22 +560,6 @@ fn parse_state(v: &serde_json::Value) -> State {
     }
 }
 
-/// Lowercase, collapse non-alphanumerics to single dashes, trim dashes.
-fn slugify(s: &str) -> String {
-    let mut out = String::new();
-    let mut prev_dash = false;
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.extend(c.to_lowercase());
-            prev_dash = false;
-        } else if !prev_dash {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    out.trim_matches('-').to_string()
-}
-
 /// The id and title slug in a Linear issue URL's `…/issue/<ID>/<title-slug>`
 /// path. `None` when there is no `issue/<ID>` pair to read.
 ///
@@ -592,7 +576,10 @@ fn url_ref(url: &str) -> Option<IssueRef> {
     let id = segments.nth(1).filter(|s| !s.is_empty())?;
     Some(IssueRef {
         id: id.to_uppercase(),
-        slug: segments.next().map(slugify).filter(|s| !s.is_empty()),
+        slug: segments
+            .next()
+            .map(crate::slug::slugify)
+            .filter(|s| !s.is_empty()),
     })
 }
 
@@ -711,6 +698,9 @@ impl Tracker for LinearTracker {
     }
 
     fn issue_url(&self, id: &str) -> Option<String> {
+        // No key, no link: `workspace_url_key` would otherwise resolve one from
+        // the ambient environment this tracker was constructed without.
+        self.key.as_ref()?;
         let ws = workspace_url_key()?;
         Some(format!("https://linear.app/{ws}/issue/{id}"))
     }
@@ -1035,12 +1025,81 @@ mod tests {
     #[test]
     fn linear_reads_an_id_and_slug_from_a_url_by_path_position() {
         let t = LinearTracker::new(Some("k".into()));
-        let r = t.issue_ref("https://linear.app/acme-2/issue/ENG-42/fix-the-login");
-        assert_eq!(
-            r.id, "ENG-42",
-            "a workspace named acme-2 is not the issue id"
-        );
-        assert_eq!(r.slug.as_deref(), Some("fix-the-login"));
+        for url in [
+            "https://linear.app/acme-2/issue/ENG-42/fix-the-login",
+            "https://linear.app/acme-2/issue/eng-42/fix-the-login",
+        ] {
+            let r = t.issue_ref(url);
+            assert_eq!(
+                r.id, "ENG-42",
+                "a workspace named acme-2 is not the issue id, and an id is uppercase: {url}"
+            );
+            assert_eq!(r.slug.as_deref(), Some("fix-the-login"), "{url}");
+        }
+    }
+
+    /// A keyless tracker answers `None` rather than resolving a workspace off
+    /// the ambient environment, matching every other method on it.
+    #[test]
+    fn a_keyless_linear_tracker_builds_no_issue_url() {
+        assert!(LinearTracker::new(None).issue_url("ENG-1").is_none());
+    }
+
+    #[test]
+    fn linear_details_flatten_absent_fields_to_empty_strings() {
+        let wire = IssueDetails {
+            identifier: "ENG-42".into(),
+            title: "Fix the login redirect".into(),
+            url: "https://linear.app/acme/issue/ENG-42/fix".into(),
+            description: "Steps:\n1. click\n".into(),
+            state: None,
+            assignee: None,
+            priority: None,
+            estimate: None,
+            labels: vec!["auth".into()],
+            parent: None,
+            project: None,
+        };
+        let d: super::super::IssueDetails = wire.into();
+        assert_eq!(d.id, "ENG-42", "Linear's identifier is the shared id");
+        assert_eq!(d.title, "Fix the login redirect");
+        assert_eq!(d.url, "https://linear.app/acme/issue/ENG-42/fix");
+        assert_eq!(d.description, "Steps:\n1. click\n");
+        assert_eq!(d.labels, vec!["auth".to_string()]);
+        for (field, got) in [
+            ("state", d.state),
+            ("assignee", d.assignee),
+            ("priority", d.priority),
+            ("estimate", d.estimate),
+            ("parent", d.parent),
+            ("project", d.project),
+        ] {
+            assert_eq!(got, "", "an absent {field} renders as the empty string");
+        }
+    }
+
+    #[test]
+    fn linear_details_carry_every_present_field_across() {
+        let wire = IssueDetails {
+            identifier: "ENG-7".into(),
+            title: "t".into(),
+            url: "u".into(),
+            description: "d".into(),
+            state: Some("Todo".into()),
+            assignee: Some("Lev".into()),
+            priority: Some("High".into()),
+            estimate: Some("3".into()),
+            labels: vec![],
+            parent: Some("ENG-1 \u{2014} Login epic".into()),
+            project: Some("Q3 hardening".into()),
+        };
+        let d: super::super::IssueDetails = wire.into();
+        assert_eq!(d.state, "Todo");
+        assert_eq!(d.assignee, "Lev");
+        assert_eq!(d.priority, "High");
+        assert_eq!(d.estimate, "3");
+        assert_eq!(d.parent, "ENG-1 \u{2014} Login epic");
+        assert_eq!(d.project, "Q3 hardening");
     }
 
     #[test]
