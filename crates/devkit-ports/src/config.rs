@@ -766,6 +766,39 @@ pub(crate) fn resolve_with_home(
     ))
 }
 
+/// Expand `${VAR}` references in a config value. `$$` is a literal `$`; a `$`
+/// followed by anything else is left alone, since it is a legal path character.
+/// An unset variable is an error naming both the config key and the variable —
+/// silently substituting an empty string would produce a plausible wrong path.
+#[allow(dead_code)]
+fn expand_vars(raw: &str, key: &str) -> Result<String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(i) = rest.find('$') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        if let Some(tail) = after.strip_prefix('$') {
+            out.push('$');
+            rest = tail;
+        } else if let Some(tail) = after.strip_prefix('{') {
+            let end = tail
+                .find('}')
+                .with_context(|| format!("`{key}`: unterminated `${{` in {raw:?}"))?;
+            let name = &tail[..end];
+            let val = std::env::var(name).map_err(|_| {
+                anyhow::anyhow!("`{key}`: `${{{name}}}` is not set in the environment")
+            })?;
+            out.push_str(&val);
+            rest = &tail[end + 1..];
+        } else {
+            out.push('$');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 pub fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/")
         && let Some(h) = std::env::var_os("HOME")
@@ -1614,5 +1647,52 @@ steps = [
         let out = toml::to_string(&c).unwrap();
         let c2 = Config::parse(&out).unwrap();
         assert_eq!(c2.tasks["build"].require_live, vec!["api"]);
+    }
+
+    #[test]
+    fn expand_vars_substitutes_a_set_variable() {
+        unsafe { std::env::set_var("DEVKIT_TEST_ROOT", "/srv/work") };
+        let got = expand_vars("${DEVKIT_TEST_ROOT}/trees", "defaults.worktree_root").unwrap();
+        assert_eq!(got, "/srv/work/trees");
+    }
+
+    #[test]
+    fn expand_vars_errors_naming_the_key_and_the_variable() {
+        let err = expand_vars("${DEVKIT_TEST_ABSENT}/x", "defaults.worktree_root")
+            .expect_err("an unset variable must be an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("defaults.worktree_root"),
+            "message names the key: {msg}"
+        );
+        assert!(
+            msg.contains("DEVKIT_TEST_ABSENT"),
+            "message names the variable: {msg}"
+        );
+    }
+
+    #[test]
+    fn expand_vars_treats_double_dollar_as_a_literal() {
+        let got = expand_vars("/opt/$${NOT_A_VAR}/x", "defaults.baseline_path").unwrap();
+        assert_eq!(got, "/opt/${NOT_A_VAR}/x");
+    }
+
+    #[test]
+    fn expand_vars_passes_a_bare_dollar_through() {
+        // A `$` not followed by `{` or `$` is a legal path character, so it stays.
+        let got = expand_vars("/opt/a$b/c", "defaults.baseline_path").unwrap();
+        assert_eq!(got, "/opt/a$b/c");
+    }
+
+    #[test]
+    fn expand_vars_errors_on_an_unterminated_brace() {
+        let err = expand_vars("${OPEN", "defaults.worktree_root").expect_err("unterminated");
+        assert!(err.to_string().contains("unterminated"), "{err}");
+    }
+
+    #[test]
+    fn expand_vars_leaves_a_plain_value_alone() {
+        let got = expand_vars("~/Git/example", "defaults.worktree_root").unwrap();
+        assert_eq!(got, "~/Git/example");
     }
 }
