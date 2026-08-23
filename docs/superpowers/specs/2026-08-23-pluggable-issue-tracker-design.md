@@ -91,20 +91,21 @@ version, which matters: the installed `gh` 2.46.0 has no `stateReason` in its
 ### The seam
 
 `devkit_common::tracker`, with `tracker::{linear, github, none}` submodules.
-`linear.rs` moves down one level rather than into a new crate.
+`linear.rs` moves down one level rather than into a crate of its own. It sits
+beside `github` and `slack`, which are the same kind of thing: a client for one
+outside service.
 
-A new crate was the first instinct and it was wrong. The apparent constraint was
-that `Config` lives in `devkit-ports`, which depends on `devkit-common`, so a
-tracker taking `&Config` could not live in `devkit-common` without inverting the
-graph. The real answer is that `Config` is in the wrong crate (see below). Either
-way the entry point takes primitives, which keeps it constructible in a test
-without a whole `Config`:
+A `devkit-tracker` crate was the first instinct, on the reasoning that `Config`
+lives in `devkit-ports` and a tracker taking `&Config` would invert the
+dependency graph. That reasoning had the wrong culprit — `Config` is the thing
+in the wrong crate (next section). Either way the entry point takes primitives,
+which keeps it constructible in a test without a whole `Config`:
 
 ```rust
 pub fn resolve(kind: Option<Kind>, repo: Option<&str>, cwd: &Path) -> Box<dyn Tracker>;
 ```
 
-### Moving `config` to `devkit-common`
+### A `devkit-config` crate
 
 `devkit-ports/src/config.rs` is 1618 lines with zero `crate::` imports. It
 depends on `anyhow`, `schemars`, `serde`, `toml`, and `std`, and nothing else in
@@ -113,18 +114,49 @@ its own crate. It is a leaf module in the wrong place, most likely because
 before it grew `[defaults]`, `[templates]`, `[docs]`, `[brief]`, and
 `[harness]`.
 
-The misplacement already costs something. `devkit-locks/src/hook.rs:137`
-declares its own `HarnessProbe` struct to read `[harness] enforce_writes`
-because it cannot depend on `devkit-ports`; the narrow two-file read that goes
-with it is deliberate and documented (`docs/configuration.md:331`), but the
-duplicated type is not. And `devkit-issue` cannot read config at all.
+Three consumers already work around the placement, because none of them can
+depend on `devkit-ports`:
 
-The move is mechanical: 30 reference lines across 14 files, plus four
-`devkit-ports` modules changing `crate::config` to `devkit_common::config`. The
-dependency direction is already `devkit-ports` → `devkit-common`, so nothing
-inverts. It lands as the first commit of phase 2, ahead of the tracker work, and
-makes a `tracker::from_config` convenience natural alongside the primitive
-`resolve`.
+| Crate | Workaround |
+|---|---|
+| `devkit-locks` | declares its own `HarnessProbe` to read `[harness] enforce_writes` (`hook.rs:137`) |
+| `devkit-docs` | reimplements the whole layer walk over `devkit.toml` (`manifest.rs:167-180`) |
+| `devkit-issue` | cannot read config at all |
+
+The `devkit-docs` one is not merely duplication. Its walk reads only
+`devkit.toml` — no `devkit.local.toml`, no `[config] root = true` cutoff, no
+`$DEVKIT_CONFIG` — while `config.rs:730` lists `docs` in `STANDALONE_SECTIONS`
+and `docs/configuration.md` documents `devkit.local.toml` as the untracked twin
+with the same shape and schema. **A `[docs]` section in a `devkit.local.toml` is
+valid config that `docm` silently ignores.** See "Discovered defects" below.
+
+So `config` becomes its own crate rather than moving into `devkit-common`:
+
+```
+devkit-config   ← anyhow, schemars, serde, toml. No internal deps.
+    ↑ devkit-common, devkit-ports, devkit-locks, devkit-issue, devkit-docs
+```
+
+Parking 1618 lines in `devkit-common` would put them in the crate everything
+already pulls, and would add `schemars` to that path for `devkit-locks` and
+`devkit-issue`, neither of which needs it. A leaf crate keeps each crate's role
+the way `AGENTS.md`'s table describes them.
+
+One consequence to accept deliberately: `Kind` needs `JsonSchema`, because
+`[tracker] kind` appears in the published schema and taplo's completion depends
+on the enum constraint. So `Kind` lives in `devkit-config` and
+`devkit-common` depends on it, giving back part of the "keep `schemars` off the
+common path" benefit. The alternative is a duplicated three-variant enum plus a
+conversion — worse code for an unmeasured compile-time saving.
+
+The move itself is mechanical: 30 reference lines across 14 files, plus four
+`devkit-ports` modules (`apps`, `task`, `load`, `strays`) changing
+`crate::config` to `devkit_config::`. It lands as
+the first commit of phase 2, and makes a `tracker::from_config` convenience
+natural alongside the primitive `resolve`.
+
+Scope stays narrow. `apps`, `doppler`, and `load` stay in `devkit-ports`; they
+are the port and app catalog, which is that crate's job.
 
 The state vocabulary stops being strings:
 
@@ -148,7 +180,7 @@ pub trait Tracker {
     fn details(&self, id: &str) -> Result<Option<IssueDetails>>;
     fn states(&self, ids: &[String]) -> HashMap<String, State>;
     fn issue_pr(&self, id: &str) -> Result<Option<PrRef>>;
-    fn exists(&self, n: u64) -> Result<Vec<IssueRef>>;        // bare-number disambiguation
+    fn candidates(&self, n: u64) -> Result<Vec<IssueRef>>;    // bare-number disambiguation
     fn issues_for_prs(&self, urls: &[String]) -> HashMap<String, Vec<String>>;
     fn assigned_history(&self, on_page: &mut dyn FnMut(usize)) -> Result<Vec<AssignedIssue>>;
     fn timeline_origin(&self) -> Result<Option<String>>;
@@ -198,11 +230,19 @@ CROSS_REFERENCED_EVENT])`, filtered to PRs in the same repo. This is the least
 certain mapping in the design and should be prototyped against a real linked
 pair before the phase-3 plan hardens.
 
-`exists(n)` is the one place GitHub is *worse* than Linear. A bare `87` is
-ambiguous between issue #87 and PR #87 in the same repository, where Linear's
-namespaces at least differ. The existing `decide_fuzzy` machinery
-(`checkout.rs:190-205`) already handles "both exist, prompt on a TTY, error when
-not", so the ambiguity is absorbed rather than newly introduced.
+`candidates(n)` returns empty for GitHub, by decision. A bare `87` is ambiguous
+between issue #87 and PR #87 in one repository, where Linear's namespaces at
+least differ. Rather than route that through the `decide_fuzzy` prompt
+(`checkout.rs:190-205`), the GitHub tracker keeps the rule `checkout-pr` already
+applies when no Linear key is set (`checkout.rs:182-188`): **a bare number is a
+PR.** One rule, no prompt. The method stays on the trait because Linear needs it.
+
+That leaves no shorthand for "the *issue* numbered 87" under GitHub, which is
+acceptable because the issue URL is unambiguous. `classify` (`checkout.rs:31`)
+currently hardcodes both URL shapes; it delegates id and URL recognition to
+`Tracker::issue_ref` and keeps only the two generic rules it already has —
+`#N` is a PR, and a `github.com/…/pull/N` URL is a PR. A
+`github.com/…/issues/N` URL then resolves as an issue through the tracker.
 
 ### The `None` tracker
 
@@ -362,17 +402,18 @@ resolution on four `[defaults]` keys. Schema regen, docs. Self-contained.
 
 **Phase 2 — the tracker seam, Linear and None only.** A pure refactor whose
 proof is that `cargo test --workspace` stays green and every command behaves
-identically. First commit moves `config` to `devkit-common`. Then `Kind` becomes
-an enum, the four match sites become exhaustive, the status report is reshaped,
-the MCP field rename lands, `IssueRecord` moves, id recovery becomes
-record-first, and the fake tracker arrives with the tests it unblocks. Nothing
-new is user-visible except the renamed status strings.
+identically. First commit extracts `config` into a new `devkit-config` crate.
+Then `Kind` becomes an enum, the four match sites become exhaustive, the status
+report is reshaped, the MCP field rename lands, `IssueRecord` moves, id recovery
+becomes record-first, `classify` delegates to `issue_ref`, and the fake tracker
+arrives with the tests it unblocks. Nothing new is user-visible except the
+renamed status strings.
 
 **Phase 3 — the GitHub tracker.** The adapter against a contract two
 implementations already exercise, plus `[tracker]`/`[github]` config, the doctor
-row, conventional-title parsing, schema regen, and docs. `issue_pr`'s
-cross-reference mapping is the one piece to prototype before committing to the
-plan.
+row, the `gh auth login` guidance on the `devkit auth` and doctor paths,
+conventional-title parsing, schema regen, and docs. `issue_pr`'s cross-reference
+mapping is the one piece to prototype before committing to the plan.
 
 ## Testing
 
@@ -409,25 +450,58 @@ reads `HOME` only and silently no-ops where it is unset.
 | Risk | Mitigation |
 |---|---|
 | `issue_pr` cross-reference mapping is unproven | prototype against a real linked issue/PR pair before the phase-3 plan is written; fall back to "no linked PR" rather than guessing |
-| Bare-number ambiguity between issue #N and PR #N | reuse `decide_fuzzy`: prompt on a TTY, error with both disambiguated forms when not |
 | Phase 2 is a wide refactor across five crates | it is behavior-preserving by construction; a green workspace test run plus unchanged CLI output is the gate |
 | Detection surprises a user with a global Linear key | `devkit doctor` prints the resolved tracker and the reason; documented in `docs/configuration.md` |
 | Layer-relative paths change existing relative-path configs | no known config uses a relative path for these keys; call it out in the release notes |
-| The `config` move collides with concurrent work in this checkout | it touches 14 files by import line only; land it as its own commit, first, and rebase rather than merge |
+| The `config` extraction collides with concurrent work in this checkout | it touches 14 files by import line only; land it as its own commit, first, and rebase rather than merge |
+| Bare-number ambiguity between issue #N and PR #N | resolved by decision: a bare number is a PR under the GitHub tracker |
 
-`AGENTS.md`'s crate table changes twice: `devkit-common` gains `config` and
-`tracker` in phase 2, and `devkit-ports` loses `config` from its description.
+`AGENTS.md`'s crate table gains a `devkit-config` row in phase 2,
+`devkit-common` gains `tracker` and loses `linear`, and `devkit-ports` loses
+`config` from its description.
 `docs/configuration.md` gains `[tracker]`, `[github]`,
 `[templates] parse_conventional_titles`, and the path-expansion rules.
 
-## Open questions
+## Discovered defects
 
-1. `GraphQL` `stateReason` is null on issues closed before GitHub introduced the
-   field. Treat null-with-`CLOSED` as `Completed` or as `Canceled`? Leaning
-   `Completed`, since the field defaulted to that behavior.
-2. Does `issue checkout-pr` under the GitHub tracker need `exists()` at all, or
-   should a bare number simply mean "PR" as it already does when no Linear key is
-   set (`checkout.rs:182-188`)? The simpler rule may be the better one.
-3. `devkit auth` gains no GitHub provider, since `gh auth login` and the token
-   env vars already cover it. Confirm that leaving `devkit auth` Linear-only is
-   acceptable rather than adding a pass-through.
+Found while scoping this work. Neither is in scope; both should be filed.
+
+1. **`docm` ignores `[docs]` in a `devkit.local.toml`.** `manifest.rs:167-180`
+   walks upward reading only `devkit.toml`, while `config.rs:730` lists `docs`
+   among the sections a standalone layer may carry and
+   `docs/configuration.md:23` documents the local file as the untracked twin
+   with the same shape and schema. The same walk also misses `[config] root =
+   true` and `$DEVKIT_CONFIG`.
+
+   The fix is not the deletion it looks like. `docm` merges `[[docs.libs]]`
+   entry-by-entry by lib name, while `config::deep_merge` replaces arrays
+   wholesale, so `devkit-docs` needs the *layer list*, not the merged table.
+   That means making `discover` public and reworking `manifest::load` around it.
+   Extracting `devkit-config` is the prerequisite, not the fix.
+
+2. **`pr_number_from_url` lives in `linear.rs`.** It parses a GitHub PR URL and
+   has no Linear content. Moves to `devkit_common::github` with this work.
+
+## Resolved decisions
+
+Settled during design; recorded so the plan does not relitigate them.
+
+| Question | Decision |
+|---|---|
+| `stateReason` null on an old closed issue | `Completed`. The field defaulted to that behavior before it existed. |
+| Bare-number ambiguity under GitHub | No disambiguation. A bare number is a PR; the issue URL addresses an issue. |
+| A GitHub provider for `devkit auth` | No. `gh auth login` and `GH_TOKEN`/`GITHUB_TOKEN` already cover it. |
+| Conventional-title stripping | On by default, `[templates] parse_conventional_titles = false` to disable. |
+| Where `config` lives | Its own `devkit-config` leaf crate, not `devkit-common`. |
+
+Because `devkit auth` gains nothing, the GitHub path must say so out loud or a
+user will run `devkit auth` and find no GitHub option:
+
+- `devkit auth` with no subcommand, and `devkit auth github` if typed, print
+  that GitHub authentication is `gh auth login` or a `GH_TOKEN` /
+  `GITHUB_TOKEN` export, and that devkit reads both (`github.rs:51`).
+- `devkit doctor`'s tracker row, when the resolved tracker is GitHub and
+  `github::token()` returns `None`, carries the same instruction as its hint,
+  matching the existing `HINT_LINEAR` pattern (`doctor.rs:21`).
+- Any tracker call failing on a missing token surfaces the `bearer()` message
+  that already names both, rather than a bare 401.
