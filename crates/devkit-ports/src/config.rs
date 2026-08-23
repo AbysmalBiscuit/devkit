@@ -754,9 +754,10 @@ pub(crate) fn resolve_with_home(
              which `[{section}]` needs"
         );
     }
-    let cfg: Config = toml::Value::Table(merged)
+    let mut cfg: Config = toml::Value::Table(merged)
         .try_into()
         .context("deserializing merged devkit config")?;
+    resolve_defaults(&mut cfg, &origin)?;
     Ok((
         cfg,
         Provenance {
@@ -770,7 +771,6 @@ pub(crate) fn resolve_with_home(
 /// followed by anything else is left alone, since it is a legal path character.
 /// An unset variable is an error naming both the config key and the variable —
 /// silently substituting an empty string would produce a plausible wrong path.
-#[allow(dead_code)]
 fn expand_vars(raw: &str, key: &str) -> Result<String> {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -799,6 +799,63 @@ fn expand_vars(raw: &str, key: &str) -> Result<String> {
     Ok(out)
 }
 
+/// Resolve `.` and `..` without touching the filesystem. `worktree_root` is
+/// routinely a directory that does not exist yet, so `fs::canonicalize` is not
+/// available; and the ports registry compares holder paths as strings, so a
+/// surviving `..` would let one directory have two spellings.
+fn normalize_lexically(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() && !out.has_root() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The directory of the config layer that supplied `key`, from the per-leaf
+/// provenance map.
+fn layer_dir<'a>(origin: &'a HashMap<String, PathBuf>, key: &str) -> Option<&'a Path> {
+    origin.get(key).and_then(|p| p.parent())
+}
+
+/// Expand `${VAR}`, then `~`, then anchor a still-relative path to the config
+/// layer that declared it. Empty stays empty — an unset optional path must not
+/// silently become the layer's own directory.
+fn resolve_path_key(raw: &str, key: &str, origin: &HashMap<String, PathBuf>) -> Result<String> {
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+    let expanded = expand_vars(raw, key)?;
+    let p = expand_tilde(&expanded);
+    let joined = match (p.is_absolute(), layer_dir(origin, key)) {
+        (true, _) | (false, None) => p,
+        (false, Some(dir)) => dir.join(p),
+    };
+    Ok(normalize_lexically(&joined).to_string_lossy().into_owned())
+}
+
+/// Resolve every `[defaults]` value that carries a path or an environment
+/// reference, in place, once, at load time.
+fn resolve_defaults(cfg: &mut Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
+    for (key, field) in [
+        ("defaults.worktree_root", &mut cfg.defaults.worktree_root),
+        ("defaults.baseline_path", &mut cfg.defaults.baseline_path),
+        ("defaults.doppler_yaml", &mut cfg.defaults.doppler_yaml),
+    ] {
+        *field = resolve_path_key(field, key, origin)?;
+    }
+    cfg.defaults.branch_prefix =
+        expand_vars(&cfg.defaults.branch_prefix, "defaults.branch_prefix")?;
+    Ok(())
+}
+
 pub fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/")
         && let Some(h) = std::env::var_os("HOME")
@@ -816,6 +873,7 @@ pub fn tests_sample() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
     pub(crate) const SAMPLE: &str = r#"
 [defaults]
 worktree_root = "~/Git/example"
@@ -1694,5 +1752,144 @@ steps = [
     fn expand_vars_leaves_a_plain_value_alone() {
         let got = expand_vars("~/Git/example", "defaults.worktree_root").unwrap();
         assert_eq!(got, "~/Git/example");
+    }
+
+    /// Write `body` to `<dir>/devkit.toml` and return the file's path.
+    fn write_cfg(dir: &Path, body: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join("devkit.toml");
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+        p
+    }
+
+    #[test]
+    fn normalize_lexically_drops_dot_and_pops_dotdot() {
+        assert_eq!(
+            normalize_lexically(Path::new("/a/b/../c/./d")),
+            PathBuf::from("/a/c/d")
+        );
+        assert_eq!(
+            normalize_lexically(Path::new("/a/../..")),
+            PathBuf::from("/")
+        );
+    }
+
+    #[test]
+    fn a_relative_path_resolves_against_its_declaring_layer() {
+        let tmp = std::env::temp_dir().join(format!("devkit-relcfg-{}", std::process::id()));
+        let proj = tmp.join("proj");
+        write_cfg(
+            &proj,
+            "[defaults]\n\
+             worktree_root = \"../proj-worktrees\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"../proj-worktrees/_baseline\"\n",
+        );
+        let (cfg, _) = resolve_with_home(None, &proj, None).unwrap();
+        assert_eq!(
+            cfg.defaults.worktree_root,
+            tmp.join("proj-worktrees").to_string_lossy()
+        );
+        assert_eq!(
+            cfg.defaults.baseline_path,
+            tmp.join("proj-worktrees/_baseline").to_string_lossy()
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn the_same_relative_path_resolves_alike_from_two_start_dirs() {
+        let tmp = std::env::temp_dir().join(format!("devkit-relcfg2-{}", std::process::id()));
+        let proj = tmp.join("proj");
+        let nested = proj.join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        write_cfg(
+            &proj,
+            "[defaults]\n\
+             worktree_root = \"../proj-worktrees\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"\"\n",
+        );
+        let (from_root, _) = resolve_with_home(None, &proj, None).unwrap();
+        let (from_nested, _) = resolve_with_home(None, &nested, None).unwrap();
+        assert_eq!(
+            from_root.defaults.worktree_root,
+            from_nested.defaults.worktree_root
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn an_absolute_path_and_a_tilde_path_are_left_absolute() {
+        let tmp = std::env::temp_dir().join(format!("devkit-abscfg-{}", std::process::id()));
+        write_cfg(
+            &tmp,
+            "[defaults]\n\
+             worktree_root = \"/srv/trees\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"\"\n",
+        );
+        let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
+        assert_eq!(cfg.defaults.worktree_root, "/srv/trees");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn an_empty_path_key_stays_empty() {
+        let tmp = std::env::temp_dir().join(format!("devkit-emptycfg-{}", std::process::id()));
+        write_cfg(
+            &tmp,
+            "[defaults]\n\
+             worktree_root = \"/srv/trees\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"\"\n",
+        );
+        let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
+        assert_eq!(
+            cfg.defaults.baseline_path, "",
+            "an unset path must not become the layer dir"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn branch_prefix_expands_vars_but_is_not_a_path() {
+        unsafe { std::env::set_var("DEVKIT_TEST_DEV", "lev") };
+        let tmp = std::env::temp_dir().join(format!("devkit-prefixcfg-{}", std::process::id()));
+        write_cfg(
+            &tmp,
+            "[defaults]\n\
+             worktree_root = \"/srv/trees\"\n\
+             branch_prefix = \"${DEVKIT_TEST_DEV}/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"\"\n",
+        );
+        let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
+        assert_eq!(cfg.defaults.branch_prefix, "lev/");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn an_unset_var_fails_the_whole_config_load() {
+        let tmp = std::env::temp_dir().join(format!("devkit-badvarcfg-{}", std::process::id()));
+        write_cfg(
+            &tmp,
+            "[defaults]\n\
+             worktree_root = \"${DEVKIT_TEST_MISSING_ROOT}/trees\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"\"\n",
+        );
+        let err = resolve_with_home(None, &tmp, None).expect_err("unset var must fail the load");
+        assert!(
+            err.to_string().contains("DEVKIT_TEST_MISSING_ROOT"),
+            "{err}"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

@@ -159,6 +159,33 @@ anything.
 | `issue_summary` | no (default `false`) | Write the issue summary file on every `issue setup`, as though `--summary` were passed. `--summary` / `--no-summary` still decide a single run. The file's path and body come from `templates.issue_summary_path` and `templates.issue_summary`. |
 | `worktree_include` | no | Glob patterns (relative to the monorepo root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten; copy failures warn and are skipped (fail-open). Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
 
+### Path values
+
+`worktree_root`, `baseline_path`, and `doppler_yaml` are resolved once when the
+config loads, in this order:
+
+1. `${VAR}` is replaced with that environment variable. An unset variable is an
+   error naming both the config key and the variable. `$$` is a literal `$`; a
+   `$` followed by anything else is left alone.
+2. A leading `~/` expands to `$HOME`.
+3. A path that is still relative is resolved against **the directory of the
+   config file that declared it**, not the working directory, and `.` / `..` are
+   folded out.
+
+`branch_prefix` gets step 1 only.
+
+Step 3 is what lets a project commit its `devkit.toml`:
+
+```toml
+[defaults]
+worktree_root = "../myproject-worktrees"
+baseline_path = "../myproject-worktrees/_baseline"
+baseline_ref  = "origin/main"
+```
+
+That is correct on every machine and for every developer. Only `branch_prefix`
+is personal — put it in `devkit.local.toml`, or write `"${USER}/"`.
+
 ### `[apps.<name>]`
 
 One table per runnable app. `<name>` is the app id passed to `issue setup --apps`.
