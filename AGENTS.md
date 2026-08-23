@@ -150,8 +150,8 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   from. Config loading belongs to the callers that have it — the `issue`
   binary's `crate::tracker::configured` and the MCP `issue.status` action —
   and a config that does not load degrades to detection rather than failing the
-  command. `devkit-issue` reads no config: `status::gather`/`gather_local`
-  detect, and a config-aware caller injects its tracker via `status::gather_with`.
+  command. `devkit-issue` reads no config: `status::gather_local` detects, and
+  every other caller injects its tracker via `status::gather_with`.
 - `StateKind` (Triage/Backlog/Unstarted/Started/Completed/Canceled) is the state
   vocabulary every tracker maps onto — match it exhaustively, no `_ =>` arms.
   Only `Completed` and `Canceled` are closed.

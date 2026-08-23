@@ -371,19 +371,10 @@ pub fn reason_not_finished(
 }
 
 /// Discover worktrees, fetch PRs + tracker state concurrently, and compute the
-/// finished verdict against this project's tracker. Silent — no progress output
-/// (the CLI re-orchestrates the same pieces with bars).
-///
-/// The tracker is *detected*: this crate reads no config, so a `[tracker] kind`
-/// has no say here. A caller that loads config resolves its own tracker and
-/// calls `gather_with`.
-pub fn gather(start: &str, ids: &[String]) -> Result<StatusReport> {
-    let t = devkit_common::tracker::resolve(None, None, Path::new(start));
-    gather_with(start, ids, t.as_ref())
-}
-
-/// `gather` against a caller-supplied tracker. Tests inject a fake; callers
-/// that already resolved one avoid resolving it twice.
+/// finished verdict against a caller-supplied tracker. Silent — no progress
+/// output (the CLI re-orchestrates the same pieces with bars). This crate reads
+/// no config, so the caller that loaded one resolves the tracker and injects it;
+/// tests inject a fake.
 pub fn gather_with(start: &str, ids: &[String], t: &dyn Tracker) -> Result<StatusReport> {
     let d = discover(start, ids)?;
     let info = TrackerInfo {
