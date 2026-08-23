@@ -7,6 +7,8 @@ use std::path::Path;
 
 pub use devkit_config::TrackerKind;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod fake;
 pub mod linear;
 pub mod none;
 

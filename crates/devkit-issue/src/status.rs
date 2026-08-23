@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_json, git};
 use devkit_common::github;
-use devkit_common::tracker::{State, linear};
+use devkit_common::tracker::{State, StateKind, Tracker, TrackerKind};
 use devkit_common::worktree;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
 struct Pr {
@@ -31,7 +32,7 @@ fn best_pr<'a>(prs: &'a [Pr], head: &str) -> Option<&'a Pr> {
         .max_by_key(|p| (state_rank(&p.state), p.number))
 }
 
-/// One issue worktree with its PR + Linear state and the finished verdict.
+/// One issue worktree with its PR + tracker state and the finished verdict.
 #[derive(Debug, Clone, Serialize)]
 pub struct IssueWorktree {
     pub worktree: String,
@@ -41,10 +42,23 @@ pub struct IssueWorktree {
     pub pr_number: Option<u64>,
     pub pr_state: String, // MERGED|OPEN|CLOSED|NO_PR
     pub pr_url: Option<String>,
-    pub linear_kind: Option<String>,
-    pub linear_name: Option<String>,
+    /// The tracker's state for this issue, absent when the tracker has no row
+    /// for it or there is no tracker.
+    pub state: Option<State>,
     pub finished: bool,
     pub reason_not_finished: Option<String>,
+}
+
+/// Which tracker produced this report and whether it could answer.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrackerInfo {
+    pub kind: TrackerKind,
+    /// Configured and able to authenticate. False means the state column is
+    /// blank because there is nothing to ask, not because the issue is unknown.
+    pub ready: bool,
+    /// The tracker's issue URL built with an empty id, so
+    /// `format!("{link_base}{id}")` is that issue's URL.
+    pub link_base: Option<String>,
 }
 
 /// The full status snapshot for a set of worktrees.
@@ -52,12 +66,11 @@ pub struct IssueWorktree {
 pub struct StatusReport {
     pub worktrees: Vec<IssueWorktree>,
     pub finished_count: usize,
-    pub has_linear_key: bool,
-    pub linear_workspace: Option<String>,
+    pub tracker: TrackerInfo,
 }
 
 /// Local-only discovery: worktrees + dirty placeholders + issue ids + the main
-/// repo path. The slow network fetches consume this. Fast — no `gh`/Linear.
+/// repo path. The slow network fetches consume this. Fast — no `gh`/tracker.
 pub struct Discovered {
     rows: Vec<IssueWorktree>,
     main_path: String,
@@ -93,7 +106,7 @@ impl Discovered {
     pub fn issue_ids(&self) -> &[String] {
         &self.issue_ids
     }
-    /// The discovered worktree rows, with dirty/PR/Linear still unfilled. Lets a
+    /// The discovered worktree rows, with dirty/PR/state still unfilled. Lets a
     /// single-worktree caller (`issue info`) pick its target without paying the
     /// per-worktree enrichment cost of a full gather.
     pub fn rows(&self) -> &[IssueWorktree] {
@@ -150,8 +163,7 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
             pr_number: None,
             pr_state: "NO_PR".to_string(),
             pr_url: None,
-            linear_kind: None,
-            linear_name: None,
+            state: None,
             finished: false,
             reason_not_finished: None,
         });
@@ -256,15 +268,15 @@ fn fetch_prs_http(cwd: &str) -> Option<Vec<Pr>> {
     )
 }
 
-/// Attach dirty flags (in row order), best PR, Linear state, and the finished
-/// verdict. `linear_workspace` is carried through to the report for link building.
+/// Attach dirty flags (in row order), best PR, tracker state, and the finished
+/// verdict. `tracker` is carried through to the report for link building and to
+/// tell a blank state column from an unreachable tracker.
 pub fn assemble(
     d: Discovered,
     dirty: Vec<bool>,
     prs: Prs,
-    linear: HashMap<String, State>,
-    linear_workspace: Option<String>,
-    has_key: bool,
+    states: HashMap<String, State>,
+    tracker: TrackerInfo,
 ) -> StatusReport {
     let mut rows = d.rows;
     let mut finished_count = 0;
@@ -280,11 +292,10 @@ pub fn assemble(
             wt.pr_state = p.state.clone();
             wt.pr_url = Some(p.url.clone());
         }
-        if let Some(st) = linear.get(&wt.issue_id) {
-            wt.linear_kind = Some(st.kind.to_string());
-            wt.linear_name = Some(st.name.clone());
+        if let Some(st) = states.get(&wt.issue_id) {
+            wt.state = Some(st.clone());
         }
-        let reason = reason_not_finished(wt, has_key, false);
+        let reason = reason_not_finished(wt, &tracker, false);
         wt.finished = reason.is_none();
         if wt.finished {
             finished_count += 1;
@@ -294,15 +305,29 @@ pub fn assemble(
     StatusReport {
         worktrees: rows,
         finished_count,
-        has_linear_key: has_key,
-        linear_workspace,
+        tracker,
+    }
+}
+
+/// How a tracker names itself in a verdict reason. `None` never reaches a
+/// reason that names a state — no tracker means no state — so it answers with
+/// the neutral word rather than claiming a provider.
+fn label(kind: TrackerKind) -> &'static str {
+    match kind {
+        TrackerKind::Linear => "Linear",
+        TrackerKind::Github => "GitHub",
+        TrackerKind::None => "tracker",
     }
 }
 
 /// None when finished; otherwise a short reason it is not. With `pr_only`, the
-/// Linear and issue-id gates are dropped (finished = PR merged + clean), so
-/// repos whose branches carry no Linear-style issue id still qualify.
-pub fn reason_not_finished(wt: &IssueWorktree, has_key: bool, pr_only: bool) -> Option<String> {
+/// tracker-state and issue-id gates are dropped (finished = PR merged + clean),
+/// so repos whose branches carry no issue id still qualify.
+pub fn reason_not_finished(
+    wt: &IssueWorktree,
+    tracker: &TrackerInfo,
+    pr_only: bool,
+) -> Option<String> {
     if !pr_only && wt.issue_id == "UNKNOWN" {
         return Some("not an issue worktree".into());
     }
@@ -315,17 +340,13 @@ pub fn reason_not_finished(wt: &IssueWorktree, has_key: bool, pr_only: bool) -> 
         });
     }
     if !pr_only {
-        match wt.linear_kind.as_deref() {
-            None => bits.push(if has_key {
-                "Linear unknown".into()
-            } else {
-                "no Linear key".into()
-            }),
-            Some(kind) if kind != "completed" => bits.push(format!(
-                "Linear {}",
-                wt.linear_name.as_deref().unwrap_or("")
-            )),
-            _ => {}
+        match wt.state.as_ref() {
+            None if tracker.ready => bits.push("tracker state unknown".into()),
+            None => bits.push("no tracker".into()),
+            Some(s) if s.kind != StateKind::Completed => {
+                bits.push(format!("{} {}", label(tracker.kind), s.name))
+            }
+            Some(_) => {}
         }
     }
     if wt.dirty {
@@ -338,128 +359,190 @@ pub fn reason_not_finished(wt: &IssueWorktree, has_key: bool, pr_only: bool) -> 
     }
 }
 
-/// Discover worktrees, fetch PRs + Linear state concurrently, and compute the
-/// finished verdict. Silent — no progress output (the CLI re-orchestrates the
-/// same pieces with bars). Signature unchanged for MCP/dashboard/tests.
+/// Discover worktrees, fetch PRs + tracker state concurrently, and compute the
+/// finished verdict against this project's tracker. Silent — no progress output
+/// (the CLI re-orchestrates the same pieces with bars).
 pub fn gather(start: &str, ids: &[String]) -> Result<StatusReport> {
+    let t = devkit_common::tracker::resolve(None, None, Path::new(start));
+    gather_with(start, ids, t.as_ref())
+}
+
+/// `gather` against a caller-supplied tracker. Tests inject a fake; callers
+/// that already resolved one avoid resolving it twice.
+pub fn gather_with(start: &str, ids: &[String], t: &dyn Tracker) -> Result<StatusReport> {
     let d = discover(start, ids)?;
-    let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
-    let has_key = key.is_some();
+    let info = TrackerInfo {
+        kind: t.kind(),
+        ready: t.ready(),
+        link_base: None,
+    };
     if d.is_empty() {
-        return Ok(assemble(
-            d,
-            Vec::new(),
-            Prs(Vec::new()),
-            HashMap::new(),
-            None,
-            has_key,
-        ));
+        // No worktrees means no ids to look up and no rows to link.
+        return Ok(assemble(d, Vec::new(), Prs::empty(), HashMap::new(), info));
     }
     let paths = d.worktree_paths();
     let ids_v: Vec<String> = d.issue_ids().to_vec();
-    let (dirty, prs, linear, ws) = std::thread::scope(|s| {
+    let (dirty, prs, states, link_base) = std::thread::scope(|s| {
         let dt = s.spawn(|| dirty_many(&paths));
         let pt = s.spawn(|| fetch_prs(&d));
-        let lt = s.spawn(|| {
-            (
-                linear::states(&ids_v, key.as_deref()),
-                linear::workspace_url_key(),
-            )
-        });
+        // Both tracker calls can reach the network, so they share the one
+        // thread the state fetch already occupied.
+        let tt = s.spawn(|| (t.states(&ids_v), t.issue_url("")));
         let dirty = dt.join().expect("dirty thread panicked");
         let prs = pt.join().expect("prs thread panicked")?;
-        let (linear, ws) = lt.join().expect("linear thread panicked");
-        Ok::<_, anyhow::Error>((dirty, prs, linear, ws))
+        let (states, link_base) = tt.join().expect("tracker thread panicked");
+        Ok::<_, anyhow::Error>((dirty, prs, states, link_base))
     })?;
-    Ok(assemble(d, dirty, prs, linear, ws, has_key))
+    Ok(assemble(
+        d,
+        dirty,
+        prs,
+        states,
+        TrackerInfo { link_base, ..info },
+    ))
 }
 
-/// Local-only status: discovery + dirty checks, with no `gh`/Linear network.
-/// PRs stay `NO_PR` and Linear stays unknown; callers (e.g. `issue info
+/// Local-only status: discovery + dirty checks, with no `gh`/tracker network.
+/// PRs stay `NO_PR` and the state stays unknown; callers (e.g. `issue info
 /// --cache-only`) overlay cached data themselves. Same signature shape as
 /// `gather`.
 pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = discover(start, ids)?;
-    let has_key = devkit_common::secrets::resolve("LINEAR_API_KEY").is_some();
+    let t = devkit_common::tracker::resolve(None, None, Path::new(start));
     let dirty = dirty_many(&d.worktree_paths());
     Ok(assemble(
         d,
         dirty,
-        Prs(Vec::new()),
+        Prs::empty(),
         HashMap::new(),
-        None,
-        has_key,
+        TrackerInfo {
+            kind: t.kind(),
+            ready: t.ready(),
+            link_base: None,
+        },
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devkit_common::tracker::StateKind;
+    use devkit_common::tracker::fake::FakeTracker;
+    use devkit_common::tracker::{StateKind, Tracker, TrackerKind};
     use std::collections::HashMap;
 
+    fn done(name: &str) -> State {
+        State {
+            kind: StateKind::Completed,
+            name: name.into(),
+            color: None,
+        }
+    }
+
+    fn tracker(kind: TrackerKind, ready: bool) -> TrackerInfo {
+        TrackerInfo {
+            kind,
+            ready,
+            link_base: None,
+        }
+    }
+
+    /// One discovered row on `branch`, shaped the way `discover` emits it.
+    fn discovered(id: &str, branch: &str) -> Discovered {
+        let mut row = wt(id, "NO_PR", false, None);
+        row.branch = branch.to_string();
+        row.pr_number = None;
+        Discovered::for_test(vec![row], "/main".into(), vec![id.to_string()])
+    }
+
+    #[test]
+    fn a_merged_clean_worktree_with_a_completed_issue_is_finished() {
+        let t = FakeTracker::ready([("ENG-1", done("Done"))]);
+        let report = assemble(
+            discovered("ENG-1", "lev/eng-1-fix"),
+            vec![false],
+            Prs::for_test(vec![pr(10, "MERGED", "lev/eng-1-fix")]),
+            t.states(&["ENG-1".into()]),
+            tracker(TrackerKind::Linear, true),
+        );
+        assert_eq!(
+            report.worktrees[0].state.as_ref().map(|s| s.kind),
+            Some(StateKind::Completed)
+        );
+        assert!(report.worktrees[0].finished);
+        assert_eq!(report.finished_count, 1);
+    }
+
+    #[test]
+    fn an_open_issue_is_not_finished_and_says_why() {
+        let mut st = done("In Progress");
+        st.kind = StateKind::Started;
+        let report = assemble(
+            discovered("ENG-2", "lev/eng-2-wip"),
+            vec![false],
+            Prs::for_test(vec![pr(11, "MERGED", "lev/eng-2-wip")]),
+            HashMap::from([("ENG-2".to_string(), st)]),
+            tracker(TrackerKind::Linear, true),
+        );
+        assert!(!report.worktrees[0].finished);
+        let why = report.worktrees[0].reason_not_finished.as_deref().unwrap();
+        assert!(
+            why.contains("In Progress"),
+            "the reason names the state: {why}"
+        );
+    }
+
+    #[test]
+    fn with_no_tracker_a_merged_clean_worktree_is_not_finished() {
+        let report = assemble(
+            discovered("ENG-3", "lev/some-branch"),
+            vec![false],
+            Prs::for_test(vec![pr(12, "MERGED", "lev/some-branch")]),
+            HashMap::new(),
+            tracker(TrackerKind::None, false),
+        );
+        let row = &report.worktrees[0];
+        assert!(row.state.is_none());
+        assert_eq!(
+            row.reason_not_finished.as_deref(),
+            Some("no tracker"),
+            "the state gate holds without a tracker; --pr-only is how a              tracker-less repo finishes on PR evidence alone"
+        );
+    }
+
     // assemble zips dirty flags onto rows in order, attaches the best PR by
-    // branch, applies Linear state, and computes the finished verdict — the same
-    // result the old monolithic gather produced.
+    // branch, applies tracker state, and computes the finished verdict — the
+    // same result the old monolithic gather produced.
     #[test]
     fn assemble_attaches_pr_dirty_and_verdict() {
-        let rows = vec![IssueWorktree {
-            worktree: "/w1".into(),
-            branch: "lev/eng-1-foo".into(),
-            issue_id: "ENG-1".into(),
-            dirty: false,
-            pr_number: None,
-            pr_state: "NO_PR".into(),
-            pr_url: None,
-            linear_kind: None,
-            linear_name: None,
-            finished: false,
-            reason_not_finished: None,
-        }];
-        let d = Discovered::for_test(rows, "/main".into(), vec!["ENG-1".into()]);
+        let d = discovered("ENG-1", "lev/eng-1-foo");
         let prs = Prs::for_test(vec![pr(7, "MERGED", "lev/eng-1-foo")]);
-        let mut linear = HashMap::new();
-        linear.insert(
-            "ENG-1".to_string(),
-            State {
-                kind: StateKind::Completed,
-                name: "Done".into(),
-                color: None,
-            },
-        );
-        let report = assemble(d, vec![false], prs, linear, Some("acme".into()), true);
+        let states = HashMap::from([("ENG-1".to_string(), done("Done"))]);
+        let info = TrackerInfo {
+            kind: TrackerKind::Linear,
+            ready: true,
+            link_base: Some("https://linear.app/acme/issue/".into()),
+        };
+        let report = assemble(d, vec![false], prs, states, info);
         let row = &report.worktrees[0];
         assert_eq!(row.pr_number, Some(7));
         assert_eq!(row.pr_state, "MERGED");
         assert!(!row.dirty);
         assert!(row.finished);
         assert_eq!(report.finished_count, 1);
-        assert_eq!(report.linear_workspace.as_deref(), Some("acme"));
+        assert_eq!(
+            report.tracker.link_base.as_deref(),
+            Some("https://linear.app/acme/issue/")
+        );
     }
 
     #[test]
     fn assemble_marks_dirty_from_flags() {
-        let rows = vec![IssueWorktree {
-            worktree: "/w1".into(),
-            branch: "lev/eng-2-bar".into(),
-            issue_id: "ENG-2".into(),
-            dirty: false,
-            pr_number: None,
-            pr_state: "NO_PR".into(),
-            pr_url: None,
-            linear_kind: None,
-            linear_name: None,
-            finished: false,
-            reason_not_finished: None,
-        }];
-        let d = Discovered::for_test(rows, "/main".into(), vec!["ENG-2".into()]);
         let report = assemble(
-            d,
+            discovered("ENG-2", "lev/eng-2-bar"),
             vec![true],
             Prs::for_test(vec![]),
             HashMap::new(),
-            None,
-            false,
+            tracker(TrackerKind::None, false),
         );
         assert!(report.worktrees[0].dirty);
         assert!(!report.worktrees[0].finished);
@@ -489,7 +572,7 @@ mod tests {
         }
     }
 
-    fn wt(issue_id: &str, pr_state: &str, dirty: bool, linear_kind: Option<&str>) -> IssueWorktree {
+    fn wt(issue_id: &str, pr_state: &str, dirty: bool, kind: Option<StateKind>) -> IssueWorktree {
         IssueWorktree {
             worktree: "/w".into(),
             branch: "b".into(),
@@ -498,8 +581,11 @@ mod tests {
             pr_number: Some(1),
             pr_state: pr_state.into(),
             pr_url: None,
-            linear_kind: linear_kind.map(String::from),
-            linear_name: linear_kind.map(|_| "Done".to_string()),
+            state: kind.map(|kind| State {
+                kind,
+                name: "Done".into(),
+                color: None,
+            }),
             finished: false,
             reason_not_finished: None,
         }
@@ -549,8 +635,8 @@ mod tests {
     fn finished_when_merged_done_clean() {
         assert!(
             reason_not_finished(
-                &wt("ENG-1", "MERGED", false, Some("completed")),
-                true,
+                &wt("ENG-1", "MERGED", false, Some(StateKind::Completed)),
+                &tracker(TrackerKind::Linear, true),
                 false
             )
             .is_none()
@@ -560,60 +646,102 @@ mod tests {
     #[test]
     fn not_finished_when_dirty() {
         assert_eq!(
-            reason_not_finished(&wt("ENG-1", "MERGED", true, Some("completed")), true, false)
-                .as_deref(),
+            reason_not_finished(
+                &wt("ENG-1", "MERGED", true, Some(StateKind::Completed)),
+                &tracker(TrackerKind::Linear, true),
+                false
+            )
+            .as_deref(),
             Some("dirty")
         );
     }
 
     #[test]
-    fn pr_only_ignores_linear() {
-        // No Linear entry, no key, but pr_only drops the Linear gate.
-        assert!(reason_not_finished(&wt("ENG-1", "MERGED", false, None), false, true).is_none());
+    fn pr_only_ignores_tracker_state() {
+        // No state, no tracker, but pr_only drops the state gate.
+        assert!(
+            reason_not_finished(
+                &wt("ENG-1", "MERGED", false, None),
+                &tracker(TrackerKind::None, false),
+                true
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn pr_only_allows_unknown_issue_id() {
-        // A repo without Linear-style branch names has UNKNOWN issue ids; with
+        // A repo without issue-id branch names has UNKNOWN issue ids; with
         // pr_only a merged + clean worktree is still finished.
-        assert!(reason_not_finished(&wt("UNKNOWN", "MERGED", false, None), false, true).is_none());
+        assert!(
+            reason_not_finished(
+                &wt("UNKNOWN", "MERGED", false, None),
+                &tracker(TrackerKind::None, false),
+                true
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn pr_only_unknown_still_gated_on_pr() {
         assert_eq!(
-            reason_not_finished(&wt("UNKNOWN", "NO_PR", false, None), false, true).as_deref(),
+            reason_not_finished(
+                &wt("UNKNOWN", "NO_PR", false, None),
+                &tracker(TrackerKind::None, false),
+                true
+            )
+            .as_deref(),
             Some("no PR")
         );
     }
 
     #[test]
     fn verdict_combinations() {
+        let linear = tracker(TrackerKind::Linear, true);
         // Unknown id is never an issue worktree.
         assert_eq!(
             reason_not_finished(
-                &wt("UNKNOWN", "MERGED", false, Some("completed")),
-                true,
+                &wt("UNKNOWN", "MERGED", false, Some(StateKind::Completed)),
+                &linear,
                 false
             )
             .as_deref(),
             Some("not an issue worktree")
         );
-        // No PR + no Linear key, all reasons join with ", ".
+        // No PR + no tracker, all reasons join with ", ".
         assert_eq!(
-            reason_not_finished(&wt("ENG-2", "NO_PR", false, None), false, false).as_deref(),
-            Some("no PR, no Linear key")
+            reason_not_finished(
+                &wt("ENG-2", "NO_PR", false, None),
+                &tracker(TrackerKind::None, false),
+                false
+            )
+            .as_deref(),
+            Some("no PR, no tracker")
         );
-        // Open PR + started Linear + dirty.
+        // Open PR + started state + dirty; the reason names the tracker.
         assert_eq!(
-            reason_not_finished(&wt("ENG-3", "OPEN", true, Some("started")), true, false)
-                .as_deref(),
+            reason_not_finished(
+                &wt("ENG-3", "OPEN", true, Some(StateKind::Started)),
+                &linear,
+                false
+            )
+            .as_deref(),
             Some("PR not merged, Linear Done, dirty")
         );
-        // Has key but no Linear entry → "Linear unknown".
+        // A ready tracker with no row for the issue.
         assert_eq!(
-            reason_not_finished(&wt("ENG-4", "MERGED", false, None), true, false).as_deref(),
-            Some("Linear unknown")
+            reason_not_finished(&wt("ENG-4", "MERGED", false, None), &linear, false).as_deref(),
+            Some("tracker state unknown")
+        );
+    }
+
+    #[test]
+    fn the_reason_names_whichever_tracker_produced_the_state() {
+        let row = wt("ENG-5", "MERGED", false, Some(StateKind::Started));
+        assert_eq!(
+            reason_not_finished(&row, &tracker(TrackerKind::Github, true), false).as_deref(),
+            Some("GitHub Done")
         );
     }
 

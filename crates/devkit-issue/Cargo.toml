@@ -8,3 +8,6 @@ anyhow.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 devkit-common.workspace = true
+
+[dev-dependencies]
+devkit-common = { workspace = true, features = ["test-support"] }

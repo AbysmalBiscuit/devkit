@@ -202,7 +202,7 @@ pub fn run(
         let t: Vec<IssueWorktree> = report
             .worktrees
             .iter()
-            .filter(|r| reason_not_finished(r, report.has_linear_key, pr_only).is_none())
+            .filter(|r| reason_not_finished(r, &report.tracker, pr_only).is_none())
             .cloned()
             .collect();
         if t.is_empty() {

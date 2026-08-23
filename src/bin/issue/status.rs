@@ -1,15 +1,16 @@
 use crate::triage::{self, render};
 use anyhow::Result;
 use devkit_common::livetable::{Cell, LiveTable};
-use devkit_common::tracker::{State, linear};
+use devkit_common::tracker::{State, TrackerKind};
 use devkit_common::ui;
-use devkit_issue::status::{self as st, IssueWorktree, StatusReport};
+use devkit_issue::status::{self as st, IssueWorktree, StatusReport, TrackerInfo};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::mpsc;
 
 pub(crate) const COL_TREE: usize = 2;
 pub(crate) const COL_PR: usize = 3;
-pub(crate) const COL_LINEAR: usize = 4;
+pub(crate) const COL_STATE: usize = 4;
 pub(crate) const COL_VERDICT: usize = 5;
 
 /// Discovery index → display row, matching `triage::render`'s sort (by
@@ -36,35 +37,33 @@ struct LiveState {
     dirty: Vec<bool>,
     dirty_seen: Vec<bool>,
     prs: Option<st::Prs>,
-    linear: Option<HashMap<String, State>>,
-    workspace: Option<String>,
-    has_key: bool,
+    states: Option<HashMap<String, State>>,
+    tracker: TrackerInfo,
 }
 
 impl LiveState {
-    fn new(rows: Vec<IssueWorktree>, has_key: bool) -> LiveState {
+    fn new(rows: Vec<IssueWorktree>, tracker: TrackerInfo) -> LiveState {
         let n = rows.len();
         LiveState {
             rows,
             dirty: vec![false; n],
             dirty_seen: vec![false; n],
             prs: None,
-            linear: None,
-            workspace: None,
-            has_key,
+            states: None,
+            tracker,
         }
     }
 
     fn done(&self) -> bool {
-        self.dirty_seen.iter().all(|&s| s) && self.prs.is_some() && self.linear.is_some()
+        self.dirty_seen.iter().all(|&s| s) && self.prs.is_some() && self.states.is_some()
     }
 
     /// VERDICT write for row `i` if all its inputs are now present.
     fn verdict_write(&mut self, i: usize, out: &mut Vec<(usize, usize, String)>) {
-        if !(self.dirty_seen[i] && self.prs.is_some() && self.linear.is_some()) {
+        if !(self.dirty_seen[i] && self.prs.is_some() && self.states.is_some()) {
             return;
         }
-        let reason = st::reason_not_finished(&self.rows[i], self.has_key, false);
+        let reason = st::reason_not_finished(&self.rows[i], &self.tracker, false);
         self.rows[i].finished = reason.is_none();
         self.rows[i].reason_not_finished = reason;
         out.push((i, COL_VERDICT, triage::verdict_cell(&self.rows[i], false)));
@@ -92,25 +91,24 @@ impl LiveState {
         out
     }
 
-    fn apply_linear(
+    fn apply_states(
         &mut self,
         states: HashMap<String, State>,
-        workspace: Option<String>,
+        link_base: Option<String>,
     ) -> Vec<(usize, usize, String)> {
         let mut out = Vec::new();
         for i in 0..self.rows.len() {
             if let Some(s) = states.get(&self.rows[i].issue_id) {
-                self.rows[i].linear_kind = Some(s.kind.to_string());
-                self.rows[i].linear_name = Some(s.name.clone());
+                self.rows[i].state = Some(s.clone());
             }
             out.push((
                 i,
-                COL_LINEAR,
-                triage::linear_cell(&self.rows[i], self.has_key),
+                COL_STATE,
+                triage::state_cell(&self.rows[i], self.tracker.ready),
             ));
         }
-        self.linear = Some(states);
-        self.workspace = workspace;
+        self.states = Some(states);
+        self.tracker.link_base = link_base;
         for i in 0..self.rows.len() {
             self.verdict_write(i, &mut out);
         }
@@ -118,13 +116,12 @@ impl LiveState {
     }
 
     /// The raw collected results, for `st::assemble`.
-    #[allow(clippy::type_complexity)]
-    fn into_parts(self) -> (Vec<bool>, st::Prs, HashMap<String, State>, Option<String>) {
+    fn into_parts(self) -> (Vec<bool>, st::Prs, HashMap<String, State>, TrackerInfo) {
         (
             self.dirty,
             self.prs.expect("apply_prs ran"),
-            self.linear.expect("apply_linear ran"),
-            self.workspace,
+            self.states.expect("apply_states ran"),
+            self.tracker,
         )
     }
 }
@@ -132,7 +129,7 @@ impl LiveState {
 enum Update {
     Dirty(usize, bool),
     Prs(Result<st::Prs>),
-    Linear(HashMap<String, State>, Option<String>),
+    States(HashMap<String, State>, Option<String>),
 }
 
 /// The single status line under the live table; sources drop out of the
@@ -140,13 +137,13 @@ enum Update {
 /// block allocates scrolls the screen and stays scrolled after the row is
 /// gone, so the block's footprint beyond the table is kept to the one line
 /// the shell prompt will overwrite.
-fn progress_msg(prs_done: bool, linear_done: bool) -> String {
+fn progress_msg(prs_done: bool, states_done: bool) -> String {
     let mut parts = vec!["Checking worktrees"];
     if !prs_done {
         parts.push("fetching PRs");
     }
-    if !linear_done {
-        parts.push("fetching Linear");
+    if !states_done {
+        parts.push("fetching issue states");
     }
     parts.join(" · ")
 }
@@ -157,8 +154,12 @@ fn progress_msg(prs_done: bool, linear_done: bool) -> String {
 /// to stdout exactly as the silent gather would.
 pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = st::discover(start, ids)?;
-    let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
-    let has_key = key.is_some();
+    let tracker = devkit_common::tracker::resolve(None, None, Path::new(start));
+    let info = TrackerInfo {
+        kind: tracker.kind(),
+        ready: tracker.ready(),
+        link_base: None,
+    };
     if d.is_empty() {
         // No worktrees means no PR fetch — the report is empty either way.
         return Ok(st::assemble(
@@ -166,8 +167,7 @@ pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
             Vec::new(),
             st::Prs::empty(),
             HashMap::new(),
-            None,
-            has_key,
+            info,
         ));
     }
 
@@ -178,15 +178,15 @@ pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
 
     let mut lt = LiveTable::new("ISSUE WORKTREES", &triage::HEADERS, m);
     for (i, row) in d.rows().iter().enumerate() {
-        // Workspace key is unknown until Linear responds; links appear in the
-        // final stdout render.
+        // The link base is unknown until the tracker responds; links appear in
+        // the final stdout render.
         lt.set(disp[i], 0, Cell::Ready(triage::issue_cell(row, None)));
         lt.set(disp[i], 1, Cell::Ready(triage::branch_cell(&row.branch)));
     }
     lt.redraw();
     let progress = lt.bar(&progress_msg(false, false), m as u64);
 
-    let mut state = LiveState::new(d.rows().to_vec(), has_key);
+    let mut state = LiveState::new(d.rows().to_vec(), info);
 
     let looped: Result<()> = std::thread::scope(|s| {
         let (tx, rx) = mpsc::channel::<Update>();
@@ -209,23 +209,23 @@ pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
         {
             let tx = tx.clone();
             let ids_v = &ids_v;
-            let key = key.clone();
+            let tracker = tracker.as_ref();
             s.spawn(move || {
-                let (states, ws) = std::thread::scope(|s2| {
-                    let stt = s2.spawn(|| linear::states(ids_v, key.as_deref()));
-                    let wst = s2.spawn(linear::workspace_url_key);
+                let (states, link_base) = std::thread::scope(|s2| {
+                    let stt = s2.spawn(|| tracker.states(ids_v));
+                    let lbt = s2.spawn(|| tracker.issue_url(""));
                     (
-                        stt.join().expect("linear states thread panicked"),
-                        wst.join().expect("linear url-key thread panicked"),
+                        stt.join().expect("tracker states thread panicked"),
+                        lbt.join().expect("tracker link-base thread panicked"),
                     )
                 });
-                let _ = tx.send(Update::Linear(states, ws));
+                let _ = tx.send(Update::States(states, link_base));
             });
         }
         drop(tx);
 
         let mut prs_done = false;
-        let mut linear_done = false;
+        let mut states_done = false;
         lt.drive(&rx, |lt, msg| {
             let writes = match msg {
                 Update::Dirty(i, dirty) => {
@@ -234,13 +234,13 @@ pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
                 }
                 Update::Prs(res) => {
                     prs_done = true;
-                    progress.set_message(progress_msg(prs_done, linear_done));
+                    progress.set_message(progress_msg(prs_done, states_done));
                     state.apply_prs(res?)
                 }
-                Update::Linear(states, ws) => {
-                    linear_done = true;
-                    progress.set_message(progress_msg(prs_done, linear_done));
-                    state.apply_linear(states, ws)
+                Update::States(states, link_base) => {
+                    states_done = true;
+                    progress.set_message(progress_msg(prs_done, states_done));
+                    state.apply_states(states, link_base)
                 }
             };
             for (i, col, content) in writes {
@@ -254,8 +254,8 @@ pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
     lt.finish();
     looped?;
 
-    let (dirty, prs, linear_states, ws) = state.into_parts();
-    Ok(st::assemble(d, dirty, prs, linear_states, ws, has_key))
+    let (dirty, prs, states, info) = state.into_parts();
+    Ok(st::assemble(d, dirty, prs, states, info))
 }
 
 pub fn run(start: &str, ids: &[String]) -> Result<()> {
@@ -267,13 +267,16 @@ pub fn run(start: &str, ids: &[String]) -> Result<()> {
             ui::green(&format!("{finished} finished."))
         );
     }
-    if !report.has_linear_key {
-        println!(
-            "\n{}",
-            ui::dim(
+    if !report.tracker.ready {
+        let hint = match report.tracker.kind {
+            TrackerKind::Linear => {
                 "LINEAR_API_KEY unset — Linear gate skipped. Create a key at https://linear.app/settings/api"
-            )
-        );
+            }
+            TrackerKind::Github | TrackerKind::None => {
+                "No issue tracker configured — the issue-state gate is skipped."
+            }
+        };
+        println!("\n{}", ui::dim(hint));
     }
     Ok(())
 }
@@ -284,6 +287,16 @@ mod tests {
     use devkit_common::tracker::StateKind;
     use devkit_issue::status::IssueWorktree;
 
+    const LINK_BASE: &str = "https://linear.app/acme/issue/";
+
+    fn tracker(ready: bool) -> TrackerInfo {
+        TrackerInfo {
+            kind: TrackerKind::Linear,
+            ready,
+            link_base: None,
+        }
+    }
+
     fn row(id: &str) -> IssueWorktree {
         IssueWorktree {
             worktree: format!("/w/{id}"),
@@ -293,8 +306,7 @@ mod tests {
             pr_number: None,
             pr_state: "NO_PR".into(),
             pr_url: None,
-            linear_kind: None,
-            linear_name: None,
+            state: None,
             finished: false,
             reason_not_finished: None,
         }
@@ -304,11 +316,11 @@ mod tests {
     fn progress_msg_drops_sources_as_they_land() {
         assert_eq!(
             progress_msg(false, false),
-            "Checking worktrees · fetching PRs · fetching Linear"
+            "Checking worktrees · fetching PRs · fetching issue states"
         );
         assert_eq!(
             progress_msg(true, false),
-            "Checking worktrees · fetching Linear"
+            "Checking worktrees · fetching issue states"
         );
         assert_eq!(
             progress_msg(false, true),
@@ -335,7 +347,7 @@ mod tests {
     // arrival order; earlier sources fill their own column immediately.
     #[test]
     fn verdicts_wait_for_all_sources() {
-        let mut state = LiveState::new(vec![row("ENG-1"), row("ENG-2")], false);
+        let mut state = LiveState::new(vec![row("ENG-1"), row("ENG-2")], tracker(false));
 
         let w1 = state.apply_dirty(0, true);
         assert!(w1.iter().any(|(r, c, _)| (*r, *c) == (0, COL_TREE)));
@@ -345,9 +357,9 @@ mod tests {
         assert!(w2.iter().any(|(r, c, _)| (*r, *c) == (1, COL_PR)));
         assert!(!w2.iter().any(|(_, c, _)| *c == COL_VERDICT));
 
-        let w3 = state.apply_linear(std::collections::HashMap::new(), None);
-        // Linear was the last input for row 0 (dirty done); row 1's dirty is
-        // still missing, so only row 0 gains a verdict.
+        let w3 = state.apply_states(std::collections::HashMap::new(), None);
+        // The tracker was the last input for row 0 (dirty done); row 1's dirty
+        // is still missing, so only row 0 gains a verdict.
         assert!(w3.iter().any(|(r, c, _)| (*r, *c) == (0, COL_VERDICT)));
         assert!(!w3.iter().any(|(r, c, _)| (*r, *c) == (1, COL_VERDICT)));
         assert!(!state.done());
@@ -361,10 +373,10 @@ mod tests {
     // flood for every row.
     #[test]
     fn prs_last_emits_all_verdicts() {
-        let mut state = LiveState::new(vec![row("ENG-1"), row("ENG-2")], false);
+        let mut state = LiveState::new(vec![row("ENG-1"), row("ENG-2")], tracker(false));
         state.apply_dirty(0, false);
         state.apply_dirty(1, true);
-        let w = state.apply_linear(std::collections::HashMap::new(), None);
+        let w = state.apply_states(std::collections::HashMap::new(), None);
         assert!(!w.iter().any(|(_, c, _)| *c == COL_VERDICT));
         assert!(!state.done());
 
@@ -376,16 +388,16 @@ mod tests {
 
     #[test]
     fn collected_parts_match_inputs() {
-        let mut state = LiveState::new(vec![row("ENG-1")], true);
+        let mut state = LiveState::new(vec![row("ENG-1")], tracker(true));
         state.apply_dirty(0, true);
         state.apply_prs(st::Prs::empty());
-        state.apply_linear(std::collections::HashMap::new(), Some("acme".into()));
-        let (dirty, _prs, _linear, ws) = state.into_parts();
+        state.apply_states(std::collections::HashMap::new(), Some(LINK_BASE.into()));
+        let (dirty, _prs, _states, info) = state.into_parts();
         assert_eq!(dirty, vec![true]);
-        assert_eq!(ws.as_deref(), Some("acme"));
+        assert_eq!(info.link_base.as_deref(), Some(LINK_BASE));
     }
 
-    // LiveState's Linear overlay + verdict duplicate what `assemble` computes;
+    // LiveState's state overlay + verdict duplicate what `assemble` computes;
     // this pins them together so the live cells can never disagree with the
     // final report built from the same raw inputs. `assemble` keeps discovery
     // order, so the comparison is index-aligned.
@@ -411,12 +423,12 @@ mod tests {
             },
         );
 
-        let mut state = LiveState::new(rows.clone(), true);
+        let mut state = LiveState::new(rows.clone(), tracker(true));
         for (i, &dt) in dirty.iter().enumerate() {
             state.apply_dirty(i, dt);
         }
         state.apply_prs(st::Prs::empty());
-        state.apply_linear(states.clone(), Some("acme".into()));
+        state.apply_states(states.clone(), Some(LINK_BASE.into()));
 
         let ids = vec!["ENG-1".into(), "ENG-2".into(), "ENG-3".into()];
         let d = st::Discovered::from_parts(rows, "/main".into(), ids);
@@ -425,8 +437,10 @@ mod tests {
             dirty,
             st::Prs::empty(),
             states,
-            Some("acme".into()),
-            true,
+            TrackerInfo {
+                link_base: Some(LINK_BASE.into()),
+                ..tracker(true)
+            },
         );
 
         assert_eq!(state.rows.len(), report.worktrees.len());
@@ -437,8 +451,7 @@ mod tests {
                 live.reason_not_finished, assembled.reason_not_finished,
                 "reason for {id}"
             );
-            assert_eq!(live.linear_kind, assembled.linear_kind, "kind for {id}");
-            assert_eq!(live.linear_name, assembled.linear_name, "name for {id}");
+            assert_eq!(live.state, assembled.state, "state for {id}");
         }
     }
 }

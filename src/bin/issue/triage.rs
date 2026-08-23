@@ -1,3 +1,4 @@
+use devkit_common::tracker::StateKind;
 use devkit_common::ui;
 use devkit_issue::status::{IssueWorktree, StatusReport};
 
@@ -10,19 +11,20 @@ fn pr_label(row: &IssueWorktree) -> String {
 }
 
 /// Branch is secondary — the issue id identifies the worktree — so cap it with
-/// an ellipsis, letting the PR/LINEAR/VERDICT columns survive a narrow terminal.
+/// an ellipsis, letting the PR/STATE/VERDICT columns survive a narrow terminal.
 /// `issue setup` fits the branches it creates to this same width.
 const BRANCH_MAX: usize = ui::BRANCH_DISPLAY_MAX;
 
 /// Column headers shared by the final render and the live table.
-pub(crate) const HEADERS: [&str; 6] = ["ISSUE", "BRANCH", "TREE", "PR", "LINEAR", "VERDICT"];
+pub(crate) const HEADERS: [&str; 6] = ["ISSUE", "BRANCH", "TREE", "PR", "STATE", "VERDICT"];
 
-pub(crate) fn issue_cell(row: &IssueWorktree, workspace: Option<&str>) -> String {
-    let linked = match workspace {
-        Some(k) if row.linear_kind.is_some() => ui::link(
-            &row.issue_id,
-            &format!("https://linear.app/{k}/issue/{}", row.issue_id),
-        ),
+/// The issue id, linked when the tracker offers a link base and actually knew
+/// the issue — an id the tracker never answered for has nothing to link to.
+pub(crate) fn issue_cell(row: &IssueWorktree, link_base: Option<&str>) -> String {
+    let linked = match link_base {
+        Some(base) if row.state.is_some() => {
+            ui::link(&row.issue_id, &format!("{base}{}", row.issue_id))
+        }
         _ => row.issue_id.clone(),
     };
     if row.issue_id == "UNKNOWN" {
@@ -58,18 +60,19 @@ pub(crate) fn pr_cell(row: &IssueWorktree) -> String {
     }
 }
 
-pub(crate) fn linear_cell(row: &IssueWorktree, has_key: bool) -> String {
-    match row.linear_kind.as_deref() {
-        None => ui::dim(if has_key { "unknown" } else { "no key" }),
-        Some(kind) => {
-            let name = row.linear_name.as_deref().unwrap_or("");
-            match kind {
-                "completed" => ui::green(name),
-                "started" => ui::yellow(name),
-                "canceled" => ui::red(name),
-                _ => ui::dim(name),
-            }
-        }
+pub(crate) fn state_cell(row: &IssueWorktree, ready: bool) -> String {
+    match row.state.as_ref() {
+        None => ui::dim(if ready {
+            "tracker state unknown"
+        } else {
+            "no tracker"
+        }),
+        Some(s) => match s.kind {
+            StateKind::Completed => ui::green(&s.name),
+            StateKind::Started => ui::yellow(&s.name),
+            StateKind::Canceled => ui::red(&s.name),
+            StateKind::Triage | StateKind::Backlog | StateKind::Unstarted => ui::dim(&s.name),
+        },
     }
 }
 
@@ -80,7 +83,7 @@ pub(crate) fn verdict_cell(row: &IssueWorktree, offline: bool) -> String {
         ui::bold_green("FINISHED")
     } else {
         // The only "ball in your court" reason is a dirty tree; flag it
-        // yellow, leave the rest (waiting on PR/Linear) dim.
+        // yellow, leave the rest (waiting on PR/tracker) dim.
         match row.reason_not_finished.as_deref() {
             Some(r) if r.contains("dirty") => ui::yellow(r),
             Some(r) => ui::dim(r),
@@ -89,8 +92,8 @@ pub(crate) fn verdict_cell(row: &IssueWorktree, offline: bool) -> String {
     }
 }
 
-/// Render the worktree triage table. When `offline`, the LINEAR and VERDICT
-/// columns show `—`: both depend on a Linear fetch that the caller skipped, so
+/// Render the worktree triage table. When `offline`, the STATE and VERDICT
+/// columns show `—`: both depend on a tracker fetch that the caller skipped, so
 /// any computed value would be stale (e.g. `issue info --cache-only`).
 pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
     println!("{}", ui::bold_cyan("ISSUE WORKTREES"));
@@ -102,17 +105,17 @@ pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
     sorted.sort_by(|a, b| a.issue_id.cmp(&b.issue_id));
     let mut t = ui::table(&HEADERS);
     for row in sorted {
-        let linear_disp = if offline {
+        let state_disp = if offline {
             ui::dim("—")
         } else {
-            linear_cell(row, report.has_linear_key)
+            state_cell(row, report.tracker.ready)
         };
         t.add_row(vec![
-            issue_cell(row, report.linear_workspace.as_deref()),
+            issue_cell(row, report.tracker.link_base.as_deref()),
             branch_cell(&row.branch),
             tree_cell(row.dirty),
             pr_cell(row),
-            linear_disp,
+            state_disp,
             verdict_cell(row, offline),
         ]);
     }
@@ -134,8 +137,7 @@ mod tests {
             pr_number: Some(7),
             pr_state: pr_state.into(),
             pr_url: None,
-            linear_kind: None,
-            linear_name: None,
+            state: None,
             finished: false,
             reason_not_finished: None,
         }
@@ -157,13 +159,16 @@ mod tests {
     }
 
     #[test]
-    fn linear_cell_no_key_vs_unknown() {
-        assert_eq!(linear_cell(&row("OPEN"), false), "no key");
-        assert_eq!(linear_cell(&row("OPEN"), true), "unknown");
+    fn state_cell_no_tracker_vs_unknown() {
+        assert_eq!(state_cell(&row("OPEN"), false), "no tracker");
+        assert_eq!(state_cell(&row("OPEN"), true), "tracker state unknown");
         let mut r = row("OPEN");
-        r.linear_kind = Some("completed".into());
-        r.linear_name = Some("Done".into());
-        assert_eq!(linear_cell(&r, true), "Done");
+        r.state = Some(devkit_common::tracker::State {
+            kind: StateKind::Completed,
+            name: "Done".into(),
+            color: None,
+        });
+        assert_eq!(state_cell(&r, true), "Done");
     }
 
     #[test]
@@ -181,9 +186,12 @@ mod tests {
     fn issue_cell_unknown_is_plain() {
         let mut r = row("OPEN");
         r.issue_id = "UNKNOWN".into();
-        // No workspace / no linear state → bare id (colour is a passthrough here).
+        // No link base / no tracker state → bare id (colour is a passthrough here).
         assert_eq!(issue_cell(&r, None), "UNKNOWN");
-        assert_eq!(issue_cell(&row("OPEN"), Some("acme")), "ENG-1");
+        assert_eq!(
+            issue_cell(&row("OPEN"), Some("https://linear.app/acme/issue/")),
+            "ENG-1"
+        );
     }
 
     #[test]

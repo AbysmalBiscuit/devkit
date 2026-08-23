@@ -38,8 +38,7 @@ mod tests {
             pr_number: None,
             pr_state: "NO_PR".into(),
             pr_url: None,
-            linear_kind: None,
-            linear_name: None,
+            state: None,
             finished: false,
             reason_not_finished: None,
         }

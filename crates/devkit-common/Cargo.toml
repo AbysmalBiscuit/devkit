@@ -24,6 +24,8 @@ interprocess = { workspace = true, optional = true }
 
 [features]
 daemon = ["dep:interprocess"]
+# The in-memory `tracker::fake` tracker, for other crates' tests.
+test-support = []
 
 [dev-dependencies]
 # InMemoryTerm: lets tests drive a visible (non-hidden) MultiProgress and

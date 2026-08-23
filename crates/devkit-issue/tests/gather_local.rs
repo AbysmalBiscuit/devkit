@@ -1,4 +1,6 @@
-use std::path::Path;
+use devkit_common::tracker::TrackerKind;
+use devkit_common::tracker::fake::FakeTracker;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn git(args: &[&str], cwd: &Path) {
@@ -11,9 +13,10 @@ fn git(args: &[&str], cwd: &Path) {
     assert!(ok, "git {args:?} failed");
 }
 
-#[test]
-fn gather_local_returns_offline_rows_without_network() {
-    let base = std::env::temp_dir().join(format!("devkit-gl-{}", std::process::id()));
+/// A repo with one commit and one `lev/eng-1-bar` worktree beside it, under a
+/// `tag`-specific directory so tests in this binary never share a fixture.
+fn fixture_repo(tag: &str) -> PathBuf {
+    let base = std::env::temp_dir().join(format!("devkit-gl-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let main = base.join("main");
     std::fs::create_dir_all(&main).unwrap();
@@ -37,6 +40,13 @@ fn gather_local_returns_offline_rows_without_network() {
         ],
         &main,
     );
+    base
+}
+
+#[test]
+fn gather_local_returns_offline_rows_without_network() {
+    let base = fixture_repo("local");
+    let main = base.join("main");
 
     let report = devkit_issue::status::gather_local(main.to_str().unwrap(), &[]).unwrap();
     let row = report
@@ -46,8 +56,28 @@ fn gather_local_returns_offline_rows_without_network() {
         .expect("eng-1 row present");
     assert_eq!(row.pr_state, "NO_PR");
     assert_eq!(row.pr_number, None);
-    assert_eq!(row.linear_kind, None);
+    assert!(row.state.is_none());
     assert!(!row.dirty);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn gather_with_builds_tracker_info_from_the_injected_tracker() {
+    // No worktree matches the filter, so nothing is fetched: the report carries
+    // the tracker's own answers and no link base to resolve.
+    let base = fixture_repo("gw");
+    let t = FakeTracker::ready([]);
+    let report = devkit_issue::status::gather_with(
+        base.join("main").to_str().unwrap(),
+        &["NOPE-1".into()],
+        &t,
+    )
+    .unwrap();
+    assert!(report.worktrees.is_empty());
+    assert_eq!(report.tracker.kind, TrackerKind::Linear);
+    assert!(report.tracker.ready);
+    assert_eq!(report.tracker.link_base, None);
 
     let _ = std::fs::remove_dir_all(&base);
 }
