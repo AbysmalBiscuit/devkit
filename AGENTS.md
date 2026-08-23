@@ -1,7 +1,7 @@
 # devkit
 
 A Rust workspace (edition 2024): a root `devkit` binary package whose six CLIs live
-in `src/bin/`, plus three library crates, coordinating local development for a monorepo.
+in `src/bin/`, plus seven library crates, coordinating local development for a monorepo.
 The engine is project-agnostic; every project-specific detail lives in `devkit.toml`.
 See `README.md` for user-facing CLI docs.
 
@@ -22,19 +22,20 @@ verifies) using the stable toolchain CI uses, so formatting matches.
 ## Layout
 
 The workspace root is the `devkit` binary package; its CLIs live in `src/bin/` and
-install together via `cargo install --path .`. Three library crates are members.
+install together via `cargo install --path .`. Seven library crates are members.
 
 | Unit | Role |
 |---|---|
-| `crates/devkit-common` | shared lib: `paths`, `cmd` (git/gh wrappers), `worktree`, `ui` (tables/links), `progress` (TTY-only spinners), `tracker` (the `Tracker` seam, with the `linear` and `none` implementations), `slack`, `supervise` |
-| `crates/devkit-ports` | lib: `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load`, `daemon`, `task` (canned oneshot resolution/exec) |
+| `crates/devkit-config` | lib: the `devkit.toml` shape — layer discovery and merge, `${VAR}` expansion and layer-relative path resolution, per-leaf provenance, and the `JsonSchema` derives `devkit schema` renders. A leaf crate with no internal dependencies, so `devkit-common` and `devkit-ports` both depend on it |
+| `crates/devkit-common` | shared lib: `paths`, `secrets`, `cmd` (git/gh wrappers) with `github` and `gitfetch`, `worktree` plus the `record` it reads (`.devkit/issue.toml`) and `gitignore`, `slug`, `template`, `ui` (tables/links) with `livetable` and `progress` (TTY-only spinners), `tracker` (the `Tracker` seam and its `linear` and `none` implementations), `slack`, `store` (flock'd JSON documents), `supervise`, `sys` (the platform boundary), `timing`, `report`, and a `daemon` client behind the `daemon` feature |
+| `crates/devkit-ports` | lib: `doppler` (yaml), `apps` (catalog), `load` (config + catalog), `registry` (flock'd port store), `run` (server lifecycle), `strays` (servers outside the registry), `daemon`, `task` (canned oneshot resolution/exec) |
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
-| `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + Linear state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
+| `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + tracker state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
 | `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks`/`devrun`/`issue` handlers) over the port + lock facades, the `devkit-ports::run` server-lifecycle facade, and the `devkit-issue` triage facade |
 | `crates/devkit-docs` | lib: version-correct library checkouts — manifest (global `docs.toml` + `devkit.toml` `[docs]`), importer-graph resolution (pnpm/bun/npm/Cargo/uv) matched to git tags, hard-error failure modes instead of a silent default-branch fallback (opt in per run with `--allow-default-branch`), bare-clone cache with ref-named worktrees (`/` encoded as `~`) under a reserved-stem-checked cache root, flock'd reference registry with reference-based prune, per-checkout pins that roll up a workspace root's members (JS lockfiles only — cargo and uv name members in a manifest) and union in the reference registry's rows for this project, and 0.12.x cache migration that moves the layout but hard-errors on a `meta.toml` it cannot parse, naming every such library in one run |
 | `src/bin/portm.rs` | CLI over the port registry |
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`, `task`); `reap` kills servers started outside devrun |
-| `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `end`, `prs`, `dashboard`, `review` |
+| `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `info`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
 | `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens), `doctor`, `brief` (session-hook project summary, silent outside a devkit project), `schema` (JSON Schema for `devkit.toml`, derived from the config types; `schema init` points a config at it, writing a fully-commented starter when absent; `schema/devkit-config.json` is committed, a test fails with a diff when it drifts, `DEVKIT_UPDATE_SCHEMA=1 cargo test` rewrites it, and release-please attaches it to each GitHub Release) |
 | `src/bin/docm.rs` | CLI over the docs cache: `add`, `rm`, `list`, `sync`, `path`, `info`, `forget`, `prune`, `completions` |
@@ -140,6 +141,16 @@ expose a `completions <shell>` subcommand via `clap_complete`.
 - `Role` (Issue/Baseline) is defined once in `devkit-ports::registry` with `ValueEnum` +
   `Display`; `devrun`'s CLI uses a separate `RoleSelector` (adds `Both`). No `_ => Issue`
   catch-alls — map roles exhaustively.
+- The issue tracker is the `Tracker` trait in `devkit-common::tracker`.
+  `tracker::resolve` picks the implementation: a resolvable `LINEAR_API_KEY`
+  means Linear, else a GitHub `origin` remote means GitHub, else `NoneTracker`,
+  whose empty answers are how `issue` degrades. There is no GitHub
+  implementation, so that arm also lands on `NoneTracker`. `resolve` takes an
+  explicit kind that wins over detection, but no caller passes one — the
+  `[tracker] kind` config key is parsed and schema-checked and nothing reads it.
+- `StateKind` (Triage/Backlog/Unstarted/Started/Completed/Canceled) is the state
+  vocabulary every tracker maps onto — match it exhaustively, no `_ =>` arms.
+  Only `Completed` and `Canceled` are closed.
 - CI runs the `test` job (and `clippy`) on ubuntu, macos, and windows. Tests that spawn or
   reap processes must poll for the expected state, not sleep a fixed interval — a loaded
   Windows runner exits a child later than a short fixed sleep allows.

@@ -433,6 +433,37 @@ Set it in `~/.config/devkit/config.toml` as a personal default and override it
 per project in that project's `devkit.toml`. A malformed `[brief]` table falls
 back to these defaults rather than withholding the brief.
 
+### `[tracker]`
+
+Which issue tracker backs the `issue` commands.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `kind` | string | _(detect)_ | `linear`, `github`, or `none`. |
+
+devkit picks the tracker by detection: a resolvable `LINEAR_API_KEY`
+(environment or `~/.config/devkit/secrets.toml`) means Linear, otherwise a
+GitHub `origin` remote means GitHub, otherwise no tracker. There is no GitHub
+implementation behind `github`, so a project that lands there runs with no
+tracker.
+
+Detection is a floor, not a convenience: a `LINEAR_API_KEY` exported globally
+resolves to Linear for *every* project on the machine. `kind` names the tracker
+outright, and the config accepts and schema-checks all three values — but no
+`issue` command reads the key yet, so detection is what decides.
+
+Without a tracker, `issue` still creates worktrees, tracks PRs, and reaches
+FINISHED on a merged PR and a clean tree, as long as the worktree carries an
+issue id; the STATE column reads `no tracker`. With one, the verdict also waits
+on the issue reaching a completed state, and a tracker that answered with
+nothing for that issue holds the verdict open rather than promoting the
+worktree.
+
+Some Linear work sits outside the tracker seam and needs `LINEAR_API_KEY`
+whatever the tracker is: `issue setup`'s title-derived slug and summary file,
+`issue checkout-pr`'s disambiguation of a bare number, `issue dashboard`'s
+issue timeline, and `[linear] resolve_pr_links` below.
+
 ### `[linear]`
 
 Opt-in Linear enrichment for `issue prs`.

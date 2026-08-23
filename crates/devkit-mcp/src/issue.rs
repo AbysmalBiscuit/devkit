@@ -11,7 +11,7 @@ pub fn actions() -> Vec<Action> {
     vec![
         Action {
             name: "issue.status",
-            summary: "List issue worktrees (optionally filtered by id) with PR/Linear state and a finished verdict.",
+            summary: "List issue worktrees (optionally filtered by id) with PR/tracker state and a finished verdict.",
             schema: status_schema,
             handler: status,
         },

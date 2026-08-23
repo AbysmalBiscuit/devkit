@@ -120,7 +120,7 @@ enum Cmd {
         /// Issue ids to report on; omit for every issue worktree.
         ids: Vec<String>,
     },
-    /// Show one worktree's PR + Linear id (current worktree, or a SELECTOR).
+    /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
     Info {
         /// Issue id, branch, worktree basename, or path. Defaults to cwd.
         selector: Option<String>,
@@ -128,11 +128,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
         /// Skip the network: take the PR number from the worktree's cache and
-        /// leave the Linear state blank.
+        /// leave the issue state blank.
         #[arg(long = "cache-only")]
         cache_only: bool,
     },
-    /// Remove FINISHED worktrees (PR merged + Linear done + clean).
+    /// Remove FINISHED worktrees (PR merged + issue done + clean).
     End {
         /// Issue ids, branches, or worktree paths to consider; omit to scan
         /// every issue worktree.
@@ -144,8 +144,8 @@ enum Cmd {
         /// worktree.
         #[arg(long)]
         force: bool,
-        /// Count a merged PR plus a clean tree as finished, ignoring the Linear
-        /// state and the issue-id gate.
+        /// Count a merged PR plus a clean tree as finished, ignoring the
+        /// tracker state and the issue-id gate.
         #[arg(long = "pr-only")]
         pr_only: bool,
         /// Remove the selected worktrees whether or not they are finished.
