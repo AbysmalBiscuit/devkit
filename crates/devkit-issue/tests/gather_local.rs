@@ -85,3 +85,33 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// An issue id is a case-insensitive identifier, and the record stores whatever
+/// spelling the tracker was given, so a worktree recorded lowercase has to be
+/// reachable by either spelling of its id.
+#[test]
+fn a_lowercase_record_id_is_found_by_either_spelling() {
+    let base = fixture_repo("case");
+    let main = base.join("main");
+    let wt = base.join("eng-1-foo");
+    std::fs::create_dir_all(wt.join(".devkit")).unwrap();
+    std::fs::write(
+        wt.join(".devkit").join("issue.toml"),
+        "issue = \"eng-1234\"\nslug = \"fix\"\napps = []\n",
+    )
+    .unwrap();
+
+    for spelling in ["eng-1234", "ENG-1234", "Eng-1234"] {
+        let report =
+            devkit_issue::status::gather_local(main.to_str().unwrap(), &[spelling.to_string()])
+                .unwrap();
+        let ids: Vec<&str> = report
+            .worktrees
+            .iter()
+            .map(|r| r.issue_id.as_str())
+            .collect();
+        assert_eq!(ids, ["eng-1234"], "filtering by {spelling}");
+    }
+
+    let _ = std::fs::remove_dir_all(&base);
+}

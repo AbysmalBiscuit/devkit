@@ -101,7 +101,7 @@ enum Cmd {
         #[arg(long = "no-gitignore")]
         no_gitignore: bool,
     },
-    /// Check out an existing PR (by number, Linear id, or URL) into a new worktree.
+    /// Check out an existing PR (by number, issue id, or URL) into a new worktree.
     CheckoutPr {
         /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue URL.
         target: String,

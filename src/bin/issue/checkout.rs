@@ -151,19 +151,17 @@ fn fetch_pr_meta(n: u64, cwd: &str) -> Result<PrMeta> {
 }
 
 /// Turn a chosen issue into a `Resolved`, erroring if it has no PR. A title the
-/// caller already holds is kept; otherwise the tracker is asked for one.
+/// caller already holds is kept; otherwise the tracker is asked for one. That
+/// lookup is best-effort: the title only decorates the worktree name, so a
+/// tracker hiccup must not fail a checkout whose PR is already resolved.
 fn resolve_issue(id: &str, title: Option<String>, t: &dyn Tracker) -> Result<Resolved> {
     let pr = t
         .issue_pr(id)?
         .with_context(|| format!("issue {id} has no associated PR to check out"))?;
-    let title = match title {
-        Some(known) => Some(known),
-        None => t.title(id)?,
-    };
     Ok(Resolved {
         pr_number: pr.number,
         linear_id: Some(id.to_string()),
-        linear_title: title,
+        linear_title: title.or_else(|| t.title(id).ok().flatten()),
     })
 }
 
@@ -183,8 +181,11 @@ fn resolve(
         }),
         Ident::Issue(r) => {
             anyhow::ensure!(t.ready(), "issue id given but no tracker is configured");
+            // A pasted issue URL spells the title slug out, and the worktree
+            // template slugifies whatever it is given, so the slug stands in for
+            // the title and spares a lookup.
             steps.during_result(&format!("Resolving issue {}…", r.id), || {
-                resolve_issue(&r.id, None, t)
+                resolve_issue(&r.id, r.slug.clone(), t)
             })
         }
         Ident::Fuzzy(n) => {
@@ -256,8 +257,8 @@ fn prompt_choice(
     Ok(chosen.cloned())
 }
 
-/// The id stored in `.devkit/issue.toml`: the Linear id if known, else the id
-/// parsed from the PR head ref, else `UNKNOWN`.
+/// The id stored in `.devkit/issue.toml`: the tracker's id when the input
+/// resolved to one, else the id parsed from the PR head ref, else `UNKNOWN`.
 fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
     linear_id.map(str::to_string).unwrap_or_else(|| {
         devkit_common::worktree::find_id(head_ref)

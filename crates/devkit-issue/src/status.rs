@@ -148,11 +148,12 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
         .to_str()
         .context("main repo path not UTF-8")?
         .to_string();
-    let wanted: Vec<String> = ids.iter().map(|s| s.to_uppercase()).collect();
     let mut rows = Vec::new();
     for wt in &others {
         let iid = worktree::issue_id_of(&wt.path, &wt.branch);
-        if !wanted.is_empty() && !wanted.contains(&iid) {
+        // An issue id is case-insensitive in every tracker that has one, and the
+        // record holds whichever spelling the tracker was given.
+        if !ids.is_empty() && !ids.iter().any(|w| w.eq_ignore_ascii_case(&iid)) {
             continue;
         }
         rows.push(IssueWorktree {

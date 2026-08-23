@@ -251,16 +251,33 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The record holds the tracker's own spelling, so it comes back untouched.
+    /// Uppercasing it would corrupt any id a tracker does not spell in caps.
     #[test]
-    fn a_numeric_record_id_is_not_uppercased_into_nonsense() {
-        let dir = std::env::temp_dir().join(format!("devkit-idnum-{}", std::process::id()));
+    fn a_record_id_is_returned_verbatim() {
+        let dir = std::env::temp_dir().join(format!("devkit-idverbatim-{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".devkit")).unwrap();
         std::fs::write(
             dir.join(".devkit").join("issue.toml"),
-            "issue = \"87\"\nslug = \"x\"\napps = []\n",
+            "issue = \"eng-1234\"\nslug = \"x\"\napps = []\n",
         )
         .unwrap();
-        assert_eq!(issue_id_of(&dir, "DETACHED"), "87");
+        assert_eq!(issue_id_of(&dir, "DETACHED"), "eng-1234");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A record with no id is no answer at all: fall through to the scan rather
+    /// than reporting an empty id.
+    #[test]
+    fn an_empty_record_id_falls_through_to_the_branch() {
+        let dir = std::env::temp_dir().join(format!("devkit-idempty-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".devkit")).unwrap();
+        std::fs::write(
+            dir.join(".devkit").join("issue.toml"),
+            "issue = \"\"\nslug = \"x\"\napps = []\n",
+        )
+        .unwrap();
+        assert_eq!(issue_id_of(&dir, "lev/eng-1-something"), "ENG-1");
         std::fs::remove_dir_all(&dir).ok();
     }
 
