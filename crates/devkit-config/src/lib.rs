@@ -26,6 +26,9 @@ pub struct Config {
     /// Linear lookups that cost an extra API round trip.
     #[serde(default)]
     pub linear: LinearConfig,
+    /// Which issue tracker backs `issue`. Detected when the table is absent.
+    #[serde(default)]
+    pub tracker: TrackerConfig,
     /// Minijinja templates for the strings `issue setup` and `issue review`
     /// generate — branch names, worktree directories, PR fields, Slack bodies.
     #[serde(default)]
@@ -154,6 +157,24 @@ pub struct LinearConfig {
     /// Query Linear for the issues linked to each PR in `issue prs` (one
     /// extra batched round trip per run). Off by default.
     pub resolve_pr_links: bool,
+}
+
+/// Which issue tracker a project uses. Absent means detect: a resolvable
+/// `LINEAR_API_KEY`, then a GitHub `origin` remote, then no tracker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrackerKind {
+    Linear,
+    Github,
+    None,
+}
+
+/// The `[tracker]` table.
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TrackerConfig {
+    /// Force a tracker instead of detecting one.
+    pub kind: Option<TrackerKind>,
 }
 
 /// Project-wide paths and branch conventions. The first four keys are required
@@ -2009,5 +2030,26 @@ steps = [
         let expected = tmp.parent().unwrap().join("proj-worktrees");
         assert_eq!(cfg.defaults.worktree_root, expected.to_string_lossy());
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn tracker_kind_parses_from_the_table() {
+        let c: Config = toml::from_str(
+            "[defaults]\nworktree_root = \"/x\"\nbranch_prefix = \"l/\"\n\
+             baseline_ref = \"origin/main\"\nbaseline_path = \"\"\n\
+             [tracker]\nkind = \"github\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.tracker.kind, Some(TrackerKind::Github));
+    }
+
+    #[test]
+    fn an_absent_tracker_table_leaves_the_kind_unset() {
+        let c: Config = toml::from_str(
+            "[defaults]\nworktree_root = \"/x\"\nbranch_prefix = \"l/\"\n\
+             baseline_ref = \"origin/main\"\nbaseline_path = \"\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.tracker.kind, None, "absent means detect, not linear");
     }
 }

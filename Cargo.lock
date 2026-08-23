@@ -272,6 +272,7 @@ dependencies = [
  "anyhow",
  "comfy-table",
  "console 0.15.11",
+ "devkit-config",
  "fd-lock",
  "glob",
  "indicatif",

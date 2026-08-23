@@ -620,6 +620,33 @@
         }
       },
       "type": "object"
+    },
+    "TrackerConfig": {
+      "description": "The `[tracker]` table.",
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrackerKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Force a tracker instead of detecting one."
+        }
+      },
+      "type": "object"
+    },
+    "TrackerKind": {
+      "description": "Which issue tracker a project uses. Absent means detect: a resolvable\n`LINEAR_API_KEY`, then a GitHub `origin` remote, then no tracker.",
+      "enum": [
+        "linear",
+        "github",
+        "none"
+      ],
+      "type": "string"
     }
   },
   "$id": "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json",
@@ -743,6 +770,13 @@
         "worktree_dir": null
       },
       "description": "Minijinja templates for the strings `issue setup` and `issue review`\ngenerate — branch names, worktree directories, PR fields, Slack bodies."
+    },
+    "tracker": {
+      "$ref": "#/$defs/TrackerConfig",
+      "default": {
+        "kind": null
+      },
+      "description": "Which issue tracker backs `issue`. Detected when the table is absent."
     }
   },
   "title": "devkit.toml",
