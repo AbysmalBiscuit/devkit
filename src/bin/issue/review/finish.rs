@@ -121,7 +121,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let record = git(&["rev-parse", "--show-toplevel"], &start)
         .ok()
-        .and_then(|top| crate::record::read(std::path::Path::new(top.trim())));
+        .and_then(|top| devkit_common::record::read(std::path::Path::new(top.trim())));
 
     let view: PrFull = steps.during_result(&format!("Fetching PR #{number}…"), || {
         fetch_pr_full(number, &start)

@@ -381,9 +381,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
         }
         None => None,
     };
-    crate::record::write(
+    devkit_common::record::write(
         &worktree,
-        &crate::record::IssueRecord {
+        &devkit_common::record::IssueRecord {
             issue: issue.clone(),
             slug: slug.clone(),
             apps: args.apps.clone(),
@@ -391,7 +391,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         },
     )?;
     if !args.no_gitignore
-        && let Err(e) = crate::gitignore::ensure_devkit_ignored()
+        && let Err(e) = devkit_common::gitignore::ensure_devkit_ignored()
     {
         eprintln!("warning: could not update global gitignore: {e:#}");
     }

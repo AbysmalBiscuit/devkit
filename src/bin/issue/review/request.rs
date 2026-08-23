@@ -204,7 +204,7 @@ pub fn run(args: Args) -> Result<()> {
     let toplevel = git(&["rev-parse", "--show-toplevel"], &start)?
         .trim()
         .to_string();
-    let record = crate::record::read(std::path::Path::new(&toplevel));
+    let record = devkit_common::record::read(std::path::Path::new(&toplevel));
     let missing_at = if record.is_none() {
         Some(toplevel.as_str())
     } else {

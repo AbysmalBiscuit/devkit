@@ -44,7 +44,7 @@ fn confirm(label: &str) -> bool {
 /// than re-derived, so a `issue_summary_path` template edited since setup
 /// cannot leave the old file behind.
 fn recorded_summary(worktree: &Path) -> Option<String> {
-    crate::record::read(worktree)?.summary
+    devkit_common::record::read(worktree)?.summary
 }
 
 /// Sentinel error for a worktree refused because it has uncommitted changes;
@@ -294,9 +294,9 @@ mod tests {
         let summary = dir.join("notes").join("ENG-1.md");
         std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
         std::fs::write(&summary, "notes\n").unwrap();
-        crate::record::write(
+        devkit_common::record::write(
             &wt,
-            &crate::record::IssueRecord {
+            &devkit_common::record::IssueRecord {
                 issue: "ENG-1".into(),
                 slug: "fix".into(),
                 apps: vec![],
@@ -314,9 +314,9 @@ mod tests {
     #[test]
     fn a_worktree_with_no_summary_has_nothing_to_remove() {
         let dir = scratch("nosummary");
-        crate::record::write(
+        devkit_common::record::write(
             &dir,
-            &crate::record::IssueRecord {
+            &devkit_common::record::IssueRecord {
                 issue: "ENG-2".into(),
                 slug: "fix".into(),
                 apps: vec![],
@@ -359,9 +359,9 @@ mod tests {
         // The summary sits beside the worktree, as the default path template puts it.
         let summary = dir.join("ISSUE_SUMMARY_ENG-1.md");
         std::fs::write(&summary, "months of notes\n").unwrap();
-        crate::record::write(
+        devkit_common::record::write(
             &wt,
-            &crate::record::IssueRecord {
+            &devkit_common::record::IssueRecord {
                 issue: "ENG-1".into(),
                 slug: "fix".into(),
                 apps: vec![],

@@ -141,7 +141,7 @@ pub(crate) fn with_fields(
 
 /// Base context shared by every review template: branch + issue record fields.
 pub(crate) fn base_ctx(
-    record: Option<&crate::record::IssueRecord>,
+    record: Option<&devkit_common::record::IssueRecord>,
     branch: &str,
 ) -> serde_json::Value {
     let mut m = serde_json::Map::new();

@@ -5,6 +5,7 @@ use devkit_common::gitfetch;
 use devkit_common::github;
 use devkit_common::progress::Steps;
 use devkit_common::tracker::linear::{self, LinearIssueRef};
+use devkit_common::tracker::{IssueRef, Tracker};
 use devkit_config::expand_tilde;
 use devkit_ports::load;
 use std::io::{IsTerminal, Write};
@@ -19,24 +20,21 @@ pub struct CheckoutArgs {
     pub config: Option<String>,
 }
 
-/// How the raw `<PR_LINEAR_ID_URL>` input is classified before resolution.
+/// How the raw `<PR_ISSUE_ID_URL>` input is classified before resolution.
 #[derive(Debug, PartialEq, Eq)]
 enum Ident {
     Pr(u64),
-    Linear(String),
+    Issue(IssueRef),
     Fuzzy(u64),
 }
 
-/// Classify the identifier by shape alone (no network, no key knowledge).
-fn classify(input: &str) -> Result<Ident> {
+/// Classify the identifier by shape. The PR and bare-number rules are
+/// tracker-independent; recognizing an issue id or issue URL is the tracker's.
+fn classify(input: &str, t: &dyn Tracker) -> Result<Ident> {
     let s = input.trim();
     if s.contains("github.com") && s.contains("/pull/") {
         let n = github::pr_number_from_url(s).context("no PR number in GitHub URL")?;
         return Ok(Ident::Pr(n));
-    }
-    if s.contains("linear.app") {
-        let parsed = crate::slug::from_linear_url(s).context("no issue id in Linear URL")?;
-        return Ok(Ident::Linear(parsed.id.to_uppercase()));
     }
     if let Some(rest) = s.strip_prefix('#')
         && !rest.is_empty()
@@ -44,18 +42,20 @@ fn classify(input: &str) -> Result<Ident> {
     {
         return Ok(Ident::Pr(rest.parse().context("bad PR number")?));
     }
-    if let Some((a, b)) = s.split_once('-')
-        && !a.is_empty()
-        && a.chars().all(|c| c.is_ascii_alphabetic())
-        && !b.is_empty()
-        && b.chars().all(|c| c.is_ascii_digit())
-    {
-        return Ok(Ident::Linear(s.to_uppercase()));
-    }
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) {
         return Ok(Ident::Fuzzy(s.parse().context("bad number")?));
     }
-    anyhow::bail!("unrecognized PR/Linear identifier: {s}");
+    if s.is_empty() || s.split_whitespace().count() != 1 {
+        anyhow::bail!("unrecognized PR/issue identifier: {s}");
+    }
+    let r = t.issue_ref(s);
+    // A tracker that cannot parse a URL hands the input straight back, and no
+    // tracker's id contains a `/`, so a slash in the result means it failed.
+    anyhow::ensure!(
+        !r.id.is_empty() && !r.id.contains('/'),
+        "unrecognized PR/issue identifier: {s}"
+    );
+    Ok(Ident::Issue(r))
 }
 
 /// The decision for a bare-number input after probing both sides.
@@ -150,29 +150,41 @@ fn fetch_pr_meta(n: u64, cwd: &str) -> Result<PrMeta> {
     )
 }
 
-/// Turn a chosen Linear issue into a `Resolved`, erroring if it has no PR.
-fn resolve_linear(id: &str, title: Option<String>, key: &str) -> Result<Resolved> {
-    let (pr, fetched_title) = linear::issue_pr(id, key)?;
-    let pr = pr.with_context(|| format!("Linear issue {id} has no associated PR to check out"))?;
+/// Turn a chosen issue into a `Resolved`, erroring if it has no PR. A title the
+/// caller already holds is kept; otherwise the tracker is asked for one.
+fn resolve_issue(id: &str, title: Option<String>, t: &dyn Tracker) -> Result<Resolved> {
+    let pr = t
+        .issue_pr(id)?
+        .with_context(|| format!("issue {id} has no associated PR to check out"))?;
+    let title = match title {
+        Some(known) => Some(known),
+        None => t.title(id)?,
+    };
     Ok(Resolved {
         pr_number: pr.number,
         linear_id: Some(id.to_string()),
-        linear_title: Some(title.unwrap_or(fetched_title)),
+        linear_title: title,
     })
 }
 
 /// Resolve the raw input to a concrete PR. Network + interactive.
-fn resolve(target: &str, key: Option<&str>, repo: &str, steps: &Steps) -> Result<Resolved> {
-    match classify(target)? {
+fn resolve(
+    target: &str,
+    key: Option<&str>,
+    repo: &str,
+    t: &dyn Tracker,
+    steps: &Steps,
+) -> Result<Resolved> {
+    match classify(target, t)? {
         Ident::Pr(n) => Ok(Resolved {
             pr_number: n,
             linear_id: None,
             linear_title: None,
         }),
-        Ident::Linear(id) => {
-            let key = key.context("Linear id given but LINEAR_API_KEY is not set")?;
-            steps.during_result(&format!("Resolving Linear issue {id}…"), || {
-                resolve_linear(&id, None, key)
+        Ident::Issue(r) => {
+            anyhow::ensure!(t.ready(), "issue id given but no tracker is configured");
+            steps.during_result(&format!("Resolving issue {}…", r.id), || {
+                resolve_issue(&r.id, None, t)
             })
         }
         Ident::Fuzzy(n) => {
@@ -203,14 +215,14 @@ fn resolve(target: &str, key: Option<&str>, repo: &str, steps: &Steps) -> Result
                     linear_id: None,
                     linear_title: None,
                 }),
-                FuzzyDecision::UseLinear(r) => resolve_linear(&r.id, Some(r.title), key),
+                FuzzyDecision::UseLinear(r) => resolve_issue(&r.id, Some(r.title), t),
                 FuzzyDecision::Prompt(cands) => match prompt_choice(exists, &cands, n)? {
                     None => Ok(Resolved {
                         pr_number: n,
                         linear_id: None,
                         linear_title: None,
                     }),
-                    Some(r) => resolve_linear(&r.id, Some(r.title), key),
+                    Some(r) => resolve_issue(&r.id, Some(r.title), t),
                 },
             }
         }
@@ -292,8 +304,15 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
 
     let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
+    let tracker = devkit_common::tracker::resolve(None, None, Path::new(&start));
     let steps = Steps::persistent();
-    let resolved = resolve(&args.target, key.as_deref(), monorepo_s, &steps)?;
+    let resolved = resolve(
+        &args.target,
+        key.as_deref(),
+        monorepo_s,
+        tracker.as_ref(),
+        &steps,
+    )?;
 
     let meta: PrMeta = steps
         .during_result(&format!("Fetching PR #{}…", resolved.pr_number), || {
@@ -359,9 +378,9 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             .with_context(|| format!("checking out PR #{}", meta.number))?;
 
         let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
-        crate::record::write(
+        devkit_common::record::write(
             &worktree,
-            &crate::record::IssueRecord {
+            &devkit_common::record::IssueRecord {
                 issue: issue.clone(),
                 slug: slugify(&meta.title),
                 apps: if args.setup {
@@ -528,48 +547,68 @@ mod tests {
         }
     }
 
+    fn tracker() -> devkit_common::tracker::linear::LinearTracker {
+        devkit_common::tracker::linear::LinearTracker::new(Some("k".into()))
+    }
+
+    fn iref(id: &str, slug: Option<&str>) -> Ident {
+        Ident::Issue(IssueRef {
+            id: id.into(),
+            slug: slug.map(str::to_string),
+        })
+    }
+
     #[test]
     fn classify_hash_is_pr() {
-        assert_eq!(classify("#3340").unwrap(), Ident::Pr(3340));
+        assert_eq!(classify("#3340", &tracker()).unwrap(), Ident::Pr(3340));
     }
     #[test]
     fn classify_github_url_is_pr() {
         assert_eq!(
-            classify("https://github.com/o/r/pull/12").unwrap(),
+            classify("https://github.com/o/r/pull/12", &tracker()).unwrap(),
             Ident::Pr(12)
         );
     }
     #[test]
-    fn classify_prefix_is_linear() {
-        assert_eq!(classify("eng-42").unwrap(), Ident::Linear("ENG-42".into()));
+    fn classify_prefix_is_an_issue() {
+        assert_eq!(
+            classify("eng-42", &tracker()).unwrap(),
+            iref("ENG-42", None)
+        );
+    }
+    /// The id shape is the tracker's to define, so an id with no dash-digits
+    /// run reaches it instead of being rejected on sight.
+    #[test]
+    fn classify_defers_the_id_shape_to_the_tracker() {
+        assert_eq!(classify("eng42", &tracker()).unwrap(), iref("ENG42", None));
     }
     #[test]
-    fn classify_linear_url_is_linear() {
+    fn classify_issue_url_is_an_issue() {
         assert_eq!(
-            classify("https://linear.app/acme/issue/ENG-42/fix").unwrap(),
-            Ident::Linear("ENG-42".into())
+            classify("https://linear.app/acme/issue/ENG-42/fix", &tracker()).unwrap(),
+            iref("ENG-42", Some("fix"))
         );
     }
     /// A workspace whose name ends in `-<digits>` reads as an issue id, so the
     /// id has to come from the path position rather than the first match.
     #[test]
-    fn classify_linear_url_ignores_a_workspace_named_like_an_id() {
+    fn classify_issue_url_ignores_a_workspace_named_like_an_id() {
         assert_eq!(
-            classify("https://linear.app/acme-2/issue/ENG-42/fix").unwrap(),
-            Ident::Linear("ENG-42".into())
+            classify("https://linear.app/acme-2/issue/ENG-42/fix", &tracker()).unwrap(),
+            iref("ENG-42", Some("fix"))
         );
     }
     #[test]
-    fn classify_linear_url_without_an_issue_segment_errors() {
-        assert!(classify("https://linear.app/acme/team/ENG/active").is_err());
+    fn classify_issue_url_without_an_issue_segment_errors() {
+        assert!(classify("https://linear.app/acme/team/ENG/active", &tracker()).is_err());
     }
     #[test]
     fn classify_bare_number_is_fuzzy() {
-        assert_eq!(classify("3340").unwrap(), Ident::Fuzzy(3340));
+        assert_eq!(classify("3340", &tracker()).unwrap(), Ident::Fuzzy(3340));
     }
     #[test]
     fn classify_garbage_errors() {
-        assert!(classify("not an id").is_err());
+        assert!(classify("not an id", &tracker()).is_err());
     }
 
     #[test]

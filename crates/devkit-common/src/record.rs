@@ -2,8 +2,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Per-worktree record written by `issue setup` and read by `issue review request`,
-/// carrying the setup-time context that is otherwise unavailable at review.
+/// Per-worktree record written by `issue setup`, carrying the setup-time
+/// context that is otherwise unavailable later: the authoritative issue id, and
+/// the slug, apps and summary path that `issue review` and `issue end` need.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IssueRecord {
     pub issue: String,

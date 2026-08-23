@@ -6,11 +6,9 @@ use std::path::PathBuf;
 mod checkout;
 mod dashboard;
 mod end;
-mod gitignore;
 mod info;
 mod info_cache;
 mod prs;
-mod record;
 mod review;
 mod select;
 mod setup;
@@ -105,7 +103,7 @@ enum Cmd {
     },
     /// Check out an existing PR (by number, Linear id, or URL) into a new worktree.
     CheckoutPr {
-        /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | linear issue URL.
+        /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue URL.
         target: String,
         /// Worktree path; defaults to the config-resolved placement.
         worktree_path: Option<String>,

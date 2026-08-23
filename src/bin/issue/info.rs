@@ -233,7 +233,7 @@ fn local_row(top: &str) -> Result<IssueWorktree> {
     } else {
         branch
     };
-    let issue_id = devkit_common::worktree::issue_id_of(&branch, Path::new(top));
+    let issue_id = devkit_common::worktree::issue_id_of(Path::new(top), &branch);
     Ok(IssueWorktree {
         worktree: top.to_string(),
         branch,

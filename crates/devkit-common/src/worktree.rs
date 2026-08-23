@@ -33,9 +33,17 @@ pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
     all
 }
 
-/// Derive an `ENG-1234`-style id from a branch or directory name, uppercased.
-pub fn issue_id_of(branch: &str, path: &std::path::Path) -> String {
-    let dir = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+/// This worktree's issue id. The setup record is authoritative because it holds
+/// whatever the tracker actually calls the issue; the branch and directory scan
+/// is the fallback that keeps worktrees made without a record — by a plain
+/// `git worktree add`, say — working.
+pub fn issue_id_of(worktree: &std::path::Path, branch: &str) -> String {
+    if let Some(rec) = crate::record::read(worktree)
+        && !rec.issue.is_empty()
+    {
+        return rec.issue;
+    }
+    let dir = worktree.file_name().and_then(|s| s.to_str()).unwrap_or("");
     for src in [branch, dir] {
         if let Some(m) = find_id(src) {
             return m.to_uppercase();
@@ -206,9 +214,54 @@ mod tests {
     }
     #[test]
     fn id_from_branch_then_dir() {
-        assert_eq!(issue_id_of("lev/eng-1234-fix", Path::new("/x")), "ENG-1234");
-        assert_eq!(issue_id_of("DETACHED", Path::new("/x/abc-9")), "ABC-9");
-        assert_eq!(issue_id_of("main", Path::new("/x/scratch")), "UNKNOWN");
+        assert_eq!(issue_id_of(Path::new("/x"), "lev/eng-1234-fix"), "ENG-1234");
+        assert_eq!(issue_id_of(Path::new("/x/abc-9"), "DETACHED"), "ABC-9");
+        assert_eq!(issue_id_of(Path::new("/x/scratch"), "main"), "UNKNOWN");
+    }
+
+    #[test]
+    fn the_record_wins_over_the_branch_name() {
+        let dir = std::env::temp_dir().join(format!("devkit-idrec-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".devkit")).unwrap();
+        std::fs::write(
+            dir.join(".devkit").join("issue.toml"),
+            "issue = \"87\"\nslug = \"fix\"\napps = []\n",
+        )
+        .unwrap();
+        // The branch carries a Linear-shaped id that is NOT this worktree's issue.
+        assert_eq!(issue_id_of(&dir, "lev/eng-1-something"), "87");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn without_a_record_the_branch_scan_still_works() {
+        let dir = std::env::temp_dir().join(format!("devkit-idbranch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(issue_id_of(&dir, "lev/eng-1-something"), "ENG-1");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_worktree_with_neither_is_unknown() {
+        // The directory name is a fallback source too, so it must carry no
+        // letters-dash-digits run of its own.
+        let dir = std::env::temp_dir().join(format!("devkit.idnone.{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(issue_id_of(&dir, "lev/no-id-here"), "UNKNOWN");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_numeric_record_id_is_not_uppercased_into_nonsense() {
+        let dir = std::env::temp_dir().join(format!("devkit-idnum-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".devkit")).unwrap();
+        std::fs::write(
+            dir.join(".devkit").join("issue.toml"),
+            "issue = \"87\"\nslug = \"x\"\napps = []\n",
+        )
+        .unwrap();
+        assert_eq!(issue_id_of(&dir, "DETACHED"), "87");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -221,8 +274,8 @@ mod tests {
         );
         assert_eq!(
             issue_id_of(
-                "pr-3255-feat-api-migrate-view-v2-to-kysely-u11-swe-8603",
-                Path::new("/x")
+                Path::new("/x"),
+                "pr-3255-feat-api-migrate-view-v2-to-kysely-u11-swe-8603"
             ),
             "SWE-8603"
         );

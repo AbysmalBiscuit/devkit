@@ -151,7 +151,7 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
     let wanted: Vec<String> = ids.iter().map(|s| s.to_uppercase()).collect();
     let mut rows = Vec::new();
     for wt in &others {
-        let iid = worktree::issue_id_of(&wt.branch, &wt.path);
+        let iid = worktree::issue_id_of(&wt.path, &wt.branch);
         if !wanted.is_empty() && !wanted.contains(&iid) {
             continue;
         }
