@@ -131,6 +131,15 @@ fn rest_get_paged(path_with_query: &str, max: usize) -> Result<Vec<Value>> {
     Ok(out)
 }
 
+// --- url parsing -----------------------------------------------------------
+
+/// Parse the PR number out of a `…/pull/<n>` GitHub URL.
+pub fn pr_number_from_url(url: &str) -> Option<u64> {
+    let tail = url.split("/pull/").nth(1)?;
+    let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
 // --- slug ------------------------------------------------------------------
 
 /// Parse `owner/repo` from a GitHub remote URL (ssh, `ssh://`, or https),
@@ -368,6 +377,18 @@ pub fn pr_timeline(slug: &str, qualifier: &str, max: usize) -> Result<Vec<PrTime
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn pr_number_parsed_from_url() {
+        assert_eq!(
+            pr_number_from_url("https://github.com/org/repo/pull/3340"),
+            Some(3340)
+        );
+        assert_eq!(
+            pr_number_from_url("https://github.com/org/repo/issues/9"),
+            None
+        );
+    }
 
     #[test]
     fn slug_parses_ssh_and_https() {

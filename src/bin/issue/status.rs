@@ -1,7 +1,8 @@
 use crate::triage::{self, render};
 use anyhow::Result;
 use devkit_common::livetable::{Cell, LiveTable};
-use devkit_common::{linear, ui};
+use devkit_common::tracker::{State, linear};
+use devkit_common::ui;
 use devkit_issue::status::{self as st, IssueWorktree, StatusReport};
 use std::collections::HashMap;
 use std::sync::mpsc;
@@ -35,7 +36,7 @@ struct LiveState {
     dirty: Vec<bool>,
     dirty_seen: Vec<bool>,
     prs: Option<st::Prs>,
-    linear: Option<HashMap<String, linear::LinearState>>,
+    linear: Option<HashMap<String, State>>,
     workspace: Option<String>,
     has_key: bool,
 }
@@ -93,13 +94,13 @@ impl LiveState {
 
     fn apply_linear(
         &mut self,
-        states: HashMap<String, linear::LinearState>,
+        states: HashMap<String, State>,
         workspace: Option<String>,
     ) -> Vec<(usize, usize, String)> {
         let mut out = Vec::new();
         for i in 0..self.rows.len() {
             if let Some(s) = states.get(&self.rows[i].issue_id) {
-                self.rows[i].linear_kind = Some(s.kind.clone());
+                self.rows[i].linear_kind = Some(s.kind.to_string());
                 self.rows[i].linear_name = Some(s.name.clone());
             }
             out.push((
@@ -118,14 +119,7 @@ impl LiveState {
 
     /// The raw collected results, for `st::assemble`.
     #[allow(clippy::type_complexity)]
-    fn into_parts(
-        self,
-    ) -> (
-        Vec<bool>,
-        st::Prs,
-        HashMap<String, linear::LinearState>,
-        Option<String>,
-    ) {
+    fn into_parts(self) -> (Vec<bool>, st::Prs, HashMap<String, State>, Option<String>) {
         (
             self.dirty,
             self.prs.expect("apply_prs ran"),
@@ -138,7 +132,7 @@ impl LiveState {
 enum Update {
     Dirty(usize, bool),
     Prs(Result<st::Prs>),
-    Linear(HashMap<String, linear::LinearState>, Option<String>),
+    Linear(HashMap<String, State>, Option<String>),
 }
 
 /// The single status line under the live table; sources drop out of the
@@ -287,6 +281,7 @@ pub fn run(start: &str, ids: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_common::tracker::StateKind;
     use devkit_issue::status::IssueWorktree;
 
     fn row(id: &str) -> IssueWorktree {
@@ -401,16 +396,18 @@ mod tests {
         let mut states = std::collections::HashMap::new();
         states.insert(
             "ENG-1".to_string(),
-            linear::LinearState {
-                kind: "completed".into(),
+            State {
+                kind: StateKind::Completed,
                 name: "Done".into(),
+                color: None,
             },
         );
         states.insert(
             "ENG-3".to_string(),
-            linear::LinearState {
-                kind: "started".into(),
+            State {
+                kind: StateKind::Started,
                 name: "In Progress".into(),
+                color: None,
             },
         );
 

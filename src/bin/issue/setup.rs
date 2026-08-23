@@ -203,7 +203,7 @@ fn resolve_slug(
     issue: &crate::slug::IssueRef,
     explicit: Option<String>,
     budget: usize,
-    details: Option<&devkit_common::linear::IssueDetails>,
+    details: Option<&devkit_common::tracker::linear::IssueDetails>,
 ) -> Result<String> {
     if let Some(s) = explicit {
         return Ok(s);
@@ -219,7 +219,7 @@ fn resolve_slug(
             let steps = Steps::new();
             steps
                 .during_result("Reading the Linear title\u{2026}", || {
-                    devkit_common::linear::issue_title(issue, &key)
+                    devkit_common::tracker::linear::issue_title(issue, &key)
                 })
                 .with_context(|| format!("fetching the Linear title for {issue}"))?
                 .with_context(|| format!("Linear has no issue {issue} \u{2014} pass --slug"))?
@@ -234,12 +234,12 @@ fn resolve_slug(
 /// created. A summary with holes in it is worse than a clear failure, so a
 /// missing key, an unknown issue, or an unreachable API stops `setup` here —
 /// while there is still no worktree and no branch to clean up.
-fn fetch_details(issue: &str) -> Result<devkit_common::linear::IssueDetails> {
+fn fetch_details(issue: &str) -> Result<devkit_common::tracker::linear::IssueDetails> {
     let key = crate::slug::linear_key()?;
     let steps = Steps::new();
     steps
         .during_result("Reading the Linear issue\u{2026}", || {
-            devkit_common::linear::issue_details(issue, &key)
+            devkit_common::tracker::linear::issue_details(issue, &key)
         })
         .with_context(|| format!("fetching Linear issue {issue}"))?
         .with_context(|| format!("Linear has no issue {issue}"))

@@ -308,7 +308,9 @@ fn fetch_report(
         {
             let tx = tx.clone();
             s.spawn(move || {
-                let _ = tx.send(Update::Workspace(devkit_common::linear::workspace_url_key()));
+                let _ = tx.send(Update::Workspace(
+                    devkit_common::tracker::linear::workspace_url_key(),
+                ));
             });
         }
         {

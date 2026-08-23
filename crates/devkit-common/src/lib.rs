@@ -3,7 +3,6 @@ pub mod cmd;
 pub mod daemon;
 pub mod gitfetch;
 pub mod github;
-pub mod linear;
 pub mod livetable;
 pub mod paths;
 pub mod progress;

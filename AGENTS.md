@@ -26,7 +26,7 @@ install together via `cargo install --path .`. Three library crates are members.
 
 | Unit | Role |
 |---|---|
-| `crates/devkit-common` | shared lib: `paths`, `cmd` (git/gh wrappers), `worktree`, `ui` (tables/links), `progress` (TTY-only spinners), `linear`, `slack`, `supervise` |
+| `crates/devkit-common` | shared lib: `paths`, `cmd` (git/gh wrappers), `worktree`, `ui` (tables/links), `progress` (TTY-only spinners), `tracker` (the `Tracker` seam, with the `linear` and `none` implementations), `slack`, `supervise` |
 | `crates/devkit-ports` | lib: `config` (toml), `doppler` (yaml), `apps` (catalog), `registry` (flock'd port store), `load`, `daemon`, `task` (canned oneshot resolution/exec) |
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
 | `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + Linear state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
@@ -150,7 +150,7 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   `config.toml`.
 - **Timing:** `issue`/`devrun` accept `--timing[=trace]` / `--timing-log <FILE>`
   (or `DEVKIT_TIMING`). Timing wraps the shared IO primitives (`cmd::capture`,
-  `github`, `linear::send`, `slack`) via `devkit-common::timing`; a global tracing
+  `github`, `tracker::linear::send`, `slack`) via `devkit-common::timing`; a global tracing
   layer aggregates flat spans by op and prints a stderr summary on exit. `devkitd`
   carries the same spans but has no activation flag yet.
 

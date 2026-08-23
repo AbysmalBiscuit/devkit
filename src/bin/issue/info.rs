@@ -1,8 +1,8 @@
 use crate::triage::render;
 use anyhow::Result;
 use devkit_common::cmd::git;
-use devkit_common::linear::LinearState;
 use devkit_common::livetable::{Cell, LiveTable};
+use devkit_common::tracker::State;
 use devkit_issue::status::{self as st, IssueWorktree, StatusReport};
 use std::collections::HashMap;
 use std::path::Path;
@@ -12,7 +12,7 @@ use std::sync::mpsc;
 /// Linear state, or the workspace URL key.
 enum Update {
     Prs(Result<st::Prs>),
-    Linear(HashMap<String, LinearState>),
+    Linear(HashMap<String, State>),
     Workspace(Option<String>),
 }
 
@@ -105,7 +105,7 @@ pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) ->
         let steps = devkit_common::progress::Steps::new();
         linear_workspace = steps.during(
             "Resolving Linear workspace…",
-            devkit_common::linear::workspace_url_key,
+            devkit_common::tracker::linear::workspace_url_key,
         );
     }
 
@@ -163,7 +163,7 @@ fn live_enrich(
             let tx = tx.clone();
             let id = row.issue_id.clone();
             s.spawn(move || {
-                let states = devkit_common::linear::states(
+                let states = devkit_common::tracker::linear::states(
                     std::slice::from_ref(&id),
                     devkit_common::secrets::resolve("LINEAR_API_KEY").as_deref(),
                 );
@@ -173,7 +173,9 @@ fn live_enrich(
         {
             let tx = tx.clone();
             s.spawn(move || {
-                let _ = tx.send(Update::Workspace(devkit_common::linear::workspace_url_key()));
+                let _ = tx.send(Update::Workspace(
+                    devkit_common::tracker::linear::workspace_url_key(),
+                ));
             });
         }
         drop(tx);
@@ -190,7 +192,7 @@ fn live_enrich(
                 }
                 Update::Linear(states) => {
                     if let Some(s) = states.get(&row.issue_id) {
-                        row.linear_kind = Some(s.kind.clone());
+                        row.linear_kind = Some(s.kind.to_string());
                         row.linear_name = Some(s.name.clone());
                     }
                     got_linear = true;

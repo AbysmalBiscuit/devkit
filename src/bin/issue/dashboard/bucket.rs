@@ -1,5 +1,5 @@
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
-use devkit_common::linear::{AssignedIssue, StateRef};
+use devkit_common::tracker::{AssignedIssue, State};
 use std::collections::HashMap;
 
 /// Parse an RFC3339 timestamp to UTC. Linear uses `…Z`; git `%aI` uses `+01:00`.
@@ -101,18 +101,20 @@ pub struct Replay {
 
 /// Build a `Replay` and record every state's (kind, color) into `meta`.
 pub fn parse_issue(iss: &AssignedIssue, meta: &mut HashMap<String, (String, String)>) -> Replay {
-    meta.entry(iss.state.name.clone())
-        .or_insert((iss.state.kind.clone(), iss.state.color.clone()));
+    meta.entry(iss.state.name.clone()).or_insert((
+        iss.state.kind.to_string(),
+        iss.state.color.clone().unwrap_or_default(),
+    ));
     let mut raw: Vec<(DateTime<Utc>, Option<String>, String)> = Vec::new();
     for (when, from, to) in &iss.history {
         for s in [from, to].into_iter().flatten() {
             meta.entry(s.name.clone())
-                .or_insert((s.kind.clone(), s.color.clone()));
+                .or_insert((s.kind.to_string(), s.color.clone().unwrap_or_default()));
         }
         if let (Some(t), Some(to_state)) = (parse_ts(when), to) {
             raw.push((
                 t,
-                from.as_ref().map(|s: &StateRef| s.name.clone()),
+                from.as_ref().map(|s: &State| s.name.clone()),
                 to_state.name.clone(),
             ));
         }
@@ -149,8 +151,18 @@ pub fn state_at(r: &Replay, t: DateTime<Utc>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_common::tracker::StateKind;
+
     fn dt(s: &str) -> DateTime<Utc> {
         parse_ts(s).unwrap()
+    }
+
+    fn st(name: &str, kind: StateKind, color: &str) -> State {
+        State {
+            kind,
+            name: name.into(),
+            color: Some(color.into()),
+        }
     }
 
     #[test]
@@ -227,37 +239,17 @@ mod tests {
         let iss = AssignedIssue {
             identifier: "ENG-1".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            state: StateRef {
-                name: "Done".into(),
-                kind: "completed".into(),
-                color: "#0f0".into(),
-            },
+            state: st("Done", StateKind::Completed, "#0f0"),
             history: vec![
                 (
                     "2026-01-02T00:00:00Z".into(),
-                    Some(StateRef {
-                        name: "Todo".into(),
-                        kind: "unstarted".into(),
-                        color: "#888".into(),
-                    }),
-                    Some(StateRef {
-                        name: "In Progress".into(),
-                        kind: "started".into(),
-                        color: "#00f".into(),
-                    }),
+                    Some(st("Todo", StateKind::Unstarted, "#888")),
+                    Some(st("In Progress", StateKind::Started, "#00f")),
                 ),
                 (
                     "2026-01-04T00:00:00Z".into(),
-                    Some(StateRef {
-                        name: "In Progress".into(),
-                        kind: "started".into(),
-                        color: "#00f".into(),
-                    }),
-                    Some(StateRef {
-                        name: "Done".into(),
-                        kind: "completed".into(),
-                        color: "#0f0".into(),
-                    }),
+                    Some(st("In Progress", StateKind::Started, "#00f")),
+                    Some(st("Done", StateKind::Completed, "#0f0")),
                 ),
             ],
         };

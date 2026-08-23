@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_json, git};
 use devkit_common::github;
-use devkit_common::linear::{self, LinearState};
+use devkit_common::tracker::{State, linear};
 use devkit_common::worktree;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -262,7 +262,7 @@ pub fn assemble(
     d: Discovered,
     dirty: Vec<bool>,
     prs: Prs,
-    linear: HashMap<String, LinearState>,
+    linear: HashMap<String, State>,
     linear_workspace: Option<String>,
     has_key: bool,
 ) -> StatusReport {
@@ -281,7 +281,7 @@ pub fn assemble(
             wt.pr_url = Some(p.url.clone());
         }
         if let Some(st) = linear.get(&wt.issue_id) {
-            wt.linear_kind = Some(st.kind.clone());
+            wt.linear_kind = Some(st.kind.to_string());
             wt.linear_name = Some(st.name.clone());
         }
         let reason = reason_not_finished(wt, has_key, false);
@@ -395,6 +395,7 @@ pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_common::tracker::StateKind;
     use std::collections::HashMap;
 
     // assemble zips dirty flags onto rows in order, attaches the best PR by
@@ -420,9 +421,10 @@ mod tests {
         let mut linear = HashMap::new();
         linear.insert(
             "ENG-1".to_string(),
-            LinearState {
-                kind: "completed".into(),
+            State {
+                kind: StateKind::Completed,
                 name: "Done".into(),
+                color: None,
             },
         );
         let report = assemble(d, vec![false], prs, linear, Some("acme".into()), true);

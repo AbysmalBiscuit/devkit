@@ -3,8 +3,8 @@ use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, gh_json, git};
 use devkit_common::gitfetch;
 use devkit_common::github;
-use devkit_common::linear::{self, LinearIssueRef};
 use devkit_common::progress::Steps;
+use devkit_common::tracker::linear::{self, LinearIssueRef};
 use devkit_config::expand_tilde;
 use devkit_ports::load;
 use std::io::{IsTerminal, Write};
@@ -31,7 +31,7 @@ enum Ident {
 fn classify(input: &str) -> Result<Ident> {
     let s = input.trim();
     if s.contains("github.com") && s.contains("/pull/") {
-        let n = linear::pr_number_from_url(s).context("no PR number in GitHub URL")?;
+        let n = github::pr_number_from_url(s).context("no PR number in GitHub URL")?;
         return Ok(Ident::Pr(n));
     }
     if s.contains("linear.app") {

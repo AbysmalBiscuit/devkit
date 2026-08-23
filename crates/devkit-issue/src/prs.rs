@@ -908,7 +908,7 @@ pub fn gather(
             .map(|pr| pr.url.clone())
             .chain(report.reviews.iter().map(|pr| pr.url.clone()))
             .collect();
-        let linked = devkit_common::linear::issues_for_prs(&urls, key.as_deref());
+        let linked = devkit_common::tracker::linear::issues_for_prs(&urls, key.as_deref());
         apply_linked(&mut report, &linked);
     }
     Ok(report)

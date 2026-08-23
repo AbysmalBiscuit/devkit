@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use devkit_common::progress::Steps;
-use devkit_common::{linear, secrets, slack};
+use devkit_common::tracker::linear;
+use devkit_common::{secrets, slack};
 use std::io::{IsTerminal, Read};
 use std::path::Path;
 

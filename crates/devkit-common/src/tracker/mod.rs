@@ -7,6 +7,7 @@ use std::path::Path;
 
 pub use devkit_config::TrackerKind;
 
+pub mod linear;
 pub mod none;
 
 /// Where an issue sits in its tracker's workflow. Linear's `state.type`
@@ -149,12 +150,14 @@ pub trait Tracker: Send + Sync {
 /// such a machine must set `kind` explicitly. What detection buys is that every
 /// config predating `[tracker]` keeps behaving exactly as it did.
 ///
-/// This crate has no Linear or GitHub implementation, so both non-`None`
-/// arms fall back to `NoneTracker`.
+/// This crate has no GitHub implementation yet, so that arm falls back to
+/// `NoneTracker`.
 pub fn resolve(kind: Option<TrackerKind>, repo: Option<&str>, cwd: &Path) -> Box<dyn Tracker> {
     let _ = repo; // only the GitHub tracker reads this
     match kind.unwrap_or_else(|| detect(cwd)) {
-        TrackerKind::Linear => Box::new(none::NoneTracker),
+        TrackerKind::Linear => Box::new(linear::LinearTracker::new(crate::secrets::resolve(
+            "LINEAR_API_KEY",
+        ))),
         TrackerKind::Github => {
             eprintln!("devkit: the GitHub tracker is not implemented yet — running without one");
             Box::new(none::NoneTracker)
@@ -250,9 +253,19 @@ mod tests {
         assert_eq!(r.slug, None);
     }
 
+    /// Pinned against whatever this machine detects: the explicit kind under
+    /// test is chosen to differ from the detected one, so the assertion holds
+    /// with or without a `LINEAR_API_KEY` in the environment.
     #[test]
     fn an_explicit_kind_is_never_overridden_by_detection() {
-        let t = resolve(Some(TrackerKind::None), None, Path::new("/nowhere"));
-        assert_eq!(t.kind(), TrackerKind::None);
+        let cwd = Path::new("/nowhere");
+        let detected = resolve(None, None, cwd).kind();
+        let explicit = if detected == TrackerKind::Linear {
+            TrackerKind::None
+        } else {
+            TrackerKind::Linear
+        };
+        assert_ne!(explicit, detected, "the kinds under test must differ");
+        assert_eq!(resolve(Some(explicit), None, cwd).kind(), explicit);
     }
 }

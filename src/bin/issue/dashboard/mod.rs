@@ -137,10 +137,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     }
 
     // Footer for issues.
-    let open_now = issues
-        .iter()
-        .filter(|i| i.state.kind != "completed" && i.state.kind != "canceled")
-        .count();
+    let open_now = issues.iter().filter(|i| i.state.kind.is_open()).count();
     if !issues.is_empty() {
         println!("\nTotal assigned: {}   open now: {open_now}", issues.len());
     }

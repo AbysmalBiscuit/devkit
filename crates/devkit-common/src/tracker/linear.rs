@@ -1,11 +1,9 @@
+//! Linear behind the tracker seam: the GraphQL free functions, plus the
+//! [`LinearTracker`] adapter that presents them as a [`Tracker`].
+
+use super::{AssignedIssue, IssueRef, PrRef, State, Tracker, TrackerKind};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinearState {
-    pub kind: String, // completed | started | unstarted | backlog | triage | canceled
-    pub name: String, // "Done"
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinearIdentity {
@@ -27,13 +25,6 @@ pub struct LinearPr {
 pub struct LinearIssueRef {
     pub id: String, // "ENG-42"
     pub title: String,
-}
-
-/// Parse the PR number out of a `…/pull/<n>` GitHub URL.
-pub fn pr_number_from_url(url: &str) -> Option<u64> {
-    let tail = url.split("/pull/").nth(1)?;
-    let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
 }
 
 /// Split a `TEAM-NUMBER` id into its uppercased team key and issue number, or
@@ -77,7 +68,7 @@ pub fn parse_issue_pr(resp: &serde_json::Value) -> (Option<LinearPr>, String) {
         .filter_map(|a| a["url"].as_str())
         .find(|u| u.contains("github.com") && u.contains("/pull/"))
         .and_then(|u| {
-            pr_number_from_url(u).map(|number| LinearPr {
+            crate::github::pr_number_from_url(u).map(|number| LinearPr {
                 url: u.to_string(),
                 number,
             })
@@ -312,7 +303,7 @@ pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> 
         let alias = format!("i{}", parts.len());
         aliases.insert(alias.clone(), id.clone());
         parts.push(format!(
-            "{alias}: issues(filter: {{ team: {{ key: {{ eq: \"{team}\" }} }}, number: {{ eq: {num} }} }}) {{ nodes {{ identifier state {{ type name }} }} }}",
+            "{alias}: issues(filter: {{ team: {{ key: {{ eq: \"{team}\" }} }}, number: {{ eq: {num} }} }}) {{ nodes {{ identifier state {{ type name color }} }} }}",
         ));
     }
     if parts.is_empty() {
@@ -322,7 +313,7 @@ pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> 
 }
 
 /// Query Linear; returns id → state. Empty map if no key/ids or on network error.
-pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, LinearState> {
+pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, State> {
     let (Some(key), Some((query, aliases))) = (key, build_query(ids)) else {
         return HashMap::new();
     };
@@ -445,7 +436,7 @@ fn fetch(
     query: &str,
     aliases: &HashMap<String, String>,
     key: &str,
-) -> Result<HashMap<String, LinearState>> {
+) -> Result<HashMap<String, State>> {
     let resp = send(ureq::json!({ "query": query }), key, "states")?;
     let mut out = HashMap::new();
     if let Some(data) = resp.get("data").and_then(|d| d.as_object()) {
@@ -454,35 +445,11 @@ fn fetch(
                 aliases.get(alias),
                 block.get("nodes").and_then(|n| n.get(0)),
             ) {
-                let st = &node["state"];
-                out.insert(
-                    id.clone(),
-                    LinearState {
-                        kind: st["type"].as_str().unwrap_or("").to_string(),
-                        name: st["name"].as_str().unwrap_or("").to_string(),
-                    },
-                );
+                out.insert(id.clone(), parse_state(&node["state"]));
             }
         }
     }
     Ok(out)
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct StateRef {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub color: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AssignedIssue {
-    pub identifier: String,
-    pub created_at: String,
-    pub state: StateRef,
-    /// (createdAt, fromState, toState) for each recorded transition, unsorted.
-    pub history: Vec<(String, Option<StateRef>, Option<StateRef>)>,
 }
 
 /// GraphQL for one page of issues assigned to me, with state + transition history.
@@ -508,6 +475,34 @@ pub fn assigned_issue_history(key: &str) -> Result<Vec<AssignedIssue>> {
 
 /// As [`assigned_issue_history`], calling `on_page` with the running total after
 /// each fetched page — lets a caller show a rising count while pages stream in.
+/// One `issues.nodes[]` entry from [`assigned_query`]. Pure → testable.
+fn parse_assigned_node(n: &serde_json::Value) -> AssignedIssue {
+    let history = n["history"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|h| {
+            (
+                h["createdAt"].as_str().unwrap_or("").to_string(),
+                optional_state(&h["fromState"]),
+                optional_state(&h["toState"]),
+            )
+        })
+        .collect();
+    AssignedIssue {
+        identifier: n["identifier"].as_str().unwrap_or("").to_string(),
+        created_at: n["createdAt"].as_str().unwrap_or("").to_string(),
+        state: parse_state(&n["state"]),
+        history,
+    }
+}
+
+/// A transition endpoint, or `None` when the block is null — an issue's first
+/// state has nothing before it, and an absent state is not an Unstarted one.
+fn optional_state(v: &serde_json::Value) -> Option<State> {
+    (!v.is_null()).then(|| parse_state(v))
+}
+
 pub fn assigned_issue_history_with_progress(
     key: &str,
     mut on_page: impl FnMut(usize),
@@ -522,24 +517,7 @@ pub fn assigned_issue_history_with_progress(
         )?;
         let block = &resp["data"]["issues"];
         if let Some(nodes) = block["nodes"].as_array() {
-            for n in nodes {
-                let state: StateRef = serde_json::from_value(n["state"].clone())?;
-                let mut history = Vec::new();
-                if let Some(hn) = n["history"]["nodes"].as_array() {
-                    for h in hn {
-                        let from = serde_json::from_value(h["fromState"].clone()).ok();
-                        let to = serde_json::from_value(h["toState"].clone()).ok();
-                        let when = h["createdAt"].as_str().unwrap_or("").to_string();
-                        history.push((when, from, to));
-                    }
-                }
-                out.push(AssignedIssue {
-                    identifier: n["identifier"].as_str().unwrap_or("").to_string(),
-                    created_at: n["createdAt"].as_str().unwrap_or("").to_string(),
-                    state,
-                    history,
-                });
-            }
+            out.extend(nodes.iter().map(parse_assigned_node));
         }
         on_page(out.len());
         // Continue only with a real cursor; a `hasNextPage` without an
@@ -567,9 +545,190 @@ pub fn viewer_created_at(key: &str) -> Result<String> {
         .context("viewer.createdAt missing from Linear response")
 }
 
+// --- the Tracker adapter ---------------------------------------------------
+
+/// Linear's `state { type name color }` block as devkit's [`State`].
+fn parse_state(v: &serde_json::Value) -> State {
+    State {
+        kind: v["type"]
+            .as_str()
+            .unwrap_or("")
+            .parse()
+            .expect("infallible"),
+        name: v["name"].as_str().unwrap_or("").to_string(),
+        color: v["color"].as_str().map(str::to_string),
+    }
+}
+
+/// Lowercase, collapse non-alphanumerics to single dashes, trim dashes.
+fn slugify(s: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.extend(c.to_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// The id and title slug in a Linear issue URL's `…/issue/<ID>/<title-slug>`
+/// path. `None` when there is no `issue/<ID>` pair to read.
+///
+/// Both values come from their path position. Scanning for the first
+/// letters-dash-digits run instead would read a workspace named `acme-2` as
+/// the issue id.
+fn url_ref(url: &str) -> Option<IssueRef> {
+    let path = url.trim();
+    let path = path.split_once('#').map_or(path, |(head, _)| head);
+    let path = path.split_once('?').map_or(path, |(head, _)| head);
+    let mut segments = path
+        .split('/')
+        .skip_while(|s| !s.eq_ignore_ascii_case("issue"));
+    let id = segments.nth(1).filter(|s| !s.is_empty())?;
+    Some(IssueRef {
+        id: id.to_uppercase(),
+        slug: segments.next().map(slugify).filter(|s| !s.is_empty()),
+    })
+}
+
+impl From<IssueDetails> for super::IssueDetails {
+    /// Linear's optional fields flatten to empty strings: the summary template
+    /// branches on emptiness, not on presence.
+    fn from(d: IssueDetails) -> Self {
+        super::IssueDetails {
+            id: d.identifier,
+            title: d.title,
+            url: d.url,
+            description: d.description,
+            state: d.state.unwrap_or_default(),
+            assignee: d.assignee.unwrap_or_default(),
+            priority: d.priority.unwrap_or_default(),
+            estimate: d.estimate.unwrap_or_default(),
+            labels: d.labels,
+            parent: d.parent.unwrap_or_default(),
+            project: d.project.unwrap_or_default(),
+        }
+    }
+}
+
+/// Linear behind the tracker seam. Holds the API key resolved once at
+/// construction; `None` means every call degrades to empty rather than erroring,
+/// which is what keeps `issue status` useful on a machine with no key.
+pub struct LinearTracker {
+    key: Option<String>,
+}
+
+impl LinearTracker {
+    pub fn new(key: Option<String>) -> Self {
+        Self { key }
+    }
+}
+
+impl Tracker for LinearTracker {
+    fn kind(&self) -> TrackerKind {
+        TrackerKind::Linear
+    }
+
+    fn ready(&self) -> bool {
+        self.key.is_some()
+    }
+
+    fn issue_ref(&self, input: &str) -> IssueRef {
+        let trimmed = input.trim();
+        if trimmed.contains("linear.app")
+            && let Some(parsed) = url_ref(trimmed)
+        {
+            return parsed;
+        }
+        IssueRef {
+            id: trimmed.to_uppercase(),
+            slug: None,
+        }
+    }
+
+    fn title(&self, id: &str) -> Result<Option<String>> {
+        match &self.key {
+            Some(k) => issue_title(id, k),
+            None => Ok(None),
+        }
+    }
+
+    fn details(&self, id: &str) -> Result<Option<super::IssueDetails>> {
+        match &self.key {
+            Some(k) => Ok(issue_details(id, k)?.map(Into::into)),
+            None => Ok(None),
+        }
+    }
+
+    fn states(&self, ids: &[String]) -> HashMap<String, State> {
+        states(ids, self.key.as_deref())
+    }
+
+    fn issue_pr(&self, id: &str) -> Result<Option<PrRef>> {
+        match &self.key {
+            Some(k) => Ok(issue_pr(id, k)?.0.map(|p| PrRef {
+                url: p.url,
+                number: p.number,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    fn candidates(&self, n: u64) -> Result<Vec<IssueRef>> {
+        match &self.key {
+            Some(k) => Ok(issues_by_number(n, k)?
+                .into_iter()
+                .map(|c| IssueRef {
+                    id: c.id,
+                    slug: None,
+                })
+                .collect()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn issues_for_prs(&self, urls: &[String]) -> HashMap<String, Vec<String>> {
+        issues_for_prs(urls, self.key.as_deref())
+    }
+
+    fn assigned_history(&self, on_page: &mut dyn FnMut(usize)) -> Result<Vec<AssignedIssue>> {
+        match &self.key {
+            Some(k) => assigned_issue_history_with_progress(k, on_page),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn timeline_origin(&self) -> Result<Option<String>> {
+        match &self.key {
+            Some(k) => viewer_created_at(k).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn issue_url(&self, id: &str) -> Option<String> {
+        let ws = workspace_url_key()?;
+        Some(format!("https://linear.app/{ws}/issue/{id}"))
+    }
+
+    fn check(&self) -> Result<String> {
+        let key = self
+            .key
+            .as_deref()
+            .context("no Linear API key — run `devkit auth linear`")?;
+        let id = validate(key)?;
+        Ok(format!("linear: {} ({})", id.org_name, id.viewer_email))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tracker::StateKind;
     #[test]
     fn query_aliases_each_id() {
         let (q, a) = build_query(&["ENG-1".into(), "ABC-22".into()]).unwrap();
@@ -645,18 +804,6 @@ mod tests {
     fn linear_missing_org_is_invalid() {
         let v = serde_json::json!({ "data": { "viewer": { "email": "" }, "organization": {} } });
         assert!(parse_identity(&v).is_err());
-    }
-
-    #[test]
-    fn pr_number_parsed_from_url() {
-        assert_eq!(
-            pr_number_from_url("https://github.com/org/repo/pull/3340"),
-            Some(3340)
-        );
-        assert_eq!(
-            pr_number_from_url("https://github.com/org/repo/issues/9"),
-            None
-        );
     }
 
     #[test]
@@ -867,5 +1014,72 @@ mod tests {
     fn issue_details_absent_issue_is_none() {
         let v = serde_json::json!({ "data": { "issues": { "nodes": [] } } });
         assert!(parse_issue_details(&v).is_none());
+    }
+
+    #[test]
+    fn linear_maps_its_state_types_onto_state_kinds() {
+        let s = parse_state(&serde_json::json!({
+            "type": "started", "name": "In Progress", "color": "#f2c94c"
+        }));
+        assert_eq!(s.kind, StateKind::Started);
+        assert_eq!(s.name, "In Progress");
+        assert_eq!(s.color.as_deref(), Some("#f2c94c"));
+    }
+
+    #[test]
+    fn linear_uppercases_a_bare_id() {
+        let t = LinearTracker::new(Some("k".into()));
+        assert_eq!(t.issue_ref("eng-42").id, "ENG-42");
+    }
+
+    #[test]
+    fn linear_reads_an_id_and_slug_from_a_url_by_path_position() {
+        let t = LinearTracker::new(Some("k".into()));
+        let r = t.issue_ref("https://linear.app/acme-2/issue/ENG-42/fix-the-login");
+        assert_eq!(
+            r.id, "ENG-42",
+            "a workspace named acme-2 is not the issue id"
+        );
+        assert_eq!(r.slug.as_deref(), Some("fix-the-login"));
+    }
+
+    #[test]
+    fn a_keyless_linear_tracker_is_not_ready_and_answers_empty() {
+        let t = LinearTracker::new(None);
+        assert!(!t.ready());
+        assert!(t.states(&["ENG-1".into()]).is_empty());
+        assert!(t.title("ENG-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn the_batch_state_query_asks_for_a_colour() {
+        let (q, _) = build_query(&["ENG-1".into()]).expect("a non-empty id list builds a query");
+        assert!(
+            q.contains("color"),
+            "State.color needs the field selected: {q}"
+        );
+    }
+
+    /// A history entry can carry a null `fromState` (the issue's very first
+    /// state has nothing before it). That must stay `None`: mapped through
+    /// `parse_state` it would become a real Unstarted state and shift the
+    /// dashboard's bands.
+    #[test]
+    fn a_transition_without_a_from_state_stays_none() {
+        let n = serde_json::json!({
+            "identifier": "ENG-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "state": { "name": "Done", "type": "completed", "color": "#0f0" },
+            "history": { "nodes": [{
+                "createdAt": "2026-01-02T00:00:00Z",
+                "fromState": serde_json::Value::Null,
+                "toState": { "name": "Todo", "type": "unstarted", "color": "#888" }
+            }] }
+        });
+        let iss = parse_assigned_node(&n);
+        let (when, from, to) = &iss.history[0];
+        assert_eq!(when, "2026-01-02T00:00:00Z");
+        assert!(from.is_none(), "a null fromState is no state at all");
+        assert_eq!(to.as_ref().expect("toState is present").name, "Todo");
     }
 }

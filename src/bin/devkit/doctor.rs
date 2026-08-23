@@ -1,7 +1,8 @@
 use anyhow::Result;
 use devkit_common::progress::Steps;
 use devkit_common::secrets::{self, Source};
-use devkit_common::{linear, slack};
+use devkit_common::slack;
+use devkit_common::tracker::linear;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Check {

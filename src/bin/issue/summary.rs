@@ -2,7 +2,7 @@
 //! facts and description as a scaffold, with the sections an agent fills in.
 
 use anyhow::{Context, Result};
-use devkit_common::linear::IssueDetails;
+use devkit_common::tracker::linear::IssueDetails;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -135,8 +135,8 @@ mod tests {
         dir
     }
 
-    fn details() -> devkit_common::linear::IssueDetails {
-        devkit_common::linear::IssueDetails {
+    fn details() -> devkit_common::tracker::linear::IssueDetails {
+        devkit_common::tracker::linear::IssueDetails {
             identifier: "ENG-42".into(),
             title: "Fix the login redirect".into(),
             url: "https://linear.app/acme/issue/ENG-42/fix-the-login-redirect".into(),

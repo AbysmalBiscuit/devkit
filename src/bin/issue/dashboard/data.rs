@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use devkit_common::cmd::{capture, gh_json};
 use devkit_common::github;
-use devkit_common::linear::{self, AssignedIssue};
+use devkit_common::tracker::{AssignedIssue, linear};
 use serde::{Deserialize, Serialize};
 
 use super::bucket::parse_ts;
