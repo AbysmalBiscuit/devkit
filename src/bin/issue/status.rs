@@ -5,7 +5,6 @@ use devkit_common::tracker::{State, TrackerKind};
 use devkit_common::ui;
 use devkit_issue::status::{self as st, IssueWorktree, StatusReport, TrackerInfo};
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::mpsc;
 
 pub(crate) const COL_TREE: usize = 2;
@@ -152,9 +151,9 @@ fn progress_msg(prs_done: bool, states_done: bool) -> String {
 /// known, other cells as spinners — and fill it as each source lands. The
 /// live block animates on stderr and is cleared; the returned report renders
 /// to stdout exactly as the silent gather would.
-pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
+pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<StatusReport> {
     let d = st::discover(start, ids)?;
-    let tracker = devkit_common::tracker::resolve(None, None, Path::new(start));
+    let tracker = crate::tracker::configured(config, start);
     let info = TrackerInfo {
         kind: tracker.kind(),
         ready: tracker.ready(),
@@ -258,8 +257,8 @@ pub fn gather_live(start: &str, ids: &[String]) -> Result<StatusReport> {
     Ok(st::assemble(d, dirty, prs, states, info))
 }
 
-pub fn run(start: &str, ids: &[String]) -> Result<()> {
-    let report = gather_live(start, ids)?;
+pub fn run(start: &str, ids: &[String], config: Option<&str>) -> Result<()> {
+    let report = gather_live(start, ids, config)?;
     let finished = render(&report, false);
     if finished > 0 {
         println!(

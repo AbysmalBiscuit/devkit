@@ -46,8 +46,17 @@ fn status_schema() -> Value {
 fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: StatusArgs = serde_json::from_value(args).context("invalid issue.status arguments")?;
     let root = a.root.unwrap_or_else(|| ".".to_string());
-    let report = status::gather(&root, &a.ids)?;
+    let kind = project_config(&root).and_then(|l| l.config.tracker.kind);
+    let tracker = devkit_common::tracker::resolve(kind, None, std::path::Path::new(&root));
+    let report = status::gather_with(&root, &a.ids, tracker.as_ref())?;
     Ok(serde_json::to_value(report)?)
+}
+
+/// The config reachable from `root`, or `None` when none resolves. A project
+/// without a `devkit.toml` — or with one that fails to load — still gets its
+/// triage answer, with every config-driven choice left at its default.
+fn project_config(root: &str) -> Option<devkit_ports::load::Loaded> {
+    devkit_ports::load::load(None, std::path::Path::new(root)).ok()
 }
 
 #[derive(Deserialize)]
@@ -86,7 +95,7 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let root = a.root.unwrap_or_else(|| ".".to_string());
     // Check-name globs to discount from the CHECK verdict, plus the Linear
     // PR-link opt-in; absent config ⇒ neither.
-    let loaded = devkit_ports::load::load(None, std::path::Path::new(&root)).ok();
+    let loaded = project_config(&root);
     let ignored_checks = loaded
         .as_ref()
         .map(|l| l.config.defaults.ignored_checks.clone())

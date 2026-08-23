@@ -373,6 +373,10 @@ pub fn reason_not_finished(
 /// Discover worktrees, fetch PRs + tracker state concurrently, and compute the
 /// finished verdict against this project's tracker. Silent — no progress output
 /// (the CLI re-orchestrates the same pieces with bars).
+///
+/// The tracker is *detected*: this crate reads no config, so a `[tracker] kind`
+/// has no say here. A caller that loads config resolves its own tracker and
+/// calls `gather_with`.
 pub fn gather(start: &str, ids: &[String]) -> Result<StatusReport> {
     let t = devkit_common::tracker::resolve(None, None, Path::new(start));
     gather_with(start, ids, t.as_ref())
@@ -416,7 +420,7 @@ pub fn gather_with(start: &str, ids: &[String], t: &dyn Tracker) -> Result<Statu
 /// Local-only status: discovery + dirty checks, with no `gh`/tracker network.
 /// PRs stay `NO_PR` and the state stays unknown; callers (e.g. `issue info
 /// --cache-only`) overlay cached data themselves. Same signature shape as
-/// `gather`.
+/// `gather`, and like it the tracker is detected rather than read from config.
 pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = discover(start, ids)?;
     let t = devkit_common::tracker::resolve(None, None, Path::new(start));

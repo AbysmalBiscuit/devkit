@@ -449,8 +449,10 @@ tracker.
 
 Detection is a floor, not a convenience: a `LINEAR_API_KEY` exported globally
 resolves to Linear for *every* project on the machine. `kind` names the tracker
-outright, and the config accepts and schema-checks all three values — but no
-`issue` command reads the key yet, so detection is what decides.
+outright and wins over detection: every `issue` command that talks to a tracker
+reads it, as does the `issue.status` MCP action. Detection is what decides only
+when no config resolves — a directory outside any devkit project, or a config
+that fails to load, still gets a tracker rather than an error.
 
 Without a tracker, `issue` still creates worktrees, tracks PRs, and reaches
 FINISHED on a merged PR and a clean tree, as long as the worktree carries an

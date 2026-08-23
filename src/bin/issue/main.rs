@@ -15,6 +15,7 @@ mod setup;
 mod slug;
 mod status;
 mod summary;
+mod tracker;
 mod triage;
 
 /// `--timing` verbosity, parsed by clap. `--timing` alone = summary,
@@ -301,19 +302,33 @@ fn main() -> Result<()> {
             dir: cli.dir,
             config: cli.config,
         }),
-        Some(Cmd::Status { ids }) => status::run(&start(&cli.dir), &ids),
+        Some(Cmd::Status { ids }) => status::run(&start(&cli.dir), &ids, cli.config.as_deref()),
         Some(Cmd::Info {
             selector,
             json,
             cache_only,
-        }) => info::run(&start(&cli.dir), selector.as_deref(), json, cache_only),
+        }) => info::run(
+            &start(&cli.dir),
+            selector.as_deref(),
+            json,
+            cache_only,
+            cli.config.as_deref(),
+        ),
         Some(Cmd::End {
             ids,
             yes,
             force,
             pr_only,
             clean_worktree,
-        }) => end::run(&start(&cli.dir), &ids, yes, force, pr_only, clean_worktree),
+        }) => end::run(
+            &start(&cli.dir),
+            &ids,
+            yes,
+            force,
+            pr_only,
+            clean_worktree,
+            cli.config.as_deref(),
+        ),
         Some(Cmd::Prs {
             mine,
             reviews,
@@ -386,6 +401,6 @@ fn main() -> Result<()> {
             clap_complete::generate(shell, &mut Cli::command(), "issue", &mut std::io::stdout());
             Ok(())
         }
-        None => status::run(&start(&cli.dir), &[]),
+        None => status::run(&start(&cli.dir), &[], cli.config.as_deref()),
     }
 }

@@ -49,14 +49,20 @@ fn current_top(start: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-pub fn run(start: &str, selector: Option<&str>, json: bool, cache_only: bool) -> Result<()> {
+pub fn run(
+    start: &str,
+    selector: Option<&str>,
+    json: bool,
+    cache_only: bool,
+    config: Option<&str>,
+) -> Result<()> {
     // `issue info` reports a single worktree, so discover once (one cheap
     // `git worktree list`) and enrich only the target — never run the
     // per-worktree dirty/PR/state work for every worktree the way a full
     // `status` gather does.
     let d = st::discover(start, &[])?;
     let top = current_top(start);
-    let tracker = devkit_common::tracker::resolve(None, None, Path::new(start));
+    let tracker = crate::tracker::configured(config, start);
     let mut info = TrackerInfo {
         kind: tracker.kind(),
         ready: tracker.ready(),

@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::triage::render;
-use devkit_issue::status::{IssueWorktree, gather, label, reason_not_finished};
+use devkit_issue::status::{IssueWorktree, gather_with, label, reason_not_finished};
 
 fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWorktree> {
     let mut chosen = Vec::new();
@@ -182,14 +182,18 @@ pub fn run(
     force: bool,
     pr_only: bool,
     clean_worktree: bool,
+    config: Option<&str>,
 ) -> Result<()> {
     let steps = Steps::persistent();
+    let tracker = crate::tracker::configured(config, start);
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
-        let report = steps.during_result("Fetching PR + issue status…", || gather(start, &[]))?;
+        let report = steps.during_result("Fetching PR + issue status…", || {
+            gather_with(start, &[], tracker.as_ref())
+        })?;
         render(&report, false);
         let t = select_explicit(&report.worktrees, ids);
         if t.is_empty() {
@@ -202,7 +206,9 @@ pub fn run(
         );
         t
     } else {
-        let report = steps.during_result("Fetching PR + issue status…", || gather(start, ids))?;
+        let report = steps.during_result("Fetching PR + issue status…", || {
+            gather_with(start, ids, tracker.as_ref())
+        })?;
         render(&report, false);
         if pr_only {
             println!(
