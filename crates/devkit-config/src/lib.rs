@@ -605,11 +605,27 @@ pub fn flatten(v: &toml::Value, prefix: &str, out: &mut Vec<(String, toml::Value
 }
 
 fn read_layer(p: &Path) -> Result<(PathBuf, toml::Table)> {
-    let body = std::fs::read_to_string(p)
-        .with_context(|| format!("reading config layer {}", p.display()))?;
-    let table: toml::Table =
-        toml::from_str(&body).with_context(|| format!("parsing config layer {}", p.display()))?;
-    Ok((p.to_path_buf(), table))
+    // The recorded path is what `layer_dir` anchors this layer's relative
+    // `[defaults]` paths to, so it has to be absolute however the caller spelled
+    // it — an explicit `--config` and `$DEVKIT_CONFIG` both arrive verbatim.
+    let path = absolutize(p)?;
+    let body = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading config layer {}", path.display()))?;
+    let table: toml::Table = toml::from_str(&body)
+        .with_context(|| format!("parsing config layer {}", path.display()))?;
+    Ok((path, table))
+}
+
+/// A path anchored to the process's current directory, resolved lexically —
+/// a config layer is routinely named relative to a directory that is not the
+/// one the config describes.
+fn absolutize(p: &Path) -> Result<PathBuf> {
+    if p.is_absolute() {
+        return Ok(p.to_path_buf());
+    }
+    let cwd = std::env::current_dir()
+        .context("resolving the current directory to absolutize a config path")?;
+    Ok(normalize_lexically(&cwd.join(p)))
 }
 
 /// The personal fallback config layer (`~/.config/devkit/config.toml`).
@@ -777,15 +793,8 @@ pub(crate) fn resolve_with_home(
     // it, must be absolute — `strays/mod.rs` uses `worktree_root` as holder
     // identity and for prefix matching, so a relative `start` (e.g. `doctor`
     // passing `.`) must not leak into that value.
-    let start_buf;
-    let start = if start.is_absolute() {
-        start
-    } else {
-        let cwd = std::env::current_dir()
-            .context("resolving the current directory to absolutize the config start path")?;
-        start_buf = normalize_lexically(&cwd.join(start));
-        start_buf.as_path()
-    };
+    let start_buf = absolutize(start)?;
+    let start = start_buf.as_path();
     let layers = discover(explicit, start, home)?;
     let order: Vec<PathBuf> = layers.iter().map(|(p, _)| p.clone()).collect();
     let (merged, origin) = merge_layers(&layers);
