@@ -169,6 +169,17 @@ pub enum TrackerKind {
     None,
 }
 
+impl TrackerKind {
+    /// The `[tracker] kind` spelling, which is also the serialized form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TrackerKind::Linear => "linear",
+            TrackerKind::Github => "github",
+            TrackerKind::None => "none",
+        }
+    }
+}
+
 /// The `[tracker]` table.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
@@ -2041,6 +2052,18 @@ steps = [
         )
         .unwrap();
         assert_eq!(c.tracker.kind, Some(TrackerKind::Github));
+    }
+
+    /// `as_str` is the config spelling, so it has to stay equal to what serde
+    /// writes and reads — a divergence would have `devkit doctor` naming a
+    /// `kind` value no config accepts.
+    #[test]
+    fn tracker_kind_spelling_matches_its_serialized_form() {
+        for k in [TrackerKind::Linear, TrackerKind::Github, TrackerKind::None] {
+            let wire = toml::Value::try_from(k).expect("a kind serializes");
+            assert_eq!(wire, toml::Value::String(k.as_str().to_string()));
+            assert_eq!(wire.try_into::<TrackerKind>().unwrap(), k);
+        }
     }
 
     #[test]

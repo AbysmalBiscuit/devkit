@@ -183,7 +183,10 @@ devkit completions <shell>
   complaint. Also warns when the installed binaries are older than the newest
   devkit plugin checkout in `~/.claude/plugins/cache` (skewed binaries make
   agents follow docs for features the binaries lack), when servers run outside
-  devrun, and when the docs cache holds unreferenced checkouts.
+  devrun, and when the docs cache holds unreferenced checkouts. The `tracker`
+  row names the tracker `issue` talks to here and how devkit arrived at it —
+  `[tracker] kind` or detection — and warns when devkit fell back to no tracker,
+  which holds every issue-state gate closed.
 - **`brief`**: prints a compact orientation for the current checkout — configured
   apps, the `[tasks]` table, this worktree's live servers, and the versions this
   checkout's lockfiles pin for each registered library. The two halves are

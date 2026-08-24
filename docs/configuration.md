@@ -461,6 +461,10 @@ verdict also waits on the issue reaching a completed state, and a tracker that
 answered with nothing for that issue holds the verdict open rather than
 promoting the worktree.
 
+`devkit doctor`'s `tracker` row prints which tracker resolved and why, which is
+the only place detection's choice is visible: it names the `kind` and whether
+config or detection produced it.
+
 Detection landing on no tracker holds the verdict open too. Declaring
 `kind = "none"` says the project has no issue states to wait for; detection
 finding neither a key nor a GitHub remote says devkit found nothing to ask,

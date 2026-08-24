@@ -2,7 +2,7 @@ use anyhow::Result;
 use devkit_common::progress::Steps;
 use devkit_common::secrets::{self, Source};
 use devkit_common::slack;
-use devkit_common::tracker::linear;
+use devkit_common::tracker::{Resolved, linear};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Check {
@@ -80,6 +80,32 @@ fn count_strays() -> usize {
         return 0;
     };
     devkit_ports::strays::scan(&loaded.config, &data).len()
+}
+
+/// Which tracker `issue` talks to here, and how devkit arrived at it.
+/// Detection is ambient — a globally exported `LINEAR_API_KEY` resolves Linear
+/// for every project on the machine, including one that has nothing in Linear —
+/// so without this row nothing on any CLI path reveals the choice or its cause.
+fn resolve_tracker(start: &std::path::Path) -> Resolved {
+    let kind = devkit_ports::load::load(None, start)
+        .ok()
+        .and_then(|l| l.config.tracker.kind);
+    devkit_common::tracker::resolve(kind, start)
+}
+
+/// A tracker devkit fell back to answers nothing while looking like an answer:
+/// every issue-state gate stays closed and `issue end` cleans up nothing, with
+/// no error to explain it. Naming a `kind` turns that into a decision.
+fn tracker_check(r: &Resolved) -> Check {
+    let detail = format!("{} — {}", r.tracker.kind().as_str(), r.reason);
+    if r.declared || r.tracker.ready() {
+        Check::Ok(detail)
+    } else {
+        Check::Warn(format!(
+            "{detail}; issue state gates stay closed — set `[tracker] kind` \
+             to name this project's tracker"
+        ))
+    }
 }
 
 /// Whether the config reachable from the cwd loads. A config that does not
@@ -212,6 +238,11 @@ fn gather(steps: &Steps) -> Vec<Row> {
             check: config_check(std::path::Path::new(".")),
         },
         Row {
+            key: "tracker",
+            source: Source::Unset,
+            check: tracker_check(&resolve_tracker(std::path::Path::new("."))),
+        },
+        Row {
             key: "devrun_strays",
             source: Source::Unset,
             check: stray_check(count_strays()),
@@ -287,6 +318,7 @@ pub fn run(json: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_common::tracker::none;
 
     fn row(check: Check) -> Row {
         Row {
@@ -320,6 +352,41 @@ mod tests {
         let check = config_check(&broken);
         assert!(matches!(check, Check::Invalid(_)), "{check:?}");
         assert_eq!(worst_exit(&[row(check)]), 1);
+    }
+
+    /// The row exists so ambient detection is debuggable: on a machine with a
+    /// globally exported `LINEAR_API_KEY`, a project with nothing in Linear
+    /// resolves to Linear and ready, and no other CLI path says so.
+    #[test]
+    fn the_tracker_row_names_the_kind_and_why_it_resolved() {
+        let declared = Resolved {
+            tracker: Box::new(none::NoneTracker),
+            declared: true,
+            reason: "[tracker] kind = \"none\"".into(),
+        };
+        match tracker_check(&declared) {
+            Check::Ok(d) => assert_eq!(d, "none — [tracker] kind = \"none\""),
+            other => panic!("a declared tracker is not a fault: {other:?}"),
+        }
+
+        let fell_back = Resolved {
+            tracker: Box::new(none::NoneTracker),
+            declared: false,
+            reason: "detected: no LINEAR_API_KEY and no GitHub origin remote".into(),
+        };
+        match tracker_check(&fell_back) {
+            Check::Warn(d) => {
+                assert!(
+                    d.starts_with("none — detected: no LINEAR_API_KEY"),
+                    "the detail leads with the kind and the reason: {d}"
+                );
+                assert!(
+                    d.contains("[tracker] kind"),
+                    "the warning says what to set: {d}"
+                );
+            }
+            other => panic!("a tracker devkit fell back to is worth a warning: {other:?}"),
+        }
     }
 
     #[test]
