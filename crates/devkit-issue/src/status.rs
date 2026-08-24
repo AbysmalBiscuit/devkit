@@ -400,47 +400,113 @@ fn recorded_result(found: Result<Option<github::PrBrief>>, n: u64) -> github::He
     }
 }
 
-/// A recorded locator's exact PR, over REST — one call per locator rather
-/// than the branch batch's single GraphQL round trip, since a status run
-/// rarely carries more than a handful of recorded bindings.
-fn recorded_lookup(loc: &github::PrLocator, default_repo: &github::Repo) -> github::HeadLookup {
-    if github::token().is_none() {
-        return github::HeadLookup::Unavailable("no GitHub token resolved".into());
-    }
-    match loc.resolve_or(default_repo) {
-        Ok(repo) => recorded_result(github::pr_by_number(&repo, loc.number), loc.number),
-        Err(e) => github::HeadLookup::Unavailable(format!("{e:#}")),
-    }
+/// Pair each recorded branch with its batched answer. An answer list shorter
+/// than the targets leaves those branches `Unavailable` rather than unkeyed: a
+/// branch with no entry at all reads as "no PR", which opens the finished
+/// verdict instead of closing it.
+fn recorded_answers(
+    pending: Vec<(String, u64)>,
+    answers: Vec<github::PrLookup>,
+) -> HashMap<String, github::HeadLookup> {
+    let mut answers: Vec<Option<github::PrLookup>> = answers.into_iter().map(Some).collect();
+    answers.resize_with(pending.len(), || None);
+    pending
+        .into_iter()
+        .zip(answers)
+        .map(|((branch, n), answer)| {
+            let found = answer.unwrap_or_else(|| {
+                Err(anyhow::anyhow!(
+                    "the batched lookup did not answer for #{n}"
+                ))
+            });
+            (branch, recorded_result(found, n))
+        })
+        .collect()
 }
 
-/// The PR lookup for every worktree branch. A branch whose worktree record
-/// carries a locator is resolved directly, one REST call each; every other
-/// branch is batched into one GraphQL round trip. Fails soft: a request that
-/// cannot be made at all (no token, transport error) marks every such branch
-/// `Unknown` rather than aborting the caller's report.
+/// Every recorded locator's exact PR, in one GraphQL round trip, keyed by the
+/// worktree branch each was recorded for. A locator naming no repository means
+/// `default_repo`; one whose slug will not validate is `Unavailable` on its own
+/// without keeping the rest of the batch from being asked.
+fn recorded_lookups(
+    bound: Vec<(String, github::PrLocator)>,
+    default_repo: &github::Repo,
+) -> HashMap<String, github::HeadLookup> {
+    if bound.is_empty() {
+        return HashMap::new();
+    }
+    if github::token().is_none() {
+        return bound
+            .into_iter()
+            .map(|(branch, _)| {
+                (
+                    branch,
+                    github::HeadLookup::Unavailable("no GitHub token resolved".into()),
+                )
+            })
+            .collect();
+    }
+    let mut out = HashMap::new();
+    let mut targets = Vec::new();
+    let mut pending = Vec::new();
+    for (branch, loc) in bound {
+        match loc.resolve_or(default_repo) {
+            Ok(repo) => {
+                targets.push((repo.slug, loc.number));
+                pending.push((branch, loc.number));
+            }
+            Err(e) => {
+                out.insert(branch, github::HeadLookup::Unavailable(format!("{e:#}")));
+            }
+        }
+    }
+    let answers = match github::prs_by_number(&targets) {
+        Ok(found) => found,
+        Err(e) => {
+            let reason = format!("{e:#}");
+            pending
+                .iter()
+                .map(|_| Err(anyhow::anyhow!(reason.clone())))
+                .collect()
+        }
+    };
+    out.extend(recorded_answers(pending, answers));
+    out
+}
+
+/// Overlay the recorded lookups on the branch batch. A key present in both
+/// keeps the record: the record is authoritative over branch matching, and a
+/// branch match overwriting it is the inversion this ordering forbids.
+fn merge_lookups(
+    recorded: HashMap<String, github::HeadLookup>,
+    batch: HashMap<String, github::HeadLookup>,
+) -> HashMap<String, github::HeadLookup> {
+    let mut merged = batch;
+    merged.extend(recorded);
+    merged
+}
+
+/// The PR lookup for every worktree branch, in at most two round trips: one
+/// resolving every recorded locator by number, one matching every other branch
+/// by head name. Fails soft: a request that cannot be made at all (no token,
+/// transport error) marks every branch it covered `Unknown` rather than
+/// aborting the caller's report.
 pub fn fetch_prs(d: &Discovered, repo: &github::Repo) -> Result<Prs> {
     let (bound, branches) = partition_by_record(&d.rows, |worktree| {
         devkit_common::record::read(Path::new(worktree)).and_then(|r| r.pr)
     });
-    let mut lookups: HashMap<String, github::HeadLookup> = bound
-        .into_iter()
-        .map(|(branch, loc)| {
-            let lookup = recorded_lookup(&loc, repo);
-            (branch, lookup)
-        })
-        .collect();
-    if !branches.is_empty() {
-        let batch = if github::token().is_none() {
-            unavailable_all(&branches, "no GitHub token resolved")
-        } else {
-            match github::graphql(&heads_query(&repo.slug, &branches)) {
-                Ok(v) => parse_heads(&v, &branches),
-                Err(e) => unavailable_all(&branches, &format!("{e:#}")),
-            }
-        };
-        lookups.extend(batch);
-    }
-    Ok(Prs(lookups))
+    let recorded = recorded_lookups(bound, repo);
+    let batch = if branches.is_empty() {
+        HashMap::new()
+    } else if github::token().is_none() {
+        unavailable_all(&branches, "no GitHub token resolved")
+    } else {
+        match github::graphql(&heads_query(&repo.slug, &branches)) {
+            Ok(v) => parse_heads(&v, &branches),
+            Err(e) => unavailable_all(&branches, &format!("{e:#}")),
+        }
+    };
+    Ok(Prs(merge_lookups(recorded, batch)))
 }
 
 /// Attach dirty flags (in row order), the branch's PR, tracker state, and the
@@ -822,6 +888,83 @@ mod tests {
         });
         assert_eq!(bound, vec![("feat/x".to_string(), loc)]);
         assert_eq!(branches, vec!["feat/y".to_string()]);
+    }
+
+    /// A `heads_query` response carrying one PR for the first branch queried.
+    fn heads_fixture(number: u64, branch: &str) -> serde_json::Value {
+        serde_json::json!({ "data": { "repository": { "b0": {
+            "totalCount": 1,
+            "nodes": [{
+                "number": number,
+                "state": "OPEN",
+                "url": format!("https://github.com/o/r/pull/{number}"),
+                "headRefName": branch,
+                "headRefOid": "beef5678",
+                "headRepositoryOwner": { "login": "o" },
+            }],
+        } } } })
+    }
+
+    #[test]
+    fn a_recorded_pr_wins_over_a_second_pr_sharing_its_branch() {
+        // Two forks propose `feat/x`: this worktree's work is #12 in its own
+        // fork, and #11 is a stranger's PR carrying the same branch name. A
+        // branch lookup answers #11 — the record is what makes the row report
+        // #12 instead.
+        let mut row = wt("ENG-1", "NO_PR", false, None);
+        row.worktree = "/w/a".into();
+        row.branch = "feat/x".into();
+
+        let recorded = github::PrLocator {
+            repo: Some("me/fork".into()),
+            number: 12,
+        };
+        let (bound, branches) =
+            partition_by_record(std::slice::from_ref(&row), |_| Some(recorded.clone()));
+        assert_eq!(bound, vec![("feat/x".to_string(), recorded)]);
+        assert!(
+            branches.is_empty(),
+            "a bound branch never reaches the batch"
+        );
+
+        let batch = parse_heads(&heads_fixture(11, "feat/x"), &["feat/x".to_string()]);
+        assert!(
+            matches!(&batch["feat/x"], github::HeadLookup::Unique(p) if p.number == 11),
+            "the fixture's second PR is what branch matching would report"
+        );
+
+        let recorded = HashMap::from([(
+            "feat/x".to_string(),
+            recorded_result(Ok(Some(pr(12, "MERGED", "feat/x"))), 12),
+        )]);
+        let prs = Prs(merge_lookups(recorded, batch));
+        prs.apply(&mut row);
+        assert_eq!(row.pr.number(), Some(12), "got {:?}", row.pr);
+    }
+
+    #[test]
+    fn a_batched_answer_is_keyed_by_the_branch_it_was_recorded_for() {
+        let pending = vec![("feat/x".to_string(), 12), ("feat/y".to_string(), 13)];
+        let got = recorded_answers(
+            pending.clone(),
+            vec![Ok(Some(pr(12, "MERGED", "someone/else"))), Ok(None)],
+        );
+        assert!(matches!(&got["feat/x"], github::HeadLookup::Unique(p) if p.number == 12));
+        assert!(
+            matches!(&got["feat/y"], github::HeadLookup::Unavailable(r) if r.contains("13")),
+            "got {:?}",
+            got["feat/y"]
+        );
+
+        // An answer list shorter than the targets leaves the rest unknown; a
+        // branch with no entry at all would read as "no PR" and open the
+        // finished verdict.
+        let short = recorded_answers(pending, vec![Ok(Some(pr(12, "MERGED", "feat/x")))]);
+        assert_eq!(short.len(), 2);
+        assert!(matches!(
+            short["feat/y"],
+            github::HeadLookup::Unavailable(_)
+        ));
     }
 
     #[test]

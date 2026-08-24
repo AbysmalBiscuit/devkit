@@ -587,12 +587,135 @@ pub fn pr_full(slug: &str, n: u64) -> Result<PrFull> {
     Ok(parse_full(&rest_get(&format!("/repos/{slug}/pulls/{n}"))?))
 }
 
+/// A single-PR REST response mapped to the triage shape. `None` is reserved
+/// for a PR that does not exist (a 404, which `rest_get_opt` reports as no
+/// body): a body that came back and could not be parsed is an error, since
+/// "there is no such PR" is what closes a worktree's finished verdict.
+fn brief_of_response(body: Option<Value>, n: u64, slug: &str) -> Result<Option<PrBrief>> {
+    match body {
+        None => Ok(None),
+        Some(v) => {
+            Ok(Some(parse_brief(&v).with_context(|| {
+                format!("unexpected PR shape for #{n} in {slug}")
+            })?))
+        }
+    }
+}
+
 /// The full triage shape (state, url, head branch and head oid) for PR `n` in
-/// `repo`, or `None` if no such PR exists. The exact single-PR read behind a
-/// recorded locator, and behind verifying a PR just created or checked out —
-/// neither carries the head oid the creating/checkout response omits.
+/// `repo`, or `None` if no such PR exists. The exact single-PR read behind
+/// verifying a PR just created or checked out — neither carries the head oid
+/// the creating/checkout response omits.
 pub fn pr_by_number(repo: &Repo, n: u64) -> Result<Option<PrBrief>> {
-    Ok(rest_get_opt(&format!("/repos/{}/pulls/{n}", repo.slug))?.and_then(|v| parse_brief(&v)))
+    brief_of_response(
+        rest_get_opt(&format!("/repos/{}/pulls/{n}", repo.slug))?,
+        n,
+        &repo.slug,
+    )
+}
+
+/// One pull request from a batched read: `Ok(None)` is a repository or pull
+/// request that does not resolve, `Err` a node that came back unparseable.
+pub type PrLookup = Result<Option<PrBrief>>;
+
+/// `(slug, number)` targets grouped by repository in first-seen order, each
+/// group carrying its targets' indices. The query builder and the parser both
+/// walk this, so they agree on every alias without passing a map between them.
+fn group_by_repo(targets: &[(String, u64)]) -> Vec<(&str, Vec<usize>)> {
+    let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+    for (i, (slug, _)) in targets.iter().enumerate() {
+        match groups.iter_mut().find(|(s, _)| *s == slug) {
+            Some((_, idx)) => idx.push(i),
+            None => groups.push((slug, vec![i])),
+        }
+    }
+    groups
+}
+
+/// One GraphQL round trip resolving many pull requests by number, aliased the
+/// way this module's other batch queries are. Repeated repositories collapse
+/// into one `repository` alias, so a cross-repository target costs an extra
+/// alias rather than an extra round trip.
+pub fn prs_by_number_query(targets: &[(String, u64)]) -> String {
+    let fields = "number state url headRefName headRefOid \
+                  headRepositoryOwner { login }";
+    let repos = group_by_repo(targets)
+        .into_iter()
+        .enumerate()
+        .map(|(g, (slug, idx))| {
+            let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
+            let prs = idx
+                .iter()
+                .map(|i| {
+                    format!(
+                        "p{i}: pullRequest(number: {}) {{ {fields} }}",
+                        targets[*i].1
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!(
+                "r{g}: repository(owner: {}, name: {}) {{ {prs} }}",
+                serde_json::Value::from(owner),
+                serde_json::Value::from(name),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("query {{ {repos} }}")
+}
+
+/// Split a `prs_by_number_query` response back into one lookup per target, in
+/// the order the targets were given. A null alias is GitHub reporting the
+/// repository or pull request as absent (paired with a `NOT_FOUND` error);
+/// a missing alias or an unparseable node is a malformed response, which is an
+/// error rather than an absence.
+pub fn parse_prs_by_number(resp: &Value, targets: &[(String, u64)]) -> Vec<PrLookup> {
+    let mut out: Vec<PrLookup> = targets
+        .iter()
+        .map(|(slug, n)| Err(anyhow::anyhow!("no answer for #{n} in {slug}")))
+        .collect();
+    let Some(data) = resp.get("data").filter(|d| !d.is_null()) else {
+        return out;
+    };
+    for (g, (slug, idx)) in group_by_repo(targets).into_iter().enumerate() {
+        let key = format!("r{g}");
+        let repo = match data.get(&key) {
+            None => continue,
+            Some(v) if v.is_null() => {
+                for i in idx {
+                    out[i] = Ok(None);
+                }
+                continue;
+            }
+            Some(v) => v,
+        };
+        for i in idx {
+            let number = targets[i].1;
+            let alias = format!("p{i}");
+            out[i] = match repo.get(&alias) {
+                None => Err(anyhow::anyhow!(
+                    "no `{alias}` alias in the response for #{number} in {slug}"
+                )),
+                Some(v) if v.is_null() => Ok(None),
+                Some(v) => parse_pr_node(v)
+                    .map(Some)
+                    .with_context(|| format!("unexpected PR shape for #{number} in {slug}")),
+            };
+        }
+    }
+    out
+}
+
+/// The exact pull requests `targets` names, in one GraphQL round trip. `Err`
+/// is the whole request failing (no token, transport, a hard GraphQL error);
+/// a per-target answer is a [`PrLookup`].
+pub fn prs_by_number(targets: &[(String, u64)]) -> Result<Vec<PrLookup>> {
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let v = graphql_partial(&prs_by_number_query(targets))?;
+    Ok(parse_prs_by_number(&v, targets))
 }
 
 /// [`pr_by_number`], erroring rather than returning `None` when the PR does
@@ -635,6 +758,21 @@ pub fn head_query(slug: &str, branch: &str) -> String {
     )
 }
 
+/// One GraphQL `PullRequest` node, as every query here selects it. `None` when
+/// a field the triage shape needs is missing or of the wrong type.
+fn parse_pr_node(n: &Value) -> Option<PrBrief> {
+    Some(PrBrief {
+        number: n["number"].as_u64()?,
+        state: n["state"].as_str()?.to_string(),
+        url: n["url"].as_str()?.to_string(),
+        head_ref_name: n["headRefName"].as_str()?.to_string(),
+        head_ref_oid: n["headRefOid"].as_str().unwrap_or("").to_string(),
+        head_repo_owner: n["headRepositoryOwner"]["login"]
+            .as_str()
+            .map(str::to_string),
+    })
+}
+
 /// Parse a successful `head_query` envelope (no top-level `errors` — `graphql`
 /// already turns those into an `Err` before a caller ever reaches this).
 /// `totalCount` beyond the returned nodes is ambiguity, not a unique answer: a
@@ -646,18 +784,7 @@ pub fn parse_head_lookup(resp: &Value) -> HeadLookup {
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|n| {
-            Some(PrBrief {
-                number: n["number"].as_u64()?,
-                state: n["state"].as_str()?.to_string(),
-                url: n["url"].as_str()?.to_string(),
-                head_ref_name: n["headRefName"].as_str()?.to_string(),
-                head_ref_oid: n["headRefOid"].as_str().unwrap_or("").to_string(),
-                head_repo_owner: n["headRepositoryOwner"]["login"]
-                    .as_str()
-                    .map(str::to_string),
-            })
-        })
+        .filter_map(parse_pr_node)
         .collect();
     match nodes.len() {
         0 => HeadLookup::NoMatch,
@@ -861,6 +988,86 @@ mod tests {
         assert_eq!(b.state, "MERGED");
         assert_eq!(b.url, "https://github.com/a/b/pull/42");
         assert_eq!(b.head_ref_name, "you/eng-1-foo");
+    }
+
+    #[test]
+    fn a_body_that_will_not_parse_is_not_an_absent_pr() {
+        assert!(brief_of_response(None, 7, "o/r").unwrap().is_none());
+
+        let ok = brief_of_response(
+            Some(json!({ "number": 7, "state": "open", "html_url": "u7" })),
+            7,
+            "o/r",
+        )
+        .unwrap()
+        .expect("a parsed PR");
+        assert_eq!(ok.number, 7);
+
+        let err = brief_of_response(Some(json!({ "state": "open" })), 7, "o/r")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains('7') && err.contains("o/r"), "{err}");
+    }
+
+    fn targets() -> Vec<(String, u64)> {
+        vec![
+            ("o/r".to_string(), 12),
+            ("o/r".to_string(), 13),
+            ("me/fork".to_string(), 9),
+            ("gone/repo".to_string(), 1),
+        ]
+    }
+
+    #[test]
+    fn a_batch_query_names_each_repository_once() {
+        let q = prs_by_number_query(&targets());
+        assert_eq!(q.matches("repository(").count(), 3, "{q}");
+        assert!(
+            q.contains(r#"r0: repository(owner: "o", name: "r")"#),
+            "{q}"
+        );
+        assert!(q.contains("p0: pullRequest(number: 12)"), "{q}");
+        assert!(q.contains("p1: pullRequest(number: 13)"), "{q}");
+        assert!(q.contains("p2: pullRequest(number: 9)"), "{q}");
+        assert!(q.contains("p3: pullRequest(number: 1)"), "{q}");
+    }
+
+    #[test]
+    fn a_batch_response_separates_resolved_missing_and_malformed() {
+        let resp = json!({
+            "data": {
+                "r0": {
+                    "p0": {
+                        "number": 12, "state": "OPEN",
+                        "url": "https://github.com/o/r/pull/12",
+                        "headRefName": "feat/x", "headRefOid": "cafe1234",
+                        "headRepositoryOwner": { "login": "o" }
+                    },
+                    "p1": null
+                },
+                "r1": { "p2": { "number": 9 } },
+                "r2": null
+            },
+            "errors": [{ "type": "NOT_FOUND", "path": ["repository"] }]
+        });
+        let got = parse_prs_by_number(&resp, &targets());
+
+        let found = got[0].as_ref().unwrap().as_ref().expect("PR 12 resolved");
+        assert_eq!(found.number, 12);
+        assert_eq!(found.head_ref_oid, "cafe1234");
+        assert!(got[1].as_ref().unwrap().is_none(), "a null PR is absent");
+        assert!(got[2].is_err(), "an unparseable node is not an absence");
+        assert!(
+            got[3].as_ref().unwrap().is_none(),
+            "a repository that does not resolve is absent"
+        );
+    }
+
+    #[test]
+    fn a_batch_response_with_no_data_fails_every_target() {
+        let got = parse_prs_by_number(&json!({ "data": null }), &targets());
+        assert!(got.iter().all(|r| r.is_err()), "{got:?}");
+        assert_eq!(got.len(), 4);
     }
 
     #[test]

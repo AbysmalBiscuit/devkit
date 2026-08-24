@@ -126,11 +126,11 @@ fn fetch_pr_full(n: u64, cwd: &str, repo: &github::Repo) -> Result<PrFull> {
     )
 }
 
-/// Choose the PR number: explicit `--pr` wins, else the worktree branch's PR.
-pub(crate) fn resolve_pr(branch_pr: Option<u64>, pr_flag: Option<u64>) -> Result<u64> {
-    pr_flag
-        .or(branch_pr)
-        .context("no PR for the current branch; pass --pr <number>")
+/// The worktree branch's PR number, or the error naming `--pr`. Branch
+/// discovery is the last resort: an explicit `--pr` and the record are both
+/// resolved into a locator before this is reached.
+pub(crate) fn resolve_pr(branch_pr: Option<u64>) -> Result<u64> {
+    branch_pr.context("no PR for the current branch; pass --pr <number>")
 }
 
 /// Explicit locator, then the record, then branch discovery. `--pr` means one
@@ -148,6 +148,9 @@ pub(crate) fn resolve_locator(
 /// chosen does not change what it can do: a branch-discovered `Unique` is
 /// unique only among one repository's PRs, so another fork's same-named branch
 /// gives the identical answer.
+///
+/// `headRefOid` is the branch head the PR carries, not the commit that landed
+/// on the base, so a squashed or rebased merge still compares equal.
 pub(crate) fn assert_belongs(pr: &github::PrBrief, head: &str) -> Result<()> {
     anyhow::ensure!(
         pr.head_ref_oid == head,
@@ -205,10 +208,16 @@ pub fn run(args: Args) -> Result<()> {
                     .ok()
                     .flatten()
             });
-            (resolve_pr(branch_pr, None)?, pr_repo.clone())
+            (resolve_pr(branch_pr)?, pr_repo.clone())
         }
     };
 
+    // No head-oid gate here, unlike every other path that resolves a PR:
+    // `review finish` is the reviewer's command, run in a worktree
+    // `checkout-pr` built, where `HEAD` goes stale the moment the author pushes
+    // again. Requiring the PR's head to equal `HEAD` would refuse the ordinary
+    // flow. Nothing here mutates the PR or the record — the effect is a Slack
+    // message to the author.
     let view: PrFull = steps.during_result(&format!("Fetching PR #{number}…"), || {
         fetch_pr_full(number, &start, &repo)
     })?;
@@ -258,11 +267,10 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn resolve_pr_prefers_flag_then_branch() {
-        assert_eq!(resolve_pr(Some(7), Some(9)).unwrap(), 9);
-        assert_eq!(resolve_pr(Some(7), None).unwrap(), 7);
-        assert_eq!(resolve_pr(None, Some(9)).unwrap(), 9);
-        assert!(resolve_pr(None, None).is_err());
+    fn resolve_pr_takes_the_branchs_pr_or_names_the_flag() {
+        assert_eq!(resolve_pr(Some(7)).unwrap(), 7);
+        let err = resolve_pr(None).unwrap_err().to_string();
+        assert!(err.contains("--pr"), "{err}");
     }
 
     #[test]
@@ -358,13 +366,5 @@ mod tests {
             err.contains("cafe1234") && err.contains("beef5678"),
             "{err}"
         );
-    }
-
-    #[test]
-    fn a_squash_merged_pr_still_compares_equal() {
-        // headRefOid is the branch head the PR carried, not the commit that landed
-        // on the base, so squash and rebase merges compare equal.
-        let pr = brief_at("cafe1234");
-        assert!(assert_belongs(&pr, "cafe1234").is_ok());
     }
 }

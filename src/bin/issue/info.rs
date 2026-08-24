@@ -81,8 +81,14 @@ pub fn run(
         },
     };
 
+    let recorded_pr = devkit_common::record::read(Path::new(&row.worktree)).and_then(|r| r.pr);
+    let cached_pr = seedable_cached_pr(
+        crate::info_cache::read(Path::new(&row.worktree)),
+        recorded_pr.as_ref(),
+    );
+
     if cache_only {
-        if let Some(pr) = crate::info_cache::read(Path::new(&row.worktree)) {
+        if let Some(pr) = cached_pr {
             apply_cached_pr(&mut row, pr);
         } else if discovered {
             // Offline verdict from local signal only — PR stays NO_PR and the
@@ -97,7 +103,7 @@ pub fn run(
         // live table's first paint shows a number instead of a spinner;
         // `live_enrich` reconciles it against the live lookup once that
         // arrives.
-        if let Some(pr) = crate::info_cache::read(Path::new(&row.worktree)) {
+        if let Some(pr) = cached_pr {
             apply_cached_pr(&mut row, pr);
         }
         let repos = crate::tracker::repos(config, start, None);
@@ -266,6 +272,22 @@ fn local_row(top: &str) -> Result<IssueWorktree> {
     })
 }
 
+/// The cached PR a row may be seeded with. A worktree record that binds a
+/// different pull request discards the cache: that cache was written before the
+/// binding, from a branch lookup the record has since superseded, and a live
+/// answer of "the recorded PR does not resolve" would otherwise leave the
+/// superseded PR on the row — with its own state driving the verdict.
+fn seedable_cached_pr(
+    cached: Option<crate::info_cache::CachedPr>,
+    recorded: Option<&devkit_common::github::PrLocator>,
+) -> Option<crate::info_cache::CachedPr> {
+    let cached = cached?;
+    match recorded {
+        Some(loc) if loc.number != cached.number => None,
+        Some(_) | None => Some(cached),
+    }
+}
+
 /// Overlay a cached PR onto an offline row. The verdict is cleared because it
 /// cannot be computed without a tracker fetch, and a `NO_PR` verdict would
 /// contradict the cached PR.
@@ -357,6 +379,31 @@ mod tests {
             row("/b", "lev/eng-2-y", "ENG-2"),
         ];
         assert_eq!(pick_index(&rows, None, Some("/b")), Some(1));
+    }
+
+    #[test]
+    fn a_cache_the_record_contradicts_never_seeds_the_row() {
+        let cached = crate::info_cache::CachedPr {
+            number: 7,
+            state: "MERGED".into(),
+            url: "https://github.com/o/r/pull/7".into(),
+        };
+        let bound = |n: u64| devkit_common::github::PrLocator {
+            repo: None,
+            number: n,
+        };
+
+        assert_eq!(
+            seedable_cached_pr(Some(cached.clone()), Some(&bound(9))),
+            None,
+            "a cache naming another PR must not seed a bound row"
+        );
+        assert_eq!(
+            seedable_cached_pr(Some(cached.clone()), Some(&bound(7))),
+            Some(cached.clone())
+        );
+        assert_eq!(seedable_cached_pr(Some(cached.clone()), None), Some(cached));
+        assert_eq!(seedable_cached_pr(None, Some(&bound(7))), None);
     }
 
     #[test]

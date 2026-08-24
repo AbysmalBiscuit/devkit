@@ -158,6 +158,43 @@ fn parse_pr_flag(s: &str) -> Result<github::PrLocator> {
     })
 }
 
+/// The repository this run acts on: the one a resolved locator names, else
+/// `pr_repo`. The fetch the head-oid gate validates and the `gh pr edit` it
+/// protects must read the same repository — gating one repository's PR while
+/// editing another's is how a fork's same-numbered PR collects a stranger's
+/// reviewers.
+fn acting_repo(loc: Option<&github::PrLocator>, repos: &github::Repos) -> Result<github::Repo> {
+    match loc {
+        Some(loc) => loc.resolve(repos),
+        None => repos.prs().cloned(),
+    }
+}
+
+/// Context for a PR fetch that failed. A locator that came from the record
+/// names the flag that rebinds the worktree, since the record is not something
+/// a user is expected to edit by hand; an explicit `--pr` already is that
+/// escape hatch.
+fn fetch_context(number: u64, from_record: bool) -> String {
+    if from_record {
+        format!(
+            "fetching PR #{number}, recorded for this worktree — pass \
+             `--pr <URL|number>` to bind it to a different PR"
+        )
+    } else {
+        format!("fetching PR #{number}")
+    }
+}
+
+/// A PR that was just created must carry this worktree's commits, which can
+/// only be checked once it exists — so this runs after the call rather than
+/// before it. A failure here leaves the PR open on GitHub, which is why the
+/// caller says so in the error.
+fn verify_created(repo: &github::Repo, number: u64, head: &str) -> Result<()> {
+    let created = github::pr_meta_full(repo, number).context("fetching the PR just created")?;
+    super::finish::assert_belongs(&created, head)
+        .context("the PR just created does not carry this worktree's commits")
+}
+
 /// The record to write once a PR is resolved: the existing record with its
 /// `pr` field replaced. `None` when there is no record to attach it to — an
 /// `issue review request` run outside a worktree `issue setup` created.
@@ -216,7 +253,6 @@ pub fn run(args: Args) -> Result<()> {
     let people = &loaded.config.people;
     let tmpls = &loaded.config.templates;
     let repos = github::Repos::resolve(&loaded.config.github, &start, None);
-    let pr_repo = repos.prs()?;
 
     let mut vars = tmpls.variables.clone();
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
@@ -272,27 +308,27 @@ pub fn run(args: Args) -> Result<()> {
     let explicit_loc = args.pr.as_deref().map(parse_pr_flag).transpose()?;
     let record_loc = record.as_ref().and_then(|r| r.pr.clone());
     let resolved_loc = super::finish::resolve_locator(explicit_loc.as_ref(), record_loc.as_ref());
+    let repo = acting_repo(resolved_loc.as_ref(), &repos)?;
 
     // The PR this run already knows about, paired with the locator to persist
-    // for it once resolved — either the one that named it, or `pr_repo` when
+    // for it once resolved — either the one that named it, or `repo` when
     // branch discovery found it.
     let (existing, existing_loc): (Option<github::PrBrief>, Option<github::PrLocator>) =
         match &resolved_loc {
             Some(loc) => {
-                let repo = loc.resolve(&repos)?;
                 let pr = steps
                     .during_result(&format!("Fetching PR #{}…", loc.number), || {
                         github::pr_meta_full(&repo, loc.number)
                     })
-                    .with_context(|| format!("fetching PR #{}", loc.number))?;
+                    .with_context(|| fetch_context(loc.number, explicit_loc.is_none()))?;
                 (Some(pr), Some(loc.clone()))
             }
             None => {
                 let found = steps.during_result("Looking up existing PR…", || {
-                    existing_pr(&branch, &start, pr_repo)
+                    existing_pr(&branch, &start, &repo)
                 })?;
                 let loc = found.as_ref().map(|p| github::PrLocator {
-                    repo: Some(pr_repo.slug.clone()),
+                    repo: Some(repo.slug.clone()),
                     number: p.number,
                 });
                 (found, loc)
@@ -311,7 +347,7 @@ pub fn run(args: Args) -> Result<()> {
             let targets = match pinned_targets(&explicit, args.no_notify) {
                 Some(t) => t,
                 None => steps.during_result("Resolving reviewers…", || {
-                    resolve_request_targets(&explicit, pr.number, &start, pr_repo, people)
+                    resolve_request_targets(&explicit, pr.number, &start, &repo, people)
                 })?,
             };
             let (logins, warnings) = reviewer_logins(&targets);
@@ -329,7 +365,7 @@ pub fn run(args: Args) -> Result<()> {
                                 "--add-reviewer",
                                 &logins.join(","),
                             ],
-                            pr_repo,
+                            &repo,
                             &start,
                         )
                     })
@@ -380,7 +416,7 @@ pub fn run(args: Args) -> Result<()> {
                 gh_args.push(&joined);
             }
             let out = steps
-                .during_result("Creating PR…", || gh_capture(&gh_args, pr_repo, &start))
+                .during_result("Creating PR…", || gh_capture(&gh_args, &repo, &start))
                 .context("gh pr create failed")?;
             let url = out
                 .lines()
@@ -389,16 +425,14 @@ pub fn run(args: Args) -> Result<()> {
                 .context("could not parse a PR URL from `gh pr create` output")?
                 .trim()
                 .to_string();
-            // A PR being created has no head to compare until it exists, so
-            // this validates immediately after the call rather than before —
-            // before the record is written, before any notification.
             let loc = github::PrLocator::from_url(&url)
                 .context("could not parse a PR number from `gh pr create` output")?;
             let created_repo = loc.resolve(&repos)?;
-            let created = github::pr_meta_full(&created_repo, loc.number)
-                .context("fetching the PR just created")?;
-            super::finish::assert_belongs(&created, &head)
-                .context("the PR just created does not carry this worktree's commits")?;
+            // The gate runs before the record is written and before any
+            // notification goes out.
+            verify_created(&created_repo, loc.number, &head).with_context(|| {
+                format!("{url} is open with nothing recorded and no notification sent")
+            })?;
             (url, explicit, loc)
         }
     };
@@ -512,6 +546,33 @@ mod tests {
         assert_eq!(bare.number, 9);
 
         assert!(parse_pr_flag("not-a-pr").is_err());
+    }
+
+    #[test]
+    fn the_acting_repository_comes_from_the_locator_not_pr_repo() {
+        let cfg = devkit_config::GithubConfig {
+            issues_repo: None,
+            pr_repo: Some("up/app".into()),
+        };
+        let repos = github::Repos::from_parts(&cfg, None, None);
+
+        let pasted = parse_pr_flag("https://github.com/me/fork/pull/9").unwrap();
+        assert_eq!(acting_repo(Some(&pasted), &repos).unwrap().slug, "me/fork");
+
+        let bare = parse_pr_flag("9").unwrap();
+        assert_eq!(acting_repo(Some(&bare), &repos).unwrap().slug, "up/app");
+
+        assert_eq!(acting_repo(None, &repos).unwrap().slug, "up/app");
+    }
+
+    #[test]
+    fn a_recorded_pr_that_will_not_resolve_names_the_rebind_flag() {
+        let recorded = fetch_context(9, true);
+        assert!(recorded.contains("--pr"), "{recorded}");
+        assert!(recorded.contains('9'), "{recorded}");
+
+        let explicit = fetch_context(9, false);
+        assert!(!explicit.contains("--pr"), "{explicit}");
     }
 
     #[test]
