@@ -392,6 +392,8 @@ pub fn run(args: SetupArgs) -> Result<()> {
             slug: slug.clone(),
             apps: args.apps.clone(),
             summary: summary_path.clone(),
+            // `issue setup` has no PR to record — there is none yet.
+            pr: None,
         },
     )?;
     if !args.no_gitignore

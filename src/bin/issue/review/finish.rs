@@ -133,6 +133,31 @@ pub(crate) fn resolve_pr(branch_pr: Option<u64>, pr_flag: Option<u64>) -> Result
         .context("no PR for the current branch; pass --pr <number>")
 }
 
+/// Explicit locator, then the record, then branch discovery. `--pr` means one
+/// thing everywhere — use this PR for this run — and does not itself write
+/// anything; `review request` recording what it acted on is what makes it a
+/// rebind.
+pub(crate) fn resolve_locator(
+    explicit: Option<&github::PrLocator>,
+    record: Option<&github::PrLocator>,
+) -> Option<github::PrLocator> {
+    explicit.or(record).cloned()
+}
+
+/// A PR entering an acting path must carry this worktree's commits. How it was
+/// chosen does not change what it can do: a branch-discovered `Unique` is
+/// unique only among one repository's PRs, so another fork's same-named branch
+/// gives the identical answer.
+pub(crate) fn assert_belongs(pr: &github::PrBrief, head: &str) -> Result<()> {
+    anyhow::ensure!(
+        pr.head_ref_oid == head,
+        "PR #{} is at {} but this worktree is at {head} — it does not carry this work",
+        pr.number,
+        pr.head_ref_oid
+    );
+    Ok(())
+}
+
 /// Build the PR-author Slack target via reverse lookup.
 pub(crate) fn author_target(login: &str, people: &HashMap<String, Person>) -> Result<Target> {
     person_by_login(login, people)
@@ -155,26 +180,37 @@ pub fn run(args: Args) -> Result<()> {
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
 
     let steps = Steps::persistent();
-    // PR from the current branch (best effort), unless --pr is given.
     let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)
         .ok()
         .map(|b| b.trim().to_string());
-    let branch_pr = branch.as_deref().and_then(|b| {
-        steps
-            .during_result("Looking up PR for branch…", || {
-                branch_pr_number(b, &start, pr_repo)
-            })
-            .ok()
-            .flatten()
-    });
-    let number = resolve_pr(branch_pr, args.pr)?;
-
     let record = git(&["rev-parse", "--show-toplevel"], &start)
         .ok()
         .and_then(|top| devkit_common::record::read(std::path::Path::new(top.trim())));
 
+    // Explicit `--pr`, then the record, then the worktree branch's PR (best
+    // effort). A recorded locator can name a repository other than `pr_repo`.
+    let explicit_loc = args
+        .pr
+        .map(|number| github::PrLocator { repo: None, number });
+    let record_loc = record.as_ref().and_then(|r| r.pr.clone());
+    let resolved_loc = resolve_locator(explicit_loc.as_ref(), record_loc.as_ref());
+    let (number, repo): (u64, github::Repo) = match &resolved_loc {
+        Some(loc) => (loc.number, loc.resolve(&repos)?),
+        None => {
+            let branch_pr = branch.as_deref().and_then(|b| {
+                steps
+                    .during_result("Looking up PR for branch…", || {
+                        branch_pr_number(b, &start, pr_repo)
+                    })
+                    .ok()
+                    .flatten()
+            });
+            (resolve_pr(branch_pr, None)?, pr_repo.clone())
+        }
+    };
+
     let view: PrFull = steps.during_result(&format!("Fetching PR #{number}…"), || {
-        fetch_pr_full(number, &start, pr_repo)
+        fetch_pr_full(number, &start, &repo)
     })?;
     let author_login = view.author.login;
 
@@ -278,5 +314,57 @@ mod tests {
             head_ref_oid: "cafe1".into(),
             head_repo_owner: None,
         }
+    }
+
+    fn loc(repo: Option<&str>, number: u64) -> github::PrLocator {
+        github::PrLocator {
+            repo: repo.map(str::to_string),
+            number,
+        }
+    }
+
+    fn brief_at(oid: &str) -> devkit_common::github::PrBrief {
+        devkit_common::github::PrBrief {
+            number: 5,
+            state: "OPEN".into(),
+            url: "https://github.com/o/r/pull/5".into(),
+            head_ref_name: "feat/x".into(),
+            head_ref_oid: oid.into(),
+            head_repo_owner: None,
+        }
+    }
+
+    #[test]
+    fn precedence_is_explicit_then_record_then_branch() {
+        // review finish --pr wins over branch discovery by contract today. Making
+        // the record unconditionally authoritative would either disable that flag
+        // silently or leave an undocumented way around the new rule.
+        let ex = loc(None, 7);
+        let rec = loc(Some("up/app"), 9);
+        assert_eq!(resolve_locator(Some(&ex), Some(&rec)), Some(ex.clone()));
+        assert_eq!(resolve_locator(None, Some(&rec)), Some(rec));
+        assert_eq!(resolve_locator(None, None), None); // branch discovery
+    }
+
+    #[test]
+    fn a_pr_that_is_not_this_worktrees_head_is_refused() {
+        // --pr with a mistyped number names a real PR that resolves cleanly, the
+        // record makes it authoritative, and its merge lets issue end run
+        // `git branch -D` on a worktree whose work never landed.
+        let pr = brief_at("cafe1234");
+        assert!(assert_belongs(&pr, "cafe1234").is_ok());
+        let err = assert_belongs(&pr, "beef5678").unwrap_err().to_string();
+        assert!(
+            err.contains("cafe1234") && err.contains("beef5678"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_squash_merged_pr_still_compares_equal() {
+        // headRefOid is the branch head the PR carried, not the commit that landed
+        // on the base, so squash and rebase merges compare equal.
+        let pr = brief_at("cafe1234");
+        assert!(assert_belongs(&pr, "cafe1234").is_ok());
     }
 }

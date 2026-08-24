@@ -21,16 +21,25 @@ pub struct Args {
     pub pr_body: Option<String>,
     pub no_push: bool,
     pub no_notify: bool,
+    /// Use this PR for this run: a GitHub PR URL keeps its own repository, a
+    /// bare number means `pr_repo`. Replaces a wrong recorded binding, since
+    /// recording what this run acts on is what makes it a rebind.
+    pub pr: Option<String>,
     pub args: Vec<String>,
     pub dir: Option<String>,
     pub config: Option<String>,
 }
 
+/// The flat shape `gh pr list --json` returns, converted into `github::PrBrief`
+/// so the fallback path carries the same head oid the direct-HTTP path does.
 #[derive(Deserialize)]
-struct PrView {
+#[serde(rename_all = "camelCase")]
+struct PrFlat {
     number: u64,
     state: String,
     url: String,
+    head_ref_name: String,
+    head_ref_oid: String,
 }
 
 #[derive(Deserialize)]
@@ -102,18 +111,14 @@ fn requested_reviewer_logins(pr: u64, cwd: &str, repo: &github::Repo) -> Result<
         .collect())
 }
 
-/// The existing PR for head branch `branch` (number/state/url), over direct HTTP
-/// when possible else `gh pr list`. `Ok(None)` means no PR.
-fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<PrView>> {
+/// The existing PR for head branch `branch`, over direct HTTP when possible
+/// else `gh pr list`. `Ok(None)` means no PR.
+fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<github::PrBrief>> {
     let looked = github::pr_by_head(repo, branch);
     if decide_fallback(&looked) == Fallback::No {
-        return Ok(resolve_acting(&looked)?.map(|p| PrView {
-            number: p.number,
-            state: p.state,
-            url: p.url,
-        }));
+        return resolve_acting(&looked);
     }
-    let v: Vec<PrView> = gh_json_in(
+    let v: Vec<PrFlat> = gh_json_in(
         &[
             "pr",
             "list",
@@ -122,13 +127,48 @@ fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<Pr
             "--state",
             "all",
             "--json",
-            "number,state,url",
+            "number,state,url,headRefName,headRefOid",
         ],
         repo,
         cwd,
     )?;
     ensure_unambiguous_gh_match(v.len())?;
-    Ok(v.into_iter().next())
+    Ok(v.into_iter().next().map(|p| github::PrBrief {
+        number: p.number,
+        state: p.state,
+        url: p.url,
+        head_ref_name: p.head_ref_name,
+        head_ref_oid: p.head_ref_oid,
+        head_repo_owner: None,
+    }))
+}
+
+/// `--pr <URL|number>`: a GitHub PR URL keeps its own repository; a bare
+/// number means `pr_repo`.
+fn parse_pr_flag(s: &str) -> Result<github::PrLocator> {
+    if let Some(loc) = github::PrLocator::from_url(s) {
+        return Ok(loc);
+    }
+    Ok(github::PrLocator {
+        repo: None,
+        number: s
+            .trim()
+            .parse()
+            .with_context(|| format!("--pr is not a PR URL or number: {s}"))?,
+    })
+}
+
+/// The record to write once a PR is resolved: the existing record with its
+/// `pr` field replaced. `None` when there is no record to attach it to — an
+/// `issue review request` run outside a worktree `issue setup` created.
+pub(crate) fn record_with_pr(
+    record: Option<&devkit_common::record::IssueRecord>,
+    loc: github::PrLocator,
+) -> Option<devkit_common::record::IssueRecord> {
+    record.map(|r| devkit_common::record::IssueRecord {
+        pr: Some(loc),
+        ..r.clone()
+    })
 }
 
 /// `--no-notify` pins the targets to whatever `--to` resolved to — possibly none —
@@ -226,14 +266,48 @@ pub fn run(args: Args) -> Result<()> {
         missing_at,
     )?;
 
-    let existing: Option<PrView> = steps.during_result("Looking up existing PR…", || {
-        existing_pr(&branch, &start, pr_repo)
-    })?;
+    let head = git(&["rev-parse", "HEAD"], &start)?.trim().to_string();
 
-    let (pr_url, targets) = match action_for(existing.as_ref().map(|p| p.state.as_str())) {
+    // Explicit `--pr`, then the record, then the worktree branch's PR.
+    let explicit_loc = args.pr.as_deref().map(parse_pr_flag).transpose()?;
+    let record_loc = record.as_ref().and_then(|r| r.pr.clone());
+    let resolved_loc = super::finish::resolve_locator(explicit_loc.as_ref(), record_loc.as_ref());
+
+    // The PR this run already knows about, paired with the locator to persist
+    // for it once resolved — either the one that named it, or `pr_repo` when
+    // branch discovery found it.
+    let (existing, existing_loc): (Option<github::PrBrief>, Option<github::PrLocator>) =
+        match &resolved_loc {
+            Some(loc) => {
+                let repo = loc.resolve(&repos)?;
+                let pr = steps
+                    .during_result(&format!("Fetching PR #{}…", loc.number), || {
+                        github::pr_meta_full(&repo, loc.number)
+                    })
+                    .with_context(|| format!("fetching PR #{}", loc.number))?;
+                (Some(pr), Some(loc.clone()))
+            }
+            None => {
+                let found = steps.during_result("Looking up existing PR…", || {
+                    existing_pr(&branch, &start, pr_repo)
+                })?;
+                let loc = found.as_ref().map(|p| github::PrLocator {
+                    repo: Some(pr_repo.slug.clone()),
+                    number: p.number,
+                });
+                (found, loc)
+            }
+        };
+
+    let (pr_url, targets, final_loc) = match action_for(existing.as_ref().map(|p| p.state.as_str()))
+    {
         PrAction::Stop(reason) => bail!("{reason}"),
         PrAction::AddReviewer => {
             let pr = existing.expect("AddReviewer implies an existing PR");
+            let loc = existing_loc.expect("AddReviewer implies a resolved locator");
+            // Mutating an existing PR is gated before the call: a mismatch here
+            // is refused before a single reviewer is added.
+            super::finish::assert_belongs(&pr, &head)?;
             let targets = match pinned_targets(&explicit, args.no_notify) {
                 Some(t) => t,
                 None => steps.during_result("Resolving reviewers…", || {
@@ -261,7 +335,7 @@ pub fn run(args: Args) -> Result<()> {
                     })
                     .context("gh pr edit --add-reviewer failed")?;
             }
-            (pr.url, targets)
+            (pr.url, targets, loc)
         }
         PrAction::Create => {
             require_pr_title(&pr_title)?;
@@ -315,9 +389,23 @@ pub fn run(args: Args) -> Result<()> {
                 .context("could not parse a PR URL from `gh pr create` output")?
                 .trim()
                 .to_string();
-            (url, explicit)
+            // A PR being created has no head to compare until it exists, so
+            // this validates immediately after the call rather than before —
+            // before the record is written, before any notification.
+            let loc = github::PrLocator::from_url(&url)
+                .context("could not parse a PR number from `gh pr create` output")?;
+            let created_repo = loc.resolve(&repos)?;
+            let created = github::pr_meta_full(&created_repo, loc.number)
+                .context("fetching the PR just created")?;
+            super::finish::assert_belongs(&created, &head)
+                .context("the PR just created does not carry this worktree's commits")?;
+            (url, explicit, loc)
         }
     };
+
+    if let Some(rec) = record_with_pr(record.as_ref(), final_loc) {
+        devkit_common::record::write(std::path::Path::new(&toplevel), &rec)?;
+    }
 
     if args.no_notify {
         println!("{pr_url}");
@@ -411,5 +499,40 @@ mod tests {
         assert_eq!(targets[0].name, "lev");
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("ghost"));
+    }
+
+    #[test]
+    fn parse_pr_flag_keeps_a_urls_repository_but_not_a_bare_numbers() {
+        let pasted = parse_pr_flag("https://github.com/o/r/pull/9").unwrap();
+        assert_eq!(pasted.repo.as_deref(), Some("o/r"));
+        assert_eq!(pasted.number, 9);
+
+        let bare = parse_pr_flag("9").unwrap();
+        assert_eq!(bare.repo, None);
+        assert_eq!(bare.number, 9);
+
+        assert!(parse_pr_flag("not-a-pr").is_err());
+    }
+
+    #[test]
+    fn record_with_pr_replaces_only_the_pr_field() {
+        let base = devkit_common::record::IssueRecord {
+            issue: "ENG-1".into(),
+            slug: "fix-login".into(),
+            apps: vec!["web".into()],
+            summary: None,
+            pr: None,
+        };
+        let loc = github::PrLocator {
+            repo: Some("o/r".into()),
+            number: 9,
+        };
+        let got = record_with_pr(Some(&base), loc.clone()).expect("a record to update");
+        assert_eq!(got.pr, Some(loc.clone()));
+        assert_eq!(got.issue, base.issue);
+        assert_eq!(got.slug, base.slug);
+        assert_eq!(got.apps, base.apps);
+
+        assert!(record_with_pr(None, loc).is_none());
     }
 }

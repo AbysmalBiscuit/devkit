@@ -367,27 +367,79 @@ fn unavailable_all(branches: &[String], reason: &str) -> HashMap<String, github:
         .collect()
 }
 
-/// The PR lookup for every worktree branch, one GraphQL round trip. Fails
-/// soft: a request that cannot be made at all (no token, transport error)
-/// marks every branch `Unknown` rather than aborting the caller's report.
-pub fn fetch_prs(d: &Discovered, repo: &github::Repo) -> Result<Prs> {
-    let branches: Vec<String> = d
-        .rows
-        .iter()
-        .filter(|r| r.branch != "DETACHED")
-        .map(|r| r.branch.clone())
-        .collect();
-    if branches.is_empty() {
-        return Ok(Prs::empty());
-    }
-    let lookups = if github::token().is_none() {
-        unavailable_all(&branches, "no GitHub token resolved")
-    } else {
-        match github::graphql(&heads_query(&repo.slug, &branches)) {
-            Ok(v) => parse_heads(&v, &branches),
-            Err(e) => unavailable_all(&branches, &format!("{e:#}")),
+/// Split worktree branches into ones a worktree's record already binds to a
+/// PR (paired with that locator) and the rest, to be looked up by head branch
+/// name in one batch. A bound branch never reaches the batch: the record is
+/// authoritative over branch matching in any repository, not only one
+/// outside `pr_repo`, so a superseded PR sharing the same head branch can
+/// never win by riding along in that batch.
+fn partition_by_record(
+    rows: &[IssueWorktree],
+    recorded: impl Fn(&str) -> Option<github::PrLocator>,
+) -> (Vec<(String, github::PrLocator)>, Vec<String>) {
+    let mut bound = Vec::new();
+    let mut branches = Vec::new();
+    for row in rows.iter().filter(|r| r.branch != "DETACHED") {
+        match recorded(&row.worktree) {
+            Some(loc) => bound.push((row.branch.clone(), loc)),
+            None => branches.push(row.branch.clone()),
         }
-    };
+    }
+    (bound, branches)
+}
+
+/// The outcome of resolving one recorded locator into the shape a head lookup
+/// already has a variant for: `Unavailable` covers both a transport failure
+/// and a PR that no longer resolves, since neither may fall back to branch
+/// matching and both close the finished verdict the same way.
+fn recorded_result(found: Result<Option<github::PrBrief>>, n: u64) -> github::HeadLookup {
+    match found {
+        Ok(Some(pr)) => github::HeadLookup::Unique(pr),
+        Ok(None) => github::HeadLookup::Unavailable(format!("recorded PR #{n} no longer resolves")),
+        Err(e) => github::HeadLookup::Unavailable(format!("{e:#}")),
+    }
+}
+
+/// A recorded locator's exact PR, over REST — one call per locator rather
+/// than the branch batch's single GraphQL round trip, since a status run
+/// rarely carries more than a handful of recorded bindings.
+fn recorded_lookup(loc: &github::PrLocator, default_repo: &github::Repo) -> github::HeadLookup {
+    if github::token().is_none() {
+        return github::HeadLookup::Unavailable("no GitHub token resolved".into());
+    }
+    match loc.resolve_or(default_repo) {
+        Ok(repo) => recorded_result(github::pr_by_number(&repo, loc.number), loc.number),
+        Err(e) => github::HeadLookup::Unavailable(format!("{e:#}")),
+    }
+}
+
+/// The PR lookup for every worktree branch. A branch whose worktree record
+/// carries a locator is resolved directly, one REST call each; every other
+/// branch is batched into one GraphQL round trip. Fails soft: a request that
+/// cannot be made at all (no token, transport error) marks every such branch
+/// `Unknown` rather than aborting the caller's report.
+pub fn fetch_prs(d: &Discovered, repo: &github::Repo) -> Result<Prs> {
+    let (bound, branches) = partition_by_record(&d.rows, |worktree| {
+        devkit_common::record::read(Path::new(worktree)).and_then(|r| r.pr)
+    });
+    let mut lookups: HashMap<String, github::HeadLookup> = bound
+        .into_iter()
+        .map(|(branch, loc)| {
+            let lookup = recorded_lookup(&loc, repo);
+            (branch, lookup)
+        })
+        .collect();
+    if !branches.is_empty() {
+        let batch = if github::token().is_none() {
+            unavailable_all(&branches, "no GitHub token resolved")
+        } else {
+            match github::graphql(&heads_query(&repo.slug, &branches)) {
+                Ok(v) => parse_heads(&v, &branches),
+                Err(e) => unavailable_all(&branches, &format!("{e:#}")),
+            }
+        };
+        lookups.extend(batch);
+    }
     Ok(Prs(lookups))
 }
 
@@ -746,6 +798,61 @@ mod tests {
             head_ref_oid: format!("oid{n}"),
             head_repo_owner: None,
         }
+    }
+
+    #[test]
+    fn a_recorded_branch_is_excluded_from_the_batch() {
+        // The record is authoritative over branch matching in any repository,
+        // not only one outside `pr_repo`: a second PR sharing the recorded
+        // row's branch name would win a plain branch lookup, but the recorded
+        // branch never reaches the batch that lookup runs against.
+        let mut a = wt("ENG-1", "NO_PR", false, None);
+        a.worktree = "/w/a".into();
+        a.branch = "feat/x".into();
+        let mut b = wt("ENG-2", "NO_PR", false, None);
+        b.worktree = "/w/b".into();
+        b.branch = "feat/y".into();
+
+        let loc = github::PrLocator {
+            repo: None,
+            number: 12,
+        };
+        let (bound, branches) = partition_by_record(&[a, b], |worktree| {
+            (worktree == "/w/a").then(|| loc.clone())
+        });
+        assert_eq!(bound, vec![("feat/x".to_string(), loc)]);
+        assert_eq!(branches, vec!["feat/y".to_string()]);
+    }
+
+    #[test]
+    fn a_detached_row_never_reaches_either_list() {
+        let mut d = wt("UNKNOWN", "NO_PR", false, None);
+        d.branch = "DETACHED".into();
+        let (bound, branches) = partition_by_record(&[d], |_| {
+            Some(github::PrLocator {
+                repo: None,
+                number: 1,
+            })
+        });
+        assert!(bound.is_empty());
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn recorded_result_maps_found_missing_and_failed_to_head_lookup() {
+        let brief = pr(12, "OPEN", "feat/y");
+        assert!(matches!(
+            recorded_result(Ok(Some(brief.clone())), 12),
+            github::HeadLookup::Unique(p) if p.number == 12
+        ));
+        assert!(matches!(
+            recorded_result(Ok(None), 3),
+            github::HeadLookup::Unavailable(reason) if reason.contains('3')
+        ));
+        assert!(matches!(
+            recorded_result(Err(anyhow::anyhow!("boom")), 3),
+            github::HeadLookup::Unavailable(reason) if reason.contains("boom")
+        ));
     }
 
     fn pr_ref(n: u64) -> devkit_common::tracker::PrRef {

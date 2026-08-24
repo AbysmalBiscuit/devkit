@@ -238,6 +238,10 @@ enum ReviewCmd {
         /// PR's current reviewers.
         #[arg(long = "no-notify")]
         no_notify: bool,
+        /// Use this PR for this run: a GitHub PR URL or a bare number (meaning
+        /// `pr_repo`). Replaces a wrong recorded binding.
+        #[arg(long)]
+        pr: Option<String>,
         /// Override a declared template variable: `--arg key=value`. Repeatable.
         #[arg(long = "arg")]
         args: Vec<String>,
@@ -375,6 +379,7 @@ fn main() -> Result<()> {
                 pr_body,
                 no_push,
                 no_notify,
+                pr,
                 args,
             } => review::request::run(review::request::Args {
                 body,
@@ -384,6 +389,7 @@ fn main() -> Result<()> {
                 pr_body,
                 no_push,
                 no_notify,
+                pr,
                 args,
                 dir: cli.dir,
                 config: cli.config,

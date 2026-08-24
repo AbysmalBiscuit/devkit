@@ -293,6 +293,16 @@ impl Repo {
     }
 }
 
+/// A repository named explicitly by a locator, as opposed to one defaulted
+/// from `pr_repo` or an origin remote.
+fn overridden_repo(slug: &str) -> Result<Repo> {
+    validate_slug(slug)?;
+    Ok(Repo {
+        slug: slug.to_string(),
+        origin: Origin::Overridden,
+    })
+}
+
 /// A pull request, identified. `repo: None` means the input was a bare number
 /// or `#42` and defaults to `pr_repo`; a URL fills it in and that repository
 /// wins.
@@ -307,14 +317,18 @@ impl PrLocator {
     /// The repository this locator names, or `pr_repo` when it names none.
     pub fn resolve(&self, repos: &Repos) -> Result<Repo> {
         match &self.repo {
-            Some(slug) => {
-                validate_slug(slug)?;
-                Ok(Repo {
-                    slug: slug.clone(),
-                    origin: Origin::Overridden,
-                })
-            }
+            Some(slug) => overridden_repo(slug),
             None => repos.prs().cloned(),
+        }
+    }
+
+    /// The repository this locator names, or `default` when it names none —
+    /// for a caller that already holds the one repository a bare number would
+    /// resolve to and has no `Repos` seam to ask.
+    pub fn resolve_or(&self, default: &Repo) -> Result<Repo> {
+        match &self.repo {
+            Some(slug) => overridden_repo(slug),
+            None => Ok(default.clone()),
         }
     }
 
@@ -571,6 +585,20 @@ pub fn pr_meta(slug: &str, n: u64) -> Result<PrMeta> {
 /// URL/title/author for PR `n`.
 pub fn pr_full(slug: &str, n: u64) -> Result<PrFull> {
     Ok(parse_full(&rest_get(&format!("/repos/{slug}/pulls/{n}"))?))
+}
+
+/// The full triage shape (state, url, head branch and head oid) for PR `n` in
+/// `repo`, or `None` if no such PR exists. The exact single-PR read behind a
+/// recorded locator, and behind verifying a PR just created or checked out —
+/// neither carries the head oid the creating/checkout response omits.
+pub fn pr_by_number(repo: &Repo, n: u64) -> Result<Option<PrBrief>> {
+    Ok(rest_get_opt(&format!("/repos/{}/pulls/{n}", repo.slug))?.and_then(|v| parse_brief(&v)))
+}
+
+/// [`pr_by_number`], erroring rather than returning `None` when the PR does
+/// not exist.
+pub fn pr_meta_full(repo: &Repo, n: u64) -> Result<PrBrief> {
+    pr_by_number(repo, n)?.with_context(|| format!("PR #{n} not found in {}", repo.slug))
 }
 
 /// What a head-branch lookup found. An `Option` cannot distinguish "the
@@ -993,6 +1021,27 @@ mod tests {
             number: 42,
         };
         assert_eq!(bare.resolve(&repos).unwrap().slug, "up/app");
+    }
+
+    #[test]
+    fn resolve_or_falls_back_to_the_given_default_not_pr_repo() {
+        let default = Repo {
+            slug: "me/fork".into(),
+            origin: Origin::Defaulted,
+        };
+        let bare = PrLocator {
+            repo: None,
+            number: 9,
+        };
+        assert_eq!(bare.resolve_or(&default).unwrap(), default);
+
+        let pasted = PrLocator {
+            repo: Some("other/app".into()),
+            number: 9,
+        };
+        let r = pasted.resolve_or(&default).unwrap();
+        assert_eq!(r.slug, "other/app");
+        assert_eq!(r.origin, Origin::Overridden);
     }
 
     /// A locator's slug is parsed out of untrusted pasted text, so it faces the

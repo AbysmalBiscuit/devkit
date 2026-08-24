@@ -383,6 +383,14 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             })
             .with_context(|| format!("checking out PR #{}", meta.number))?;
 
+        // The worktree is built *from* the PR, so it has no head to compare
+        // until the checkout lands — validated immediately after, before the
+        // record is written, rather than pre-gated.
+        let head = git(&["rev-parse", "HEAD"], worktree_s)?.trim().to_string();
+        let checked_out = github::pr_meta_full(&pr_repo, meta.number)
+            .with_context(|| format!("verifying PR #{}", meta.number))?;
+        crate::review::finish::assert_belongs(&checked_out, &head)?;
+
         let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
         devkit_common::record::write(
             &worktree,
@@ -397,6 +405,10 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
                 // A PR checkout reviews someone else's work; there is no issue
                 // to scaffold notes for.
                 summary: None,
+                pr: Some(github::PrLocator {
+                    repo: Some(pr_repo.slug.clone()),
+                    number: meta.number,
+                }),
             },
         )?;
         Ok(issue)

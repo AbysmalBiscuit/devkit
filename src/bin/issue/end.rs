@@ -337,6 +337,7 @@ mod tests {
                 slug: "fix".into(),
                 apps: vec![],
                 summary: Some(summary.display().to_string()),
+                pr: None,
             },
         )
         .unwrap();
@@ -357,6 +358,7 @@ mod tests {
                 slug: "fix".into(),
                 apps: vec![],
                 summary: None,
+                pr: None,
             },
         )
         .unwrap();
@@ -402,6 +404,7 @@ mod tests {
                 slug: "fix".into(),
                 apps: vec![],
                 summary: Some(summary.display().to_string()),
+                pr: None,
             },
         )
         .unwrap();

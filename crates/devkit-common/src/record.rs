@@ -5,7 +5,7 @@ use std::path::Path;
 /// Per-worktree record written by `issue setup`, carrying the setup-time
 /// context that is otherwise unavailable later: the authoritative issue id, and
 /// the slug, apps and summary path that `issue review` and `issue end` need.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IssueRecord {
     pub issue: String,
     pub slug: String,
@@ -16,6 +16,13 @@ pub struct IssueRecord {
     /// the summary existed, and on setups that asked for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// The pull request this worktree's work belongs to, written by
+    /// `checkout-pr` and by `issue review request` whenever either resolves
+    /// one. The locator identifies both repository and number, so a PR outside
+    /// `pr_repo` is still findable. Absent on records written before it existed
+    /// and on an `issue setup` worktree whose PR does not exist yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<crate::github::PrLocator>,
 }
 
 /// `<worktree>/.devkit/issue.toml`.
@@ -53,6 +60,10 @@ mod tests {
             slug: "fix-login".into(),
             apps: vec!["web".into(), "api".into()],
             summary: Some("/w/ISSUE_SUMMARY_ABC-123.md".into()),
+            pr: Some(crate::github::PrLocator {
+                repo: Some("acme/web".into()),
+                number: 42,
+            }),
         };
         write(&dir, &rec).unwrap();
         assert_eq!(read(&dir), Some(rec));
@@ -71,6 +82,7 @@ mod tests {
         let got = read(&dir).expect("legacy record parses");
         assert_eq!(got.issue, "ABC-1");
         assert!(got.summary.is_none());
+        assert!(got.pr.is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -78,5 +90,11 @@ mod tests {
     fn read_missing_is_none() {
         let dir = std::env::temp_dir().join("devkit-rec-does-not-exist-xyz");
         assert_eq!(read(&dir), None);
+    }
+
+    #[test]
+    fn an_old_record_with_no_pr_field_still_deserializes() {
+        let rec: IssueRecord = toml::from_str("issue = 'ENG-1'\nslug = 'x'\napps = []\n").unwrap();
+        assert_eq!(rec.pr, None);
     }
 }
