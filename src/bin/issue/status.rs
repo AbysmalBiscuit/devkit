@@ -253,6 +253,30 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
     Ok(st::assemble(d, dirty, prs, states, info))
 }
 
+/// The note printed under the table for a tracker that could not answer, or
+/// `None` when there is nothing worth saying.
+///
+/// A tracker that cannot answer holds every issue-state gate closed, which is
+/// why nothing reaches FINISHED — so the hint explains the closed gate and how
+/// to open it. The one project that genuinely skips the gate is the one that
+/// declared it has no tracker, and it asked for that, so it gets no note.
+fn tracker_hint(t: &TrackerInfo) -> Option<&'static str> {
+    if t.ready {
+        return None;
+    }
+    match t.kind {
+        TrackerKind::Linear => Some(
+            "No LINEAR_API_KEY — Linear state gates stay closed, so nothing reports finished. \
+             Create a key at https://linear.app/settings/api",
+        ),
+        TrackerKind::None if t.declared => None,
+        TrackerKind::Github | TrackerKind::None => Some(
+            "No issue tracker devkit can read — issue state gates stay closed, so nothing \
+             reports finished. Set `[tracker] kind` to name this project's tracker",
+        ),
+    }
+}
+
 pub fn run(start: &str, ids: &[String], config: Option<&str>) -> Result<()> {
     let report = gather_live(start, ids, config)?;
     let finished = render(&report, false);
@@ -262,15 +286,7 @@ pub fn run(start: &str, ids: &[String], config: Option<&str>) -> Result<()> {
             ui::green(&format!("{finished} finished."))
         );
     }
-    if !report.tracker.ready {
-        let hint = match report.tracker.kind {
-            TrackerKind::Linear => {
-                "LINEAR_API_KEY unset — Linear gate skipped. Create a key at https://linear.app/settings/api"
-            }
-            TrackerKind::Github | TrackerKind::None => {
-                "No issue tracker configured — the issue-state gate is skipped."
-            }
-        };
+    if let Some(hint) = tracker_hint(&report.tracker) {
         println!("\n{}", ui::dim(hint));
     }
     Ok(())
@@ -293,6 +309,15 @@ mod tests {
         }
     }
 
+    fn info(kind: TrackerKind, ready: bool, declared: bool) -> TrackerInfo {
+        TrackerInfo {
+            kind,
+            ready,
+            declared,
+            link_base: None,
+        }
+    }
+
     fn row(id: &str) -> IssueWorktree {
         IssueWorktree {
             worktree: format!("/w/{id}"),
@@ -306,6 +331,58 @@ mod tests {
             finished: false,
             reason_not_finished: None,
         }
+    }
+
+    /// A worktree whose only remaining gate is the tracker's: merged PR, clean
+    /// tree, real issue id.
+    fn merged_clean(id: &str) -> IssueWorktree {
+        let mut r = row(id);
+        r.pr_number = Some(1);
+        r.pr_state = "MERGED".into();
+        r
+    }
+
+    /// Every tracker that cannot answer keeps a merged, clean worktree off
+    /// FINISHED, so its hint has to say the gate is closed rather than skipped —
+    /// the reader is looking for why nothing finished.
+    #[test]
+    fn a_tracker_that_holds_the_gate_says_so() {
+        for (kind, declared) in [
+            (TrackerKind::Linear, true),
+            (TrackerKind::Github, false),
+            (TrackerKind::None, false),
+        ] {
+            let t = info(kind, false, declared);
+            assert!(
+                st::reason_not_finished(&merged_clean("ENG-1"), &t, false).is_some(),
+                "{kind:?} holds the gate"
+            );
+            let hint = tracker_hint(&t).unwrap_or_else(|| panic!("{kind:?} needs a hint"));
+            assert!(hint.contains("stay closed"), "{kind:?}: {hint}");
+            assert!(!hint.contains("skipped"), "{kind:?}: {hint}");
+        }
+    }
+
+    /// Only a project that declared it has no tracker really skips the gate, and
+    /// that is what it asked for — nothing to report.
+    #[test]
+    fn a_declared_absence_of_a_tracker_gets_no_hint() {
+        let t = info(TrackerKind::None, false, true);
+        assert!(st::reason_not_finished(&merged_clean("ENG-1"), &t, false).is_none());
+        assert_eq!(tracker_hint(&t), None);
+    }
+
+    #[test]
+    fn a_tracker_that_answered_gets_no_hint() {
+        assert_eq!(tracker_hint(&info(TrackerKind::Linear, true, true)), None);
+    }
+
+    /// The Linear hint is the only one that can point at a fix the user makes
+    /// outside the config, so it keeps the key's URL.
+    #[test]
+    fn the_linear_hint_points_at_the_api_key_page() {
+        let hint = tracker_hint(&info(TrackerKind::Linear, false, true)).unwrap();
+        assert!(hint.contains("https://linear.app/settings/api"), "{hint}");
     }
 
     #[test]
