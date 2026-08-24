@@ -80,7 +80,7 @@ impl Serialize for IssueWorktree {
     /// `pr_state` keeps working while a new one can read the candidates.
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("IssueWorktree", 10)?;
+        let mut st = s.serialize_struct("IssueWorktree", 11)?;
         st.serialize_field("worktree", &self.worktree)?;
         st.serialize_field("branch", &self.branch)?;
         st.serialize_field("issue_id", &self.issue_id)?;
@@ -93,36 +93,6 @@ impl Serialize for IssueWorktree {
         st.serialize_field("finished", &self.finished)?;
         st.serialize_field("reason_not_finished", &self.reason_not_finished)?;
         st.end()
-    }
-}
-
-/// The finished verdict, from the PR tag and the issue state. An unidentified
-/// PR never closes it: `issue end` deletes a worktree on this answer.
-pub fn verdict(pr: &PrStatus, state: Option<StateKind>, dirty: bool) -> (bool, Option<String>) {
-    if dirty {
-        return (false, Some("worktree has uncommitted changes".into()));
-    }
-    match pr {
-        PrStatus::Ambiguous { candidates } => (
-            false,
-            Some(format!(
-                "several PRs share this branch ({}) — pass --pr to choose one",
-                candidates
-                    .iter()
-                    .map(|c| format!("#{}", c.number))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        ),
-        PrStatus::Unknown { reason } => (false, Some(reason.clone())),
-        PrStatus::None => (false, Some("no PR for this branch".into())),
-        PrStatus::Unique { state: s, .. } if s != "MERGED" => {
-            (false, Some(format!("PR is {s}, not merged")))
-        }
-        PrStatus::Unique { .. } => match state {
-            Some(k) if k.is_open() => (false, Some(format!("issue is {k}"))),
-            Some(_) | None => (true, None),
-        },
     }
 }
 
@@ -363,11 +333,22 @@ pub fn parse_heads(
         .iter()
         .enumerate()
         .map(|(i, b)| {
-            let one = serde_json::json!({
-                "data": { "repository": { "pullRequests": resp["data"]["repository"][format!("b{i}")] } },
-                "errors": resp["errors"],
-            });
-            (b.clone(), github::parse_head_lookup(&one))
+            let key = format!("b{i}");
+            let alias = &resp["data"]["repository"][&key];
+            // A present-but-null or absent alias is a malformed response, not
+            // evidence the branch has no PR — the latter is what `issue end`
+            // reads before deleting a worktree.
+            let lookup = if alias.is_null() {
+                github::HeadLookup::Unavailable(format!(
+                    "no `{key}` alias in the GraphQL response for branch `{b}`"
+                ))
+            } else {
+                let one = serde_json::json!({
+                    "data": { "repository": { "pullRequests": alias } },
+                });
+                github::parse_head_lookup(&one)
+            };
+            (b.clone(), lookup)
         })
         .collect()
 }
@@ -963,30 +944,31 @@ mod tests {
         assert_eq!(a.url(), None);
     }
 
+    // The safety gate `issue end` reads before deleting a worktree: neither an
+    // ambiguous nor an unresolved PR may read as finished, and each names why.
     #[test]
-    fn the_verdict_never_closes_on_an_unidentified_pr() {
-        for pr in [
-            PrStatus::Ambiguous {
+    fn ambiguous_and_unknown_prs_are_never_finished() {
+        let linear = tracker(TrackerKind::Linear, true);
+        let ambiguous = IssueWorktree {
+            pr: PrStatus::Ambiguous {
                 candidates: vec![pr_ref(7), pr_ref(8)],
             },
-            PrStatus::Unknown {
+            ..wt("ENG-1", "NO_PR", false, Some(StateKind::Completed))
+        };
+        let reason = reason_not_finished(&ambiguous, &linear, false).expect("must name a reason");
+        assert!(reason.contains("PR ambiguous"), "{reason}");
+
+        let unknown = IssueWorktree {
+            pr: PrStatus::Unknown {
                 reason: "recorded PR no longer resolves".into(),
             },
-        ] {
-            let (finished, why) = verdict(&pr, Some(StateKind::Completed), false);
-            assert!(!finished, "{pr:?} must not be finished");
-            assert!(why.is_some());
-        }
-        let (finished, _) = verdict(
-            &PrStatus::Unique {
-                number: 1,
-                state: "MERGED".into(),
-                url: "u".into(),
-            },
-            Some(StateKind::Completed),
-            false,
+            ..wt("ENG-2", "NO_PR", false, Some(StateKind::Completed))
+        };
+        let reason = reason_not_finished(&unknown, &linear, false).expect("must name a reason");
+        assert!(
+            reason.contains("recorded PR no longer resolves"),
+            "{reason}"
         );
-        assert!(finished);
     }
 
     #[test]
@@ -1015,6 +997,26 @@ mod tests {
         let got = parse_heads(&resp, &["feat/a".into(), "fix/b".into()]);
         assert!(matches!(got["feat/a"], github::HeadLookup::Unique(ref p) if p.number == 900));
         assert!(matches!(got["fix/b"], github::HeadLookup::NoMatch));
+    }
+
+    #[test]
+    fn a_missing_alias_is_unavailable_not_no_match() {
+        // A malformed or truncated response is a lookup that could not be
+        // made, not evidence the branch has no PR — the latter is what
+        // `issue end` reads before deleting a worktree.
+        let resp: serde_json::Value = serde_json::from_str(
+            r#"{"data":{"repository":{
+                 "b0":{"totalCount":0,"nodes":[]}}}}"#,
+        )
+        .unwrap();
+        let got = parse_heads(&resp, &["feat/a".into(), "fix/b".into()]);
+        assert!(matches!(got["feat/a"], github::HeadLookup::NoMatch));
+        match &got["fix/b"] {
+            github::HeadLookup::Unavailable(reason) => {
+                assert!(reason.contains("fix/b"), "{reason}");
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
     }
 
     // dirty_stream must report each index exactly once with the same result

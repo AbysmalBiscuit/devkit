@@ -158,13 +158,18 @@ mod tests {
         }
     }
 
-    // Off-TTY the colour helpers pass text through, so assertions are plain.
-    // A `Unique` PR always carries a URL, so the MERGED case may be wrapped in
-    // an OSC 8 hyperlink depending on ambient terminal detection — assert on
-    // the label surviving inside it rather than exact equality.
+    // A `Unique` PR always carries a URL, so `pr_cell` wraps the MERGED case
+    // in a hyperlink whenever the ambient terminal detection says to — which
+    // varies by environment. Compute the expected value through the same
+    // `ui::green`/`ui::link` calls `pr_cell` makes, rather than asserting a
+    // fixed string, so the comparison holds under any detection outcome while
+    // still failing if `pr_cell` stops calling them.
     #[test]
     fn pr_cell_labels() {
-        assert!(pr_cell(&row("MERGED")).contains("MERGED #7"));
+        assert_eq!(
+            pr_cell(&row("MERGED")),
+            ui::link(&ui::green("MERGED #7"), "")
+        );
         assert_eq!(pr_cell(&row("NO_PR")), "no PR");
     }
 

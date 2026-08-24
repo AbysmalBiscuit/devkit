@@ -279,10 +279,11 @@ fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::info_cache::CachedPr) {
     row.reason_not_finished = None;
 }
 
-/// Drop a cached unique PR when the live lookup no longer agrees it is unique.
-/// Replaying it would show one PR beside a verdict reading a contradictory tag.
+/// Reconcile a cache-seeded row against the live lookup. The live answer wins;
+/// the cached PR survives only when the lookup could not be made at all, where
+/// it is the better of the two available answers.
 fn reconcile_cache(row: &mut IssueWorktree, live: &PrStatus) {
-    if !matches!(live, PrStatus::Unique { .. }) {
+    if !matches!(live, PrStatus::Unknown { .. }) {
         row.pr = live.clone();
     }
 }
@@ -437,5 +438,27 @@ mod tests {
         };
         reconcile_cache(&mut r, &live);
         assert!(matches!(r.pr, PrStatus::Unique { number: 7, .. }));
+    }
+
+    #[test]
+    fn a_cached_unique_pr_survives_an_unavailable_live_lookup() {
+        let mut r = row("/a", "lev/eng-1-x", "ENG-1");
+        apply_cached_pr(
+            &mut r,
+            crate::info_cache::CachedPr {
+                number: 7,
+                state: "OPEN".into(),
+                url: "https://github.com/o/r/pull/7".into(),
+            },
+        );
+        let live = PrStatus::Unknown {
+            reason: "GitHub unreachable".into(),
+        };
+        reconcile_cache(&mut r, &live);
+        assert!(
+            matches!(r.pr, PrStatus::Unique { number: 7, .. }),
+            "an unreachable live lookup must not discard the cached PR, got {:?}",
+            r.pr
+        );
     }
 }
