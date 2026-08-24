@@ -15,15 +15,21 @@ fn git(args: &[&str], cwd: &Path) {
     assert!(ok, "git {args:?} failed");
 }
 
-/// A one-commit repo with no remote, whose `devkit.toml` forces `kind`.
-fn fixture(kind: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("devkit-mcp-tracker-{kind}-{}", std::process::id()));
+/// A one-commit repo with no remote, whose `devkit.toml` forces `kind` — or
+/// omits the `[tracker]` table entirely when `kind` is `None`, leaving the
+/// choice to detection.
+fn fixture(kind: Option<&str>) -> PathBuf {
+    let tag = kind.unwrap_or("detect");
+    let dir = std::env::temp_dir().join(format!("devkit-mcp-tracker-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     git(&["init", "-q", "-b", "main"], &dir);
     git(&["config", "user.email", "t@t"], &dir);
     git(&["config", "user.name", "t"], &dir);
+    let table = match kind {
+        Some(k) => format!("\n[tracker]\nkind = \"{k}\"\n"),
+        None => String::new(),
+    };
     std::fs::write(
         dir.join("devkit.toml"),
         format!(
@@ -32,9 +38,7 @@ fn fixture(kind: &str) -> PathBuf {
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"baseline\"\n\
-             \n\
-             [tracker]\n\
-             kind = \"{kind}\"\n"
+             {table}"
         ),
     )
     .unwrap();
@@ -74,7 +78,7 @@ fn the_status_action_reports_the_configured_tracker_kind() {
     unsafe { std::env::remove_var("DEVKIT_CONFIG") };
 
     for kind in ["linear", "none"] {
-        let dir = fixture(kind);
+        let dir = fixture(Some(kind));
         // No worktree matches the filter, so nothing is fetched over the network.
         let report = call(
             "issue.status",
@@ -82,6 +86,29 @@ fn the_status_action_reports_the_configured_tracker_kind() {
         );
         assert!(report["worktrees"].as_array().unwrap().is_empty());
         assert_eq!(report["tracker"]["kind"], kind, "in {}", dir.display());
+        assert_eq!(
+            report["tracker"]["declared"],
+            true,
+            "a config named this tracker, in {}",
+            dir.display()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // No `[tracker]` table: whichever kind detection lands on, nobody declared
+    // it, and the report has to say so — `declared` is what keeps `issue end`
+    // from reading a detected `none` as "no issue state to wait for". The
+    // assertion holds whether or not this machine has a LINEAR_API_KEY.
+    let dir = fixture(None);
+    let report = call(
+        "issue.status",
+        json!({ "root": dir.to_str().unwrap(), "ids": ["NOPE-1"] }),
+    );
+    assert_eq!(
+        report["tracker"]["declared"],
+        false,
+        "detection produced this tracker, in {}",
+        dir.display()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
