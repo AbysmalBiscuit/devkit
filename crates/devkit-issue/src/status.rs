@@ -429,8 +429,11 @@ pub fn gather_with(start: &str, ids: &[String], t: &Resolved) -> Result<StatusRe
 
 /// Local-only status: discovery + dirty checks, with no `gh`/tracker network.
 /// PRs stay `NO_PR` and the state stays unknown; callers (e.g. `issue info
-/// --cache-only`) overlay cached data themselves. Same signature shape as
-/// `gather`, and like it the tracker is detected rather than read from config.
+/// --cache-only`) overlay cached data themselves.
+///
+/// This crate reads no config, so the tracker is detected from `start` rather
+/// than named by one. Detection never yields a declared tracker, which keeps the
+/// state gate closed on every row until a caller overlays real data.
 pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = discover(start, ids)?;
     let t = devkit_common::tracker::resolve(None, Path::new(start));
