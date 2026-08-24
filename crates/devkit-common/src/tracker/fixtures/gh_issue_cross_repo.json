@@ -1,0 +1,7 @@
+{"data":{"repository":{"issue":{
+  "number":6,
+  "closedByPullRequestsReferences":{
+    "totalCount":1,
+    "pageInfo":{"hasNextPage":false},
+    "nodes":[{"number":185,"state":"MERGED","url":"https://github.com/upstream/widget/pull/185",
+              "repository":{"nameWithOwner":"upstream/widget"}}]}}}}}

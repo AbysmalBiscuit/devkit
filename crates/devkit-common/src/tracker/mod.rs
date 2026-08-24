@@ -9,6 +9,7 @@ pub use devkit_config::TrackerKind;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;
+pub mod github;
 pub mod linear;
 pub mod none;
 

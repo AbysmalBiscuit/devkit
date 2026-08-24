@@ -1,0 +1,9 @@
+{"data":{"repository":{"issue":{
+  "title":"Bug: crash on startup",
+  "url":"https://github.com/me/widget/issues/6",
+  "body":"Steps to reproduce...",
+  "state":"OPEN",
+  "stateReason":null,
+  "assignees":{"nodes":[{"login":"contributor"}]},
+  "labels":{"nodes":[{"name":"bug"},{"name":"P1"}]}
+}}}}
