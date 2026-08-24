@@ -47,13 +47,35 @@ pub(crate) fn tree_cell(dirty: bool) -> String {
     }
 }
 
+/// The semantic colour `pr_cell` paints a PR state word — a pure decision,
+/// independent of whether the terminal ends up rendering it. Split out so it
+/// can be asserted directly: every `ui::` colour helper passes text through
+/// unchanged when stdout isn't a terminal, which is always true under
+/// `cargo test`, so nothing about ambient rendering is observable there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrColor {
+    Green,
+    Yellow,
+    Red,
+    Dim,
+}
+
+fn pr_color(state: &str) -> PrColor {
+    match state {
+        "MERGED" => PrColor::Green,
+        "OPEN" => PrColor::Yellow,
+        "CLOSED" => PrColor::Red,
+        _ => PrColor::Dim, // NO_PR | AMBIGUOUS | UNKNOWN
+    }
+}
+
 pub(crate) fn pr_cell(row: &IssueWorktree) -> String {
     let label = pr_label(row);
-    let colored = match row.pr.state_label() {
-        "MERGED" => ui::green(&label),
-        "OPEN" => ui::yellow(&label),
-        "CLOSED" => ui::red(&label),
-        _ => ui::dim(&label), // NO_PR | AMBIGUOUS | UNKNOWN
+    let colored = match pr_color(row.pr.state_label()) {
+        PrColor::Green => ui::green(&label),
+        PrColor::Yellow => ui::yellow(&label),
+        PrColor::Red => ui::red(&label),
+        PrColor::Dim => ui::dim(&label),
     };
     match row.pr.url() {
         Some(u) => ui::link(&colored, u),
@@ -158,19 +180,28 @@ mod tests {
         }
     }
 
-    // A `Unique` PR always carries a URL, so `pr_cell` wraps the MERGED case
-    // in a hyperlink whenever the ambient terminal detection says to — which
-    // varies by environment. Compute the expected value through the same
-    // `ui::green`/`ui::link` calls `pr_cell` makes, rather than asserting a
-    // fixed string, so the comparison holds under any detection outcome while
-    // still failing if `pr_cell` stops calling them.
+    // Under `cargo test` stdout is not a terminal, so every `ui::` colour and
+    // link helper passes its input through unchanged (see
+    // `devkit_common::ui`'s own `color_plain_when_not_a_tty`) — an assertion
+    // built from those same helpers would hold no matter which colour
+    // `pr_cell` picked, or whether it picked one at all. `pr_cell_labels`
+    // therefore only claims what is genuinely observable here: the label
+    // text survives. The colour decision itself is `pr_color`, tested below
+    // without going anywhere near ambient terminal detection.
     #[test]
     fn pr_cell_labels() {
-        assert_eq!(
-            pr_cell(&row("MERGED")),
-            ui::link(&ui::green("MERGED #7"), "")
-        );
+        assert!(pr_cell(&row("MERGED")).contains("MERGED #7"));
         assert_eq!(pr_cell(&row("NO_PR")), "no PR");
+    }
+
+    #[test]
+    fn pr_color_matches_pr_state() {
+        assert_eq!(pr_color("MERGED"), PrColor::Green);
+        assert_eq!(pr_color("OPEN"), PrColor::Yellow);
+        assert_eq!(pr_color("CLOSED"), PrColor::Red);
+        assert_eq!(pr_color("NO_PR"), PrColor::Dim);
+        assert_eq!(pr_color("AMBIGUOUS"), PrColor::Dim);
+        assert_eq!(pr_color("UNKNOWN"), PrColor::Dim);
     }
 
     #[test]
