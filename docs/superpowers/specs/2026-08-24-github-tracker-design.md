@@ -1,7 +1,7 @@
 # The GitHub tracker
 
 **Date:** 2026-08-24
-**Status:** ready to plan, after seven rounds of adversarial cross-model
+**Status:** ready to plan, after eight rounds of adversarial cross-model
 review. See `2026-08-24-github-tracker-review-log.md`.
 **Parent:** `2026-08-23-pluggable-issue-tracker-design.md`, phase 3. That spec's
 phases 1 and 2 shipped. This one supersedes its "The GitHub mapping" section,
@@ -224,11 +224,19 @@ must name the same repository or they are not one seam.
 
 "Repository-scoped" is the whole rule, not a softening of it. `gh pr` and its
 subcommands take `--repo`; `gh auth token`, `gh auth status` and `gh api
-graphql` do not, and devkit uses all three. Authentication commands are not
-repository-scoped and stay unscoped. `gh api graphql` carries the repository the
-only way it can, as query variables, which is the same thing by another spelling
-— the requirement is that no invocation lets the ambient environment choose the
-repository, not that a particular flag appears.
+graphql` do not, and devkit uses all three. `gh api graphql` carries the
+repository the only way it can, as query variables. The requirement is that no
+invocation lets the ambient environment choose the repository, not that a
+particular flag appears.
+
+**The host is part of that, and `--repo owner/repo` does not pin it.** `GH_HOST`
+selects an enterprise host, so an unscoped `gh auth token` can hand back an
+enterprise credential that `github.rs` then sends to `api.github.com` — a token
+disclosed to a host it was not issued for, which is worse than a wrong-repository
+read. Authentication commands are not repository-scoped but they are host-scoped.
+So `--repo` is spelled `github.com/owner/repo`, and `gh api` and `gh auth token`
+carry `--hostname github.com`. GitHub Enterprise is out of scope for this phase;
+naming the host explicitly is what keeps it out rather than silently half-in.
 
 Each field still records whether it was configured, overridden on the command
 line, or defaulted from origin. That provenance is no longer what decides
@@ -380,8 +388,10 @@ wrong at all.
 
 Where a tie survives that rule — the top state group spanning repositories —
 `checkout-pr` refuses and names the candidates rather than guessing, because it
-is about to create a worktree from that answer. `states` and the status report
-are read-only and take the ranked first.
+is about to create a worktree from that answer. `states` takes the ranked first,
+being a state column with no action behind it. The status report does not: it
+carries the ambiguity into the row and leaves the finished verdict closed, the
+same as for a head lookup, because `issue end` reads that verdict.
 
 ### A PR outside `pr_repo`
 
@@ -705,11 +715,15 @@ comes after all of them rather than after the adapter.
    retaining whether it was configured, overridden or defaulted, each validated
    as an `owner/repo` slug where it is resolved, and the origin fallback
    requiring a `github.com` host — every GitHub operation taking it instead of
-   resolving its own, and `--repo` on every `gh` path including `gh pr edit`,
-   with no exemption for an origin-defaulted value. No change to what any
-   lookup answers. **The gate is that a project setting neither key behaves
-   identically**, Linear projects included, since this task alone touches every
-   PR path devkit has.
+   resolving its own, and `--repo github.com/owner/repo` on every `gh pr`
+   command including `gh pr edit`, with no exemption for an origin-defaulted
+   value, plus `--hostname github.com` on `gh api` and `gh auth token`. No
+   change to what any lookup answers. **The gate is that a project setting
+   neither key reaches the same repository it does today**, Linear projects
+   included, since this task alone touches every PR path devkit has. That is
+   "same repository", not "same argument vector": the one intended difference is
+   that an ambient `GH_REPO` or `GH_HOST` no longer redirects anything, which is
+   the point of the task and is asserted rather than waived.
 
    Schema regeneration cannot wait for the documentation task:
    `tests/config_schema.rs` compares the committed schema against the generated
@@ -766,9 +780,15 @@ comes after all of them rather than after the adapter.
    `review finish --pr` keeps winning as it does today and stays a one-run
    override that writes nothing; `review request` gains the URL form, and its
    existing write rule is what makes it a rebind. An explicit locator's
-   `headRefOid` must equal the worktree's `HEAD` or it is refused — and so must
-   a recorded or branch-discovered one, before any external effect and before
-   anything is written — while a merged PR satisfies the finished verdict only
+   `headRefOid` must equal the worktree's `HEAD` or it is refused, and so must a
+   recorded or branch-discovered one. **Where the comparison happens depends on
+   whether the PR already exists.** Mutating an existing PR — adding reviewers,
+   commenting, merging — is gated before the call. A PR being created has no
+   head to compare until it exists, and `checkout-pr` builds the worktree *from*
+   the PR, so neither can be pre-gated; both validate immediately after the
+   call and before anything downstream — before the record is written, before
+   any notification, before hooks — and a mismatched checkout is cleaned up
+   rather than left behind. A merged PR satisfies the finished verdict only
    under the same comparison. A recorded
    PR that no longer resolves reports unknown rather than falling back.
 8. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
@@ -898,9 +918,10 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   worktree's `HEAD` is refused whether it arrived by `--pr`, from the record, or
   from a unique branch lookup. `review finish --pr <n>` still wins
   over both the record and branch discovery and leaves the record unchanged,
-  which is today's contract. A `--pr` naming a PR whose `headRefName` is not the
-  worktree's `HEAD` commit is refused, on both commands and before anything is
-  written, and a squash- or rebase-merged PR still compares equal because
+  which is today's contract. A PR whose `headRefOid` is not the worktree's
+  `HEAD` is refused — before the call when the PR already exists, immediately
+  after it and before any record, notification or hook when it was just created
+  or checked out — and a squash- or rebase-merged PR still compares equal because
   `headRefOid` is the branch head the PR carried, not the commit that landed on
   the base; under `--no-push`, a branch ahead of its remote fails closed. A
   merged PR whose head is not the worktree's `HEAD` does not satisfy the
@@ -920,10 +941,11 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   origin, resolves and works without being made to configure an `issues_repo` it
   never uses; a GitHub operation needing the key that is missing errors naming
   that key.
-- **`--repo` everywhere.** Every `gh` invocation carries `--repo`, asserted on
-  the argument vector, including when the value came from origin — so a `GH_REPO`
-  in the environment cannot make the `gh` half act on a different repository
-  from the one the HTTP half read.
+- **Repository and host on `gh`.** Every `gh pr` invocation carries `--repo
+  github.com/owner/repo`, asserted on the argument vector, including when the
+  value came from origin — so neither `GH_REPO` nor `GH_HOST` can make the `gh`
+  half act on a different repository or host from the one the HTTP half read.
+  `gh api` and `gh auth token` carry `--hostname github.com` and no `--repo`.
 - **Origin host.** A GitLab or Bitbucket origin fails the origin fallback rather
   than defaulting a repository, on a *declared* `github` tracker as well as
   during detection; explicitly configured repositories work with no origin at
@@ -979,9 +1001,10 @@ adapter is network-free under test.
 | `[linear] resolve_pr_links` | Stays, as Linear's own opt-in gate. GitHub's linked issues are a field on a query already being made. |
 | `--pr`'s meaning | One meaning everywhere: use this PR for this run. Rebinding falls out of `review request` recording what it acted on, so `review finish --pr` keeps its one-run contract. |
 | Locator precedence | Explicit `--pr`, then the record, then branch discovery. |
-| Validating an explicit locator | Its `headRefOid` must equal the worktree's `HEAD`, at binding and again where a merged PR would satisfy the verdict. A branch-name match does not prove the PR carries these commits, and same-named branches across forks are the case this design assumes everywhere else. |
+| Validating a PR on an acting path | Its `headRefOid` must equal the worktree's `HEAD` — explicit, recorded or branch-discovered alike — and again where a merged PR would satisfy the verdict. A branch-name match does not prove the PR carries these commits, and same-named branches across forks are the case this design assumes everywhere else. |
+| When that check runs | Before the call for an existing PR; immediately after, and before any record, notification or hook, for one just created or checked out. A PR that does not exist yet has no head to compare. |
 | `--no-push` under that rule | Fails closed. Declining to publish the branch is declining to make it checkable. |
-| `--repo` on `gh` | Always, with no exemption. An origin-defaulted exemption still lets `GH_REPO` split the `gh` half from the HTTP half within one command. |
+| `--repo` on `gh` | On every `gh pr` command, with no origin-defaulted exemption, spelled `github.com/owner/repo`. `gh api` and `gh auth token` take `--hostname github.com` instead. `GH_REPO` must not split the `gh` half from the HTTP half, and `GH_HOST` must not send a token to a host it was not issued for. |
 | Whether both repository keys must resolve | No. Each resolves independently and is required only where used, so a Linear project with a fork workflow sets `pr_repo` alone. |
 | Where the `github.com` host check applies | Every origin fallback, not detection alone. A declared `github` tracker skips detection, and `repo_slug` is host-blind. |
 | Configured repositories in a cache filename | Validated as `owner/repo` where resolved, and every cache-scope component encoded before it reaches a path. |

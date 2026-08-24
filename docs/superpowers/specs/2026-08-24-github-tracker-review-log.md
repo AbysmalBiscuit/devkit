@@ -586,3 +586,63 @@ rounds of edits and asked this round to look for.
   transitions looks entirely normal.
 
 Seven rounds, thirty-five findings, none rejected. This revision is unreviewed.
+
+## Round 8: Codex
+
+`VERDICT: REVISE`. Three findings, down from five; the ranking and independent
+repository resolution are called sound.
+
+1. **`GH_HOST` can still select the host.** `--repo owner/repo` leaves the host
+   unspecified, and an unscoped `gh auth token` can return an enterprise token
+   that `github.rs:43` then sends to `api.github.com`, disclosing a credential
+   to the wrong host. *Fix:* spell `--repo` as `github.com/owner/repo` and pass
+   `--hostname github.com` to `gh api` and `gh auth token`.
+2. **The OID-before-any-external-effect gate is impossible for two paths.**
+   `review request` must create a PR before that PR has a `headRefOid`
+   (`request.rs:190`), and `checkout-pr` builds the worktree from the PR
+   (`checkout.rs:358`), so neither can be pre-gated. Task 7 requires validation
+   before every external effect, so its gate cannot land as written. *Fix:*
+   pre-gate mutations of an existing PR; validate a newly created or checked-out
+   one immediately afterward but before recording, notification or hooks,
+   cleaning up a mismatched checkout.
+3. **Executable sections still assert superseded behavior:** status "takes the
+   ranked first", task 1 requiring `--repo` on every `gh` path and identical
+   unconfigured behavior, the acceptance list retaining the `headRefName` check
+   and the every-`gh` `--repo` test, and the decisions table still saying
+   explicit-only OID validation and unconditional `--repo`. *Fix:* restate every
+   task, test and decision against the final rules.
+
+### Claude's response
+
+All three accepted.
+
+- **Finding 1 accepted.** I closed the repository half of the ambient-environment
+  hole across two rounds and never asked about the host. `GH_HOST` is the worse
+  one: a wrong repository is a wrong read, a wrong host is a credential sent
+  somewhere it was not issued for. `--repo` is spelled `github.com/owner/repo`
+  and the auth and API commands take `--hostname github.com`. GitHub Enterprise
+  stays out of scope, and naming the host is what keeps it out rather than
+  silently half-in.
+- **Finding 2 accepted.** I wrote "before any external effect" as though every
+  PR exists before it is acted on. A PR being created has no head until it
+  exists, and `checkout-pr` derives the worktree from the PR, so the gate was
+  unachievable for exactly the two paths that build things. The comparison now
+  splits by whether the PR already exists: before the call for a mutation,
+  immediately after and before any record, notification or hook for a creation
+  or checkout, with a mismatched checkout cleaned up.
+- **Finding 3 accepted, and my round-7 sweep for this class was incomplete.**
+  Round 7 found three stale assertions and I fixed those three rather than
+  sweeping for the rest; five more remained, one of them a mangled half-edit
+  reading "`headRefName` is not the worktree's `HEAD` commit". Design prose and
+  the executable sections drifting apart is how a reviewed spec gets implemented
+  wrong, and finding it twice means the sweep, not the spot fix, was the job.
+  Task 1's gate also needed restating: it now asserts the same *repository*
+  rather than the same argument vector, since the one intended difference is
+  that an ambient `GH_REPO` or `GH_HOST` no longer redirects anything.
+
+Eight rounds, thirty-eight findings, none rejected. The review stops here by
+decision, not by convergence: round 8 returned three findings rather than five
+and conceded two areas as sound, but it did not approve. Two of its three were
+internal consistency rather than new design defects, which is where a spec this
+heavily edited fails. **This revision is unreviewed**, and the stale-assertion
+class is the one to re-check before implementing.
