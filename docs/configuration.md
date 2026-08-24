@@ -454,12 +454,19 @@ reads it, as does the `issue.status` MCP action. Detection is what decides only
 when no config resolves — a directory outside any devkit project, or a config
 that fails to load, still gets a tracker rather than an error.
 
-Without a tracker, `issue` still creates worktrees, tracks PRs, and reaches
+With `kind = "none"`, `issue` still creates worktrees, tracks PRs, and reaches
 FINISHED on a merged PR and a clean tree, as long as the worktree carries an
-issue id; the STATE column reads `no tracker`. With one, the verdict also waits
-on the issue reaching a completed state, and a tracker that answered with
-nothing for that issue holds the verdict open rather than promoting the
-worktree.
+issue id; the STATE column reads `no tracker`. Under any other tracker the
+verdict also waits on the issue reaching a completed state, and a tracker that
+answered with nothing for that issue holds the verdict open rather than
+promoting the worktree.
+
+Detection landing on no tracker holds the verdict open too. Declaring
+`kind = "none"` says the project has no issue states to wait for; detection
+finding neither a key nor a GitHub remote says devkit found nothing to ask,
+which is the same silence a tracker with no key gives. `issue end` removes
+worktrees and deletes their branches, so it never acts on an unanswered
+question.
 
 Some Linear work sits outside the tracker seam and needs `LINEAR_API_KEY`
 whatever the tracker is: `issue setup`'s title-derived slug and summary file,

@@ -153,12 +153,8 @@ fn progress_msg(prs_done: bool, states_done: bool) -> String {
 /// to stdout exactly as the silent gather would.
 pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<StatusReport> {
     let d = st::discover(start, ids)?;
-    let tracker = crate::tracker::configured(config, start);
-    let info = TrackerInfo {
-        kind: tracker.kind(),
-        ready: tracker.ready(),
-        link_base: None,
-    };
+    let resolved = crate::tracker::configured(config, start);
+    let info = TrackerInfo::of(&resolved);
     if d.is_empty() {
         // No worktrees means no PR fetch — the report is empty either way.
         return Ok(st::assemble(
@@ -208,7 +204,7 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
         {
             let tx = tx.clone();
             let ids_v = &ids_v;
-            let tracker = tracker.as_ref();
+            let tracker = resolved.tracker.as_ref();
             s.spawn(move || {
                 let (states, link_base) = std::thread::scope(|s2| {
                     let stt = s2.spawn(|| tracker.states(ids_v));
@@ -292,6 +288,7 @@ mod tests {
         TrackerInfo {
             kind: TrackerKind::Linear,
             ready,
+            declared: true,
             link_base: None,
         }
     }

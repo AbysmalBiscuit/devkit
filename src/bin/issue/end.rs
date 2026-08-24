@@ -192,7 +192,7 @@ pub fn run(
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
         let report = steps.during_result("Fetching PR + issue status…", || {
-            gather_with(start, &[], tracker.as_ref())
+            gather_with(start, &[], &tracker)
         })?;
         render(&report, false);
         let t = select_explicit(&report.worktrees, ids);
@@ -207,7 +207,7 @@ pub fn run(
         t
     } else {
         let report = steps.during_result("Fetching PR + issue status…", || {
-            gather_with(start, ids, tracker.as_ref())
+            gather_with(start, ids, &tracker)
         })?;
         render(&report, false);
         if pr_only {

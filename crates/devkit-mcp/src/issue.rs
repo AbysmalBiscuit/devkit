@@ -48,7 +48,7 @@ fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let root = a.root.unwrap_or_else(|| ".".to_string());
     let kind = project_config(&root).and_then(|l| l.config.tracker.kind);
     let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root));
-    let report = status::gather_with(&root, &a.ids, tracker.as_ref())?;
+    let report = status::gather_with(&root, &a.ids, &tracker)?;
     Ok(serde_json::to_value(report)?)
 }
 

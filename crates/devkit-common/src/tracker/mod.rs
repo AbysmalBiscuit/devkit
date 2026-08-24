@@ -144,6 +144,19 @@ pub trait Tracker: Send + Sync {
     fn check(&self) -> Result<String>;
 }
 
+/// A tracker and how devkit arrived at it.
+pub struct Resolved {
+    pub tracker: Box<dyn Tracker>,
+    /// Whether this tracker is the project's own answer rather than a stand-in
+    /// devkit fell back to. It is the difference between "this project has no
+    /// issue states to wait for" and "devkit found no tracker to ask" — two
+    /// situations that both produce a `TrackerKind::None` and must not be
+    /// treated alike.
+    pub declared: bool,
+    /// Why this tracker and not another, phrased for `devkit doctor`.
+    pub reason: String,
+}
+
 /// The tracker for this project. An explicit `kind` always wins; otherwise a
 /// resolvable Linear key, then a GitHub `origin` remote, then no tracker.
 ///
@@ -151,32 +164,48 @@ pub trait Tracker: Send + Sync {
 /// `LINEAR_API_KEY` resolves to Linear for every project, so a GitHub project on
 /// such a machine must set `kind` explicitly. What detection buys is that every
 /// config predating `[tracker]` keeps behaving exactly as it did.
-///
-/// This crate has no GitHub implementation yet, so that arm falls back to
-/// `NoneTracker`. It warns only when the caller named GitHub explicitly —
-/// detection choosing it is not something the user did wrong, and the read-only
-/// paths that resolve a tracker per run would otherwise print on every call.
-pub fn resolve(kind: Option<TrackerKind>, cwd: &Path) -> Box<dyn Tracker> {
-    let explicitly_github = kind == Some(TrackerKind::Github);
-    match kind.unwrap_or_else(|| detect(cwd)) {
-        TrackerKind::Linear => Box::new(linear::LinearTracker::new(crate::secrets::resolve(
-            "LINEAR_API_KEY",
-        ))),
-        TrackerKind::Github => {
-            if explicitly_github {
-                eprintln!(
-                    "devkit: the GitHub tracker is not implemented yet — running without one"
-                );
-            }
-            Box::new(none::NoneTracker)
-        }
-        TrackerKind::None => Box::new(none::NoneTracker),
+pub fn resolve(kind: Option<TrackerKind>, cwd: &Path) -> Resolved {
+    resolve_with_key(kind, cwd, crate::secrets::resolve("LINEAR_API_KEY"))
+}
+
+/// `resolve` with the Linear key supplied instead of read from the environment,
+/// so detection can be exercised whatever the ambient `LINEAR_API_KEY` holds.
+fn resolve_with_key(kind: Option<TrackerKind>, cwd: &Path, key: Option<String>) -> Resolved {
+    let declared = kind.is_some();
+    match kind.unwrap_or_else(|| detect(cwd, key.as_deref())) {
+        TrackerKind::Linear => Resolved {
+            tracker: Box::new(linear::LinearTracker::new(key)),
+            declared,
+            reason: if declared {
+                "[tracker] kind = \"linear\"".into()
+            } else {
+                "detected: LINEAR_API_KEY resolves".into()
+            },
+        },
+        // There is no GitHub implementation, so this arm hands back the
+        // no-tracker stand-in. It is never `declared`: what devkit can supply is
+        // not the tracker that was asked for, and reading its empty answers as
+        // the project's own would drop every issue-state gate.
+        TrackerKind::Github => Resolved {
+            tracker: Box::new(none::NoneTracker),
+            declared: false,
+            reason: "detected: a GitHub origin remote, which no tracker reads yet".into(),
+        },
+        TrackerKind::None => Resolved {
+            tracker: Box::new(none::NoneTracker),
+            declared,
+            reason: if declared {
+                "[tracker] kind = \"none\"".into()
+            } else {
+                "detected: no LINEAR_API_KEY and no GitHub origin remote".into()
+            },
+        },
     }
 }
 
 /// Detection order, used only when `[tracker] kind` is absent.
-fn detect(cwd: &Path) -> TrackerKind {
-    if crate::secrets::resolve("LINEAR_API_KEY").is_some() {
+fn detect(cwd: &Path, linear_key: Option<&str>) -> TrackerKind {
+    if linear_key.is_some() {
         return TrackerKind::Linear;
     }
     if crate::github::repo_slug(&cwd.to_string_lossy()).is_ok() {
@@ -242,7 +271,7 @@ mod tests {
 
     #[test]
     fn the_none_tracker_answers_empty_and_is_never_ready() {
-        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere"));
+        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere")).tracker;
         assert_eq!(t.kind(), TrackerKind::None);
         assert!(!t.ready());
         assert!(t.states(&["ENG-1".into()]).is_empty());
@@ -255,10 +284,31 @@ mod tests {
 
     #[test]
     fn the_none_tracker_passes_an_id_through_unchanged() {
-        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere"));
+        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere")).tracker;
         let r = t.issue_ref("  eng-1  ");
         assert_eq!(r.id, "eng-1");
         assert_eq!(r.slug, None);
+    }
+
+    /// Detection with nothing to go on — no Linear key, and a directory with
+    /// no git remote — lands on `None`, which must not read as the project
+    /// declaring it has no tracker. The key is passed in rather than read from
+    /// the environment, so an ambient `LINEAR_API_KEY` cannot decide this.
+    #[test]
+    fn a_tracker_detection_fell_back_to_is_not_declared() {
+        let r = resolve_with_key(None, Path::new("/nonexistent-devkit-tracker-probe"), None);
+        assert_eq!(r.tracker.kind(), TrackerKind::None);
+        assert!(!r.declared);
+    }
+
+    #[test]
+    fn a_named_none_is_declared() {
+        let r = resolve(
+            Some(TrackerKind::None),
+            Path::new("/nonexistent-devkit-tracker-probe"),
+        );
+        assert_eq!(r.tracker.kind(), TrackerKind::None);
+        assert!(r.declared);
     }
 
     /// One directory, two explicit kinds, two different trackers: only the
@@ -268,11 +318,11 @@ mod tests {
     fn the_same_directory_yields_whichever_kind_is_named() {
         let dir = Path::new("/nonexistent-devkit-tracker-probe");
         assert_eq!(
-            resolve(Some(TrackerKind::Linear), dir).kind(),
+            resolve(Some(TrackerKind::Linear), dir).tracker.kind(),
             TrackerKind::Linear
         );
         assert_eq!(
-            resolve(Some(TrackerKind::None), dir).kind(),
+            resolve(Some(TrackerKind::None), dir).tracker.kind(),
             TrackerKind::None
         );
     }

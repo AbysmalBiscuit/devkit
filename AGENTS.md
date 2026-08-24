@@ -147,7 +147,10 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   whose empty answers are how `issue` degrades. There is no GitHub
   implementation, so that arm also lands on `NoneTracker`. `resolve` takes an
   explicit kind that wins over detection; `[tracker] kind` is where it comes
-  from. Config loading belongs to the callers that have it — the `issue`
+  from. It returns a `Resolved`, whose `declared` flag says whether the project
+  named this tracker or devkit fell back to it — the finished verdict skips the
+  issue-state gate only for a *declared* `TrackerKind::None`, because devkit
+  finding no tracker is silence, not an answer. Config loading belongs to the callers that have it — the `issue`
   binary's `crate::tracker::configured` and the MCP `issue.status` action —
   and a config that does not load degrades to detection rather than failing the
   command. `devkit-issue` reads no config: `status::gather_local` detects, and

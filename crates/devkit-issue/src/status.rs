@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_json, git};
 use devkit_common::github;
-use devkit_common::tracker::{State, StateKind, Tracker, TrackerKind};
+use devkit_common::tracker::{Resolved, State, StateKind, TrackerKind};
 use devkit_common::worktree;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -56,9 +56,27 @@ pub struct TrackerInfo {
     /// Configured and able to authenticate. False means the state column is
     /// blank because there is nothing to ask, not because the issue is unknown.
     pub ready: bool,
+    /// Whether this tracker is the project's own answer rather than the
+    /// stand-in devkit falls back to when nothing resolves. Only meaningful for
+    /// `TrackerKind::None`, where it separates a project that has no tracker
+    /// from devkit having found none.
+    pub declared: bool,
     /// The tracker's issue URL built with an empty id, so
     /// `format!("{link_base}{id}")` is that issue's URL.
     pub link_base: Option<String>,
+}
+
+impl TrackerInfo {
+    /// The report's tracker row for a resolved tracker. `link_base` starts
+    /// absent: it costs a round trip, so callers fill it once they have asked.
+    pub fn of(r: &Resolved) -> TrackerInfo {
+        TrackerInfo {
+            kind: r.tracker.kind(),
+            ready: r.tracker.ready(),
+            declared: r.declared,
+            link_base: None,
+        }
+    }
 }
 
 /// The full status snapshot for a set of worktrees.
@@ -323,12 +341,13 @@ pub fn label(kind: TrackerKind) -> &'static str {
 
 /// None when finished; otherwise a short reason it is not.
 ///
-/// The state gate has three shapes. A project whose tracker kind is
-/// `TrackerKind::None` has no state to wait for, so its verdict rests on the PR
-/// and a clean tree. A tracker that answered gates on the issue having reached a
-/// completed state. A tracker that is configured but did not answer holds the
-/// gate open, so an unset key or an unreachable API never promotes a worktree to
-/// finished.
+/// The state gate has four shapes. A project that declared it has no tracker
+/// has no state to wait for, so its verdict rests on the PR and a clean tree. A
+/// tracker that answered gates on the issue having reached a completed state. A
+/// tracker that is configured but did not answer holds the gate open, so an
+/// unset key or an unreachable API never promotes a worktree to finished — and
+/// so does the no-tracker stand-in devkit falls back to, which is devkit having
+/// found nothing to ask rather than the project saying there is nothing.
 ///
 /// With `pr_only` both the state and issue-id gates are dropped (finished = PR
 /// merged + clean), so repos whose branches carry no issue id still qualify.
@@ -348,9 +367,12 @@ pub fn reason_not_finished(
             "no PR".into()
         });
     }
-    // A tracker-less project has no state to wait for; every other kind gates on
-    // the issue's state, and says so when it could not read one.
-    if !pr_only && tracker.kind != TrackerKind::None {
+    // A project that declared it has no tracker has no state to wait for; every
+    // other tracker gates on the issue's state and says so when it could not
+    // read one — the fallback stand-in included, since it stands in for a
+    // tracker devkit could not resolve.
+    let nothing_to_wait_for = tracker.kind == TrackerKind::None && tracker.declared;
+    if !pr_only && !nothing_to_wait_for {
         match wt.state.as_ref() {
             Some(s) if s.kind != StateKind::Completed => {
                 bits.push(format!("{} {}", label(tracker.kind), s.name))
@@ -375,13 +397,10 @@ pub fn reason_not_finished(
 /// output (the CLI re-orchestrates the same pieces with bars). This crate reads
 /// no config, so the caller that loaded one resolves the tracker and injects it;
 /// tests inject a fake.
-pub fn gather_with(start: &str, ids: &[String], t: &dyn Tracker) -> Result<StatusReport> {
+pub fn gather_with(start: &str, ids: &[String], t: &Resolved) -> Result<StatusReport> {
     let d = discover(start, ids)?;
-    let info = TrackerInfo {
-        kind: t.kind(),
-        ready: t.ready(),
-        link_base: None,
-    };
+    let info = TrackerInfo::of(t);
+    let t = t.tracker.as_ref();
     if d.is_empty() {
         // No worktrees means no ids to look up and no rows to link.
         return Ok(assemble(d, Vec::new(), Prs::empty(), HashMap::new(), info));
@@ -421,11 +440,7 @@ pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
         dirty,
         Prs::empty(),
         HashMap::new(),
-        TrackerInfo {
-            kind: t.kind(),
-            ready: t.ready(),
-            link_base: None,
-        },
+        TrackerInfo::of(&t),
     ))
 }
 
@@ -448,6 +463,18 @@ mod tests {
         TrackerInfo {
             kind,
             ready,
+            declared: true,
+            link_base: None,
+        }
+    }
+
+    /// The stand-in devkit falls back to when nothing resolved: kind `None`,
+    /// but the project never asked for it.
+    fn fallback_none() -> TrackerInfo {
+        TrackerInfo {
+            kind: TrackerKind::None,
+            ready: false,
+            declared: false,
             link_base: None,
         }
     }
@@ -515,6 +542,25 @@ mod tests {
     }
 
     #[test]
+    fn with_a_fallback_tracker_a_merged_clean_worktree_is_not_finished() {
+        let report = assemble(
+            discovered("ENG-6", "lev/fallback-branch"),
+            vec![false],
+            Prs::for_test(vec![pr(14, "MERGED", "lev/fallback-branch")]),
+            HashMap::new(),
+            fallback_none(),
+        );
+        let row = &report.worktrees[0];
+        assert!(!row.finished);
+        assert_eq!(
+            row.reason_not_finished.as_deref(),
+            Some("no tracker key"),
+            "landing on the no-tracker stand-in means devkit found no tracker to \
+             ask, which holds the gate exactly as an unreadable one does"
+        );
+    }
+
+    #[test]
     fn with_a_tracker_and_no_key_a_merged_clean_worktree_is_not_finished() {
         let report = assemble(
             discovered("ENG-4", "lev/other-branch"),
@@ -544,6 +590,7 @@ mod tests {
         let info = TrackerInfo {
             kind: TrackerKind::Linear,
             ready: true,
+            declared: true,
             link_base: Some("https://linear.app/acme/issue/".into()),
         };
         let report = assemble(d, vec![false], prs, states, info);

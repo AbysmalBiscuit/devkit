@@ -1,6 +1,6 @@
 //! Which tracker this project's commands talk to.
 
-use devkit_common::tracker::Tracker;
+use devkit_common::tracker::Resolved;
 use devkit_ports::load;
 use std::path::Path;
 
@@ -8,7 +8,7 @@ use std::path::Path;
 /// resolves. A project without a `devkit.toml` — or with one that fails to
 /// load — still gets its answer from detection: the tracker choice must never
 /// be what fails a command that would otherwise work.
-pub fn configured(config: Option<&str>, start: &str) -> Box<dyn Tracker> {
+pub fn configured(config: Option<&str>, start: &str) -> Resolved {
     let dir = Path::new(start);
     let kind = load::load(config.map(Path::new), dir)
         .ok()
@@ -54,7 +54,7 @@ mod tests {
             let path = dir.join(format!("{named}.toml"));
             write_config(&path, named);
             assert_eq!(
-                configured(path.to_str(), start).kind(),
+                configured(path.to_str(), start).tracker.kind(),
                 kind,
                 "config naming {named}"
             );

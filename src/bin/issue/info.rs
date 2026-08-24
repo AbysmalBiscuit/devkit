@@ -2,7 +2,7 @@ use crate::triage::render;
 use anyhow::Result;
 use devkit_common::cmd::git;
 use devkit_common::livetable::{Cell, LiveTable};
-use devkit_common::tracker::{State, Tracker};
+use devkit_common::tracker::{Resolved, State};
 use devkit_issue::status::{self as st, IssueWorktree, StatusReport, TrackerInfo};
 use std::collections::HashMap;
 use std::path::Path;
@@ -62,12 +62,9 @@ pub fn run(
     // `status` gather does.
     let d = st::discover(start, &[])?;
     let top = current_top(start);
-    let tracker = crate::tracker::configured(config, start);
-    let mut info = TrackerInfo {
-        kind: tracker.kind(),
-        ready: tracker.ready(),
-        link_base: None,
-    };
+    let resolved = crate::tracker::configured(config, start);
+    let tracker = resolved.tracker.as_ref();
+    let mut info = TrackerInfo::of(&resolved);
 
     let (mut row, discovered) = match pick_index(d.rows(), selector, top.as_deref()) {
         Some(i) => {
@@ -96,7 +93,7 @@ pub fn run(
             row.reason_not_finished = reason;
         }
     } else if discovered {
-        info.link_base = live_enrich(&mut row, &d, tracker.as_ref(), !json)?;
+        info.link_base = live_enrich(&mut row, &d, &resolved, !json)?;
 
         if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
             // pr_number and pr_url are set together, so both-Some is the normal
@@ -138,9 +135,10 @@ pub fn run(
 fn live_enrich(
     row: &mut IssueWorktree,
     d: &st::Discovered,
-    t: &dyn Tracker,
+    resolved: &Resolved,
     render: bool,
 ) -> Result<Option<String>> {
+    let t = resolved.tracker.as_ref();
     let mut lt = if render {
         LiveTable::new("ISSUE WORKTREES", &crate::triage::HEADERS, 1)
     } else {
@@ -160,11 +158,7 @@ fn live_enrich(
     let mut link_base = None;
     // The verdict never reads the link base, so it can be computed the moment
     // the PR and state land — before the link base has arrived.
-    let verdict_tracker = TrackerInfo {
-        kind: t.kind(),
-        ready: t.ready(),
-        link_base: None,
-    };
+    let verdict_tracker = TrackerInfo::of(resolved);
     let looped: Result<()> = std::thread::scope(|s| {
         let (tx, rx) = mpsc::channel::<Update>();
         {

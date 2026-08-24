@@ -1,5 +1,5 @@
-use devkit_common::tracker::TrackerKind;
 use devkit_common::tracker::fake::FakeTracker;
+use devkit_common::tracker::{Resolved, TrackerKind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -72,10 +72,15 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
     let base = fixture_repo("gw");
     let mut t = FakeTracker::with_states([]);
     t.kind = TrackerKind::None;
+    let injected = Resolved {
+        tracker: Box::new(t),
+        declared: true,
+        reason: "chosen by this test".into(),
+    };
     let report = devkit_issue::status::gather_with(
         base.join("main").to_str().unwrap(),
         &["NOPE-1".into()],
-        &t,
+        &injected,
     )
     .unwrap();
     assert!(report.worktrees.is_empty());
