@@ -23,16 +23,23 @@ fn a_relative_config_path_resolves_like_the_discovered_one() {
     let proj = tmp.path().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
     std::fs::write(proj.join("devkit.toml"), BODY).unwrap();
-    let expected = tmp
-        .path()
+
+    // Every spelling here comes from the directory the process reports rather
+    // than the one `tempfile` handed back: macOS resolves a `/var/folders/...`
+    // temp dir through the `/private/var` symlink once it is the current
+    // directory, so a `tmp`-derived expectation would name a path the relative
+    // resolutions never produce.
+    std::env::set_current_dir(&proj).unwrap();
+    let proj = std::env::current_dir().unwrap();
+    let expected = proj
+        .parent()
+        .unwrap()
         .join("proj-worktrees")
         .to_string_lossy()
         .into_owned();
 
     let (discovered, _) = devkit_config::resolve(None, &proj).unwrap();
     assert_eq!(discovered.defaults.worktree_root, expected);
-
-    std::env::set_current_dir(&proj).unwrap();
 
     let (explicit, prov) = devkit_config::resolve(Some(Path::new("devkit.toml")), &proj).unwrap();
     assert_eq!(
