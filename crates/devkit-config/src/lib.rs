@@ -628,11 +628,20 @@ fn absolutize(p: &Path) -> Result<PathBuf> {
     Ok(normalize_lexically(&cwd.join(p)))
 }
 
+/// The user's home directory. Windows sets `USERPROFILE` and not `HOME`, so a
+/// `~` path and the personal config layer would both go missing there on `HOME`
+/// alone. Matches what `devkit-common`'s `paths` resolves.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|s| !s.is_empty()))
+        .map(PathBuf::from)
+}
+
 /// The personal fallback config layer (`~/.config/devkit/config.toml`).
 /// Public so callers can tell a project-level layer from this global one.
 pub fn home_config_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".config/devkit/config.toml"))
+    Some(home_dir()?.join(".config/devkit/config.toml"))
 }
 
 /// The `[config]` table. Read straight off the raw layer by `is_root_layer`
@@ -931,9 +940,9 @@ fn resolve_defaults(cfg: &mut Config, origin: &HashMap<String, PathBuf>) -> Resu
 
 pub fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/")
-        && let Some(h) = std::env::var_os("HOME")
+        && let Some(h) = home_dir()
     {
-        return PathBuf::from(h).join(rest);
+        return h.join(rest);
     }
     PathBuf::from(p)
 }
@@ -1952,7 +1961,7 @@ steps = [
         );
         let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, ABS_W);
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        let home = home_dir().expect("a home directory to expand `~` against");
         assert_eq!(
             cfg.defaults.baseline_path,
             home.join("wt").join("_baseline").to_string_lossy()
