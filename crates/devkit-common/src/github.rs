@@ -62,26 +62,67 @@ fn bearer() -> Result<String> {
         .context("no GitHub token (set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`)")
 }
 
-/// POST a raw GraphQL query to `api.github.com/graphql`. The response envelope
-/// is returned whole (`{ "data": … }`); a non-empty `errors` array is an error.
-pub fn graphql(query: &str) -> Result<Value> {
+/// POST a raw GraphQL query to `api.github.com/graphql`, returning the
+/// response envelope whole (`{ "data": …, "errors": … }`) with no error
+/// handling of its own — both [`graphql`] and [`graphql_partial`] apply their
+/// own acceptance rule to the same request.
+fn graphql_request(query: &str) -> Result<Value> {
     let _span = crate::timing::io_span("github graphql", "graphql").entered();
-    let v: Value = agent()
+    Ok(agent()
         .post(&format!("{API}/graphql"))
         .set("Authorization", &bearer()?)
         .set("User-Agent", UA)
         .send_json(ureq::json!({ "query": query }))?
-        .into_json()?;
+        .into_json()?)
+}
+
+fn graphql_error_message(v: &Value) -> &str {
+    v.get("errors")
+        .and_then(|e| e.as_array())
+        .and_then(|e| e.first())
+        .and_then(|e| e["message"].as_str())
+        .unwrap_or("unknown GraphQL error")
+}
+
+/// POST a raw GraphQL query to `api.github.com/graphql`. The response envelope
+/// is returned whole (`{ "data": … }`); a non-empty `errors` array is an error.
+pub fn graphql(query: &str) -> Result<Value> {
+    let v = graphql_request(query)?;
     if let Some(errors) = v.get("errors").and_then(|e| e.as_array())
         && !errors.is_empty()
     {
-        let msg = errors
-            .first()
-            .and_then(|e| e["message"].as_str())
-            .unwrap_or("unknown GraphQL error");
-        anyhow::bail!("GitHub GraphQL error: {msg}");
+        anyhow::bail!("GitHub GraphQL error: {}", graphql_error_message(&v));
     }
     Ok(v)
+}
+
+/// Whether a GraphQL response envelope is a usable answer: no errors at all,
+/// or every error is a `NOT_FOUND` alongside real `data`. An aliased batch
+/// reports one missing id this way while returning real data for the rest; an
+/// error with no `type`, a mix of `NOT_FOUND` and another error class, or
+/// `NOT_FOUND` with `data` absent or null, is still a hard failure.
+fn accepts_partial(v: &Value) -> bool {
+    match v.get("errors").and_then(|e| e.as_array()) {
+        None => true,
+        Some(errors) if errors.is_empty() => true,
+        Some(errors) => {
+            let all_not_found = errors
+                .iter()
+                .all(|e| e.get("type").and_then(|t| t.as_str()) == Some("NOT_FOUND"));
+            all_not_found && v.get("data").is_some_and(|d| !d.is_null())
+        }
+    }
+}
+
+/// A GraphQL response whose every error is a `NOT_FOUND` is a successful
+/// partial answer: an aliased batch reports one missing id that way while
+/// returning real data for the rest. Any other error class still fails.
+pub fn graphql_partial(query: &str) -> Result<Value> {
+    let v = graphql_request(query)?;
+    if accepts_partial(&v) {
+        return Ok(v);
+    }
+    anyhow::bail!("GitHub GraphQL error: {}", graphql_error_message(&v));
 }
 
 /// GET `{API}{path}`. `Ok(Some(json))` on 2xx, `Ok(None)` on 404 (a clean
@@ -648,6 +689,46 @@ pub fn pr_timeline(slug: &str, qualifier: &str, max: usize) -> Result<Vec<PrTime
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn accepts_partial_admits_an_errors_free_response() {
+        assert!(accepts_partial(&json!({ "data": { "a": 1 } })));
+    }
+
+    #[test]
+    fn accepts_partial_admits_an_all_not_found_response_with_data() {
+        assert!(accepts_partial(&json!({
+            "data": { "repository": { "i0": { "state": "CLOSED" }, "i1": null } },
+            "errors": [{ "type": "NOT_FOUND", "path": ["repository", "i1"] }]
+        })));
+    }
+
+    #[test]
+    fn accepts_partial_rejects_a_mix_of_not_found_and_another_error() {
+        assert!(!accepts_partial(&json!({
+            "data": { "a": 1 },
+            "errors": [
+                { "type": "NOT_FOUND", "path": ["repository", "i1"] },
+                { "type": "FORBIDDEN", "path": ["repository", "i0"] }
+            ]
+        })));
+    }
+
+    #[test]
+    fn accepts_partial_rejects_an_error_with_no_type() {
+        assert!(!accepts_partial(&json!({
+            "data": { "a": 1 },
+            "errors": [{ "message": "something went wrong" }]
+        })));
+    }
+
+    #[test]
+    fn accepts_partial_rejects_all_not_found_with_null_data() {
+        assert!(!accepts_partial(&json!({
+            "data": null,
+            "errors": [{ "type": "NOT_FOUND", "path": ["repository"] }]
+        })));
+    }
 
     #[test]
     fn pr_number_parsed_from_url() {

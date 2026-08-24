@@ -1,0 +1,14 @@
+{
+  "data": {
+    "repository": {
+      "issue": {
+        "timelineItems": {
+          "pageInfo": { "hasNextPage": true, "endCursor": "cursorY" },
+          "nodes": [
+            { "__typename": "ClosedEvent", "createdAt": "2026-03-01T00:00:00Z", "stateReason": "COMPLETED" }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -3,4 +3,10 @@
   "closedByPullRequestsReferences":{
     "totalCount":0,
     "pageInfo":{"hasNextPage":false},
-    "nodes":[]}}}}}
+    "nodes":[]},
+  "timelineItems":{
+    "pageInfo":{"hasNextPage":false},
+    "nodes":[
+      {"__typename":"CrossReferencedEvent",
+       "source":{"__typename":"Issue","number":42}}
+    ]}}}}}

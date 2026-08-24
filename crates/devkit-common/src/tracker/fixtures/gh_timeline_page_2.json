@@ -1,0 +1,14 @@
+{
+  "data": {
+    "repository": {
+      "issue": {
+        "timelineItems": {
+          "pageInfo": { "hasNextPage": false, "endCursor": null },
+          "nodes": [
+            { "__typename": "ReopenedEvent", "createdAt": "2026-03-02T00:00:00Z" }
+          ]
+        }
+      }
+    }
+  }
+}

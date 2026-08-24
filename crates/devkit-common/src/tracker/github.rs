@@ -38,8 +38,8 @@ pub fn issue_query(slug: &str, number: u64) -> String {
     format!(
         r#"query {{ repository(owner: {o}, name: {n}) {{ issue(number: {number}) {{
              title url body state stateReason
-             assignees(first: 10) {{ nodes {{ login }} }}
-             labels(first: 20) {{ nodes {{ name }} }}
+             assignees(first: 10) {{ pageInfo {{ hasNextPage }} nodes {{ login }} }}
+             labels(first: 20) {{ pageInfo {{ hasNextPage }} nodes {{ name }} }}
            }} }} }}"#,
         o = serde_json::Value::from(owner),
         n = serde_json::Value::from(name),
@@ -48,6 +48,10 @@ pub fn issue_query(slug: &str, number: u64) -> String {
 
 /// The details from an `issue_query` response. `None` when the repository or
 /// issue does not exist.
+///
+/// Neither `assignees` nor `labels` is paginated: a connection truncated by
+/// its window reads as a partial list with `…` appended, rather than as a
+/// complete one that happens to be short.
 pub fn parse_issue(resp: &serde_json::Value, id: &str) -> Option<IssueDetails> {
     let node = &resp["data"]["repository"]["issue"];
     let title = node["title"].as_str()?.to_string();
@@ -55,19 +59,31 @@ pub fn parse_issue(resp: &serde_json::Value, id: &str) -> Option<IssueDetails> {
         node["state"].as_str().unwrap_or(""),
         node["stateReason"].as_str(),
     );
-    let assignee = node["assignees"]["nodes"]
+    let mut assignees: Vec<&str> = node["assignees"]["nodes"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|n| n["login"].as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let labels = node["labels"]["nodes"]
+        .collect();
+    if node["assignees"]["pageInfo"]["hasNextPage"]
+        .as_bool()
+        .unwrap_or(false)
+    {
+        assignees.push("…");
+    }
+    let assignee = assignees.join(", ");
+    let mut labels: Vec<String> = node["labels"]["nodes"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|n| n["name"].as_str().map(String::from))
         .collect();
+    if node["labels"]["pageInfo"]["hasNextPage"]
+        .as_bool()
+        .unwrap_or(false)
+    {
+        labels.push("…".to_string());
+    }
     Some(IssueDetails {
         id: id.to_string(),
         title,
@@ -160,7 +176,6 @@ pub enum LinkedChoice {
 
 /// `closedByPullRequestsReferences` answers directly, in one field.
 ///
-/// A probe disproved the timeline approach the parent spec designed:
 /// `ConnectedEvent` never fires (it records a manual Development-sidebar link
 /// nobody uses), and `willCloseTarget` goes false once the issue closes,
 /// losing the PR for exactly the closed issues the finished verdict reads.
@@ -170,7 +185,7 @@ pub fn issue_pr_query(slug: &str, number: u64) -> String {
         r#"query {{ repository(owner: {o}, name: {n}) {{ issue(number: {number}) {{
              closedByPullRequestsReferences(first: 10, includeClosedPrs: true,
                                             orderByState: true) {{
-               totalCount pageInfo {{ hasNextPage }}
+               pageInfo {{ hasNextPage }}
                nodes {{ number state url repository {{ nameWithOwner }} }}
              }} }} }} }}"#,
         o = serde_json::Value::from(owner),
@@ -190,7 +205,7 @@ fn state_rank(s: &str) -> u8 {
 }
 
 /// Choose among an issue's linked PRs.
-pub fn rank_linked(prs: &[LinkedPr], _pr_repo: &str) -> LinkedChoice {
+pub fn rank_linked(prs: &[LinkedPr]) -> LinkedChoice {
     let Some(top) = prs.iter().map(|p| state_rank(&p.state)).max() else {
         return LinkedChoice::None;
     };
@@ -218,7 +233,7 @@ pub fn rank_linked(prs: &[LinkedPr], _pr_repo: &str) -> LinkedChoice {
 }
 
 /// Parse and rank in one step. A truncated connection refuses.
-pub fn parse_issue_pr(resp: &serde_json::Value, pr_repo: &str) -> LinkedChoice {
+pub fn parse_issue_pr(resp: &serde_json::Value) -> LinkedChoice {
     let conn = &resp["data"]["repository"]["issue"]["closedByPullRequestsReferences"];
     if conn["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false) {
         return LinkedChoice::Truncated;
@@ -236,7 +251,7 @@ pub fn parse_issue_pr(resp: &serde_json::Value, pr_repo: &str) -> LinkedChoice {
             })
         })
         .collect();
-    rank_linked(&prs, pr_repo)
+    rank_linked(&prs)
 }
 
 // --- assigned issues, with their state-transition history ------------------
@@ -270,11 +285,12 @@ pub fn assigned_query(slug: &str, login: &str, after: Option<&str>) -> String {
     )
 }
 
+/// A `(when, from, to)` state transition parsed from one timeline event.
+type Transition = (String, Option<State>, Option<State>);
+
 /// One `timelineItems.nodes[]` entry as a `(when, from, to)` transition, or
 /// `None` for an event type outside the two requested.
-fn parse_timeline_transition(
-    n: &serde_json::Value,
-) -> Option<(String, Option<State>, Option<State>)> {
+fn parse_timeline_transition(n: &serde_json::Value) -> Option<Transition> {
     let created_at = n["createdAt"].as_str()?.to_string();
     match n["__typename"].as_str()? {
         "ClosedEvent" => Some((
@@ -350,6 +366,26 @@ fn timeline_page_query(slug: &str, number: u64, after: &str) -> String {
     )
 }
 
+/// One page of a single issue's remaining `timelineItems`: the transitions on
+/// the page, plus the next cursor when the connection has one.
+pub fn parse_timeline_page(resp: &serde_json::Value) -> (Vec<Transition>, Option<String>) {
+    let block = &resp["data"]["repository"]["issue"]["timelineItems"];
+    let transitions = block["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(parse_timeline_transition)
+        .collect();
+    let next = match (
+        block["pageInfo"]["hasNextPage"].as_bool(),
+        block["pageInfo"]["endCursor"].as_str(),
+    ) {
+        (Some(true), Some(c)) => Some(c.to_string()),
+        _ => None,
+    };
+    (transitions, next)
+}
+
 /// Fetch the rest of one issue's timeline past `cursor`, appending each page's
 /// transitions onto the matching entry in `issues`.
 fn fill_remaining_timeline(
@@ -363,22 +399,13 @@ fn fill_remaining_timeline(
         .with_context(|| format!("bad issue number {number}"))?;
     loop {
         let resp = github::graphql(&timeline_page_query(slug, n, &cursor))?;
-        let block = &resp["data"]["repository"]["issue"]["timelineItems"];
-        let extra: Vec<_> = block["nodes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(parse_timeline_transition)
-            .collect();
+        let (extra, next) = parse_timeline_page(&resp);
         if let Some(issue) = issues.iter_mut().find(|i| i.identifier == number) {
             issue.history.extend(extra);
         }
-        match (
-            block["pageInfo"]["hasNextPage"].as_bool(),
-            block["pageInfo"]["endCursor"].as_str(),
-        ) {
-            (Some(true), Some(c)) => cursor = c.to_string(),
-            _ => return Ok(()),
+        match next {
+            Some(c) => cursor = c,
+            None => return Ok(()),
         }
     }
 }
@@ -537,7 +564,7 @@ impl Tracker for GithubTracker {
             .with_context(|| format!("unrecognized GitHub issue identifier: {s}"))?;
         anyhow::ensure!(
             repo == self.repo.slug,
-            "issue {number} is in {repo}, but this project's [github] issues_repo is {}",
+            "issue {number} is in {repo}, but this project's issues repository is {}",
             self.repo.slug
         );
         Ok(IssueRef {
@@ -554,7 +581,7 @@ impl Tracker for GithubTracker {
         let n: u64 = id
             .parse()
             .with_context(|| format!("bad issue number {id}"))?;
-        let resp = github::graphql(&issue_query(&self.repo.slug, n))?;
+        let resp = github::graphql_partial(&issue_query(&self.repo.slug, n))?;
         Ok(parse_issue(&resp, id))
     }
 
@@ -562,7 +589,7 @@ impl Tracker for GithubTracker {
         let Some((query, aliases)) = states_query(&self.repo.slug, ids) else {
             return HashMap::new();
         };
-        match github::graphql(&query) {
+        match github::graphql_partial(&query) {
             Ok(resp) => parse_states(&resp, &aliases),
             Err(e) => {
                 eprintln!("GitHub lookup failed: {e:#}");
@@ -576,7 +603,7 @@ impl Tracker for GithubTracker {
             .parse()
             .with_context(|| format!("bad issue number {id}"))?;
         let resp = github::graphql(&issue_pr_query(&self.repo.slug, n))?;
-        match parse_issue_pr(&resp, &self.repo.slug) {
+        match parse_issue_pr(&resp) {
             LinkedChoice::None => Ok(None),
             LinkedChoice::One(p) => Ok(Some(p)),
             LinkedChoice::Ambiguous(c) => anyhow::bail!(
@@ -721,6 +748,26 @@ mod tests {
     }
 
     #[test]
+    fn a_truncated_assignees_or_labels_connection_is_marked_not_dropped() {
+        // Neither connection paginates; a list wider than the window must stay
+        // visible as incomplete rather than silently reading as the whole list.
+        let resp = serde_json::json!({ "data": { "repository": { "issue": {
+            "title": "t", "state": "OPEN",
+            "assignees": {
+                "pageInfo": { "hasNextPage": true },
+                "nodes": [{ "login": "alice" }]
+            },
+            "labels": {
+                "pageInfo": { "hasNextPage": true },
+                "nodes": [{ "name": "bug" }]
+            }
+        } } } });
+        let d = parse_issue(&resp, "1").unwrap();
+        assert_eq!(d.assignee, "alice, …");
+        assert_eq!(d.labels, vec!["bug".to_string(), "…".to_string()]);
+    }
+
+    #[test]
     fn a_closed_issue_with_no_assignee_parses_to_empty_fields() {
         let d = parse_issue(&fixture("gh_issue_closed.json"), "12").unwrap();
         assert_eq!(d.state, "Done");
@@ -770,7 +817,7 @@ mod tests {
         // workflow. Filtering to PRs in the same repo would have reported
         // these issues as having no PR at all.
         let resp = fixture("gh_issue_cross_repo.json");
-        let LinkedChoice::One(pr) = parse_issue_pr(&resp, "me/widget") else {
+        let LinkedChoice::One(pr) = parse_issue_pr(&resp) else {
             panic!("expected one linked PR")
         };
         assert_eq!(pr.url, "https://github.com/upstream/widget/pull/185");
@@ -780,7 +827,7 @@ mod tests {
     #[test]
     fn no_link_parses_to_none() {
         assert!(matches!(
-            parse_issue_pr(&fixture("gh_issue_no_pr.json"), "me/widget"),
+            parse_issue_pr(&fixture("gh_issue_no_pr.json")),
             LinkedChoice::None
         ));
     }
@@ -791,7 +838,7 @@ mod tests {
         // from another issue never appears there, so it parses the same as no
         // link at all.
         assert!(matches!(
-            parse_issue_pr(&fixture("gh_issue_only_issue_xref.json"), "me/widget"),
+            parse_issue_pr(&fixture("gh_issue_only_issue_xref.json")),
             LinkedChoice::None
         ));
     }
@@ -804,10 +851,7 @@ mod tests {
         let mut resp = fixture("gh_issue_cross_repo.json");
         resp["data"]["repository"]["issue"]["closedByPullRequestsReferences"]["pageInfo"]["hasNextPage"] =
             serde_json::Value::Bool(true);
-        assert!(matches!(
-            parse_issue_pr(&resp, "me/widget"),
-            LinkedChoice::Truncated
-        ));
+        assert!(matches!(parse_issue_pr(&resp), LinkedChoice::Truncated));
     }
 
     #[test]
@@ -815,13 +859,10 @@ mod tests {
         // Number ordering only means something inside one repository, and there
         // it is a total order — the higher number is the later attempt, not a
         // tie.
-        let c = rank_linked(
-            &[
-                linked(10, "MERGED", "me/widget"),
-                linked(12, "MERGED", "me/widget"),
-            ],
-            "me/widget",
-        );
+        let c = rank_linked(&[
+            linked(10, "MERGED", "me/widget"),
+            linked(12, "MERGED", "me/widget"),
+        ]);
         let LinkedChoice::One(pr) = c else {
             panic!("expected a ranked winner, got {c:?}")
         };
@@ -832,13 +873,10 @@ mod tests {
     fn two_merged_prs_across_repositories_are_ambiguous() {
         // #5 upstream is not "older" than #900 in a fork: the numbers are
         // unrelated.
-        let c = rank_linked(
-            &[
-                linked(5, "MERGED", "upstream/widget"),
-                linked(900, "MERGED", "me/widget"),
-            ],
-            "me/widget",
-        );
+        let c = rank_linked(&[
+            linked(5, "MERGED", "upstream/widget"),
+            linked(900, "MERGED", "me/widget"),
+        ]);
         assert!(
             matches!(c, LinkedChoice::Ambiguous(ref v) if v.len() == 2),
             "{c:?}"
@@ -847,13 +885,10 @@ mod tests {
 
     #[test]
     fn a_merged_pr_beats_an_open_one() {
-        let c = rank_linked(
-            &[
-                linked(3, "OPEN", "me/widget"),
-                linked(1, "MERGED", "me/widget"),
-            ],
-            "me/widget",
-        );
+        let c = rank_linked(&[
+            linked(3, "OPEN", "me/widget"),
+            linked(1, "MERGED", "me/widget"),
+        ]);
         let LinkedChoice::One(pr) = c else { panic!() };
         assert_eq!(pr.number, 1);
     }
@@ -872,6 +907,24 @@ mod tests {
             q.contains("CLOSED_EVENT") && q.contains("REOPENED_EVENT"),
             "{q}"
         );
+    }
+
+    #[test]
+    fn a_nested_timeline_walk_appends_pages_in_order_and_terminates() {
+        // fill_remaining_timeline loops parse_timeline_page across a real
+        // multi-page walk: page one still has more, page two ends it.
+        let (mut transitions, next) = parse_timeline_page(&fixture("gh_timeline_page_1.json"));
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0].0, "2026-03-01T00:00:00Z");
+        assert_eq!(next.as_deref(), Some("cursorY"));
+
+        let (page_two, next) = parse_timeline_page(&fixture("gh_timeline_page_2.json"));
+        transitions.extend(page_two);
+        assert_eq!(next, None);
+
+        assert_eq!(transitions.len(), 2);
+        assert_eq!(transitions[0].0, "2026-03-01T00:00:00Z");
+        assert_eq!(transitions[1].0, "2026-03-02T00:00:00Z");
     }
 
     #[test]
@@ -900,6 +953,9 @@ mod tests {
             err.contains("other/thing") && err.contains("me/widget"),
             "{err}"
         );
+        // A `Defaulted` origin never wrote a `[github] issues_repo` key, so the
+        // message must not send the reader to edit a setting they don't have.
+        assert!(!err.contains("[github]"), "{err}");
 
         assert_eq!(t.issue_ref("9").unwrap().id, "9");
         assert_eq!(
