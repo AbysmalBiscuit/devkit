@@ -65,21 +65,70 @@ response. It builds on `devkit_common::github`, which already provides
 `graphql()`, `repo_slug(cwd)`, and `token()` with its `GH_TOKEN` /
 `GITHUB_TOKEN` / `gh auth token` chain, and is already wrapped in a timing span.
 
-### Which repository the adapter reads
+### Which repository, for issues and for PRs
 
-`repo_slug(cwd)` is the default and is right for the observed repositories:
-alacritree keeps its issues on the fork, which is `origin`. But origin-only
-resolution cannot serve every layout. In the ordinary fork workflow the issues
-live upstream while `origin` is the fork, and a project may deliberately track
-issues in a repository separate from its code. Both cases would query the wrong
-repository and find no issue.
+devkit resolves one repository today, `repo_slug(cwd)` from the `origin` remote,
+and uses it for both issues and pull requests. That holds only when origin owns
+both. It does not in a fork: origin is the fork, PRs are opened against
+upstream, and the issues may sit on either side. It also does not when a project
+tracks issues in a repository separate from its code.
 
-So `[github] repo` is retained as an optional override, defaulting to the origin
-remote. That answers the objection it was dropped for: the repository *is*
-derived from the worktree, and the override exists only for the layouts
-derivation cannot reach. `tracker::resolve` regains the `repo` parameter that
-`8ccb43e` removed, and `GithubTracker` is constructed with a resolved slug
-rather than resolving one per call.
+The two therefore become separately configurable, both defaulting to the origin
+remote so a project that sets neither behaves exactly as it does today:
+
+```toml
+[github]
+issues_repo = "org/planning"           # where issues live
+pr_repo     = "mathix420/alacritree"   # where PRs are opened
+```
+
+This table sits at `[github]`, not `[tracker.github]`. `pr_repo` is not tracker
+work: a project on Linear with a fork workflow needs it just as much, and
+scoping it under the tracker would deny it to them.
+
+**The head owner is derived and never configured.** A pull request in another
+repository has its head branch in *your* repository, so the head owner is
+whoever owns `origin`. That falls out for free: in a monorepo origin owns
+`pr_repo` too, so nothing changes, and in a fork it names the fork, which is
+where the branches actually are.
+
+`github::pr_by_head` currently builds its query as `head={slug_owner}:{branch}`,
+taking the head owner from the repository being searched. Cross-repository that
+is wrong, and measurably so: against `mathix420/alacritree`,
+`head=mathix420:fix/glyph-overhang-clipped` returns nothing while
+`head=AbysmalBiscuit:fix/glyph-overhang-clipped` returns PR 185. Without this
+correction, `pr_repo` alone would leave `issue status`, `review request` and
+`review finish` all reporting no PR. So `pr_by_head` takes the head owner as a
+parameter.
+
+(An unqualified `head={branch}` also matches, and `gh pr list --repo <upstream>
+--head <branch>` finds the fork's PR while the owner-qualified spelling
+`--head owner:branch` does not. The REST and `gh` paths disagree on that point,
+so each keeps the spelling verified to work for it.)
+
+### The repository resolution seam
+
+Nine call sites resolve the repository independently today, in `prs.rs`,
+`status.rs`, `checkout.rs`, `review/request.rs`, `review/finish.rs` and
+`dashboard/data.rs`, each calling `repo_slug(cwd)` inline. They all share one
+shape: attempt direct HTTP with an explicit slug, and fall back to a `gh`
+invocation that infers the repository from the working directory.
+
+Both halves need the resolved value, so the resolution moves into one place. A
+`Repos { issues, prs, head_owner }` is resolved once per command from the config
+layer plus the origin remote, and threaded to the sites that need it. The HTTP
+half takes `repos.prs`; the `gh` half gains `--repo` whenever `repos.prs`
+differs from origin, which covers `gh pr view`, `gh pr list`, `gh pr checkout`
+and the `gh pr create` in `review/request.rs`.
+
+`prs.rs` already holds a partial version of this in `resolve_repo(Option<&str>,
+cwd)`, fed by `issue prs --repo`. The seam generalizes that rather than
+inventing a parallel mechanism, and the flag keeps working as an explicit
+override of `pr_repo` for one invocation.
+
+`GithubTracker` is constructed with `repos.issues` rather than resolving a
+repository per call, and `tracker::resolve` regains the `repo` parameter that
+`8ccb43e` removed.
 
 **Detection must validate the host.** `slug_from_remote_url` parses any
 `https://host/owner/repo` shape without checking the host, so
@@ -157,31 +206,26 @@ candidates remain, `checkout-pr` refuses and names them rather than guessing,
 because it is about to create a worktree from that answer. `states` and the
 status report are read-only and take the ranked first.
 
-### Cross-repository checkout
+### A PR outside `pr_repo`
 
-`PrRef` already carries `url`, so `issue_pr` returning a PR in another
-repository needs no type change. `checkout-pr` parses `owner/repo` out of that
-URL and passes `--repo` to both `gh` calls it makes, `gh pr view` in
-`fetch_pr_meta` and `gh pr checkout` in the worktree, whenever the parsed slug
-differs from `repo_slug` of the monorepo. `github.rs` already holds
-`pr_number_from_url` and `slug_from_remote_url` for the parser to sit beside.
+With the seam in place, a PR upstream is no longer foreign: it is simply where
+`pr_repo` points, and `status`, `review` and `checkout-pr` all read it. The
+verified `gh pr checkout <n> --repo <pr_repo>` behavior is what makes this work
+without an upstream remote, resolving the PR from `pr_repo` and fetching its
+head from wherever the branch lives.
 
-The same-repository case passes no `--repo` and behaves exactly as today.
+A PR outside `pr_repo` remains possible, because `issue_pr` returns whatever
+repository closed the issue and that need not be the configured one. Left
+unrecorded it would stall the lifecycle: `status` lists PRs for `repos.prs`, so
+a PR elsewhere reports `pr_state` as `NO_PR` and the finished verdict says "no
+PR" no matter what happens to it.
 
-**The PR must be persisted, or the lifecycle stalls.** `IssueRecord` carries no
-PR reference, and `status::fetch_prs_http` lists PRs for `repo_slug(cwd)` only.
-A worktree checked out from a PR in another repository would therefore find no
-matching PR, report `pr_state` as `NO_PR`, and the finished verdict would say
-"no PR" forever no matter what happened upstream. Returning a cross-repository
-PR without recording it is worse than filtering it out.
-
-So `IssueRecord` gains an optional PR reference: the full URL, which already
-identifies both the repository and the number. It is written by `checkout-pr`,
-absent on records written before it existed and on `issue setup` worktrees that
-have no PR yet. `status` reads it and, when the recorded PR is outside the
-origin repository, queries that repository for that one PR instead of relying on
-the origin PR listing. Worktrees with no recorded PR keep today's behavior
-exactly.
+So `IssueRecord` gains an optional PR reference, the full URL, which identifies
+both repository and number. `checkout-pr` writes it. It is absent on records
+written before it existed and on `issue setup` worktrees that have no PR yet.
+`status` reads it and queries that exact repository for that one PR when the
+recorded PR is outside `repos.prs`, instead of relying on the listing.
+Worktrees with no recorded PR keep today's behavior exactly.
 
 ### Authentication
 
@@ -261,33 +305,40 @@ The key gains the tracker kind and the repository or workspace identity.
 
 ## Delivery
 
-Eight tasks. Task 1 is the bulk. Tasks 2 through 4 each close a gap the review
-found and none of them is optional: without 4 the dashboard silently shows
-nothing, and without 3 the finished verdict never closes on a cross-repository
-PR.
+Eight tasks. Task 1 lands first because everything else reads the repositories
+it resolves, and it is the one task that touches Linear paths, so it carries its
+own regression gate. Task 2 is the bulk. None of tasks 3 through 5 is optional:
+without 5 the dashboard silently shows nothing, and without 4 the finished
+verdict never closes on a PR outside `pr_repo`.
 
-1. **The adapter.** `github.rs` with the query, parse and wrapper split, the
+1. **The repository resolution seam.** `[github] issues_repo` and `pr_repo`
+   config, the `Repos { issues, prs, head_owner }` resolution, the nine call
+   sites taking it instead of `repo_slug(cwd)`, `--repo` on the `gh` fallback
+   paths, and `pr_by_head` taking the head owner as a parameter. **The gate is
+   that a project setting neither key behaves identically**, Linear projects
+   included, since this task alone touches every PR path devkit has.
+2. **The adapter.** `github.rs` with the query, parse and wrapper split, the
    `Tracker` implementation including the linked-PR ranking rule, and its
    fixture tests. No wiring yet.
-2. **Selection and detection.** `TrackerKind::Github` constructs `GithubTracker`
-   instead of the stand-in, with `declared` and the reason line; `[github] repo`
-   config with the origin default; `tracker::resolve` regains `repo`; detection
-   validates the origin host is `github.com`.
-3. **The PR reference in the record.** `IssueRecord` gains the optional PR URL,
+3. **Selection and detection.** `TrackerKind::Github` constructs `GithubTracker`
+   instead of the stand-in, with `declared` and the reason line; `tracker::resolve`
+   regains `repo` and is handed `repos.issues`; detection validates the origin
+   host is `github.com`.
+4. **The PR reference in the record.** `IssueRecord` gains the optional PR URL,
    `checkout-pr` writes it and passes `--repo` to `gh` when the PR is outside
    origin, and `status` consults it for a PR the origin listing cannot see.
-4. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
+5. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
    configured tracker and calls `assigned_history` and `timeline_origin` instead
    of Linear directly, and the cache key gains the tracker and repository
    identity. Linear's behavior through the new path is the regression gate.
-5. **`devkit auth github`** and the doctor hint, with the identity taken from
+6. **`devkit auth github`** and the doctor hint, with the identity taken from
    the resolved token rather than from the active `gh` account.
-6. **Dogfood.** devkit's own `devkit.toml` declares `[tracker] kind = "github"`.
+7. **Dogfood.** devkit's own `devkit.toml` declares `[tracker] kind = "github"`.
    Worth noting: this repository currently has no GitHub issues filed, so the
    declaration exercises the empty-tracker path and little else. It becomes real
    exercise once devkit work is filed as issues. Land it last, or defer it.
-7. **Documentation.** `docs/configuration.md` gains the `[tracker] kind =
-   "github"` row, `[github] repo`, and the auth instruction; `README.md` gains
+8. **Documentation.** `docs/configuration.md` gains the `[tracker] kind =
+   "github"` row, the `[github]` table, and the auth instruction; `README.md` gains
    `devkit auth github`; `AGENTS.md`'s tracker paragraph drops "there is no
    GitHub implementation" and describes the real arm; `skills/using-devkit/`'s
    CLI reference gains the new subcommand. Schema regenerates via
@@ -321,6 +372,14 @@ TDD throughout; `cargo test --workspace` is the merge gate.
 - **Host validation.** Detection returns no tracker for a GitLab or Bitbucket
   origin, and GitHub for a `github.com` origin in each remote-URL shape
   `slug_from_remote_url` accepts.
+- **Repository resolution.** Neither key set resolves both repositories and the
+  head owner to origin; each key set independently; both set; and `issue prs
+  --repo` still overriding `pr_repo` for one invocation. The identical-behavior
+  gate for an unconfigured project is asserted at this layer rather than left to
+  manual checking.
+- **`pr_by_head` head owner.** A fork PR is found when the head owner is the
+  fork and missed when it is taken from the searched repository, which is the
+  regression this parameter exists to prevent.
 - **The dashboard through the trait.** The fake tracker drives the timeline, so
   the wiring is covered without a network call, and Linear's path is asserted
   unchanged.
@@ -347,8 +406,10 @@ adapter is network-free under test.
 | How `issue_pr` finds the PR | `closedByPullRequestsReferences`, not the timeline. Probe-driven. |
 | Several linked PRs | `orderByState` plus an explicit merged / open / highest rule; `checkout-pr` refuses a genuine tie. |
 | A linked PR in another repository | Returned, not filtered, and persisted in `IssueRecord` so status can see it. |
-| `[github] repo` config | Retained as an optional override with the origin remote as default. Reversed after review. |
-| `tracker::resolve`'s signature | Regains `repo`. |
+| Repository configuration | `[github] issues_repo` and `pr_repo`, separately configurable, both defaulting to origin. |
+| Where `[github]` sits | Top level, not under `[tracker]`. `pr_repo` serves Linear projects on a fork too. |
+| The PR head owner | Derived from origin, never configured. `pr_by_head` takes it as a parameter. |
+| `tracker::resolve`'s signature | Regains `repo`, handed `repos.issues`. |
 | Host validation in detection | Added. A non-`github.com` origin no longer detects as GitHub. |
 | The dashboard | Wired to the trait in this phase, not assumed. |
 | A `devkit auth github` credential store | No. It reports the resolved token's identity and lists `gh` accounts as diagnostics. |
