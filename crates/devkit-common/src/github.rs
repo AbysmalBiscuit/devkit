@@ -524,20 +524,11 @@ pub fn head_query(slug: &str, branch: &str) -> String {
     )
 }
 
-/// Parse a `head_query` response. `totalCount` beyond the returned nodes is
-/// ambiguity, not a unique answer: a winner outside the window would otherwise
-/// be silently dropped.
+/// Parse a successful `head_query` envelope (no top-level `errors` — `graphql`
+/// already turns those into an `Err` before a caller ever reaches this).
+/// `totalCount` beyond the returned nodes is ambiguity, not a unique answer: a
+/// winner outside the window would otherwise be silently dropped.
 pub fn parse_head_lookup(resp: &Value) -> HeadLookup {
-    if let Some(errs) = resp["errors"].as_array()
-        && !errs.is_empty()
-    {
-        let msg = errs
-            .iter()
-            .filter_map(|e| e["message"].as_str())
-            .collect::<Vec<_>>()
-            .join("; ");
-        return HeadLookup::Unavailable(msg);
-    }
     let conn = &resp["data"]["repository"]["pullRequests"];
     let total = conn["totalCount"].as_u64().unwrap_or(0);
     let nodes: Vec<PrBrief> = conn["nodes"]
@@ -932,15 +923,5 @@ mod tests {
             parse_head_lookup(&head_resp(NODE_A, 3)),
             HeadLookup::Ambiguous(_)
         ));
-    }
-
-    #[test]
-    fn a_graphql_error_body_parses_to_unavailable() {
-        let resp: serde_json::Value =
-            serde_json::from_str(r#"{"errors":[{"message":"Bad credentials"}]}"#).unwrap();
-        let HeadLookup::Unavailable(why) = parse_head_lookup(&resp) else {
-            panic!("expected Unavailable")
-        };
-        assert!(why.contains("Bad credentials"), "{why}");
     }
 }

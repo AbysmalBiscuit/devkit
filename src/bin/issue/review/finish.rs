@@ -77,6 +77,17 @@ pub(crate) fn resolve_acting(l: &github::HeadLookup) -> Result<Option<github::Pr
     }
 }
 
+/// Refuse a `gh pr list` fallback result naming more than one PR. Both
+/// fallback call sites dropped `--limit 1` so they can see a second
+/// candidate instead of silently taking whichever came first.
+pub(crate) fn ensure_unambiguous_gh_match(matches: usize) -> Result<()> {
+    anyhow::ensure!(
+        matches <= 1,
+        "several PRs share this head branch — pass --pr to choose one"
+    );
+    Ok(())
+}
+
 /// PR number for head branch `b`, over direct HTTP when a token is available,
 /// else `gh pr list`. `Ok(None)` means no PR (whichever path answered).
 fn branch_pr_number(b: &str, cwd: &str, repo: &github::Repo) -> Result<Option<u64>> {
@@ -84,8 +95,6 @@ fn branch_pr_number(b: &str, cwd: &str, repo: &github::Repo) -> Result<Option<u6
     if decide_fallback(&looked) == Fallback::No {
         return Ok(resolve_acting(&looked)?.map(|p| p.number));
     }
-    // `--limit 1` is gone: the fallback must be able to see a second candidate
-    // rather than silently taking whichever came first.
     let v: Vec<PrLite> = gh_json_in(
         &[
             "pr", "list", "--head", b, "--state", "all", "--json", "number",
@@ -93,10 +102,7 @@ fn branch_pr_number(b: &str, cwd: &str, repo: &github::Repo) -> Result<Option<u6
         repo,
         cwd,
     )?;
-    anyhow::ensure!(
-        v.len() <= 1,
-        "several PRs share this head branch — pass --pr to choose one"
-    );
+    ensure_unambiguous_gh_match(v.len())?;
     Ok(v.into_iter().next().map(|p| p.number))
 }
 

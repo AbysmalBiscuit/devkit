@@ -6,7 +6,7 @@ use devkit_config::Person;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use super::finish::{Fallback, decide_fallback, resolve_acting};
+use super::finish::{Fallback, decide_fallback, ensure_unambiguous_gh_match, resolve_acting};
 use super::{
     PrAction, Target, action_for, base_ctx, deliver, guard_branch, is_human_login, parse_args,
     person_by_login, render_review, require_pr_title, require_reviewer, resolve_target,
@@ -113,8 +113,6 @@ fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<Pr
             url: p.url,
         }));
     }
-    // `--limit 1` is gone: the fallback must be able to see a second candidate
-    // rather than silently taking whichever came first.
     let v: Vec<PrView> = gh_json_in(
         &[
             "pr",
@@ -129,10 +127,7 @@ fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<Pr
         repo,
         cwd,
     )?;
-    anyhow::ensure!(
-        v.len() <= 1,
-        "several PRs share this head branch — pass --pr to choose one"
-    );
+    ensure_unambiguous_gh_match(v.len())?;
     Ok(v.into_iter().next())
 }
 
