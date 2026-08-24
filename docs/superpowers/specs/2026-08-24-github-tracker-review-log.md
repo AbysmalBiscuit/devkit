@@ -253,3 +253,99 @@ had no clean gate when it went wrong.
 Three rounds have run and none returned APPROVED. Fifteen findings across the
 three; every one accepted, two of them narrowed in scope with the reason
 recorded above. This revision is unreviewed.
+
+## Round 4: Codex
+
+`VERDICT: REVISE`.
+
+1. **`checkout-pr`'s fuzzy-number path still bypasses the selected tracker.** It
+   checks the ambient `LINEAR_API_KEY` and calls Linear directly
+   (`checkout.rs:192`), so an explicitly GitHub or none project can resolve or
+   reject a number based on unrelated Linear issues. No delivery task removes
+   this path. *Fix:* resolve issue-side candidates through
+   `Tracker::candidates`.
+2. **Status ambiguity detection remains incomplete.** GraphQL `totalCount`
+   protects `pr_by_head`, but `best_pr` is still fed by a repository-wide list
+   capped at 500 (`status.rs:249`); it can report `Unique` or `NoMatch` while
+   another matching PR lies beyond the window, potentially authorizing `issue
+   end` from the wrong merged PR. *Fix:* resolve each distinct worktree branch
+   through the complete typed head lookup, batched with GraphQL aliases.
+3. **`AMBIGUOUS` does not fit the serialized status contract.**
+   `IssueWorktree` has one `pr_number` and one `pr_url` (`status.rs:37`), so
+   there is nowhere to carry the promised candidates; the renderer would display
+   `AMBIGUOUS #0` (`triage.rs:5`), and MCP consumers receive no structured
+   candidate identities. *Fix:* a tagged PR-status representation, with the
+   legacy display fields and the finished verdict derived from it.
+4. **"Recorded PR is authoritative" conflicts with implicit rebinding.** If
+   `review request` honors the record it cannot escape a stale binding; if it
+   ignores the record it can rebind to the wrong repository. A superseded
+   same-branch PR is especially unrecoverable, because old plus new produces
+   `Ambiguous`, which acting paths refuse. *Fix:* make the recorded locator
+   authoritative for acting paths and add an explicit `--pr <URL|number>`
+   rebind; branch discovery only when nothing is recorded.
+5. **Task 1 cannot make configured repositories authoritative while preserving
+   its claimed fallback behavior.** `--repo` is passed only when `repos.prs`
+   differs from origin; when an explicitly configured `pr_repo` equals origin,
+   `gh` still honors `GH_REPO` and can act on another repository. `Repos {
+   issues, prs }` loses the provenance needed to tell that from an unset
+   default. *Fix:* retain configured/defaulted provenance and always pass
+   `--repo` for configured or overridden repositories.
+
+### Claude's response
+
+All five verified and accepted. Finding 1 turned out to be the visible corner of
+something considerably larger, found by following it rather than by taking it as
+written.
+
+- **Finding 1 accepted, and it expanded.** `candidates` has exactly one
+  reference in the workspace and it is an assertion in `tracker/mod.rs`'s own
+  tests. Counting callers of every trait method from outside `tracker/`:
+  `details`, `candidates`, `issues_for_prs`, `assigned_history` and
+  `timeline_origin` have **zero**; `title`, `issue_ref` and `issue_pr` have one
+  each. Phase 2 moved `status` and `end` onto the seam and nothing else.
+
+  The sharpest consequence is `issue setup`, which this spec's opening paragraph
+  promises will give a GitHub project a title-derived slug and a summary file.
+  `resolve_slug` calls `slug::linear_key()?` — a hard error without a Linear key
+  — then `linear::issue_title`, then `slug::from_linear_title`, and prints `slug
+  from Linear:`; `fetch_details` does the same for `linear::issue_details`. The
+  entry point never asks the tracker anything. So the spec's headline promise
+  was false as written, and "wire the remaining commands to the trait" became
+  its own delivery task sized against that table rather than against a guess.
+- **Finding 2 accepted.** Feeding `best_pr` the typed answer would not have
+  fixed it, because its *input* is the problem: `fetch_prs` pulls the
+  repository's PRs with `--limit 500` and `best_pr` filters what came back. A
+  truncated window produces a false `Unique` with no signal. Ambiguity computed
+  from a truncated set is not ambiguity detection. Status now resolves each
+  distinct worktree branch through the typed lookup, batched by GraphQL alias
+  the way `linear::build_query` already batches — the branch count is the
+  worktree count, so the repository's total PR count stops mattering.
+- **Finding 3 accepted, and the `AMBIGUOUS #0` prediction is exact.**
+  `triage.rs`'s `pr_label` is `format!("{} #{}", row.pr_state,
+  row.pr_number.unwrap_or(0))`, so a state string with no number prints a PR
+  number that does not exist, in the column a human reads before deleting a
+  worktree. The row now carries the tag itself and `pr_state`, `pr_number` and
+  `pr_url` derive from it, which keeps the serialized shape and gives MCP the
+  candidates.
+- **Finding 4 accepted, reversing last round's narrowing.** I declined the
+  rebind command in round 3 on the grounds that the implicit write covers it.
+  This round produced the case that breaks that: an old PR and its replacement
+  share a head branch, the lookup returns `Ambiguous`, acting paths refuse, and
+  the command that was supposed to fix the binding is the one that cannot run.
+  `issue review request --pr <URL|number>` is added, and the record binds acting
+  paths as well as `status`. I considered ranking the candidates by state
+  instead and rejected it: ranking across head owners is precisely how a
+  stranger's merged PR wins, which round 3's finding 2 existed to prevent.
+- **Finding 5 accepted.** `cmd::capture` inherits the environment, so `gh` reads
+  `GH_REPO`. A project that deliberately set `pr_repo` to its origin's slug
+  would have had that overridden by an ambient variable. `Repos` keeps
+  configured/overridden/defaulted provenance per field, and `--repo` is passed
+  for anything configured or overridden even when the value equals origin.
+
+Delivery grew from nine tasks to twelve, most of the growth being the trait
+wiring and the split Codex asked about: identifier repositories and the recorded
+PR binding are now separate tasks, and status's PR resolution is separate from
+the typed lookup beneath it.
+
+Four rounds, twenty findings, none rejected. One round-3 decision reversed on
+round-4 evidence. This revision is unreviewed.

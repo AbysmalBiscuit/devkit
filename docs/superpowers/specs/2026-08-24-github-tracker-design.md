@@ -1,7 +1,7 @@
 # The GitHub tracker
 
 **Date:** 2026-08-24
-**Status:** ready to plan, after three rounds of adversarial cross-model
+**Status:** ready to plan, after four rounds of adversarial cross-model
 review. See `2026-08-24-github-tracker-review-log.md`.
 **Parent:** `2026-08-23-pluggable-issue-tracker-design.md`, phase 3. That spec's
 phases 1 and 2 shipped. This one supersedes its "The GitHub mapping" section,
@@ -12,6 +12,12 @@ fills the third slot: a GitHub Issues adapter, selected by `[tracker] kind =
 "github"`, so a project that tracks work in GitHub gets the title-derived slug,
 the summary file, the state column, the state gate, and the dashboard timeline
 that Linear projects already get.
+
+Delivering that takes more than the adapter. Phase 2 moved `status` and `end`
+onto the trait and stopped there, so `setup`, `checkout-pr`'s bare-number arm,
+`prs` and the dashboard still call Linear directly and five trait methods have
+no caller at all. Wiring them is part of this phase, not an inheritance from the
+last one.
 
 ## What changed since the parent spec
 
@@ -123,7 +129,8 @@ in two directions at once. A lookup that succeeds and finds nothing yields
 inside `pr_by_head` would therefore change nothing: the refusal is swallowed by
 `.ok()` and the guess happens anyway.
 
-So both transports, HTTP and `gh`, return the same four-way answer:
+So both transports, HTTP and `gh`, return the same four-way answer, and it is a
+tagged value rather than a pair of nullable fields:
 
 | Answer | Meaning | Caller |
 |---|---|---|
@@ -140,17 +147,45 @@ Ambiguity divides by what the caller is about to do:
 - **Acting paths refuse.** `review request` is about to create or comment on a
   PR and `review finish` is about to merge or close one; `checkout-pr` is about
   to build a worktree from the answer. Each surfaces the candidates and stops.
-- **Read-only paths record it.** `issue status` reports the row with
-  `pr_state = "AMBIGUOUS"`, lists the candidates, and the finished verdict stays
-  closed with that as its reason. A report that cannot identify the PR must not
-  claim the work is done — `issue end` reads this verdict to decide whether a
-  worktree may be deleted, and a stranger's merged PR is exactly the input that
-  must not authorize a deletion.
+- **Read-only paths record it.** `issue status` reports the row as ambiguous
+  with its candidates, and the finished verdict stays closed with that as its
+  reason. A report that cannot identify the PR must not claim the work is done —
+  `issue end` reads this verdict to decide whether a worktree may be deleted,
+  and a stranger's merged PR is exactly the input that must not authorize a
+  deletion.
 
-`best_pr` in `status.rs` is the third place a guess is made: it selects on
-`p.head_ref_name == head` alone, from a listing capped at 500, and ranks the
-survivors. It moves onto the same typed answer, so several same-named branches
-become `Ambiguous` there too rather than a silent winner.
+**`IssueWorktree` cannot carry that as it stands.** The row holds `pr_state:
+String`, one `pr_number` and one `pr_url`, so an ambiguous answer has nowhere to
+put its candidates and degrades to a state string nothing else understands.
+`triage.rs` renders `format!("{} #{}", row.pr_state,
+row.pr_number.unwrap_or(0))`, so an `"AMBIGUOUS"` string with no number prints
+as `AMBIGUOUS #0` — a PR number that does not exist, in a column a human reads
+to decide whether to delete a worktree. The MCP `issue.status` action serializes
+the same struct, so its consumers would receive that too, with no structured way
+to see what the candidates were.
+
+So the row carries the tagged status itself — `Unique(PrRef)`, `NoMatch`,
+`Ambiguous(Vec<PrRef>)`, `Unavailable` — and `pr_state`, `pr_number` and
+`pr_url` become values derived from it for display and for the existing
+serialized shape. One source of truth, and every consumer that wants the detail
+can reach it: the finished verdict reads the tag rather than comparing strings,
+`triage.rs` renders `ambiguous (2)` from the tag instead of formatting a missing
+number, and MCP gains the candidate list rather than a string it must parse.
+
+**The capped listing has to go with it.** `best_pr` in `status.rs` is the third
+place a guess is made, and simply feeding it the typed answer would not fix it,
+because its input is wrong: `fetch_prs` pulls the repository's PRs with `gh pr
+list --state all --limit 500` (or the HTTP equivalent) and `best_pr` selects on
+`p.head_ref_name == head` from whatever came back. A window that truncates
+produces a false `Unique` — or a false `NoMatch` — with no signal that it did,
+which is precisely the shape of error the recorded-PR rule exists to prevent.
+Ambiguity computed from a truncated set is not ambiguity detection.
+
+So `status` resolves each distinct worktree branch through the same head lookup
+the rest of the design uses, batched into one round trip by GraphQL alias the
+way `linear::build_query` batches its state queries. The number of distinct
+branches is the number of issue worktrees, which is small; the repository's
+total PR count, which is what the 500 cap is fighting, stops mattering.
 
 (`gh pr list --repo <upstream> --head <branch>` finds the fork's PR, while the
 owner-qualified `--head owner:branch` does not. The `gh` fallback keeps the
@@ -173,11 +208,21 @@ reaches the API over HTTP or through `gh`, not a sweep of one function's
 callers.
 
 Both halves need the resolved value, so the resolution moves into one place. A
-`Repos { issues, prs }` is resolved once per command from the config layer
-plus the origin remote, and threaded to the sites that need it. The HTTP
-half takes `repos.prs`; the `gh` half gains `--repo` whenever `repos.prs`
-differs from origin, which covers `gh pr view`, `gh pr list`, `gh pr checkout`
-and the `gh pr create` in `review/request.rs`.
+`Repos { issues, prs }` is resolved once per command from the config layer plus
+the origin remote, and threaded to the sites that need it. The HTTP half takes
+`repos.prs`; the `gh` half gains `--repo`, which covers `gh pr view`, `gh pr
+list`, `gh pr checkout` and the `gh pr create` in `review/request.rs`.
+
+**Each repository remembers where its value came from, and `--repo` is passed
+for anything configured even when it equals origin.** Passing `--repo` only when
+the value differs from origin looks like a harmless optimization and is not one.
+`cmd::capture` inherits the environment, so `gh` still reads `GH_REPO`, and a
+project that deliberately set `pr_repo` to the same slug as its origin would
+have that setting silently overridden by an ambient variable — creating,
+editing, or checking out a PR in a repository nobody named. A resolved slug
+alone cannot tell the two cases apart, so each field carries whether it was
+configured, overridden on the command line, or defaulted from origin. Configured
+and overridden always pass `--repo`; only the defaulted case may omit it.
 
 `prs.rs` already holds a partial version of this in `resolve_repo(Option<&str>,
 cwd)`, fed by `issue prs --repo`. The seam generalizes that rather than
@@ -312,10 +357,28 @@ authoritative record would be authoritative for exactly the case that did not
 need it. So `review request` persists the PR URL whenever it resolves one,
 whether it found an existing PR or opened a new one.
 
-That write is also the rebind. A superseded PR is replaced the next time
-`review request` runs and resolves a different one, so the binding is mutable by
-the normal flow and no separate rebind command is needed. `issue end` removes
-the worktree and its record together, which covers clearing.
+**That write is not sufficient as the rebind, and `review request` needs an
+explicit one.** Letting the write itself serve as the rebind assumed the command
+could always discover the right PR again, and it cannot. The two rules collide:
+if `review request` honors the record it can never escape a stale or wrong
+binding, and if it ignores the record and searches `pr_repo` it can rebind to
+the wrong PR — which is the branch matching this section exists to replace. The
+superseded case closes the trap: an old PR and its replacement share a head
+branch, the head lookup returns `Ambiguous`, and an acting path refuses. The
+command that was supposed to fix the binding is the one that cannot run.
+
+Ranking the candidates by state would paper over that one case and open a worse
+one, since ranking across head owners is how a stranger's merged PR wins. So the
+rule stays strict and gains a human-supplied escape:
+
+- The recorded locator is authoritative for **acting paths too**, not only for
+  `status`. `review request` and `review finish` use it when it is present.
+- Branch discovery runs only when no PR is recorded.
+- `issue review request --pr <URL|number>` sets or replaces the binding
+  outright. A URL names its own repository; a bare number means `pr_repo`.
+
+`issue end` removes the worktree and its record together, which covers
+clearing.
 
 A recorded URL can still go stale in one direction the flow does not reach: a PR
 deleted, transferred, or in a repository the token can no longer see. Status
@@ -402,12 +465,65 @@ globally exported `LINEAR_API_KEY` resolves to Linear for every project, so a
 GitHub project on such a machine must name `kind` explicitly, and `devkit
 doctor` prints which tracker resolved and why.
 
+### Most of the trait has no caller
+
+`assigned_history` and `timeline_origin` are not the only dead methods, and the
+gap is not a detail. Counting callers of each `Tracker` method from outside
+`tracker/`:
+
+| Method | Callers outside the tracker module |
+|---|---|
+| `states`, `issue_url` | 4 each |
+| `check` | 2 |
+| `title`, `issue_ref`, `issue_pr` | 1 each |
+| `details`, `candidates`, `issues_for_prs`, `assigned_history`, `timeline_origin` | **0** |
+
+Phase 2 moved `status` and `end` onto the seam. It did not move `setup`,
+`checkout-pr`'s bare-number arm, `prs`, or the dashboard, and each of those
+still calls `linear::` directly. So the trait is a shape the code mostly does
+not go through, and implementing `GithubTracker` against it would deliver a
+tracker that most commands never ask.
+
+**`issue setup` is the sharpest case, because it is the entry point.**
+`resolve_slug` calls `crate::slug::linear_key()?` — a hard error without a
+Linear key — then `linear::issue_title`, then `slug::from_linear_title`, and
+prints `slug from Linear:`. `fetch_details` does the same for
+`linear::issue_details`, which is every fact the summary file holds. A GitHub
+project running `issue setup` therefore gets no title, no derived slug, and no
+summary file: the first two things this spec's opening paragraph promises. The
+`title` and `details` trait methods exist for exactly this and `setup` calls
+neither.
+
+**`checkout-pr`'s bare-number arm is the case with a wrong answer rather than no
+answer.** It reads the ambient `LINEAR_API_KEY` directly: absent, a number is
+taken as a GitHub PR without further thought; present, it calls
+`linear::issues_by_number` and can resolve the number to a Linear issue, or
+refuse it as ambiguous, on a project whose configured tracker is GitHub or none.
+The exported key of one project decides what a number means in another, and
+declaring `kind = "github"` does not stop it, because the code never asks which
+tracker was selected. `LinearTracker::candidates` already wraps
+`issues_by_number`, so routing through the trait leaves Linear's behavior
+identical where Linear is selected and correctly absent where it is not;
+`GithubTracker::candidates` returns empty, which is what makes a bare number a
+PR on a GitHub project — by the tracker's answer rather than by a missing
+environment variable.
+
+`prs.rs` reaches for `linear::workspace_url_key()` to build its link base, which
+`issue_url` covers. `summary.rs` and `setup.rs` also pass
+`linear::IssueDetails` around as a type; that one is a naming problem rather
+than a behavioral one, and renaming it is optional, not part of the gate.
+
+So wiring the remaining commands to the trait is its own delivery task, sized
+against that table rather than against a guess. Its gate is that every method
+has a non-test caller, and that a project with no `LINEAR_API_KEY` in the
+environment gets identical behavior from a Linear-configured devkit — which is
+also the regression test proving the trait carries what the direct calls did.
+
 ### The dashboard is not wired to the trait yet
 
-Phase 2 moved Linear behind the trait for `status` and `end`, but not for the
-dashboard. `assigned_history` and `timeline_origin` have no caller anywhere
-outside the tracker module: they are dead trait methods. `dashboard/data.rs`
-returns an empty list when `LINEAR_API_KEY` does not resolve and otherwise calls
+The dashboard is the fourth of the unwired commands, and the one whose two trait
+methods exist for nothing else. `dashboard/data.rs` returns an empty list when
+`LINEAR_API_KEY` does not resolve and otherwise calls
 `linear::assigned_issue_history_with_progress` directly.
 
 So implementing those two methods on `GithubTracker` delivers nothing on its
@@ -438,21 +554,21 @@ The key gains the tracker kind and the repository or workspace identity.
 
 ## Delivery
 
-Nine tasks. Task 1 lands first because everything else reads the repositories it
-resolves. Task 2 is the one that changes what every PR path answers, so it is
-separated from the plumbing beneath it rather than bundled in — a task that
-moves resolution and rewrites the lookup's contract at once has no clean gate
-when it goes wrong. Task 3 is the bulk. Tasks 4 and 5 are not optional and not
-deferrable: without 4 the finished verdict never closes on a PR outside
-`pr_repo`, and without 5 the dashboard silently shows nothing. Task 6 is the
-switch that makes GitHub live, which is why it follows them rather than the
-adapter.
+Twelve tasks, up from nine, because the fourth review round found that the trait
+most of this spec builds on is not what the commands actually call. Tasks 1
+through 4 are groundwork on the existing Linear paths and change no GitHub
+behavior; each is a regression gate in its own right, which is why they are
+separate. Task 5 is the adapter. Tasks 6 through 8 build the lifecycle the
+adapter needs. Task 9 is the switch that makes GitHub live, which is why it
+comes after all of them rather than after the adapter.
 
 1. **The repository resolution seam.** `[github] issues_repo` and `pr_repo`
-   config **with the schema regenerated in this same task**, the `Repos {
-   issues, prs }` resolution — from config first, origin only for a key config
-   left unset — every GitHub operation taking it instead of resolving its own,
-   and `--repo` on the `gh` paths including `gh pr edit`. No change to what any
+   config **with the schema regenerated in this same task**, the `Repos`
+   resolution — from config first, origin only for a key config left unset,
+   each field retaining whether it was configured, overridden or defaulted —
+   every GitHub operation taking it instead of resolving its own, and `--repo`
+   on the `gh` paths including `gh pr edit`, passed for any configured or
+   overridden repository even when it equals origin. No change to what any
    lookup answers. **The gate is that a project setting neither key behaves
    identically**, Linear projects included, since this task alone touches every
    PR path devkit has.
@@ -464,24 +580,42 @@ adapter.
    place.
 2. **The typed PR lookup.** `pr_by_head` moves to GraphQL
    `pullRequests(headRefName:)` with `totalCount`, both transports return
-   `Unique` / `NoMatch` / `Ambiguous` / `Unavailable`, and every caller is
-   rewritten to branch on it: `branch_pr_number`, `existing_pr` and
+   `Unique` / `NoMatch` / `Ambiguous` / `Unavailable`, and the acting callers
+   are rewritten to branch on it: `branch_pr_number`, `existing_pr` and
    `fetch_pr_full` stop collapsing the answer with `.ok()`, the `gh` fallback
-   fires only on `Unavailable` and drops `--limit 1`, acting paths refuse an
-   ambiguous answer, and `status`'s `best_pr` reports `AMBIGUOUS` with the
-   finished gate closed. The gate is that an unambiguous single-repository
-   project — every project today — resolves the same PR it always did.
-3. **The adapter.** `github.rs` with the query, parse and wrapper split, the
+   fires only on `Unavailable` and drops `--limit 1`, and `review request` and
+   `review finish` refuse an ambiguous answer. The gate is that an unambiguous
+   single-repository project — every project today — resolves the same PR it
+   always did.
+3. **Status's PR resolution and the tagged row.** `fetch_prs` stops pulling the
+   repository's PRs with `--limit 500` and resolves each distinct worktree
+   branch through the typed lookup, batched by GraphQL alias. `IssueWorktree`
+   carries the tagged status, with `pr_state`, `pr_number` and `pr_url` derived
+   from it so the serialized shape survives; the finished verdict reads the tag;
+   `triage.rs` renders the ambiguous case from the tag rather than formatting
+   `#0`; the MCP `issue.status` action gains the candidate list.
+4. **Wire the remaining commands to the trait.** `setup` takes its title and its
+   summary facts from `title` and `details` instead of `linear::issue_title` and
+   `linear::issue_details`, and stops hard-requiring a Linear key;
+   `checkout-pr`'s bare-number arm resolves candidates through `candidates`
+   instead of reading `LINEAR_API_KEY`; `prs.rs` takes its link base from
+   `issue_url` instead of `linear::workspace_url_key`. The gate is that every
+   trait method except the two the dashboard uses has a non-test caller, and
+   that a Linear-configured project behaves identically through the new path.
+5. **The adapter.** `github.rs` with the query, parse and wrapper split, the
    `Tracker` implementation including the linked-PR ranking rule, and its
    fixture tests. No wiring yet.
-4. **PR identity: the record and the locator.** `IssueRecord` gains the optional
-   PR URL; `checkout-pr` and **`review request`** both write it whenever they
-   resolve a PR; `status` queries a recorded PR exactly rather than matching on
-   branch name, and treats one that no longer resolves as unknown rather than
-   falling back. A PR identifier carries `{ repo, number }` so `classify` keeps
-   the repository from a pasted PR URL, and the GitHub adapter's `issue_ref`
-   refuses an issue URL outside `issues_repo`.
-5. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
+6. **Identifier repositories.** A PR identifier carries `{ repo, number }`, so
+   `classify` keeps the repository from a pasted PR URL and only a bare number
+   or `#42` defaults to `pr_repo`; the GitHub adapter's `issue_ref` refuses an
+   issue URL outside `issues_repo`, naming both.
+7. **The recorded PR binding.** `IssueRecord` gains the optional PR locator;
+   `checkout-pr` and `review request` both write it whenever they resolve a PR;
+   the record is authoritative for acting paths as well as for `status`, with
+   branch discovery running only when nothing is recorded; `issue review request
+   --pr <URL|number>` sets or replaces it; a recorded PR that no longer resolves
+   reports unknown rather than falling back.
+8. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
    configured tracker and calls `assigned_history` and `timeline_origin` instead
    of Linear directly. Linear's behavior through the new path is the regression
    gate. **Every dashboard cache key gets scoped**, not just the issue one:
@@ -489,27 +623,28 @@ adapter.
    component, so `issues`, `pr-timeline-mine` and `pr-timeline-all` are already
    shared by every project on the machine. The key gains the tracker, the
    repository and the viewer identity.
-6. **Selection and detection.** `TrackerKind::Github` constructs `GithubTracker`
+9. **Selection and detection.** `TrackerKind::Github` constructs `GithubTracker`
    instead of the stand-in, with `declared` and the reason line;
    `tracker::resolve` regains `repo` and is handed the resolved `repos.issues`;
    `ready` rests on a token plus that resolved repository rather than on
    `repo_slug(cwd)`; detection validates the origin host is `github.com`. This
-   lands after tasks 4 and 5 on purpose: it is the switch that makes GitHub
+   lands after tasks 6 through 8 on purpose: it is the switch that makes GitHub
    live, and flipping it while the recorded-PR lifecycle or the dashboard is
    still half-wired would ship a tracker that reports confidently wrong
    verdicts.
-7. **`devkit auth github`** and the doctor hint, with the identity taken from
-   the resolved token rather than from the active `gh` account.
-8. **Dogfood.** devkit's own `devkit.toml` declares `[tracker] kind = "github"`.
-   Worth noting: this repository currently has no GitHub issues filed, so the
-   declaration exercises the empty-tracker path and little else. It becomes real
-   exercise once devkit work is filed as issues. Land it last, or defer it.
-9. **Documentation.** `docs/configuration.md` gains the `[tracker] kind =
-   "github"` row, the `[github]` table, and the auth instruction; `README.md` gains
-   `devkit auth github`; `AGENTS.md`'s tracker paragraph drops "there is no
-   GitHub implementation" and describes the real arm; `skills/using-devkit/`'s
-   CLI reference gains the new subcommand. Schema regenerates via
-   `DEVKIT_UPDATE_SCHEMA=1 cargo test`.
+10. **`devkit auth github`** and the doctor hint, with the identity taken from
+    the resolved token rather than from the active `gh` account.
+11. **Dogfood.** devkit's own `devkit.toml` declares `[tracker] kind =
+    "github"`. Worth noting: this repository currently has no GitHub issues
+    filed, so the declaration exercises the empty-tracker path and little else.
+    It becomes real exercise once devkit work is filed as issues. Land it last,
+    or defer it.
+12. **Documentation.** `docs/configuration.md` gains the `[tracker] kind =
+    "github"` row, the `[github]` table, and the auth instruction; `README.md`
+    gains `devkit auth github`; `AGENTS.md`'s tracker paragraph drops "there is
+    no GitHub implementation" and describes the real arm; `skills/using-devkit/`'s
+    CLI reference gains the new subcommand and `--pr`. Schema regenerates via
+    `DEVKIT_UPDATE_SCHEMA=1 cargo test`.
 
 ## Testing
 
@@ -571,6 +706,31 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   yields none, which resolves to `pr_repo`. `issue_ref` accepts an issue URL in
   `issues_repo`, refuses one outside it naming both repositories, and accepts a
   bare number.
+- **Status's PR resolution.** A repository whose PR count exceeds any single
+  window still resolves each worktree branch correctly, which the `--limit 500`
+  listing could not guarantee; two PRs on one branch make that row ambiguous
+  rather than picking a winner; and the alias batching issues one round trip for
+  many branches.
+- **The tagged row.** `triage.rs` renders the ambiguous case without emitting a
+  PR number, so the `AMBIGUOUS #0` shape cannot recur; `pr_state`, `pr_number`
+  and `pr_url` derive from the tag with the same values they carry today for
+  `Unique` and `NoMatch`; the MCP `issue.status` payload round-trips the
+  candidates; and the finished verdict reads the tag rather than a string.
+- **The trait wiring.** Every `Tracker` method has a non-test caller. `issue
+  setup` on a Linear project produces the identical slug and summary through
+  `title` and `details`; on a GitHub project it produces them at all. A bare
+  number on a project whose tracker is GitHub or none resolves as a PR **with
+  `LINEAR_API_KEY` exported in the environment**, which is the regression the
+  ambient read caused.
+- **Repository provenance.** A `pr_repo` configured to the same slug as origin
+  still passes `--repo`, asserted by the argument vector rather than by
+  behavior, so an ambient `GH_REPO` cannot redirect it; an unset key that
+  defaults to origin may omit it.
+- **The `--pr` rebind.** `issue review request --pr <URL>` replaces an existing
+  binding and sets one where none existed; a bare number binds within
+  `pr_repo`; and the supersede case — an old and a new PR sharing a head branch,
+  which acting paths refuse as ambiguous — is recoverable through it, which is
+  the case that made the flag necessary.
 - **The dashboard through the trait.** The fake tracker drives the timeline, so
   the wiring is covered without a network call, and Linear's path is asserted
   unchanged.
@@ -602,7 +762,15 @@ adapter is network-free under test.
 | The PR head owner | Neither configured nor derived. `pr_by_head` searches GraphQL `headRefName` by branch name alone. |
 | REST or GraphQL for the head lookup | GraphQL. REST documents `head` only as `user:ref-name`, so the unqualified form a probe observed is undocumented behavior. |
 | What a PR lookup returns | `Unique` / `NoMatch` / `Ambiguous` / `Unavailable` from both transports. Only `Unavailable` falls back; acting paths refuse `Ambiguous`, read-only paths report it and keep the verdict closed. |
-| Who writes the recorded PR | `checkout-pr` and `review request` both, whenever either resolves one. That write is also the rebind; no separate command. |
+| Who writes the recorded PR | `checkout-pr` and `review request` both, whenever either resolves one. |
+| How a binding is corrected | `issue review request --pr <URL\|number>`. The implicit write is not enough: an old and a new PR share a head branch, so the lookup is `Ambiguous` and the acting path that would fix the binding refuses. |
+| Whether the record binds acting paths too | Yes. A record authoritative only for `status` leaves `review request` and `review finish` on branch discovery, which is what the record replaces. |
+| Ranking ambiguous head candidates by state | No. Ranking across head owners is how a stranger's merged PR wins. The rule stays strict and `--pr` is the escape. |
+| How status finds each worktree's PR | Per-branch typed lookups batched by GraphQL alias, not a `--limit 500` repository listing. Ambiguity computed from a truncated window is not ambiguity detection. |
+| How the row carries an ambiguous PR | A tagged status on `IssueWorktree`, with `pr_state`/`pr_number`/`pr_url` derived from it. A `"AMBIGUOUS"` string renders as `AMBIGUOUS #0` and gives MCP nothing structured. |
+| `--repo` when the configured value equals origin | Passed anyway. `gh` reads an ambient `GH_REPO`, so omitting it lets an environment variable override a setting the project made. `Repos` keeps configured/overridden/defaulted provenance to tell the cases apart. |
+| The bare-number arm's issue candidates | Through `Tracker::candidates`, never the ambient `LINEAR_API_KEY`. |
+| The commands phase 2 left on direct `linear::` calls | Wired in this phase. `setup`, `checkout-pr`'s fuzzy arm and `prs` were not moved onto the seam, and five trait methods had no caller at all. |
 | A recorded PR that no longer resolves | Reported as unknown with the verdict closed. Never a silent fall back to branch matching. |
 | A pasted PR URL's repository | Kept. A PR identifier is `{ repo, number }`; only a bare number or `#42` defaults to `pr_repo`. |
 | An issue URL outside `issues_repo` | Refused, naming both. `IssueRef` stays as it is rather than carrying a repository Linear never fills. |
