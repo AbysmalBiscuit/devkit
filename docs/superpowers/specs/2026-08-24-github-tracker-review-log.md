@@ -349,3 +349,93 @@ the typed lookup beneath it.
 
 Four rounds, twenty findings, none rejected. One round-3 decision reversed on
 round-4 evidence. This revision is unreviewed.
+
+## Round 5: Codex
+
+`VERDICT: REVISE`. The tagged status and task ordering are sound; the trait
+wiring and the PR-binding contract still have gaps.
+
+1. **Task 4 has no valid input-parsing transition for `issue setup`.** It uses
+   the Linear-only `slug::parse_issue_ref` (`setup.rs:292`), so a GitHub issue
+   URL or `#42` never reaches `GithubTracker::issue_ref`; replacing it with
+   detected-tracker parsing would break legacy undeclared projects where a
+   Linear URL supplies its slug without a key. And the trait method cannot
+   implement the promised repository-mismatch refusal, because it cannot return
+   an error (`tracker/mod.rs:129`). *Fix:* make `issue_ref` return
+   `Result<IssueRef>`, call it from setup and checkout, and preserve Linear-URL
+   parsing when the tracker was not explicitly declared.
+2. **Task 4 still leaves `issues_for_prs` dead.** The task replaces only the
+   workspace-URL lookup, while `devkit-issue::prs::gather` calls
+   `linear::issues_for_prs` directly behind `[linear] resolve_pr_links`
+   (`prs.rs:903`); GitHub PR rows never receive their closing issue ids, which
+   contradicts the task's own "every method has a caller" gate. *Fix:* inject
+   the resolved tracker into PR gathering and keep `resolve_pr_links` as
+   Linear's opt-in, in both the CLI and MCP paths.
+3. **`review request --pr` can authoritatively bind an unrelated valid PR.** The
+   spec checks repository and number but never that the PR belongs to this
+   worktree; once that PR merges, a completed issue and a clean tree satisfy
+   `issue end` and the worktree is deleted. *Fix:* require the selected PR's
+   `headRefOid` to equal the current pushed `HEAD` before acting or writing.
+4. **Record authority leaves `review finish --pr` precedence undefined.** That
+   flag wins over branch discovery by contract today (`finish.rs:81`); making
+   the record unconditionally authoritative either silently disables it or
+   leaves an undocumented override. *Fix:* define precedence as explicit
+   locator, then record, then branch lookup, with `review finish --pr` a
+   one-run, non-rebinding override.
+5. **Repository values become cache-key components without validation.**
+   `cache::path_for` interpolates the key straight into a filename
+   (`cache.rs:26`); a repository-controlled `devkit.toml` with traversal
+   components can make dashboard writes escape the cache directory. *Fix:*
+   validate configured repositories as `owner/repo` slugs and encode every
+   cache-scope component before constructing a filename.
+
+### Claude's response
+
+All five verified and accepted. Two were contradictions inside the spec itself
+rather than gaps between spec and code.
+
+- **Finding 1 accepted.** `fn issue_ref(&self, input: &str) -> IssueRef` has no
+  `Result`, so the refusal this spec promised in "A pasted URL keeps its
+  repository" could not be expressed by the method that was supposed to make it.
+  `checkout-pr` already works around the absence by treating a `/` in the
+  returned id as a parse failure; that heuristic goes away with the signature
+  change. The undeclared-project half is a real regression I would have shipped:
+  `slug::parse_issue_ref` recognizes a `linear.app` URL by string alone and
+  needs no key, so routing it through `NoneTracker` would drop the slug for a
+  project with no tracker configured. `Resolved.declared` already exists to
+  separate the project's own answer from devkit's fallback, so the fallback
+  keeps the permissive parse.
+- **Finding 2 accepted.** `prs::gather` calls `linear::issues_for_prs` directly,
+  which task 4 did not mention while its gate claimed every method would gain a
+  caller. `resolve_pr_links` keeps its meaning as Linear's opt-in — it was added
+  to gate an expensive call, and GitHub's equivalent is a field on a query
+  already being made.
+- **Finding 3 accepted; the check substituted.** The hazard is exact: `--pr`
+  with a mistyped number names a real PR that resolves cleanly, the record makes
+  it authoritative, and its merge lets `issue end` delete a worktree whose work
+  never landed. I did not take the `headRefOid` comparison, because it refuses
+  whenever the local branch is ahead of what was pushed — the normal state right
+  up until `review request` pushes — and breaks after any force-push. The
+  selected PR's `headRefName` must equal the worktree's branch instead: it is
+  what actually ties a PR to a worktree, it survives both cases, and it still
+  admits the supersede case the flag exists for.
+- **Finding 4 accepted.** `resolve_pr` is `pr_flag.or(branch_pr)`, so `review
+  finish --pr` wins today and my record rule would have silently changed what
+  the flag does. Precedence is now explicit locator, then record, then branch
+  discovery. This also let `--pr` collapse to one meaning everywhere — *use this
+  PR for this run* — with rebinding falling out of the already-stated rule that
+  `review request` records what it acted on, rather than being a second meaning
+  bolted onto the same flag.
+- **Finding 5 accepted, both halves.** `path_for` is a raw `format!("{key}.json")`
+  interpolation, and `issues_repo` travels with a checkout, so scoping the key
+  by repository would let a cloned repository steer a dashboard write out of the
+  cache directory. Validation and encoding are each right on their own:
+  a slug that is not `owner/repo` is a configuration error worth reporting where
+  it is resolved, and encoding makes `path_for` safe against whatever a future
+  key includes.
+
+Delivery stays at twelve tasks; tasks 1, 4, 7 and 8 grew.
+
+Five rounds, twenty-five findings, none rejected outright — one round-3 decision
+reversed on round-4 evidence, and one round-5 mechanism substituted with the
+reason recorded. This revision is unreviewed.
