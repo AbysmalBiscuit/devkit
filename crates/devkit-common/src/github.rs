@@ -381,6 +381,11 @@ pub struct PrBrief {
     pub state: String, // MERGED | OPEN | CLOSED
     pub url: String,
     pub head_ref_name: String,
+    /// The commit at the PR's head. This is what ties a PR to a worktree: a
+    /// branch name does not, since two forks routinely propose the same name.
+    pub head_ref_oid: String,
+    /// The fork the head branch lives in, when the API reported one.
+    pub head_repo_owner: Option<String>,
 }
 
 fn as_str(v: &Value, key: &str) -> String {
@@ -396,6 +401,23 @@ fn head_ref(v: &Value) -> String {
         .and_then(|r| r.as_str())
         .unwrap_or("")
         .to_string()
+}
+
+fn head_sha(v: &Value) -> String {
+    v.get("head")
+        .and_then(|h| h.get("sha"))
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn head_repo_owner(v: &Value) -> Option<String> {
+    v.get("head")?
+        .get("repo")?
+        .get("owner")?
+        .get("login")?
+        .as_str()
+        .map(String::from)
 }
 
 /// gh's `state` distinguishes MERGED; REST's `state` is only open/closed with a
@@ -438,6 +460,8 @@ fn parse_brief(v: &Value) -> Option<PrBrief> {
         state: gh_state(v),
         url: as_str(v, "html_url"),
         head_ref_name: head_ref(v),
+        head_ref_oid: head_sha(v),
+        head_repo_owner: head_repo_owner(v),
     })
 }
 
@@ -466,15 +490,90 @@ pub fn pr_full(slug: &str, n: u64) -> Result<PrFull> {
     Ok(parse_full(&rest_get(&format!("/repos/{slug}/pulls/{n}"))?))
 }
 
-/// The most recent PR whose head branch is `branch` (any state), or `None`.
-/// `branch` is qualified with the repo owner, matching devkit's in-repo branches.
-pub fn pr_by_head(slug: &str, branch: &str) -> Result<Option<PrBrief>> {
-    let owner = slug.split('/').next().unwrap_or("");
-    let path = format!(
-        "/repos/{slug}/pulls?head={owner}:{branch}&state=all&per_page=1&sort=created&direction=desc"
-    );
-    let v = rest_get(&path)?;
-    Ok(v.as_array().and_then(|a| a.first()).and_then(parse_brief))
+/// What a head-branch lookup found. An `Option` cannot distinguish "the
+/// transport answered and there is no such PR" from "the transport failed", and
+/// every caller collapsed both into a fallback that guessed.
+#[derive(Debug, Clone)]
+pub enum HeadLookup {
+    Unique(PrBrief),
+    NoMatch,
+    Ambiguous(Vec<PrBrief>),
+    Unavailable(String),
+}
+
+/// PRs whose head branch is `branch`, in any fork.
+///
+/// GraphQL rather than REST: REST documents `head` only as `user:ref-name`, and
+/// the head owner cannot be derived — git allows a push URL distinct from the
+/// fetch URL, `remote.pushDefault`, and per-branch push remotes, so `origin`
+/// need not be where a branch was pushed. `headRefName` is a documented
+/// argument that matches a fork's branch with no owner qualifier.
+pub fn head_query(slug: &str, branch: &str) -> String {
+    let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
+    format!(
+        r#"query {{ repository(owner: {owner}, name: {name}) {{
+             pullRequests(headRefName: {branch}, first: 10,
+                          states: [OPEN, CLOSED, MERGED]) {{
+               totalCount
+               nodes {{ number state url headRefName headRefOid
+                        headRepositoryOwner {{ login }} }}
+             }} }} }}"#,
+        owner = serde_json::Value::from(owner),
+        name = serde_json::Value::from(name),
+        branch = serde_json::Value::from(branch),
+    )
+}
+
+/// Parse a `head_query` response. `totalCount` beyond the returned nodes is
+/// ambiguity, not a unique answer: a winner outside the window would otherwise
+/// be silently dropped.
+pub fn parse_head_lookup(resp: &Value) -> HeadLookup {
+    if let Some(errs) = resp["errors"].as_array()
+        && !errs.is_empty()
+    {
+        let msg = errs
+            .iter()
+            .filter_map(|e| e["message"].as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return HeadLookup::Unavailable(msg);
+    }
+    let conn = &resp["data"]["repository"]["pullRequests"];
+    let total = conn["totalCount"].as_u64().unwrap_or(0);
+    let nodes: Vec<PrBrief> = conn["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            Some(PrBrief {
+                number: n["number"].as_u64()?,
+                state: n["state"].as_str()?.to_string(),
+                url: n["url"].as_str()?.to_string(),
+                head_ref_name: n["headRefName"].as_str()?.to_string(),
+                head_ref_oid: n["headRefOid"].as_str().unwrap_or("").to_string(),
+                head_repo_owner: n["headRepositoryOwner"]["login"]
+                    .as_str()
+                    .map(str::to_string),
+            })
+        })
+        .collect();
+    match nodes.len() {
+        0 => HeadLookup::NoMatch,
+        1 if total <= 1 => HeadLookup::Unique(nodes.into_iter().next().expect("len == 1")),
+        _ => HeadLookup::Ambiguous(nodes),
+    }
+}
+
+/// Look up `branch`'s PR in `repo`. `Unavailable` is the only answer a caller
+/// may respond to by trying another transport.
+pub fn pr_by_head(repo: &Repo, branch: &str) -> HeadLookup {
+    if token().is_none() {
+        return HeadLookup::Unavailable("no GitHub token resolved".into());
+    }
+    match graphql(&head_query(&repo.slug, branch)) {
+        Ok(v) => parse_head_lookup(&v),
+        Err(e) => HeadLookup::Unavailable(format!("{e:#}")),
+    }
 }
 
 /// Human logins currently requested as reviewers on PR `n`.
@@ -772,5 +871,76 @@ mod tests {
         // `--repo o/r` leaves GH_HOST free to pick an enterprise host, so every
         // `gh pr` argument names github.com explicitly.
         assert_eq!(r.qualified(), "github.com/o/r");
+    }
+
+    fn head_resp(nodes: &str, total: u32) -> serde_json::Value {
+        serde_json::from_str(&format!(
+            r#"{{"data":{{"repository":{{"pullRequests":{{"totalCount":{total},"nodes":[{nodes}]}}}}}}}}"#
+        ))
+        .unwrap()
+    }
+
+    const NODE_A: &str = r#"{"number":185,"state":"OPEN","url":"https://github.com/up/app/pull/185",
+      "headRefName":"fix/glyph-overhang","headRefOid":"aaaa111",
+      "headRepositoryOwner":{"login":"contributor"}}"#;
+    const NODE_B: &str = r#"{"number":42,"state":"MERGED","url":"https://github.com/up/app/pull/42",
+      "headRefName":"fix/glyph-overhang","headRefOid":"bbbb222",
+      "headRepositoryOwner":{"login":"someone-else"}}"#;
+
+    #[test]
+    fn one_node_parses_to_unique() {
+        let l = parse_head_lookup(&head_resp(NODE_A, 1));
+        let HeadLookup::Unique(pr) = l else {
+            panic!("expected Unique, got {l:?}")
+        };
+        assert_eq!(pr.number, 185);
+        assert_eq!(pr.head_ref_oid, "aaaa111");
+    }
+
+    #[test]
+    fn a_fork_head_still_parses_to_unique() {
+        // The whole reason this moved off REST: the head owner differs from the
+        // searched repository's owner and the match must still be found.
+        let HeadLookup::Unique(pr) = parse_head_lookup(&head_resp(NODE_A, 1)) else {
+            panic!("expected Unique")
+        };
+        assert_eq!(pr.head_repo_owner.as_deref(), Some("contributor"));
+    }
+
+    #[test]
+    fn zero_nodes_parses_to_no_match() {
+        assert!(matches!(
+            parse_head_lookup(&head_resp("", 0)),
+            HeadLookup::NoMatch
+        ));
+    }
+
+    #[test]
+    fn two_nodes_parse_to_ambiguous() {
+        let l = parse_head_lookup(&head_resp(&format!("{NODE_A},{NODE_B}"), 2));
+        let HeadLookup::Ambiguous(c) = l else {
+            panic!("expected Ambiguous, got {l:?}")
+        };
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn a_total_count_beyond_the_window_is_ambiguous_not_unique() {
+        // One node returned but the server says there are three: ranking a
+        // truncated set is exactly the false-unique this type exists to prevent.
+        assert!(matches!(
+            parse_head_lookup(&head_resp(NODE_A, 3)),
+            HeadLookup::Ambiguous(_)
+        ));
+    }
+
+    #[test]
+    fn a_graphql_error_body_parses_to_unavailable() {
+        let resp: serde_json::Value =
+            serde_json::from_str(r#"{"errors":[{"message":"Bad credentials"}]}"#).unwrap();
+        let HeadLookup::Unavailable(why) = parse_head_lookup(&resp) else {
+            panic!("expected Unavailable")
+        };
+        assert!(why.contains("Bad credentials"), "{why}");
     }
 }

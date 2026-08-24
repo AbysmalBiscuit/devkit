@@ -6,6 +6,7 @@ use devkit_config::Person;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+use super::finish::{Fallback, decide_fallback, resolve_acting};
 use super::{
     PrAction, Target, action_for, base_ctx, deliver, guard_branch, is_human_login, parse_args,
     person_by_login, render_review, require_pr_title, require_reviewer, resolve_target,
@@ -104,15 +105,16 @@ fn requested_reviewer_logins(pr: u64, cwd: &str, repo: &github::Repo) -> Result<
 /// The existing PR for head branch `branch` (number/state/url), over direct HTTP
 /// when possible else `gh pr list`. `Ok(None)` means no PR.
 fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<PrView>> {
-    if github::token().is_some()
-        && let Ok(found) = github::pr_by_head(&repo.slug, branch)
-    {
-        return Ok(found.map(|p| PrView {
+    let looked = github::pr_by_head(repo, branch);
+    if decide_fallback(&looked) == Fallback::No {
+        return Ok(resolve_acting(&looked)?.map(|p| PrView {
             number: p.number,
             state: p.state,
             url: p.url,
         }));
     }
+    // `--limit 1` is gone: the fallback must be able to see a second candidate
+    // rather than silently taking whichever came first.
     let v: Vec<PrView> = gh_json_in(
         &[
             "pr",
@@ -123,12 +125,14 @@ fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<Pr
             "all",
             "--json",
             "number,state,url",
-            "--limit",
-            "1",
         ],
         repo,
         cwd,
     )?;
+    anyhow::ensure!(
+        v.len() <= 1,
+        "several PRs share this head branch — pass --pr to choose one"
+    );
     Ok(v.into_iter().next())
 }
 
