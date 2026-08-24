@@ -83,3 +83,78 @@ observed fork keeps its issues on the fork, but the ordinary fork workflow keeps
 them upstream, and origin-only resolution cannot serve both.
 
 No second round was run. This revision is unreviewed.
+
+## Round 2: Codex
+
+Verdict: REVISE. Five more, all against the parts round 1 did not see.
+
+1. **`head_owner` cannot be project-global.** `repo_slug` reads the origin fetch
+   URL, but git supports a separate push URL, `remote.pushDefault` and per-branch
+   push remotes, and a checked-out contributor PR has a different head owner
+   again. Worse, the callers treat a successful-but-empty HTTP lookup as
+   authoritative instead of falling through to `gh`. Fix: resolve the head
+   repository per branch, or use an unqualified lookup with ambiguity refusal.
+
+2. **A recorded PR is authoritative even inside `pr_repo`.** The spec consults
+   the recorded URL only when the PR is outside `pr_repo`; otherwise status
+   still matches on `head_ref_name` alone within a capped listing. Two forks
+   sharing a branch name let status attach the wrong PR, and `issue end` could
+   then remove a worktree early. Fix: always query a recorded PR URL exactly,
+   and use branch discovery only for records without one.
+
+3. **`first: 10` leaves the ranking incomplete.** GitHub documents
+   `orderByState` only as "return results ordered by state", with no direction,
+   and the spec ignores `hasNextPage`. An eleventh candidate can change the
+   winner or turn a unique answer into a tie. Fix: request `pageInfo` and refuse
+   on `hasNextPage`, or paginate before ranking.
+
+4. **The call-site inventory has the wrong shape.** `gh pr edit` in
+   `review/request.rs` infers its repository from the working directory and is
+   absent from the spec's list. The dashboard's `pr-timeline-*` caches are also
+   global, so different repositories or viewers can be served each other's data.
+   Fix: audit every GitHub operation and every cache, not the `repo_slug`
+   callers.
+
+5. **The delivery order cannot land green.** Task 1 adds config fields while
+   schema regeneration waits until task 8, and the schema drift test fails
+   immediately. Task 3 also activates the adapter before the recorded-PR
+   lifecycle and the dashboard wiring exist. Fix: regenerate the schema in task
+   1 and move selection after those tasks.
+
+### Claude's response
+
+All five verified against the source and accepted. Three were confirmed by
+reading the code the review cited, and one turned out worse than reported.
+
+- **1** holds, and the mechanism is worth stating exactly: `branch_pr_number`
+  and its siblings are written as `if let Some(found) = …and_then(|slug|
+  pr_by_head(&slug, b).ok())`, so an HTTP call that succeeds and finds nothing
+  yields `Some(None)`, matches the `if let`, and returns `Ok(None)` without ever
+  trying `gh`. A wrong head owner therefore reports "no PR" authoritatively and
+  silently. The fix goes further than the review proposed: `head_owner` is
+  removed from the design entirely. An unqualified `head={branch}` lookup was
+  already measured to work against `mathix420/alacritree`, so the owner never
+  needs deriving, and the ambiguity it introduces is handled by refusing rather
+  than ranking.
+- **2** holds. `best_pr` filters on `p.head_ref_name == head` and nothing else,
+  so branch-name collision across forks is real. Always consulting a recorded PR
+  URL is both simpler than the conditional rule and safer, and it subsumes half
+  of finding 1: a contributor's PR is identified by its recorded URL rather than
+  by guessing whose fork the branch is on.
+- **3** holds. The ranking was always client-side, so `orderByState` was never
+  load-bearing; completeness was the real gap. The query requests `pageInfo` and
+  the adapter refuses on `hasNextPage` rather than ranking a truncated set.
+- **4** holds, and the cache half is worse than reported. `cache::path_for` is
+  `cache_dir()/dashboard/{key}.json` with no project component at all, so
+  `issues`, `pr-timeline-mine` and `pr-timeline-all` are already shared across
+  every project on the machine. The task is rewritten as an audit of every
+  GitHub operation and every cache key, since "the nine `repo_slug` callers" was
+  an inventory of the wrong thing and `gh pr edit` proves it.
+- **5** holds on both halves. `tests/config_schema.rs` compares the committed
+  schema against the generated one and fails on any drift, so a task that adds
+  config keys without regenerating cannot be green on its own, which the
+  project's per-task merge gate requires. Selection moves after the record and
+  dashboard tasks so the adapter is never live while half-wired.
+
+Two rounds have now run and neither returned APPROVED. Every finding across both
+was accepted; none was rejected. This revision is unreviewed.
