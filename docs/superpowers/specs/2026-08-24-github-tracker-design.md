@@ -1,7 +1,7 @@
 # The GitHub tracker
 
 **Date:** 2026-08-24
-**Status:** ready to plan, after one round of adversarial cross-model
+**Status:** ready to plan, after three rounds of adversarial cross-model
 review. See `2026-08-24-github-tracker-review-log.md`.
 **Parent:** `2026-08-23-pluggable-issue-tracker-design.md`, phase 3. That spec's
 phases 1 and 2 shipped. This one supersedes its "The GitHub mapping" section,
@@ -98,25 +98,64 @@ per-branch push remotes, so origin need not be where a branch was pushed. A
 worktree created by `checkout-pr` from a contributor's PR has a different head
 owner again.
 
-So the owner is dropped from the query rather than computed. An unqualified
-`head={branch}` matches PR 185 against `mathix420/alacritree`, so `pr_by_head`
-searches `pr_repo` by branch name alone. Where that returns more than one
-candidate, which two forks using the same branch name can produce, it refuses
-and names them instead of ranking.
+**So the lookup moves off REST onto GraphQL.** Dropping the owner from the REST
+query does work against the live API, but REST documents `head` only in the form
+`user:ref-name`; an unqualified value is undocumented behavior that a probe can
+observe and cannot make stable. GraphQL's `Repository.pullRequests` takes
+`headRefName` as a documented argument, matches a fork's head branch without any
+owner qualifier, and is the mechanism `gh pr list --head` itself uses. Verified
+against `mathix420/alacritree`:
+`pullRequests(headRefName: "fix/glyph-overhang-clipped")` returns PR 185, whose
+`headRepositoryOwner` is `AbysmalBiscuit`, with `totalCount: 1`.
 
-**A silent failure mode has to close with it.** `branch_pr_number` and its
-siblings are written as `if let Some(found) = …and_then(|slug| pr_by_head(&slug,
-b).ok())`, so a lookup that succeeds and finds nothing produces `Some(None)`,
-satisfies the `if let`, and returns `Ok(None)` without ever reaching the `gh`
-fallback. Today that is harmless because the head owner is always right; with
-cross-repository lookups in play, a missed match becomes an authoritative and
-silent "no PR". The unqualified query is what makes the short-circuit safe
-again, and the reason is recorded here because the code reads as if the fallback
-still covers it.
+`totalCount` alongside the nodes is what makes ambiguity detectable rather than
+inferred, so two forks proposing the same branch name are seen as two.
 
-(`gh pr list --repo <upstream> --head <branch>` also finds the fork's PR, while
-the owner-qualified `--head owner:branch` does not. The REST and `gh` paths
-disagree, so each keeps the spelling verified for it.)
+### The PR lookup answers with a type, not an `Option`
+
+`pr_by_head` today returns `Result<Option<PrBrief>>` and every caller collapses
+it. `branch_pr_number`, `existing_pr` and `fetch_pr_full` are each written as
+`if let Some(found) = …and_then(|slug| pr_by_head(&slug, b).ok())`, which fails
+in two directions at once. A lookup that succeeds and finds nothing yields
+`Some(None)`, satisfies the `if let`, and returns "no PR" without consulting
+`gh`. A lookup that errors yields `None`, falls through to `gh pr list --head
+<branch> --limit 1`, and takes an arbitrary one of several matches. Refusing
+inside `pr_by_head` would therefore change nothing: the refusal is swallowed by
+`.ok()` and the guess happens anyway.
+
+So both transports, HTTP and `gh`, return the same four-way answer:
+
+| Answer | Meaning | Caller |
+|---|---|---|
+| `Unique(pr)` | exactly one PR has this head branch | use it |
+| `NoMatch` | the transport answered; there is no such PR | trust it; do **not** fall back |
+| `Ambiguous(Vec<pr>)` | several candidates share the branch name | see below |
+| `Unavailable(reason)` | no token, or the request failed | fall back to the other transport |
+
+Only `Unavailable` reaches the fallback. That alone closes the silent
+short-circuit, independently of the ambiguity work.
+
+Ambiguity divides by what the caller is about to do:
+
+- **Acting paths refuse.** `review request` is about to create or comment on a
+  PR and `review finish` is about to merge or close one; `checkout-pr` is about
+  to build a worktree from the answer. Each surfaces the candidates and stops.
+- **Read-only paths record it.** `issue status` reports the row with
+  `pr_state = "AMBIGUOUS"`, lists the candidates, and the finished verdict stays
+  closed with that as its reason. A report that cannot identify the PR must not
+  claim the work is done — `issue end` reads this verdict to decide whether a
+  worktree may be deleted, and a stranger's merged PR is exactly the input that
+  must not authorize a deletion.
+
+`best_pr` in `status.rs` is the third place a guess is made: it selects on
+`p.head_ref_name == head` alone, from a listing capped at 500, and ranks the
+survivors. It moves onto the same typed answer, so several same-named branches
+become `Ambiguous` there too rather than a silent winner.
+
+(`gh pr list --repo <upstream> --head <branch>` finds the fork's PR, while the
+owner-qualified `--head owner:branch` does not. The `gh` fallback keeps the
+spelling verified for it, and `--limit 1` is dropped so it can see a second
+candidate.)
 
 ### The repository resolution seam
 
@@ -149,6 +188,20 @@ override of `pr_repo` for one invocation.
 repository per call, and `tracker::resolve` regains the `repo` parameter that
 `8ccb43e` removed.
 
+**Resolution happens before construction, and origin is consulted only for what
+config did not supply.** A project that sets `issues_repo` and `pr_repo` has
+named both repositories outright; asking the `origin` remote for them again is
+pointless, and failing when there is no GitHub origin is wrong. So `Repos` is
+resolved first — each key from config, falling back to the origin remote for a
+key config left unset — and the resolved value is handed to the tracker. Origin
+is required only when a key is missing, and the error names which key would fix
+it.
+
+This is what `ready` then rests on: **a resolved token plus a resolved
+`repos.issues`**, not `repo_slug(cwd)`. A GitHub project whose code lives
+elsewhere, or one worked on from a directory with no GitHub remote, is ready
+when its config says which repository holds the issues.
+
 **Detection must validate the host.** `slug_from_remote_url` parses any
 `https://host/owner/repo` shape without checking the host, so
 `https://gitlab.com/o/r` yields `o/r` and `repo_slug` succeeds. `detect()` reads
@@ -162,8 +215,8 @@ callers already know they hold a GitHub URL.
 | Method | Source |
 |---|---|
 | `kind` | `TrackerKind::Github` |
-| `ready` | `github::token()` resolves and `repo_slug` succeeds |
-| `issue_ref` | strips a leading `#`; recognizes a `github.com/…/issues/N` URL |
+| `ready` | `github::token()` resolves and `repos.issues` resolved |
+| `issue_ref` | strips a leading `#`; recognizes a `github.com/…/issues/N` URL, refusing one whose repository is not `issues_repo` |
 | `title` / `details` | `repository.issue(number:)` fields |
 | `states` | `state` + `stateReason`, batched by alias the way `linear::build_query` batches |
 | `issue_pr` | `closedByPullRequestsReferences(first: 10, includeClosedPrs: true, orderByState: true)`, any repository; see below |
@@ -247,8 +300,29 @@ a PR elsewhere reports `pr_state` as `NO_PR` and the finished verdict says "no
 PR" no matter what happens to it.
 
 So `IssueRecord` gains an optional PR reference, the full URL, which identifies
-both repository and number. `checkout-pr` writes it. It is absent on records
-written before it existed and on `issue setup` worktrees that have no PR yet.
+both repository and number. It is absent on records written before it existed
+and on an `issue setup` worktree whose PR does not exist yet.
+
+**Every path that learns the PR writes it, not only `checkout-pr`.** The
+ordinary lifecycle is `issue setup` then `issue review request`: setup has no PR
+to record, and `review request` is the command that finds or creates one. If
+only `checkout-pr` wrote the field, that whole flow would leave the record empty
+and fall back to the branch matching this section exists to replace — the
+authoritative record would be authoritative for exactly the case that did not
+need it. So `review request` persists the PR URL whenever it resolves one,
+whether it found an existing PR or opened a new one.
+
+That write is also the rebind. A superseded PR is replaced the next time
+`review request` runs and resolves a different one, so the binding is mutable by
+the normal flow and no separate rebind command is needed. `issue end` removes
+the worktree and its record together, which covers clearing.
+
+A recorded URL can still go stale in one direction the flow does not reach: a PR
+deleted, transferred, or in a repository the token can no longer see. Status
+treats a recorded PR that does not resolve as unknown rather than as an error —
+the row reports it, and the finished verdict stays closed. It does not silently
+fall back to branch matching, because a silent fallback is how a stranger's PR
+gets attached in the first place.
 
 **A recorded PR is always authoritative, not only when it is elsewhere.** The
 first version of this consulted the record only for a PR outside `repos.prs`,
@@ -259,6 +333,32 @@ would let `issue end` judge a worktree finished on a stranger's merge. So
 `status` queries a recorded URL exactly, in whatever repository it names, and
 falls back to branch discovery only for a worktree whose record carries no PR.
 Those keep today's behavior exactly.
+
+### A pasted URL keeps its repository
+
+`checkout-pr` classifies its input in `classify`, and a GitHub PR URL becomes
+`Ident::Pr(u64)` — the number survives, the repository is thrown away. With one
+resolved repository that loss is invisible, because the only repository the
+number could mean is the one being used. With `issues_repo` and `pr_repo`
+configured separately it stops being invisible: pasting
+`github.com/other/repo/pull/42` resolves `pr_repo#42`, a different pull request
+that happens to share a number, and `checkout-pr` builds a worktree from it
+without a word.
+
+So a PR identifier carries `{ repo: Option<String>, number: u64 }`. `None` means
+the input was a bare number or a `#42`, which still defaults to `pr_repo`; a URL
+fills it in and that repository wins. The same locator is what
+`issue_pr` returns and what the record stores, so one shape describes a PR
+everywhere.
+
+Issue URLs take the other resolution. `IssueRef { id, slug }` is shared with
+Linear, and widening it for a field only GitHub populates would push GitHub's
+repository question into Linear's type. The GitHub adapter's `issue_ref`
+instead refuses a `github.com/…/issues/N` URL whose repository is not
+`issues_repo`, naming both repositories in the error. The tracker is scoped to
+one repository by construction, so an issue outside it is genuinely unanswerable
+rather than merely inconvenient, and refusing says so. A bare number or `#42`
+continues to mean `issues_repo`.
 
 ### Authentication
 
@@ -338,35 +438,50 @@ The key gains the tracker kind and the repository or workspace identity.
 
 ## Delivery
 
-Eight tasks. Task 1 lands first because everything else reads the repositories
-it resolves, and it is the one task that touches Linear paths, so it carries its
-own regression gate. Task 2 is the bulk. Tasks 3 and 4 are not optional and not
-deferrable: without 3 the finished verdict never closes on a PR outside
-`pr_repo`, and without 4 the dashboard silently shows nothing. Task 5 is the
+Nine tasks. Task 1 lands first because everything else reads the repositories it
+resolves. Task 2 is the one that changes what every PR path answers, so it is
+separated from the plumbing beneath it rather than bundled in — a task that
+moves resolution and rewrites the lookup's contract at once has no clean gate
+when it goes wrong. Task 3 is the bulk. Tasks 4 and 5 are not optional and not
+deferrable: without 4 the finished verdict never closes on a PR outside
+`pr_repo`, and without 5 the dashboard silently shows nothing. Task 6 is the
 switch that makes GitHub live, which is why it follows them rather than the
 adapter.
 
 1. **The repository resolution seam.** `[github] issues_repo` and `pr_repo`
    config **with the schema regenerated in this same task**, the `Repos {
-   issues, prs }` resolution, every GitHub operation taking it instead of
-   resolving its own, `--repo` on the `gh` paths including `gh pr edit`, and
-   `pr_by_head` dropping the head-owner qualifier for an unqualified branch
-   lookup that refuses ambiguity. **The gate is that a project setting neither
-   key behaves identically**, Linear projects included, since this task alone
-   touches every PR path devkit has.
+   issues, prs }` resolution — from config first, origin only for a key config
+   left unset — every GitHub operation taking it instead of resolving its own,
+   and `--repo` on the `gh` paths including `gh pr edit`. No change to what any
+   lookup answers. **The gate is that a project setting neither key behaves
+   identically**, Linear projects included, since this task alone touches every
+   PR path devkit has.
 
    Schema regeneration cannot wait for the documentation task:
    `tests/config_schema.rs` compares the committed schema against the generated
    one and fails on any drift, so a task that adds config keys without it is red
    the moment it lands. Every task that changes a config type regenerates in
    place.
-2. **The adapter.** `github.rs` with the query, parse and wrapper split, the
+2. **The typed PR lookup.** `pr_by_head` moves to GraphQL
+   `pullRequests(headRefName:)` with `totalCount`, both transports return
+   `Unique` / `NoMatch` / `Ambiguous` / `Unavailable`, and every caller is
+   rewritten to branch on it: `branch_pr_number`, `existing_pr` and
+   `fetch_pr_full` stop collapsing the answer with `.ok()`, the `gh` fallback
+   fires only on `Unavailable` and drops `--limit 1`, acting paths refuse an
+   ambiguous answer, and `status`'s `best_pr` reports `AMBIGUOUS` with the
+   finished gate closed. The gate is that an unambiguous single-repository
+   project — every project today — resolves the same PR it always did.
+3. **The adapter.** `github.rs` with the query, parse and wrapper split, the
    `Tracker` implementation including the linked-PR ranking rule, and its
    fixture tests. No wiring yet.
-3. **The PR reference in the record.** `IssueRecord` gains the optional PR URL,
-   `checkout-pr` writes it, and `status` queries a recorded PR exactly rather
-   than matching on branch name.
-4. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
+4. **PR identity: the record and the locator.** `IssueRecord` gains the optional
+   PR URL; `checkout-pr` and **`review request`** both write it whenever they
+   resolve a PR; `status` queries a recorded PR exactly rather than matching on
+   branch name, and treats one that no longer resolves as unknown rather than
+   falling back. A PR identifier carries `{ repo, number }` so `classify` keeps
+   the repository from a pasted PR URL, and the GitHub adapter's `issue_ref`
+   refuses an issue URL outside `issues_repo`.
+5. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
    configured tracker and calls `assigned_history` and `timeline_origin` instead
    of Linear directly. Linear's behavior through the new path is the regression
    gate. **Every dashboard cache key gets scoped**, not just the issue one:
@@ -374,20 +489,22 @@ adapter.
    component, so `issues`, `pr-timeline-mine` and `pr-timeline-all` are already
    shared by every project on the machine. The key gains the tracker, the
    repository and the viewer identity.
-5. **Selection and detection.** `TrackerKind::Github` constructs `GithubTracker`
+6. **Selection and detection.** `TrackerKind::Github` constructs `GithubTracker`
    instead of the stand-in, with `declared` and the reason line;
-   `tracker::resolve` regains `repo` and is handed `repos.issues`; detection
-   validates the origin host is `github.com`. This lands after tasks 3 and 4 on
-   purpose: it is the switch that makes GitHub live, and flipping it while the
-   recorded-PR lifecycle or the dashboard is still half-wired would ship a
-   tracker that reports confidently wrong verdicts.
-6. **`devkit auth github`** and the doctor hint, with the identity taken from
+   `tracker::resolve` regains `repo` and is handed the resolved `repos.issues`;
+   `ready` rests on a token plus that resolved repository rather than on
+   `repo_slug(cwd)`; detection validates the origin host is `github.com`. This
+   lands after tasks 4 and 5 on purpose: it is the switch that makes GitHub
+   live, and flipping it while the recorded-PR lifecycle or the dashboard is
+   still half-wired would ship a tracker that reports confidently wrong
+   verdicts.
+7. **`devkit auth github`** and the doctor hint, with the identity taken from
    the resolved token rather than from the active `gh` account.
-7. **Dogfood.** devkit's own `devkit.toml` declares `[tracker] kind = "github"`.
+8. **Dogfood.** devkit's own `devkit.toml` declares `[tracker] kind = "github"`.
    Worth noting: this repository currently has no GitHub issues filed, so the
    declaration exercises the empty-tracker path and little else. It becomes real
    exercise once devkit work is filed as issues. Land it last, or defer it.
-8. **Documentation.** `docs/configuration.md` gains the `[tracker] kind =
+9. **Documentation.** `docs/configuration.md` gains the `[tracker] kind =
    "github"` row, the `[github]` table, and the auth instruction; `README.md` gains
    `devkit auth github`; `AGENTS.md`'s tracker paragraph drops "there is no
    GitHub implementation" and describes the real arm; `skills/using-devkit/`'s
@@ -418,28 +535,42 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   the two-merged case is reported as ambiguous rather than silently ranked.
 - **The recorded PR.** A record carrying a cross-repository PR URL drives status
   to the finished verdict; a record without one keeps today's behavior; an old
-  record with no field at all still deserializes.
+  record with no field at all still deserializes; `review request` writes the
+  URL on a worktree whose record had none, and overwrites it when it resolves a
+  different PR; and a recorded URL that no longer resolves reports unknown
+  rather than falling back to branch matching.
 - **Cache scoping.** Two projects on different trackers, and two viewers on one
   project, each get their own `issues` and `pr-timeline-*` entries rather than
   reading each other's.
 - **Host validation.** Detection returns no tracker for a GitLab or Bitbucket
   origin, and GitHub for a `github.com` origin in each remote-URL shape
   `slug_from_remote_url` accepts.
-- **Repository resolution.** Neither key set resolves both repositories and the
-  head owner to origin; each key set independently; both set; and `issue prs
+- **Repository resolution.** Neither key set resolves both repositories to
+  origin; each key set independently; both set; both set with no GitHub origin
+  at all, which must succeed and must report `ready`; one key set with no origin
+  to supply the other, which must fail naming the missing key; and `issue prs
   --repo` still overriding `pr_repo` for one invocation. The identical-behavior
   gate for an unconfigured project is asserted at this layer rather than left to
   manual checking.
-- **`pr_by_head` without an owner qualifier.** A fork PR is found by branch name
-  alone against the upstream repository, is missed when the owner is taken from
-  the searched repository, and two candidates sharing a branch name are refused
-  rather than ranked.
+- **The typed PR lookup.** A `headRefName` response with one node parses to
+  `Unique`, with `totalCount: 0` to `NoMatch`, with two nodes to `Ambiguous`,
+  and a transport error to `Unavailable`. Above that, a caller test asserts the
+  branching that made this a type: `NoMatch` does not reach the `gh` fallback,
+  `Unavailable` does, `review request` and `review finish` refuse on
+  `Ambiguous`, and `status` reports `AMBIGUOUS` with the finished verdict
+  closed. The fork case is covered by a fixture whose single node carries a
+  `headRepositoryOwner` other than the searched repository's owner.
 - **Linked-PR completeness.** A response carrying `hasNextPage: true` is refused
   rather than ranked, so a winner outside the window can never be silently
   dropped.
 - **Recorded PR precedence.** A record whose PR sits inside `pr_repo` is still
   queried by URL rather than matched by branch, proven by a fixture where a
   second PR shares the branch name and would otherwise win.
+- **Identifier repository.** `classify` on `github.com/other/repo/pull/42`
+  yields that repository rather than `pr_repo`; on `#42` and on a bare number it
+  yields none, which resolves to `pr_repo`. `issue_ref` accepts an issue URL in
+  `issues_repo`, refuses one outside it naming both repositories, and accepts a
+  bare number.
 - **The dashboard through the trait.** The fake tracker drives the timeline, so
   the wiring is covered without a network call, and Linear's path is asserted
   unchanged.
@@ -468,13 +599,20 @@ adapter is network-free under test.
 | A linked PR in another repository | Returned, not filtered, and persisted in `IssueRecord` so status can see it. |
 | Repository configuration | `[github] issues_repo` and `pr_repo`, separately configurable, both defaulting to origin. |
 | Where `[github]` sits | Top level, not under `[tracker]`. `pr_repo` serves Linear projects on a fork too. |
-| The PR head owner | Neither configured nor derived. `pr_by_head` searches by branch name alone and refuses ambiguity. |
+| The PR head owner | Neither configured nor derived. `pr_by_head` searches GraphQL `headRefName` by branch name alone. |
+| REST or GraphQL for the head lookup | GraphQL. REST documents `head` only as `user:ref-name`, so the unqualified form a probe observed is undocumented behavior. |
+| What a PR lookup returns | `Unique` / `NoMatch` / `Ambiguous` / `Unavailable` from both transports. Only `Unavailable` falls back; acting paths refuse `Ambiguous`, read-only paths report it and keep the verdict closed. |
+| Who writes the recorded PR | `checkout-pr` and `review request` both, whenever either resolves one. That write is also the rebind; no separate command. |
+| A recorded PR that no longer resolves | Reported as unknown with the verdict closed. Never a silent fall back to branch matching. |
+| A pasted PR URL's repository | Kept. A PR identifier is `{ repo, number }`; only a bare number or `#42` defaults to `pr_repo`. |
+| An issue URL outside `issues_repo` | Refused, naming both. `IssueRef` stays as it is rather than carrying a repository Linear never fills. |
 | A recorded PR URL | Always authoritative, in any repository. Branch discovery serves only records without one. |
 | Truncated linked-PR results | Refused via `hasNextPage`, never ranked. |
 | Schema regeneration | In the task that changes the config type, not deferred to the documentation task. |
 | When GitHub goes live | After the recorded-PR and dashboard tasks, so the switch never exposes a half-wired tracker. |
 | `tracker::resolve`'s signature | Regains `repo`, handed `repos.issues`. |
 | Host validation in detection | Added. A non-`github.com` origin no longer detects as GitHub. |
+| What `ready` means | A resolved token plus a resolved `repos.issues`, not `repo_slug(cwd)`. A project that names its repositories needs no GitHub origin. |
 | The dashboard | Wired to the trait in this phase, not assumed. |
 | A `devkit auth github` credential store | No. It reports the resolved token's identity and lists `gh` accounts as diagnostics. |
 | Conventional-title parsing | Out of scope. Its own spec. |

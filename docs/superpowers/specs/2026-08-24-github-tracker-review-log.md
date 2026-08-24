@@ -158,3 +158,98 @@ reading the code the review cited, and one turned out worse than reported.
 
 Two rounds have now run and neither returned APPROVED. Every finding across both
 was accepted; none was rejected. This revision is unreviewed.
+
+## Round 3: Codex
+
+`VERDICT: REVISE`. Tasks 2 through 4 have no remaining ordering blocker, but
+task 1 is not behaviorally safe and task 5 still has a readiness bug.
+
+1. **The unqualified REST lookup relies on undocumented behavior.** GitHub's
+   REST contract requires `head=user:ref-name`; `gh pr list --head` works
+   because `gh` uses GraphQL `pullRequests(headRefName:)`, not that REST
+   behavior. A live probe does not make it stable. *Fix:* implement direct
+   lookup with GraphQL `pullRequests(headRefName:)`, matching the documented
+   mechanism `gh` uses.
+2. **Ambiguity refusal is not end to end.** `review request` and `review finish`
+   discard `pr_by_head` errors with `.ok()` and fall back to `gh pr list --limit
+   1` (`request.rs:107`, `finish.rs:43`); `status` independently ranks
+   same-named branches in `best_pr` (`status.rs:29`). Acting paths can still
+   choose arbitrarily, and `issue end` can treat a stranger's merged PR as
+   grounds for deletion. *Fix:* return a typed unique/none/ambiguous/unavailable
+   result from both transports; acting paths propagate ambiguity, status records
+   a per-row ambiguous/unknown PR and keeps the finished gate closed.
+3. **Only `checkout-pr` writes the authoritative URL.** The normal `issue setup`
+   → `issue review request` flow reads the record but never updates it when it
+   finds or creates the exact PR (`request.rs:207`); replacement PRs likewise
+   leave an immutable stale binding. *Fix:* make the binding updateable, persist
+   it whenever review request finds or creates a PR, and provide a rebind/clear
+   path for superseded PRs.
+4. **Repository-qualified URLs collapse to bare numbers.** `checkout-pr`
+   discards the repository from a PR URL (`checkout.rs:36`), and `IssueRef` has
+   nowhere to retain the repository from an issue URL. With separate configured
+   repositories, pasting `other/repo/pull/42` or `other/repo/issues/42` resolves
+   `pr_repo#42` or `issues_repo#42`. *Fix:* preserve `{repo, number}` for PR
+   URLs, and either preserve issue repository identity or reject issue URLs that
+   do not match `issues_repo`; only bare numbers default to the configured
+   repositories.
+5. **`ready()` still depends on `repo_slug(cwd)`** even though `GithubTracker`
+   is constructed with `repos.issues`. A project with both keys configured and
+   no GitHub origin has everything required but remains unready, leaving every
+   state gate closed. *Fix:* resolve defaults before constructing the tracker,
+   require origin only for missing config values, and define readiness as a
+   token plus the validated configured issue repository.
+
+### Claude's response
+
+All five verified against source before acceptance, and all five accepted.
+Findings 2 through 5 were confirmed by reading the cited lines; finding 1 was
+confirmed by probing the proposed replacement rather than the claim.
+
+- **Finding 1 accepted, and the fix probed.** REST documents `head` only as
+  `user:ref-name`, so the unqualified form the earlier probe observed is
+  undocumented. `pullRequests(headRefName: "fix/glyph-overhang-clipped")`
+  against `mathix420/alacritree` returns PR 185 with `headRepositoryOwner:
+  AbysmalBiscuit` and `totalCount: 1` — documented argument, cross-fork match,
+  and ambiguity detectable from `totalCount` rather than inferred from a node
+  count that a page limit could have truncated. Strictly better than what it
+  replaces.
+- **Finding 2 accepted, and it is the sharpest of the five.** Refusing inside
+  `pr_by_head` would have changed nothing: `.ok()` swallows the refusal and the
+  `gh` fallback guesses anyway. The same `.ok()` also makes `Some(None)` return
+  "no PR" without consulting `gh`. Both failures come from an `Option` that
+  cannot say which of four things happened, so the fix is a four-way type
+  returned by both transports, with only `Unavailable` reaching the fallback.
+  `best_pr` moves onto it too. The spec gained a section for this.
+- **Finding 3 accepted; the rebind half narrowed.** `request.rs:207` and
+  `finish.rs:124` only `record::read` — nothing outside `checkout.rs`,
+  `setup.rs` and `end.rs` writes. So the ordinary `setup` → `review request`
+  flow would have left the record empty and fallen back to exactly the branch
+  matching the record exists to replace. `review request` now persists the URL
+  whenever it resolves a PR. A separate rebind or clear command was **not**
+  added: that write is itself the rebind, since the next `review request` on a
+  replacement PR overwrites, and `issue end` removes the record with the
+  worktree. What the flow does not reach is a recorded PR that stops resolving,
+  so status reports that as unknown with the verdict closed rather than falling
+  back.
+- **Finding 4 accepted; the two halves resolved differently.** A PR identifier
+  becomes `{ repo: Option<String>, number }`, so a pasted URL keeps its
+  repository and only a bare number defaults to `pr_repo`. Issue URLs take the
+  other option Codex offered: `IssueRef` is shared with Linear, and widening it
+  for a field only GitHub fills would push GitHub's repository question into
+  Linear's type, so `issue_ref` refuses an issue URL outside `issues_repo`
+  instead. The tracker is scoped to one repository by construction, so an issue
+  outside it is unanswerable rather than merely inconvenient.
+- **Finding 5 accepted.** Line 165 of the spec contradicted line 148 outright.
+  `Repos` now resolves before the tracker is constructed, taking each key from
+  config and consulting origin only for a key config left unset, and `ready` is
+  a resolved token plus a resolved `repos.issues`.
+
+Delivery grew from eight tasks to nine. The typed lookup was split out of task 1
+rather than bundled into it: task 1 moves resolution and changes nothing about
+what any lookup answers, task 2 changes the contract every PR path reads. Codex
+called task 1 not behaviorally safe, and a task that did both at once would have
+had no clean gate when it went wrong.
+
+Three rounds have run and none returned APPROVED. Fifteen findings across the
+three; every one accepted, two of them narrowed in scope with the reason
+recorded above. This revision is unreviewed.
