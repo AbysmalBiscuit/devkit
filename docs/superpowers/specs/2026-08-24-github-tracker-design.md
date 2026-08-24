@@ -1,7 +1,7 @@
 # The GitHub tracker
 
 **Date:** 2026-08-24
-**Status:** ready to plan, after six rounds of adversarial cross-model
+**Status:** ready to plan, after seven rounds of adversarial cross-model
 review. See `2026-08-24-github-tracker-review-log.md`.
 **Parent:** `2026-08-23-pluggable-issue-tracker-design.md`, phase 3. That spec's
 phases 1 and 2 shipped. This one supersedes its "The GitHub mapping" section,
@@ -213,13 +213,22 @@ the origin remote, and threaded to the sites that need it. The HTTP half takes
 `repos.prs`; the `gh` half gains `--repo`, which covers `gh pr view`, `gh pr
 list`, `gh pr checkout` and the `gh pr create` in `review/request.rs`.
 
-**`--repo` is passed on every `gh` operation, without exception.** Omitting it
-looks like a harmless optimization and is not one. `cmd::capture` inherits the
-environment, so `gh` still reads `GH_REPO`. Exempting the origin-defaulted case
-does not help: the HTTP half would use the slug devkit resolved from origin
-while the `gh` half followed `GH_REPO` somewhere else, so one `review request`
-could read PR A over HTTP and then edit, check out, or create against repository
-B. The two halves must name the same repository or they are not one seam.
+**`--repo` is passed on every repository-scoped `gh` command, with no exemption
+for a value that came from origin.** Omitting it looks like a harmless
+optimization and is not one. `cmd::capture` inherits the environment, so `gh`
+still reads `GH_REPO`. Exempting the origin-defaulted case does not help: the
+HTTP half would use the slug devkit resolved from origin while the `gh` half
+followed `GH_REPO` somewhere else, so one `review request` could read PR A over
+HTTP and then edit, check out, or create against repository B. The two halves
+must name the same repository or they are not one seam.
+
+"Repository-scoped" is the whole rule, not a softening of it. `gh pr` and its
+subcommands take `--repo`; `gh auth token`, `gh auth status` and `gh api
+graphql` do not, and devkit uses all three. Authentication commands are not
+repository-scoped and stay unscoped. `gh api graphql` carries the repository the
+only way it can, as query variables, which is the same thing by another spelling
+— the requirement is that no invocation lets the ambient environment choose the
+repository, not that a particular flag appears.
 
 Each field still records whether it was configured, overridden on the command
 line, or defaulted from origin. That provenance is no longer what decides
@@ -331,10 +340,18 @@ documents no default ordering. Neither probed repository currently has such an
 issue, so this is an unobserved risk rather than a live bug, but the failure
 mode is silent and wrong rather than loud.
 
-The ranking is done by the adapter, not by the server: a merged PR wins, then an
-open one, then the highest number. `orderByState` is documented only as "return
-results ordered by state" with no direction given, so nothing load-bearing rests
-on it.
+The ranking is done by the adapter, not by the server, and the tuple is stated
+in full because a partial one reads as a tie-breaker while behaving as a
+refusal. Candidates are ordered by state — merged, then open, then closed — and
+within the top state group by PR number, highest first. `orderByState` is
+documented only as "return results ordered by state" with no direction given, so
+nothing load-bearing rests on it.
+
+Number ordering only means something inside one repository. Two PRs in different
+repositories have unrelated numbering, so `#5` upstream is not "older" than
+`#900` in a fork. **A tie is therefore candidates that share the top state and
+span more than one repository**, and only that. Two merged PRs in the same
+repository are ranked, not refused: the higher number is the later attempt.
 
 What does matter is seeing every candidate. A ranked window is worthless if the
 winner sits outside it, and a tie that looks unique only because the second
@@ -344,10 +361,27 @@ than ranking a truncated set. Ten is chosen over routine pagination because the
 connection is empty or single in every observed case; `hasNextPage` is what
 makes that choice safe instead of merely convenient.
 
-Where the choice is genuinely ambiguous, meaning several merged or several open
-candidates remain, `checkout-pr` refuses and names them rather than guessing,
-because it is about to create a worktree from that answer. `states` and the
-status report are read-only and take the ranked first.
+**Every nested connection gets the same treatment, not just this one.** A
+GraphQL connection nested inside a paginated one does not paginate with its
+parent, so walking the outer pages silently truncates each inner list at its
+`first:`. Two in this design are nested: each issue's `timelineItems` inside
+`assigned_history`'s paginated `issues`, and `closingIssuesReferences` inside
+`issues_for_prs`. An issue closed and reopened more times than the window holds
+would contribute a truncated transition history to the dashboard chart, and a PR
+closing many issues would report only some of them — both wrong quietly, in a
+place nothing else would contradict.
+
+So every connection in every query requests `pageInfo { hasNextPage }`, and a
+truncated one is either paginated or reported as incomplete. Which of the two is
+per connection: `closingIssuesReferences` reports incomplete, since a partial
+answer there feeds a link column that is better blank than wrong;
+`timelineItems` paginates, since a chart missing transitions is not visibly
+wrong at all.
+
+Where a tie survives that rule — the top state group spanning repositories —
+`checkout-pr` refuses and names the candidates rather than guessing, because it
+is about to create a worktree from that answer. `states` and the status report
+are read-only and take the ranked first.
 
 ### A PR outside `pr_repo`
 
@@ -403,9 +437,15 @@ rule stays strict and gains a human-supplied escape:
   --pr <n>` overrides for that run and leaves the record alone.
 - Branch discovery runs only when neither locator is present.
 
-**An explicit locator still has to belong to this worktree, and the branch name
-does not prove that.** Repository and number are not enough: `--pr` with a
-mistyped number names a real PR that resolves cleanly, and the record then makes
+**Every PR entering an acting path has to belong to this worktree, and the
+branch name does not prove it.** The check is not about how the PR was chosen.
+An explicit `--pr` with a mistyped number names a real PR that resolves cleanly;
+a recorded locator can have been written when the branch meant something else;
+and a branch-discovered `Unique` is unique only in that one repository's PRs
+share the name — another fork's same-named branch produces exactly the same
+answer. All three then drive reviewer edits, Slack notifications, merges and the
+finished verdict. So the comparison gates all three, not the explicit one.
+Repository and number are not enough: with a wrong PR bound, the record makes
 it authoritative. When that unrelated PR merges, `issue end` sees a merged PR, a
 completed issue and a clean tree, and runs `git branch -D` on a worktree whose
 work never landed.
@@ -726,8 +766,10 @@ comes after all of them rather than after the adapter.
    `review finish --pr` keeps winning as it does today and stays a one-run
    override that writes nothing; `review request` gains the URL form, and its
    existing write rule is what makes it a rebind. An explicit locator's
-   `headRefOid` must equal the worktree's `HEAD` or it is refused, and a merged
-   PR satisfies the finished verdict only under the same comparison. A recorded
+   `headRefOid` must equal the worktree's `HEAD` or it is refused — and so must
+   a recorded or branch-discovered one, before any external effect and before
+   anything is written — while a merged PR satisfies the finished verdict only
+   under the same comparison. A recorded
    PR that no longer resolves reports unknown rather than falling back.
 8. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
    configured tracker and calls `assigned_history` and `timeline_origin` instead
@@ -781,8 +823,9 @@ TDD throughout; `cargo test --workspace` is the merge gate.
 - **`devkit auth github`.** Parse tests over a `gh auth status --json hosts`
   response with several accounts, an empty response, and a malformed one.
 - **Linked-PR ranking.** Table test over one merged PR, one open PR, a merged
-  and an open together, two merged, and none, asserting the chosen PR and that
-  the two-merged case is reported as ambiguous rather than silently ranked.
+  and an open together, two merged **in one repository** — ranked by number, not
+  refused — two merged **across repositories**, which is refused because their
+  numbers are not comparable, and none.
 - **The recorded PR.** A record carrying a cross-repository PR URL drives status
   to the finished verdict; a record without one keeps today's behavior; an old
   record with no field at all still deserializes; `review request` writes the
@@ -798,8 +841,9 @@ TDD throughout; `cargo test --workspace` is the merge gate.
 - **Repository resolution.** Neither key set resolves both repositories to
   origin; each key set independently; both set; both set with no GitHub origin
   at all, which must succeed and must report `ready`; one key set with no origin
-  to supply the other, which must fail naming the missing key; and `issue prs
-  --repo` still overriding `pr_repo` for one invocation. The identical-behavior
+  to supply the other, which succeeds for every operation using the key that
+  resolved and fails **only at an operation needing the missing one**, naming
+  it; and `issue prs --repo` still overriding `pr_repo` for one invocation. The identical-behavior
   gate for an unconfigured project is asserted at this layer rather than left to
   manual checking.
 - **The typed PR lookup.** A `headRefName` response with one node parses to
@@ -810,9 +854,13 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   `Ambiguous`, and `status` reports `AMBIGUOUS` with the finished verdict
   closed. The fork case is covered by a fixture whose single node carries a
   `headRepositoryOwner` other than the searched repository's owner.
-- **Linked-PR completeness.** A response carrying `hasNextPage: true` is refused
-  rather than ranked, so a winner outside the window can never be silently
-  dropped.
+- **Connection completeness.** A `closedByPullRequestsReferences` response
+  carrying `hasNextPage: true` is refused rather than ranked, so a winner
+  outside the window can never be silently dropped. A truncated
+  `closingIssuesReferences` reports incomplete rather than a partial link list,
+  and a truncated `timelineItems` nested inside a paginated `issues` page is
+  paginated through rather than cut — the nested case walking its own pages
+  while the outer connection stays where it is.
 - **Recorded PR precedence.** A record whose PR sits inside `pr_repo` is still
   queried by URL rather than matched by branch, proven by a fixture where a
   second PR shares the branch name and would otherwise win.
@@ -837,19 +885,24 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   number on a project whose tracker is GitHub or none resolves as a PR **with
   `LINEAR_API_KEY` exported in the environment**, which is the regression the
   ambient read caused.
-- **Repository provenance.** A `pr_repo` configured to the same slug as origin
-  still passes `--repo`, asserted by the argument vector rather than by
-  behavior, so an ambient `GH_REPO` cannot redirect it; an unset key that
-  defaults to origin may omit it.
+- **Repository scoping on `gh`.** Every `gh pr` invocation carries `--repo`,
+  asserted on the argument vector, including when the value came from origin and
+  when it equals origin, so an ambient `GH_REPO` cannot redirect it. `gh auth`
+  and `gh api graphql` carry no `--repo`, and the graphql path names its
+  repository in the query variables instead.
 - **`--pr` and precedence.** `issue review request --pr <URL>` replaces an
   existing binding and sets one where none existed; a bare number binds within
   `pr_repo`; the supersede case — an old and a new PR sharing a head branch,
   which acting paths refuse as ambiguous — is recoverable through it, which is
-  the case that made the flag necessary. `review finish --pr <n>` still wins
+  the case that made the flag necessary. A PR whose `headRefOid` is not the
+  worktree's `HEAD` is refused whether it arrived by `--pr`, from the record, or
+  from a unique branch lookup. `review finish --pr <n>` still wins
   over both the record and branch discovery and leaves the record unchanged,
   which is today's contract. A `--pr` naming a PR whose `headRefName` is not the
   worktree's `HEAD` commit is refused, on both commands and before anything is
-  written; under `--no-push`, a branch ahead of its remote fails closed. A
+  written, and a squash- or rebase-merged PR still compares equal because
+  `headRefOid` is the branch head the PR carried, not the commit that landed on
+  the base; under `--no-push`, a branch ahead of its remote fails closed. A
   merged PR whose head is not the worktree's `HEAD` does not satisfy the
   finished verdict, so `issue end` cannot delete a branch carrying unlanded
   commits.
@@ -938,6 +991,10 @@ adapter is network-free under test.
 | An issue URL outside `issues_repo` | Refused, naming both. `IssueRef` stays as it is rather than carrying a repository Linear never fills. |
 | A recorded PR URL | Always authoritative, in any repository. Branch discovery serves only records without one. |
 | Truncated linked-PR results | Refused via `hasNextPage`, never ranked. |
+| Every other connection | Same rule. `pageInfo` on all of them; `closingIssuesReferences` reports incomplete, `timelineItems` paginates. A connection nested in a paginated one does not paginate with its parent. |
+| The linked-PR ranking tuple | State, then number within the top state group. A tie is a top state group spanning repositories, where numbers are not comparable — two merged PRs in one repository are ranked, not refused. |
+| Which PRs the OID check gates | All of them on an acting path: explicit, recorded, and branch-discovered. How the PR was chosen does not change what it can do. |
+| `--repo`'s actual scope | Repository-scoped `gh pr` commands. `gh auth` and `gh api graphql` do not accept it; graphql names its repository in variables. The rule is that the environment never chooses the repository. |
 | Schema regeneration | In the task that changes the config type, not deferred to the documentation task. |
 | When GitHub goes live | After the recorded-PR and dashboard tasks, so the switch never exposes a half-wired tracker. |
 | `tracker::resolve`'s signature | Regains `repo`, handed `repos.issues`. |

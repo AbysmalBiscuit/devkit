@@ -513,3 +513,76 @@ substituting the check were wrong.
 
 Six rounds, thirty findings, none rejected. Two of my own decisions reversed
 under later evidence. This revision is unreviewed.
+
+## Round 7: Codex
+
+`VERDICT: REVISE`. The `headRefOid` comparison itself is sound across squash and
+rebase merges; the problems are its coverage and several contradictory
+contracts.
+
+1. **`--repo` on every `gh` invocation is impossible.** `gh auth token`, `gh
+   auth status` and `gh api graphql` do not accept the flag, and all are used or
+   planned. *Fix:* require it only on repository-scoped `gh pr` commands, pass
+   repository variables explicitly to `gh api graphql`, leave authentication
+   commands unscoped.
+2. **The OID check is restricted to an explicit locator** in the delivery task,
+   leaving recorded and uniquely branch-discovered PRs able to trigger reviewer
+   edits or notifications while pointing at another fork's same-named branch.
+   *Fix:* validate `headRefOid == HEAD` for every PR entering an acting path,
+   before external effects and before recording.
+3. **The acceptance tests still demand superseded behavior:** one missing
+   repository must fail, an origin-defaulted repository may omit `--repo`, and
+   the OID test compares `headRefName` to a commit. *Fix:* operation-local
+   missing-key failures, unconditional `--repo` on supported repository
+   commands, `headRefOid` comparisons.
+4. **Linked-PR selection remains contradictory:** the adapter ranks by state
+   then highest number, but the spec later declares several merged PRs ambiguous
+   and tests that. *Fix:* define the complete ranking tuple and refuse only
+   candidates tied on the whole tuple; test distinct-number and genuine
+   same-number cross-repository ties separately.
+5. **Nested GraphQL connections are not complete.** Outer issue pagination does
+   not paginate each issue's `timelineItems`, and `closingIssuesReferences` has
+   no pagination or truncation contract, so dashboard transitions and
+   PR-to-issue links can be silently incomplete. *Fix:* request `pageInfo` on
+   every nested connection and either paginate or return an explicit incomplete
+   result.
+
+### Claude's response
+
+All five accepted. Four are contradictions or omissions inside the spec rather
+than gaps against the code, which is the failure mode I expected after six
+rounds of edits and asked this round to look for.
+
+- **Finding 1 accepted; I created this one last round.** Writing "every `gh`
+  operation, without exception" to close the `GH_REPO` hole overshot into a rule
+  three used commands cannot satisfy. The scope is repository-scoped `gh pr`
+  commands. `gh api graphql` names its repository in query variables, which
+  serves the same purpose by another spelling, and the underlying requirement is
+  restated as what it always was: nothing lets the ambient environment choose
+  the repository.
+- **Finding 2 accepted.** I attached the OID check to the explicit locator
+  because that was the finding it came from, but how a PR was chosen has nothing
+  to do with what it can then do. A branch-discovered `Unique` is unique only
+  among one repository's PRs, so another fork's same-named branch produces the
+  identical answer, and a recorded locator may have been written when the branch
+  meant something else. All three gate on the same comparison.
+- **Finding 3 accepted.** Three test bullets still asserted superseded rules
+  from rounds 5 and 6. Design prose and acceptance tests drifting apart is
+  exactly how a spec passes review and then gets implemented wrong, so this is
+  worth as much as the design findings.
+- **Finding 4 accepted, and it has been wrong since round 1.** "Merged, then
+  open, then highest number" is a total order over distinct numbers, so two
+  merged PRs are never tied under it — while a later paragraph and a test both
+  called two merged PRs ambiguous. The tuple is now stated in full, and the tie
+  is defined as what it actually is: a top state group spanning repositories,
+  where PR numbers have no shared ordering. Two merged PRs in one repository
+  rank by number.
+- **Finding 5 accepted.** I gave `closedByPullRequestsReferences` a `hasNextPage`
+  rule and did not apply it to the other two connections. A connection nested in
+  a paginated one does not paginate with its parent, so walking outer pages
+  truncates each inner list silently. Every connection now carries `pageInfo`;
+  `closingIssuesReferences` reports incomplete because a partial link column is
+  worse than a blank one, and `timelineItems` paginates because a chart missing
+  transitions looks entirely normal.
+
+Seven rounds, thirty-five findings, none rejected. This revision is unreviewed.
