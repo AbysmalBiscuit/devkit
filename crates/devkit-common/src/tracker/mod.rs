@@ -301,6 +301,42 @@ mod tests {
         assert!(!r.declared);
     }
 
+    /// A GitHub `origin` on a machine with no Linear key is the detection path
+    /// most projects land on, and devkit reads no GitHub issues: what comes back
+    /// is the no-tracker stand-in. Calling that stand-in the project's own answer
+    /// would drop the issue-state gate for every one of those projects, so the
+    /// GitHub arm must stay undeclared. The key is passed in as absent, so an
+    /// ambient `LINEAR_API_KEY` cannot steer detection past this.
+    #[test]
+    fn a_github_origin_resolves_to_an_undeclared_stand_in() {
+        let dir = std::env::temp_dir().join(format!("devkit-tracker-gh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let at = dir.to_str().unwrap();
+        crate::cmd::git(&["init", "-q"], at).unwrap();
+        crate::cmd::git(
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widget.git",
+            ],
+            at,
+        )
+        .unwrap();
+
+        assert_eq!(
+            detect(&dir, None),
+            TrackerKind::Github,
+            "the fixture has to reach the GitHub arm for the rest to mean anything"
+        );
+        let r = resolve_with_key(None, &dir, None);
+        assert_eq!(r.tracker.kind(), TrackerKind::None);
+        assert!(!r.declared, "{}", r.reason);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_named_none_is_declared() {
         let r = resolve(
