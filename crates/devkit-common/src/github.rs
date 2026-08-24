@@ -40,7 +40,10 @@ fn resolve_token() -> Option<String> {
         }
     }
     // One `gh` spawn, cached for the process — amortized across every HTTP call.
-    crate::cmd::capture("gh", &["auth", "token"], None)
+    // `--hostname` is explicit: with `GH_HOST` set, an unqualified call returns
+    // an enterprise token, which the callers below would then send to
+    // api.github.com.
+    crate::cmd::capture("gh", &["auth", "token", "--hostname", "github.com"], None)
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -167,12 +170,184 @@ pub fn slug_from_remote_url(url: &str) -> Option<String> {
     Some(format!("{owner}/{repo}"))
 }
 
-/// `owner/repo` for the repo at `cwd`, from its `origin` remote URL. No HTTP —
-/// this replaces a `gh repo view` spawn.
-pub fn repo_slug(cwd: &str) -> Result<String> {
-    let url = crate::cmd::git(&["remote", "get-url", "origin"], cwd)?;
+/// A repository slug is exactly `owner/repo`, both segments non-empty and made
+/// only of characters GitHub allows in a name. Configured slugs reach cache
+/// filenames and `gh --repo` arguments, so a slug carrying a path separator or
+/// `..` is rejected where it is resolved rather than sanitized downstream.
+pub fn validate_slug(s: &str) -> Result<()> {
+    fn ok_segment(seg: &str) -> bool {
+        !seg.is_empty()
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            && seg != "."
+            && seg != ".."
+    }
+    let mut parts = s.split('/');
+    let (Some(owner), Some(repo), None) = (parts.next(), parts.next(), parts.next()) else {
+        anyhow::bail!("`{s}` is not an owner/repo repository slug");
+    };
+    anyhow::ensure!(
+        ok_segment(owner) && ok_segment(repo),
+        "`{s}` is not an owner/repo repository slug"
+    );
+    Ok(())
+}
+
+/// Whether a git remote URL points at github.com. `slug_from_remote_url` parses
+/// any `host/owner/repo` shape without checking the host, so a GitLab origin
+/// yields a slug and every downstream caller would query github.com for a
+/// repository that is not the project's.
+pub fn is_github_remote(url: &str) -> bool {
+    let u = url.trim();
+    let host = if let Some(rest) = u.strip_prefix("git@") {
+        rest.split(':').next().unwrap_or("")
+    } else if let Some(rest) = u.split("://").nth(1) {
+        let after_user = rest.rsplit('@').next().unwrap_or(rest);
+        after_user.split(['/', ':']).next().unwrap_or("")
+    } else {
+        ""
+    };
+    host.eq_ignore_ascii_case("github.com")
+}
+
+/// The `origin` slug, only when origin is a github.com remote. This is the
+/// single entry point for defaulting a repository from the remote, so the host
+/// check cannot be skipped by a caller that declared its tracker and therefore
+/// never ran detection.
+pub fn github_origin_slug(cwd: &str) -> Result<String> {
+    let url = crate::cmd::git(&["remote", "get-url", "origin"], cwd)
+        .context("reading the `origin` remote")?;
+    anyhow::ensure!(
+        is_github_remote(&url),
+        "`origin` is not a github.com remote ({}); set [github] issues_repo / pr_repo explicitly",
+        url.trim()
+    );
     slug_from_remote_url(&url)
-        .with_context(|| format!("cannot parse owner/repo from origin remote: {}", url.trim()))
+        .with_context(|| format!("no owner/repo in the origin URL `{}`", url.trim()))
+}
+
+/// Where a repository slug came from. A configured or overridden slug is a
+/// decision the project made; a defaulted one was read from the remote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    Configured,
+    Overridden,
+    Defaulted,
+}
+
+/// One resolved repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Repo {
+    pub slug: String,
+    pub origin: Origin,
+}
+
+impl Repo {
+    /// The `gh --repo` spelling. The host is explicit because `--repo o/r`
+    /// leaves `GH_HOST` free to select an enterprise host, which would send a
+    /// token to a host it was not issued for.
+    pub fn qualified(&self) -> String {
+        format!("github.com/{}", self.slug)
+    }
+}
+
+/// The repositories one command works against, resolved once and threaded to
+/// every GitHub operation. Each key resolves independently and is required only
+/// where it is used, so a Linear project with a fork workflow sets `pr_repo`
+/// alone and is never asked for an `issues_repo` it will not read.
+#[derive(Debug, Clone)]
+pub struct Repos {
+    issues: std::result::Result<Repo, String>,
+    prs: std::result::Result<Repo, String>,
+}
+
+impl Repos {
+    /// Resolve from config plus the `origin` remote. `pr_override` is `issue prs
+    /// --repo`, one invocation's override of `pr_repo`.
+    pub fn resolve(
+        cfg: &devkit_config::GithubConfig,
+        cwd: &str,
+        pr_override: Option<&str>,
+    ) -> Repos {
+        // The origin lookup is skipped entirely when config supplies both keys,
+        // so a project outside GitHub never pays for it and never fails on it.
+        let need_origin =
+            cfg.issues_repo.is_none() || (cfg.pr_repo.is_none() && pr_override.is_none());
+        let origin = need_origin.then(|| github_origin_slug(cwd)).transpose();
+        let origin = match origin {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = format!("{e:#}");
+                return Repos {
+                    issues: cfg
+                        .issues_repo
+                        .clone()
+                        .map(|s| (s, Origin::Configured))
+                        .ok_or_else(|| msg.clone())
+                        .and_then(checked),
+                    prs: pr_override
+                        .map(|s| (s.to_string(), Origin::Overridden))
+                        .or_else(|| cfg.pr_repo.clone().map(|s| (s, Origin::Configured)))
+                        .ok_or(msg)
+                        .and_then(checked),
+                };
+            }
+        };
+        Repos::from_parts(cfg, origin, pr_override)
+    }
+
+    /// `resolve` with the origin slug supplied rather than read, so resolution
+    /// is testable without a git remote.
+    #[doc(hidden)]
+    pub fn from_parts(
+        cfg: &devkit_config::GithubConfig,
+        origin: Option<String>,
+        pr_override: Option<&str>,
+    ) -> Repos {
+        let missing = |key: &str| {
+            format!(
+                "no GitHub repository for {key}: set [github] {key} or give the project a \
+                 github.com `origin` remote"
+            )
+        };
+        Repos {
+            issues: cfg
+                .issues_repo
+                .clone()
+                .map(|s| (s, Origin::Configured))
+                .or_else(|| origin.clone().map(|s| (s, Origin::Defaulted)))
+                .ok_or_else(|| missing("issues_repo"))
+                .and_then(checked),
+            prs: pr_override
+                .map(|s| (s.to_string(), Origin::Overridden))
+                .or_else(|| cfg.pr_repo.clone().map(|s| (s, Origin::Configured)))
+                .or_else(|| origin.map(|s| (s, Origin::Defaulted)))
+                .ok_or_else(|| missing("pr_repo"))
+                .and_then(checked),
+        }
+    }
+
+    /// The issues repository, or the error explaining which key would supply it.
+    pub fn issues(&self) -> Result<&Repo> {
+        self.issues.as_ref().map_err(|e| anyhow::anyhow!(e.clone()))
+    }
+
+    /// The pull-request repository, or the error explaining which key would
+    /// supply it.
+    pub fn prs(&self) -> Result<&Repo> {
+        self.prs.as_ref().map_err(|e| anyhow::anyhow!(e.clone()))
+    }
+}
+
+/// Validate a resolved slug at the point of resolution, so a bad value is
+/// reported against the key that carries it rather than failing later inside a
+/// URL or a cache filename.
+fn checked((slug, origin): (String, Origin)) -> std::result::Result<Repo, String> {
+    match validate_slug(&slug) {
+        Ok(()) => Ok(Repo { slug, origin }),
+        Err(e) => Err(format!("{e:#}")),
+    }
 }
 
 // --- typed reads -----------------------------------------------------------
@@ -502,5 +677,94 @@ mod tests {
         assert!(q.contains("repo:acme/mono is:pr author:@me"));
         assert!(!q.contains("after:"));
         assert!(timeline_query("a/b", "reviewed-by:@me", Some("X")).contains("after: \"X\""));
+    }
+
+    #[test]
+    fn validate_slug_accepts_owner_repo() {
+        assert!(validate_slug("K-Nette/BountyPop_GODOT").is_ok());
+        assert!(validate_slug("a/b").is_ok());
+        assert!(validate_slug("owner.name/repo.name").is_ok());
+    }
+
+    #[test]
+    fn validate_slug_rejects_anything_that_could_escape_a_path() {
+        for bad in [
+            "",
+            "owner",
+            "owner/repo/extra",
+            "../../etc",
+            "owner/../..",
+            "owner/",
+            "/repo",
+            "own er/repo",
+            "owner/re po",
+        ] {
+            assert!(validate_slug(bad).is_err(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn github_origin_rejects_a_non_github_host() {
+        // `slug_from_remote_url` is host-blind by design — its other callers
+        // already know they hold a GitHub URL. The host check lives here.
+        assert!(is_github_remote("https://github.com/o/r.git"));
+        assert!(is_github_remote("git@github.com:o/r.git"));
+        assert!(is_github_remote("ssh://git@github.com/o/r"));
+        assert!(!is_github_remote("https://gitlab.com/o/r.git"));
+        assert!(!is_github_remote("git@bitbucket.org:o/r.git"));
+        assert!(!is_github_remote("https://github.com.evil.test/o/r"));
+    }
+
+    fn cfg(issues: Option<&str>, prs: Option<&str>) -> devkit_config::GithubConfig {
+        devkit_config::GithubConfig {
+            issues_repo: issues.map(str::to_string),
+            pr_repo: prs.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn repos_resolve_each_key_independently() {
+        // Both configured: no origin is consulted at all, so a project whose code
+        // lives outside GitHub still resolves.
+        let r = Repos::from_parts(&cfg(Some("org/planning"), Some("up/app")), None, None);
+        assert_eq!(r.issues().unwrap().slug, "org/planning");
+        assert_eq!(r.issues().unwrap().origin, Origin::Configured);
+        assert_eq!(r.prs().unwrap().slug, "up/app");
+
+        // Only pr_repo configured and no origin: the PR paths work, and only an
+        // operation needing the issues repository fails — naming the key.
+        let r = Repos::from_parts(&cfg(None, Some("up/app")), None, None);
+        assert_eq!(r.prs().unwrap().slug, "up/app");
+        let err = r.issues().unwrap_err().to_string();
+        assert!(err.contains("issues_repo"), "{err}");
+
+        // Neither configured, origin available: both default to it.
+        let r = Repos::from_parts(&cfg(None, None), Some("me/fork".into()), None);
+        assert_eq!(r.issues().unwrap().slug, "me/fork");
+        assert_eq!(r.issues().unwrap().origin, Origin::Defaulted);
+        assert_eq!(r.prs().unwrap().slug, "me/fork");
+
+        // A per-invocation override beats pr_repo and is marked as such.
+        let r = Repos::from_parts(&cfg(None, Some("up/app")), None, Some("other/x"));
+        assert_eq!(r.prs().unwrap().slug, "other/x");
+        assert_eq!(r.prs().unwrap().origin, Origin::Overridden);
+    }
+
+    #[test]
+    fn repos_reject_a_configured_slug_that_is_not_owner_repo() {
+        let r = Repos::from_parts(&cfg(Some("../../etc/passwd"), None), None, None);
+        let err = r.issues().unwrap_err().to_string();
+        assert!(err.contains("owner/repo"), "{err}");
+    }
+
+    #[test]
+    fn a_repo_qualifies_itself_with_the_host() {
+        let r = Repo {
+            slug: "o/r".into(),
+            origin: Origin::Defaulted,
+        };
+        // `--repo o/r` leaves GH_HOST free to pick an enterprise host, so every
+        // `gh pr` argument names github.com explicitly.
+        assert_eq!(r.qualified(), "github.com/o/r");
     }
 }

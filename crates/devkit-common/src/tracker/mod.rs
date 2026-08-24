@@ -208,7 +208,7 @@ fn detect(cwd: &Path, linear_key: Option<&str>) -> TrackerKind {
     if linear_key.is_some() {
         return TrackerKind::Linear;
     }
-    if crate::github::repo_slug(&cwd.to_string_lossy()).is_ok() {
+    if crate::github::github_origin_slug(&cwd.to_string_lossy()).is_ok() {
         return TrackerKind::Github;
     }
     TrackerKind::None

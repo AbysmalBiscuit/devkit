@@ -166,6 +166,8 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
         ));
     }
 
+    let repos = crate::tracker::repos(config, start, None);
+    let repo = repos.prs()?;
     let m = d.len();
     let paths = d.worktree_paths();
     let ids_v: Vec<String> = d.issue_ids().to_vec();
@@ -198,7 +200,7 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
             let tx = tx.clone();
             let d = &d;
             s.spawn(move || {
-                let _ = tx.send(Update::Prs(st::fetch_prs(d)));
+                let _ = tx.send(Update::Prs(st::fetch_prs(d, repo)));
             });
         }
         {

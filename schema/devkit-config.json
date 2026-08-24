@@ -299,6 +299,29 @@
         }
       ]
     },
+    "GithubConfig": {
+      "additionalProperties": false,
+      "description": "Which GitHub repositories this project uses. Both default to the `origin`\nremote, so a project setting neither reaches the same repository it does\ntoday. They are separate because a fork opens its PRs upstream while its\nissues may sit on either side, and because a project may track issues in a\nrepository separate from its code.\n\nThis table is not under `[tracker]`: a project on Linear with a fork\nworkflow needs `pr_repo` just as much as a GitHub one does.",
+      "properties": {
+        "issues_repo": {
+          "default": null,
+          "description": "Repository holding the issues, e.g. `org/planning`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pr_repo": {
+          "default": null,
+          "description": "Repository pull requests are opened against, e.g. `upstream/app`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "HarnessSection": {
       "description": "The `[harness]` table of a checkout's `devkit.toml`.",
       "properties": {
@@ -720,6 +743,14 @@
         "libs": []
       },
       "description": "Libraries `docm` resolves version-correct checkouts for."
+    },
+    "github": {
+      "$ref": "#/$defs/GithubConfig",
+      "default": {
+        "issues_repo": null,
+        "pr_repo": null
+      },
+      "description": "Which GitHub repositories back issues and pull requests."
     },
     "harness": {
       "$ref": "#/$defs/HarnessSection",

@@ -1,6 +1,6 @@
 use crate::slug::slugify;
 use anyhow::{Context, Result};
-use devkit_common::cmd::{capture, gh_json, git};
+use devkit_common::cmd::{gh_capture, gh_json_in, git};
 use devkit_common::gitfetch;
 use devkit_common::github;
 use devkit_common::progress::Steps;
@@ -95,24 +95,21 @@ struct PrMeta {
 /// Whether GitHub PR `n` exists in `repo`. A clean "not found" from `gh pr view`
 /// is `Ok(false)`; a real tool failure (gh missing, unauthenticated, network
 /// down, bad cwd) propagates as `Err` rather than masquerading as absence.
-fn pr_exists(n: u64, repo: &str) -> Result<bool> {
+fn pr_exists(n: u64, cwd: &str, repo: &github::Repo) -> Result<bool> {
     // Direct HTTP resolves existence from a 200/404; a clean 404 is `Ok(false)`.
     // Any HTTP failure (no token, transport) yields `None` → fall back to `gh`.
-    if let Some(exists) = github::repo_slug(repo)
-        .ok()
-        .and_then(|slug| github::pr_exists(&slug, n).ok())
-    {
+    if let Ok(exists) = github::pr_exists(&repo.slug, n) {
         return Ok(exists);
     }
-    match capture(
-        "gh",
+    match gh_capture(
         &["pr", "view", &n.to_string(), "--json", "number"],
-        Some(repo),
+        repo,
+        cwd,
     ) {
         Ok(_) => Ok(true),
         Err(e) => {
-            // `capture` embeds the command's stderr in its error message, so the
-            // not-found signal is recoverable from the rendered error chain.
+            // `gh_capture` embeds the command's stderr in its error message, so
+            // the not-found signal is recoverable from the rendered error chain.
             let msg = format!("{e:#}").to_lowercase();
             if msg.contains("no pull requests found")
                 || msg.contains("could not resolve to a pullrequest")
@@ -127,18 +124,15 @@ fn pr_exists(n: u64, repo: &str) -> Result<bool> {
 
 /// PR number/title/head-branch, over direct HTTP when a token is available and
 /// falling back to `gh pr view` otherwise.
-fn fetch_pr_meta(n: u64, cwd: &str) -> Result<PrMeta> {
-    if let Some(m) = github::repo_slug(cwd)
-        .ok()
-        .and_then(|slug| github::pr_meta(&slug, n).ok())
-    {
+fn fetch_pr_meta(n: u64, cwd: &str, repo: &github::Repo) -> Result<PrMeta> {
+    if let Ok(m) = github::pr_meta(&repo.slug, n) {
         return Ok(PrMeta {
             number: m.number,
             title: m.title,
             head_ref_name: m.head_ref_name,
         });
     }
-    gh_json(
+    gh_json_in(
         &[
             "pr",
             "view",
@@ -146,6 +140,7 @@ fn fetch_pr_meta(n: u64, cwd: &str) -> Result<PrMeta> {
             "--json",
             "number,title,headRefName",
         ],
+        repo,
         cwd,
     )
 }
@@ -169,7 +164,8 @@ fn resolve_issue(id: &str, title: Option<String>, t: &dyn Tracker) -> Result<Res
 fn resolve(
     target: &str,
     key: Option<&str>,
-    repo: &str,
+    cwd: &str,
+    pr_repo: &github::Repo,
     t: &dyn Tracker,
     steps: &Steps,
 ) -> Result<Resolved> {
@@ -199,7 +195,7 @@ fn resolve(
             };
             // Probe both sides under a spinner; clear it before any prompt.
             let (exists, candidates) = steps.during_result(&format!("Resolving {n}…"), || {
-                let exists = pr_exists(n, repo)?;
+                let exists = pr_exists(n, cwd, pr_repo)?;
                 let candidates = linear::issues_by_number(n, key)?;
                 Ok::<_, anyhow::Error>((exists, candidates))
             })?;
@@ -306,18 +302,21 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
 
     let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
     let tracker = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start)).tracker;
+    let repos = github::Repos::resolve(&cfg.github, monorepo_s, None);
+    let pr_repo = repos.prs()?;
     let steps = Steps::persistent();
     let resolved = resolve(
         &args.target,
         key.as_deref(),
         monorepo_s,
+        pr_repo,
         tracker.as_ref(),
         &steps,
     )?;
 
     let meta: PrMeta = steps
         .during_result(&format!("Fetching PR #{}…", resolved.pr_number), || {
-            fetch_pr_meta(resolved.pr_number, monorepo_s)
+            fetch_pr_meta(resolved.pr_number, monorepo_s, pr_repo)
         })
         .with_context(|| format!("fetching PR #{}", resolved.pr_number))?;
 
@@ -370,10 +369,10 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let issue = with_cleanup(&worktree, monorepo_s, || {
         steps
             .during_result(&format!("Checking out PR #{}…", meta.number), || {
-                capture(
-                    "gh",
+                gh_capture(
                     &["pr", "checkout", &meta.number.to_string()],
-                    Some(worktree_s),
+                    pr_repo,
+                    worktree_s,
                 )
             })
             .with_context(|| format!("checking out PR #{}", meta.number))?;

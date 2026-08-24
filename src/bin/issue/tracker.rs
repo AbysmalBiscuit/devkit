@@ -1,5 +1,6 @@
-//! Which tracker this project's commands talk to.
+//! Which tracker and GitHub repositories this project's commands talk to.
 
+use devkit_common::github::Repos;
 use devkit_common::tracker::Resolved;
 use devkit_ports::load;
 use std::path::Path;
@@ -14,6 +15,19 @@ pub fn configured(config: Option<&str>, start: &str) -> Resolved {
         .ok()
         .and_then(|l| l.config.tracker.kind);
     devkit_common::tracker::resolve(kind, dir)
+}
+
+/// The `[github]` repositories named by config plus the `origin` remote. A
+/// project without a `devkit.toml` — or with one that fails to load — still
+/// resolves from origin alone, matching `configured`'s degrade-to-detection
+/// contract. `pr_override` is `issue prs --repo`.
+pub fn repos(config: Option<&str>, start: &str, pr_override: Option<&str>) -> Repos {
+    let dir = Path::new(start);
+    let cfg = load::load(config.map(Path::new), dir)
+        .ok()
+        .map(|l| l.config.github)
+        .unwrap_or_default();
+    Repos::resolve(&cfg, start, pr_override)
 }
 
 #[cfg(test)]

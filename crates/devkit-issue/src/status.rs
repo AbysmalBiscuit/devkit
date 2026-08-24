@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use devkit_common::cmd::{gh_json, git};
+use devkit_common::cmd::{gh_json_in, git};
 use devkit_common::github;
 use devkit_common::tracker::{Resolved, State, StateKind, TrackerKind};
 use devkit_common::worktree;
@@ -246,14 +246,14 @@ pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clon
 
 /// The single `gh pr list` round-trip for every worktree PR. Skips the call
 /// entirely when there are no worktrees.
-pub fn fetch_prs(d: &Discovered) -> Result<Prs> {
+pub fn fetch_prs(d: &Discovered, repo: &github::Repo) -> Result<Prs> {
     if d.rows.is_empty() {
         return Ok(Prs::empty());
     }
-    if let Some(prs) = fetch_prs_http(&d.main_path) {
+    if let Some(prs) = fetch_prs_http(repo) {
         return Ok(Prs(prs));
     }
-    let prs: Vec<Pr> = gh_json(
+    let prs: Vec<Pr> = gh_json_in(
         &[
             "pr",
             "list",
@@ -264,6 +264,7 @@ pub fn fetch_prs(d: &Discovered) -> Result<Prs> {
             "--json",
             "number,state,url,headRefName",
         ],
+        repo,
         &d.main_path,
     )?;
     Ok(Prs(prs))
@@ -271,9 +272,8 @@ pub fn fetch_prs(d: &Discovered) -> Result<Prs> {
 
 /// The PR list over direct HTTP; `None` on no token / parse / transport failure,
 /// so [`fetch_prs`] falls back to `gh`.
-fn fetch_prs_http(cwd: &str) -> Option<Vec<Pr>> {
-    let slug = github::repo_slug(cwd).ok()?;
-    let briefs = github::list_prs(&slug, 500).ok()?;
+fn fetch_prs_http(repo: &github::Repo) -> Option<Vec<Pr>> {
+    let briefs = github::list_prs(&repo.slug, 500).ok()?;
     Some(
         briefs
             .into_iter()
@@ -395,21 +395,28 @@ pub fn reason_not_finished(
 /// Discover worktrees, fetch PRs + tracker state concurrently, and compute the
 /// finished verdict against a caller-supplied tracker. Silent — no progress
 /// output (the CLI re-orchestrates the same pieces with bars). This crate reads
-/// no config, so the caller that loaded one resolves the tracker and injects it;
-/// tests inject a fake.
-pub fn gather_with(start: &str, ids: &[String], t: &Resolved) -> Result<StatusReport> {
+/// no config, so the caller that loaded one resolves the tracker and repos and
+/// injects them; tests inject a fake.
+pub fn gather_with(
+    start: &str,
+    ids: &[String],
+    t: &Resolved,
+    repos: &github::Repos,
+) -> Result<StatusReport> {
     let d = discover(start, ids)?;
     let info = TrackerInfo::of(t);
     let t = t.tracker.as_ref();
     if d.is_empty() {
-        // No worktrees means no ids to look up and no rows to link.
+        // No worktrees means no ids to look up and no rows to link, and no PR
+        // repository is needed either.
         return Ok(assemble(d, Vec::new(), Prs::empty(), HashMap::new(), info));
     }
+    let repo = repos.prs()?;
     let paths = d.worktree_paths();
     let ids_v: Vec<String> = d.issue_ids().to_vec();
     let (dirty, prs, states, link_base) = std::thread::scope(|s| {
         let dt = s.spawn(|| dirty_many(&paths));
-        let pt = s.spawn(|| fetch_prs(&d));
+        let pt = s.spawn(|| fetch_prs(&d, repo));
         // The state fetch and the link base share a thread: both go through the
         // tracker, and both can reach the network.
         let tt = s.spawn(|| (t.states(&ids_v), t.issue_url("")));

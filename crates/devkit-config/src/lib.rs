@@ -26,6 +26,9 @@ pub struct Config {
     /// Linear lookups that cost an extra API round trip.
     #[serde(default)]
     pub linear: LinearConfig,
+    /// Which GitHub repositories back issues and pull requests.
+    #[serde(default)]
+    pub github: GithubConfig,
     /// Which issue tracker backs `issue`. Detected when the table is absent.
     #[serde(default)]
     pub tracker: TrackerConfig,
@@ -157,6 +160,23 @@ pub struct LinearConfig {
     /// Query Linear for the issues linked to each PR in `issue prs` (one
     /// extra batched round trip per run). Off by default.
     pub resolve_pr_links: bool,
+}
+
+/// Which GitHub repositories this project uses. Both default to the `origin`
+/// remote, so a project setting neither reaches the same repository it does
+/// today. They are separate because a fork opens its PRs upstream while its
+/// issues may sit on either side, and because a project may track issues in a
+/// repository separate from its code.
+///
+/// This table is not under `[tracker]`: a project on Linear with a fork
+/// workflow needs `pr_repo` just as much as a GitHub one does.
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GithubConfig {
+    /// Repository holding the issues, e.g. `org/planning`.
+    pub issues_repo: Option<String>,
+    /// Repository pull requests are opened against, e.g. `upstream/app`.
+    pub pr_repo: Option<String>,
 }
 
 /// Which issue tracker a project uses. Absent means detect: a resolvable
@@ -1019,6 +1039,18 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         assert!(c.linear.resolve_pr_links);
         let bare = Config::parse(SAMPLE).unwrap();
         assert!(!bare.linear.resolve_pr_links);
+    }
+    #[test]
+    fn github_section_parses_and_defaults_absent() {
+        let c = Config::parse(&format!(
+            "{SAMPLE}\n[github]\nissues_repo = \"org/planning\"\npr_repo = \"upstream/app\"\n"
+        ))
+        .unwrap();
+        assert_eq!(c.github.issues_repo.as_deref(), Some("org/planning"));
+        assert_eq!(c.github.pr_repo.as_deref(), Some("upstream/app"));
+        let bare = Config::parse(SAMPLE).unwrap();
+        assert_eq!(bare.github.issues_repo, None);
+        assert_eq!(bare.github.pr_repo, None);
     }
     #[test]
     fn parses_app_setup_commands() {

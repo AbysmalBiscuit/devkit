@@ -93,7 +93,9 @@ pub fn run(
             row.reason_not_finished = reason;
         }
     } else if discovered {
-        info.link_base = live_enrich(&mut row, &d, &resolved, !json)?;
+        let repos = crate::tracker::repos(config, start, None);
+        let repo = repos.prs()?;
+        info.link_base = live_enrich(&mut row, &d, &resolved, !json, repo)?;
 
         if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
             // pr_number and pr_url are set together, so both-Some is the normal
@@ -137,6 +139,7 @@ fn live_enrich(
     d: &st::Discovered,
     resolved: &Resolved,
     render: bool,
+    repo: &devkit_common::github::Repo,
 ) -> Result<Option<String>> {
     let t = resolved.tracker.as_ref();
     let mut lt = if render {
@@ -164,7 +167,7 @@ fn live_enrich(
         {
             let tx = tx.clone();
             s.spawn(move || {
-                let _ = tx.send(Update::Prs(st::fetch_prs(d)));
+                let _ = tx.send(Update::Prs(st::fetch_prs(d, repo)));
             });
         }
         if want_state {

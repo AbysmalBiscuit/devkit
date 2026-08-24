@@ -224,12 +224,6 @@ impl PrNode {
     }
 }
 
-#[derive(Deserialize)]
-struct RepoInfo {
-    #[serde(rename = "nameWithOwner")]
-    name_with_owner: String,
-}
-
 // pure logic --------------------------------------------------------------------
 
 const FAIL: [&str; 4] = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"];
@@ -749,17 +743,18 @@ pub struct PrsReport {
     pub reviews: Vec<ReviewPrView>,
 }
 
-/// Resolve `owner/name`. Returns `repo` as-is when given, else reads it from the
-/// `origin` remote URL (no spawn), falling back to `gh repo view`.
-pub fn resolve_repo(repo: Option<&str>, cwd: &str) -> Result<String> {
-    if let Some(r) = repo {
-        return Ok(r.to_string());
-    }
-    if let Ok(slug) = github::repo_slug(cwd) {
-        return Ok(slug);
-    }
-    let info: RepoInfo = gh_json(&["repo", "view", "--json", "nameWithOwner"], cwd)?;
-    Ok(info.name_with_owner)
+/// Resolve `owner/name`: the `[github] pr_repo` key, an explicit `--repo`
+/// override, or the `origin` remote — whichever `Repos` picks for the `prs`
+/// key. No `gh` spawn: `Repos::resolve` reads the remote directly.
+pub fn resolve_repo(
+    cfg: &devkit_config::GithubConfig,
+    cwd: &str,
+    pr_override: Option<&str>,
+) -> Result<String> {
+    Ok(github::Repos::resolve(cfg, cwd, pr_override)
+        .prs()?
+        .slug
+        .clone())
 }
 
 /// One PR-search GraphQL round trip over direct HTTP, falling back to
@@ -771,7 +766,10 @@ fn fetch_graphql<T: serde::de::DeserializeOwned>(query: &str, root: &str) -> Res
         return Ok(resp);
     }
     let arg = format!("query={query}");
-    gh_json(&["api", "graphql", "-f", &arg], root)
+    gh_json(
+        &["api", "graphql", "--hostname", "github.com", "-f", &arg],
+        root,
+    )
 }
 
 /// Backoff before retry `attempt` (1-based): 1s, 2s, 4s, then 8s for the rest.
@@ -836,17 +834,13 @@ pub fn gather(
     root: &str,
     mine: bool,
     reviews: bool,
-    repo: Option<&str>,
+    repo: &str,
     ignored_checks: &[String],
     resolve_pr_links: bool,
     fetch: Fetch,
 ) -> Result<PrsReport> {
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
-    let repo = match repo {
-        Some(r) => r.to_string(),
-        None => resolve_repo(None, root)?,
-    };
 
     // Only the sections the report will render are fetched, and the three run
     // concurrently — each paginates independently, so serialising them would
@@ -862,10 +856,7 @@ pub fn gather(
     let fetched: Vec<(Section, SectionNodes)> = std::thread::scope(|s| {
         let handles: Vec<_> = wanted
             .iter()
-            .map(|&sec| {
-                let repo = repo.as_str();
-                (sec, s.spawn(move || fetch_section(repo, sec, root, fetch)))
-            })
+            .map(|&sec| (sec, s.spawn(move || fetch_section(repo, sec, root, fetch))))
             .collect();
         handles
             .into_iter()

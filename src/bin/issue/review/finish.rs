@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use devkit_common::cmd::{gh_json, git};
+use devkit_common::cmd::{gh_json_in, git};
 use devkit_common::github;
 use devkit_common::progress::Steps;
 use devkit_config::Person;
@@ -40,29 +40,26 @@ struct Author {
 
 /// PR number for head branch `b`, over direct HTTP when a token is available,
 /// else `gh pr list`. `Ok(None)` means no PR (whichever path answered).
-fn branch_pr_number(b: &str, cwd: &str) -> Result<Option<u64>> {
-    if let Some(found) = github::repo_slug(cwd)
-        .ok()
-        .filter(|_| github::token().is_some())
-        .and_then(|slug| github::pr_by_head(&slug, b).ok())
+fn branch_pr_number(b: &str, cwd: &str, repo: &github::Repo) -> Result<Option<u64>> {
+    if github::token().is_some()
+        && let Ok(found) = github::pr_by_head(&repo.slug, b)
     {
         return Ok(found.map(|p| p.number));
     }
-    let v: Vec<PrLite> = gh_json(
+    let v: Vec<PrLite> = gh_json_in(
         &[
             "pr", "list", "--head", b, "--state", "all", "--json", "number", "--limit", "1",
         ],
+        repo,
         cwd,
     )?;
     Ok(v.into_iter().next().map(|p| p.number))
 }
 
 /// URL/title/author for PR `n`, over direct HTTP when possible else `gh pr view`.
-fn fetch_pr_full(n: u64, cwd: &str) -> Result<PrFull> {
-    if let Some(f) = github::repo_slug(cwd)
-        .ok()
-        .filter(|_| github::token().is_some())
-        .and_then(|slug| github::pr_full(&slug, n).ok())
+fn fetch_pr_full(n: u64, cwd: &str, repo: &github::Repo) -> Result<PrFull> {
+    if github::token().is_some()
+        && let Ok(f) = github::pr_full(&repo.slug, n)
     {
         return Ok(PrFull {
             url: f.url,
@@ -72,8 +69,9 @@ fn fetch_pr_full(n: u64, cwd: &str) -> Result<PrFull> {
             },
         });
     }
-    gh_json(
+    gh_json_in(
         &["pr", "view", &n.to_string(), "--json", "url,title,author"],
+        repo,
         cwd,
     )
 }
@@ -100,6 +98,8 @@ pub fn run(args: Args) -> Result<()> {
     )?;
     let people = &loaded.config.people;
     let tmpls = &loaded.config.templates;
+    let repos = github::Repos::resolve(&loaded.config.github, &start, None);
+    let pr_repo = repos.prs()?;
 
     let mut vars = tmpls.variables.clone();
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
@@ -112,7 +112,7 @@ pub fn run(args: Args) -> Result<()> {
     let branch_pr = branch.as_deref().and_then(|b| {
         steps
             .during_result("Looking up PR for branch…", || {
-                branch_pr_number(b, &start)
+                branch_pr_number(b, &start, pr_repo)
             })
             .ok()
             .flatten()
@@ -124,7 +124,7 @@ pub fn run(args: Args) -> Result<()> {
         .and_then(|top| devkit_common::record::read(std::path::Path::new(top.trim())));
 
     let view: PrFull = steps.during_result(&format!("Fetching PR #{number}…"), || {
-        fetch_pr_full(number, &start)
+        fetch_pr_full(number, &start, pr_repo)
     })?;
     let author_login = view.author.login;
 

@@ -324,6 +324,7 @@ version = "0.13.2"
 dependencies = [
  "anyhow",
  "devkit-common",
+ "devkit-config",
  "serde",
  "serde_json",
 ]
@@ -348,6 +349,7 @@ version = "0.13.2"
 dependencies = [
  "anyhow",
  "devkit-common",
+ "devkit-config",
  "devkit-issue",
  "devkit-locks",
  "devkit-ports",

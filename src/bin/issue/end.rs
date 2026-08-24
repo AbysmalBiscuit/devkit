@@ -186,13 +186,14 @@ pub fn run(
 ) -> Result<()> {
     let steps = Steps::persistent();
     let tracker = crate::tracker::configured(config, start);
+    let repos = crate::tracker::repos(config, start, None);
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
         let report = steps.during_result("Fetching PR + issue status…", || {
-            gather_with(start, &[], &tracker)
+            gather_with(start, &[], &tracker, &repos)
         })?;
         render(&report, false);
         let t = select_explicit(&report.worktrees, ids);
@@ -207,7 +208,7 @@ pub fn run(
         t
     } else {
         let report = steps.during_result("Fetching PR + issue status…", || {
-            gather_with(start, ids, &tracker)
+            gather_with(start, ids, &tracker, &repos)
         })?;
         render(&report, false);
         if pr_only {

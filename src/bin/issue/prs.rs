@@ -320,7 +320,7 @@ fn fetch_report(
                     ".",
                     mine,
                     reviews,
-                    Some(resolved),
+                    resolved,
                     ignored_checks,
                     resolve_pr_links,
                     fetch,
@@ -379,7 +379,12 @@ pub fn run(
 
     // Resolve the repo up front: the snapshot cache is keyed by it and the
     // stale table must render before the fetch starts.
-    let resolved = devkit_issue::prs::resolve_repo(repo.as_deref(), ".")?;
+    let default_gh = devkit_config::GithubConfig::default();
+    let github_cfg = loaded
+        .as_ref()
+        .map(|l| &l.config.github)
+        .unwrap_or(&default_gh);
+    let resolved = devkit_issue::prs::resolve_repo(github_cfg, ".", repo.as_deref())?;
     let repo_key = if no_cache {
         None
     } else {

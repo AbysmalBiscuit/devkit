@@ -139,11 +139,20 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         None => capture_email(&start),
     };
     let monorepo = monorepo_dir(&args)?;
+    // The `[github]` config lives beside `start`'s `devkit.toml`, not
+    // `monorepo` (the doppler-derived checkout root) — only the `origin`
+    // remote lookup runs against `monorepo`.
+    let loaded = devkit_ports::load::load(
+        args.config.as_deref().map(std::path::Path::new),
+        std::path::Path::new(&start),
+    )?;
+    let repos = devkit_common::github::Repos::resolve(&loaded.config.github, &monorepo, None);
+    let pr_repo = repos.prs()?;
     let steps = devkit_common::progress::Steps::new();
     let _b1 = steps.spinner("[1/2] Loading PR history…");
     let _b2 = steps.spinner("[2/2] Loading commit history…");
     let (opened, merged, add, del, commits) = std::thread::scope(|s| {
-        let pr_t = s.spawn(|| data::pr_timeline(args.all_roles, use_cache));
+        let pr_t = s.spawn(|| data::pr_timeline(args.all_roles, use_cache, pr_repo));
         let commit_t = s.spawn(|| data::commit_dates(&monorepo, &author));
         let (opened, merged, add, del) = pr_t.join().expect("pr timeline thread panicked");
         let commits = commit_t.join().expect("commit thread panicked");

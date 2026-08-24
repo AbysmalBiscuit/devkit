@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use devkit_common::cmd::{capture, gh_json};
+use devkit_common::cmd::{capture, gh_json_in};
 use devkit_common::github;
 use devkit_common::tracker::{AssignedIssue, linear};
 use serde::{Deserialize, Serialize};
@@ -81,6 +81,7 @@ fn to_datetimes(stamps: &[i64]) -> Vec<DateTime<Utc>> {
 pub fn pr_timeline(
     all_roles: bool,
     use_cache: bool,
+    repo: &github::Repo,
 ) -> (Vec<DateTime<Utc>>, Vec<DateTime<Utc>>, i64, i64) {
     let key = if all_roles {
         "pr-timeline-all"
@@ -96,10 +97,10 @@ pub fn pr_timeline(
         );
     }
     let fetch = |search: &str| -> Vec<PrTimes> {
-        if let Some(v) = fetch_timeline_http(search) {
+        if let Some(v) = fetch_timeline_http(search, repo) {
             return v;
         }
-        gh_json(
+        gh_json_in(
             &[
                 "pr",
                 "list",
@@ -112,6 +113,7 @@ pub fn pr_timeline(
                 "--json",
                 "createdAt,mergedAt,additions,deletions",
             ],
+            repo,
             ".",
         )
         .unwrap_or_default()
@@ -157,10 +159,9 @@ pub fn pr_timeline(
 
 /// Timeline PRs for `qualifier` (`author:@me` / `reviewed-by:@me`) over direct
 /// HTTP; `None` on no token / transport failure so the caller falls back to `gh`.
-fn fetch_timeline_http(qualifier: &str) -> Option<Vec<PrTimes>> {
-    let slug = github::repo_slug(".").ok()?;
+fn fetch_timeline_http(qualifier: &str, repo: &github::Repo) -> Option<Vec<PrTimes>> {
     github::token()?;
-    let items = github::pr_timeline(&slug, qualifier, 500).ok()?;
+    let items = github::pr_timeline(&repo.slug, qualifier, 500).ok()?;
     Some(
         items
             .into_iter()

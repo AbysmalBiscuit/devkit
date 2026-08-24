@@ -46,9 +46,16 @@ fn status_schema() -> Value {
 fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: StatusArgs = serde_json::from_value(args).context("invalid issue.status arguments")?;
     let root = a.root.unwrap_or_else(|| ".".to_string());
-    let kind = project_config(&root).and_then(|l| l.config.tracker.kind);
+    let loaded = project_config(&root);
+    let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
     let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root));
-    let report = status::gather_with(&root, &a.ids, &tracker)?;
+    let default_gh = devkit_config::GithubConfig::default();
+    let github_cfg = loaded
+        .as_ref()
+        .map(|l| &l.config.github)
+        .unwrap_or(&default_gh);
+    let repos = devkit_common::github::Repos::resolve(github_cfg, &root, None);
+    let report = status::gather_with(&root, &a.ids, &tracker, &repos)?;
     Ok(serde_json::to_value(report)?)
 }
 
@@ -103,11 +110,17 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let resolve_pr_links = loaded
         .as_ref()
         .is_some_and(|l| l.config.linear.resolve_pr_links);
+    let default_gh = devkit_config::GithubConfig::default();
+    let github_cfg = loaded
+        .as_ref()
+        .map(|l| &l.config.github)
+        .unwrap_or(&default_gh);
+    let repo = prs::resolve_repo(github_cfg, &root, a.repo.as_deref())?;
     let report = prs::gather(
         &root,
         a.mine,
         a.reviews,
-        a.repo.as_deref(),
+        &repo,
         &ignored_checks,
         resolve_pr_links,
         prs::Fetch {

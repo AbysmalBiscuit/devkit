@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use devkit_common::cmd::{capture, gh_json, git};
+use devkit_common::cmd::{gh_capture, gh_json_in, git};
 use devkit_common::github;
 use devkit_common::progress::Steps;
 use devkit_config::Person;
@@ -83,16 +83,15 @@ pub(crate) fn targets_from_logins(
 
 /// Logins currently requested as reviewers on PR `pr`, over direct HTTP when a
 /// token is available, else `gh pr view --json reviewRequests`.
-fn requested_reviewer_logins(pr: u64, cwd: &str) -> Result<Vec<String>> {
-    if let Some(logins) = github::repo_slug(cwd)
-        .ok()
-        .filter(|_| github::token().is_some())
-        .and_then(|slug| github::requested_reviewers(&slug, pr).ok())
+fn requested_reviewer_logins(pr: u64, cwd: &str, repo: &github::Repo) -> Result<Vec<String>> {
+    if github::token().is_some()
+        && let Ok(logins) = github::requested_reviewers(&repo.slug, pr)
     {
         return Ok(logins);
     }
-    let view: ReviewRequestsView = gh_json(
+    let view: ReviewRequestsView = gh_json_in(
         &["pr", "view", &pr.to_string(), "--json", "reviewRequests"],
+        repo,
         cwd,
     )?;
     Ok(view
@@ -104,11 +103,9 @@ fn requested_reviewer_logins(pr: u64, cwd: &str) -> Result<Vec<String>> {
 
 /// The existing PR for head branch `branch` (number/state/url), over direct HTTP
 /// when possible else `gh pr list`. `Ok(None)` means no PR.
-fn existing_pr(branch: &str, cwd: &str) -> Result<Option<PrView>> {
-    if let Some(found) = github::repo_slug(cwd)
-        .ok()
-        .filter(|_| github::token().is_some())
-        .and_then(|slug| github::pr_by_head(&slug, branch).ok())
+fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<PrView>> {
+    if github::token().is_some()
+        && let Ok(found) = github::pr_by_head(&repo.slug, branch)
     {
         return Ok(found.map(|p| PrView {
             number: p.number,
@@ -116,7 +113,7 @@ fn existing_pr(branch: &str, cwd: &str) -> Result<Option<PrView>> {
             url: p.url,
         }));
     }
-    let v: Vec<PrView> = gh_json(
+    let v: Vec<PrView> = gh_json_in(
         &[
             "pr",
             "list",
@@ -129,6 +126,7 @@ fn existing_pr(branch: &str, cwd: &str) -> Result<Option<PrView>> {
             "--limit",
             "1",
         ],
+        repo,
         cwd,
     )?;
     Ok(v.into_iter().next())
@@ -147,12 +145,13 @@ fn resolve_request_targets(
     explicit: &[Target],
     pr: u64,
     cwd: &str,
+    repo: &github::Repo,
     people: &HashMap<String, Person>,
 ) -> Result<Vec<Target>> {
     if !explicit.is_empty() {
         return Ok(explicit.to_vec());
     }
-    let logins: Vec<String> = requested_reviewer_logins(pr, cwd)?
+    let logins: Vec<String> = requested_reviewer_logins(pr, cwd, repo)?
         .into_iter()
         .filter(|l| is_human_login(l))
         .collect();
@@ -177,6 +176,8 @@ pub fn run(args: Args) -> Result<()> {
     )?;
     let people = &loaded.config.people;
     let tmpls = &loaded.config.templates;
+    let repos = github::Repos::resolve(&loaded.config.github, &start, None);
+    let pr_repo = repos.prs()?;
 
     let mut vars = tmpls.variables.clone();
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
@@ -226,8 +227,9 @@ pub fn run(args: Args) -> Result<()> {
         missing_at,
     )?;
 
-    let existing: Option<PrView> =
-        steps.during_result("Looking up existing PR…", || existing_pr(&branch, &start))?;
+    let existing: Option<PrView> = steps.during_result("Looking up existing PR…", || {
+        existing_pr(&branch, &start, pr_repo)
+    })?;
 
     let (pr_url, targets) = match action_for(existing.as_ref().map(|p| p.state.as_str())) {
         PrAction::Stop(reason) => bail!("{reason}"),
@@ -236,7 +238,7 @@ pub fn run(args: Args) -> Result<()> {
             let targets = match pinned_targets(&explicit, args.no_notify) {
                 Some(t) => t,
                 None => steps.during_result("Resolving reviewers…", || {
-                    resolve_request_targets(&explicit, pr.number, &start, people)
+                    resolve_request_targets(&explicit, pr.number, &start, pr_repo, people)
                 })?,
             };
             let (logins, warnings) = reviewer_logins(&targets);
@@ -246,8 +248,7 @@ pub fn run(args: Args) -> Result<()> {
             if !logins.is_empty() {
                 steps
                     .during_result("Adding reviewers…", || {
-                        capture(
-                            "gh",
+                        gh_capture(
                             &[
                                 "pr",
                                 "edit",
@@ -255,7 +256,8 @@ pub fn run(args: Args) -> Result<()> {
                                 "--add-reviewer",
                                 &logins.join(","),
                             ],
-                            Some(&start),
+                            pr_repo,
+                            &start,
                         )
                     })
                     .context("gh pr edit --add-reviewer failed")?;
@@ -305,7 +307,7 @@ pub fn run(args: Args) -> Result<()> {
                 gh_args.push(&joined);
             }
             let out = steps
-                .during_result("Creating PR…", || capture("gh", &gh_args, Some(&start)))
+                .during_result("Creating PR…", || gh_capture(&gh_args, pr_repo, &start))
                 .context("gh pr create failed")?;
             let url = out
                 .lines()
