@@ -1254,8 +1254,23 @@ content = \"key = 1\\n\"\n"
         d
     }
 
+    /// An absolute path, spelled the way the host spells one. `resolve_path_key`
+    /// anchors anything `Path::is_absolute` rejects to its declaring layer, and a
+    /// leading `/` is not absolute on Windows, so a fixture that spelled one
+    /// there would move with the layer instead of standing still.
+    #[cfg(not(windows))]
+    const ABS_W: &str = "/w";
+    #[cfg(windows)]
+    const ABS_W: &str = "C:\\w";
+
+    /// Every `[defaults]` key a `Config` requires, with `ABS_W` as the worktree
+    /// root so the layering tests read back what they wrote.
+    #[cfg(not(windows))]
     const FULL_DEFAULTS: &str =
         "worktree_root='/w'\nbranch_prefix='x/'\nbaseline_ref='r'\nbaseline_path='/b'\n";
+    #[cfg(windows)]
+    const FULL_DEFAULTS: &str =
+        "worktree_root='C:\\w'\nbranch_prefix='x/'\nbaseline_ref='r'\nbaseline_path='C:\\b'\n";
 
     #[test]
     fn resolve_merges_parent_and_child() {
@@ -1274,7 +1289,7 @@ content = \"key = 1\\n\"\n"
         .unwrap();
         let (cfg, prov) = resolve_with_home(None, &child, None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "y/"); // child overrides
-        assert_eq!(cfg.defaults.worktree_root, "/w"); // inherited from parent
+        assert_eq!(cfg.defaults.worktree_root, ABS_W); // inherited from parent
         assert_eq!(cfg.apps["api"].base_port, 2); // child overrides
         assert_eq!(cfg.apps["api"].launch, vec!["a".to_string()]); // inherited
         assert_eq!(prov.layers.len(), 2);
@@ -1302,7 +1317,7 @@ content = \"key = 1\\n\"\n"
         )
         .unwrap();
         let (cfg, prov) = resolve_with_home(None, &child, Some(&home)).unwrap();
-        assert_eq!(cfg.defaults.worktree_root, "/w"); // parent's /PARENT dropped
+        assert_eq!(cfg.defaults.worktree_root, ABS_W); // parent's /PARENT dropped
         assert_eq!(cfg.defaults.branch_prefix, "x/"); // home's HOME/ dropped
         assert_eq!(prov.layers, vec![child.join("devkit.toml")]);
     }
@@ -1348,7 +1363,7 @@ content = \"key = 1\\n\"\n"
         .unwrap();
         let (cfg, prov) = resolve_with_home(None, &repo, None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "local/");
-        assert_eq!(cfg.defaults.worktree_root, "/w"); // tracked layer still merges
+        assert_eq!(cfg.defaults.worktree_root, ABS_W); // tracked layer still merges
         assert_eq!(
             prov.origin["defaults.branch_prefix"],
             repo.join("devkit.local.toml")
@@ -1388,7 +1403,7 @@ content = \"key = 1\\n\"\n"
         )
         .unwrap();
         let (cfg, prov) = resolve_with_home(None, &repo, None).unwrap();
-        assert_eq!(cfg.defaults.worktree_root, "/w");
+        assert_eq!(cfg.defaults.worktree_root, ABS_W);
         assert_eq!(prov.layers, vec![repo.join("devkit.local.toml")]);
     }
 
@@ -1411,7 +1426,7 @@ content = \"key = 1\\n\"\n"
         .unwrap();
         std::fs::write(child.join("devkit.local.toml"), "[config]\nroot=true\n").unwrap();
         let (cfg, prov) = resolve_with_home(None, &child, Some(&home)).unwrap();
-        assert_eq!(cfg.defaults.worktree_root, "/w"); // parent's /PARENT dropped
+        assert_eq!(cfg.defaults.worktree_root, ABS_W); // parent's /PARENT dropped
         assert_eq!(cfg.defaults.branch_prefix, "x/"); // home's HOME/ dropped
         assert_eq!(
             prov.layers,
@@ -1892,7 +1907,9 @@ steps = [
         );
         assert_eq!(
             cfg.defaults.baseline_path,
-            tmp.join("proj-worktrees/_baseline").to_string_lossy()
+            tmp.join("proj-worktrees")
+                .join("_baseline")
+                .to_string_lossy()
         );
         std::fs::remove_dir_all(&tmp).ok();
     }
@@ -1925,18 +1942,20 @@ steps = [
         let tmp = std::env::temp_dir().join(format!("devkit-abscfg-{}", std::process::id()));
         write_cfg(
             &tmp,
-            "[defaults]\n\
-             worktree_root = \"/srv/trees\"\n\
+            &format!(
+                "[defaults]\n\
+             worktree_root = '{ABS_W}'\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
-             baseline_path = \"~/wt/_baseline\"\n",
+             baseline_path = \"~/wt/_baseline\"\n"
+            ),
         );
         let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
-        assert_eq!(cfg.defaults.worktree_root, "/srv/trees");
+        assert_eq!(cfg.defaults.worktree_root, ABS_W);
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
         assert_eq!(
             cfg.defaults.baseline_path,
-            home.join("wt/_baseline").to_string_lossy()
+            home.join("wt").join("_baseline").to_string_lossy()
         );
         std::fs::remove_dir_all(&tmp).ok();
     }
@@ -2042,12 +2061,16 @@ steps = [
         // threads concurrently.
         let cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(&tmp).unwrap();
+        // The expectation is anchored to the directory the process reports, not
+        // to `tmp`: macOS resolves a `/var/folders/...` temp dir through the
+        // `/var` -> `/private/var` symlink, so the two spellings differ.
+        let here = std::env::current_dir().unwrap();
         let result = resolve_with_home(None, Path::new("."), None);
         std::env::set_current_dir(&cwd).unwrap();
         let (cfg, _) = result.unwrap();
         let root = Path::new(&cfg.defaults.worktree_root);
         assert!(root.is_absolute(), "{root:?} must be absolute");
-        let expected = tmp.parent().unwrap().join("proj-worktrees");
+        let expected = here.parent().unwrap().join("proj-worktrees");
         assert_eq!(cfg.defaults.worktree_root, expected.to_string_lossy());
         std::fs::remove_dir_all(&tmp).ok();
     }
