@@ -4,8 +4,7 @@ use devkit_common::cmd::{gh_capture, gh_json_in, git};
 use devkit_common::gitfetch;
 use devkit_common::github;
 use devkit_common::progress::Steps;
-use devkit_common::tracker::linear::{self, LinearIssueRef};
-use devkit_common::tracker::{IssueRef, Tracker};
+use devkit_common::tracker::{IssueRef, Tracker, TrackerKind};
 use devkit_config::expand_tilde;
 use devkit_ports::load;
 use std::io::{IsTerminal, Write};
@@ -48,13 +47,12 @@ fn classify(input: &str, t: &dyn Tracker) -> Result<Ident> {
     if s.is_empty() || s.split_whitespace().count() != 1 {
         anyhow::bail!("unrecognized PR/issue identifier: {s}");
     }
-    let r = t.issue_ref(s);
-    // A tracker that cannot parse a URL hands the input straight back, and no
-    // tracker's id contains a `/`, so a slash in the result means it failed.
-    anyhow::ensure!(
-        !r.id.is_empty() && !r.id.contains('/'),
-        "unrecognized PR/issue identifier: {s}"
-    );
+    // A tracker that cannot parse this input says so, so there is nothing to
+    // infer from the shape of what it returned.
+    let r = t
+        .issue_ref(s)
+        .with_context(|| format!("unrecognized PR/issue identifier: {s}"))?;
+    anyhow::ensure!(!r.id.is_empty(), "unrecognized PR/issue identifier: {s}");
     Ok(Ident::Issue(r))
 }
 
@@ -62,20 +60,30 @@ fn classify(input: &str, t: &dyn Tracker) -> Result<Ident> {
 #[derive(Debug, PartialEq, Eq)]
 enum FuzzyDecision {
     UsePr,
-    UseLinear(LinearIssueRef),
-    Prompt(Vec<LinearIssueRef>),
+    UseTracker(IssueRef),
+    Prompt(Vec<IssueRef>),
     ErrorAmbiguous,
     ErrorNone,
 }
 
-fn decide_fuzzy(pr_exists: bool, candidates: &[LinearIssueRef], is_tty: bool) -> FuzzyDecision {
+fn decide_fuzzy(pr_exists: bool, candidates: &[IssueRef], is_tty: bool) -> FuzzyDecision {
     match (pr_exists, candidates) {
         (false, []) => FuzzyDecision::ErrorNone,
         (true, []) => FuzzyDecision::UsePr,
-        (false, [only]) => FuzzyDecision::UseLinear(only.clone()),
+        (false, [only]) => FuzzyDecision::UseTracker(only.clone()),
         _ if is_tty => FuzzyDecision::Prompt(candidates.to_vec()),
         _ => FuzzyDecision::ErrorAmbiguous,
     }
+}
+
+/// `decide_fuzzy` with the candidates asked from the tracker itself, so the
+/// project's declared kind decides what a bare number means rather than
+/// whatever `LINEAR_API_KEY` happens to be exported in the shell.
+/// `candidates` degrades to empty on error — the id still resolves via the PR
+/// side, or reports "not found", rather than aborting the whole checkout.
+fn decide_fuzzy_via(t: &dyn Tracker, n: u64, pr_exists: bool, is_tty: bool) -> FuzzyDecision {
+    let candidates = t.candidates(n).unwrap_or_default();
+    decide_fuzzy(pr_exists, &candidates, is_tty)
 }
 
 struct Resolved {
@@ -163,7 +171,6 @@ fn resolve_issue(id: &str, title: Option<String>, t: &dyn Tracker) -> Result<Res
 /// Resolve the raw input to a concrete PR. Network + interactive.
 fn resolve(
     target: &str,
-    key: Option<&str>,
     cwd: &str,
     pr_repo: &github::Repo,
     t: &dyn Tracker,
@@ -185,41 +192,32 @@ fn resolve(
             })
         }
         Ident::Fuzzy(n) => {
-            // No Linear key → a bare number is a GitHub PR.
-            let Some(key) = key else {
-                return Ok(Resolved {
-                    pr_number: n,
-                    linear_id: None,
-                    linear_title: None,
-                });
-            };
             // Probe both sides under a spinner; clear it before any prompt.
-            let (exists, candidates) = steps.during_result(&format!("Resolving {n}…"), || {
+            let (exists, decision) = steps.during_result(&format!("Resolving {n}…"), || {
                 let exists = pr_exists(n, cwd, pr_repo)?;
-                let candidates = linear::issues_by_number(n, key)?;
-                Ok::<_, anyhow::Error>((exists, candidates))
+                let is_tty = std::io::stdin().is_terminal();
+                Ok::<_, anyhow::Error>((exists, decide_fuzzy_via(t, n, exists, is_tty)))
             })?;
-            let is_tty = std::io::stdin().is_terminal();
-            match decide_fuzzy(exists, &candidates, is_tty) {
+            match decision {
                 FuzzyDecision::ErrorNone => {
-                    anyhow::bail!("no PR or Linear issue found for {n}")
+                    anyhow::bail!("no PR or issue found for {n}")
                 }
-                FuzzyDecision::ErrorAmbiguous => anyhow::bail!(
-                    "ambiguous {n} — rerun as #{n} (GitHub PR) or PREFIX-{n} (Linear)"
-                ),
+                FuzzyDecision::ErrorAmbiguous => {
+                    anyhow::bail!("ambiguous {n} — rerun as #{n} (PR) or with the full issue id")
+                }
                 FuzzyDecision::UsePr => Ok(Resolved {
                     pr_number: n,
                     linear_id: None,
                     linear_title: None,
                 }),
-                FuzzyDecision::UseLinear(r) => resolve_issue(&r.id, Some(r.title), t),
-                FuzzyDecision::Prompt(cands) => match prompt_choice(exists, &cands, n)? {
+                FuzzyDecision::UseTracker(r) => resolve_issue(&r.id, r.slug.clone(), t),
+                FuzzyDecision::Prompt(cands) => match prompt_choice(exists, &cands, n, t.kind())? {
                     None => Ok(Resolved {
                         pr_number: n,
                         linear_id: None,
                         linear_title: None,
                     }),
-                    Some(r) => resolve_issue(&r.id, Some(r.title), t),
+                    Some(r) => resolve_issue(&r.id, r.slug.clone(), t),
                 },
             }
         }
@@ -229,11 +227,12 @@ fn resolve(
 /// Print the options and read a choice. `Ok(None)` = the GitHub PR.
 fn prompt_choice(
     pr_exists: bool,
-    candidates: &[LinearIssueRef],
+    candidates: &[IssueRef],
     n: u64,
-) -> Result<Option<LinearIssueRef>> {
+    kind: TrackerKind,
+) -> Result<Option<IssueRef>> {
     println!("Multiple matches for {n}:");
-    let mut options: Vec<Option<&LinearIssueRef>> = Vec::new();
+    let mut options: Vec<Option<&IssueRef>> = Vec::new();
     if pr_exists {
         options.push(None);
     }
@@ -241,7 +240,7 @@ fn prompt_choice(
     for (i, opt) in options.iter().enumerate() {
         match opt {
             None => println!("  [{i}] GitHub PR #{n}"),
-            Some(c) => println!("  [{i}] Linear {} — {}", c.id, c.title),
+            Some(c) => println!("  [{i}] {} {}", kind.as_str(), c.id),
         }
     }
     print!("Choose [0]: ");
@@ -249,7 +248,7 @@ fn prompt_choice(
     let mut line = String::new();
     std::io::stdin().read_line(&mut line).ok();
     let idx: usize = line.trim().parse().unwrap_or(0);
-    let chosen: Option<&LinearIssueRef> = *options.get(idx).context("choice out of range")?;
+    let chosen: Option<&IssueRef> = *options.get(idx).context("choice out of range")?;
     Ok(chosen.cloned())
 }
 
@@ -300,19 +299,11 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let monorepo = wt_root.join("monorepo");
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
 
-    let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
     let tracker = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start)).tracker;
     let repos = github::Repos::resolve(&cfg.github, monorepo_s, None);
     let pr_repo = repos.prs()?;
     let steps = Steps::persistent();
-    let resolved = resolve(
-        &args.target,
-        key.as_deref(),
-        monorepo_s,
-        pr_repo,
-        tracker.as_ref(),
-        &steps,
-    )?;
+    let resolved = resolve(&args.target, monorepo_s, pr_repo, tracker.as_ref(), &steps)?;
 
     let meta: PrMeta = steps
         .during_result(&format!("Fetching PR #{}…", resolved.pr_number), || {
@@ -540,10 +531,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    fn lref(id: &str, title: &str) -> LinearIssueRef {
-        LinearIssueRef {
+    fn lref(id: &str, slug: &str) -> IssueRef {
+        IssueRef {
             id: id.into(),
-            title: title.into(),
+            slug: Some(slug.into()),
         }
     }
 
@@ -623,7 +614,7 @@ mod tests {
     fn fuzzy_single_linear() {
         assert_eq!(
             decide_fuzzy(false, &[lref("ENG-1", "a")], true),
-            FuzzyDecision::UseLinear(lref("ENG-1", "a"))
+            FuzzyDecision::UseTracker(lref("ENG-1", "a"))
         );
     }
     #[test]
@@ -656,6 +647,25 @@ mod tests {
             decide_fuzzy(true, &[lref("ENG-1", "a")], false),
             FuzzyDecision::ErrorAmbiguous
         );
+    }
+
+    #[test]
+    fn a_bare_number_asks_the_tracker_not_the_environment() {
+        // The exported LINEAR_API_KEY of one project decided what a number meant in
+        // another: the arm read the ambient key directly, so declaring
+        // kind = "github" did not stop it.
+        use devkit_common::tracker::fake;
+        let gh = fake::FakeTracker::new().with_kind(TrackerKind::Github); // candidates() empty
+        assert_eq!(
+            decide_fuzzy_via(&gh, 42, /* pr_exists */ true, false),
+            FuzzyDecision::UsePr
+        );
+
+        let lin = fake::FakeTracker::new().with_candidates(42, vec!["ENG-42"]);
+        assert!(matches!(
+            decide_fuzzy_via(&lin, 42, true, true),
+            FuzzyDecision::Prompt(_)
+        ));
     }
 
     #[test]

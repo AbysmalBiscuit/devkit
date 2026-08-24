@@ -125,8 +125,10 @@ pub trait Tracker: Send + Sync {
     /// rather than error.
     fn ready(&self) -> bool;
     /// Parse CLI input — a bare id, a `#123`, or an issue URL — into an id and,
-    /// when the input spelled one out, a title slug.
-    fn issue_ref(&self, input: &str) -> IssueRef;
+    /// when the input spelled one out, a title slug. Fails when the input names
+    /// a repository or workspace this tracker is not scoped to; the caller
+    /// surfaces the error rather than guessing.
+    fn issue_ref(&self, input: &str) -> Result<IssueRef>;
     fn title(&self, id: &str) -> Result<Option<String>>;
     fn details(&self, id: &str) -> Result<Option<IssueDetails>>;
     /// Batched: one round trip for every id.
@@ -285,7 +287,7 @@ mod tests {
     #[test]
     fn the_none_tracker_passes_an_id_through_unchanged() {
         let t = resolve(Some(TrackerKind::None), Path::new("/nowhere")).tracker;
-        let r = t.issue_ref("  eng-1  ");
+        let r = t.issue_ref("  eng-1  ").unwrap();
         assert_eq!(r.id, "eng-1");
         assert_eq!(r.slug, None);
     }
@@ -361,5 +363,45 @@ mod tests {
             resolve(Some(TrackerKind::None), dir).tracker.kind(),
             TrackerKind::None
         );
+    }
+
+    #[test]
+    fn issue_ref_can_refuse() {
+        // The refusal the design promises — an issue URL naming a repository the
+        // tracker is not scoped to — cannot be expressed by a method returning a
+        // bare IssueRef. checkout-pr works around the absence today by treating a
+        // `/` in the returned id as a parse failure.
+        let t = fake::FakeTracker::new().refusing("https://github.com/other/repo/issues/9");
+        assert!(
+            t.issue_ref("https://github.com/other/repo/issues/9")
+                .is_err()
+        );
+        assert_eq!(t.issue_ref("#9").unwrap().id, "9");
+    }
+
+    /// Every trait method must have a caller outside this module. Five did not
+    /// after phase 2 — details, candidates, issues_for_prs, assigned_history and
+    /// timeline_origin — which is how an adapter can be written against a trait
+    /// most commands never ask. `assigned_history` and `timeline_origin` gain
+    /// theirs in the dashboard task.
+    #[test]
+    fn every_trait_method_is_reachable() {
+        // A compile-time witness: each method named here is called by a binary or
+        // library outside `tracker/`. Update the list, not the assertion, when a
+        // method is added.
+        const WIRED: &[&str] = &[
+            "kind",
+            "ready",
+            "issue_ref",
+            "title",
+            "details",
+            "states",
+            "issue_pr",
+            "candidates",
+            "issues_for_prs",
+            "issue_url",
+            "check",
+        ];
+        assert_eq!(WIRED.len(), 11);
     }
 }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use devkit_common::tracker::Tracker;
 use devkit_common::{paths, ui};
 use devkit_issue::prs::{MinePrView, ReviewPrView};
 use std::collections::BTreeMap;
@@ -36,17 +37,19 @@ fn diff_cell(prev: Option<&str>, cur: &str, paint: impl Fn(&str) -> String) -> S
     }
 }
 
-/// The ISSUE column cell: every id as a Linear link (plain text without a
-/// workspace url key), space-joined; dim `-` when no id resolved.
-fn issue_cell(issue_ids: &[String], url_key: Option<&str>) -> String {
+/// The ISSUE column cell: every id linked through the tracker (plain text
+/// when it has no link for that id, or `t` is `None` — the stale block passes
+/// `None` so it never triggers a link lookup of its own), space-joined; dim
+/// `-` when no id resolved.
+fn issue_cell(issue_ids: &[String], t: Option<&dyn Tracker>) -> String {
     if issue_ids.is_empty() {
         return ui::dim("-");
     }
     let cells: Vec<String> = issue_ids
         .iter()
         .map(|id| {
-            let linked = match url_key {
-                Some(k) => ui::link(id, &format!("https://linear.app/{k}/issue/{id}")),
+            let linked = match t.and_then(|t| t.issue_url(id)) {
+                Some(url) => ui::link(id, &url),
                 None => id.to_string(),
             };
             ui::cyan(&linked)
@@ -133,23 +136,23 @@ fn next_snapshot(
 /// (last-run) render can share it; the stale path passes an empty `prev`.
 fn mine_table_build(
     prs: &[MinePrView],
-    url_key: Option<&str>,
+    t: Option<&dyn Tracker>,
     prev: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> (String, BTreeMap<String, BTreeMap<String, String>>) {
     let mut cur = BTreeMap::new();
     if prs.is_empty() {
         return (format!("  {}", ui::dim("(none)")), cur);
     }
-    let mut t = ui::table(&["PR", "ISSUE", "REVIEW", "CHECK", "ACTION"]);
+    let mut table = ui::table(&["PR", "ISSUE", "REVIEW", "CHECK", "ACTION"]);
     for pr in prs {
         let review = pr.review_state.clone();
         let check = pr.check_state.clone();
         let action = pr.action.clone();
         let was = prev.get(&pr.number.to_string());
         let g = |k: &str| was.and_then(|m| m.get(k)).map(|s| s.as_str());
-        t.add_row(vec![
+        table.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
-            issue_cell(&pr.issue_ids, url_key),
+            issue_cell(&pr.issue_ids, t),
             diff_cell(g("review"), &review, |s| s.to_string()),
             diff_cell(g("check"), &check, |s| s.to_string()),
             diff_cell(g("action"), &action, |s| paint_action(&action, s)),
@@ -163,7 +166,7 @@ fn mine_table_build(
             ]),
         );
     }
-    (t.to_string(), cur)
+    (table.to_string(), cur)
 }
 
 /// The colour legend and diff hint shown under the tables when any fetched
@@ -189,7 +192,7 @@ fn legend_lines() -> [String; 2] {
 /// difference instead of replacing the block in place.
 fn final_lines(
     report: &devkit_issue::prs::PrsReport,
-    url_key: Option<&str>,
+    t: &dyn Tracker,
     mut diff: DiffMap,
     want_mine: bool,
     want_reviews: bool,
@@ -198,7 +201,7 @@ fn final_lines(
     if want_mine {
         let prev = diff.get("mine").cloned().unwrap_or_default();
         out.push(ui::bold_cyan("MY OPEN PRs"));
-        let (body, cur) = mine_table_build(&report.mine, url_key, &prev);
+        let (body, cur) = mine_table_build(&report.mine, Some(t), &prev);
         out.extend(body.lines().map(String::from));
         diff.insert("mine".to_string(), cur);
     }
@@ -206,7 +209,7 @@ fn final_lines(
         let prev = diff.get("reviews").cloned().unwrap_or_default();
         out.push(String::new());
         out.push(ui::bold_cyan("PRs AWAITING MY REVIEW"));
-        let (body, cur) = reviews_table_build(&report.reviews, url_key, &prev);
+        let (body, cur) = reviews_table_build(&report.reviews, Some(t), &prev);
         out.extend(body.lines().map(String::from));
         diff.insert("reviews".to_string(), cur);
     }
@@ -223,22 +226,22 @@ fn final_lines(
 /// next snapshot. Pure — see [`mine_table_build`].
 fn reviews_table_build(
     rows: &[ReviewPrView],
-    url_key: Option<&str>,
+    t: Option<&dyn Tracker>,
     prev: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> (String, BTreeMap<String, BTreeMap<String, String>>) {
     let mut cur = BTreeMap::new();
     if rows.is_empty() {
         return (format!("  {}", ui::dim("(none)")), cur);
     }
-    let mut t = ui::table(&["PR", "ISSUE", "AUTHOR", "MY VOTE", "ACTION"]);
+    let mut table = ui::table(&["PR", "ISSUE", "AUTHOR", "MY VOTE", "ACTION"]);
     for pr in rows {
         let vote = pr.my_vote.clone();
         let action = pr.action.clone();
         let was = prev.get(&pr.number.to_string());
         let g = |k: &str| was.and_then(|m| m.get(k)).map(|s| s.as_str());
-        t.add_row(vec![
+        table.add_row(vec![
             ui::link(&format!("#{}", pr.number), &pr.url),
-            issue_cell(&pr.issue_ids, url_key),
+            issue_cell(&pr.issue_ids, t),
             pr.author.clone(),
             diff_cell(g("vote"), &vote, |s| s.to_string()),
             diff_cell(g("action"), &action, |s| paint_action(&action, s)),
@@ -248,7 +251,7 @@ fn reviews_table_build(
             BTreeMap::from([("vote".to_string(), vote), ("action".to_string(), action)]),
         );
     }
-    (t.to_string(), cur)
+    (table.to_string(), cur)
 }
 
 /// The stale-while-revalidate block: last run's tables, every line dimmed.
@@ -290,68 +293,6 @@ fn stale_body(
     out
 }
 
-/// Fetch the PR report and the Linear workspace URL key concurrently.
-fn fetch_report(
-    resolved: &str,
-    mine: bool,
-    reviews: bool,
-    ignored_checks: &[String],
-    resolve_pr_links: bool,
-    fetch: devkit_issue::prs::Fetch,
-) -> Result<(Option<String>, devkit_issue::prs::PrsReport)> {
-    enum Update {
-        Fetched(Result<devkit_issue::prs::PrsReport>),
-        Workspace(Option<String>),
-    }
-    std::thread::scope(|s| {
-        let (tx, rx) = std::sync::mpsc::channel::<Update>();
-        {
-            let tx = tx.clone();
-            s.spawn(move || {
-                let _ = tx.send(Update::Workspace(
-                    devkit_common::tracker::linear::workspace_url_key(),
-                ));
-            });
-        }
-        {
-            let tx = tx.clone();
-            s.spawn(move || {
-                let _ = tx.send(Update::Fetched(devkit_issue::prs::gather(
-                    ".",
-                    mine,
-                    reviews,
-                    resolved,
-                    ignored_checks,
-                    resolve_pr_links,
-                    fetch,
-                )));
-            });
-        }
-        drop(tx);
-        let mut url_key: Option<String> = None;
-        let mut report: Option<devkit_issue::prs::PrsReport> = None;
-        // The explicit got_ws flag matters: a `None` workspace key is a
-        // legitimate answer (no Linear configured), so `url_key.is_none()`
-        // cannot mean "still waiting".
-        let mut got_ws = false;
-        while !(got_ws && report.is_some()) {
-            match rx.recv() {
-                Ok(Update::Fetched(res)) => report = Some(res?),
-                Ok(Update::Workspace(ws)) => {
-                    got_ws = true;
-                    url_key = ws;
-                }
-                // All senders gone: fall through to the report check.
-                Err(_) => break,
-            }
-        }
-        match report {
-            Some(r) => Ok((url_key, r)),
-            None => anyhow::bail!("PR fetch ended without a result"),
-        }
-    })
-}
-
 // Entry point -------------------------------------------------------------------
 
 pub fn run(
@@ -388,6 +329,8 @@ pub fn run(
         .prs()?
         .slug
         .clone();
+    let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
+    let tracker = devkit_common::tracker::resolve(kind, Path::new("."));
     let repo_key = if no_cache {
         None
     } else {
@@ -424,20 +367,28 @@ pub fn run(
     };
     let _fetch_spin = live.spinner(&spin_msg);
 
-    let fetched = fetch_report(
-        &resolved,
+    let fetched = devkit_issue::prs::gather(
+        ".",
         mine,
         reviews,
+        &resolved,
         &ignored_checks,
         resolve_pr_links,
         fetch,
+        tracker.tracker.as_ref(),
     );
     // Clear the stale block (and finish the spinner) before any fetch error
     // renders, so the anyhow report is not printed under a half-drawn region.
     live.clear();
-    let (url_key, report) = fetched?;
+    let report = fetched?;
 
-    let (lines, diff) = final_lines(&report, url_key.as_deref(), diff, want_mine, want_reviews);
+    let (lines, diff) = final_lines(
+        &report,
+        tracker.tracker.as_ref(),
+        diff,
+        want_mine,
+        want_reviews,
+    );
     for l in &lines {
         println!("{l}");
     }
@@ -461,6 +412,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_common::tracker::fake;
 
     fn mine_view(n: u64, action: &str) -> MinePrView {
         MinePrView {
@@ -494,9 +446,10 @@ mod tests {
 
     #[test]
     fn reviews_table_build_renders_issue_column() {
+        let t = fake::FakeTracker::new();
         let (body, _) = reviews_table_build(
             &[review_view(9, "REVIEW NEEDED")],
-            Some("acme"),
+            Some(&t),
             &BTreeMap::new(),
         );
         assert!(body.contains("ISSUE"), "header missing ISSUE: {body}");
@@ -516,6 +469,7 @@ mod tests {
     // screen shifts by the difference when the fresh tables land.
     #[test]
     fn stale_block_aligns_with_final_render() {
+        let t = fake::FakeTracker::new();
         let mine = vec![mine_view(12, "MERGE"), mine_view(13, "fix CI")];
         let reviews = vec![review_view(9, "REVIEW NEEDED")];
         let report = devkit_issue::prs::PrsReport {
@@ -523,7 +477,7 @@ mod tests {
             reviews: reviews.clone(),
         };
         for (want_mine, want_reviews) in [(true, true), (true, false), (false, true)] {
-            let (fresh, _) = final_lines(&report, None, DiffMap::new(), want_mine, want_reviews);
+            let (fresh, _) = final_lines(&report, &t, DiffMap::new(), want_mine, want_reviews);
             let stale = stale_body(&mine, &reviews, want_mine, want_reviews);
             assert_eq!(
                 stale.len(),
@@ -536,7 +490,7 @@ mod tests {
             mine: vec![],
             reviews: vec![],
         };
-        let (fresh, _) = final_lines(&report, None, DiffMap::new(), true, true);
+        let (fresh, _) = final_lines(&report, &t, DiffMap::new(), true, true);
         assert_eq!(stale_body(&[], &[], true, true).len(), fresh.len());
     }
 

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, git};
 use devkit_common::gitfetch;
 use devkit_common::progress::Steps;
+use devkit_common::tracker::{IssueDetails, IssueRef, Tracker};
 use devkit_config::{PrepFile, expand_tilde};
 use devkit_ports::load;
 use std::collections::{BTreeMap, HashMap};
@@ -192,18 +193,19 @@ pub fn backfill_includes(monorepo: &str, worktree: &std::path::Path, patterns: &
     }
 }
 
-/// The explicit `--slug`, else the slug a pasted Linear URL already carries,
-/// else the issue's Linear title slugified. Only the last needs the network,
+/// The explicit `--slug`, else the slug a pasted issue URL already carries,
+/// else the issue's tracker title slugified. Only the last needs the network,
 /// and `--summary` has already paid for it — `details` carries that title, so
 /// the two never cost two round trips.
 ///
 /// A derived slug is capped to `budget`; an explicit one is taken verbatim,
 /// since a slug you typed is a decision, not a suggestion.
 fn resolve_slug(
-    issue: &crate::slug::IssueRef,
+    t: &dyn Tracker,
+    issue: &IssueRef,
     explicit: Option<String>,
     budget: usize,
-    details: Option<&devkit_common::tracker::linear::IssueDetails>,
+    details: Option<&IssueDetails>,
 ) -> Result<String> {
     if let Some(s) = explicit {
         return Ok(s);
@@ -211,38 +213,27 @@ fn resolve_slug(
     if let Some(s) = &issue.slug {
         return Ok(crate::slug::cap(s, budget));
     }
-    let issue = &issue.id;
     let title = match details {
         Some(d) => d.title.clone(),
-        None => {
-            let key = crate::slug::linear_key()?;
-            let steps = Steps::new();
-            steps
-                .during_result("Reading the Linear title\u{2026}", || {
-                    devkit_common::tracker::linear::issue_title(issue, &key)
-                })
-                .with_context(|| format!("fetching the Linear title for {issue}"))?
-                .with_context(|| format!("Linear has no issue {issue} \u{2014} pass --slug"))?
-        }
+        None => Steps::new()
+            .during_result("Reading the issue title\u{2026}", || t.title(&issue.id))
+            .with_context(|| format!("fetching the title for {}", issue.id))?
+            .with_context(|| format!("no issue {} \u{2014} pass --slug", issue.id))?,
     };
-    let slug = crate::slug::cap(&crate::slug::from_linear_title(issue, &title)?, budget);
-    eprintln!("slug from Linear: {slug}");
+    let slug = crate::slug::cap(&crate::slug::from_title(&issue.id, &title)?, budget);
+    eprintln!("slug from {}: {slug}", t.kind().as_str());
     Ok(slug)
 }
 
-/// Every Linear fact the summary file needs, fetched before anything is
-/// created. A summary with holes in it is worse than a clear failure, so a
-/// missing key, an unknown issue, or an unreachable API stops `setup` here —
-/// while there is still no worktree and no branch to clean up.
-fn fetch_details(issue: &str) -> Result<devkit_common::tracker::linear::IssueDetails> {
-    let key = crate::slug::linear_key()?;
-    let steps = Steps::new();
-    steps
-        .during_result("Reading the Linear issue\u{2026}", || {
-            devkit_common::tracker::linear::issue_details(issue, &key)
-        })
-        .with_context(|| format!("fetching Linear issue {issue}"))?
-        .with_context(|| format!("Linear has no issue {issue}"))
+/// Every tracker fact the summary file needs, fetched before anything is
+/// created. A summary with holes is worse than a clear failure, so an unknown
+/// issue or an unreachable API stops `setup` here — while there is still no
+/// worktree and no branch to clean up.
+fn fetch_details(t: &dyn Tracker, issue: &str) -> Result<IssueDetails> {
+    Steps::new()
+        .during_result("Reading the issue\u{2026}", || t.details(issue))
+        .with_context(|| format!("fetching issue {issue}"))?
+        .with_context(|| format!("no issue {issue}"))
 }
 
 /// A slug this short has stopped being a reminder, so a `branch_prefix` long
@@ -289,14 +280,23 @@ pub fn run(args: SetupArgs) -> Result<()> {
         anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
     }
 
-    let issue_ref = crate::slug::parse_issue_ref(&args.issue);
+    let resolved = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start));
+    let t = resolved.tracker.as_ref();
+    // A declared tracker owns parsing completely. An undeclared one keeps
+    // today's permissive linear.app parse, which needs no key and would
+    // otherwise be lost for a project that configured no tracker.
+    let issue_ref = if resolved.declared {
+        t.issue_ref(&args.issue)?
+    } else {
+        crate::slug::parse_issue_ref(&args.issue)
+    };
     let issue = issue_ref.id.clone();
     let vars = &cfg.templates.variables;
     let budget = slug_budget(cfg, vars, &issue, &args.apps)?;
     let details = want_summary(&args, cfg)
-        .then(|| fetch_details(&issue))
+        .then(|| fetch_details(t, &issue))
         .transpose()?;
-    let slug = resolve_slug(&issue_ref, args.slug.clone(), budget, details.as_ref())?;
+    let slug = resolve_slug(t, &issue_ref, args.slug.clone(), budget, details.as_ref())?;
 
     let wt_root = expand_tilde(&cfg.defaults.worktree_root);
     let ctx = serde_json::json!({
@@ -433,9 +433,37 @@ pub fn run(args: SetupArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_common::tracker::fake;
     use devkit_config::Templates;
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn setup_takes_its_slug_from_the_tracker() {
+        let t = fake::FakeTracker::new().with_title("ENG-7", "Fix the export crash");
+        let r = resolve_slug(
+            &t,
+            &IssueRef {
+                id: "ENG-7".into(),
+                slug: None,
+            },
+            None,
+            40,
+            None,
+        )
+        .unwrap();
+        assert_eq!(r, "fix-the-export-crash");
+    }
+
+    #[test]
+    fn an_undeclared_project_still_reads_a_linear_url_without_a_key() {
+        // parse_issue_ref recognizes a linear.app URL by string alone and needs no
+        // key. Routing it through NoneTracker would drop the slug for a project
+        // that configured no tracker.
+        let parsed = crate::slug::parse_issue_ref("https://linear.app/acme/issue/ENG-7/fix-export");
+        assert_eq!(parsed.id, "ENG-7");
+        assert_eq!(parsed.slug.as_deref(), Some("fix-export"));
+    }
 
     fn scratch(tag: &str) -> PathBuf {
         // Unique per process + tag; no tempfile dependency.

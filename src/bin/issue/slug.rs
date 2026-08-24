@@ -1,12 +1,13 @@
 //! Branch/worktree slug derivation, shared by `setup` and `checkout-pr`.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use devkit_common::tracker::IssueRef;
 
 pub(crate) use devkit_common::slug::slugify;
 
-/// Slug for `issue`, taken from its Linear title. The issue id is stripped from
-/// the front so the branch template's `<issue>-<slug>` does not repeat it.
-pub(crate) fn from_linear_title(issue: &str, title: &str) -> Result<String> {
+/// Slug for `issue`, taken from its tracker title. The issue id is stripped
+/// from the front so the branch template's `<issue>-<slug>` does not repeat it.
+pub(crate) fn from_title(issue: &str, title: &str) -> Result<String> {
     let id = slugify(issue);
     let slug = slugify(title);
     let trimmed = slug
@@ -15,16 +16,9 @@ pub(crate) fn from_linear_title(issue: &str, title: &str) -> Result<String> {
     let out = trimmed.to_string();
     anyhow::ensure!(
         !out.is_empty(),
-        "Linear title for {issue} slugifies to nothing (title: {title:?}) — pass --slug"
+        "title for {issue} slugifies to nothing (title: {title:?}) — pass --slug"
     );
     Ok(out)
-}
-
-/// An issue id from CLI input, plus the title slug when the input carried one.
-pub(crate) struct IssueRef {
-    pub(crate) id: String,
-    /// The slug a Linear URL already spells out, so no title lookup is needed.
-    pub(crate) slug: Option<String>,
 }
 
 /// The id and title slug in a Linear issue URL's `…/issue/<ID>/<title-slug>`
@@ -49,8 +43,12 @@ pub(crate) fn from_linear_url(url: &str) -> Option<IssueRef> {
 
 /// Split CLI input into an issue id and, for a Linear URL, the title slug its
 /// path spells out. Pasting a URL supplies both without a network call.
-/// Anything else is taken as a bare id; `issue_title_query` rejects a
-/// malformed one downstream.
+/// Anything else is taken as a bare id.
+///
+/// Used only for a project whose tracker was not declared: a declared
+/// tracker's own `issue_ref` owns parsing completely, and this permissive
+/// linear.app read — which needs no key — would otherwise be lost for a
+/// project that configured no tracker.
 pub(crate) fn parse_issue_ref(input: &str) -> IssueRef {
     let trimmed = input.trim();
     if trimmed.contains("linear.app")
@@ -92,40 +90,34 @@ pub(crate) fn cap(slug: &str, budget: usize) -> String {
     out
 }
 
-/// The Linear API key, with the message a caller needs when it is missing.
-pub(crate) fn linear_key() -> Result<String> {
-    devkit_common::secrets::resolve("LINEAR_API_KEY")
-        .context("no Linear API key — run `devkit auth linear`, or pass --slug")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn from_linear_title_slugifies() {
+    fn from_title_slugifies() {
         assert_eq!(
-            from_linear_title("ENG-1234", "Fix BLI export").unwrap(),
+            from_title("ENG-1234", "Fix BLI export").unwrap(),
             "fix-bli-export"
         );
     }
 
     #[test]
-    fn from_linear_title_strips_a_leading_issue_id() {
+    fn from_title_strips_a_leading_issue_id() {
         assert_eq!(
-            from_linear_title("ENG-1234", "ENG-1234: fix BLI export").unwrap(),
+            from_title("ENG-1234", "ENG-1234: fix BLI export").unwrap(),
             "fix-bli-export"
         );
         assert_eq!(
-            from_linear_title("eng-1234", "ENG-1234 fix BLI export").unwrap(),
+            from_title("eng-1234", "ENG-1234 fix BLI export").unwrap(),
             "fix-bli-export"
         );
     }
 
     #[test]
-    fn from_linear_title_keeps_an_unrelated_id_prefix() {
+    fn from_title_keeps_an_unrelated_id_prefix() {
         assert_eq!(
-            from_linear_title("ENG-1234", "OPS-7 fix BLI export").unwrap(),
+            from_title("ENG-1234", "OPS-7 fix BLI export").unwrap(),
             "ops-7-fix-bli-export"
         );
     }
@@ -204,8 +196,8 @@ mod tests {
     }
 
     #[test]
-    fn from_linear_title_rejects_a_title_with_no_slug_left() {
-        assert!(from_linear_title("ENG-1234", "!!!").is_err());
-        assert!(from_linear_title("ENG-1234", "ENG-1234").is_err());
+    fn from_title_rejects_a_title_with_no_slug_left() {
+        assert!(from_title("ENG-1234", "!!!").is_err());
+        assert!(from_title("ENG-1234", "ENG-1234").is_err());
     }
 }

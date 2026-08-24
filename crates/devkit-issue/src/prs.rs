@@ -1,6 +1,7 @@
 use anyhow::Result;
 use devkit_common::cmd::gh_json;
 use devkit_common::github;
+use devkit_common::tracker::{Tracker, TrackerKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -812,10 +813,11 @@ fn fetch_section(repo: &str, section: Section, root: &str, f: Fetch) -> SectionN
 
 /// Fetch and classify the caller's PRs in a single GraphQL round-trip.
 /// Neither flag set ⇒ both groups. Stateless: no diff cache is read or
-/// written. With `resolve_pr_links`, one extra batched Linear round trip
-/// (after the GitHub fetch — it needs the PR URLs) unions Linear-linked
-/// issue ids into each row; fail-soft, so a missing LINEAR_API_KEY or a
-/// Linear error leaves the text-derived ids as-is.
+/// written. `t`'s linked issues are unioned into each row via
+/// [`apply_tracker_links`] — for Linear that is one extra batched round trip,
+/// opted into by `resolve_pr_links`; for GitHub it is a field already on this
+/// query's response.
+#[allow(clippy::too_many_arguments)]
 pub fn gather(
     root: &str,
     mine: bool,
@@ -824,6 +826,7 @@ pub fn gather(
     ignored_checks: &[String],
     resolve_pr_links: bool,
     fetch: Fetch,
+    t: &dyn Tracker,
 ) -> Result<PrsReport> {
     let want_mine = mine || !reviews;
     let want_reviews = reviews || !mine;
@@ -877,23 +880,80 @@ pub fn gather(
     }
 
     let mut report = classify(data, want_mine, want_reviews, ignored_checks);
-    if resolve_pr_links {
-        let key = devkit_common::secrets::resolve("LINEAR_API_KEY");
-        let urls: Vec<String> = report
-            .mine
-            .iter()
-            .map(|pr| pr.url.clone())
-            .chain(report.reviews.iter().map(|pr| pr.url.clone()))
-            .collect();
-        let linked = devkit_common::tracker::linear::issues_for_prs(&urls, key.as_deref());
-        apply_linked(&mut report, &linked);
-    }
+    apply_tracker_links(&mut report, t, resolve_pr_links);
     Ok(report)
+}
+
+/// Attach each PR's closing issues. `resolve_pr_links` gates Linear only: it
+/// exists to make an expensive extra round trip opt-in, and GitHub answers
+/// from a field on a query already being made.
+pub(crate) fn apply_tracker_links(report: &mut PrsReport, t: &dyn Tracker, resolve_pr_links: bool) {
+    let gated = match t.kind() {
+        TrackerKind::Linear => !resolve_pr_links,
+        TrackerKind::Github | TrackerKind::None => false,
+    };
+    if gated {
+        return;
+    }
+    let urls: Vec<String> = report
+        .mine
+        .iter()
+        .map(|pr| pr.url.clone())
+        .chain(report.reviews.iter().map(|pr| pr.url.clone()))
+        .collect();
+    apply_linked(report, &t.issues_for_prs(&urls));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_common::tracker::{TrackerKind, fake};
+
+    fn report_with_pr(url: &str) -> PrsReport {
+        PrsReport {
+            mine: vec![MinePrView {
+                number: 1,
+                url: url.to_string(),
+                issue_ids: vec![],
+                review_state: "-".into(),
+                check_state: "-".into(),
+                action: "-".into(),
+            }],
+            reviews: vec![],
+        }
+    }
+
+    #[test]
+    fn pr_rows_get_their_closing_issues_from_the_tracker() {
+        // issues_for_prs had no caller anywhere: prs::gather called
+        // linear::issues_for_prs directly, so a GitHub PR row's issue column would
+        // simply stay empty.
+        let t = fake::FakeTracker::new()
+            .with_links("https://github.com/o/r/pull/7", vec!["ENG-1", "ENG-2"]);
+        let mut report = report_with_pr("https://github.com/o/r/pull/7");
+        apply_tracker_links(&mut report, &t, true);
+        assert_eq!(report.mine[0].issue_ids, vec!["ENG-1", "ENG-2"]);
+    }
+
+    #[test]
+    fn resolve_pr_links_still_gates_linear_only() {
+        // The flag was added to gate an expensive Linear round trip. GitHub's
+        // linked issues are a field on a query already being made, so the flag
+        // keeps its Linear meaning rather than becoming a global switch.
+        let lin = fake::FakeTracker::new()
+            .with_kind(TrackerKind::Linear)
+            .with_links("https://github.com/o/r/pull/7", vec!["ENG-1"]);
+        let mut report = report_with_pr("https://github.com/o/r/pull/7");
+        apply_tracker_links(&mut report, &lin, false);
+        assert!(report.mine[0].issue_ids.is_empty());
+
+        let gh = fake::FakeTracker::new()
+            .with_kind(TrackerKind::Github)
+            .with_links("https://github.com/o/r/pull/7", vec!["9"]);
+        let mut report = report_with_pr("https://github.com/o/r/pull/7");
+        apply_tracker_links(&mut report, &gh, false);
+        assert_eq!(report.mine[0].issue_ids, vec!["9"]);
+    }
 
     fn node(json: serde_json::Value) -> PrNode {
         serde_json::from_value(json).unwrap()

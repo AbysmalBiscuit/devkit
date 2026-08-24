@@ -14,11 +14,11 @@ impl Tracker for NoneTracker {
     fn ready(&self) -> bool {
         false
     }
-    fn issue_ref(&self, input: &str) -> IssueRef {
-        IssueRef {
+    fn issue_ref(&self, input: &str) -> Result<IssueRef> {
+        Ok(IssueRef {
             id: input.trim().to_string(),
             slug: None,
-        }
+        })
     }
     fn title(&self, _id: &str) -> Result<Option<String>> {
         Ok(None)

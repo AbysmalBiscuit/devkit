@@ -119,6 +119,8 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
         .prs()?
         .slug
         .clone();
+    let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
+    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root));
     let report = prs::gather(
         &root,
         a.mine,
@@ -130,6 +132,7 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
             batch_size: a.batch_size.unwrap_or(prs::DEFAULT_BATCH_SIZE),
             retries: a.retries.unwrap_or(0),
         },
+        tracker.tracker.as_ref(),
     )?;
     Ok(serde_json::to_value(report)?)
 }

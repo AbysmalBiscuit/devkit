@@ -4,6 +4,7 @@
 use super::{AssignedIssue, IssueRef, PrRef, State, Tracker, TrackerKind};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinearIdentity {
@@ -608,11 +609,18 @@ impl From<IssueDetails> for super::IssueDetails {
 /// which is what keeps `issue status` useful on a machine with no key.
 pub struct LinearTracker {
     key: Option<String>,
+    /// The workspace url slug, fetched at most once per tracker instance —
+    /// `issue_url` is called per id, and re-resolving it for every id in a PR
+    /// table would multiply one network round trip into one per row.
+    workspace_key: OnceLock<Option<String>>,
 }
 
 impl LinearTracker {
     pub fn new(key: Option<String>) -> Self {
-        Self { key }
+        Self {
+            key,
+            workspace_key: OnceLock::new(),
+        }
     }
 }
 
@@ -625,17 +633,19 @@ impl Tracker for LinearTracker {
         self.key.is_some()
     }
 
-    fn issue_ref(&self, input: &str) -> IssueRef {
+    fn issue_ref(&self, input: &str) -> Result<IssueRef> {
         let trimmed = input.trim();
-        if trimmed.contains("linear.app")
-            && let Some(parsed) = url_ref(trimmed)
-        {
-            return parsed;
+        // A linear.app URL with no `/issue/<id>` segment (a team view, a
+        // project page, …) names nothing this tracker can resolve — that must
+        // fail rather than fall through to the whole URL read as a bare id.
+        if trimmed.contains("linear.app") {
+            return url_ref(trimmed)
+                .with_context(|| format!("no issue id in Linear URL: {trimmed}"));
         }
-        IssueRef {
+        Ok(IssueRef {
             id: trimmed.to_uppercase(),
             slug: None,
-        }
+        })
     }
 
     fn title(&self, id: &str) -> Result<Option<String>> {
@@ -701,7 +711,7 @@ impl Tracker for LinearTracker {
         // No key, no link: `workspace_url_key` would otherwise resolve one from
         // the ambient environment this tracker was constructed without.
         self.key.as_ref()?;
-        let ws = workspace_url_key()?;
+        let ws = self.workspace_key.get_or_init(workspace_url_key).as_ref()?;
         Some(format!("https://linear.app/{ws}/issue/{id}"))
     }
 
@@ -1019,7 +1029,7 @@ mod tests {
     #[test]
     fn linear_uppercases_a_bare_id() {
         let t = LinearTracker::new(Some("k".into()));
-        assert_eq!(t.issue_ref("eng-42").id, "ENG-42");
+        assert_eq!(t.issue_ref("eng-42").unwrap().id, "ENG-42");
     }
 
     #[test]
@@ -1029,7 +1039,7 @@ mod tests {
             "https://linear.app/acme-2/issue/ENG-42/fix-the-login",
             "https://linear.app/acme-2/issue/eng-42/fix-the-login",
         ] {
-            let r = t.issue_ref(url);
+            let r = t.issue_ref(url).unwrap();
             assert_eq!(
                 r.id, "ENG-42",
                 "a workspace named acme-2 is not the issue id, and an id is uppercase: {url}"

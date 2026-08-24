@@ -1,13 +1,13 @@
-//! The issue summary file `issue setup --summary` leaves behind: the Linear
+//! The issue summary file `issue setup --summary` leaves behind: the tracker
 //! facts and description as a scaffold, with the sections an agent fills in.
 
 use anyhow::{Context, Result};
-use devkit_common::tracker::linear::IssueDetails;
+use devkit_common::tracker::IssueDetails;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Render context for both `issue_summary_path` and `issue_summary`. Every
-/// Linear field Linear left empty renders as the empty string, so a template
+/// field the tracker left empty renders as the empty string, so a template
 /// can branch on it with a plain `{% if %}`.
 fn context(
     d: &IssueDetails,
@@ -18,17 +18,17 @@ fn context(
     apps: &[String],
 ) -> serde_json::Value {
     serde_json::json!({
-        "issue": d.identifier,
+        "issue": d.id,
         "title": d.title,
         "url": d.url,
         "description": d.description,
-        "state": d.state.clone().unwrap_or_default(),
-        "assignee": d.assignee.clone().unwrap_or_default(),
-        "priority": d.priority.clone().unwrap_or_default(),
-        "estimate": d.estimate.clone().unwrap_or_default(),
+        "state": d.state,
+        "assignee": d.assignee,
+        "priority": d.priority,
+        "estimate": d.estimate,
         "labels": d.labels,
-        "parent": d.parent.clone().unwrap_or_default(),
-        "project": d.project.clone().unwrap_or_default(),
+        "parent": d.parent,
+        "project": d.project,
         "worktree": worktree,
         "branch": branch,
         "slug": slug,
@@ -135,19 +135,19 @@ mod tests {
         dir
     }
 
-    fn details() -> devkit_common::tracker::linear::IssueDetails {
-        devkit_common::tracker::linear::IssueDetails {
-            identifier: "ENG-42".into(),
+    fn details() -> devkit_common::tracker::IssueDetails {
+        devkit_common::tracker::IssueDetails {
+            id: "ENG-42".into(),
             title: "Fix the login redirect".into(),
             url: "https://linear.app/acme/issue/ENG-42/fix-the-login-redirect".into(),
             description: "Clicking sign-in bounces to /.".into(),
-            state: Some("Todo".into()),
-            assignee: Some("Lev".into()),
-            priority: Some("High".into()),
-            estimate: Some("3".into()),
+            state: "Todo".into(),
+            assignee: "Lev".into(),
+            priority: "High".into(),
+            estimate: "3".into(),
             labels: vec!["auth".into(), "web".into()],
-            parent: Some("ENG-1 \u{2014} Login epic".into()),
-            project: Some("Q3 hardening".into()),
+            parent: "ENG-1 \u{2014} Login epic".into(),
+            project: "Q3 hardening".into(),
         }
     }
 
@@ -209,11 +209,11 @@ mod tests {
     #[test]
     fn absent_linear_fields_drop_their_lines_rather_than_render_empty() {
         let mut d = details();
-        d.parent = None;
-        d.project = None;
-        d.estimate = None;
+        d.parent = String::new();
+        d.project = String::new();
+        d.estimate = String::new();
         d.labels.clear();
-        d.assignee = None;
+        d.assignee = String::new();
         let c = context(&d, "/w/eng-42", "b", "s", "lev/", &[]);
         let out = devkit_common::template::render(
             devkit_config::DEFAULT_ISSUE_SUMMARY,

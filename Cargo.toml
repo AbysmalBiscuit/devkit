@@ -45,6 +45,7 @@ devkit-docs.workspace = true
 tempfile = "3"
 # A collapsed diff when the committed JSON schema drifts from the config types.
 similar = "2"
+devkit-common = { workspace = true, features = ["test-support"] }
 
 # Used only by the Unix-only supervision integration test (POSIX signals).
 [target.'cfg(unix)'.dev-dependencies]
