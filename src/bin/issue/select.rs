@@ -21,13 +21,15 @@ pub fn matches(row: &IssueWorktree, sel: &str) -> bool {
     {
         return true;
     }
-    row.pr_number
+    row.pr
+        .number()
         .is_some_and(|pr| s.strip_prefix('#').unwrap_or(&s) == pr.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_issue::status::PrStatus;
 
     fn row() -> IssueWorktree {
         IssueWorktree {
@@ -35,9 +37,7 @@ mod tests {
             branch: "lev/eng-7-fix".into(),
             issue_id: "ENG-7".into(),
             dirty: false,
-            pr_number: None,
-            pr_state: "NO_PR".into(),
-            pr_url: None,
+            pr: PrStatus::None,
             state: None,
             finished: false,
             reason_not_finished: None,
@@ -59,22 +59,27 @@ mod tests {
         assert!(!matches(&row(), "eng-8"));
     }
 
+    fn with_pr_number(n: u64) -> IssueWorktree {
+        IssueWorktree {
+            pr: PrStatus::Unique {
+                number: n,
+                state: "OPEN".into(),
+                url: "".into(),
+            },
+            ..row()
+        }
+    }
+
     #[test]
     fn matches_by_pr_number() {
-        let r = IssueWorktree {
-            pr_number: Some(3124),
-            ..row()
-        };
+        let r = with_pr_number(3124);
         assert!(matches(&r, "3124"));
         assert!(matches(&r, "#3124"));
     }
 
     #[test]
     fn rejects_wrong_pr_number_and_pr_when_absent() {
-        let r = IssueWorktree {
-            pr_number: Some(3124),
-            ..row()
-        };
+        let r = with_pr_number(3124);
         assert!(!matches(&r, "3125"));
         // A row with no PR never matches a bare number.
         assert!(!matches(&row(), "3124"));

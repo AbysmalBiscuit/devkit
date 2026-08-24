@@ -1,12 +1,13 @@
 use devkit_common::tracker::StateKind;
 use devkit_common::ui;
-use devkit_issue::status::{IssueWorktree, StatusReport};
+use devkit_issue::status::{IssueWorktree, PrStatus, StatusReport};
 
 fn pr_label(row: &IssueWorktree) -> String {
-    if row.pr_state == "NO_PR" {
-        "no PR".into()
-    } else {
-        format!("{} #{}", row.pr_state, row.pr_number.unwrap_or(0))
+    match &row.pr {
+        PrStatus::None => "no PR".into(),
+        PrStatus::Unique { number, state, .. } => format!("{state} #{number}"),
+        PrStatus::Ambiguous { candidates } => format!("ambiguous ({})", candidates.len()),
+        PrStatus::Unknown { .. } => "unknown".into(),
     }
 }
 
@@ -48,13 +49,13 @@ pub(crate) fn tree_cell(dirty: bool) -> String {
 
 pub(crate) fn pr_cell(row: &IssueWorktree) -> String {
     let label = pr_label(row);
-    let colored = match row.pr_state.as_str() {
+    let colored = match row.pr.state_label() {
         "MERGED" => ui::green(&label),
         "OPEN" => ui::yellow(&label),
         "CLOSED" => ui::red(&label),
-        _ => ui::dim(&label), // NO_PR
+        _ => ui::dim(&label), // NO_PR | AMBIGUOUS | UNKNOWN
     };
-    match &row.pr_url {
+    match row.pr.url() {
         Some(u) => ui::link(&colored, u),
         None => colored,
     }
@@ -124,28 +125,70 @@ mod tests {
     use super::*;
     use devkit_issue::status::IssueWorktree;
 
-    fn row(pr_state: &str) -> IssueWorktree {
+    fn row_with(pr: PrStatus) -> IssueWorktree {
         IssueWorktree {
             worktree: "/w".into(),
             branch: "lev/eng-1-x".into(),
             issue_id: "ENG-1".into(),
             dirty: false,
-            pr_number: Some(7),
-            pr_state: pr_state.into(),
-            pr_url: None,
+            pr,
             state: None,
             finished: false,
             reason_not_finished: None,
         }
     }
 
+    fn row(pr_state: &str) -> IssueWorktree {
+        let pr = if pr_state == "NO_PR" {
+            PrStatus::None
+        } else {
+            PrStatus::Unique {
+                number: 7,
+                state: pr_state.into(),
+                url: "".into(),
+            }
+        };
+        row_with(pr)
+    }
+
+    fn pr_ref(n: u64) -> devkit_common::tracker::PrRef {
+        devkit_common::tracker::PrRef {
+            url: format!("https://github.com/o/r/pull/{n}"),
+            number: n,
+        }
+    }
+
     // Off-TTY the colour helpers pass text through, so assertions are plain.
+    // A `Unique` PR always carries a URL, so the MERGED case may be wrapped in
+    // an OSC 8 hyperlink depending on ambient terminal detection — assert on
+    // the label surviving inside it rather than exact equality.
     #[test]
     fn pr_cell_labels() {
-        assert_eq!(pr_cell(&row("MERGED")), "MERGED #7");
-        let mut r = row("NO_PR");
-        r.pr_number = None;
-        assert_eq!(pr_cell(&r), "no PR");
+        assert!(pr_cell(&row("MERGED")).contains("MERGED #7"));
+        assert_eq!(pr_cell(&row("NO_PR")), "no PR");
+    }
+
+    #[test]
+    fn an_ambiguous_row_never_renders_a_pr_number() {
+        // `format!("{} #{}", pr_state, pr_number.unwrap_or(0))` printed
+        // `AMBIGUOUS #0` — a PR that does not exist, in the column read before
+        // deleting a worktree.
+        let row = row_with(PrStatus::Ambiguous {
+            candidates: vec![pr_ref(7), pr_ref(8)],
+        });
+        let label = pr_label(&row);
+        assert!(!label.contains('#'), "{label}");
+        assert!(label.contains('2'), "{label} should say how many");
+
+        assert_eq!(pr_label(&row_with(PrStatus::None)), "no PR");
+        assert_eq!(
+            pr_label(&row_with(PrStatus::Unique {
+                number: 12,
+                state: "MERGED".into(),
+                url: "u".into()
+            })),
+            "MERGED #12"
+        );
     }
 
     #[test]

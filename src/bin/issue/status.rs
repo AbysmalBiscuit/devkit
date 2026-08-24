@@ -80,7 +80,7 @@ impl LiveState {
     fn apply_prs(&mut self, prs: st::Prs) -> Vec<(usize, usize, String)> {
         let mut out = Vec::new();
         for i in 0..self.rows.len() {
-            prs.apply_best(&mut self.rows[i]);
+            prs.apply(&mut self.rows[i]);
             out.push((i, COL_PR, triage::pr_cell(&self.rows[i])));
         }
         self.prs = Some(prs);
@@ -298,7 +298,7 @@ pub fn run(start: &str, ids: &[String], config: Option<&str>) -> Result<()> {
 mod tests {
     use super::*;
     use devkit_common::tracker::StateKind;
-    use devkit_issue::status::IssueWorktree;
+    use devkit_issue::status::{IssueWorktree, PrStatus};
 
     const LINK_BASE: &str = "https://linear.app/acme/issue/";
 
@@ -326,9 +326,7 @@ mod tests {
             branch: format!("lev/{}-x", id.to_lowercase()),
             issue_id: id.into(),
             dirty: false,
-            pr_number: None,
-            pr_state: "NO_PR".into(),
-            pr_url: None,
+            pr: PrStatus::None,
             state: None,
             finished: false,
             reason_not_finished: None,
@@ -339,8 +337,11 @@ mod tests {
     /// tree, real issue id.
     fn merged_clean(id: &str) -> IssueWorktree {
         let mut r = row(id);
-        r.pr_number = Some(1);
-        r.pr_state = "MERGED".into();
+        r.pr = PrStatus::Unique {
+            number: 1,
+            state: "MERGED".into(),
+            url: "".into(),
+        };
         r
     }
 
@@ -506,7 +507,7 @@ mod tests {
         state.apply_states(states.clone(), Some(LINK_BASE.into()));
 
         let ids = vec!["ENG-1".into(), "ENG-2".into(), "ENG-3".into()];
-        let d = st::Discovered::from_parts(rows, "/main".into(), ids);
+        let d = st::Discovered::from_parts(rows, ids);
         let report = st::assemble(
             d,
             dirty,

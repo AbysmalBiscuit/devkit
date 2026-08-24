@@ -3,7 +3,7 @@ use anyhow::Result;
 use devkit_common::cmd::git;
 use devkit_common::livetable::{Cell, LiveTable};
 use devkit_common::tracker::{Resolved, State};
-use devkit_issue::status::{self as st, IssueWorktree, StatusReport, TrackerInfo};
+use devkit_issue::status::{self as st, IssueWorktree, PrStatus, StatusReport, TrackerInfo};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc;
@@ -93,19 +93,24 @@ pub fn run(
             row.reason_not_finished = reason;
         }
     } else if discovered {
+        // Seed the row from any cached PR before the live fetch lands, so the
+        // live table's first paint shows a number instead of a spinner;
+        // `live_enrich` reconciles it against the live lookup once that
+        // arrives.
+        if let Some(pr) = crate::info_cache::read(Path::new(&row.worktree)) {
+            apply_cached_pr(&mut row, pr);
+        }
         let repos = crate::tracker::repos(config, start, None);
         let repo = repos.prs()?;
         info.link_base = live_enrich(&mut row, &d, &resolved, !json, repo)?;
 
-        if let (Some(number), Some(url)) = (row.pr_number, row.pr_url.clone()) {
-            // pr_number and pr_url are set together, so both-Some is the normal
-            // PR case; a PR-less row simply leaves the cache untouched.
+        if let PrStatus::Unique { number, state, url } = &row.pr {
             let _ = crate::info_cache::write(
                 Path::new(&row.worktree),
                 &crate::info_cache::CachedPr {
-                    number,
-                    state: row.pr_state.clone(),
-                    url,
+                    number: *number,
+                    state: state.clone(),
+                    url: url.clone(),
                 },
             );
         }
@@ -159,6 +164,11 @@ fn live_enrich(
     lt.redraw();
 
     let mut link_base = None;
+    // Whether the row already carries a cached PR, seeded before this call —
+    // the live update below reconciles against it instead of blindly
+    // replacing it, so a live lookup that still agrees it's unique doesn't
+    // discard the cache's answer.
+    let had_cache = matches!(row.pr, PrStatus::Unique { .. });
     // The verdict never reads the link base, so it can be computed the moment
     // the PR and state land — before the link base has arrived.
     let verdict_tracker = TrackerInfo::of(resolved);
@@ -191,7 +201,14 @@ fn live_enrich(
         lt.drive(&rx, |lt, msg| {
             match msg {
                 Update::Prs(res) => {
-                    res?.apply_best(row);
+                    let prs = res?;
+                    if had_cache {
+                        let mut live = row.clone();
+                        prs.apply(&mut live);
+                        reconcile_cache(row, &live.pr);
+                    } else {
+                        prs.apply(row);
+                    }
                     got_prs = true;
                     lt.set(0, 3, Cell::Ready(crate::triage::pr_cell(row)));
                 }
@@ -242,25 +259,32 @@ fn local_row(top: &str) -> Result<IssueWorktree> {
         branch,
         issue_id,
         dirty: st::dirty_of(top),
-        pr_number: None,
-        pr_state: "NO_PR".to_string(),
-        pr_url: None,
+        pr: PrStatus::None,
         state: None,
         finished: false,
         reason_not_finished: None,
     })
 }
 
-/// Overlay a cached PR onto an offline row. The PR fields come from the cache;
-/// the finished verdict is cleared because it cannot be computed without a
-/// tracker fetch, and the row's `NO_PR` verdict would otherwise contradict the
-/// cached PR.
+/// Overlay a cached PR onto an offline row. The verdict is cleared because it
+/// cannot be computed without a tracker fetch, and a `NO_PR` verdict would
+/// contradict the cached PR.
 fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::info_cache::CachedPr) {
-    row.pr_number = Some(pr.number);
-    row.pr_state = pr.state;
-    row.pr_url = Some(pr.url);
+    row.pr = PrStatus::Unique {
+        number: pr.number,
+        state: pr.state,
+        url: pr.url,
+    };
     row.finished = false;
     row.reason_not_finished = None;
+}
+
+/// Drop a cached unique PR when the live lookup no longer agrees it is unique.
+/// Replaying it would show one PR beside a verdict reading a contradictory tag.
+fn reconcile_cache(row: &mut IssueWorktree, live: &PrStatus) {
+    if !matches!(live, PrStatus::Unique { .. }) {
+        row.pr = live.clone();
+    }
 }
 
 #[cfg(test)]
@@ -273,9 +297,7 @@ mod tests {
             branch: branch.into(),
             issue_id: id.into(),
             dirty: false,
-            pr_number: None,
-            pr_state: "NO_PR".into(),
-            pr_url: None,
+            pr: PrStatus::None,
             state: None,
             finished: false,
             reason_not_finished: None,
@@ -309,7 +331,7 @@ mod tests {
         let r = local_row(top).unwrap();
         assert_eq!(r.issue_id, "ENG-9");
         assert_eq!(r.branch, "lev/eng-9-foo");
-        assert_eq!(r.pr_number, None);
+        assert_eq!(r.pr.number(), None);
         assert!(!r.dirty);
 
         std::fs::write(base.join("g"), "y").unwrap();
@@ -348,9 +370,9 @@ mod tests {
                 url: "https://x/pr/123".into(),
             },
         );
-        assert_eq!(r.pr_number, Some(123));
-        assert_eq!(r.pr_state, "OPEN");
-        assert_eq!(r.pr_url.as_deref(), Some("https://x/pr/123"));
+        assert_eq!(r.pr.number(), Some(123));
+        assert_eq!(r.pr.state_label(), "OPEN");
+        assert_eq!(r.pr.url(), Some("https://x/pr/123"));
         assert!(!r.finished);
         assert_eq!(r.reason_not_finished, None);
     }
@@ -361,5 +383,59 @@ mod tests {
         assert_eq!(pick_index(&rows, Some("eng-9"), None), None);
         assert_eq!(pick_index(&rows, None, Some("/elsewhere")), None);
         assert_eq!(pick_index(&rows, None, None), None);
+    }
+
+    #[test]
+    fn a_cached_unique_pr_yields_to_a_live_ambiguous_lookup() {
+        let mut r = row("/a", "lev/eng-1-x", "ENG-1");
+        apply_cached_pr(
+            &mut r,
+            crate::info_cache::CachedPr {
+                number: 7,
+                state: "OPEN".into(),
+                url: "https://github.com/o/r/pull/7".into(),
+            },
+        );
+        assert!(matches!(r.pr, PrStatus::Unique { number: 7, .. }));
+
+        let live = PrStatus::Ambiguous {
+            candidates: vec![
+                devkit_common::tracker::PrRef {
+                    number: 7,
+                    url: "https://github.com/o/r/pull/7".into(),
+                },
+                devkit_common::tracker::PrRef {
+                    number: 9,
+                    url: "https://github.com/o/r/pull/9".into(),
+                },
+            ],
+        };
+        reconcile_cache(&mut r, &live);
+
+        assert!(
+            matches!(r.pr, PrStatus::Ambiguous { .. }),
+            "a live ambiguous lookup must clear the cached unique PR, got {:?}",
+            r.pr
+        );
+    }
+
+    #[test]
+    fn a_cached_unique_pr_survives_a_live_unique_lookup() {
+        let mut r = row("/a", "lev/eng-1-x", "ENG-1");
+        apply_cached_pr(
+            &mut r,
+            crate::info_cache::CachedPr {
+                number: 7,
+                state: "OPEN".into(),
+                url: "https://github.com/o/r/pull/7".into(),
+            },
+        );
+        let live = PrStatus::Unique {
+            number: 7,
+            state: "OPEN".into(),
+            url: "https://github.com/o/r/pull/7".into(),
+        };
+        reconcile_cache(&mut r, &live);
+        assert!(matches!(r.pr, PrStatus::Unique { number: 7, .. }));
     }
 }

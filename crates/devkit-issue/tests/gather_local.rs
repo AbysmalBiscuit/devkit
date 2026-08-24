@@ -54,8 +54,8 @@ fn gather_local_returns_offline_rows_without_network() {
         .iter()
         .find(|r| r.issue_id == "ENG-1")
         .expect("eng-1 row present");
-    assert_eq!(row.pr_state, "NO_PR");
-    assert_eq!(row.pr_number, None);
+    assert_eq!(row.pr.state_label(), "NO_PR");
+    assert_eq!(row.pr.number(), None);
     assert!(row.state.is_none());
     assert!(!row.dirty);
 

@@ -83,7 +83,7 @@ pub struct IssueRef {
 }
 
 /// A pull request linked to an issue.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrRef {
     pub url: String,
     pub number: u64,

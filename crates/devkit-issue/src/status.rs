@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
-use devkit_common::cmd::{gh_json_in, git};
+use anyhow::Result;
+use devkit_common::cmd::git;
 use devkit_common::github;
 use devkit_common::tracker::{Resolved, State, StateKind, TrackerKind};
 use devkit_common::worktree;
@@ -7,46 +7,123 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
-#[derive(Debug, Clone, Deserialize)]
-struct Pr {
-    number: u64,
-    state: String, // MERGED | OPEN | CLOSED
-    url: String,
-    #[serde(rename = "headRefName")]
-    head_ref_name: String,
+/// A worktree's pull request, as the report knows it. The row carries the tag
+/// rather than a state string plus two nullable fields, because an ambiguous
+/// answer has candidates to name and a string has nowhere to put them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PrStatus {
+    /// No PR for this branch, from a transport that answered.
+    None,
+    Unique {
+        number: u64,
+        state: String,
+        url: String,
+    },
+    /// Several PRs share this head branch. The verdict stays closed: `issue
+    /// end` reads it to decide whether a worktree may be deleted, and a
+    /// stranger's merged PR must not authorize that.
+    Ambiguous {
+        candidates: Vec<devkit_common::tracker::PrRef>,
+    },
+    /// The PR could not be identified — no token, a failed request, or a
+    /// recorded PR that no longer resolves.
+    Unknown { reason: String },
 }
 
-fn state_rank(s: &str) -> u8 {
-    match s {
-        "MERGED" => 3,
-        "OPEN" => 2,
-        "CLOSED" => 1,
-        _ => 0,
+impl PrStatus {
+    pub fn number(&self) -> Option<u64> {
+        match self {
+            PrStatus::Unique { number, .. } => Some(*number),
+            PrStatus::None | PrStatus::Ambiguous { .. } | PrStatus::Unknown { .. } => None,
+        }
+    }
+
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            PrStatus::Unique { url, .. } => Some(url),
+            PrStatus::None | PrStatus::Ambiguous { .. } | PrStatus::Unknown { .. } => None,
+        }
+    }
+
+    /// The `PR` column's state word, and the value the serialized `pr_state`
+    /// field keeps carrying for consumers written against it.
+    pub fn state_label(&self) -> &str {
+        match self {
+            PrStatus::Unique { state, .. } => state,
+            PrStatus::None => "NO_PR",
+            PrStatus::Ambiguous { .. } => "AMBIGUOUS",
+            PrStatus::Unknown { .. } => "UNKNOWN",
+        }
     }
 }
 
-/// Best PR for a head branch: prefer MERGED > OPEN > CLOSED, then higher number.
-fn best_pr<'a>(prs: &'a [Pr], head: &str) -> Option<&'a Pr> {
-    prs.iter()
-        .filter(|p| p.head_ref_name == head)
-        .max_by_key(|p| (state_rank(&p.state), p.number))
-}
-
 /// One issue worktree with its PR + tracker state and the finished verdict.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct IssueWorktree {
     pub worktree: String,
     pub branch: String,
     pub issue_id: String,
     pub dirty: bool,
-    pub pr_number: Option<u64>,
-    pub pr_state: String, // MERGED|OPEN|CLOSED|NO_PR
-    pub pr_url: Option<String>,
+    /// The PR, tagged. `pr_number`, `pr_state` and `pr_url` below are derived
+    /// from it for the serialized shape consumers already read.
+    pub pr: PrStatus,
     /// The tracker's state for this issue, absent when the tracker has no row
     /// for it or there is no tracker.
     pub state: Option<State>,
     pub finished: bool,
     pub reason_not_finished: Option<String>,
+}
+
+impl Serialize for IssueWorktree {
+    /// Emits `pr` alongside the three legacy fields, so an MCP consumer reading
+    /// `pr_state` keeps working while a new one can read the candidates.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("IssueWorktree", 10)?;
+        st.serialize_field("worktree", &self.worktree)?;
+        st.serialize_field("branch", &self.branch)?;
+        st.serialize_field("issue_id", &self.issue_id)?;
+        st.serialize_field("dirty", &self.dirty)?;
+        st.serialize_field("pr", &self.pr)?;
+        st.serialize_field("pr_number", &self.pr.number())?;
+        st.serialize_field("pr_state", self.pr.state_label())?;
+        st.serialize_field("pr_url", &self.pr.url())?;
+        st.serialize_field("state", &self.state)?;
+        st.serialize_field("finished", &self.finished)?;
+        st.serialize_field("reason_not_finished", &self.reason_not_finished)?;
+        st.end()
+    }
+}
+
+/// The finished verdict, from the PR tag and the issue state. An unidentified
+/// PR never closes it: `issue end` deletes a worktree on this answer.
+pub fn verdict(pr: &PrStatus, state: Option<StateKind>, dirty: bool) -> (bool, Option<String>) {
+    if dirty {
+        return (false, Some("worktree has uncommitted changes".into()));
+    }
+    match pr {
+        PrStatus::Ambiguous { candidates } => (
+            false,
+            Some(format!(
+                "several PRs share this branch ({}) — pass --pr to choose one",
+                candidates
+                    .iter()
+                    .map(|c| format!("#{}", c.number))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        ),
+        PrStatus::Unknown { reason } => (false, Some(reason.clone())),
+        PrStatus::None => (false, Some("no PR for this branch".into())),
+        PrStatus::Unique { state: s, .. } if s != "MERGED" => {
+            (false, Some(format!("PR is {s}, not merged")))
+        }
+        PrStatus::Unique { .. } => match state {
+            Some(k) if k.is_open() => (false, Some(format!("issue is {k}"))),
+            Some(_) | None => (true, None),
+        },
+    }
 }
 
 /// Which tracker produced this report and whether it could answer.
@@ -87,11 +164,10 @@ pub struct StatusReport {
     pub tracker: TrackerInfo,
 }
 
-/// Local-only discovery: worktrees + dirty placeholders + issue ids + the main
-/// repo path. The slow network fetches consume this. Fast — no `gh`/tracker.
+/// Local-only discovery: worktrees + dirty placeholders + issue ids. The slow
+/// network fetches consume this. Fast — no `gh`/tracker.
 pub struct Discovered {
     rows: Vec<IssueWorktree>,
-    main_path: String,
     issue_ids: Vec<String>,
 }
 
@@ -100,16 +176,8 @@ impl Discovered {
     /// discovery. A seam for tests of callers that re-orchestrate the gather
     /// (e.g. the CLI's live table); real callers use [`discover`].
     #[doc(hidden)]
-    pub fn from_parts(
-        rows: Vec<IssueWorktree>,
-        main_path: String,
-        issue_ids: Vec<String>,
-    ) -> Discovered {
-        Discovered {
-            rows,
-            main_path,
-            issue_ids,
-        }
+    pub fn from_parts(rows: Vec<IssueWorktree>, issue_ids: Vec<String>) -> Discovered {
+        Discovered { rows, issue_ids }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -132,28 +200,51 @@ impl Discovered {
     }
 }
 
-/// An opaque GitHub PR list for a set of worktrees.
-pub struct Prs(Vec<Pr>);
+/// One GitHub head-branch lookup per worktree branch, keyed by branch name.
+pub struct Prs(HashMap<String, github::HeadLookup>);
 
 impl Prs {
     /// An empty PR list, built without any network call. Used when there are
     /// no worktrees and by tests of code that consumes a `Prs`.
     pub fn empty() -> Prs {
-        Prs(Vec::new())
+        Prs(HashMap::new())
     }
 
-    /// Overlay the best PR for `row`'s branch onto it, leaving the row untouched
-    /// when the branch is detached or has no PR. Same rule `assemble` applies
-    /// per row, exposed so a single-worktree caller can enrich one row.
-    pub fn apply_best(&self, row: &mut IssueWorktree) {
+    /// Overlay `row`'s branch's head lookup onto `row.pr`, leaving the row
+    /// untouched when the branch is detached or has no entry (an empty `Prs`
+    /// never queried it). Same rule `assemble` applies per row, exposed so a
+    /// single-worktree caller can enrich one row.
+    pub fn apply(&self, row: &mut IssueWorktree) {
         if row.branch == "DETACHED" {
             return;
         }
-        if let Some(p) = best_pr(&self.0, &row.branch) {
-            row.pr_number = Some(p.number);
-            row.pr_state = p.state.clone();
-            row.pr_url = Some(p.url.clone());
+        if let Some(lookup) = self.0.get(&row.branch) {
+            row.pr = pr_status_of(lookup);
         }
+    }
+}
+
+/// Tag a head-branch lookup as the report's `PrStatus`.
+fn pr_status_of(lookup: &github::HeadLookup) -> PrStatus {
+    match lookup {
+        github::HeadLookup::Unique(pr) => PrStatus::Unique {
+            number: pr.number,
+            state: pr.state.clone(),
+            url: pr.url.clone(),
+        },
+        github::HeadLookup::NoMatch => PrStatus::None,
+        github::HeadLookup::Ambiguous(candidates) => PrStatus::Ambiguous {
+            candidates: candidates
+                .iter()
+                .map(|p| devkit_common::tracker::PrRef {
+                    url: p.url.clone(),
+                    number: p.number,
+                })
+                .collect(),
+        },
+        github::HeadLookup::Unavailable(reason) => PrStatus::Unknown {
+            reason: reason.clone(),
+        },
     }
 }
 
@@ -161,11 +252,7 @@ impl Prs {
 /// Rows carry `dirty = false` placeholders; the dirty check is a separate step
 /// so callers can drive it with a progress bar.
 pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
-    let (main, others) = worktree::discover(start)?;
-    let main_path = main
-        .to_str()
-        .context("main repo path not UTF-8")?
-        .to_string();
+    let (_main, others) = worktree::discover(start)?;
     let mut rows = Vec::new();
     for wt in &others {
         let iid = worktree::issue_id_of(&wt.path, &wt.branch);
@@ -179,9 +266,7 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
             branch: wt.branch.clone(),
             issue_id: iid,
             dirty: false,
-            pr_number: None,
-            pr_state: "NO_PR".to_string(),
-            pr_url: None,
+            pr: PrStatus::None,
             state: None,
             finished: false,
             reason_not_finished: None,
@@ -192,11 +277,7 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
         .filter(|r| r.issue_id != "UNKNOWN")
         .map(|r| r.issue_id.clone())
         .collect();
-    Ok(Discovered {
-        rows,
-        main_path,
-        issue_ids,
-    })
+    Ok(Discovered { rows, issue_ids })
 }
 
 /// True when a worktree has uncommitted changes.
@@ -244,52 +325,94 @@ pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clon
     });
 }
 
-/// The single `gh pr list` round-trip for every worktree PR. Skips the call
-/// entirely when there are no worktrees.
-pub fn fetch_prs(d: &Discovered, repo: &github::Repo) -> Result<Prs> {
-    if d.rows.is_empty() {
-        return Ok(Prs::empty());
-    }
-    if let Some(prs) = fetch_prs_http(repo) {
-        return Ok(Prs(prs));
-    }
-    let prs: Vec<Pr> = gh_json_in(
-        &[
-            "pr",
-            "list",
-            "--state",
-            "all",
-            "--limit",
-            "500",
-            "--json",
-            "number,state,url,headRefName",
-        ],
-        repo,
-        &d.main_path,
-    )?;
-    Ok(Prs(prs))
-}
-
-/// The PR list over direct HTTP; `None` on no token / parse / transport failure,
-/// so [`fetch_prs`] falls back to `gh`.
-fn fetch_prs_http(repo: &github::Repo) -> Option<Vec<Pr>> {
-    let briefs = github::list_prs(&repo.slug, 500).ok()?;
-    Some(
-        briefs
-            .into_iter()
-            .map(|b| Pr {
-                number: b.number,
-                state: b.state,
-                url: b.url,
-                head_ref_name: b.head_ref_name,
-            })
-            .collect(),
+/// One GraphQL round trip resolving every worktree branch's PR, aliased the way
+/// `linear::build_query` aliases its state queries.
+///
+/// This replaces a `gh pr list --limit 500` over the whole repository. The
+/// branch count is the worktree count, which is small; the repository's total PR
+/// count — what the 500 cap was fighting — stops mattering.
+pub fn heads_query(slug: &str, branches: &[String]) -> String {
+    let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
+    let fields = "totalCount nodes { number state url headRefName headRefOid \
+                  headRepositoryOwner { login } }";
+    let aliases = branches
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            format!(
+                "b{i}: pullRequests(headRefName: {}, first: 10, \
+                 states: [OPEN, CLOSED, MERGED]) {{ {fields} }}",
+                serde_json::Value::from(b.as_str())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "query {{ repository(owner: {}, name: {}) {{ {aliases} }} }}",
+        serde_json::Value::from(owner),
+        serde_json::Value::from(name),
     )
 }
 
-/// Attach dirty flags (in row order), best PR, tracker state, and the finished
-/// verdict. `tracker` is carried through to the report for link building and to
-/// tell a blank state column from an unreachable tracker.
+/// Split a `heads_query` response back into one lookup per branch.
+pub fn parse_heads(
+    resp: &serde_json::Value,
+    branches: &[String],
+) -> HashMap<String, github::HeadLookup> {
+    branches
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let one = serde_json::json!({
+                "data": { "repository": { "pullRequests": resp["data"]["repository"][format!("b{i}")] } },
+                "errors": resp["errors"],
+            });
+            (b.clone(), github::parse_head_lookup(&one))
+        })
+        .collect()
+}
+
+/// Every branch marked `Unavailable` with the same `reason` — the whole batch
+/// request could not be made at all (no token, transport failure).
+fn unavailable_all(branches: &[String], reason: &str) -> HashMap<String, github::HeadLookup> {
+    branches
+        .iter()
+        .map(|b| {
+            (
+                b.clone(),
+                github::HeadLookup::Unavailable(reason.to_string()),
+            )
+        })
+        .collect()
+}
+
+/// The PR lookup for every worktree branch, one GraphQL round trip. Fails
+/// soft: a request that cannot be made at all (no token, transport error)
+/// marks every branch `Unknown` rather than aborting the caller's report.
+pub fn fetch_prs(d: &Discovered, repo: &github::Repo) -> Result<Prs> {
+    let branches: Vec<String> = d
+        .rows
+        .iter()
+        .filter(|r| r.branch != "DETACHED")
+        .map(|r| r.branch.clone())
+        .collect();
+    if branches.is_empty() {
+        return Ok(Prs::empty());
+    }
+    let lookups = if github::token().is_none() {
+        unavailable_all(&branches, "no GitHub token resolved")
+    } else {
+        match github::graphql(&heads_query(&repo.slug, &branches)) {
+            Ok(v) => parse_heads(&v, &branches),
+            Err(e) => unavailable_all(&branches, &format!("{e:#}")),
+        }
+    };
+    Ok(Prs(lookups))
+}
+
+/// Attach dirty flags (in row order), the branch's PR, tracker state, and the
+/// finished verdict. `tracker` is carried through to the report for link
+/// building and to tell a blank state column from an unreachable tracker.
 pub fn assemble(
     d: Discovered,
     dirty: Vec<bool>,
@@ -301,16 +424,7 @@ pub fn assemble(
     let mut finished_count = 0;
     for (i, wt) in rows.iter_mut().enumerate() {
         wt.dirty = dirty.get(i).copied().unwrap_or(false);
-        let pr = if wt.branch != "DETACHED" {
-            best_pr(&prs.0, &wt.branch)
-        } else {
-            None
-        };
-        if let Some(p) = pr {
-            wt.pr_number = Some(p.number);
-            wt.pr_state = p.state.clone();
-            wt.pr_url = Some(p.url.clone());
-        }
+        prs.apply(wt);
         if let Some(st) = states.get(&wt.issue_id) {
             wt.state = Some(st.clone());
         }
@@ -360,12 +474,12 @@ pub fn reason_not_finished(
         return Some("not an issue worktree".into());
     }
     let mut bits: Vec<String> = Vec::new();
-    if wt.pr_state != "MERGED" {
-        bits.push(if wt.pr_state != "NO_PR" {
-            "PR not merged".into()
-        } else {
-            "no PR".into()
-        });
+    match &wt.pr {
+        PrStatus::Unique { state, .. } if state == "MERGED" => {}
+        PrStatus::Unique { .. } => bits.push("PR not merged".into()),
+        PrStatus::None => bits.push("no PR".into()),
+        PrStatus::Ambiguous { .. } => bits.push("PR ambiguous".into()),
+        PrStatus::Unknown { reason } => bits.push(format!("PR unknown: {reason}")),
     }
     // A project that declared it has no tracker has no state to wait for; every
     // other tracker gates on the issue's state and says so when it could not
@@ -493,8 +607,7 @@ mod tests {
     fn discovered(id: &str, branch: &str) -> Discovered {
         let mut row = wt(id, "NO_PR", false, None);
         row.branch = branch.to_string();
-        row.pr_number = None;
-        Discovered::for_test(vec![row], "/main".into(), vec![id.to_string()])
+        Discovered::for_test(vec![row], vec![id.to_string()])
     }
 
     #[test]
@@ -589,9 +702,9 @@ mod tests {
         );
     }
 
-    // assemble zips dirty flags onto rows in order, attaches the best PR by
-    // branch, applies tracker state, and computes the finished verdict — the
-    // same result the old monolithic gather produced.
+    // assemble zips dirty flags onto rows in order, attaches the branch's PR,
+    // applies tracker state, and computes the finished verdict — the same
+    // result the old monolithic gather produced.
     #[test]
     fn assemble_attaches_pr_dirty_and_verdict() {
         let d = discovered("ENG-1", "lev/eng-1-foo");
@@ -605,8 +718,8 @@ mod tests {
         };
         let report = assemble(d, vec![false], prs, states, info);
         let row = &report.worktrees[0];
-        assert_eq!(row.pr_number, Some(7));
-        assert_eq!(row.pr_state, "MERGED");
+        assert_eq!(row.pr.number(), Some(7));
+        assert_eq!(row.pr.state_label(), "MERGED");
         assert!(!row.dirty);
         assert!(row.finished);
         assert_eq!(report.finished_count, 1);
@@ -630,38 +743,53 @@ mod tests {
     }
 
     impl Discovered {
-        fn for_test(rows: Vec<IssueWorktree>, main_path: String, issue_ids: Vec<String>) -> Self {
-            Discovered {
-                rows,
-                main_path,
-                issue_ids,
-            }
+        fn for_test(rows: Vec<IssueWorktree>, issue_ids: Vec<String>) -> Self {
+            Discovered { rows, issue_ids }
         }
     }
     impl Prs {
-        fn for_test(prs: Vec<Pr>) -> Self {
-            Prs(prs)
+        fn for_test(briefs: Vec<github::PrBrief>) -> Self {
+            Prs(briefs
+                .into_iter()
+                .map(|b| (b.head_ref_name.clone(), github::HeadLookup::Unique(b)))
+                .collect())
         }
     }
 
-    fn pr(n: u64, state: &str, head: &str) -> Pr {
-        Pr {
+    fn pr(n: u64, state: &str, head: &str) -> github::PrBrief {
+        github::PrBrief {
             number: n,
             state: state.into(),
             url: format!("https://x/{n}"),
             head_ref_name: head.into(),
+            head_ref_oid: format!("oid{n}"),
+            head_repo_owner: None,
+        }
+    }
+
+    fn pr_ref(n: u64) -> devkit_common::tracker::PrRef {
+        devkit_common::tracker::PrRef {
+            url: format!("https://github.com/o/r/pull/{n}"),
+            number: n,
         }
     }
 
     fn wt(issue_id: &str, pr_state: &str, dirty: bool, kind: Option<StateKind>) -> IssueWorktree {
+        let pr = if pr_state == "NO_PR" {
+            PrStatus::None
+        } else {
+            PrStatus::Unique {
+                number: 1,
+                state: pr_state.into(),
+                url: "https://x/1".into(),
+            }
+        };
         IssueWorktree {
             worktree: "/w".into(),
             branch: "b".into(),
             issue_id: issue_id.into(),
             dirty,
-            pr_number: Some(1),
-            pr_state: pr_state.into(),
-            pr_url: None,
+            pr,
             state: kind.map(|kind| State {
                 kind,
                 name: "Done".into(),
@@ -673,43 +801,19 @@ mod tests {
     }
 
     #[test]
-    fn best_pr_prefers_merged_over_open() {
-        let prs = vec![
-            pr(1, "OPEN", "feat"),
-            pr(2, "MERGED", "feat"),
-            pr(3, "CLOSED", "feat"),
-        ];
-        assert_eq!(best_pr(&prs, "feat").unwrap().number, 2);
-    }
-
-    #[test]
-    fn best_pr_higher_number_within_same_state() {
-        let prs = vec![pr(5, "OPEN", "feat"), pr(9, "OPEN", "feat")];
-        assert_eq!(best_pr(&prs, "feat").unwrap().number, 9);
-    }
-
-    #[test]
-    fn best_pr_none_for_unknown_head() {
-        let prs = vec![pr(1, "MERGED", "feat")];
-        assert!(best_pr(&prs, "other").is_none());
-    }
-
-    #[test]
-    fn apply_best_overlays_pr_and_skips_detached() {
+    fn apply_overlays_pr_and_skips_detached() {
         let prs = Prs::for_test(vec![pr(7, "MERGED", "lev/eng-1-foo")]);
         let mut row = wt("ENG-1", "NO_PR", false, None);
         row.branch = "lev/eng-1-foo".into();
-        row.pr_number = None;
-        prs.apply_best(&mut row);
-        assert_eq!(row.pr_number, Some(7));
-        assert_eq!(row.pr_state, "MERGED");
+        prs.apply(&mut row);
+        assert_eq!(row.pr.number(), Some(7));
+        assert_eq!(row.pr.state_label(), "MERGED");
 
         let mut detached = wt("UNKNOWN", "NO_PR", false, None);
         detached.branch = "DETACHED".into();
-        detached.pr_number = None;
-        prs.apply_best(&mut detached);
-        assert_eq!(detached.pr_number, None);
-        assert_eq!(detached.pr_state, "NO_PR");
+        prs.apply(&mut detached);
+        assert_eq!(detached.pr.number(), None);
+        assert_eq!(detached.pr.state_label(), "NO_PR");
     }
 
     #[test]
@@ -829,10 +933,88 @@ mod tests {
     #[test]
     fn prs_empty_leaves_row_untouched() {
         let mut r = wt("ENG-1", "NO_PR", false, None);
-        r.pr_number = None;
-        Prs::empty().apply_best(&mut r);
-        assert_eq!(r.pr_number, None);
-        assert_eq!(r.pr_state, "NO_PR");
+        Prs::empty().apply(&mut r);
+        assert_eq!(r.pr.number(), None);
+        assert_eq!(r.pr.state_label(), "NO_PR");
+    }
+
+    #[test]
+    fn legacy_fields_derive_from_the_tag() {
+        let u = PrStatus::Unique {
+            number: 12,
+            state: "MERGED".into(),
+            url: "https://github.com/o/r/pull/12".into(),
+        };
+        assert_eq!(u.number(), Some(12));
+        assert_eq!(u.state_label(), "MERGED");
+        assert_eq!(u.url(), Some("https://github.com/o/r/pull/12"));
+
+        assert_eq!(PrStatus::None.state_label(), "NO_PR");
+        assert_eq!(PrStatus::None.number(), None);
+
+        // The shape that used to render as `AMBIGUOUS #0`: a state string with no
+        // number, formatted with unwrap_or(0), printing a PR that does not exist in
+        // the column a human reads before deleting a worktree.
+        let a = PrStatus::Ambiguous {
+            candidates: vec![pr_ref(7), pr_ref(8)],
+        };
+        assert_eq!(a.state_label(), "AMBIGUOUS");
+        assert_eq!(a.number(), None);
+        assert_eq!(a.url(), None);
+    }
+
+    #[test]
+    fn the_verdict_never_closes_on_an_unidentified_pr() {
+        for pr in [
+            PrStatus::Ambiguous {
+                candidates: vec![pr_ref(7), pr_ref(8)],
+            },
+            PrStatus::Unknown {
+                reason: "recorded PR no longer resolves".into(),
+            },
+        ] {
+            let (finished, why) = verdict(&pr, Some(StateKind::Completed), false);
+            assert!(!finished, "{pr:?} must not be finished");
+            assert!(why.is_some());
+        }
+        let (finished, _) = verdict(
+            &PrStatus::Unique {
+                number: 1,
+                state: "MERGED".into(),
+                url: "u".into(),
+            },
+            Some(StateKind::Completed),
+            false,
+        );
+        assert!(finished);
+    }
+
+    #[test]
+    fn heads_are_batched_one_alias_per_branch() {
+        let q = heads_query("o/r", &["feat/a".into(), "fix/b".into()]);
+        assert!(
+            q.contains("b0: pullRequests(headRefName: \"feat/a\""),
+            "{q}"
+        );
+        assert!(q.contains("b1: pullRequests(headRefName: \"fix/b\""), "{q}");
+        assert_eq!(q.matches("repository(").count(), 1, "one round trip");
+    }
+
+    #[test]
+    fn a_repository_with_more_prs_than_any_window_still_resolves_each_branch() {
+        // The `--limit 500` listing this replaces could not promise this: a branch
+        // whose PR sat beyond the window read as NO_PR, with no signal.
+        let resp: serde_json::Value = serde_json::from_str(
+            r#"{"data":{"repository":{
+                 "b0":{"totalCount":1,"nodes":[{"number":900,"state":"OPEN",
+                       "url":"https://github.com/o/r/pull/900","headRefName":"feat/a",
+                       "headRefOid":"aa11","headRepositoryOwner":{"login":"me"}}]},
+                 "b1":{"totalCount":0,"nodes":[]}}}}"#,
+        )
+        .unwrap();
+        let got = parse_heads(&resp, &["feat/a".into(), "fix/b".into()]);
+        assert!(matches!(got["feat/a"], github::HeadLookup::Unique(ref p) if p.number == 900));
+        assert!(matches!(got["fix/b"], github::HeadLookup::NoMatch));
     }
 
     // dirty_stream must report each index exactly once with the same result
