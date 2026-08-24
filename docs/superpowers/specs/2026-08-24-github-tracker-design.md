@@ -1,7 +1,8 @@
 # The GitHub tracker
 
 **Date:** 2026-08-24
-**Status:** ready to plan.
+**Status:** ready to plan, after one round of adversarial cross-model
+review. See `2026-08-24-github-tracker-review-log.md`.
 **Parent:** `2026-08-23-pluggable-issue-tracker-design.md`, phase 3. That spec's
 phases 1 and 2 shipped. This one supersedes its "The GitHub mapping" section,
 which a live probe disproved in two places.
@@ -64,12 +65,29 @@ response. It builds on `devkit_common::github`, which already provides
 `graphql()`, `repo_slug(cwd)`, and `token()` with its `GH_TOKEN` /
 `GITHUB_TOKEN` / `gh auth token` chain, and is already wrapped in a timing span.
 
-The repository comes from `repo_slug(cwd)` and nothing else. The parent spec
-proposed a `[github] repo` override; it is dropped. The fork case settles it:
-alacritree's issues live in the fork, which is `origin`, so detection is already
-right. An override would serve only a project whose issues live in a different
-repository from its code, which no observed project does. `tracker::resolve`
-therefore keeps its current `(kind, cwd)` signature and needs no change.
+### Which repository the adapter reads
+
+`repo_slug(cwd)` is the default and is right for the observed repositories:
+alacritree keeps its issues on the fork, which is `origin`. But origin-only
+resolution cannot serve every layout. In the ordinary fork workflow the issues
+live upstream while `origin` is the fork, and a project may deliberately track
+issues in a repository separate from its code. Both cases would query the wrong
+repository and find no issue.
+
+So `[github] repo` is retained as an optional override, defaulting to the origin
+remote. That answers the objection it was dropped for: the repository *is*
+derived from the worktree, and the override exists only for the layouts
+derivation cannot reach. `tracker::resolve` regains the `repo` parameter that
+`8ccb43e` removed, and `GithubTracker` is constructed with a resolved slug
+rather than resolving one per call.
+
+**Detection must validate the host.** `slug_from_remote_url` parses any
+`https://host/owner/repo` shape without checking the host, so
+`https://gitlab.com/o/r` yields `o/r` and `repo_slug` succeeds. `detect()` reads
+a successful `repo_slug` as proof of a GitHub origin, so a GitLab or Bitbucket
+project currently detects as GitHub. Detection gains a host check against
+`github.com`. `slug_from_remote_url` itself is left alone, since its other
+callers already know they hold a GitHub URL.
 
 ### Per-method mapping
 
@@ -80,7 +98,7 @@ therefore keeps its current `(kind, cwd)` signature and needs no change.
 | `issue_ref` | strips a leading `#`; recognizes a `github.com/…/issues/N` URL |
 | `title` / `details` | `repository.issue(number:)` fields |
 | `states` | `state` + `stateReason`, batched by alias the way `linear::build_query` batches |
-| `issue_pr` | `closedByPullRequestsReferences(first: 1, includeClosedPrs: true)`, any repository |
+| `issue_pr` | `closedByPullRequestsReferences(first: 10, includeClosedPrs: true, orderByState: true)`, any repository; see below |
 | `candidates` | empty; a bare number is a PR |
 | `issues_for_prs` | each PR's `closingIssuesReferences` |
 | `assigned_history` | `issues(filterBy: {assignee: <viewer login>})`, paginated, each node carrying its `CLOSED_EVENT` / `REOPENED_EVENT` timeline |
@@ -120,6 +138,25 @@ page as the parent spec intended.
 `issues_for_prs` is likewise verified: `closingIssuesReferences` on a PR returns
 the issues it closes, and an empty list for a PR that closes none.
 
+### Choosing among several linked PRs
+
+An issue may have more than one linked PR: a superseded attempt, or a reopened
+issue closed twice. `first: 1` would return an arbitrary one, and the field
+documents no default ordering. Neither probed repository currently has such an
+issue, so this is an unobserved risk rather than a live bug, but the failure
+mode is silent and wrong rather than loud.
+
+The field takes an `orderByState` argument. The query asks for `first: 10,
+orderByState: true` and the adapter picks by an explicit rule: a merged PR wins,
+then an open one, then the highest number. Ten is chosen over full pagination
+because the connection is empty or single in every observed case, and paginating
+it would be more than the job needs.
+
+Where the choice is genuinely ambiguous, meaning several merged or several open
+candidates remain, `checkout-pr` refuses and names them rather than guessing,
+because it is about to create a worktree from that answer. `states` and the
+status report are read-only and take the ranked first.
+
 ### Cross-repository checkout
 
 `PrRef` already carries `url`, so `issue_pr` returning a PR in another
@@ -131,22 +168,45 @@ differs from `repo_slug` of the monorepo. `github.rs` already holds
 
 The same-repository case passes no `--repo` and behaves exactly as today.
 
+**The PR must be persisted, or the lifecycle stalls.** `IssueRecord` carries no
+PR reference, and `status::fetch_prs_http` lists PRs for `repo_slug(cwd)` only.
+A worktree checked out from a PR in another repository would therefore find no
+matching PR, report `pr_state` as `NO_PR`, and the finished verdict would say
+"no PR" forever no matter what happened upstream. Returning a cross-repository
+PR without recording it is worse than filtering it out.
+
+So `IssueRecord` gains an optional PR reference: the full URL, which already
+identifies both the repository and the number. It is written by `checkout-pr`,
+absent on records written before it existed and on `issue setup` worktrees that
+have no PR yet. `status` reads it and, when the recorded PR is outside the
+origin repository, queries that repository for that one PR instead of relying on
+the origin PR listing. Worktrees with no recorded PR keep today's behavior
+exactly.
+
 ### Authentication
 
 devkit stores no GitHub credential of its own. `gh auth login`, `GH_TOKEN` and
 `GITHUB_TOKEN` already cover it, and `github::token()` already reads all three.
 So `devkit auth github` reports rather than stores.
 
-It reads `gh auth status --json hosts`, which returns per account a `login`,
-`host`, `active` flag, `scopes` string and `state`. It renders one row per
-account, marking the active one, because `github::token()` falls back to `gh
-auth token` and that returns the active account's token. Which account is active
-is therefore the identity devkit will use, and with several accounts logged in
-that is not obvious.
+**The identity comes from the token, not from `gh`.** `resolve_token` reads
+`GH_TOKEN`, then `GITHUB_TOKEN`, and only then falls back to `gh auth token`. So
+with either variable set, the active `gh` account is not the identity devkit
+uses, and reporting it as such would mislead precisely the user who most needs
+the answer. The command resolves the token the way `github::token()` does,
+queries `viewer { login }` with it, and reports that login and which source
+supplied the token.
 
-With no account logged in, or when `--json` is unsupported by an older `gh`, it
-prints the `gh auth login` instruction and the two environment variables. Bare
-`devkit auth` lists `github` among its providers with the same one-line summary.
+Beneath that it lists the `gh` accounts from `gh auth status --json hosts`,
+which returns per account a `login`, `host`, `active` flag, `scopes` string and
+`state`. That list is secondary diagnostics: it explains what `gh auth token`
+would return and lets the user spot a login they forgot, but it is not the
+identity line.
+
+With no token resolvable at all, or when `--json` is unsupported by an older
+`gh`, it prints the `gh auth login` instruction and the two environment
+variables. Bare `devkit auth` lists `github` among its providers with the same
+one-line summary.
 
 `devkit doctor`'s tracker row, when the resolved tracker is GitHub and
 `github::token()` returns `None`, carries that instruction as its hint, matching
@@ -165,6 +225,25 @@ globally exported `LINEAR_API_KEY` resolves to Linear for every project, so a
 GitHub project on such a machine must name `kind` explicitly, and `devkit
 doctor` prints which tracker resolved and why.
 
+### The dashboard is not wired to the trait yet
+
+Phase 2 moved Linear behind the trait for `status` and `end`, but not for the
+dashboard. `assigned_history` and `timeline_origin` have no caller anywhere
+outside the tracker module: they are dead trait methods. `dashboard/data.rs`
+returns an empty list when `LINEAR_API_KEY` does not resolve and otherwise calls
+`linear::assigned_issue_history_with_progress` directly.
+
+So implementing those two methods on `GithubTracker` delivers nothing on its
+own. The dashboard would show an empty timeline for a GitHub project and never
+say why. Wiring it is part of this phase, not an assumed inheritance: the
+dashboard resolves the configured tracker the way `status` does and calls the
+trait, so Linear keeps its current behavior through the same path.
+
+Its cache needs scoping in the same change. `dashboard/data.rs` caches under the
+literal key `"issues"`, which is global, so two projects already share one cache
+entry. Two projects on different trackers would serve each other's timelines.
+The key gains the tracker kind and the repository or workspace identity.
+
 ## Non-goals
 
 - **Write operations.** `devkit-issue` is a read-only triage facade. No
@@ -173,7 +252,6 @@ doctor` prints which tracker resolved and why.
   `[templates] parse_conventional_titles`, and `type` / `scope` in the render
   context into this phase. They are independent of GitHub and they change Linear
   branch names too, so they get their own spec. Nothing here depends on them.
-- **`[github] repo`.** Dropped, per the fork evidence above.
 - **A `devkit auth github` credential store.** Reporting only.
 - **GitHub Projects v2 and label-as-status.** Neither is in use in the observed
   repositories, and Projects needs a token scope the account lacks. Both remain
@@ -183,24 +261,36 @@ doctor` prints which tracker resolved and why.
 
 ## Delivery
 
-Six tasks. Task 1 is the bulk; the rest are small and independent of each other.
+Eight tasks. Task 1 is the bulk. Tasks 2 through 4 each close a gap the review
+found and none of them is optional: without 4 the dashboard silently shows
+nothing, and without 3 the finished verdict never closes on a cross-repository
+PR.
 
 1. **The adapter.** `github.rs` with the query, parse and wrapper split, the
-   `Tracker` implementation, and its fixture tests. No wiring yet.
-2. **Selection.** `TrackerKind::Github` constructs `GithubTracker` instead of
-   the stand-in, with `declared` and the reason line.
-3. **Cross-repository checkout.** `checkout-pr` derives the PR's repository from
-   `PrRef.url` and passes `--repo` when it differs from origin.
-4. **`devkit auth github`** and the doctor hint.
-5. **Dogfood.** devkit's own `devkit.toml` declares `[tracker] kind = "github"`.
+   `Tracker` implementation including the linked-PR ranking rule, and its
+   fixture tests. No wiring yet.
+2. **Selection and detection.** `TrackerKind::Github` constructs `GithubTracker`
+   instead of the stand-in, with `declared` and the reason line; `[github] repo`
+   config with the origin default; `tracker::resolve` regains `repo`; detection
+   validates the origin host is `github.com`.
+3. **The PR reference in the record.** `IssueRecord` gains the optional PR URL,
+   `checkout-pr` writes it and passes `--repo` to `gh` when the PR is outside
+   origin, and `status` consults it for a PR the origin listing cannot see.
+4. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
+   configured tracker and calls `assigned_history` and `timeline_origin` instead
+   of Linear directly, and the cache key gains the tracker and repository
+   identity. Linear's behavior through the new path is the regression gate.
+5. **`devkit auth github`** and the doctor hint, with the identity taken from
+   the resolved token rather than from the active `gh` account.
+6. **Dogfood.** devkit's own `devkit.toml` declares `[tracker] kind = "github"`.
    Worth noting: this repository currently has no GitHub issues filed, so the
    declaration exercises the empty-tracker path and little else. It becomes real
    exercise once devkit work is filed as issues. Land it last, or defer it.
-6. **Documentation.** `docs/configuration.md` gains the `[tracker] kind =
-   "github"` row and the auth instruction; `README.md` gains `devkit auth
-   github`; `AGENTS.md`'s tracker paragraph drops "there is no GitHub
-   implementation" and describes the real arm; `skills/using-devkit/`'s CLI
-   reference gains the new subcommand. Schema regenerates via
+7. **Documentation.** `docs/configuration.md` gains the `[tracker] kind =
+   "github"` row, `[github] repo`, and the auth instruction; `README.md` gains
+   `devkit auth github`; `AGENTS.md`'s tracker paragraph drops "there is no
+   GitHub implementation" and describes the real arm; `skills/using-devkit/`'s
+   CLI reference gains the new subcommand. Schema regenerates via
    `DEVKIT_UPDATE_SCHEMA=1 cargo test`.
 
 ## Testing
@@ -222,6 +312,18 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   to pass `--repo`, since the `gh` invocation itself is not testable offline.
 - **`devkit auth github`.** Parse tests over a `gh auth status --json hosts`
   response with several accounts, an empty response, and a malformed one.
+- **Linked-PR ranking.** Table test over one merged PR, one open PR, a merged
+  and an open together, two merged, and none, asserting the chosen PR and that
+  the two-merged case is reported as ambiguous rather than silently ranked.
+- **The recorded PR.** A record carrying a cross-repository PR URL drives status
+  to the finished verdict; a record without one keeps today's behavior; an old
+  record with no field at all still deserializes.
+- **Host validation.** Detection returns no tracker for a GitLab or Bitbucket
+  origin, and GitHub for a `github.com` origin in each remote-URL shape
+  `slug_from_remote_url` accepts.
+- **The dashboard through the trait.** The fake tracker drives the timeline, so
+  the wiring is covered without a network call, and Linear's path is asserted
+  unchanged.
 - **The fake tracker** from phase 2 keeps driving `devkit-issue`'s `gather` end
   to end. Nothing in this phase requires the network to test.
 
@@ -243,10 +345,13 @@ adapter is network-free under test.
 | Question | Decision |
 |---|---|
 | How `issue_pr` finds the PR | `closedByPullRequestsReferences`, not the timeline. Probe-driven. |
-| A linked PR in another repository | Returned, not filtered. `checkout-pr` passes `--repo`. |
-| `[github] repo` config | Dropped. `repo_slug(cwd)` is sufficient. |
-| `tracker::resolve`'s signature | Unchanged at `(kind, cwd)`. |
-| A `devkit auth github` credential store | No. It lists `gh` identities and instructs. |
+| Several linked PRs | `orderByState` plus an explicit merged / open / highest rule; `checkout-pr` refuses a genuine tie. |
+| A linked PR in another repository | Returned, not filtered, and persisted in `IssueRecord` so status can see it. |
+| `[github] repo` config | Retained as an optional override with the origin remote as default. Reversed after review. |
+| `tracker::resolve`'s signature | Regains `repo`. |
+| Host validation in detection | Added. A non-`github.com` origin no longer detects as GitHub. |
+| The dashboard | Wired to the trait in this phase, not assumed. |
+| A `devkit auth github` credential store | No. It reports the resolved token's identity and lists `gh` accounts as diagnostics. |
 | Conventional-title parsing | Out of scope. Its own spec. |
 | Fixture content | Synthesized in the shape of the originals, never copied. |
 | devkit's own tracker | Declares `github`, landed last, with the empty-repository caveat stated. |
