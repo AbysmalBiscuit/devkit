@@ -977,6 +977,39 @@ mod tests {
     }
 
     #[test]
+    fn a_locator_with_a_repository_outranks_the_configured_one() {
+        let repos = Repos::from_parts(&cfg(None, Some("up/app")), None, None);
+
+        let pasted = PrLocator {
+            repo: Some("fork/app".into()),
+            number: 42,
+        };
+        let r = pasted.resolve(&repos).unwrap();
+        assert_eq!(r.slug, "fork/app");
+        assert_eq!(r.origin, Origin::Overridden);
+
+        let bare = PrLocator {
+            repo: None,
+            number: 42,
+        };
+        assert_eq!(bare.resolve(&repos).unwrap().slug, "up/app");
+    }
+
+    /// A locator's slug is parsed out of untrusted pasted text, so it faces the
+    /// same shape check a configured one does before reaching a `--repo`
+    /// argument or a cache path.
+    #[test]
+    fn a_locator_repository_that_is_not_owner_repo_is_rejected() {
+        let repos = Repos::from_parts(&cfg(None, Some("up/app")), None, None);
+        let loc = PrLocator {
+            repo: Some("../../etc/passwd".into()),
+            number: 42,
+        };
+        let err = loc.resolve(&repos).unwrap_err().to_string();
+        assert!(err.contains("owner/repo"), "{err}");
+    }
+
+    #[test]
     fn a_repo_qualifies_itself_with_the_host() {
         let r = Repo {
             slug: "o/r".into(),
