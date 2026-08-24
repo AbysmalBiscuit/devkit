@@ -79,10 +79,14 @@ fn decide_fuzzy(pr_exists: bool, candidates: &[IssueRef], is_tty: bool) -> Fuzzy
 /// `decide_fuzzy` with the candidates asked from the tracker itself, so the
 /// project's declared kind decides what a bare number means rather than
 /// whatever `LINEAR_API_KEY` happens to be exported in the shell.
-/// `candidates` degrades to empty on error — the id still resolves via the PR
-/// side, or reports "not found", rather than aborting the whole checkout.
+/// `candidates` degrades to empty on error, reported to stderr — the id still
+/// resolves via the PR side, or reports "not found", rather than aborting the
+/// whole checkout.
 fn decide_fuzzy_via(t: &dyn Tracker, n: u64, pr_exists: bool, is_tty: bool) -> FuzzyDecision {
-    let candidates = t.candidates(n).unwrap_or_default();
+    let candidates = t.candidates(n).unwrap_or_else(|e| {
+        eprintln!("warning: tracker lookup for {n} failed, treating it as no issue match: {e:#}");
+        Vec::new()
+    });
     decide_fuzzy(pr_exists, &candidates, is_tty)
 }
 

@@ -96,9 +96,8 @@ impl Tracker for FakeTracker {
             !self.refuse.contains(trimmed),
             "fake tracker refuses {trimmed}"
         );
-        let id = trimmed.strip_prefix('#').unwrap_or(trimmed);
         Ok(IssueRef {
-            id: id.to_uppercase(),
+            id: trimmed.to_uppercase(),
             slug: None,
         })
     }

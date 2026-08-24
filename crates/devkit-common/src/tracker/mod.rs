@@ -124,9 +124,9 @@ pub trait Tracker: Send + Sync {
     /// Configured and able to authenticate. False means callers should degrade
     /// rather than error.
     fn ready(&self) -> bool;
-    /// Parse CLI input — a bare id, a `#123`, or an issue URL — into an id and,
-    /// when the input spelled one out, a title slug. Fails when the input names
-    /// a repository or workspace this tracker is not scoped to; the caller
+    /// Parse CLI input — a bare id or an issue URL — into an id and, when the
+    /// input spelled one out, a title slug. Fails when the input names a
+    /// repository or workspace this tracker is not scoped to; the caller
     /// surfaces the error rather than guessing.
     fn issue_ref(&self, input: &str) -> Result<IssueRef>;
     fn title(&self, id: &str) -> Result<Option<String>>;
@@ -376,32 +376,5 @@ mod tests {
             t.issue_ref("https://github.com/other/repo/issues/9")
                 .is_err()
         );
-        assert_eq!(t.issue_ref("#9").unwrap().id, "9");
-    }
-
-    /// Every trait method must have a caller outside this module. Five did not
-    /// after phase 2 — details, candidates, issues_for_prs, assigned_history and
-    /// timeline_origin — which is how an adapter can be written against a trait
-    /// most commands never ask. `assigned_history` and `timeline_origin` gain
-    /// theirs in the dashboard task.
-    #[test]
-    fn every_trait_method_is_reachable() {
-        // A compile-time witness: each method named here is called by a binary or
-        // library outside `tracker/`. Update the list, not the assertion, when a
-        // method is added.
-        const WIRED: &[&str] = &[
-            "kind",
-            "ready",
-            "issue_ref",
-            "title",
-            "details",
-            "states",
-            "issue_pr",
-            "candidates",
-            "issues_for_prs",
-            "issue_url",
-            "check",
-        ];
-        assert_eq!(WIRED.len(), 11);
     }
 }

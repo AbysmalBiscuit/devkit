@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use devkit_common::cmd::{capture, git};
 use devkit_common::gitfetch;
 use devkit_common::progress::Steps;
-use devkit_common::tracker::{IssueDetails, IssueRef, Tracker};
+use devkit_common::tracker::{IssueDetails, IssueRef, Resolved, Tracker};
 use devkit_config::{PrepFile, expand_tilde};
 use devkit_ports::load;
 use std::collections::{BTreeMap, HashMap};
@@ -10,7 +10,7 @@ use std::path::Path;
 
 pub struct SetupArgs {
     pub issue: String,
-    /// `None` asks Linear for the issue title and slugifies that.
+    /// `None` asks the resolved tracker for the issue title and slugifies that.
     pub slug: Option<String>,
     pub apps: Vec<String>,
     pub dry_run: bool,
@@ -270,6 +270,17 @@ fn slug_budget(
         .max(MIN_SLUG))
 }
 
+/// A declared tracker owns parsing completely. An undeclared one keeps
+/// today's permissive linear.app parse, which needs no key and would
+/// otherwise be lost for a project that configured no tracker.
+fn parse_input(resolved: &Resolved, input: &str) -> Result<IssueRef> {
+    if resolved.declared {
+        resolved.tracker.issue_ref(input)
+    } else {
+        Ok(crate::slug::parse_issue_ref(input))
+    }
+}
+
 pub fn run(args: SetupArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
@@ -282,14 +293,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
     let resolved = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start));
     let t = resolved.tracker.as_ref();
-    // A declared tracker owns parsing completely. An undeclared one keeps
-    // today's permissive linear.app parse, which needs no key and would
-    // otherwise be lost for a project that configured no tracker.
-    let issue_ref = if resolved.declared {
-        t.issue_ref(&args.issue)?
-    } else {
-        crate::slug::parse_issue_ref(&args.issue)
-    };
+    let issue_ref = parse_input(&resolved, &args.issue)?;
     let issue = issue_ref.id.clone();
     let vars = &cfg.templates.variables;
     let budget = slug_budget(cfg, vars, &issue, &args.apps)?;
@@ -456,13 +460,32 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_trackers_refusal_propagates() {
+        let refused = "https://github.com/other/repo/issues/9";
+        let resolved = Resolved {
+            tracker: Box::new(fake::FakeTracker::new().refusing(refused)),
+            declared: true,
+            reason: "test".into(),
+        };
+        assert!(parse_input(&resolved, refused).is_err());
+    }
+
+    #[test]
     fn an_undeclared_project_still_reads_a_linear_url_without_a_key() {
-        // parse_issue_ref recognizes a linear.app URL by string alone and needs no
-        // key. Routing it through NoneTracker would drop the slug for a project
-        // that configured no tracker.
-        let parsed = crate::slug::parse_issue_ref("https://linear.app/acme/issue/ENG-7/fix-export");
-        assert_eq!(parsed.id, "ENG-7");
-        assert_eq!(parsed.slug.as_deref(), Some("fix-export"));
+        // A tracker that would refuse or need a key is never asked when the
+        // project declared none — the permissive linear.app parse stands in.
+        let resolved = Resolved {
+            tracker: Box::new(fake::FakeTracker::new()),
+            declared: false,
+            reason: "test".into(),
+        };
+        let parsed = parse_input(
+            &resolved,
+            "https://linear.app/acme/issue/ENG-1234/fix-bli-export",
+        )
+        .unwrap();
+        assert_eq!(parsed.id, "ENG-1234");
+        assert_eq!(parsed.slug.as_deref(), Some("fix-bli-export"));
     }
 
     fn scratch(tag: &str) -> PathBuf {
