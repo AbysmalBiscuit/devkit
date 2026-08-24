@@ -439,3 +439,77 @@ Delivery stays at twelve tasks; tasks 1, 4, 7 and 8 grew.
 Five rounds, twenty-five findings, none rejected outright — one round-3 decision
 reversed on round-4 evidence, and one round-5 mechanism substituted with the
 reason recorded. This revision is unreviewed.
+
+## Round 6: Codex
+
+`VERDICT: REVISE`.
+
+1. **`headRefName` does not prove the PR contains this worktree's commits.**
+   Same-named branches across forks are an acknowledged case; once the wrong or
+   stale PR merges, the verdict can authorize `git branch -D` (`end.rs:163`).
+   The local-ahead argument is also wrong for the normal request path, which
+   pushes before looking up the PR (`request.rs:192`, `:230`). *Fix:* query
+   `headRefOid` and require it to equal the worktree `HEAD` before
+   recording/acting and before a merged PR satisfies the finished verdict;
+   `--no-push` mismatches fail closed.
+2. **Origin-defaulted repositories may omit `--repo`**, so an ambient `GH_REPO`
+   can still redirect the `gh` half while HTTP uses the resolved origin. One
+   request can read PR A over HTTP and then edit, check out or create against
+   repository B. *Fix:* pass `--repo <resolved-repo>` on every `gh` operation.
+3. **`Repos` is still all-or-nothing.** The spec says `pr_repo` serves Linear
+   projects, and also requires one configured key without an origin supplying
+   the other to fail. A Linear project with an explicit `pr_repo` and no GitHub
+   origin is forced to configure an unused `issues_repo`. *Fix:* resolve the two
+   independently and require only the field the selected tracker or operation
+   needs.
+4. **Host validation is confined to detection.** A declared GitHub tracker
+   bypasses detection while the origin fallback still uses the host-blind
+   `repo_slug`, so a GitLab origin can produce a "ready" GitHub tracker querying
+   an unrelated `owner/repo` on github.com. *Fix:* require a `github.com` origin
+   whenever any repository field defaults from origin.
+5. **Task 3 omits `issue info`,** which has its own PR enrichment and cache
+   path: it calls `fetch_prs` separately (`info.rs:167`) and mutates the legacy
+   fields directly (`info.rs:255`). Once the verdict reads the tag this either
+   stops compiling or renders a PR beside a contradictory tag. *Fix:* include
+   `info.rs` and `info_cache.rs` in task 3, and clear cached uniqueness when the
+   lookup is non-unique.
+
+### Claude's response
+
+All five accepted. The first is a straight concession: both reasons I gave for
+substituting the check were wrong.
+
+- **Finding 1 accepted; my round-5 substitution was wrong on the facts.** I
+  argued a commit comparison refuses whenever the branch is ahead of its remote,
+  "the normal state right up until `review request` pushes". `request.rs` pushes
+  at line 190 and looks the PR up at line 230, so on that path the remote is
+  current and the oids agree. My second reason — that it breaks after a
+  force-push — was also wrong: a force-push moves the remote *to* the local
+  commit, not away from it. The real gap is the one Codex names: a branch name
+  does not prove the PR carries these commits, and same-named branches across
+  forks are the case this whole design is built around. So `headRefOid` it is,
+  checked at binding and again where a merged PR would satisfy the verdict,
+  since `end.rs` runs `git branch -D` on that verdict. `--no-push` fails closed:
+  declining to publish the branch is declining to make it checkable.
+- **Finding 2 accepted.** I closed half this hole in round 5 and left the other
+  half open by exempting the origin-defaulted case. The exemption is unsound for
+  a reason the provenance argument obscured: it lets one command's HTTP half and
+  `gh` half name different repositories. `--repo` is now unconditional, and
+  provenance keeps only its remaining job of deciding which key an error may
+  demand.
+- **Finding 3 accepted.** My own justification for putting `[github]` outside
+  `[tracker]` was that a Linear project with a fork workflow needs `pr_repo`.
+  Requiring both keys to resolve then forces exactly that project to configure
+  an `issues_repo` it never reads. The keys resolve independently and each is
+  required only where used.
+- **Finding 4 accepted.** Detection is the path a declared tracker skips, so
+  putting the host check only there guards the case that needed it least. It
+  applies wherever the origin remote is read.
+- **Finding 5 accepted.** `issue info` calls `fetch_prs` on its own path and
+  `apply_cached_pr` assigns `pr_number`, `pr_state` and `pr_url` directly, so it
+  is a second writer of the fields task 3 turns into derived values. It joins
+  task 3, and a cached unique PR is discarded rather than replayed when the live
+  lookup is no longer unique.
+
+Six rounds, thirty findings, none rejected. Two of my own decisions reversed
+under later evidence. This revision is unreviewed.

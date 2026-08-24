@@ -1,7 +1,7 @@
 # The GitHub tracker
 
 **Date:** 2026-08-24
-**Status:** ready to plan, after five rounds of adversarial cross-model
+**Status:** ready to plan, after six rounds of adversarial cross-model
 review. See `2026-08-24-github-tracker-review-log.md`.
 **Parent:** `2026-08-23-pluggable-issue-tracker-design.md`, phase 3. That spec's
 phases 1 and 2 shipped. This one supersedes its "The GitHub mapping" section,
@@ -213,16 +213,34 @@ the origin remote, and threaded to the sites that need it. The HTTP half takes
 `repos.prs`; the `gh` half gains `--repo`, which covers `gh pr view`, `gh pr
 list`, `gh pr checkout` and the `gh pr create` in `review/request.rs`.
 
-**Each repository remembers where its value came from, and `--repo` is passed
-for anything configured even when it equals origin.** Passing `--repo` only when
-the value differs from origin looks like a harmless optimization and is not one.
-`cmd::capture` inherits the environment, so `gh` still reads `GH_REPO`, and a
-project that deliberately set `pr_repo` to the same slug as its origin would
-have that setting silently overridden by an ambient variable — creating,
-editing, or checking out a PR in a repository nobody named. A resolved slug
-alone cannot tell the two cases apart, so each field carries whether it was
-configured, overridden on the command line, or defaulted from origin. Configured
-and overridden always pass `--repo`; only the defaulted case may omit it.
+**`--repo` is passed on every `gh` operation, without exception.** Omitting it
+looks like a harmless optimization and is not one. `cmd::capture` inherits the
+environment, so `gh` still reads `GH_REPO`. Exempting the origin-defaulted case
+does not help: the HTTP half would use the slug devkit resolved from origin
+while the `gh` half followed `GH_REPO` somewhere else, so one `review request`
+could read PR A over HTTP and then edit, check out, or create against repository
+B. The two halves must name the same repository or they are not one seam.
+
+Each field still records whether it was configured, overridden on the command
+line, or defaulted from origin. That provenance is no longer what decides
+`--repo`; it decides which key an error is allowed to demand, below.
+
+**The two keys resolve independently.** Requiring both to resolve makes a Linear
+project with an explicit `pr_repo` and no GitHub origin configure an
+`issues_repo` it will never use, which contradicts the reason `pr_repo` sits
+outside `[tracker]` at all. So each key resolves on its own and is required only
+where it is used: `issues_repo` by the GitHub tracker, `pr_repo` by the PR
+paths. A missing one is an error at the operation that needs it, naming that
+key.
+
+**Defaulting from origin requires a `github.com` origin.** Host validation
+belongs to every path that reads the remote, not to detection alone. A project
+that declares `kind = "github"` skips detection entirely, and `repo_slug` does
+not check the host, so a GitLab origin would yield `owner/repo`, default both
+repositories to it, and query an unrelated `github.com/owner/repo` that may well
+exist — a tracker reporting `ready` about someone else's issues. So the host
+check guards the origin fallback itself. Explicitly configured repositories need
+no origin and are unaffected.
 
 `prs.rs` already holds a partial version of this in `resolve_repo(Option<&str>,
 cwd)`, fed by `issue prs --repo`. The seam generalizes that rather than
@@ -247,12 +265,13 @@ This is what `ready` then rests on: **a resolved token plus a resolved
 elsewhere, or one worked on from a directory with no GitHub remote, is ready
 when its config says which repository holds the issues.
 
-**Detection must validate the host.** `slug_from_remote_url` parses any
+**Detection must validate the host too.** `slug_from_remote_url` parses any
 `https://host/owner/repo` shape without checking the host, so
 `https://gitlab.com/o/r` yields `o/r` and `repo_slug` succeeds. `detect()` reads
 a successful `repo_slug` as proof of a GitHub origin, so a GitLab or Bitbucket
-project currently detects as GitHub. Detection gains a host check against
-`github.com`. `slug_from_remote_url` itself is left alone, since its other
+project currently detects as GitHub. Detection gains the same `github.com` check
+the origin fallback gains above; they are one rule applied wherever the remote
+is read. `slug_from_remote_url` itself is left alone, since its other
 callers already know they hold a GitHub URL.
 
 ### Per-method mapping
@@ -384,20 +403,30 @@ rule stays strict and gains a human-supplied escape:
   --pr <n>` overrides for that run and leaves the record alone.
 - Branch discovery runs only when neither locator is present.
 
-**An explicit locator still has to belong to this worktree.** Repository and
-number are not enough: `--pr` with a mistyped number names a real PR that
-resolves cleanly, and the record then makes it authoritative. When that
-unrelated PR merges, `issue end` sees a merged PR, a completed issue and a clean
-tree, and deletes a worktree whose work never landed. So the selected PR's
-`headRefName` must equal the worktree's branch, and a mismatch is refused with
-both names shown.
+**An explicit locator still has to belong to this worktree, and the branch name
+does not prove that.** Repository and number are not enough: `--pr` with a
+mistyped number names a real PR that resolves cleanly, and the record then makes
+it authoritative. When that unrelated PR merges, `issue end` sees a merged PR, a
+completed issue and a clean tree, and runs `git branch -D` on a worktree whose
+work never landed.
 
-Matching the branch name rather than the head commit is deliberate. A commit
-comparison refuses whenever the local branch is ahead of what was pushed, which
-is the normal state right up until `review request` pushes, and it breaks after
-any force-push. The branch name is what actually ties a PR to a worktree, and it
-still admits the supersede case `--pr` exists for, where two PRs share the
-branch and the human is choosing between them.
+A branch-name match does not close it either, because same-named branches across
+forks are the case this design already acknowledges everywhere else. So the
+check is on the commit: the selected PR's `headRefOid` must equal the worktree's
+`HEAD`, and a mismatch is refused showing both.
+
+The same comparison gates the verdict, not only the binding. A merged PR
+satisfies `finished` only when its `headRefOid` is the worktree's `HEAD`;
+commits sitting locally beyond what the PR merged are unlanded work, and
+`issue end` deletes the branch they live on. That is the deletion this rule
+exists to prevent, so it is checked where the deletion is decided rather than
+only where the binding is written.
+
+`review request` pushes the branch before it looks up the PR, so on the ordinary
+path the remote is current and the oids agree. Under `--no-push` they can
+disagree, and that fails closed: declining to publish the branch is declining to
+make it checkable, and binding a PR to unverifiable commits is the thing being
+prevented.
 
 `issue end` removes the worktree and its record together, which covers
 clearing.
@@ -632,11 +661,12 @@ comes after all of them rather than after the adapter.
 1. **The repository resolution seam.** `[github] issues_repo` and `pr_repo`
    config **with the schema regenerated in this same task**, the `Repos`
    resolution — from config first, origin only for a key config left unset,
-   each field retaining whether it was configured, overridden or defaulted,
-   each validated as an `owner/repo` slug where it is resolved —
-   every GitHub operation taking it instead of resolving its own, and `--repo`
-   on the `gh` paths including `gh pr edit`, passed for any configured or
-   overridden repository even when it equals origin. No change to what any
+   each key resolving independently and required only where it is used, each
+   retaining whether it was configured, overridden or defaulted, each validated
+   as an `owner/repo` slug where it is resolved, and the origin fallback
+   requiring a `github.com` host — every GitHub operation taking it instead of
+   resolving its own, and `--repo` on every `gh` path including `gh pr edit`,
+   with no exemption for an origin-defaulted value. No change to what any
    lookup answers. **The gate is that a project setting neither key behaves
    identically**, Linear projects included, since this task alone touches every
    PR path devkit has.
@@ -661,7 +691,13 @@ comes after all of them rather than after the adapter.
    carries the tagged status, with `pr_state`, `pr_number` and `pr_url` derived
    from it so the serialized shape survives; the finished verdict reads the tag;
    `triage.rs` renders the ambiguous case from the tag rather than formatting
-   `#0`; the MCP `issue.status` action gains the candidate list.
+   `#0`; the MCP `issue.status` action gains the candidate list. **`issue info`
+   is part of this task**: it calls `fetch_prs` on its own path and
+   `apply_cached_pr` writes `pr_number`/`pr_state`/`pr_url` directly, so
+   `info.rs` and `info_cache.rs` construct the tag instead, and a cached unique
+   PR is discarded rather than replayed when the live lookup is no longer
+   unique. Left out, this task either stops compiling or renders a PR beside a
+   verdict reading a contradictory tag.
 4. **Wire the remaining commands to the trait.** `Tracker::issue_ref` becomes
    `Result<IssueRef>` so it can refuse, and `checkout-pr`'s slash heuristic goes
    away with it. `setup` parses through the trait and takes its title and
@@ -690,7 +726,8 @@ comes after all of them rather than after the adapter.
    `review finish --pr` keeps winning as it does today and stays a one-run
    override that writes nothing; `review request` gains the URL form, and its
    existing write rule is what makes it a rebind. An explicit locator's
-   `headRefName` must equal the worktree's branch or it is refused. A recorded
+   `headRefOid` must equal the worktree's `HEAD` or it is refused, and a merged
+   PR satisfies the finished verdict only under the same comparison. A recorded
    PR that no longer resolves reports unknown rather than falling back.
 8. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
    configured tracker and calls `assigned_history` and `timeline_origin` instead
@@ -811,7 +848,11 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   the case that made the flag necessary. `review finish --pr <n>` still wins
   over both the record and branch discovery and leaves the record unchanged,
   which is today's contract. A `--pr` naming a PR whose `headRefName` is not the
-  worktree's branch is refused, on both commands and before anything is written.
+  worktree's `HEAD` commit is refused, on both commands and before anything is
+  written; under `--no-push`, a branch ahead of its remote fails closed. A
+  merged PR whose head is not the worktree's `HEAD` does not satisfy the
+  finished verdict, so `issue end` cannot delete a branch carrying unlanded
+  commits.
 - **`issue_ref` refusing.** A GitHub issue URL outside `issues_repo` returns an
   error naming both repositories rather than a mangled id, and `checkout-pr`
   classifies it as unrecognized without consulting a `/` in the result. A
@@ -822,6 +863,21 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   from `issues_for_prs`; a Linear project's rows are unchanged and still gated
   by `[linear] resolve_pr_links`; and the MCP path resolves the same way as the
   CLI.
+- **Independent keys.** A Linear project setting only `pr_repo`, with no GitHub
+  origin, resolves and works without being made to configure an `issues_repo` it
+  never uses; a GitHub operation needing the key that is missing errors naming
+  that key.
+- **`--repo` everywhere.** Every `gh` invocation carries `--repo`, asserted on
+  the argument vector, including when the value came from origin — so a `GH_REPO`
+  in the environment cannot make the `gh` half act on a different repository
+  from the one the HTTP half read.
+- **Origin host.** A GitLab or Bitbucket origin fails the origin fallback rather
+  than defaulting a repository, on a *declared* `github` tracker as well as
+  during detection; explicitly configured repositories work with no origin at
+  all.
+- **`issue info`.** Its live path and its cached path both produce the tagged
+  status, and a cached unique PR is discarded rather than replayed when the live
+  lookup is ambiguous or unavailable.
 - **Cache path safety.** An `issues_repo` carrying path separators or `..` is
   rejected when the repositories are resolved, and — independently — a
   cache-scope component containing them still produces a path inside the
@@ -870,7 +926,11 @@ adapter is network-free under test.
 | `[linear] resolve_pr_links` | Stays, as Linear's own opt-in gate. GitHub's linked issues are a field on a query already being made. |
 | `--pr`'s meaning | One meaning everywhere: use this PR for this run. Rebinding falls out of `review request` recording what it acted on, so `review finish --pr` keeps its one-run contract. |
 | Locator precedence | Explicit `--pr`, then the record, then branch discovery. |
-| Validating an explicit locator | Its `headRefName` must equal the worktree's branch. Head-commit comparison was rejected: it refuses whenever the branch is ahead of the remote, which is the normal state before `review request` pushes. |
+| Validating an explicit locator | Its `headRefOid` must equal the worktree's `HEAD`, at binding and again where a merged PR would satisfy the verdict. A branch-name match does not prove the PR carries these commits, and same-named branches across forks are the case this design assumes everywhere else. |
+| `--no-push` under that rule | Fails closed. Declining to publish the branch is declining to make it checkable. |
+| `--repo` on `gh` | Always, with no exemption. An origin-defaulted exemption still lets `GH_REPO` split the `gh` half from the HTTP half within one command. |
+| Whether both repository keys must resolve | No. Each resolves independently and is required only where used, so a Linear project with a fork workflow sets `pr_repo` alone. |
+| Where the `github.com` host check applies | Every origin fallback, not detection alone. A declared `github` tracker skips detection, and `repo_slug` is host-blind. |
 | Configured repositories in a cache filename | Validated as `owner/repo` where resolved, and every cache-scope component encoded before it reaches a path. |
 | The commands phase 2 left on direct `linear::` calls | Wired in this phase. `setup`, `checkout-pr`'s fuzzy arm and `prs` were not moved onto the seam, and five trait methods had no caller at all. |
 | A recorded PR that no longer resolves | Reported as unknown with the verdict closed. Never a silent fall back to branch matching. |
