@@ -1,5 +1,5 @@
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
-use devkit_common::tracker::{AssignedIssue, State};
+use devkit_common::tracker::{AssignedIssue, State, StateKind};
 use std::collections::HashMap;
 
 /// Parse an RFC3339 timestamp to UTC. Linear uses `…Z`; git `%aI` uses `+01:00`.
@@ -99,17 +99,29 @@ pub struct Replay {
     pub transitions: Vec<(DateTime<Utc>, String)>,
 }
 
+/// Where a status sits in the issue lifecycle, which is the order the
+/// issues-by-status chart stacks its bands in. Keyed off `StateKind` rather
+/// than a tracker's own state names, which are arbitrary.
+pub fn type_rank(k: StateKind) -> u8 {
+    match k {
+        StateKind::Triage => 0,
+        StateKind::Backlog => 1,
+        StateKind::Unstarted => 2,
+        StateKind::Started => 3,
+        StateKind::Completed => 4,
+        StateKind::Canceled => 5,
+    }
+}
+
 /// Build a `Replay` and record every state's (kind, color) into `meta`.
-pub fn parse_issue(iss: &AssignedIssue, meta: &mut HashMap<String, (String, String)>) -> Replay {
-    meta.entry(iss.state.name.clone()).or_insert((
-        iss.state.kind.to_string(),
-        iss.state.color.clone().unwrap_or_default(),
-    ));
+pub fn parse_issue(iss: &AssignedIssue, meta: &mut HashMap<String, (StateKind, String)>) -> Replay {
+    meta.entry(iss.state.name.clone())
+        .or_insert((iss.state.kind, iss.state.color.clone().unwrap_or_default()));
     let mut raw: Vec<(DateTime<Utc>, Option<String>, String)> = Vec::new();
     for (when, from, to) in &iss.history {
         for s in [from, to].into_iter().flatten() {
             meta.entry(s.name.clone())
-                .or_insert((s.kind.to_string(), s.color.clone().unwrap_or_default()));
+                .or_insert((s.kind, s.color.clone().unwrap_or_default()));
         }
         if let (Some(t), Some(to_state)) = (parse_ts(when), to) {
             raw.push((
@@ -163,6 +175,27 @@ mod tests {
             name: name.into(),
             color: Some(color.into()),
         }
+    }
+
+    /// The chart stacks statuses in lifecycle order, keyed off `StateKind`
+    /// rather than a tracker's own state names, which are arbitrary. The match
+    /// is exhaustive, so a seventh kind is a compile error rather than a status
+    /// silently ranked last.
+    #[test]
+    fn type_rank_follows_the_issue_lifecycle() {
+        let lifecycle = [
+            StateKind::Triage,
+            StateKind::Backlog,
+            StateKind::Unstarted,
+            StateKind::Started,
+            StateKind::Completed,
+            StateKind::Canceled,
+        ];
+        let ranks: Vec<u8> = lifecycle.iter().map(|k| type_rank(*k)).collect();
+        assert!(
+            ranks.windows(2).all(|w| w[0] < w[1]),
+            "ranks rise with the lifecycle: {ranks:?}"
+        );
     }
 
     #[test]

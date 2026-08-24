@@ -69,26 +69,17 @@ pub fn run(args: DashboardArgs) -> Result<()> {
             .collect();
         let labels: Vec<String> = starts.iter().map(|s| bucket::label_for(*s, &b)).collect();
 
-        let mut meta: HashMap<String, (String, String)> = HashMap::new();
+        let mut meta: HashMap<String, (devkit_common::tracker::StateKind, String)> = HashMap::new();
         let replays: Vec<_> = issues
             .iter()
             .map(|i| bucket::parse_issue(i, &mut meta))
             .collect();
 
         // Lifecycle stacking order: type rank, then name.
-        let type_rank = |k: &str| match k {
-            "triage" => 0,
-            "backlog" => 1,
-            "unstarted" => 2,
-            "started" => 3,
-            "completed" => 4,
-            "canceled" => 5,
-            _ => 99,
-        };
         let mut names: Vec<String> = meta.keys().cloned().collect();
         names.sort_by(|a, b| {
-            type_rank(&meta[a].0)
-                .cmp(&type_rank(&meta[b].0))
+            bucket::type_rank(meta[a].0)
+                .cmp(&bucket::type_rank(meta[b].0))
                 .then_with(|| a.cmp(b))
         });
 
