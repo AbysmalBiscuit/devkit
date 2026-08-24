@@ -293,6 +293,48 @@ impl Repo {
     }
 }
 
+/// A pull request, identified. `repo: None` means the input was a bare number
+/// or `#42` and defaults to `pr_repo`; a URL fills it in and that repository
+/// wins.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PrLocator {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    pub number: u64,
+}
+
+impl PrLocator {
+    /// The repository this locator names, or `pr_repo` when it names none.
+    pub fn resolve(&self, repos: &Repos) -> Result<Repo> {
+        match &self.repo {
+            Some(slug) => {
+                validate_slug(slug)?;
+                Ok(Repo {
+                    slug: slug.clone(),
+                    origin: Origin::Overridden,
+                })
+            }
+            None => repos.prs().cloned(),
+        }
+    }
+
+    /// Parse `https://github.com/owner/repo/pull/N`.
+    pub fn from_url(url: &str) -> Option<PrLocator> {
+        let rest = url.split("github.com/").nth(1)?;
+        let mut seg = rest.split('/');
+        let owner = seg.next()?;
+        let name = seg.next()?;
+        if seg.next()? != "pull" {
+            return None;
+        }
+        let number = seg.next()?.split(['?', '#']).next()?.parse().ok()?;
+        Some(PrLocator {
+            repo: Some(format!("{owner}/{name}")),
+            number,
+        })
+    }
+}
+
 /// The repositories one command works against, resolved once and threaded to
 /// every GitHub operation. Each key resolves independently and is required only
 /// where it is used, so a Linear project with a fork workflow sets `pr_repo`

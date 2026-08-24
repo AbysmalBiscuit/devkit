@@ -22,9 +22,9 @@ pub struct CheckoutArgs {
 /// How the raw `<PR_ISSUE_ID_URL>` input is classified before resolution.
 #[derive(Debug, PartialEq, Eq)]
 enum Ident {
-    Pr(u64),
+    Pr(github::PrLocator),
     Issue(IssueRef),
-    Fuzzy(u64),
+    Fuzzy(github::PrLocator),
 }
 
 /// Classify the identifier by shape. The PR and bare-number rules are
@@ -32,17 +32,23 @@ enum Ident {
 fn classify(input: &str, t: &dyn Tracker) -> Result<Ident> {
     let s = input.trim();
     if s.contains("github.com") && s.contains("/pull/") {
-        let n = github::pr_number_from_url(s).context("no PR number in GitHub URL")?;
-        return Ok(Ident::Pr(n));
+        let loc = github::PrLocator::from_url(s).context("no PR number in GitHub URL")?;
+        return Ok(Ident::Pr(loc));
     }
     if let Some(rest) = s.strip_prefix('#')
         && !rest.is_empty()
         && rest.chars().all(|c| c.is_ascii_digit())
     {
-        return Ok(Ident::Pr(rest.parse().context("bad PR number")?));
+        return Ok(Ident::Pr(github::PrLocator {
+            repo: None,
+            number: rest.parse().context("bad PR number")?,
+        }));
     }
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()) {
-        return Ok(Ident::Fuzzy(s.parse().context("bad number")?));
+        return Ok(Ident::Fuzzy(github::PrLocator {
+            repo: None,
+            number: s.parse().context("bad number")?,
+        }));
     }
     if s.is_empty() || s.split_whitespace().count() != 1 {
         anyhow::bail!("unrecognized PR/issue identifier: {s}");
@@ -91,7 +97,7 @@ fn decide_fuzzy_via(t: &dyn Tracker, n: u64, pr_exists: bool, is_tty: bool) -> F
 }
 
 struct Resolved {
-    pr_number: u64,
+    loc: github::PrLocator,
     linear_id: Option<String>,
     linear_title: Option<String>,
 }
@@ -166,7 +172,10 @@ fn resolve_issue(id: &str, title: Option<String>, t: &dyn Tracker) -> Result<Res
         .issue_pr(id)?
         .with_context(|| format!("issue {id} has no associated PR to check out"))?;
     Ok(Resolved {
-        pr_number: pr.number,
+        loc: github::PrLocator {
+            repo: None,
+            number: pr.number,
+        },
         linear_id: Some(id.to_string()),
         linear_title: title.or_else(|| t.title(id).ok().flatten()),
     })
@@ -176,13 +185,13 @@ fn resolve_issue(id: &str, title: Option<String>, t: &dyn Tracker) -> Result<Res
 fn resolve(
     target: &str,
     cwd: &str,
-    pr_repo: &github::Repo,
+    repos: &github::Repos,
     t: &dyn Tracker,
     steps: &Steps,
 ) -> Result<Resolved> {
     match classify(target, t)? {
-        Ident::Pr(n) => Ok(Resolved {
-            pr_number: n,
+        Ident::Pr(loc) => Ok(Resolved {
+            loc,
             linear_id: None,
             linear_title: None,
         }),
@@ -195,10 +204,12 @@ fn resolve(
                 resolve_issue(&r.id, r.slug.clone(), t)
             })
         }
-        Ident::Fuzzy(n) => {
+        Ident::Fuzzy(loc) => {
+            let n = loc.number;
+            let repo = loc.resolve(repos)?;
             // Probe both sides under a spinner; clear it before any prompt.
             let (exists, decision) = steps.during_result(&format!("Resolving {n}…"), || {
-                let exists = pr_exists(n, cwd, pr_repo)?;
+                let exists = pr_exists(n, cwd, &repo)?;
                 let is_tty = std::io::stdin().is_terminal();
                 Ok::<_, anyhow::Error>((exists, decide_fuzzy_via(t, n, exists, is_tty)))
             })?;
@@ -210,14 +221,14 @@ fn resolve(
                     anyhow::bail!("ambiguous {n} — rerun as #{n} (PR) or with the full issue id")
                 }
                 FuzzyDecision::UsePr => Ok(Resolved {
-                    pr_number: n,
+                    loc,
                     linear_id: None,
                     linear_title: None,
                 }),
                 FuzzyDecision::UseTracker(r) => resolve_issue(&r.id, r.slug.clone(), t),
                 FuzzyDecision::Prompt(cands) => match prompt_choice(exists, &cands, n, t.kind())? {
                     None => Ok(Resolved {
-                        pr_number: n,
+                        loc,
                         linear_id: None,
                         linear_title: None,
                     }),
@@ -305,15 +316,15 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
 
     let tracker = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start)).tracker;
     let repos = github::Repos::resolve(&cfg.github, monorepo_s, None);
-    let pr_repo = repos.prs()?;
     let steps = Steps::persistent();
-    let resolved = resolve(&args.target, monorepo_s, pr_repo, tracker.as_ref(), &steps)?;
+    let resolved = resolve(&args.target, monorepo_s, &repos, tracker.as_ref(), &steps)?;
+    let pr_repo = resolved.loc.resolve(&repos)?;
 
     let meta: PrMeta = steps
-        .during_result(&format!("Fetching PR #{}…", resolved.pr_number), || {
-            fetch_pr_meta(resolved.pr_number, monorepo_s, pr_repo)
+        .during_result(&format!("Fetching PR #{}…", resolved.loc.number), || {
+            fetch_pr_meta(resolved.loc.number, monorepo_s, &pr_repo)
         })
-        .with_context(|| format!("fetching PR #{}", resolved.pr_number))?;
+        .with_context(|| format!("fetching PR #{}", resolved.loc.number))?;
 
     let ctx = serde_json::json!({
         "pr_number": meta.number,
@@ -366,7 +377,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             .during_result(&format!("Checking out PR #{}…", meta.number), || {
                 gh_capture(
                     &["pr", "checkout", &meta.number.to_string()],
-                    pr_repo,
+                    &pr_repo,
                     worktree_s,
                 )
             })
@@ -555,13 +566,22 @@ mod tests {
 
     #[test]
     fn classify_hash_is_pr() {
-        assert_eq!(classify("#3340", &tracker()).unwrap(), Ident::Pr(3340));
+        assert_eq!(
+            classify("#3340", &tracker()).unwrap(),
+            Ident::Pr(github::PrLocator {
+                repo: None,
+                number: 3340
+            })
+        );
     }
     #[test]
     fn classify_github_url_is_pr() {
         assert_eq!(
             classify("https://github.com/o/r/pull/12", &tracker()).unwrap(),
-            Ident::Pr(12)
+            Ident::Pr(github::PrLocator {
+                repo: Some("o/r".into()),
+                number: 12
+            })
         );
     }
     #[test]
@@ -599,7 +619,36 @@ mod tests {
     }
     #[test]
     fn classify_bare_number_is_fuzzy() {
-        assert_eq!(classify("3340", &tracker()).unwrap(), Ident::Fuzzy(3340));
+        assert_eq!(
+            classify("3340", &tracker()).unwrap(),
+            Ident::Fuzzy(github::PrLocator {
+                repo: None,
+                number: 3340
+            })
+        );
+    }
+    #[test]
+    fn a_pasted_pr_url_keeps_its_repository() {
+        // With one resolved repository the loss was invisible. With issues_repo
+        // and pr_repo configured separately, pasting other/repo/pull/42 resolved
+        // pr_repo#42 — a different pull request that happens to share a number —
+        // and built a worktree from it without a word.
+        let Ident::Pr(loc) = classify("https://github.com/other/repo/pull/42", &tracker()).unwrap()
+        else {
+            panic!("expected a PR")
+        };
+        assert_eq!(loc.repo.as_deref(), Some("other/repo"));
+        assert_eq!(loc.number, 42);
+    }
+    #[test]
+    fn a_bare_number_or_hash_defaults_to_pr_repo() {
+        for input in ["#42", "42"] {
+            let (Ident::Pr(loc) | Ident::Fuzzy(loc)) = classify(input, &tracker()).unwrap() else {
+                panic!("expected a PR-shaped ident for {input}")
+            };
+            assert_eq!(loc.repo, None, "{input}");
+            assert_eq!(loc.number, 42, "{input}");
+        }
     }
     #[test]
     fn classify_garbage_errors() {
