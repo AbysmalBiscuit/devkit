@@ -163,8 +163,7 @@ pub struct LinearConfig {
 }
 
 /// Which GitHub repositories this project uses. Both default to the `origin`
-/// remote, so a project setting neither reaches the same repository it does
-/// today. They are separate because a fork opens its PRs upstream while its
+/// remote. They are separate because a fork opens its PRs upstream while its
 /// issues may sit on either side, and because a project may track issues in a
 /// repository separate from its code.
 ///

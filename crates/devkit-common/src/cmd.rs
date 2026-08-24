@@ -62,9 +62,8 @@ pub fn gh_json_in<T: serde::de::DeserializeOwned>(
 }
 
 /// `gh <args...> --repo github.com/<slug>`, capturing stdout. The mutating
-/// counterpart to `gh_json_in` — `pr create`, `pr edit`, `pr checkout`, and
-/// the `pr view` existence probe — scoped the same way and for the same
-/// reason: no repository-scoped `gh` call is left for `GH_REPO` to redirect.
+/// counterpart to `gh_json_in`, scoped the same way and for the same reason:
+/// no repository-scoped `gh` call is left for `GH_REPO` to redirect.
 pub fn gh_capture(args: &[&str], repo: &crate::github::Repo, cwd: &str) -> Result<String> {
     let v = gh_args(args, repo);
     let refs: Vec<&str> = v.iter().map(String::as_str).collect();
@@ -97,22 +96,5 @@ mod tests {
             gh_args(&["pr", "list"], &repo),
             vec!["pr", "list", "--repo", "github.com/o/r"]
         );
-    }
-
-    #[test]
-    fn gh_capture_shares_the_same_repository_scoped_vector() {
-        let repo = crate::github::Repo {
-            slug: "o/r".into(),
-            origin: crate::github::Origin::Defaulted,
-        };
-        // `gh_capture` (the mutating path: `pr create`, `pr edit`, `pr
-        // checkout`, `pr view`) is built on the same `gh_args` as the read
-        // path, so it is asserted the same way: on the vector's repository,
-        // not on an exact argv string or on behavior — an ambient GH_REPO
-        // cannot change which repository this names, because the vector
-        // always carries an explicit `--repo`.
-        let args = gh_args(&["pr", "create", "--title", "x"], &repo);
-        assert!(args.contains(&"--repo".to_string()));
-        assert_eq!(args.last().map(String::as_str), Some("github.com/o/r"));
     }
 }

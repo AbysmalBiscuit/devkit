@@ -147,7 +147,11 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         std::path::Path::new(&start),
     )?;
     let repos = devkit_common::github::Repos::resolve(&loaded.config.github, &monorepo, None);
-    let pr_repo = repos.prs()?;
+    // Absent, not `?`: the PR-timeline section degrades to empty when no PR
+    // repository resolves (a Linear project whose code is not on GitHub is
+    // exactly the shape `[github]` exists to serve), while the issue charts
+    // and commit history above and below it still render.
+    let pr_repo = repos.prs().ok();
     let steps = devkit_common::progress::Steps::new();
     let _b1 = steps.spinner("[1/2] Loading PR history…");
     let _b2 = steps.spinner("[2/2] Loading commit history…");

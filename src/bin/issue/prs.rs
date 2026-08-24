@@ -384,7 +384,10 @@ pub fn run(
         .as_ref()
         .map(|l| &l.config.github)
         .unwrap_or(&default_gh);
-    let resolved = devkit_issue::prs::resolve_repo(github_cfg, ".", repo.as_deref())?;
+    let resolved = devkit_common::github::Repos::resolve(github_cfg, ".", repo.as_deref())
+        .prs()?
+        .slug
+        .clone();
     let repo_key = if no_cache {
         None
     } else {

@@ -115,7 +115,10 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
         .as_ref()
         .map(|l| &l.config.github)
         .unwrap_or(&default_gh);
-    let repo = prs::resolve_repo(github_cfg, &root, a.repo.as_deref())?;
+    let repo = devkit_common::github::Repos::resolve(github_cfg, &root, a.repo.as_deref())
+        .prs()?
+        .slug
+        .clone();
     let report = prs::gather(
         &root,
         a.mine,

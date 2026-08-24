@@ -78,10 +78,13 @@ fn to_datetimes(stamps: &[i64]) -> Vec<DateTime<Utc>> {
 
 /// (opened stamps, merged stamps, total additions, total deletions) for my PRs.
 /// With `use_cache`, a fresh prior fetch is reused; failures are never cached.
+/// `repo` is absent when no PR repository resolves (no `[github] pr_repo` and
+/// no github.com `origin`, e.g. a Linear project whose code lives elsewhere) —
+/// the section then degrades to empty rather than failing the dashboard.
 pub fn pr_timeline(
     all_roles: bool,
     use_cache: bool,
-    repo: &github::Repo,
+    repo: Option<&github::Repo>,
 ) -> (Vec<DateTime<Utc>>, Vec<DateTime<Utc>>, i64, i64) {
     let key = if all_roles {
         "pr-timeline-all"
@@ -96,6 +99,9 @@ pub fn pr_timeline(
             c.deletions,
         );
     }
+    let Some(repo) = repo else {
+        return (Vec::new(), Vec::new(), 0, 0);
+    };
     let fetch = |search: &str| -> Vec<PrTimes> {
         if let Some(v) = fetch_timeline_http(search, repo) {
             return v;
@@ -195,4 +201,23 @@ pub fn commit_dates(repo: &str, author: &str) -> Vec<DateTime<Utc>> {
         }
     };
     out.lines().filter_map(|l| parse_ts(l.trim())).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No PR repository resolved (no `[github] pr_repo`, no github.com
+    /// `origin`) must degrade the section to empty rather than panic or
+    /// reach for a `Repo` that doesn't exist — `use_cache: false` also rules
+    /// out the cache short-circuit above it, so this exercises the `None`
+    /// branch directly.
+    #[test]
+    fn pr_timeline_with_no_repo_degrades_to_empty() {
+        let (opened, merged, add, del) = pr_timeline(true, false, None);
+        assert!(opened.is_empty());
+        assert!(merged.is_empty());
+        assert_eq!(add, 0);
+        assert_eq!(del, 0);
+    }
 }

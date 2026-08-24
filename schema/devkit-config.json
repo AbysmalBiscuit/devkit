@@ -301,7 +301,7 @@
     },
     "GithubConfig": {
       "additionalProperties": false,
-      "description": "Which GitHub repositories this project uses. Both default to the `origin`\nremote, so a project setting neither reaches the same repository it does\ntoday. They are separate because a fork opens its PRs upstream while its\nissues may sit on either side, and because a project may track issues in a\nrepository separate from its code.\n\nThis table is not under `[tracker]`: a project on Linear with a fork\nworkflow needs `pr_repo` just as much as a GitHub one does.",
+      "description": "Which GitHub repositories this project uses. Both default to the `origin`\nremote. They are separate because a fork opens its PRs upstream while its\nissues may sit on either side, and because a project may track issues in a\nrepository separate from its code.\n\nThis table is not under `[tracker]`: a project on Linear with a fork\nworkflow needs `pr_repo` just as much as a GitHub one does.",
       "properties": {
         "issues_repo": {
           "default": null,

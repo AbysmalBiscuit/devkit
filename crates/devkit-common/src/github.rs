@@ -274,27 +274,16 @@ impl Repos {
         // so a project outside GitHub never pays for it and never fails on it.
         let need_origin =
             cfg.issues_repo.is_none() || (cfg.pr_repo.is_none() && pr_override.is_none());
-        let origin = need_origin.then(|| github_origin_slug(cwd)).transpose();
-        let origin = match origin {
-            Ok(v) => v,
+        match need_origin.then(|| github_origin_slug(cwd)).transpose() {
+            Ok(origin) => build(cfg, origin, pr_override, &missing_message),
+            // The origin lookup itself is the more useful explanation than the
+            // generic "set [github] <key>" message, so a key that would have
+            // defaulted to it reports why the default failed instead.
             Err(e) => {
                 let msg = format!("{e:#}");
-                return Repos {
-                    issues: cfg
-                        .issues_repo
-                        .clone()
-                        .map(|s| (s, Origin::Configured))
-                        .ok_or_else(|| msg.clone())
-                        .and_then(checked),
-                    prs: pr_override
-                        .map(|s| (s.to_string(), Origin::Overridden))
-                        .or_else(|| cfg.pr_repo.clone().map(|s| (s, Origin::Configured)))
-                        .ok_or(msg)
-                        .and_then(checked),
-                };
+                build(cfg, None, pr_override, &|_| msg.clone())
             }
-        };
-        Repos::from_parts(cfg, origin, pr_override)
+        }
     }
 
     /// `resolve` with the origin slug supplied rather than read, so resolution
@@ -305,27 +294,7 @@ impl Repos {
         origin: Option<String>,
         pr_override: Option<&str>,
     ) -> Repos {
-        let missing = |key: &str| {
-            format!(
-                "no GitHub repository for {key}: set [github] {key} or give the project a \
-                 github.com `origin` remote"
-            )
-        };
-        Repos {
-            issues: cfg
-                .issues_repo
-                .clone()
-                .map(|s| (s, Origin::Configured))
-                .or_else(|| origin.clone().map(|s| (s, Origin::Defaulted)))
-                .ok_or_else(|| missing("issues_repo"))
-                .and_then(checked),
-            prs: pr_override
-                .map(|s| (s.to_string(), Origin::Overridden))
-                .or_else(|| cfg.pr_repo.clone().map(|s| (s, Origin::Configured)))
-                .or_else(|| origin.map(|s| (s, Origin::Defaulted)))
-                .ok_or_else(|| missing("pr_repo"))
-                .and_then(checked),
-        }
+        build(cfg, origin, pr_override, &missing_message)
     }
 
     /// The issues repository, or the error explaining which key would supply it.
@@ -337,6 +306,43 @@ impl Repos {
     /// supply it.
     pub fn prs(&self) -> Result<&Repo> {
         self.prs.as_ref().map_err(|e| anyhow::anyhow!(e.clone()))
+    }
+}
+
+/// The default "no repository" error for `key`, used when there was no origin
+/// failure to report instead.
+fn missing_message(key: &str) -> String {
+    format!(
+        "no GitHub repository for {key}: set [github] {key} or give the project a \
+         github.com `origin` remote"
+    )
+}
+
+/// The one precedence chain both `resolve` and `from_parts` run: config, then
+/// override (`prs` only), then the origin default, each key independent.
+/// `missing` supplies the error a key reports when nothing resolves it — the
+/// generic "set [github] key" message normally, or the origin lookup's own
+/// error when that lookup is what failed.
+fn build(
+    cfg: &devkit_config::GithubConfig,
+    origin: Option<String>,
+    pr_override: Option<&str>,
+    missing: &dyn Fn(&str) -> String,
+) -> Repos {
+    Repos {
+        issues: cfg
+            .issues_repo
+            .clone()
+            .map(|s| (s, Origin::Configured))
+            .or_else(|| origin.clone().map(|s| (s, Origin::Defaulted)))
+            .ok_or_else(|| missing("issues_repo"))
+            .and_then(checked),
+        prs: pr_override
+            .map(|s| (s.to_string(), Origin::Overridden))
+            .or_else(|| cfg.pr_repo.clone().map(|s| (s, Origin::Configured)))
+            .or_else(|| origin.map(|s| (s, Origin::Defaulted)))
+            .ok_or_else(|| missing("pr_repo"))
+            .and_then(checked),
     }
 }
 

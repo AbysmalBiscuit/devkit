@@ -743,20 +743,6 @@ pub struct PrsReport {
     pub reviews: Vec<ReviewPrView>,
 }
 
-/// Resolve `owner/name`: the `[github] pr_repo` key, an explicit `--repo`
-/// override, or the `origin` remote — whichever `Repos` picks for the `prs`
-/// key. No `gh` spawn: `Repos::resolve` reads the remote directly.
-pub fn resolve_repo(
-    cfg: &devkit_config::GithubConfig,
-    cwd: &str,
-    pr_override: Option<&str>,
-) -> Result<String> {
-    Ok(github::Repos::resolve(cfg, cwd, pr_override)
-        .prs()?
-        .slug
-        .clone())
-}
-
 /// One PR-search GraphQL round trip over direct HTTP, falling back to
 /// `gh api graphql` when no token is configured or the HTTP path fails.
 fn fetch_graphql<T: serde::de::DeserializeOwned>(query: &str, root: &str) -> Result<T> {
