@@ -367,10 +367,8 @@ mod tests {
 
     #[test]
     fn issue_ref_can_refuse() {
-        // The refusal the design promises — an issue URL naming a repository the
-        // tracker is not scoped to — cannot be expressed by a method returning a
-        // bare IssueRef. checkout-pr works around the absence today by treating a
-        // `/` in the returned id as a parse failure.
+        // An issue URL naming a repository the tracker is not scoped to must
+        // fail rather than resolve to an id the caller would go on to use.
         let t = fake::FakeTracker::new().refusing("https://github.com/other/repo/issues/9");
         assert!(
             t.issue_ref("https://github.com/other/repo/issues/9")
