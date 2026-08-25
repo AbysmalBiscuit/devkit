@@ -1,11 +1,7 @@
-//! Shared integration-test helpers: unique temp dirs and a local fixture
-//! git repo with two tagged versions (v1.0.0 → "// v1", v1.1.0 tip → "// v2").
+//! Shared integration-test helpers: a local fixture git repo with two tagged
+//! versions (v1.0.0 → "// v1", v1.1.0 tip → "// v2").
 
 use std::path::Path;
-
-pub fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
-    devkit_testtmp::dir(&format!("devkit-docs-it-{tag}"))
-}
 
 fn sh(args: &[&str], cwd: &Path) {
     devkit_common::cmd::capture("git", args, Some(cwd.to_str().unwrap())).unwrap();

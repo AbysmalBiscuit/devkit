@@ -5,7 +5,8 @@ mod common;
 
 #[test]
 fn a_nested_scoped_cache_migrates_and_its_worktree_still_works() {
-    let base = common::unique_tmp("upgrade");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
 
@@ -84,7 +85,8 @@ fn a_nested_scoped_cache_migrates_and_its_worktree_still_works() {
 
 #[test]
 fn a_worktree_whose_link_cannot_be_repaired_is_rebuilt_at_its_recorded_commit() {
-    let base = common::unique_tmp("upgrade-broken");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let old = cache.join("@scope/pkg");
@@ -147,7 +149,8 @@ fn a_worktree_whose_link_cannot_be_repaired_is_rebuilt_at_its_recorded_commit() 
 
 #[test]
 fn a_crash_between_rename_and_repair_is_finished_by_the_next_run() {
-    let base = common::unique_tmp("upgrade-resume");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let old = cache.join("@scope/pkg");
@@ -214,7 +217,8 @@ fn a_crash_between_rename_and_repair_is_finished_by_the_next_run() {
 
 #[test]
 fn a_crash_between_worktree_prune_and_worktree_add_is_recovered_from_the_journal() {
-    let base = common::unique_tmp("upgrade-journal");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let lib = cache.join("@scope~pkg");
@@ -273,7 +277,8 @@ fn a_crash_between_worktree_prune_and_worktree_add_is_recovered_from_the_journal
 
 #[test]
 fn a_rename_whose_target_already_exists_migrates_nothing() {
-    let base = common::unique_tmp("upgrade-collide");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
 
@@ -309,7 +314,8 @@ fn a_rename_whose_target_already_exists_migrates_nothing() {
 
 #[test]
 fn an_already_migrated_cache_is_left_alone() {
-    let base = common::unique_tmp("upgrade-noop");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let lib = cache.join("@scope~pkg");
@@ -333,7 +339,8 @@ fn an_already_migrated_cache_is_left_alone() {
 
 #[test]
 fn a_stale_administrative_back_pointer_is_repaired_before_prune_can_read_it_as_abandoned() {
-    let base = common::unique_tmp("upgrade-backptr");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let lib = cache.join("@scope~pkg");
@@ -387,7 +394,8 @@ fn a_stale_administrative_back_pointer_is_repaired_before_prune_can_read_it_as_a
 
 #[test]
 fn one_unrepairable_checkout_does_not_cost_its_healthy_sibling_its_registration() {
-    let base = common::unique_tmp("upgrade-mixed");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let old = cache.join("@scope/pkg");
@@ -462,7 +470,8 @@ fn one_unrepairable_checkout_does_not_cost_its_healthy_sibling_its_registration(
 
 #[test]
 fn a_recreated_checkout_clears_the_registration_its_removal_left_behind() {
-    let base = common::unique_tmp("upgrade-stranded");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let lib = cache.join("@scope~pkg");
@@ -581,7 +590,8 @@ fn write_journal(cache: &std::path::Path, lib: &str, checkout: &str, commit: &st
 
 #[test]
 fn a_husk_left_by_an_interrupted_removal_is_rebuilt_rather_than_forgotten() {
-    let base = common::unique_tmp("upgrade-husk");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let lib = cache.join("@scope~pkg");
@@ -621,7 +631,8 @@ fn a_husk_left_by_an_interrupted_removal_is_rebuilt_rather_than_forgotten() {
 /// the file, so the delete lands in exactly the case the read failed.
 #[test]
 fn a_journal_that_cannot_be_read_survives_the_heal_pass() {
-    let base = common::unique_tmp("upgrade-unreadable-journal");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let lib = cache.join("@scope~pkg");
@@ -671,7 +682,8 @@ fn a_git_that_cannot_spawn_is_not_a_commit_the_repository_lost() {
         return;
     }
 
-    let base = common::unique_tmp("upgrade-no-git");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let lib = cache.join("@scope~pkg");
@@ -723,7 +735,8 @@ fn a_git_that_cannot_spawn_is_not_a_commit_the_repository_lost() {
 /// the wrong commit.
 #[test]
 fn a_worktree_administration_that_cannot_be_listed_is_not_an_empty_one() {
-    let base = common::unique_tmp("upgrade-unreadable-admin");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let old = cache.join("@scope").join("pkg");
@@ -753,7 +766,8 @@ fn a_worktree_administration_that_cannot_be_listed_is_not_an_empty_one() {
 
 #[test]
 fn a_rename_another_process_already_applied_is_not_an_error() {
-    let base = common::unique_tmp("upgrade-raced");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let old = cache.join("@scope/pkg");
@@ -806,7 +820,8 @@ fn a_rename_another_process_already_applied_is_not_an_error() {
 
 #[test]
 fn two_sources_that_fold_onto_one_target_migrate_nothing() {
-    let base = common::unique_tmp("upgrade-fold");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     seed_library(&repo, &cache.join("@Scope/pkg"), &[]);
@@ -828,7 +843,8 @@ fn two_sources_that_fold_onto_one_target_migrate_nothing() {
 
 #[test]
 fn a_capture_failure_refuses_the_run_before_any_library_is_touched() {
-    let base = common::unique_tmp("upgrade-capture");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     seed_library(&repo, &cache.join("@scope/aaa"), &["v1.0.0"]);
@@ -864,7 +880,8 @@ fn a_capture_failure_refuses_the_run_before_any_library_is_touched() {
 /// still read is not held back by a sibling it cannot.
 #[test]
 fn every_unreadable_sidecar_is_named_in_one_run() {
-    let base = common::unique_tmp("upgrade-aggregate");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
 

@@ -42,8 +42,9 @@ checksum = "aa"
 
 #[test]
 fn a_declared_library_reports_its_lockfile_version() {
-    let root = common::unique_tmp("pins-version");
-    cargo_project(&root, "[config]\nroot = true\n");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    cargo_project(root, "[config]\nroot = true\n");
     write(
         &root.join("docs.toml"),
         "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nrepo = \"https://example.invalid/serde\"\n",
@@ -70,8 +71,9 @@ fn a_declared_library_reports_its_lockfile_version() {
 
 #[test]
 fn a_transitive_library_is_undeclared_not_unresolved() {
-    let root = common::unique_tmp("pins-undeclared");
-    cargo_project(&root, "[config]\nroot = true\n");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    cargo_project(root, "[config]\nroot = true\n");
     write(
         &root.join("docs.toml"),
         "[[libs]]\nname = \"tokio\"\necosystem = \"rust\"\nrepo = \"https://example.invalid/tokio\"\n",
@@ -91,8 +93,9 @@ fn a_ref_pin_still_carries_importer_evidence() {
     // resolve checks `ref` before consulting the importer, so a ref pin would
     // otherwise carry no evidence in either direction. It must, or the
     // relevance filter drops libraries the project genuinely depends on.
-    let root = common::unique_tmp("pins-ref-evidence");
-    cargo_project(&root, "[config]\nroot = true\n");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    cargo_project(root, "[config]\nroot = true\n");
     write(
         &root.join("docs.toml"),
         "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nref = \"v1.0.200\"\nrepo = \"https://example.invalid/serde\"\n",
@@ -108,8 +111,9 @@ fn an_invalid_ref_is_unresolved_not_asserted() {
     // A ref the manifest accepts but `names::checkout_dir` would later reject
     // must not be printed as a pin: the table would state something `docm
     // info` refuses to serve.
-    let root = common::unique_tmp("pins-bad-ref");
-    cargo_project(&root, "[config]\nroot = true\n");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    cargo_project(root, "[config]\nroot = true\n");
     write(
         &root.join("docs.toml"),
         "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nref = \"v1~2\"\nrepo = \"https://example.invalid/serde\"\n",
@@ -124,9 +128,10 @@ fn an_invalid_ref_is_unresolved_not_asserted() {
 
 #[test]
 fn a_project_docs_section_marks_its_entries_project_scoped() {
-    let root = common::unique_tmp("pins-scope");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     cargo_project(
-        &root,
+        root,
         "[config]\nroot = true\n\n[[docs.libs]]\nname = \"godot\"\necosystem = \"git\"\nref = \"4.3-stable\"\nrepo = \"https://example.invalid/godot\"\n",
     );
     write(
@@ -154,8 +159,9 @@ fn a_project_docs_section_marks_its_entries_project_scoped() {
 
 #[test]
 fn one_ecosystem_failing_leaves_the_others_rendered() {
-    let root = common::unique_tmp("pins-fail-soft");
-    cargo_project(&root, "[config]\nroot = true\n");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    cargo_project(root, "[config]\nroot = true\n");
     // A JS lockfile that will not parse, beside a working Cargo project.
     write(&root.join("project/package.json"), r#"{"name":"app"}"#);
     write(&root.join("project/pnpm-lock.yaml"), "{{{ not yaml");
@@ -183,8 +189,9 @@ fn a_broken_manifest_is_an_error_not_an_empty_list() {
     // Manifest discovery failing means the caller cannot know what to
     // resolve. `docm list --project` must exit non-zero rather than print an
     // empty listing that reads as "no libraries".
-    let root = common::unique_tmp("pins-broken-manifest");
-    cargo_project(&root, "[config]\nroot = true\n");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    cargo_project(root, "[config]\nroot = true\n");
     write(&root.join("docs.toml"), "this is not toml [[[");
 
     assert!(pins::pins(&root.join("project"), Some(&root.join("docs.toml"))).is_err());
@@ -194,7 +201,8 @@ fn a_broken_manifest_is_an_error_not_an_empty_list() {
 fn a_globally_registered_library_stays_relative_without_any_devkit_toml() {
     // Root-level resolution: the workspace is also the lockfile's own
     // directory, so there is no project root anywhere above `start`.
-    let root = common::unique_tmp("pins-no-devkit-root");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     write(
         &root.join("app/Cargo.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.200\"\n",
@@ -228,7 +236,8 @@ checksum = "aa"
 
     // Member resolution: the workspace sits below the lockfile's directory,
     // and still no `devkit.toml` exists anywhere above `start`.
-    let root = common::unique_tmp("pins-no-devkit-member");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     write(
         &root.join("Cargo.toml"),
         "[workspace]\nmembers = [\"crates/app\"]\nresolver = \"2\"\n",
@@ -269,8 +278,9 @@ checksum = "aa"
 fn an_unresolved_reason_is_one_line() {
     // The `undeclared` diagnostic is three lines; that belongs in `docm info`,
     // not in injected context. Unresolved carries `{err}`, never `{err:#}`.
-    let root = common::unique_tmp("pins-one-line");
-    cargo_project(&root, "[config]\nroot = true\n");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    cargo_project(root, "[config]\nroot = true\n");
     write(
         &root.join("docs.toml"),
         "[[libs]]\nname = \"kysely\"\necosystem = \"js\"\nrepo = \"https://example.invalid/kysely\"\n",
@@ -531,9 +541,10 @@ fn the_envelope_carries_the_discriminant_per_pin() {
 fn a_git_entry_without_a_ref_says_so_rather_than_reading_as_unregistered() {
     // A git entry has no importer to ask, so it never reaches a selector; the
     // row must still name why, not fall through to the "no ecosystem" reason.
-    let root = common::unique_tmp("pins-git-no-ref");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     cargo_project(
-        &root,
+        root,
         "[config]\nroot = true\n\n[[docs.libs]]\nname = \"godot\"\necosystem = \"git\"\nrepo = \"https://example.invalid/godot\"\n",
     );
     write(&root.join("docs.toml"), "");
@@ -619,14 +630,15 @@ fn resolving_a_library_reads_only_the_rows_that_bear_on_it() {
     // touches, so a listing must touch only the rows that decide its own
     // answer. A package row nothing in this workspace depends on is one of
     // those: reaching it at all is the sweep this bounds.
-    let root = common::unique_tmp("pins-no-sweep");
-    pnpm_workspace(&root, 1, 4);
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    pnpm_workspace(root, 1, 4);
     let mut lock = std::fs::read_to_string(root.join("pnpm-lock.yaml")).unwrap();
     lock.push_str("  unrelated@9.9.9: not-a-mapping\n");
     write(&root.join("pnpm-lock.yaml"), &lock);
     write(&root.join("docs.toml"), &js_manifest(2, 1));
 
-    let out = pins::pins(&root, Some(&root.join("docs.toml"))).unwrap();
+    let out = pins::pins(root, Some(&root.join("docs.toml"))).unwrap();
     assert!(
         matches!(&out[1].outcome, Outcome::Version { version, .. } if version == "1.0.0"),
         "{:?}",
@@ -646,8 +658,9 @@ fn a_listing_does_not_cost_a_lockfile_traversal_per_library() {
     // it bound the run to a 10-second timeout, so the cost must sit on the
     // lockfile's size rather than on the product of that and the number of
     // registrations.
-    let root = common::unique_tmp("pins-scaling");
-    pnpm_workspace(&root, 1, 3000);
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    pnpm_workspace(root, 1, 3000);
     let manifest = root.join("docs.toml");
 
     let elapsed = |libraries: usize, declared: usize| {
@@ -655,7 +668,7 @@ fn a_listing_does_not_cost_a_lockfile_traversal_per_library() {
         (0..3)
             .map(|_| {
                 let started = std::time::Instant::now();
-                let out = pins::pins(&root, Some(&manifest)).unwrap();
+                let out = pins::pins(root, Some(&manifest)).unwrap();
                 assert_eq!(out.len(), libraries);
                 started.elapsed()
             })
@@ -699,10 +712,11 @@ fn bun_monorepo(root: &Path) {
 
 #[test]
 fn a_workspace_root_rolls_up_its_members() {
-    let root = common::unique_tmp("pins-rollup");
-    bun_monorepo(&root);
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    bun_monorepo(root);
 
-    let out = pins::pins(&root, Some(&root.join("docs.toml"))).unwrap();
+    let out = pins::pins(root, Some(&root.join("docs.toml"))).unwrap();
     match &out[0].outcome {
         Outcome::Rollup { versions, lockfile } => {
             assert_eq!(lockfile, "bun.lock");
@@ -725,10 +739,11 @@ fn a_workspace_root_rolls_up_its_members() {
 
 #[test]
 fn a_rolled_up_row_names_its_members() {
-    let root = common::unique_tmp("pins-rollup-render");
-    bun_monorepo(&root);
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    bun_monorepo(root);
 
-    let out = pins::pins(&root, Some(&root.join("docs.toml"))).unwrap();
+    let out = pins::pins(root, Some(&root.join("docs.toml"))).unwrap();
     let table = pins::render(&out);
     assert!(table.contains("apps/api"), "{table}");
     assert!(table.contains("1.15.11"), "{table}");
@@ -737,8 +752,9 @@ fn a_rolled_up_row_names_its_members() {
 
 #[test]
 fn a_leaf_workspace_reports_its_own_version_without_rolling_up() {
-    let root = common::unique_tmp("pins-rollup-leaf");
-    bun_monorepo(&root);
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    bun_monorepo(root);
     write(
         &root.join("apps/api/package.json"),
         r#"{"name":"@app/api","dependencies":{"h3":"^1.15.5"}}"#,
@@ -772,16 +788,17 @@ fn registry(cache: &Path, rows: &[(&Path, &str, &str)]) {
 fn a_registry_row_surfaces_a_library_no_lockfile_evidences() {
     // `docm` resolved a checkout for this project; that is evidence the
     // project uses the library even when the importer graph cannot say so.
-    let root = common::unique_tmp("pins-registry");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache = root.join("cache");
-    bun_monorepo(&root);
+    bun_monorepo(root);
     write(
         &root.join("docs.toml"),
         "[[libs]]\nname = \"zod\"\necosystem = \"js\"\nrepo = \"https://example.invalid/zod\"\n",
     );
-    registry(&cache, &[(root.path(), "zod", "4.4.3")]);
+    registry(&cache, &[(root, "zod", "4.4.3")]);
 
-    let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
+    let out = pins::pins_with_cache(root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
     assert_eq!(out[0].resolved.as_deref(), Some("4.4.3"));
     let (rows, _) = pins::relevant(&out);
     assert_eq!(rows.len(), 1, "a resolved row is relevant");
@@ -793,12 +810,13 @@ fn a_registry_row_surfaces_a_library_no_lockfile_evidences() {
 fn a_registry_row_that_disagrees_with_the_lockfile_is_flagged() {
     // The checkout an agent would read is not the version this project
     // resolves — silently showing the lockfile version would hide that.
-    let root = common::unique_tmp("pins-registry-stale");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache = root.join("cache");
-    bun_monorepo(&root);
-    registry(&cache, &[(root.path(), "h3", "1.0.0")]);
+    bun_monorepo(root);
+    registry(&cache, &[(root, "h3", "1.0.0")]);
 
-    let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
+    let out = pins::pins_with_cache(root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
     let table = pins::render(&out);
     assert!(table.contains("checkout 1.0.0"), "{table}");
 }
@@ -807,16 +825,17 @@ fn a_registry_row_that_disagrees_with_the_lockfile_is_flagged() {
 fn a_registry_row_for_a_sibling_project_is_not_borrowed() {
     // Worktrees sit beside each other under one parent; a row keyed to a
     // sibling says nothing about the checkout in hand.
-    let root = common::unique_tmp("pins-registry-sibling");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache = root.join("cache");
-    bun_monorepo(&root);
+    bun_monorepo(root);
     write(
         &root.join("docs.toml"),
         "[[libs]]\nname = \"zod\"\necosystem = \"js\"\nrepo = \"https://example.invalid/zod\"\n",
     );
     registry(&cache, &[(&root.join("../other"), "zod", "4.4.3")]);
 
-    let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
+    let out = pins::pins_with_cache(root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
     assert_eq!(out[0].resolved, None);
 }
 
@@ -825,19 +844,17 @@ fn an_encoded_checkout_dirname_is_not_a_disagreement() {
     // The registry records the checkout *directory*, where a ref's `/` is
     // encoded as `~`. Comparing that against the ref verbatim would report
     // every slash-bearing ref as stale.
-    let root = common::unique_tmp("pins-registry-encoded");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache = root.join("cache");
-    bun_monorepo(&root);
+    bun_monorepo(root);
     write(
         &root.join("docs.toml"),
         "[[libs]]\nname = \"typescript-go\"\necosystem = \"git\"\nref = \"typescript/v7.0.2\"\nrepo = \"https://example.invalid/tsgo\"\n",
     );
-    registry(
-        &cache,
-        &[(root.path(), "typescript-go", "typescript~v7.0.2")],
-    );
+    registry(&cache, &[(root, "typescript-go", "typescript~v7.0.2")]);
 
-    let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
+    let out = pins::pins_with_cache(root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
     assert_eq!(out[0].resolved.as_deref(), Some("typescript/v7.0.2"));
     let table = pins::render(&out);
     assert!(!table.contains("checkout"), "{table}");

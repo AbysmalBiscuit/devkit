@@ -468,15 +468,11 @@ mod tests {
     use super::*;
     use std::io;
 
-    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-docs-root-{tag}"))
-    }
-
     #[test]
     fn legacy_store_moves_to_new_root_once() {
-        let base = unique_tmp("migrate");
-        let legacy = base.join("cache/devkit/docs");
-        let root = base.join("share/devkit/docs");
+        let base = tempfile::tempdir().unwrap();
+        let legacy = base.path().join("cache/devkit/docs");
+        let root = base.path().join("share/devkit/docs");
         std::fs::create_dir_all(legacy.join("kysely")).unwrap();
         std::fs::write(legacy.join("kysely/meta.json"), "{}").unwrap();
 
@@ -493,18 +489,19 @@ mod tests {
 
     #[test]
     fn migration_is_a_noop_without_a_legacy_store() {
-        let base = unique_tmp("noop");
-        let root = base.join("share/devkit/docs");
-        migrate_legacy_root(&root, &base.join("cache/devkit/docs"));
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("share/devkit/docs");
+        migrate_legacy_root(&root, &base.path().join("cache/devkit/docs"));
         assert!(!root.exists());
     }
 
     #[test]
     fn directory_entry_errors_keep_the_cache_path_context() {
-        let parent = unique_tmp("read-dir-entry");
+        let parent_dir = tempfile::tempdir().unwrap();
+        let parent = parent_dir.path();
         let error = collect_dir_entries(
             std::iter::once(Err(io::Error::other("entry disappeared"))),
-            &parent,
+            parent,
         )
         .unwrap_err();
 

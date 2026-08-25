@@ -425,10 +425,6 @@ pub fn remove_project(devkit_toml: &Path, name: &str, cache_root: &Path) -> Resu
 mod tests {
     use super::*;
 
-    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-docs-{tag}"))
-    }
-
     #[test]
     fn merge_overrides_fields_and_appends_new_libs() {
         let base: DocsManifest = toml::from_str(
@@ -466,7 +462,8 @@ mod tests {
 
     #[test]
     fn discover_merges_global_then_walked_up_devkit_toml_layers() {
-        let root = unique_tmp("discover");
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
         let global = root.join("docs.toml");
         std::fs::write(
             &global,
@@ -495,15 +492,17 @@ mod tests {
 
     #[test]
     fn discover_without_any_manifest_is_empty_not_an_error() {
-        let root = unique_tmp("empty");
-        let d = discover(&root, Some(&root.join("missing.toml"))).unwrap();
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        let d = discover(root, Some(&root.join("missing.toml"))).unwrap();
         assert!(d.manifest.libs.is_empty());
         assert_eq!(d.project_devkit_toml, None);
     }
 
     #[test]
     fn upsert_global_creates_replaces_and_remove_deletes() {
-        let root = unique_tmp("global");
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
         let path = root.join("docs.toml");
         let e = LibEntry {
             name: "tokio".into(),
@@ -511,17 +510,17 @@ mod tests {
             repo: Some("u1".into()),
             ..Default::default()
         };
-        upsert_global(&path, &e, &root).unwrap();
+        upsert_global(&path, &e, root).unwrap();
         let e2 = LibEntry {
             repo: Some("u2".into()),
             ..e.clone()
         };
-        upsert_global(&path, &e2, &root).unwrap();
+        upsert_global(&path, &e2, root).unwrap();
         let m = load_global(&path).unwrap();
         assert_eq!(m.libs.len(), 1);
         assert_eq!(m.libs[0].repo.as_deref(), Some("u2"));
-        assert!(remove_global(&path, "tokio", &root).unwrap());
-        assert!(!remove_global(&path, "tokio", &root).unwrap());
+        assert!(remove_global(&path, "tokio", root).unwrap());
+        assert!(!remove_global(&path, "tokio", root).unwrap());
         assert!(load_global(&path).unwrap().libs.is_empty());
     }
 
@@ -548,7 +547,8 @@ mod tests {
 
     #[test]
     fn upsert_project_preserves_comments_and_replaces_by_name() {
-        let root = unique_tmp("project");
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
         let path = root.join("devkit.toml");
         std::fs::write(&path, "# keep me\n[defaults]\napps_dir = 'apps' # inline\n").unwrap();
         let e = LibEntry {
@@ -557,7 +557,7 @@ mod tests {
             repo: Some("r1".into()),
             ..Default::default()
         };
-        upsert_project(&path, &e, &root).unwrap();
+        upsert_project(&path, &e, root).unwrap();
         let s = std::fs::read_to_string(&path).unwrap();
         assert!(s.contains("# keep me") && s.contains("# inline"));
         assert!(s.contains("[[docs.libs]]"));
@@ -566,13 +566,13 @@ mod tests {
             repo: Some("r2".into()),
             ..e
         };
-        upsert_project(&path, &e2, &root).unwrap();
+        upsert_project(&path, &e2, root).unwrap();
         let d = discover(path.parent().unwrap(), Some(&root.join("nope.toml"))).unwrap();
         assert_eq!(d.manifest.libs.len(), 1);
         assert_eq!(d.manifest.libs[0].repo.as_deref(), Some("r2"));
 
-        assert!(remove_project(&path, "react", &root).unwrap());
-        assert!(!remove_project(&path, "react", &root).unwrap());
+        assert!(remove_project(&path, "react", root).unwrap());
+        assert!(!remove_project(&path, "react", root).unwrap());
         let s = std::fs::read_to_string(&path).unwrap();
         assert!(s.contains("# keep me")); // untouched content survives removal too
     }

@@ -180,10 +180,6 @@ mod tests {
     use super::*;
     use crate::manifest::Ecosystem;
 
-    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-docs-lf-{tag}"))
-    }
-
     const CARGO_LOCK: &str = "version = 4\n\n[[package]]\nname = \"tokio\"\nversion = \"1.38.0\"\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.203\"\n";
     const UV_LOCK: &str = "version = 1\n\n[[package]]\nname = \"requests\"\nversion = \"2.32.3\"\n";
     const NPM_LOCK: &str = r#"{ "lockfileVersion": 3, "packages": {
@@ -214,14 +210,15 @@ mod tests {
 
     #[test]
     fn cargo_lock_versions() {
-        let d = unique_tmp("cargo");
+        let d_dir = tempfile::tempdir().unwrap();
+        let d = d_dir.path();
         std::fs::write(d.join("Cargo.lock"), CARGO_LOCK).unwrap();
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Rust, "tokio").unwrap(),
+            versions_in_dir(d, Ecosystem::Rust, "tokio").unwrap(),
             vec!["1.38.0"]
         );
         assert!(
-            versions_in_dir(&d, Ecosystem::Rust, "absent")
+            versions_in_dir(d, Ecosystem::Rust, "absent")
                 .unwrap()
                 .is_empty()
         );
@@ -229,60 +226,65 @@ mod tests {
 
     #[test]
     fn uv_lock_versions() {
-        let d = unique_tmp("uv");
+        let d_dir = tempfile::tempdir().unwrap();
+        let d = d_dir.path();
         std::fs::write(d.join("uv.lock"), UV_LOCK).unwrap();
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Python, "requests").unwrap(),
+            versions_in_dir(d, Ecosystem::Python, "requests").unwrap(),
             vec!["2.32.3"]
         );
     }
 
     #[test]
     fn npm_lock_collects_all_copies() {
-        let d = unique_tmp("npm");
+        let d_dir = tempfile::tempdir().unwrap();
+        let d = d_dir.path();
         std::fs::write(d.join("package-lock.json"), NPM_LOCK).unwrap();
-        let mut v = versions_in_dir(&d, Ecosystem::Js, "react").unwrap();
+        let mut v = versions_in_dir(d, Ecosystem::Js, "react").unwrap();
         v.sort();
         assert_eq!(v, vec!["17.0.2", "18.3.1"]);
     }
 
     #[test]
     fn pnpm_v9_and_scoped_and_v6_keys() {
-        let d = unique_tmp("pnpm9");
+        let d_dir = tempfile::tempdir().unwrap();
+        let d = d_dir.path();
         std::fs::write(d.join("pnpm-lock.yaml"), PNPM_V9).unwrap();
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Js, "react").unwrap(),
+            versions_in_dir(d, Ecosystem::Js, "react").unwrap(),
             vec!["18.3.1"]
         );
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Js, "@types/node").unwrap(),
+            versions_in_dir(d, Ecosystem::Js, "@types/node").unwrap(),
             vec!["20.12.0"]
         );
-        let d6 = unique_tmp("pnpm6");
+        let d6_dir = tempfile::tempdir().unwrap();
+        let d6 = d6_dir.path();
         std::fs::write(d6.join("pnpm-lock.yaml"), PNPM_V6).unwrap();
         assert_eq!(
-            versions_in_dir(&d6, Ecosystem::Js, "react").unwrap(),
+            versions_in_dir(d6, Ecosystem::Js, "react").unwrap(),
             vec!["18.2.0"]
         );
     }
 
     #[test]
     fn bun_lock_collects_all_copies_despite_trailing_commas() {
-        let d = unique_tmp("bun");
+        let d_dir = tempfile::tempdir().unwrap();
+        let d = d_dir.path();
         std::fs::write(d.join("bun.lock"), BUN_LOCK).unwrap();
-        let mut v = versions_in_dir(&d, Ecosystem::Js, "kysely").unwrap();
+        let mut v = versions_in_dir(d, Ecosystem::Js, "kysely").unwrap();
         v.sort();
         assert_eq!(v, vec!["0.28.14", "0.28.17"]);
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Js, "@types/node").unwrap(),
+            versions_in_dir(d, Ecosystem::Js, "@types/node").unwrap(),
             vec!["20.12.0"]
         );
         assert_eq!(
-            versions_in_dir(&d, Ecosystem::Js, "@scope/kysely").unwrap(),
+            versions_in_dir(d, Ecosystem::Js, "@scope/kysely").unwrap(),
             vec!["9.9.9"]
         );
         assert!(
-            versions_in_dir(&d, Ecosystem::Js, "absent")
+            versions_in_dir(d, Ecosystem::Js, "absent")
                 .unwrap()
                 .is_empty()
         );
@@ -290,14 +292,15 @@ mod tests {
 
     #[test]
     fn find_version_walks_up_and_reports_lockfile_dir() {
-        let root = unique_tmp("walk");
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
         std::fs::write(root.join("Cargo.lock"), CARGO_LOCK).unwrap();
         let deep = root.join("crates/app/src");
         std::fs::create_dir_all(&deep).unwrap();
         let (dir, vs) = find_version(&deep, Ecosystem::Rust, "tokio")
             .unwrap()
             .unwrap();
-        assert_eq!(dir, root.path());
+        assert_eq!(dir, root);
         assert_eq!(vs, vec!["1.38.0"]);
         assert!(
             find_version(&deep, Ecosystem::Rust, "absent")
@@ -308,19 +311,20 @@ mod tests {
 
     #[test]
     fn an_empty_lockfile_is_no_versions_not_an_error() {
-        let d = unique_tmp("empty");
+        let d_dir = tempfile::tempdir().unwrap();
+        let d = d_dir.path();
         std::fs::write(d.join("Cargo.lock"), "").unwrap();
         std::fs::write(d.join("package-lock.json"), "   \n").unwrap();
         std::fs::write(d.join("pnpm-lock.yaml"), "").unwrap();
         std::fs::write(d.join("bun.lock"), "// nothing here yet\n").unwrap();
 
         assert!(
-            versions_in_dir(&d, Ecosystem::Rust, "tokio")
+            versions_in_dir(d, Ecosystem::Rust, "tokio")
                 .unwrap()
                 .is_empty()
         );
         assert!(
-            versions_in_dir(&d, Ecosystem::Js, "react")
+            versions_in_dir(d, Ecosystem::Js, "react")
                 .unwrap()
                 .is_empty()
         );
@@ -328,9 +332,10 @@ mod tests {
 
     #[test]
     fn an_unparsable_lockfile_is_an_error_not_no_versions() {
-        let d = unique_tmp("unparsable");
+        let d_dir = tempfile::tempdir().unwrap();
+        let d = d_dir.path();
         std::fs::write(d.join("Cargo.lock"), "this = = not valid toml [[[").unwrap();
-        assert!(versions_in_dir(&d, Ecosystem::Rust, "tokio").is_err());
+        assert!(versions_in_dir(d, Ecosystem::Rust, "tokio").is_err());
     }
 
     #[test]

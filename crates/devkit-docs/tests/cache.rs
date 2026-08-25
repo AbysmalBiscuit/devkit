@@ -1,16 +1,17 @@
 mod common;
 
-use common::{fixture_repo, unique_tmp};
+use common::fixture_repo;
 use devkit_docs::cache::{self, LibCache, Meta, WorktreeMeta};
 use devkit_docs::tags::TagPattern;
 
 #[test]
 fn a_directory_the_host_folds_into_an_existing_one_is_refused() {
-    let root = common::unique_tmp("fold");
-    let first = devkit_docs::cache::create_dir_exact(&root, "V1.0").unwrap();
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    let first = devkit_docs::cache::create_dir_exact(root, "V1.0").unwrap();
     assert!(first.is_dir());
 
-    match devkit_docs::cache::create_dir_exact(&root, "v1.0") {
+    match devkit_docs::cache::create_dir_exact(root, "v1.0") {
         Ok(path) => assert!(path.is_dir(), "a case-sensitive host keeps them distinct"),
         Err(error) => assert!(
             error.to_string().contains("V1.0"),
@@ -21,7 +22,8 @@ fn a_directory_the_host_folds_into_an_existing_one_is_refused() {
 
 #[test]
 fn clone_tags_and_ref_named_worktrees() {
-    let tmp = unique_tmp("cache");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = fixture_repo(&tmp.join("upstream"));
     let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
     let mut meta = Meta::default();
@@ -66,7 +68,8 @@ fn clone_tags_and_ref_named_worktrees() {
 
 #[test]
 fn a_branch_checkout_follows_new_commits_after_fetch() {
-    let tmp = unique_tmp("sync");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let upstream = tmp.join("upstream");
     let repo = fixture_repo(&upstream);
     let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
@@ -99,7 +102,8 @@ fn a_branch_checkout_follows_new_commits_after_fetch() {
 
 #[test]
 fn an_existing_clone_without_origin_bootstraps_from_the_bare_repo() {
-    let tmp = unique_tmp("legacy-origin");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = fixture_repo(&tmp.join("upstream"));
     let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
     let mut initial = Meta::default();
@@ -113,7 +117,8 @@ fn an_existing_clone_without_origin_bootstraps_from_the_bare_repo() {
 
 #[test]
 fn a_forty_hex_pin_is_only_an_object_name() {
-    let tmp = unique_tmp("hex-object");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let upstream = tmp.join("upstream");
     let repo = fixture_repo(&upstream);
     let hex = "0000000000000000000000000000000000000000";
@@ -132,7 +137,8 @@ fn a_forty_hex_pin_is_only_an_object_name() {
 
 #[test]
 fn meta_round_trips() {
-    let tmp = unique_tmp("meta");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let mut m = Meta {
         origin: Some("https://example.test/up.git".into()),
         tag_pattern: Some(TagPattern::LeafDash),
@@ -153,8 +159,8 @@ fn meta_round_trips() {
             commit: "0123456789012345678901234567890123456789".into(),
         },
     );
-    cache::write_meta(&tmp, &m).unwrap();
-    assert_eq!(cache::read_meta(&tmp).unwrap(), m);
+    cache::write_meta(tmp, &m).unwrap();
+    assert_eq!(cache::read_meta(tmp).unwrap(), m);
     assert_eq!(
         cache::read_meta(&tmp.join("missing")).unwrap(),
         Meta::default()
@@ -163,10 +169,11 @@ fn meta_round_trips() {
 
 #[test]
 fn meta_without_identity_fields_keeps_backward_compatible_defaults() {
-    let tmp = unique_tmp("legacy-meta");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     std::fs::write(tmp.join("meta.toml"), "tag_pattern = \"v\"\n").unwrap();
 
-    let meta = cache::read_meta(&tmp).unwrap();
+    let meta = cache::read_meta(tmp).unwrap();
 
     assert_eq!(meta.tag_pattern, Some(TagPattern::V));
     assert_eq!(meta.origin, None);
@@ -187,11 +194,12 @@ const ZERO_TWELVE_META: &str = "origin = \"https://example.test/up.git\"\n\
 
 #[test]
 fn a_meta_from_an_older_docm_is_an_error_rather_than_an_empty_one() {
-    let tmp = unique_tmp("meta-unparsable");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let path = tmp.join("meta.toml");
     std::fs::write(&path, ZERO_TWELVE_META).unwrap();
 
-    let error = cache::read_meta(&tmp).expect_err(
+    let error = cache::read_meta(tmp).expect_err(
         "a meta.toml that does not parse must not read as a cache with no recorded state",
     );
 
@@ -208,7 +216,8 @@ fn a_meta_from_an_older_docm_is_an_error_rather_than_an_empty_one() {
 
 #[test]
 fn resolve_leaves_a_meta_it_cannot_parse_on_disk() {
-    let tmp = unique_tmp("meta-unparsable-resolve");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cacheroot");
     let project = tmp.join("project");

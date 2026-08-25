@@ -1,6 +1,5 @@
 mod common;
 
-use common::unique_tmp;
 use devkit_docs::manifest::{Ecosystem, LibEntry};
 use devkit_docs::refs::{self, RefStore};
 use std::collections::{BTreeMap, BTreeSet};
@@ -95,7 +94,8 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
         return;
     }
 
-    let root = unique_tmp("resolve-prune-race");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let repo = common::fixture_repo(&root.join("upstream"));
     let cache_root = root.join("cache");
     let project = root.join("project");
@@ -176,7 +176,8 @@ fn prune_waits_for_an_in_flight_resolve_registry_commit() {
 // its checkouts silently reclaimed — a read/parse error is not "unreferenced".
 #[test]
 fn prune_keeps_rows_for_a_project_with_an_unreadable_manifest() {
-    let tmp = unique_tmp("brokenmanifest");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = common::fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let global = tmp.join("docs.toml");
@@ -214,18 +215,20 @@ fn prune_keeps_rows_for_a_project_with_an_unreadable_manifest() {
 
 #[test]
 fn a_scoped_library_is_one_directory_and_prune_leaves_it_alone() {
-    let root = unique_tmp("scoped");
-    let lib = devkit_docs::cache::LibCache::new(&root, "@types/node").unwrap();
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    let lib = devkit_docs::cache::LibCache::new(root, "@types/node").unwrap();
     assert!(lib.dir.ends_with("@types~node"));
 
     std::fs::create_dir_all(root.join("@scope/pkg")).unwrap();
-    let stray = devkit_docs::cache::LibCache::new(&root, "@scope").unwrap();
+    let stray = devkit_docs::cache::LibCache::new(root, "@scope").unwrap();
     assert!(stray.version_worktrees().is_empty());
 }
 
 #[test]
 fn whole_library_deletion_rechecks_fresh_references() {
-    let root = unique_tmp("whole-lib-race");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache_root = root.join("cache");
     let project = root.join("project");
     let global = root.join("docs.toml");
@@ -270,7 +273,8 @@ fn whole_library_deletion_spares_a_library_another_process_re_resolved() {
         return;
     }
 
-    let root = unique_tmp("whole-lib-reresolve-race");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache_root = root.join("cache");
     let project = root.join("project");
     let global = root.join("docs.toml");
@@ -337,7 +341,8 @@ fn whole_library_deletion_spares_a_library_resolved_before_the_snapshot() {
         return;
     }
 
-    let root = unique_tmp("whole-lib-resolved-before-snapshot-race");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache_root = root.join("cache");
     let project = root.join("project");
     let global = root.join("docs.toml");
@@ -379,7 +384,8 @@ fn whole_library_deletion_spares_a_library_resolved_before_the_snapshot() {
 
 #[test]
 fn whole_library_deletion_ignores_rows_already_rejected_by_the_plan() {
-    let root = unique_tmp("whole-lib-stale-row");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache_root = root.join("cache");
     let global = root.join("docs.toml");
     std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
@@ -410,7 +416,8 @@ fn whole_library_deletion_ignores_rows_already_rejected_by_the_plan() {
 // `chmod` is not portable here).
 #[test]
 fn whole_library_deletion_aborts_when_the_registry_is_unreadable() {
-    let root = unique_tmp("whole-lib-unreadable-registry");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache_root = root.join("cache");
     std::fs::create_dir_all(cache_root.join("up/repo.git")).unwrap();
     std::fs::create_dir_all(cache_root.join("registry.json")).unwrap();
@@ -436,7 +443,8 @@ fn whole_library_deletion_aborts_when_the_registry_is_unreadable() {
 
 #[test]
 fn prune_preserves_every_ref_named_checkout_recorded_by_resolve() {
-    let tmp = unique_tmp("live-ref-checkouts");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = common::fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("project");
@@ -550,7 +558,8 @@ fn a_legacy_row_protects_default_until_a_real_materialization_retires_it() {
 
 #[test]
 fn resolving_the_workspace_that_owns_a_legacy_row_upserts_it() {
-    let tmp = unique_tmp("legacy-upsert");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = common::fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("project");
@@ -592,7 +601,8 @@ fn resolving_the_workspace_that_owns_a_legacy_row_upserts_it() {
 
 #[test]
 fn a_legacy_row_keeps_its_checkout_until_a_workspace_row_retires_it() {
-    let root = unique_tmp("legacy-retire");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let lockfile_dir = root.join("repo");
     let member = lockfile_dir.join("apps/api");
     std::fs::create_dir_all(&member).unwrap();
@@ -634,11 +644,12 @@ fn a_legacy_row_keeps_its_checkout_until_a_workspace_row_retires_it() {
 
 #[test]
 fn prune_never_enumerates_a_control_entry_as_a_library() {
-    let root = unique_tmp("control");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::create_dir_all(root.join("registry.locks")).unwrap();
     std::fs::write(root.join("registry.json"), "{}").unwrap();
 
-    let pruned = refs::prune_with_lock(&root, &BTreeSet::new(), None).unwrap();
+    let pruned = refs::prune_with_lock(root, &BTreeSet::new(), None).unwrap();
 
     assert!(
         pruned.removed.is_empty() && pruned.removable_libs.is_empty(),
@@ -660,7 +671,8 @@ fn prune_never_enumerates_a_control_entry_as_a_library() {
 // mentions.
 #[test]
 fn prune_with_lock_preserves_another_projects_overlay_lib() {
-    let tmp = unique_tmp("xproj-prune");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = common::fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let global = tmp.join("docs.toml");
@@ -722,10 +734,11 @@ fn prune_with_lock_preserves_another_projects_overlay_lib() {
 
 #[test]
 fn prune_reports_a_cache_entry_that_is_not_a_library() {
-    let root = unique_tmp("stray-report");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::create_dir_all(root.join("@scope/pkg")).unwrap();
 
-    let pruned = refs::prune_with_lock(&root, &BTreeSet::new(), None).unwrap();
+    let pruned = refs::prune_with_lock(root, &BTreeSet::new(), None).unwrap();
 
     assert_eq!(
         pruned.skipped.iter().map(|s| &s.entry).collect::<Vec<_>>(),
@@ -742,7 +755,8 @@ fn prune_reports_a_cache_entry_that_is_not_a_library() {
 
 #[test]
 fn prune_reports_an_unmanageable_directory_and_keeps_going() {
-    let root = unique_tmp("unmanageable");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache_root = root.join("cache");
     let project = root.join("project");
     let global = root.join("docs.toml");
@@ -787,7 +801,8 @@ fn prune_reports_an_unmanageable_directory_and_keeps_going() {
 /// way an outright-invalid name does.
 #[test]
 fn prune_reports_a_directory_too_long_for_its_lock_file_and_keeps_going() {
-    let root = unique_tmp("toolong");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let cache_root = root.join("cache");
     let project = root.join("project");
     let global = root.join("docs.toml");
@@ -826,18 +841,19 @@ fn prune_reports_a_directory_too_long_for_its_lock_file_and_keeps_going() {
 
 #[test]
 fn prune_drops_a_row_whose_project_directory_is_gone() {
-    let root = unique_tmp("dead-holder");
-    RefStore::at(&root)
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    RefStore::at(root)
         .commit(|data| {
             data.record("/gone/nowhere", "libX", "v1.0.0", "v1.0.0", "aaa");
             Ok(())
         })
         .unwrap();
 
-    refs::prune_with_lock(&root, &BTreeSet::new(), None).unwrap();
+    refs::prune_with_lock(root, &BTreeSet::new(), None).unwrap();
 
     assert!(
-        RefStore::at(&root).snapshot().rows.is_empty(),
+        RefStore::at(root).snapshot().rows.is_empty(),
         "a row whose holder directory is gone outlived prune, and no cache \
          directory exists to reach it through"
     );
@@ -852,7 +868,8 @@ fn prune_drops_a_row_whose_project_directory_is_gone() {
 // mode a permission-denied file or a mid-migration mount would.
 #[test]
 fn prune_aborts_when_the_registry_is_unreadable() {
-    let tmp = unique_tmp("unreadable-registry");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = common::fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("project");
@@ -931,7 +948,8 @@ fn prune_aborts_when_the_registry_is_unreadable() {
 // devkit.toml.
 #[test]
 fn prune_keeps_checkout_when_a_lockfile_fails_to_parse() {
-    let tmp = unique_tmp("bad-lockfile");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = common::fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("project");
@@ -1005,7 +1023,8 @@ fn prune_keeps_checkout_when_a_lockfile_fails_to_parse() {
 // checkout must still be reclaimed.
 #[test]
 fn prune_reclaims_a_checkout_once_the_valid_lockfile_drops_the_package() {
-    let tmp = unique_tmp("dropped-from-lockfile");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = common::fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("project");

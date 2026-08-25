@@ -296,19 +296,20 @@ mod tests {
 
     #[test]
     fn doctor_summary_counts_libs_and_unreferenced_worktrees() {
-        let root = devkit_testtmp::dir("devkit-docs-dr");
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
         // One lib with a referenced worktree, an unreferenced one, and default.
         for wt in ["1.0.0", "2.0.0", "default", "repo.git"] {
             std::fs::create_dir_all(root.join("tokio").join(wt)).unwrap();
         }
         std::fs::write(root.join("tokio/1.0.0/f"), "x").unwrap();
-        refs::RefStore::at(&root)
+        refs::RefStore::at(root)
             .commit(|d| {
                 d.record("/some/project", "tokio", "1.0.0", "v1.0.0", "aaa");
                 Ok(())
             })
             .unwrap();
-        let s = doctor_summary(&root);
+        let s = doctor_summary(root);
         assert_eq!(s.libs, 1);
         assert_eq!(s.unreferenced, 2); // 2.0.0 and default; repo.git is not a checkout
         assert!(s.bytes > 0);
@@ -316,11 +317,12 @@ mod tests {
 
     #[test]
     fn doctor_summary_skips_registry_lock_directory() {
-        let root = devkit_testtmp::dir("devkit-docs-dr-controls");
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
         std::fs::create_dir_all(root.join("tokio/default")).unwrap();
         std::fs::create_dir_all(root.join("registry.locks")).unwrap();
 
-        let summary = doctor_summary(&root);
+        let summary = doctor_summary(root);
 
         assert_eq!(summary.libs, 1);
     }

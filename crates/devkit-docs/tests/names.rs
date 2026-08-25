@@ -136,7 +136,8 @@ fn case_folding_keys_let_a_caller_spot_a_host_collision() {
 
 #[test]
 fn a_manifest_holding_both_a_slash_b_and_a_tilde_b_is_rejected_on_load() {
-    let dir = devkit_testtmp::dir("docm-names-load");
+    let dir_guard = tempfile::tempdir().unwrap();
+    let dir = dir_guard.path();
     let global = dir.join("docs.toml");
     std::fs::write(
         &global,
@@ -144,7 +145,7 @@ fn a_manifest_holding_both_a_slash_b_and_a_tilde_b_is_rejected_on_load() {
     )
     .unwrap();
 
-    let err = devkit_docs::manifest::discover(&dir, Some(&global)).unwrap_err();
+    let err = devkit_docs::manifest::discover(dir, Some(&global)).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("a~b"), "error must name both entries: {msg}");
     assert!(msg.contains("a/b"), "error must name both entries: {msg}");

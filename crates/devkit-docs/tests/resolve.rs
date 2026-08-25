@@ -1,13 +1,14 @@
 mod common;
 
-use common::{fixture_repo, unique_tmp};
+use common::fixture_repo;
 use devkit_docs::manifest::{Ecosystem, LibEntry};
 use devkit_docs::refs::RefStore;
 use devkit_docs::resolve::{Options, resolve};
 
 #[test]
 fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
-    let tmp = unique_tmp("resolve");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("proj");
@@ -62,7 +63,8 @@ fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
 
 #[test]
 fn ref_pin_wins_and_no_lockfile_falls_back_to_default_branch_when_allowed() {
-    let tmp = unique_tmp("resolve-pin");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("proj");
@@ -105,7 +107,8 @@ fn ref_pin_wins_and_no_lockfile_falls_back_to_default_branch_when_allowed() {
 
 #[test]
 fn layout_override_applies_and_meta_caches_detection() {
-    let tmp = unique_tmp("resolve-layout");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let entry = LibEntry {
@@ -115,7 +118,7 @@ fn layout_override_applies_and_meta_caches_detection() {
         docs_dir: Some("docs/special".into()),
         ..Default::default()
     };
-    let r = resolve(&entry, &tmp, &cache_root, &Options::default()).unwrap();
+    let r = resolve(&entry, tmp, &cache_root, &Options::default()).unwrap();
     assert_eq!(r.layout.docs_dir.as_deref(), Some("docs/special")); // override wins
     let meta = devkit_docs::cache::read_meta(&cache_root.join("mylib")).unwrap();
     // meta stores the DETECTED layout (docs), not the override.
@@ -124,7 +127,8 @@ fn layout_override_applies_and_meta_caches_detection() {
 
 #[test]
 fn git_ecosystem_without_ref_falls_back_to_default_when_allowed() {
-    let tmp = unique_tmp("resolve-git");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("proj");
@@ -158,7 +162,8 @@ fn git_ecosystem_without_ref_falls_back_to_default_when_allowed() {
 
 #[test]
 fn lockfile_resolved_from_subdir_records_selected_workspace() {
-    let tmp = unique_tmp("resolve-subdir");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let repo = fixture_repo(&tmp.join("upstream"));
     let cache_root = tmp.join("cache");
     let project = tmp.join("proj");
@@ -205,7 +210,8 @@ fn lockfile_resolved_from_subdir_records_selected_workspace() {
 
 #[test]
 fn a_changed_pin_gets_its_own_directory_and_never_returns_the_old_checkout() {
-    let base = common::unique_tmp("repin");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
 
@@ -218,7 +224,7 @@ fn a_changed_pin_gets_its_own_directory_and_never_returns_the_old_checkout() {
     };
     let first = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -232,7 +238,7 @@ fn a_changed_pin_gets_its_own_directory_and_never_returns_the_old_checkout() {
     entry.r#ref = Some("v1.1.0".into());
     let second = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -254,7 +260,8 @@ fn a_changed_pin_gets_its_own_directory_and_never_returns_the_old_checkout() {
 
 #[test]
 fn a_corrupted_head_is_repaired_and_reported() {
-    let base = common::unique_tmp("repair");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let entry = devkit_docs::manifest::LibEntry {
@@ -266,7 +273,7 @@ fn a_corrupted_head_is_repaired_and_reported() {
     };
     let r = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -280,7 +287,7 @@ fn a_corrupted_head_is_repaired_and_reported() {
 
     let again = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -291,7 +298,8 @@ fn a_corrupted_head_is_repaired_and_reported() {
 
 #[test]
 fn a_tracked_dirty_checkout_is_a_hard_error() {
-    let base = common::unique_tmp("dirty");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let entry = devkit_docs::manifest::LibEntry {
@@ -303,7 +311,7 @@ fn a_tracked_dirty_checkout_is_a_hard_error() {
     };
     let r = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -313,7 +321,7 @@ fn a_tracked_dirty_checkout_is_a_hard_error() {
     assert!(
         devkit_docs::resolve::resolve(
             &entry,
-            &base,
+            base,
             &cache,
             &devkit_docs::resolve::Options::default()
         )
@@ -323,7 +331,8 @@ fn a_tracked_dirty_checkout_is_a_hard_error() {
 
 #[test]
 fn an_untracked_dirty_checkout_is_a_hard_error() {
-    let base = common::unique_tmp("dirty-untracked");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let entry = devkit_docs::manifest::LibEntry {
@@ -335,7 +344,7 @@ fn an_untracked_dirty_checkout_is_a_hard_error() {
     };
     let r = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -345,7 +354,7 @@ fn an_untracked_dirty_checkout_is_a_hard_error() {
     assert!(
         devkit_docs::resolve::resolve(
             &entry,
-            &base,
+            base,
             &cache,
             &devkit_docs::resolve::Options::default()
         )
@@ -355,7 +364,8 @@ fn an_untracked_dirty_checkout_is_a_hard_error() {
 
 #[test]
 fn a_repo_url_change_is_refused_rather_than_reusing_the_clone() {
-    let base = common::unique_tmp("origin");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let a = common::fixture_repo(&base.join("a"));
     let b = common::fixture_repo(&base.join("b"));
     let cache = base.join("cache");
@@ -368,7 +378,7 @@ fn a_repo_url_change_is_refused_rather_than_reusing_the_clone() {
     };
     devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -376,7 +386,7 @@ fn a_repo_url_change_is_refused_rather_than_reusing_the_clone() {
     entry.repo = Some(b);
     let err = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -389,7 +399,8 @@ fn a_repo_url_change_is_refused_rather_than_reusing_the_clone() {
 
 #[test]
 fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
-    let base = common::unique_tmp("movedtag");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let entry = devkit_docs::manifest::LibEntry {
@@ -401,7 +412,7 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
     };
     let first = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -411,7 +422,7 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
 
     let second = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -425,7 +436,7 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
     lib.fetch().unwrap();
     let third = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -462,7 +473,8 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
 
 #[test]
 fn a_failed_moved_tag_repair_does_not_report_success() {
-    let base = common::unique_tmp("movedtag-failed-repair");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let entry = devkit_docs::manifest::LibEntry {
@@ -474,7 +486,7 @@ fn a_failed_moved_tag_repair_does_not_report_success() {
     };
     let first = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -486,7 +498,7 @@ fn a_failed_moved_tag_repair_does_not_report_success() {
 
     let error = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -501,7 +513,8 @@ fn a_failed_moved_tag_repair_does_not_report_success() {
 
 #[test]
 fn a_tag_deleted_upstream_is_a_hard_error_after_prune_tags() {
-    let base = common::unique_tmp("deltag");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     devkit_common::cmd::capture("git", &["tag", "v2.0.0", "v1.1.0"], Some(&repo)).unwrap();
@@ -514,7 +527,7 @@ fn a_tag_deleted_upstream_is_a_hard_error_after_prune_tags() {
     };
     devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -535,7 +548,7 @@ fn a_tag_deleted_upstream_is_a_hard_error_after_prune_tags() {
 
     let err = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -549,7 +562,8 @@ fn a_tag_deleted_upstream_is_a_hard_error_after_prune_tags() {
 
 #[test]
 fn a_pin_that_changes_from_a_tag_to_a_branch_is_refused() {
-    let base = common::unique_tmp("kindchange");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     devkit_common::cmd::capture("git", &["tag", "release", "v1.0.0"], Some(&repo)).unwrap();
@@ -562,7 +576,7 @@ fn a_pin_that_changes_from_a_tag_to_a_branch_is_refused() {
     };
     devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -575,7 +589,7 @@ fn a_pin_that_changes_from_a_tag_to_a_branch_is_refused() {
 
     let err = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -589,7 +603,8 @@ fn a_pin_that_changes_from_a_tag_to_a_branch_is_refused() {
 
 #[test]
 fn a_ref_published_after_the_last_fetch_resolves_without_a_manual_sync() {
-    let base = common::unique_tmp("newtag");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     let mut entry = devkit_docs::manifest::LibEntry {
@@ -601,7 +616,7 @@ fn a_ref_published_after_the_last_fetch_resolves_without_a_manual_sync() {
     };
     devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -612,7 +627,7 @@ fn a_ref_published_after_the_last_fetch_resolves_without_a_manual_sync() {
     entry.r#ref = Some("v3.0.0".into());
     let r = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &cache,
         &devkit_docs::resolve::Options::default(),
     )
@@ -640,7 +655,8 @@ fn max_paren_depth(message: &str) -> usize {
 
 #[test]
 fn a_version_with_no_tag_is_a_hard_error_listing_what_was_tried() {
-    let base = common::unique_tmp("notag");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
     // The lockfile needs `app`'s own entry with its edge to `up`, or importer
@@ -664,7 +680,7 @@ fn a_version_with_no_tag_is_a_hard_error_listing_what_was_tried() {
         ..Default::default()
     };
     let opts = devkit_docs::resolve::Options::default();
-    let err = devkit_docs::resolve::resolve(&entry, &base, &cache, &opts)
+    let err = devkit_docs::resolve::resolve(&entry, base, &cache, &opts)
         .unwrap_err()
         .to_string();
     assert!(err.contains("9.9.9"), "{err}");
@@ -701,12 +717,13 @@ fn a_version_with_no_tag_is_a_hard_error_listing_what_was_tried() {
     let opts = devkit_docs::resolve::Options {
         allow_default_branch: true,
     };
-    assert!(devkit_docs::resolve::resolve(&entry, &base, &cache, &opts).is_ok());
+    assert!(devkit_docs::resolve::resolve(&entry, base, &cache, &opts).is_ok());
 }
 
 #[test]
 fn a_git_entry_with_no_ref_is_a_hard_error_naming_sync() {
-    let base = common::unique_tmp("noref");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let entry = devkit_docs::manifest::LibEntry {
         name: "up".into(),
@@ -716,7 +733,7 @@ fn a_git_entry_with_no_ref_is_a_hard_error_naming_sync() {
     };
     let err = devkit_docs::resolve::resolve(
         &entry,
-        &base,
+        base,
         &base.join("cache"),
         &devkit_docs::resolve::Options::default(),
     )
@@ -727,7 +744,8 @@ fn a_git_entry_with_no_ref_is_a_hard_error_naming_sync() {
 
 #[test]
 fn a_missing_importer_manifest_is_a_hard_error_naming_the_manifest() {
-    let base = common::unique_tmp("nomanifest");
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let project = base.join("proj");
     std::fs::create_dir_all(&project).unwrap();

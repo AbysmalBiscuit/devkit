@@ -63,18 +63,15 @@ mod tests {
     use super::*;
     use crate::manifest::LibEntry;
 
-    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-docs-ly-{tag}"))
-    }
-
     #[test]
     fn detects_dirs_and_mdbook() {
-        let d = unique_tmp("mdbook");
+        let d_dir = tempfile::tempdir().unwrap();
+        let d = d_dir.path();
         for p in ["docs", "src", "examples"] {
             std::fs::create_dir_all(d.join(p)).unwrap();
         }
         std::fs::write(d.join("book.toml"), "[book]").unwrap();
-        let l = detect(&d);
+        let l = detect(d);
         assert_eq!(l.docs_dir.as_deref(), Some("docs"));
         assert_eq!(l.src_dir.as_deref(), Some("src"));
         assert_eq!(l.examples_dir.as_deref(), Some("examples"));
@@ -83,14 +80,16 @@ mod tests {
 
     #[test]
     fn detects_sphinx_under_doc_and_empty_repo_is_all_none() {
-        let d = unique_tmp("sphinx");
+        let d_dir = tempfile::tempdir().unwrap();
+        let d = d_dir.path();
         std::fs::create_dir_all(d.join("doc")).unwrap();
         std::fs::write(d.join("doc/conf.py"), "").unwrap();
-        let l = detect(&d);
+        let l = detect(d);
         assert_eq!(l.docs_dir.as_deref(), Some("doc"));
         assert_eq!(l.kind.as_deref(), Some("sphinx"));
-        let empty = unique_tmp("none");
-        assert_eq!(detect(&empty), Layout::default());
+        let empty_dir = tempfile::tempdir().unwrap();
+        let empty = empty_dir.path();
+        assert_eq!(detect(empty), Layout::default());
     }
 
     #[test]

@@ -293,8 +293,9 @@ fn scrub(text: &str, root: &Path) -> String {
 fn record() -> String {
     let mut out = String::new();
     for case in CASES {
-        let root = common::unique_tmp(&format!("golden-{}", case.name));
-        (case.build)(&root);
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        (case.build)(root);
         for (ecosystem, start, package) in case.probes {
             let dir = if start.is_empty() {
                 root.to_path_buf()
@@ -310,23 +311,23 @@ fn record() -> String {
                 Ok(selection) => {
                     out.push_str(&format!(
                         "ok version={}\nok workspace={}\nok source={}\n",
-                        scrub(&selection.version, &root),
-                        scrub(&selection.workspace.to_string_lossy(), &root),
-                        scrub(&selection.source, &root),
+                        scrub(&selection.version, root),
+                        scrub(&selection.workspace.to_string_lossy(), root),
+                        scrub(&selection.source, root),
                     ));
                 }
                 Err(error) => {
                     out.push_str(&format!(
                         "err display={}\nerr alternate={}\nerr debug={}\n",
-                        scrub(&format!("{error}"), &root),
-                        scrub(&format!("{error:#}"), &root),
-                        scrub(common::message(&format!("{error:?}")), &root),
+                        scrub(&format!("{error}"), root),
+                        scrub(&format!("{error:#}"), root),
+                        scrub(common::message(&format!("{error:?}")), root),
                     ));
                 }
             }
             out.push('\n');
         }
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(root);
     }
     out
 }

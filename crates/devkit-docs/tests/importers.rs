@@ -27,7 +27,8 @@ fn write_package_json(dir: &std::path::Path, body: &str) {
 
 #[test]
 fn a_bun_alias_never_wins_over_the_declared_dependency() {
-    let root = common::unique_tmp("bun-alias");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
     let ws = root.join("apps/api");
     write_package_json(
@@ -63,7 +64,8 @@ fn a_bun_alias_never_wins_over_the_declared_dependency() {
 
 #[test]
 fn bun_candidates_decode_valid_tuple_variants_and_info_slots() {
-    let root = common::unique_tmp("bun-variants");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("bun.lock"),
         r#"{
@@ -84,9 +86,9 @@ fn bun_candidates_decode_valid_tuple_variants_and_info_slots() {
 }"#,
     )
     .unwrap();
-    write_package_json(&root, r#"{"name":"root","dependencies":{}}"#);
+    write_package_json(root, r#"{"name":"root","dependencies":{}}"#);
 
-    let error = importers::select(&root, Ecosystem::Js, "transitive")
+    let error = importers::select(root, Ecosystem::Js, "transitive")
         .unwrap_err()
         .to_string();
     assert!(error.contains("does not declare"), "{error}");
@@ -98,7 +100,8 @@ fn bun_candidates_decode_valid_tuple_variants_and_info_slots() {
 
 #[test]
 fn bun_rejects_a_selected_non_registry_resolution() {
-    let root = common::unique_tmp("bun-non-registry");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("bun.lock"),
         r#"{
@@ -113,11 +116,11 @@ fn bun_rejects_a_selected_non_registry_resolution() {
     )
     .unwrap();
     write_package_json(
-        &root,
+        root,
         r#"{"name":"root","dependencies":{"local":"workspace:*"}}"#,
     );
 
-    let error = importers::select(&root, Ecosystem::Js, "local")
+    let error = importers::select(root, Ecosystem::Js, "local")
         .unwrap_err()
         .to_string();
     assert!(error.contains("non-registry"), "{error}");
@@ -150,14 +153,15 @@ fn write_embedded_at_workspace(root: &std::path::Path) {
 
 #[test]
 fn a_git_ssh_resolution_with_an_embedded_at_sign_decodes_as_git() {
-    let root = common::unique_tmp("bun-embedded-at-git");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), BUN_LOCK_EMBEDDED_AT).unwrap();
-    write_embedded_at_workspace(&root);
+    write_embedded_at_workspace(root);
 
     // The ssh-user marker inside the URL (`git@github.com`) must not be
     // mistaken for the name/resolution separator: the resolution should
     // decode whole, as a non-registry git dependency, not fail tuple arity.
-    let error = importers::select(&root, Ecosystem::Js, "pkg")
+    let error = importers::select(root, Ecosystem::Js, "pkg")
         .unwrap_err()
         .to_string();
     assert!(error.contains("non-registry"), "{error}");
@@ -170,17 +174,19 @@ fn a_git_ssh_resolution_with_an_embedded_at_sign_decodes_as_git() {
 
 #[test]
 fn a_scoped_registry_name_still_resolves_beside_an_embedded_at_sign() {
-    let root = common::unique_tmp("bun-embedded-at-scoped");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), BUN_LOCK_EMBEDDED_AT).unwrap();
-    write_embedded_at_workspace(&root);
+    write_embedded_at_workspace(root);
 
-    let selection = importers::select(&root, Ecosystem::Js, "@types/node").unwrap();
+    let selection = importers::select(root, Ecosystem::Js, "@types/node").unwrap();
     assert_eq!(selection.version, "20.11.0");
 }
 
 #[test]
 fn a_transitive_package_is_a_hard_error_that_lists_truthful_candidates() {
-    let root = common::unique_tmp("bun-transitive");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
     let ws = root.join("apps/web");
     write_package_json(&ws, r#"{"name":"@app/web","dependencies":{}}"#);
@@ -206,7 +212,8 @@ fn a_transitive_package_is_a_hard_error_that_lists_truthful_candidates() {
     assert!(tuple_error.contains("declared by: h3-v2"), "{tuple_error}");
     assert!(!tuple_error.contains("required by h3-v2"), "{tuple_error}");
 
-    let pnpm_root = common::unique_tmp("pnpm-transitive");
+    let pnpm_root_dir = tempfile::tempdir().unwrap();
+    let pnpm_root = pnpm_root_dir.path();
     std::fs::write(
         pnpm_root.join("pnpm-lock.yaml"),
         "lockfileVersion: '9.0'\nimporters:\n  apps/api:\n    dependencies:\n      h3:\n        specifier: ^1.15.5\n        version: 1.15.11\n  apps/web: {}\npackages:\n  h3@1.15.11: {}\nsnapshots:\n  h3@1.15.11: {}\n",
@@ -224,7 +231,8 @@ fn a_transitive_package_is_a_hard_error_that_lists_truthful_candidates() {
         "{pnpm_error}"
     );
 
-    let npm_root = common::unique_tmp("npm-transitive");
+    let npm_root_dir = tempfile::tempdir().unwrap();
+    let npm_root = npm_root_dir.path();
     std::fs::write(
         npm_root.join("package-lock.json"),
         r#"{"lockfileVersion":3,"packages":{"":{"name":"root"},"apps/api":{"dependencies":{"h3":"^1"}},"apps/web":{},"node_modules/h3":{"version":"1.15.11"}}}"#,
@@ -239,7 +247,8 @@ fn a_transitive_package_is_a_hard_error_that_lists_truthful_candidates() {
     assert!(npm_error.contains("declared by: apps/api"), "{npm_error}");
     assert!(!npm_error.contains("required by apps/api"), "{npm_error}");
 
-    let uv_root = common::unique_tmp("uv-transitive");
+    let uv_root_dir = tempfile::tempdir().unwrap();
+    let uv_root = uv_root_dir.path();
     std::fs::write(
         uv_root.join("uv.lock"),
         r#"version = 1
@@ -265,7 +274,7 @@ version = "2024.7.4"
         "[project]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"httpx\"]\n",
     )
     .unwrap();
-    let uv_error = importers::select(&uv_root, Ecosystem::Python, "certifi")
+    let uv_error = importers::select(uv_root, Ecosystem::Python, "certifi")
         .unwrap_err()
         .to_string();
     assert!(uv_error.contains("2024.7.4"), "{uv_error}");
@@ -278,7 +287,8 @@ version = "2024.7.4"
 
 #[test]
 fn a_pnpm_peer_qualified_locator_yields_a_bare_version() {
-    let root = common::unique_tmp("pnpm-peer");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("pnpm-lock.yaml"),
         "lockfileVersion: '9.0'\nimporters:\n  apps/api:\n    dependencies:\n      vitest:\n        specifier: ^3.2.0\n        version: 3.2.4(@types/node@25.5.0)\npackages:\n  vitest@3.2.4:\n    resolution: {integrity: sha512-x}\n",
@@ -308,7 +318,8 @@ fn a_pnpm_peer_qualified_locator_yields_a_bare_version() {
 
 #[test]
 fn competing_js_lockfiles_use_the_nearest_valid_packagemanager() {
-    let root = common::unique_tmp("two-locks");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
     std::fs::write(
         root.join("pnpm-lock.yaml"),
@@ -367,7 +378,8 @@ fn competing_js_lockfiles_use_the_nearest_valid_packagemanager() {
 
 #[test]
 fn a_uv_fork_recording_two_versions_is_a_hard_error() {
-    let root = common::unique_tmp("uv-fork");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("uv.lock"),
         r#"version = 1
@@ -393,7 +405,7 @@ version = "0.28.1"
     )
     .unwrap();
 
-    let error = importers::select(&root, Ecosystem::Python, "httpx")
+    let error = importers::select(root, Ecosystem::Python, "httpx")
         .unwrap_err()
         .to_string();
     assert!(error.contains("0.27.0"), "{error}");
@@ -403,7 +415,8 @@ version = "0.28.1"
 
 #[test]
 fn uv_selects_a_versionless_dynamic_member_by_local_source() {
-    let root = common::unique_tmp("uv-dynamic-member");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("uv.lock"),
         r#"version = 1
@@ -431,14 +444,15 @@ source = { registry = "https://pypi.org/simple" }
     )
     .unwrap();
 
-    let selection = importers::select(&root, Ecosystem::Python, "httpx").unwrap();
+    let selection = importers::select(root, Ecosystem::Python, "httpx").unwrap();
     assert_eq!(selection.version, "0.28.1");
-    assert_eq!(selection.workspace, root.path());
+    assert_eq!(selection.workspace, root);
 }
 
 #[test]
 fn uv_dev_optional_and_dependency_groups_are_direct_dependencies() {
-    let root = common::unique_tmp("uv-groups");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("uv.lock"),
         r#"version = 1
@@ -481,14 +495,15 @@ source = { registry = "https://pypi.org/simple" }
 
     for (package, version) in [("pytest", "8.3.2"), ("uvloop", "0.21.0"), ("ruff", "0.9.1")] {
         assert_eq!(
-            importers::select(&root, Ecosystem::Python, package)
+            importers::select(root, Ecosystem::Python, package)
                 .unwrap()
                 .version,
             version
         );
     }
 
-    let duplicate = common::unique_tmp("uv-member-duplicate");
+    let duplicate_dir = tempfile::tempdir().unwrap();
+    let duplicate = duplicate_dir.path();
     std::fs::write(
         duplicate.join("uv.lock"),
         r#"version = 1
@@ -523,12 +538,12 @@ source = { registry = "https://pypi.org/simple" }
     )
     .unwrap();
     assert_eq!(
-        importers::select(&duplicate, Ecosystem::Python, "httpx")
+        importers::select(duplicate, Ecosystem::Python, "httpx")
             .unwrap()
             .version,
         "0.28.1"
     );
-    let error = importers::select(&duplicate, Ecosystem::Python, "rich")
+    let error = importers::select(duplicate, Ecosystem::Python, "rich")
         .unwrap_err()
         .to_string();
     assert!(error.contains("does not declare"), "{error}");
@@ -559,7 +574,7 @@ source = { registry = "https://pypi.org/simple" }
 "#,
     )
     .unwrap();
-    let error = importers::select(&duplicate, Ecosystem::Python, "httpx")
+    let error = importers::select(duplicate, Ecosystem::Python, "httpx")
         .unwrap_err()
         .to_string();
     assert!(error.contains("ambiguous"), "{error}");
@@ -567,7 +582,8 @@ source = { registry = "https://pypi.org/simple" }
 
 #[test]
 fn a_cargo_member_gets_its_own_dependency_not_another_members() {
-    let root = common::unique_tmp("cargo-ws");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("Cargo.toml"),
         "[workspace]\nmembers = [\"a\", \"b\"]\n",
@@ -621,7 +637,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 #[test]
 fn a_cargo_edge_disambiguates_duplicate_package_and_member_names() {
-    let root = common::unique_tmp("cargo-dup");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("Cargo.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n",
@@ -656,7 +673,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     .unwrap();
 
     assert_eq!(
-        importers::select(&root, Ecosystem::Rust, "serde")
+        importers::select(root, Ecosystem::Rust, "serde")
             .unwrap()
             .version,
         "1.0.210"
@@ -688,7 +705,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "#,
     )
     .unwrap();
-    let error = importers::select(&root, Ecosystem::Rust, "serde")
+    let error = importers::select(root, Ecosystem::Rust, "serde")
         .unwrap_err()
         .to_string();
     assert!(error.contains("ambiguous"), "{error}");
@@ -696,7 +713,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 #[test]
 fn npm_resolves_the_nearest_nested_copy_walking_up_from_the_workspace() {
-    let root = common::unique_tmp("npm-nested");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("package-lock.json"),
         r#"{
@@ -721,20 +739,21 @@ fn npm_resolves_the_nearest_nested_copy_walking_up_from_the_workspace() {
 
 #[test]
 fn a_pnpm_alias_resolves_and_non_registry_locators_are_rejected() {
-    let root = common::unique_tmp("pnpm-alias");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("pnpm-lock.yaml"),
         "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3-v2:\n        specifier: npm:h3@2.0.1\n        version: h3@2.0.1\npackages:\n  h3@2.0.1: {}\n",
     )
     .unwrap();
     write_package_json(
-        &root,
+        root,
         r#"{"name":"root","dependencies":{"h3-v2":"npm:h3@2.0.1"}}"#,
     );
 
-    assert!(importers::select(&root, Ecosystem::Js, "h3").is_err());
+    assert!(importers::select(root, Ecosystem::Js, "h3").is_err());
     assert_eq!(
-        importers::select(&root, Ecosystem::Js, "h3-v2")
+        importers::select(root, Ecosystem::Js, "h3-v2")
             .unwrap()
             .version,
         "2.0.1"
@@ -745,7 +764,7 @@ fn a_pnpm_alias_resolves_and_non_registry_locators_are_rejected() {
         "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3-v2:\n        specifier: npm:h3@2.0.1\n        version: ghost@2.0.1\npackages:\n  h3@2.0.1: {}\n",
     )
     .unwrap();
-    let error = importers::select(&root, Ecosystem::Js, "h3-v2")
+    let error = importers::select(root, Ecosystem::Js, "h3-v2")
         .unwrap_err()
         .to_string();
     assert!(error.contains("ghost@2.0.1"), "{error}");
@@ -759,7 +778,7 @@ fn a_pnpm_alias_resolves_and_non_registry_locators_are_rejected() {
             ),
         )
         .unwrap();
-        let error = importers::select(&root, Ecosystem::Js, "h3-v2")
+        let error = importers::select(root, Ecosystem::Js, "h3-v2")
             .unwrap_err()
             .to_string();
         assert!(error.contains("unsupported"), "{error}");
@@ -769,15 +788,16 @@ fn a_pnpm_alias_resolves_and_non_registry_locators_are_rejected() {
 
 #[test]
 fn pnpm_rejects_a_direct_locator_without_a_target_row() {
-    let root = common::unique_tmp("pnpm-missing-target");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("pnpm-lock.yaml"),
         "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3:\n        specifier: ^9\n        version: 9.9.9\npackages:\n  h3@1.15.11: {}\n",
     )
     .unwrap();
-    write_package_json(&root, r#"{"name":"root","dependencies":{"h3":"^9"}}"#);
+    write_package_json(root, r#"{"name":"root","dependencies":{"h3":"^9"}}"#);
 
-    let error = importers::select(&root, Ecosystem::Js, "h3")
+    let error = importers::select(root, Ecosystem::Js, "h3")
         .unwrap_err()
         .to_string();
     assert!(error.contains("h3@9.9.9"), "{error}");
@@ -786,7 +806,8 @@ fn pnpm_rejects_a_direct_locator_without_a_target_row() {
 
 #[test]
 fn every_direct_dependency_class_resolves_in_its_js_format() {
-    let bun = common::unique_tmp("js-classes-bun");
+    let bun_dir = tempfile::tempdir().unwrap();
+    let bun = bun_dir.path();
     std::fs::write(
         bun.join("bun.lock"),
         r#"{
@@ -808,7 +829,7 @@ fn every_direct_dependency_class_resolves_in_its_js_format() {
     )
     .unwrap();
     write_package_json(
-        &bun,
+        bun,
         r#"{"name":"root","devDependencies":{"vitest":"^3"},"optionalDependencies":{"fsevents":"^2"},"peerDependencies":{"react":"^19"}}"#,
     );
     for (package, version) in [
@@ -817,40 +838,42 @@ fn every_direct_dependency_class_resolves_in_its_js_format() {
         ("react", "19.1.0"),
     ] {
         assert_eq!(
-            importers::select(&bun, Ecosystem::Js, package)
+            importers::select(bun, Ecosystem::Js, package)
                 .unwrap()
                 .version,
             version
         );
     }
 
-    let pnpm = common::unique_tmp("js-classes-pnpm");
+    let pnpm_dir = tempfile::tempdir().unwrap();
+    let pnpm = pnpm_dir.path();
     std::fs::write(
         pnpm.join("pnpm-lock.yaml"),
         "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      vitest:\n        specifier: ^3\n        version: 3.2.4\n    optionalDependencies:\n      fsevents:\n        specifier: ^2\n        version: 2.3.3\npackages:\n  vitest@3.2.4: {}\n  fsevents@2.3.3: {}\n",
     )
     .unwrap();
     write_package_json(
-        &pnpm,
+        pnpm,
         r#"{"name":"root","devDependencies":{"vitest":"^3"},"optionalDependencies":{"fsevents":"^2"}}"#,
     );
     for (package, version) in [("vitest", "3.2.4"), ("fsevents", "2.3.3")] {
         assert_eq!(
-            importers::select(&pnpm, Ecosystem::Js, package)
+            importers::select(pnpm, Ecosystem::Js, package)
                 .unwrap()
                 .version,
             version
         );
     }
 
-    let npm = common::unique_tmp("js-classes-npm");
+    let npm_dir = tempfile::tempdir().unwrap();
+    let npm = npm_dir.path();
     std::fs::write(
         npm.join("package-lock.json"),
         r#"{"lockfileVersion":3,"packages":{"":{"name":"root","devDependencies":{"vitest":"^3"},"optionalDependencies":{"fsevents":"^2"},"peerDependencies":{"react":"^19"}},"node_modules/vitest":{"version":"3.2.4","resolved":"https://registry.npmjs.org/vitest/-/vitest-3.2.4.tgz"},"node_modules/fsevents":{"version":"2.3.3","resolved":"https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz"},"node_modules/react":{"version":"19.1.0","resolved":"https://registry.npmjs.org/react/-/react-19.1.0.tgz"}}}"#,
     )
     .unwrap();
     write_package_json(
-        &npm,
+        npm,
         r#"{"name":"root","devDependencies":{"vitest":"^3"},"optionalDependencies":{"fsevents":"^2"},"peerDependencies":{"react":"^19"}}"#,
     );
     for (package, version) in [
@@ -859,7 +882,7 @@ fn every_direct_dependency_class_resolves_in_its_js_format() {
         ("react", "19.1.0"),
     ] {
         assert_eq!(
-            importers::select(&npm, Ecosystem::Js, package)
+            importers::select(npm, Ecosystem::Js, package)
                 .unwrap()
                 .version,
             version
@@ -887,16 +910,17 @@ fn write_cargo_app(root: &std::path::Path, lock_packages: &str) {
 
 #[test]
 fn cargo_rejects_a_non_registry_source_for_the_selected_package() {
-    let root = common::unique_tmp("cargo-non-registry");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
 
     write_cargo_app(
-        &root,
+        root,
         &format!(
             "\n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{CARGO_REGISTRY}\"\n"
         ),
     );
     assert_eq!(
-        importers::select(&root, Ecosystem::Rust, "mylib")
+        importers::select(root, Ecosystem::Rust, "mylib")
             .unwrap()
             .version,
         "1.2.3"
@@ -904,10 +928,10 @@ fn cargo_rejects_a_non_registry_source_for_the_selected_package() {
 
     let git = "git+https://github.com/me/mylib?branch=x#abc123";
     write_cargo_app(
-        &root,
+        root,
         &format!("\n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{git}\"\n"),
     );
-    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+    let error = importers::select(root, Ecosystem::Rust, "mylib")
         .unwrap_err()
         .to_string();
     assert!(error.contains("non-registry"), "{error}");
@@ -917,13 +941,14 @@ fn cargo_rejects_a_non_registry_source_for_the_selected_package() {
 
 #[test]
 fn cargo_rejects_a_path_dependency_for_the_selected_package() {
-    let root = common::unique_tmp("cargo-path-dep");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     write_cargo_app(
-        &root,
+        root,
         "\n[[package]]\nname = \"mylib\"\nversion = \"0.3.0\"\n",
     );
 
-    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+    let error = importers::select(root, Ecosystem::Rust, "mylib")
         .unwrap_err()
         .to_string();
     assert!(error.contains("mylib"), "{error}");
@@ -934,19 +959,20 @@ fn cargo_rejects_a_path_dependency_for_the_selected_package() {
 
 #[test]
 fn a_cargo_registry_and_git_pair_is_named_by_source_not_by_fork() {
-    let root = common::unique_tmp("cargo-registry-vs-git");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     let git = "git+https://github.com/me/mylib#abc123";
 
     // Same version: the version keys collapse to one, so the resolution-fork
     // error cannot fire and the git row must be what the user is told about.
     write_cargo_app(
-        &root,
+        root,
         &format!(
             "\n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{CARGO_REGISTRY}\"\n\
              \n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{git}\"\n"
         ),
     );
-    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+    let error = importers::select(root, Ecosystem::Rust, "mylib")
         .unwrap_err()
         .to_string();
     assert!(error.contains("non-registry"), "{error}");
@@ -956,13 +982,13 @@ fn a_cargo_registry_and_git_pair_is_named_by_source_not_by_fork() {
     // Different versions with an unpinned edge: the fork error already names
     // both versions and the escape hatch, which is actionable as it stands.
     write_cargo_app(
-        &root,
+        root,
         &format!(
             "\n[[package]]\nname = \"mylib\"\nversion = \"1.2.3\"\nsource = \"{CARGO_REGISTRY}\"\n\
              \n[[package]]\nname = \"mylib\"\nversion = \"2.0.0\"\nsource = \"{git}\"\n"
         ),
     );
-    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+    let error = importers::select(root, Ecosystem::Rust, "mylib")
         .unwrap_err()
         .to_string();
     assert!(error.contains("fork"), "{error}");
@@ -982,7 +1008,7 @@ fn a_cargo_registry_and_git_pair_is_named_by_source_not_by_fork() {
         ),
     )
     .unwrap();
-    let error = importers::select(&root, Ecosystem::Rust, "mylib")
+    let error = importers::select(root, Ecosystem::Rust, "mylib")
         .unwrap_err()
         .to_string();
     assert!(error.contains("non-registry"), "{error}");
@@ -1009,14 +1035,15 @@ fn write_uv_app(root: &std::path::Path, httpx_source: &str) {
 
 #[test]
 fn uv_rejects_a_non_registry_source_for_the_selected_package() {
-    let root = common::unique_tmp("uv-non-registry");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
 
     write_uv_app(
-        &root,
+        root,
         "source = { registry = \"https://pypi.org/simple\" }\n",
     );
     assert_eq!(
-        importers::select(&root, Ecosystem::Python, "httpx")
+        importers::select(root, Ecosystem::Python, "httpx")
             .unwrap()
             .version,
         "0.28.1"
@@ -1027,8 +1054,8 @@ fn uv_rejects_a_non_registry_source_for_the_selected_package() {
         "directory = \"vendor/httpx\"",
         "url = \"https://example.invalid/httpx.tar.gz\"",
     ] {
-        write_uv_app(&root, &format!("source = {{ {locator} }}\n"));
-        let error = importers::select(&root, Ecosystem::Python, "httpx")
+        write_uv_app(root, &format!("source = {{ {locator} }}\n"));
+        let error = importers::select(root, Ecosystem::Python, "httpx")
             .unwrap_err()
             .to_string();
         assert!(error.contains("non-registry"), "{error}");
@@ -1055,14 +1082,15 @@ fn write_npm_app(root: &std::path::Path, h3_row: &str) {
 
 #[test]
 fn npm_rejects_a_non_registry_resolution_for_the_selected_package() {
-    let root = common::unique_tmp("npm-non-registry");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
 
     write_npm_app(
-        &root,
+        root,
         r#"{"version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
     );
     assert_eq!(
-        importers::select(&root, Ecosystem::Js, "h3")
+        importers::select(root, Ecosystem::Js, "h3")
             .unwrap()
             .version,
         "1.15.11"
@@ -1079,8 +1107,8 @@ fn npm_rejects_a_non_registry_resolution_for_the_selected_package() {
         ),
         (r#"{"resolved":"packages/h3","link":true}"#, "packages/h3"),
     ] {
-        write_npm_app(&root, row);
-        let error = importers::select(&root, Ecosystem::Js, "h3")
+        write_npm_app(root, row);
+        let error = importers::select(root, Ecosystem::Js, "h3")
             .unwrap_err()
             .to_string();
         assert!(error.contains("non-registry"), "{error}");
@@ -1088,8 +1116,8 @@ fn npm_rejects_a_non_registry_resolution_for_the_selected_package() {
         assert!(error.contains("--ref"), "{error}");
     }
 
-    write_npm_app(&root, r#"{"version":"1.15.11"}"#);
-    let error = importers::select(&root, Ecosystem::Js, "h3")
+    write_npm_app(root, r#"{"version":"1.15.11"}"#);
+    let error = importers::select(root, Ecosystem::Js, "h3")
         .unwrap_err()
         .to_string();
     assert!(error.contains("no registry resolution"), "{error}");
@@ -1104,7 +1132,8 @@ fn npm_rejects_a_non_registry_resolution_for_the_selected_package() {
 /// where a registry install leaves a semver range or dist-tag.
 #[test]
 fn npm_rejects_a_remote_tarball_declaration_for_the_selected_package() {
-    let root = common::unique_tmp("npm-tarball-spec");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
 
     for spec in [
         "https://example.com/h3-fork.tgz",
@@ -1112,12 +1141,12 @@ fn npm_rejects_a_remote_tarball_declaration_for_the_selected_package() {
         "http://internal.invalid/h3-1.15.11.tgz",
     ] {
         write_npm_app_declaring(
-            &root,
+            root,
             "h3",
             spec,
             &format!(r#"{{"version":"1.15.11","resolved":"{spec}","integrity":"sha512-x"}}"#),
         );
-        let error = importers::select(&root, Ecosystem::Js, "h3")
+        let error = importers::select(root, Ecosystem::Js, "h3")
             .unwrap_err()
             .to_string();
         assert!(error.contains("non-registry"), "{error}");
@@ -1128,26 +1157,26 @@ fn npm_rejects_a_remote_tarball_declaration_for_the_selected_package() {
     // A semver range and an `npm:` spec naming the same package are both
     // registry installs and must keep resolving.
     write_npm_app_declaring(
-        &root,
+        root,
         "h3",
         "^1.15.11",
         r#"{"version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
     );
     assert_eq!(
-        importers::select(&root, Ecosystem::Js, "h3")
+        importers::select(root, Ecosystem::Js, "h3")
             .unwrap()
             .version,
         "1.15.11"
     );
 
     write_npm_app_declaring(
-        &root,
+        root,
         "h3",
         "npm:h3@^1.15.11",
         r#"{"name":"h3","version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
     );
     assert_eq!(
-        importers::select(&root, Ecosystem::Js, "h3")
+        importers::select(root, Ecosystem::Js, "h3")
             .unwrap()
             .version,
         "1.15.11"
@@ -1161,16 +1190,17 @@ fn npm_rejects_a_remote_tarball_declaration_for_the_selected_package() {
 /// package is refused.
 #[test]
 fn npm_rejects_an_install_slot_holding_another_package() {
-    let root = common::unique_tmp("npm-alias-identity");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
 
     // A project depending on a fork through the upstream name.
     write_npm_app_declaring(
-        &root,
+        root,
         "h3",
         "npm:h3-fork@^1.0.0",
         r#"{"name":"h3-fork","version":"1.4.0","resolved":"https://registry.npmjs.org/h3-fork/-/h3-fork-1.4.0.tgz","integrity":"sha512-x"}"#,
     );
-    let error = importers::select(&root, Ecosystem::Js, "h3")
+    let error = importers::select(root, Ecosystem::Js, "h3")
         .unwrap_err()
         .to_string();
     assert!(error.contains("h3-fork"), "{error}");
@@ -1179,12 +1209,12 @@ fn npm_rejects_an_install_slot_holding_another_package() {
 
     // The same shape the other way round: a fork name serving upstream.
     write_npm_app_declaring(
-        &root,
+        root,
         "h3-fork",
         "npm:h3@^1.15.11",
         r#"{"name":"h3","version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
     );
-    let error = importers::select(&root, Ecosystem::Js, "h3-fork")
+    let error = importers::select(root, Ecosystem::Js, "h3-fork")
         .unwrap_err()
         .to_string();
     assert!(error.contains("node_modules/h3-fork"), "{error}");
@@ -1193,12 +1223,12 @@ fn npm_rejects_an_install_slot_holding_another_package() {
     // An alias whose target is a tarball: the `npm:` prefix keeps the spec out
     // of the tarball check, and the row's `resolved` is an ordinary https URL.
     write_npm_app_declaring(
-        &root,
+        root,
         "h3-fork",
         "npm:h3@https://example.com/h3.tgz",
         r#"{"name":"h3","version":"1.15.11","resolved":"https://example.com/h3.tgz","integrity":"sha512-x"}"#,
     );
-    let error = importers::select(&root, Ecosystem::Js, "h3-fork")
+    let error = importers::select(root, Ecosystem::Js, "h3-fork")
         .unwrap_err()
         .to_string();
     assert!(error.contains("node_modules/h3-fork"), "{error}");
@@ -1206,12 +1236,12 @@ fn npm_rejects_an_install_slot_holding_another_package() {
 
     // An alias under a different key does not fill the queried slot at all.
     write_npm_app_declaring(
-        &root,
+        root,
         "h3-alias",
         "npm:h3@^1.15.11",
         r#"{"name":"h3","version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
     );
-    let error = importers::select(&root, Ecosystem::Js, "h3")
+    let error = importers::select(root, Ecosystem::Js, "h3")
         .unwrap_err()
         .to_string();
     assert!(!error.contains("1.15.11"), "{error}");
@@ -1219,26 +1249,26 @@ fn npm_rejects_an_install_slot_holding_another_package() {
     // An ordinary registry install records no `name`, and one that records a
     // matching `name` is equally ordinary: neither may be refused.
     write_npm_app_declaring(
-        &root,
+        root,
         "h3",
         "^1.15.11",
         r#"{"version":"1.15.11","resolved":"https://registry.npmjs.org/h3/-/h3-1.15.11.tgz","integrity":"sha512-x"}"#,
     );
     assert_eq!(
-        importers::select(&root, Ecosystem::Js, "h3")
+        importers::select(root, Ecosystem::Js, "h3")
             .unwrap()
             .version,
         "1.15.11"
     );
 
     write_npm_app_declaring(
-        &root,
+        root,
         "@scope/pkg",
         "^2.0.0",
         r#"{"name":"@scope/pkg","version":"2.0.1","resolved":"https://registry.npmjs.org/@scope/pkg/-/pkg-2.0.1.tgz","integrity":"sha512-x"}"#,
     );
     assert_eq!(
-        importers::select(&root, Ecosystem::Js, "@scope/pkg")
+        importers::select(root, Ecosystem::Js, "@scope/pkg")
             .unwrap()
             .version,
         "2.0.1"
@@ -1247,7 +1277,8 @@ fn npm_rejects_an_install_slot_holding_another_package() {
 
 #[test]
 fn undeclared_is_downcastable_and_renders_unchanged() {
-    let root = common::unique_tmp("undeclared-typed");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
     let ws = root.join("apps/web");
     write_package_json(&ws, r#"{"name":"@app/web","dependencies":{}}"#);
@@ -1272,7 +1303,8 @@ fn undeclared_is_downcastable_and_renders_unchanged() {
 
 #[test]
 fn selection_names_the_lockfile_that_carried_the_version() {
-    let root = common::unique_tmp("selection-lockfile");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
     let ws = root.join("apps/api");
     write_package_json(
@@ -1291,7 +1323,8 @@ fn evidence_survives_a_failure_that_runs_after_declaration() {
     // errors; `inspect` still reports Declared. This is the case whose error
     // text recommends --ref, so a globally ref-pinned library in this state
     // must still be judged relevant to the checkout.
-    let root = common::unique_tmp("evidence-post-decl");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("bun.lock"),
         r#"{
@@ -1306,18 +1339,19 @@ fn evidence_survives_a_failure_that_runs_after_declaration() {
     )
     .unwrap();
     write_package_json(
-        &root,
+        root,
         r#"{"name":"root","dependencies":{"h3":"github:unjs/h3"}}"#,
     );
 
-    let inspection = importers::inspect(&root, Ecosystem::Js, "h3");
+    let inspection = importers::inspect(root, Ecosystem::Js, "h3");
     assert!(inspection.result.is_err(), "non-registry must not resolve");
     assert_eq!(inspection.evidence, importers::Evidence::Declared);
 }
 
 #[test]
 fn evidence_reports_undeclared_and_unknown_distinctly() {
-    let root = common::unique_tmp("evidence-tristate");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
     let ws = root.join("apps/web");
     write_package_json(&ws, r#"{"name":"@app/web","dependencies":{}}"#);
@@ -1343,7 +1377,8 @@ fn evidence_reports_undeclared_and_unknown_distinctly() {
 fn an_ambiguity_probe_does_not_leak_evidence() {
     // Two lockfiles, no packageManager: resolution bails without deciding.
     // The per-lockfile probes that build the message must not set evidence.
-    let root = common::unique_tmp("evidence-ambiguous");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("bun.lock"),
         r#"{"lockfileVersion":1,"workspaces":{"":{"name":"root","dependencies":{"h3":"^1"}}},"packages":{"h3":["h3@1.15.11","",{},"sha512-a"]}}"#,
@@ -1354,9 +1389,9 @@ fn an_ambiguity_probe_does_not_leak_evidence() {
         "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      h3:\n        specifier: ^1\n        version: 1.0.0\npackages:\n  h3@1.0.0: {}\n",
     )
     .unwrap();
-    write_package_json(&root, r#"{"name":"root","dependencies":{"h3":"^1"}}"#);
+    write_package_json(root, r#"{"name":"root","dependencies":{"h3":"^1"}}"#);
 
-    let inspection = importers::inspect(&root, Ecosystem::Js, "h3");
+    let inspection = importers::inspect(root, Ecosystem::Js, "h3");
     assert!(inspection.result.is_err());
     assert_eq!(inspection.evidence, importers::Evidence::Unknown);
 }
@@ -1368,7 +1403,8 @@ fn a_selector_reads_each_lockfile_once() {
     // still resolve, which is only possible if nothing re-reads the file.
     // The later packages are all differently named, so a cache keyed by
     // (lockfile, package) would have to re-read the deleted file too.
-    let root = common::unique_tmp("selector-one-read");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), BUN_LOCK).unwrap();
     let ws = root.join("apps/api");
     write_package_json(
@@ -1395,7 +1431,8 @@ fn a_selector_reads_each_lockfile_once() {
 fn a_malformed_unselected_lockfile_is_still_ignored() {
     // packageManager names pnpm; a corrupt bun.lock sits beside it. Eager
     // parsing would make this a hard failure for a project that resolves fine.
-    let root = common::unique_tmp("selector-unselected-malformed");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("bun.lock"), "{ this is not json").unwrap();
     std::fs::write(
         root.join("pnpm-lock.yaml"),
@@ -1403,17 +1440,17 @@ fn a_malformed_unselected_lockfile_is_still_ignored() {
     )
     .unwrap();
     write_package_json(
-        &root,
+        root,
         r#"{"name":"root","packageManager":"pnpm@9.0.0","dependencies":{"h3":"^1"}}"#,
     );
 
     assert_eq!(
-        importers::select(&root, Ecosystem::Js, "h3")
+        importers::select(root, Ecosystem::Js, "h3")
             .unwrap()
             .version,
         "1.0.0"
     );
-    let selector = importers::Selector::new(&root, Ecosystem::Js).unwrap();
+    let selector = importers::Selector::new(root, Ecosystem::Js).unwrap();
     assert_eq!(selector.select("h3").unwrap().version, "1.0.0");
 }
 
@@ -1424,11 +1461,12 @@ fn a_cached_parse_error_replays_identically() {
     // same three renderings as the first. The lockfile is deleted in between,
     // so only a memoized *failure* can produce the second error at all — a
     // re-parse would report `reading …` instead.
-    let root = common::unique_tmp("selector-error-replay");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(root.join("pnpm-lock.yaml"), "\tnot: [valid: yaml").unwrap();
-    write_package_json(&root, r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#);
+    write_package_json(root, r#"{"name":"root","packageManager":"pnpm@9.0.0"}"#);
 
-    let selector = importers::Selector::new(&root, Ecosystem::Js).unwrap();
+    let selector = importers::Selector::new(root, Ecosystem::Js).unwrap();
     let first = selector.select("h3").unwrap_err();
     std::fs::remove_file(root.join("pnpm-lock.yaml")).unwrap();
     let second = selector.select("kysely").unwrap_err();
@@ -1446,7 +1484,8 @@ fn a_cached_parse_error_replays_identically() {
 
 #[test]
 fn a_cargo_selector_resolves_two_packages_from_one_parse() {
-    let root = common::unique_tmp("selector-cargo");
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
     std::fs::write(
         root.join("Cargo.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.200\"\nanyhow = \"1.0.90\"\n",
@@ -1460,7 +1499,7 @@ fn a_cargo_selector_resolves_two_packages_from_one_parse() {
     )
     .unwrap();
 
-    let selector = importers::Selector::new(&root, Ecosystem::Rust).unwrap();
+    let selector = importers::Selector::new(root, Ecosystem::Rust).unwrap();
     assert_eq!(selector.select("serde").unwrap().version, "1.0.200");
     std::fs::remove_file(root.join("Cargo.lock")).unwrap();
     assert_eq!(selector.select("anyhow").unwrap().version, "1.0.90");

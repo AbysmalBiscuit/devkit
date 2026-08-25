@@ -15,7 +15,8 @@ fn concurrent_records_never_lose_rows() {
         std::process::exit(0);
     }
 
-    let tmp = devkit_testtmp::dir("devkit-docs-race");
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
     let exe = std::env::current_exe().unwrap();
 
     let mut kids = Vec::new();
@@ -27,9 +28,9 @@ fn concurrent_records_never_lose_rows() {
                 // Pin both cache-home inputs so all workers flock the same
                 // isolated registry: cache_dir() prefers $XDG_CACHE_HOME and
                 // falls back to $HOME/.cache.
-                .env("HOME", &tmp)
-                .env("XDG_CACHE_HOME", &tmp)
-                .env("XDG_DATA_HOME", &tmp)
+                .env("HOME", tmp)
+                .env("XDG_CACHE_HOME", tmp)
+                .env("XDG_DATA_HOME", tmp)
                 .env("DEVKIT_DOCS_TEST_RECORD", &project)
                 .args([
                     "--exact",

@@ -473,10 +473,6 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-docs-rf-{tag}"))
-    }
-
     #[test]
     fn record_upserts_by_project_and_lib() {
         let mut d = Data::default();
@@ -531,8 +527,9 @@ mod tests {
 
     #[test]
     fn store_commit_and_snapshot_round_trip() {
-        let root = unique_tmp("store");
-        let store = RefStore::at(&root);
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        let store = RefStore::at(root);
         store
             .commit(|d| {
                 d.record("/p", "tokio", "1.0.0", "v1.0.0", "aaa");
@@ -552,8 +549,9 @@ mod tests {
     // unreadable (see the prune tests for why `chmod` is not portable here).
     #[test]
     fn commit_aborts_when_the_registry_is_unreadable() {
-        let root = unique_tmp("commit-unreadable");
-        let store = RefStore::at(&root);
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        let store = RefStore::at(root);
         store
             .commit(|d| {
                 d.record("/p", "tokio", "1.0.0", "v1.0.0", "aaa");
@@ -591,7 +589,8 @@ mod tests {
 
     #[test]
     fn plan_drops_dead_projects_and_preserves_materialized_rows() {
-        let live = unique_tmp("live"); // an existing dir = live project
+        let live_dir = tempfile::tempdir().unwrap(); // an existing dir = live project
+        let live = live_dir.path();
         let mut data = Data::default();
         data.record(live.to_str().unwrap(), "tokio", "1.0.0", "v1.0.0", "aaa");
         data.record("/gone/nowhere", "tokio", "0.9.0", "v0.9.0", "bbb"); // dead project → drop
