@@ -438,7 +438,7 @@ pub fn issues_for_prs_queries(urls: &[String]) -> Vec<(String, HashMap<String, S
                     r#"{alias}: resource(url: {u}) {{ ... on PullRequest {{
                          closingIssuesReferences(first: 20) {{
                            pageInfo {{ hasNextPage }}
-                           nodes {{ number }}
+                           nodes {{ number repository {{ nameWithOwner }} }}
                          }} }} }}"#,
                     u = serde_json::Value::from(url.as_str()),
                 ));
@@ -448,14 +448,20 @@ pub fn issues_for_prs_queries(urls: &[String]) -> Vec<(String, HashMap<String, S
         .collect()
 }
 
-/// From one `issues_for_prs_queries` response: PR url → the issue numbers it
-/// closes. A connection reporting `hasNextPage` is dropped rather than kept
-/// partial — a partial link list is worse than none, since it feeds a column
-/// that is better blank than wrong. A URL with no closing issues gets no
-/// entry.
+/// From one `issues_for_prs_queries` response: PR url → the ids of the issues
+/// it closes. An issue in `slug`, the tracker's own issues repository, is a
+/// bare number; one anywhere else is `owner/name#number`, since GitHub lets a
+/// PR close an issue across a repository boundary and a bare number there
+/// would name a different issue. A node with no `repository` stays bare — a
+/// missing field is not evidence of a different repository.
+///
+/// A connection reporting `hasNextPage` is dropped rather than kept partial —
+/// a partial link list is worse than none, since it feeds a column that is
+/// better blank than wrong. A URL with no closing issues gets no entry.
 pub fn parse_issues_for_prs(
     resp: &serde_json::Value,
     aliases: &HashMap<String, String>,
+    slug: &str,
 ) -> HashMap<String, Vec<String>> {
     let mut out = HashMap::new();
     let Some(data) = resp["data"].as_object() else {
@@ -473,8 +479,13 @@ pub fn parse_issues_for_prs(
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|n| n["number"].as_u64())
-            .map(|n| n.to_string())
+            .filter_map(|n| {
+                let number = n["number"].as_u64()?;
+                Some(match n["repository"]["nameWithOwner"].as_str() {
+                    Some(other) if other != slug => format!("{other}#{number}"),
+                    _ => number.to_string(),
+                })
+            })
             .collect();
         if !ids.is_empty() {
             out.insert(url.clone(), ids);
@@ -629,7 +640,7 @@ impl Tracker for GithubTracker {
         let mut out = HashMap::new();
         for (query, aliases) in issues_for_prs_queries(urls) {
             match github::graphql(&query) {
-                Ok(resp) => out.extend(parse_issues_for_prs(&resp, &aliases)),
+                Ok(resp) => out.extend(parse_issues_for_prs(&resp, &aliases, &self.repo.slug)),
                 Err(e) => {
                     eprintln!("GitHub PR-link lookup failed: {e:#}");
                     break;
@@ -667,8 +678,13 @@ impl Tracker for GithubTracker {
         Ok(parse_timeline_origin(&resp))
     }
 
+    /// An `owner/name#number` id names an issue outside this tracker's issues
+    /// repository — `issues_for_prs` emits that form for a PR closing an issue
+    /// across a repository boundary — and links to the repository it names. A
+    /// bare number is an issue here.
     fn issue_url(&self, id: &str) -> Option<String> {
-        Some(format!("https://github.com/{}/issues/{id}", self.repo.slug))
+        let (slug, number) = id.split_once('#').unwrap_or((&self.repo.slug, id));
+        Some(format!("https://github.com/{slug}/issues/{number}"))
     }
 
     fn check(&self) -> Result<String> {
@@ -996,7 +1012,10 @@ mod tests {
             "data": {
                 "p0": { "closingIssuesReferences": {
                     "pageInfo": { "hasNextPage": false },
-                    "nodes": [{ "number": 6 }, { "number": 7 }]
+                    "nodes": [
+                        { "number": 6, "repository": { "nameWithOwner": "o/r" } },
+                        { "number": 7, "repository": { "nameWithOwner": "o/r" } }
+                    ]
                 } },
                 "p1": { "closingIssuesReferences": {
                     "pageInfo": { "hasNextPage": false },
@@ -1013,7 +1032,7 @@ mod tests {
             "p1".to_string(),
             "https://github.com/o/r/pull/2".to_string(),
         );
-        let got = parse_issues_for_prs(&resp, &aliases);
+        let got = parse_issues_for_prs(&resp, &aliases, "o/r");
         assert_eq!(
             got["https://github.com/o/r/pull/1"],
             vec!["6".to_string(), "7".to_string()]
@@ -1022,11 +1041,71 @@ mod tests {
     }
 
     #[test]
+    fn a_closing_issue_outside_the_tracker_repository_carries_its_own() {
+        let resp = serde_json::json!({
+            "data": { "p0": { "closingIssuesReferences": {
+                "pageInfo": { "hasNextPage": false },
+                "nodes": [
+                    { "number": 6, "repository": { "nameWithOwner": "o/r" } },
+                    { "number": 42, "repository": { "nameWithOwner": "other/repo" } }
+                ]
+            } } }
+        });
+        let mut aliases = HashMap::new();
+        aliases.insert(
+            "p0".to_string(),
+            "https://github.com/o/r/pull/1".to_string(),
+        );
+        let got = parse_issues_for_prs(&resp, &aliases, "o/r");
+        assert_eq!(
+            got["https://github.com/o/r/pull/1"],
+            vec!["6".to_string(), "other/repo#42".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_closing_issue_node_without_a_repository_stays_bare() {
+        let resp = serde_json::json!({
+            "data": { "p0": { "closingIssuesReferences": {
+                "pageInfo": { "hasNextPage": false },
+                "nodes": [{ "number": 6 }]
+            } } }
+        });
+        let mut aliases = HashMap::new();
+        aliases.insert(
+            "p0".to_string(),
+            "https://github.com/o/r/pull/1".to_string(),
+        );
+        let got = parse_issues_for_prs(&resp, &aliases, "o/r");
+        assert_eq!(got["https://github.com/o/r/pull/1"], vec!["6".to_string()]);
+    }
+
+    #[test]
+    fn issue_url_follows_a_qualified_id_to_its_own_repository() {
+        let t = GithubTracker::new(repo("me/widget"));
+        assert_eq!(
+            t.issue_url("42").as_deref(),
+            Some("https://github.com/me/widget/issues/42")
+        );
+        assert_eq!(
+            t.issue_url("other/repo#42").as_deref(),
+            Some("https://github.com/other/repo/issues/42")
+        );
+    }
+
+    #[test]
+    fn issues_for_prs_query_asks_for_each_closing_issues_repository() {
+        let urls = vec!["https://github.com/o/r/pull/1".to_string()];
+        let (q, _) = issues_for_prs_queries(&urls).remove(0);
+        assert!(q.contains("nameWithOwner"), "{q}");
+    }
+
+    #[test]
     fn parse_issues_for_prs_ignores_unknown_aliases() {
         let resp = serde_json::json!({ "data": { "zzz": { "closingIssuesReferences": {
             "pageInfo": { "hasNextPage": false }, "nodes": [{ "number": 6 }]
         } } } });
-        assert!(parse_issues_for_prs(&resp, &HashMap::new()).is_empty());
+        assert!(parse_issues_for_prs(&resp, &HashMap::new(), "o/r").is_empty());
     }
 
     #[test]
@@ -1045,7 +1124,7 @@ mod tests {
             "p0".to_string(),
             "https://github.com/o/r/pull/1".to_string(),
         );
-        assert!(parse_issues_for_prs(&resp, &aliases).is_empty());
+        assert!(parse_issues_for_prs(&resp, &aliases, "o/r").is_empty());
     }
 
     #[test]
