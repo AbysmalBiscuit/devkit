@@ -144,10 +144,10 @@ expose a `completions <shell>` subcommand via `clap_complete`.
 - The issue tracker is the `Tracker` trait in `devkit-common::tracker`.
   `tracker::resolve` picks the implementation: a resolvable `LINEAR_API_KEY`
   means Linear, else a GitHub `origin` remote means GitHub, else `NoneTracker`,
-  whose empty answers are how `issue` degrades. There is no GitHub
-  implementation, so that arm also lands on `NoneTracker`. `resolve` takes an
-  explicit kind that wins over detection; `[tracker] kind` is where it comes
-  from. It returns a `Resolved`, whose `declared` flag says whether the project
+  whose empty answers are how `issue` degrades. The GitHub arm needs an issues
+  repository to talk to; without one it falls back to `NoneTracker`, undeclared,
+  with the failure in `reason`. `resolve` takes an explicit kind that wins over
+  detection; `[tracker] kind` is where it comes from. It returns a `Resolved`, whose `declared` flag says whether the project
   named this tracker or devkit fell back to it — the finished verdict skips the
   issue-state gate only for a *declared* `TrackerKind::None`, because devkit
   finding no tracker is silence, not an answer. Config loading belongs to the callers that have it — the `issue`
