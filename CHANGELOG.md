@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.4](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.3...v0.13.4) (2026-08-25)
+
+
+### Bug Fixes
+
+* **plugin:** run bootstrap hook on Windows ([89ddd42](https://github.com/AbysmalBiscuit/devkit/commit/89ddd426f244972db751b24f0b5aa6dfd3eed8ca))
+
 ## [0.13.3](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.2...v0.13.3) (2026-08-25)
 
 
