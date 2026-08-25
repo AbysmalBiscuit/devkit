@@ -48,13 +48,13 @@ fn build_task() -> TaskConfig {
 fn gate_waiver_scoping_and_lazy_resolution() {
     // The registry path comes from process-global env, so every scenario runs
     // sequentially inside this single test.
-    let tmp = devkit_testtmp::dir("devkit-task-gate");
+    let tmp = tempfile::tempdir().unwrap();
     unsafe {
-        std::env::set_var("HOME", &tmp);
-        std::env::set_var("XDG_STATE_HOME", &tmp);
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("XDG_STATE_HOME", tmp.path());
     }
-    let mine = tmp.join("wt-mine");
-    let foreign = tmp.join("wt-foreign");
+    let mine = tmp.path().join("wt-mine");
+    let foreign = tmp.path().join("wt-foreign");
     std::fs::create_dir_all(&mine).unwrap();
     std::fs::create_dir_all(&foreign).unwrap();
     let mine_s = mine.to_str().unwrap();
@@ -93,7 +93,7 @@ fn gate_waiver_scoping_and_lazy_resolution() {
         mine_s,
         Role::Issue,
         std::process::id(),
-        tmp.join("api.log"),
+        tmp.path().join("api.log"),
     )
     .unwrap();
     let plan = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none).unwrap();
@@ -111,7 +111,7 @@ fn gate_waiver_scoping_and_lazy_resolution() {
         mine_s,
         Role::Issue,
         std::process::id(),
-        tmp.join("api.log"),
+        tmp.path().join("api.log"),
     )
     .unwrap();
     let plan = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none).unwrap();

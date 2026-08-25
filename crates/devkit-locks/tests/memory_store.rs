@@ -2,15 +2,11 @@ use devkit_locks::model::Data;
 use devkit_locks::store::{MemoryStore, acquire_with};
 use std::sync::{Arc, Mutex};
 
-fn tmp(tag: &str) -> devkit_testtmp::TmpDir {
-    devkit_testtmp::dir(&format!("devkit-lockmem-{tag}"))
-}
-
 #[test]
 fn commit_writes_through_then_updates_memory() {
-    let dir = tmp("ok");
+    let dir = tempfile::tempdir().unwrap();
     let state = Arc::new(Mutex::new(Data::default()));
-    let store = MemoryStore::new(state.clone(), dir.join("locks.json"));
+    let store = MemoryStore::new(state.clone(), dir.path().join("locks.json"));
     acquire_with(
         &store,
         "/repo",
@@ -23,17 +19,17 @@ fn commit_writes_through_then_updates_memory() {
     )
     .unwrap();
     assert_eq!(state.lock().unwrap().locks.len(), 1, "memory updated");
-    let on_disk: Data = devkit_common::store::load(&dir.join("locks.json"));
+    let on_disk: Data = devkit_common::store::load(&dir.path().join("locks.json"));
     assert_eq!(on_disk.locks.len(), 1, "file written through");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn commit_failure_leaves_memory_unchanged() {
-    let dir = tmp("fail");
+    let dir = tempfile::tempdir().unwrap();
     let state = Arc::new(Mutex::new(Data::default()));
     // Point the data path at a directory so the file write fails.
-    let bad = dir.join("as-dir");
+    let bad = dir.path().join("as-dir");
     std::fs::create_dir_all(&bad).unwrap();
     let store = MemoryStore::new(state.clone(), bad);
     let r = acquire_with(

@@ -18,18 +18,17 @@ fn git(args: &[&str], cwd: &Path) {
 /// A one-commit repo with no remote, whose `devkit.toml` forces `kind` — or
 /// omits the `[tracker]` table entirely when `kind` is `None`, leaving the
 /// choice to detection.
-fn fixture(kind: Option<&str>) -> devkit_testtmp::TmpDir {
-    let tag = kind.unwrap_or("detect");
-    let dir = devkit_testtmp::dir(&format!("devkit-mcp-tracker-{tag}"));
-    git(&["init", "-q", "-b", "main"], &dir);
-    git(&["config", "user.email", "t@t"], &dir);
-    git(&["config", "user.name", "t"], &dir);
+fn fixture(kind: Option<&str>) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    git(&["init", "-q", "-b", "main"], dir.path());
+    git(&["config", "user.email", "t@t"], dir.path());
+    git(&["config", "user.name", "t"], dir.path());
     let table = match kind {
         Some(k) => format!("\n[tracker]\nkind = \"{k}\"\n"),
         None => String::new(),
     };
     std::fs::write(
-        dir.join("devkit.toml"),
+        dir.path().join("devkit.toml"),
         format!(
             "[defaults]\n\
              worktree_root = \"wts\"\n\
@@ -40,9 +39,9 @@ fn fixture(kind: Option<&str>) -> devkit_testtmp::TmpDir {
         ),
     )
     .unwrap();
-    std::fs::write(dir.join("f"), "x").unwrap();
-    git(&["add", "."], &dir);
-    git(&["commit", "-qm", "init"], &dir);
+    std::fs::write(dir.path().join("f"), "x").unwrap();
+    git(&["add", "."], dir.path());
+    git(&["commit", "-qm", "init"], dir.path());
     dir
 }
 
@@ -80,15 +79,20 @@ fn the_status_action_reports_the_configured_tracker_kind() {
         // No worktree matches the filter, so nothing is fetched over the network.
         let report = call(
             "issue.status",
-            json!({ "root": dir.to_str().unwrap(), "ids": ["NOPE-1"] }),
+            json!({ "root": dir.path().to_str().unwrap(), "ids": ["NOPE-1"] }),
         );
         assert!(report["worktrees"].as_array().unwrap().is_empty());
-        assert_eq!(report["tracker"]["kind"], kind, "in {}", dir.display());
+        assert_eq!(
+            report["tracker"]["kind"],
+            kind,
+            "in {}",
+            dir.path().display()
+        );
         assert_eq!(
             report["tracker"]["declared"],
             true,
             "a config named this tracker, in {}",
-            dir.display()
+            dir.path().display()
         );
     }
 
@@ -99,12 +103,12 @@ fn the_status_action_reports_the_configured_tracker_kind() {
     let dir = fixture(None);
     let report = call(
         "issue.status",
-        json!({ "root": dir.to_str().unwrap(), "ids": ["NOPE-1"] }),
+        json!({ "root": dir.path().to_str().unwrap(), "ids": ["NOPE-1"] }),
     );
     assert_eq!(
         report["tracker"]["declared"],
         false,
         "detection produced this tracker, in {}",
-        dir.display()
+        dir.path().display()
     );
 }

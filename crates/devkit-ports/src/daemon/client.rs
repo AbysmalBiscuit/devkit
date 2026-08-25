@@ -95,14 +95,14 @@ mod tests {
     fn routes_through_systemd_only_when_unit_present() {
         // Use a unique temp dir so the test does not observe the developer's real
         // ~/.config/systemd/user/devkitd.service — both branches are asserted.
-        let tmp = devkit_testtmp::dir("devkit-routing-test");
+        let tmp = tempfile::tempdir().unwrap();
 
         // Point XDG_CONFIG_HOME at the empty temp dir: no unit present → false.
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", &tmp) };
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
         assert!(!super::use_systemd_unit(), "no unit yet — should be false");
 
         // Write the unit file and assert the positive branch.
-        let unit = tmp.join("systemd/user/devkitd.service");
+        let unit = tmp.path().join("systemd/user/devkitd.service");
         std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
         std::fs::write(&unit, "").unwrap();
         assert!(super::use_systemd_unit(), "unit present — should be true");

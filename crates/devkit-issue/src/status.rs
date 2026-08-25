@@ -1288,10 +1288,10 @@ mod tests {
     #[test]
     fn dirty_stream_reports_every_index_once() {
         use std::sync::Mutex;
-        let base = devkit_testtmp::dir("devkit-dstream");
+        let base = tempfile::tempdir().unwrap();
         let paths: Vec<String> = (0..7)
             .map(|i| {
-                let p = base.join(format!("d{i}"));
+                let p = base.path().join(format!("d{i}"));
                 std::fs::create_dir_all(&p).unwrap();
                 p.to_string_lossy().into_owned()
             })

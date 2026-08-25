@@ -13,11 +13,11 @@ fn git(args: &[&str], cwd: &Path) {
     assert!(ok, "git {args:?} failed");
 }
 
-/// A repo with one commit and one `lev/eng-1-bar` worktree beside it, under a
-/// `tag`-specific directory so tests in this binary never share a fixture.
-fn fixture_repo(tag: &str) -> devkit_testtmp::TmpDir {
-    let base = devkit_testtmp::dir(&format!("devkit-gl-{tag}"));
-    let main = base.join("main");
+/// A repo with one commit and one `lev/eng-1-bar` worktree beside it, in a
+/// fresh directory so tests in this binary never share a fixture.
+fn fixture_repo() -> tempfile::TempDir {
+    let base = tempfile::tempdir().unwrap();
+    let main = base.path().join("main");
     std::fs::create_dir_all(&main).unwrap();
 
     git(&["init", "-q", "-b", "main"], &main);
@@ -27,7 +27,7 @@ fn fixture_repo(tag: &str) -> devkit_testtmp::TmpDir {
     git(&["add", "."], &main);
     git(&["commit", "-qm", "init"], &main);
 
-    let wt = base.join("eng-1-foo");
+    let wt = base.path().join("eng-1-foo");
     git(
         &[
             "worktree",
@@ -44,8 +44,8 @@ fn fixture_repo(tag: &str) -> devkit_testtmp::TmpDir {
 
 #[test]
 fn gather_local_returns_offline_rows_without_network() {
-    let base = fixture_repo("local");
-    let main = base.join("main");
+    let base = fixture_repo();
+    let main = base.path().join("main");
 
     let report = devkit_issue::status::gather_local(main.to_str().unwrap(), &[]).unwrap();
     let row = report
@@ -66,7 +66,7 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
     // proves the injected tracker answered, whatever the environment holds. No
     // worktree matches the filter, so nothing is fetched and no link base is
     // resolved.
-    let base = fixture_repo("gw");
+    let base = fixture_repo();
     let mut t = FakeTracker::with_states([]);
     t.kind = TrackerKind::None;
     let injected = Resolved {
@@ -80,7 +80,7 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
         None,
     );
     let report = devkit_issue::status::gather_with(
-        base.join("main").to_str().unwrap(),
+        base.path().join("main").to_str().unwrap(),
         &["NOPE-1".into()],
         &injected,
         &repos,
@@ -97,9 +97,9 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
 /// reachable by either spelling of its id.
 #[test]
 fn a_lowercase_record_id_is_found_by_either_spelling() {
-    let base = fixture_repo("case");
-    let main = base.join("main");
-    let wt = base.join("eng-1-foo");
+    let base = fixture_repo();
+    let main = base.path().join("main");
+    let wt = base.path().join("eng-1-foo");
     std::fs::create_dir_all(wt.join(".devkit")).unwrap();
     std::fs::write(
         wt.join(".devkit").join("issue.toml"),

@@ -322,14 +322,10 @@ mod tests {
 mod seam_tests {
     use super::*;
 
-    fn tmp(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-lockseam-{tag}"))
-    }
-
     #[test]
     fn acquire_with_then_check_sees_conflict_for_other_holder() {
-        let dir = tmp("acq");
-        let s = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let s = FlockStore::at(dir.path());
         let out = acquire_with(
             &s,
             "/repo",
@@ -345,13 +341,13 @@ mod seam_tests {
         let conflicts = check_with(&s, "/repo", "bob", &["scenes/x".into()], 120).unwrap();
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].held_by, "alice");
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn release_with_frees_holders_path() {
-        let dir = tmp("rel");
-        let s = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let s = FlockStore::at(dir.path());
         acquire_with(
             &s,
             "/repo",
@@ -368,29 +364,29 @@ mod seam_tests {
         assert_eq!(released, vec!["scenes".to_string()]);
         assert!(refused.is_empty());
         assert!(s.snapshot().unwrap().locks.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn prune_with_drops_dead_and_is_a_hard_mutation() {
-        let dir = tmp("prune");
-        let s = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let s = FlockStore::at(dir.path());
         // ttl=60, ts=0 → dead at now=1000
         acquire_with(&s, "/repo", "alice", &["scenes".into()], None, None, 60, 0).unwrap();
         let dropped = prune_with(&s, 1000).unwrap();
         assert_eq!(dropped, 1);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn commit_refused_while_gate_held_exclusive() {
-        let dir = tmp("gate");
-        let s = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let s = FlockStore::at(dir.path());
         let f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(false)
-            .open(dir.join("devkitd.lock"))
+            .open(dir.path().join("devkitd.lock"))
             .unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().expect("take exclusive gate");
@@ -409,13 +405,13 @@ mod seam_tests {
             err.downcast_ref::<DaemonHoldsLock>().is_some(),
             "got: {err:#}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn check_is_ungated_under_held_gate() {
-        let dir = tmp("checkgate");
-        let s = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let s = FlockStore::at(dir.path());
         acquire_with(
             &s,
             "/repo",
@@ -431,7 +427,7 @@ mod seam_tests {
             .create(true)
             .write(true)
             .truncate(false)
-            .open(dir.join("devkitd.lock"))
+            .open(dir.path().join("devkitd.lock"))
             .unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().unwrap();
@@ -439,13 +435,13 @@ mod seam_tests {
         let conflicts = check_with(&s, "/repo", "bob", &["scenes".into()], 120)
             .expect("read must not fail under held gate");
         assert_eq!(conflicts.len(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn write_decide_acquires_then_blocks_other_holder() {
-        let dir = tmp("wd");
-        let s = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let s = FlockStore::at(dir.path());
         let first = write_decide_with(
             &s,
             "/repo",
@@ -461,29 +457,29 @@ mod seam_tests {
         let blocked =
             write_decide_with(&s, "/repo", "T", "src/a.rs", None, None, 1800, 120).unwrap();
         assert!(matches!(blocked, crate::model::WriteDecision::Denied(_)));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn write_decide_ancestor_allows() {
-        let dir = tmp("wda");
-        let s = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let s = FlockStore::at(dir.path());
         write_decide_with(&s, "/repo", "S", "src", None, None, 1800, 100).unwrap();
         let child =
             write_decide_with(&s, "/repo", "S/a1", "src/a.rs", None, None, 1800, 120).unwrap();
         assert_eq!(child, crate::model::WriteDecision::AllowedByOwnership);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn release_prefix_with_frees_subtree() {
-        let dir = tmp("rp");
-        let s = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let s = FlockStore::at(dir.path());
         write_decide_with(&s, "/repo", "S", "a", None, None, 1800, 1).unwrap();
         write_decide_with(&s, "/repo", "S/a1", "b", None, None, 1800, 1).unwrap();
         let freed = release_prefix_with(&s, "S").unwrap();
         assert_eq!(freed.len(), 2);
         assert!(s.snapshot().unwrap().locks.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 }

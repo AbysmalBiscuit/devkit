@@ -1008,8 +1008,8 @@ mod tests {
         // holder path is gone (grace applies only after that check), so a
         // nonexistent holder lets a concurrent test's prune free this row
         // before bring_down runs.
-        let holderdir = devkit_testtmp::dir("down-test");
-        let holder = holderdir.to_str().unwrap().to_string();
+        let holderdir = tempfile::tempdir().unwrap();
+        let holder = holderdir.path().to_str().unwrap().to_string();
         registry::alloc(&holder, &[("web".to_string(), 7000)], Role::Issue).unwrap();
         let out = bring_down(&holder, None).unwrap();
         assert_eq!(out.stopped, 0, "no pid recorded, nothing to stop");
@@ -1024,8 +1024,8 @@ mod tests {
         // A real holder dir so a concurrent prune (which drops reservations whose
         // holder path is gone) can't steal the still-reserved second port out from
         // under this test before it asserts.
-        let holderdir = devkit_testtmp::dir("down-ports-test");
-        let holder = holderdir.to_str().unwrap().to_string();
+        let holderdir = tempfile::tempdir().unwrap();
+        let holder = holderdir.path().to_str().unwrap().to_string();
         let got = registry::alloc(
             &holder,
             &[("api".to_string(), 7300), ("web".to_string(), 7400)],
@@ -1048,9 +1048,9 @@ mod tests {
     fn read_log_tails_a_tracked_logfile() {
         // Use logdir as the holder so holder_alive returns true (snapshot prunes
         // entries whose holder path does not exist).
-        let logdir = devkit_testtmp::dir("devrun-log");
-        let holder = logdir.to_str().unwrap().to_string();
-        let logfile = logdir.join("issue-web.log");
+        let logdir = tempfile::tempdir().unwrap();
+        let holder = logdir.path().to_str().unwrap().to_string();
+        let logfile = logdir.path().join("issue-web.log");
         std::fs::write(&logfile, "line1\nline2\nline3\n").unwrap();
 
         // Track an entry pointing at the log, then read it back.
@@ -1090,8 +1090,8 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         drop(l);
 
-        let logdir = devkit_testtmp::dir("devrun-run");
-        let tmp = logdir.join("run.log");
+        let logdir = tempfile::tempdir().unwrap();
+        let tmp = logdir.path().join("run.log");
         let mut argv = py;
         // Inline accept-loop listener rather than `-m http.server`: http.server's
         // `server_bind` resolves the bound address with `socket.getfqdn()`, a
@@ -1212,8 +1212,8 @@ mod tests {
         // A real holder dir: prune judges a reservation dead the moment its
         // holder path is gone, so a nonexistent holder would let a concurrent
         // test's prune free these rows before the assertions run.
-        let holderdir = devkit_testtmp::dir("resolve-ports-ok");
-        let holder = holderdir.to_str().unwrap().to_string();
+        let holderdir = tempfile::tempdir().unwrap();
+        let holder = holderdir.path().to_str().unwrap().to_string();
 
         let mut catalog = HashMap::new();
         let mut primary = test_app(

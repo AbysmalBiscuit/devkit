@@ -11,4 +11,3 @@ toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-devkit-testtmp.workspace = true

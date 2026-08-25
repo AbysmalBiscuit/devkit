@@ -366,27 +366,27 @@ mod tests {
 
     #[test]
     fn harness_enabled_reads_flag() {
-        let dir = devkit_testtmp::dir("devkit-harness");
+        let dir = tempfile::tempdir().unwrap();
         std::fs::write(
-            dir.join("devkit.toml"),
+            dir.path().join("devkit.toml"),
             "[harness]\nenforce_writes = true\n",
         )
         .unwrap();
-        assert!(harness_enabled(&dir));
+        assert!(harness_enabled(dir.path()));
         std::fs::write(
-            dir.join("devkit.toml"),
+            dir.path().join("devkit.toml"),
             "[harness]\nenforce_writes = false\n",
         )
         .unwrap();
-        assert!(!harness_enabled(&dir));
+        assert!(!harness_enabled(dir.path()));
         std::fs::write(
-            dir.join("devkit.toml"),
+            dir.path().join("devkit.toml"),
             "[defaults]\nworktree_root = \"x\"\n",
         )
         .unwrap();
-        assert!(!harness_enabled(&dir)); // missing section → off, despite unrelated keys
-        let _ = std::fs::remove_file(dir.join("devkit.toml"));
-        assert!(!harness_enabled(&dir)); // no devkit.toml → off
+        assert!(!harness_enabled(dir.path())); // missing section → off, despite unrelated keys
+        let _ = std::fs::remove_file(dir.path().join("devkit.toml"));
+        assert!(!harness_enabled(dir.path())); // no devkit.toml → off
     }
 
     #[test]

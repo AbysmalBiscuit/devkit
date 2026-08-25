@@ -1295,10 +1295,6 @@ content = \"key = 1\\n\"\n"
         assert_eq!(origin["apps.api.static_env.A"], PathBuf::from("/b"));
     }
 
-    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-cfg-{tag}"))
-    }
-
     /// An absolute path, spelled the way the host spells one. `resolve_path_key`
     /// anchors anything `Path::is_absolute` rejects to its declaring layer, and a
     /// leading `/` is not absolute on Windows, so a fixture that spelled one
@@ -1319,11 +1315,11 @@ content = \"key = 1\\n\"\n"
 
     #[test]
     fn resolve_merges_parent_and_child() {
-        let root = unique_tmp("merge");
-        let child = root.join("repo");
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("repo");
         std::fs::create_dir_all(&child).unwrap();
         std::fs::write(
-            root.join("devkit.toml"),
+            root.path().join("devkit.toml"),
             format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=1\nlaunch=['a']\n"),
         )
         .unwrap();
@@ -1346,13 +1342,13 @@ content = \"key = 1\\n\"\n"
 
     #[test]
     fn root_marker_stops_walk() {
-        let root = unique_tmp("rooted");
-        let child = root.join("repo");
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("repo");
         std::fs::create_dir_all(&child).unwrap();
-        let home = root.join("home.toml");
+        let home = root.path().join("home.toml");
         std::fs::write(&home, "[defaults]\nbranch_prefix='HOME/'\n").unwrap();
         std::fs::write(
-            root.join("devkit.toml"),
+            root.path().join("devkit.toml"),
             "[defaults]\nworktree_root='/PARENT'\n",
         )
         .unwrap();
@@ -1369,10 +1365,10 @@ content = \"key = 1\\n\"\n"
 
     #[test]
     fn home_layer_is_lowest_precedence() {
-        let root = unique_tmp("home");
-        let repo = root.join("repo");
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let home = root.join("home.toml");
+        let home = root.path().join("home.toml");
         std::fs::write(
             &home,
             "[defaults]\nbranch_prefix='HOME/'\nworktree_root='/hw'\n",
@@ -1395,38 +1391,38 @@ content = \"key = 1\\n\"\n"
 
     #[test]
     fn local_layer_overrides_the_tracked_file_beside_it() {
-        let repo = unique_tmp("local-over");
+        let repo = tempfile::tempdir().unwrap();
         std::fs::write(
-            repo.join("devkit.toml"),
+            repo.path().join("devkit.toml"),
             format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=1\nlaunch=['a']\n"),
         )
         .unwrap();
         std::fs::write(
-            repo.join("devkit.local.toml"),
+            repo.path().join("devkit.local.toml"),
             "[defaults]\nbranch_prefix='local/'\n",
         )
         .unwrap();
-        let (cfg, prov) = resolve_with_home(None, &repo, None).unwrap();
+        let (cfg, prov) = resolve_with_home(None, repo.path(), None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "local/");
         assert_eq!(cfg.defaults.worktree_root, ABS_W); // tracked layer still merges
         assert_eq!(
             prov.origin["defaults.branch_prefix"],
-            repo.join("devkit.local.toml")
+            repo.path().join("devkit.local.toml")
         );
     }
 
     #[test]
     fn deeper_tracked_layer_beats_a_shallower_local_layer() {
-        let root = unique_tmp("local-depth");
-        let child = root.join("repo");
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("repo");
         std::fs::create_dir_all(&child).unwrap();
         std::fs::write(
-            root.join("devkit.toml"),
+            root.path().join("devkit.toml"),
             format!("[defaults]\n{FULL_DEFAULTS}"),
         )
         .unwrap();
         std::fs::write(
-            root.join("devkit.local.toml"),
+            root.path().join("devkit.local.toml"),
             "[defaults]\nbranch_prefix='shallow-local/'\n",
         )
         .unwrap();
@@ -1441,26 +1437,26 @@ content = \"key = 1\\n\"\n"
 
     #[test]
     fn a_local_layer_alone_resolves() {
-        let repo = unique_tmp("local-only");
+        let repo = tempfile::tempdir().unwrap();
         std::fs::write(
-            repo.join("devkit.local.toml"),
+            repo.path().join("devkit.local.toml"),
             format!("[defaults]\n{FULL_DEFAULTS}"),
         )
         .unwrap();
-        let (cfg, prov) = resolve_with_home(None, &repo, None).unwrap();
+        let (cfg, prov) = resolve_with_home(None, repo.path(), None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, ABS_W);
-        assert_eq!(prov.layers, vec![repo.join("devkit.local.toml")]);
+        assert_eq!(prov.layers, vec![repo.path().join("devkit.local.toml")]);
     }
 
     #[test]
     fn root_marker_in_a_local_layer_stops_walk() {
-        let root = unique_tmp("local-rooted");
-        let child = root.join("repo");
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("repo");
         std::fs::create_dir_all(&child).unwrap();
-        let home = root.join("home.toml");
+        let home = root.path().join("home.toml");
         std::fs::write(&home, "[defaults]\nbranch_prefix='HOME/'\n").unwrap();
         std::fs::write(
-            root.join("devkit.toml"),
+            root.path().join("devkit.toml"),
             "[defaults]\nworktree_root='/PARENT'\n",
         )
         .unwrap();
@@ -1481,10 +1477,10 @@ content = \"key = 1\\n\"\n"
 
     #[test]
     fn explicit_config_bypasses_layering() {
-        let root = unique_tmp("explicit");
-        let child = root.join("repo");
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("repo");
         std::fs::create_dir_all(&child).unwrap();
-        let explicit = root.join("custom.toml");
+        let explicit = root.path().join("custom.toml");
         std::fs::write(
             &explicit,
             format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=7\nlaunch=['a']\n"),
@@ -1503,8 +1499,8 @@ content = \"key = 1\\n\"\n"
 
     #[test]
     fn resolve_errors_when_no_config_found() {
-        let root = unique_tmp("empty");
-        let err = resolve_with_home(None, &root, None).unwrap_err();
+        let root = tempfile::tempdir().unwrap();
+        let err = resolve_with_home(None, root.path(), None).unwrap_err();
         assert!(err.to_string().contains("no devkit.toml"));
     }
 
@@ -1935,8 +1931,8 @@ steps = [
 
     #[test]
     fn a_relative_path_resolves_against_its_declaring_layer() {
-        let tmp = devkit_testtmp::dir("devkit-relcfg");
-        let proj = tmp.join("proj");
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = tmp.path().join("proj");
         write_cfg(
             &proj,
             "[defaults]\n\
@@ -1948,11 +1944,12 @@ steps = [
         let (cfg, _) = resolve_with_home(None, &proj, None).unwrap();
         assert_eq!(
             cfg.defaults.worktree_root,
-            tmp.join("proj-worktrees").to_string_lossy()
+            tmp.path().join("proj-worktrees").to_string_lossy()
         );
         assert_eq!(
             cfg.defaults.baseline_path,
-            tmp.join("proj-worktrees")
+            tmp.path()
+                .join("proj-worktrees")
                 .join("_baseline")
                 .to_string_lossy()
         );
@@ -1960,8 +1957,8 @@ steps = [
 
     #[test]
     fn the_same_relative_path_resolves_alike_from_two_start_dirs() {
-        let tmp = devkit_testtmp::dir("devkit-relcfg2");
-        let proj = tmp.join("proj");
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = tmp.path().join("proj");
         let nested = proj.join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
         write_cfg(
@@ -1982,9 +1979,9 @@ steps = [
 
     #[test]
     fn an_absolute_path_and_a_tilde_path_are_left_absolute() {
-        let tmp = devkit_testtmp::dir("devkit-abscfg");
+        let tmp = tempfile::tempdir().unwrap();
         write_cfg(
-            &tmp,
+            tmp.path(),
             &format!(
                 "[defaults]\n\
              worktree_root = '{ABS_W}'\n\
@@ -1993,7 +1990,7 @@ steps = [
              baseline_path = \"~/wt/_baseline\"\n"
             ),
         );
-        let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
+        let (cfg, _) = resolve_with_home(None, tmp.path(), None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, ABS_W);
         let home = home_dir().expect("a home directory to expand `~` against");
         assert_eq!(
@@ -2004,16 +2001,16 @@ steps = [
 
     #[test]
     fn an_empty_path_key_stays_empty() {
-        let tmp = devkit_testtmp::dir("devkit-emptycfg");
+        let tmp = tempfile::tempdir().unwrap();
         write_cfg(
-            &tmp,
+            tmp.path(),
             "[defaults]\n\
              worktree_root = \"/srv/trees\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"\"\n",
         );
-        let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
+        let (cfg, _) = resolve_with_home(None, tmp.path(), None).unwrap();
         assert_eq!(
             cfg.defaults.baseline_path, "",
             "an unset path must not become the layer dir"
@@ -2023,31 +2020,32 @@ steps = [
     #[test]
     fn branch_prefix_expands_vars_but_is_not_a_path() {
         unsafe { std::env::set_var("DEVKIT_TEST_DEV", "lev") };
-        let tmp = devkit_testtmp::dir("devkit-prefixcfg");
+        let tmp = tempfile::tempdir().unwrap();
         write_cfg(
-            &tmp,
+            tmp.path(),
             "[defaults]\n\
              worktree_root = \"/srv/trees\"\n\
              branch_prefix = \"${DEVKIT_TEST_DEV}/\"\n\
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"\"\n",
         );
-        let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
+        let (cfg, _) = resolve_with_home(None, tmp.path(), None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "lev/");
     }
 
     #[test]
     fn an_unset_var_fails_the_whole_config_load() {
-        let tmp = devkit_testtmp::dir("devkit-badvarcfg");
+        let tmp = tempfile::tempdir().unwrap();
         write_cfg(
-            &tmp,
+            tmp.path(),
             "[defaults]\n\
              worktree_root = \"${DEVKIT_TEST_MISSING_ROOT}/trees\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"\"\n",
         );
-        let err = resolve_with_home(None, &tmp, None).expect_err("unset var must fail the load");
+        let err =
+            resolve_with_home(None, tmp.path(), None).expect_err("unset var must fail the load");
         assert!(
             err.to_string().contains("DEVKIT_TEST_MISSING_ROOT"),
             "{err}"
@@ -2061,16 +2059,16 @@ steps = [
         // to `""` and must be treated the same as an unset optional path, not
         // silently resolved to the declaring layer's own directory.
         unsafe { std::env::set_var("DEVKIT_TEST_EMPTY", "") };
-        let tmp = devkit_testtmp::dir("devkit-emptyvarcfg");
+        let tmp = tempfile::tempdir().unwrap();
         write_cfg(
-            &tmp,
+            tmp.path(),
             "[defaults]\n\
              worktree_root = \"/srv/trees\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"${DEVKIT_TEST_EMPTY}\"\n",
         );
-        let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
+        let (cfg, _) = resolve_with_home(None, tmp.path(), None).unwrap();
         assert_eq!(
             cfg.defaults.baseline_path, "",
             "a set-but-empty variable must not become the layer dir"
@@ -2082,9 +2080,9 @@ steps = [
         // `devkit doctor` calls `load(None, Path::new("."))` — a relative
         // `start` must not leak into the resolved `worktree_root`, since the
         // ports registry uses it as holder identity and for prefix matching.
-        let tmp = devkit_testtmp::dir("devkit-relstart");
+        let tmp = tempfile::tempdir().unwrap();
         write_cfg(
-            &tmp,
+            tmp.path(),
             "[defaults]\n\
              worktree_root = \"../proj-worktrees\"\n\
              branch_prefix = \"lev/\"\n\
@@ -2098,7 +2096,7 @@ steps = [
         // cwd change here does not corrupt them even if `cargo test` runs
         // threads concurrently.
         let cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&tmp).unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
         // The expectation is anchored to the directory the process reports, not
         // to `tmp`: macOS resolves a `/var/folders/...` temp dir through the
         // `/var` -> `/private/var` symlink, so the two spellings differ.

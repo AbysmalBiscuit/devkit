@@ -296,7 +296,6 @@ name = "devkit-config"
 version = "0.13.2"
 dependencies = [
  "anyhow",
- "devkit-testtmp",
  "schemars",
  "serde",
  "tempfile",
@@ -329,9 +328,9 @@ dependencies = [
  "anyhow",
  "devkit-common",
  "devkit-config",
- "devkit-testtmp",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -340,12 +339,12 @@ version = "0.13.2"
 dependencies = [
  "anyhow",
  "devkit-common",
- "devkit-testtmp",
  "fd-lock",
  "interprocess",
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "toml",
 ]
 
@@ -359,9 +358,9 @@ dependencies = [
  "devkit-issue",
  "devkit-locks",
  "devkit-ports",
- "devkit-testtmp",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -372,7 +371,6 @@ dependencies = [
  "clap",
  "devkit-common",
  "devkit-config",
- "devkit-testtmp",
  "fd-lock",
  "interprocess",
  "nix",
@@ -380,6 +378,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "tempfile",
  "toml",
 ]
 

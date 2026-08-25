@@ -3,12 +3,12 @@ use std::sync::{Arc, Mutex};
 
 #[test]
 fn memory_store_serves_reads_from_memory_after_alloc() {
-    let dir = devkit_testtmp::dir("devkit-memstore");
+    let dir = tempfile::tempdir().unwrap();
     let state = Arc::new(Mutex::new(registry::Data::default()));
-    let store = MemoryStore::new(state.clone(), dir.join("ports.json"));
+    let store = MemoryStore::new(state.clone(), dir.path().join("ports.json"));
 
     // Use the temp dir itself as the holder so holder_alive() returns true.
-    let holder = dir.to_string_lossy().into_owned();
+    let holder = dir.path().to_string_lossy().into_owned();
     let out =
         registry::alloc_with(&store, &holder, &[("api".to_string(), 9100)], Role::Issue).unwrap();
     let (_, port) = out[0];

@@ -349,10 +349,6 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-lib-{tag}"))
-    }
-
     #[test]
     fn facade_without_daemon_uses_flock_path() {
         // No daemon is running in unit tests, so daemon_request returns Ok(None) and
@@ -366,9 +362,9 @@ mod tests {
     fn resolved_fns_roundtrip_via_flock_path() {
         // No daemon runs in unit tests, so the `_resolved` fns fall through to the
         // FlockStore path. A unique root namespaces these lock rows.
-        let root = scratch("resolved-roundtrip");
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-        let r = root.to_string_lossy().into_owned();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        let r = root.path().to_string_lossy().into_owned();
         let paths = vec!["a.rs".to_string()];
 
         let out = acquire_resolved(&r, "holder-a", &paths, None, None, 60).expect("acquire");
@@ -403,9 +399,9 @@ mod tests {
 
     #[test]
     fn find_root_walks_up_to_git() {
-        let root = scratch("git-root");
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-        let deep = root.join("a/b/c");
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        let deep = root.path().join("a/b/c");
         std::fs::create_dir_all(&deep).unwrap();
         assert_eq!(find_root_from(&deep), root.path());
         let _ = std::fs::remove_dir_all(&root);
@@ -413,16 +409,20 @@ mod tests {
 
     #[test]
     fn find_root_falls_back_to_start_without_git() {
-        let start = scratch("no-git");
+        let start = tempfile::tempdir().unwrap();
         // The fallback is only reachable when the walk exhausts every parent,
         // so a stray `.git` above the temp dir — even an empty one, which the
         // walk cannot tell from a repository — answers first.
         assert!(
-            start.ancestors().skip(1).all(|d| !d.join(".git").exists()),
+            start
+                .path()
+                .ancestors()
+                .skip(1)
+                .all(|d| !d.join(".git").exists()),
             "a `.git` above {} decides the walk before the fallback runs",
-            start.display()
+            start.path().display()
         );
-        assert_eq!(find_root_from(&start), start.path());
+        assert_eq!(find_root_from(start.path()), start.path());
         let _ = std::fs::remove_dir_all(&start);
     }
 
@@ -447,10 +447,10 @@ mod tests {
 
     #[test]
     fn write_ctx_derives_root_and_relpath() {
-        let root = scratch("wctx");
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        let file = root.join("src/a.rs");
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        let file = root.path().join("src/a.rs");
         let (r, rel) = write_ctx(file.to_str().unwrap()).unwrap();
         assert_eq!(PathBuf::from(&r), root.path());
         assert_eq!(rel, "src/a.rs");

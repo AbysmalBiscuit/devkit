@@ -13,12 +13,12 @@ fn concurrent_alloc_never_collides() {
         std::process::exit(0);
     }
 
-    let tmp = devkit_testtmp::dir("devkit-race");
+    let tmp = tempfile::tempdir().unwrap();
     let exe = std::env::current_exe().unwrap();
 
     let mut kids = Vec::new();
     for i in 0..16 {
-        let holder = tmp.join(format!("w{i}")); // distinct, existing holder dirs
+        let holder = tmp.path().join(format!("w{i}")); // distinct, existing holder dirs
         std::fs::create_dir_all(&holder).unwrap();
         kids.push(
             Command::new(&exe)
@@ -26,8 +26,8 @@ fn concurrent_alloc_never_collides() {
                 // isolated: state_dir() prefers $XDG_STATE_HOME, then falls back to
                 // $HOME. Setting only one leaks to the developer's real registry when
                 // the other is present in the environment.
-                .env("HOME", &tmp)
-                .env("XDG_STATE_HOME", &tmp) // registry under tmp/devkit
+                .env("HOME", tmp.path())
+                .env("XDG_STATE_HOME", tmp.path()) // registry under tmp/devkit
                 .env("DEVKIT_TEST_ALLOC", &holder)
                 .args(["--exact", "concurrent_alloc_never_collides", "--nocapture"])
                 .output()

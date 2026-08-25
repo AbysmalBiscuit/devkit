@@ -232,9 +232,9 @@ mod tests {
 
     #[test]
     fn acquire_status_release_roundtrip_through_handlers() {
-        let root = devkit_testtmp::dir("devkit-mcp-locks");
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-        let r = root.to_string_lossy().into_owned();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        let r = root.path().to_string_lossy().into_owned();
         let c = ctx();
 
         let out = acquire(

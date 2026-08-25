@@ -999,14 +999,10 @@ mod store_seam_tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn tmp(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-seam-{tag}"))
-    }
-
     #[test]
     fn alloc_with_reserves_pidless_then_record_pid_attaches() {
-        let dir = tmp("alloc");
-        let store = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let store = FlockStore::at(dir.path());
         let out = alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
         let (_, port) = out[0];
         let d = store.snapshot().unwrap();
@@ -1025,30 +1021,30 @@ mod store_seam_tests {
         )
         .unwrap();
         assert_eq!(store.snapshot().unwrap().entries[&port].pid, Some(4321));
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn release_with_frees_holder() {
-        let dir = tmp("release");
-        let store = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let store = FlockStore::at(dir.path());
         alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
         let freed = release_with(&store, "/w", None).unwrap();
         assert_eq!(freed.len(), 1);
         assert!(store.snapshot().unwrap().entries.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn commit_refused_while_gate_held_exclusive() {
-        let dir = tmp("gate-held");
-        let store = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let store = FlockStore::at(dir.path());
         // Simulate a running daemon: hold devkitd.lock exclusive on a separate fd.
         let f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(false)
-            .open(dir.join("devkitd.lock"))
+            .open(dir.path().join("devkitd.lock"))
             .unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().expect("take exclusive gate");
@@ -1062,13 +1058,13 @@ mod store_seam_tests {
             err.downcast_ref::<DaemonHoldsLock>().is_some(),
             "got: {err:#}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn snapshot_is_ungated_and_prune_is_best_effort_under_held_gate() {
-        let dir = tmp("snap-gate");
-        let store = FlockStore::at(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        let store = FlockStore::at(dir.path());
         // Seed a dead reservation (dead holder dir => dead_ports flags it).
         store
             .commit(|d| {
@@ -1092,7 +1088,7 @@ mod store_seam_tests {
             .create(true)
             .write(true)
             .truncate(false)
-            .open(dir.join("devkitd.lock"))
+            .open(dir.path().join("devkitd.lock"))
             .unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().unwrap();
@@ -1101,29 +1097,29 @@ mod store_seam_tests {
             !snap.entries.contains_key(&9100),
             "dead entry pruned from the returned view"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn memorystore_commit_writes_through_and_updates_memory() {
-        let dir = tmp("mem-ok");
+        let dir = tempfile::tempdir().unwrap();
         let state = std::sync::Arc::new(std::sync::Mutex::new(Data::default()));
-        let store = MemoryStore::new(state.clone(), dir.join("ports.json"));
+        let store = MemoryStore::new(state.clone(), dir.path().join("ports.json"));
         alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue).unwrap();
         // memory updated
         assert_eq!(state.lock().unwrap().entries.len(), 1);
         // file written through (load sees it)
-        let on_disk: Data = devkit_common::store::load(&dir.join("ports.json"));
+        let on_disk: Data = devkit_common::store::load(&dir.path().join("ports.json"));
         assert_eq!(on_disk.entries.len(), 1);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 
     #[test]
     fn memorystore_commit_failure_leaves_memory_unchanged() {
-        let dir = tmp("mem-fail");
+        let dir = tempfile::tempdir().unwrap();
         let state = std::sync::Arc::new(std::sync::Mutex::new(Data::default()));
         // Point the data path at a *directory* so the file write fails.
-        let bad = dir.join("as-dir");
+        let bad = dir.path().join("as-dir");
         std::fs::create_dir_all(&bad).unwrap();
         let store = MemoryStore::new(state.clone(), bad);
         let err = alloc_with(&store, "/w", &[("api".into(), 9100)], Role::Issue);
@@ -1132,7 +1128,7 @@ mod store_seam_tests {
             state.lock().unwrap().entries.is_empty(),
             "memory must be unchanged when the write fails"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir.path());
     }
 }
 
