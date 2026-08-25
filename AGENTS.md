@@ -1,7 +1,7 @@
 # devkit
 
 A Rust workspace (edition 2024): a root `devkit` binary package whose six CLIs live
-in `src/bin/`, plus its library crates, coordinating local development for a monorepo.
+in `src/bin/`, plus the library crates, coordinating local development for a monorepo.
 The engine is project-agnostic; every project-specific detail lives in `devkit.toml`.
 See `README.md` for user-facing CLI docs.
 
@@ -22,7 +22,7 @@ verifies) using the stable toolchain CI uses, so formatting matches.
 ## Layout
 
 The workspace root is the `devkit` binary package; its CLIs live in `src/bin/` and
-install together via `cargo install --path .`. Its library crates are members.
+install together via `cargo install --path .`. The library crates are members.
 
 | Unit | Role |
 |---|---|
