@@ -28,10 +28,10 @@ fn git(cwd: &Path, args: &[&str]) {
 /// path the CLI reports would never equal the guard's own. Windows
 /// canonicalization instead prepends a `\\?\` verbatim prefix the CLI never
 /// prints, so there the path is kept as given.
-fn temp_root(name: &str) -> (devkit_testtmp::TmpDir, PathBuf) {
-    let guard = devkit_testtmp::dir(name);
+fn temp_root() -> (tempfile::TempDir, PathBuf) {
+    let guard = tempfile::tempdir().unwrap();
     let root = if cfg!(windows) {
-        guard.to_path_buf()
+        guard.path().to_path_buf()
     } else {
         std::fs::canonicalize(&guard).unwrap()
     };
@@ -59,7 +59,7 @@ fn fixture_repo(dir: &Path) {
 struct Env {
     /// Every path below lives inside this directory, which is removed when the
     /// `Env` drops.
-    _scratch: devkit_testtmp::TmpDir,
+    _scratch: tempfile::TempDir,
     root: PathBuf,
     home: PathBuf,
     data: PathBuf,
@@ -68,8 +68,8 @@ struct Env {
 }
 
 impl Env {
-    fn new(tag: &str) -> Self {
-        let (guard, root) = temp_root(&format!("docm-cli-{tag}"));
+    fn new() -> Self {
+        let (guard, root) = temp_root();
         let env = Env {
             _scratch: guard,
             home: root.join("home"),
@@ -315,7 +315,7 @@ fn wait(child: Child, label: &str) -> Output {
 
 #[test]
 fn add_materializes_the_checkout_and_reports_ref_commit_and_path() {
-    let env = Env::new("add-reports");
+    let env = Env::new();
     let added = env.add("up", "v1.0.0");
     assert_ran(&added, "docm add up");
 
@@ -339,7 +339,7 @@ fn add_materializes_the_checkout_and_reports_ref_commit_and_path() {
 
 #[test]
 fn a_failed_repin_leaves_the_previous_entry_intact() {
-    let env = Env::new("repin-rollback");
+    let env = Env::new();
     assert_ran(&env.add("up", "v1.0.0"), "docm add up v1.0.0");
     let before = read(&env.global());
 
@@ -365,7 +365,7 @@ fn a_failed_repin_leaves_the_previous_entry_intact() {
 
 #[test]
 fn a_failed_add_of_a_new_library_leaves_the_manifest_byte_identical() {
-    let env = Env::new("add-rollback");
+    let env = Env::new();
     assert_ran(&env.add("keep", "v1.0.0"), "docm add keep");
     let before = read(&env.global());
 
@@ -386,7 +386,7 @@ fn a_failed_add_of_a_new_library_leaves_the_manifest_byte_identical() {
 /// there has to put the file back rather than rewrite it.
 #[test]
 fn a_failed_project_add_leaves_the_devkit_toml_byte_identical() {
-    let env = Env::new("project-add-rollback");
+    let env = Env::new();
     let devkit_toml = env.write_devkit_toml("keep");
     let before = read(&devkit_toml);
 
@@ -404,7 +404,7 @@ fn a_failed_project_add_leaves_the_devkit_toml_byte_identical() {
 /// the rest of the file — comments, formatting, unrelated tables — alone.
 #[test]
 fn a_failed_project_repin_restores_the_previous_entry() {
-    let env = Env::new("project-repin-rollback");
+    let env = Env::new();
     let devkit_toml = env.write_devkit_toml("keep");
     let before = read(&devkit_toml);
 
@@ -436,7 +436,7 @@ fn a_failed_project_repin_restores_the_previous_entry() {
 
 #[test]
 fn rm_project_removes_only_the_named_entry() {
-    let env = Env::new("project-rm");
+    let env = Env::new();
     let devkit_toml = env.write_devkit_toml("keep");
 
     let removed = env.docm(&["rm", "keep", "--project"]);
@@ -452,7 +452,7 @@ fn rm_project_removes_only_the_named_entry() {
 
 #[test]
 fn add_of_a_ref_less_git_entry_pins_the_default_branch_globally() {
-    let env = Env::new("add-infers");
+    let env = Env::new();
     let added = env.docm(&["add", "up", "--eco", "git", "--repo", &env.upstream]);
     assert_ran(&added, "docm add up (no --ref)");
 
@@ -471,7 +471,7 @@ fn add_of_a_ref_less_git_entry_pins_the_default_branch_globally() {
 
 #[test]
 fn add_project_refuses_to_infer_a_default_branch() {
-    let env = Env::new("add-project-refuses");
+    let env = Env::new();
     let devkit_toml = env.project.join("devkit.toml");
     std::fs::write(&devkit_toml, "[defaults]\napps_dir = 'apps'\n").unwrap();
     let before = read(&devkit_toml);
@@ -501,7 +501,7 @@ fn add_project_refuses_to_infer_a_default_branch() {
 
 #[test]
 fn sync_records_a_missing_ref_in_the_global_manifest() {
-    let env = Env::new("sync-backfills");
+    let env = Env::new();
     std::fs::write(
         env.global(),
         format!(
@@ -524,7 +524,7 @@ fn sync_records_a_missing_ref_in_the_global_manifest() {
 
 #[test]
 fn sync_refuses_to_write_an_inferred_ref_into_a_devkit_toml() {
-    let env = Env::new("sync-project-refuses");
+    let env = Env::new();
     let devkit_toml = env.project.join("devkit.toml");
     std::fs::write(
         &devkit_toml,
@@ -554,7 +554,7 @@ fn sync_refuses_to_write_an_inferred_ref_into_a_devkit_toml() {
 
 #[test]
 fn info_and_list_report_the_ref_commit_and_clone_origin() {
-    let env = Env::new("info-list");
+    let env = Env::new();
     assert_ran(&env.add("up", "v1.0.0"), "docm add up");
 
     let info = env.docm(&["info", "up"]);
@@ -593,7 +593,7 @@ fn info_and_list_report_the_ref_commit_and_clone_origin() {
 /// whose source no longer matches its commit fails the command instead.
 #[test]
 fn info_fails_instead_of_reporting_ok_for_a_dirty_checkout() {
-    let env = Env::new("info-dirty");
+    let env = Env::new();
     assert_ran(&env.add("up", "v1.0.0"), "docm add up");
     std::fs::write(
         env.checkout("up", "v1.0.0").join("src/lib.rs"),
@@ -623,7 +623,7 @@ fn info_fails_instead_of_reporting_ok_for_a_dirty_checkout() {
 /// commit afterwards, leaving `up` registered by a command that removed it.
 #[test]
 fn rm_blocks_until_a_concurrent_add_of_the_same_library_completes() {
-    let env = Env::new("rm-add-race");
+    let env = Env::new();
     assert_ran(&env.add("keep", "v1.0.0"), "docm add keep");
     let barrier = env.root.join("barrier");
     // The manifest write and the resolution have rendezvous of their own,
@@ -687,7 +687,7 @@ fn rm_blocks_until_a_concurrent_add_of_the_same_library_completes() {
 /// with no working CLI is not.
 #[test]
 fn an_unsatisfiable_migration_record_does_not_disable_the_cli() {
-    let env = Env::new("journal-unsatisfiable");
+    let env = Env::new();
     assert_ran(&env.add("up", "v1.0.0"), "docm add up");
     let journal = env.write_unsatisfiable_journal("up");
 
@@ -717,7 +717,7 @@ fn an_unsatisfiable_migration_record_does_not_disable_the_cli() {
 /// cache migration that can warn or fail.
 #[test]
 fn completions_neither_migrates_the_cache_nor_writes_to_stderr() {
-    let env = Env::new("completions-no-migration");
+    let env = Env::new();
     assert_ran(&env.add("up", "v1.0.0"), "docm add up");
     let journal = env.write_unsatisfiable_journal("up");
 
@@ -745,7 +745,7 @@ fn completions_neither_migrates_the_cache_nor_writes_to_stderr() {
 /// model, and the comments and ordering around them.
 #[test]
 fn a_successful_project_repin_keeps_unmodeled_keys_and_inner_comments() {
-    let env = Env::new("project-repin-keeps");
+    let env = Env::new();
     let devkit_toml = env.write_devkit_toml_with_extras("keep");
 
     let repinned = env.add_project("keep", "v1.1.0");
@@ -780,7 +780,7 @@ fn a_successful_project_repin_keeps_unmodeled_keys_and_inner_comments() {
 /// stderr — the channel readers are told to treat as a stop signal.
 #[test]
 fn a_lockfile_resolution_reports_its_provenance_on_stdout_only() {
-    let env = Env::new("lockfile-provenance");
+    let env = Env::new();
     env.write_cargo_project("up", "1.0.0");
 
     let added = env.docm(&["add", "up", "--eco", "rust", "--repo", &env.upstream]);
@@ -827,7 +827,7 @@ fn a_lockfile_resolution_reports_its_provenance_on_stdout_only() {
 /// installed and the pin that overrides it.
 #[test]
 fn an_npm_alias_is_refused_rather_than_resolved_to_the_wrong_repo() {
-    let env = Env::new("npm-alias");
+    let env = Env::new();
     env.write_npm_project(
         "up",
         "npm:up-fork@^1.0.0",
@@ -876,7 +876,7 @@ fn an_npm_alias_is_refused_rather_than_resolved_to_the_wrong_repo() {
 /// recovery the error names.
 #[test]
 fn a_reserved_library_name_names_a_recovery_that_works() {
-    let env = Env::new("reserved-name");
+    let env = Env::new();
     assert_ran(&env.add("other", "v1.0.0"), "docm add other");
 
     let manifest = env.global();
@@ -919,7 +919,7 @@ fn a_reserved_library_name_names_a_recovery_that_works() {
 
 #[test]
 fn forget_releases_this_projects_reference_and_leaves_another_projects() {
-    let env = Env::new("forget");
+    let env = Env::new();
     assert_ran(&env.add("libx", "v1.0.0"), "docm add libx");
     let other = env.root.join("other");
     std::fs::create_dir_all(&other).unwrap();
@@ -954,7 +954,7 @@ fn forget_releases_a_library_the_manifest_no_longer_lists() {
     // A row outlives the registration that created it, and it alone keeps the
     // library in this project's brief — so forget reads the registry, not the
     // manifest.
-    let env = Env::new("forget-unregistered");
+    let env = Env::new();
     assert_ran(&env.add("libx", "v1.0.0"), "docm add libx");
     assert_ran(&env.docm(&["rm", "libx"]), "docm rm libx");
 
@@ -966,7 +966,7 @@ fn forget_releases_a_library_the_manifest_no_longer_lists() {
 
 #[test]
 fn forget_of_an_unreferenced_library_fails_instead_of_reporting_success() {
-    let env = Env::new("forget-unreferenced");
+    let env = Env::new();
     assert_ran(&env.add("libx", "v1.0.0"), "docm add libx");
 
     let forgotten = env.docm(&["forget", "liby"]);
@@ -990,7 +990,7 @@ fn forget_of_an_unreferenced_library_fails_instead_of_reporting_success() {
 
 #[test]
 fn list_project_filters_to_the_checkout_and_counts_what_it_dropped() {
-    let env = Env::new("list-project");
+    let env = Env::new();
     // Two registered libraries; only one is declared by this project.
     std::fs::write(
         env.project.join("Cargo.toml"),
@@ -1043,7 +1043,7 @@ fn list_project_filters_to_the_checkout_and_counts_what_it_dropped() {
 
 #[test]
 fn list_project_exits_non_zero_on_a_broken_manifest() {
-    let env = Env::new("list-project-broken");
+    let env = Env::new();
     std::fs::create_dir_all(env.home.join(".config/devkit")).unwrap();
     std::fs::write(env.home.join(".config/devkit/docs.toml"), "not toml [[[").unwrap();
 
@@ -1061,7 +1061,7 @@ fn list_project_and_info_select_the_same_version() {
     // The test that replaces "correct by construction" for the part
     // construction cannot guarantee: `pins` and `resolve` must name the same
     // version for the same library from the same cwd.
-    let env = Env::new("list-project-agreement");
+    let env = Env::new();
     std::fs::write(
         env.project.join("Cargo.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nfixture = \"1.0.0\"\n",
@@ -1100,7 +1100,7 @@ fn list_project_and_info_select_the_same_version() {
 fn a_ref_only_project_with_no_lockfile_renders_a_full_table() {
     // The lockfile-less case is the shape a git-ecosystem project has, not a
     // degradation: every row is a ref, and the table is not empty.
-    let env = Env::new("list-project-refs");
+    let env = Env::new();
     std::fs::write(
         env.project.join("devkit.toml"),
         format!(

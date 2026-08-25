@@ -57,11 +57,11 @@ mod tests {
     /// `$DEVKIT_CONFIG` takes part.
     #[test]
     fn the_configured_kind_wins_over_detection() {
-        let dir = devkit_testtmp::dir("devkit-tracker");
-        let start = dir.to_str().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let start = dir.path().to_str().unwrap();
 
         for (named, kind) in [("linear", TrackerKind::Linear), ("none", TrackerKind::None)] {
-            let path = dir.join(format!("{named}.toml"));
+            let path = dir.path().join(format!("{named}.toml"));
             write_config(&path, named);
             assert_eq!(
                 select(path.to_str(), start, None).0.tracker.kind(),

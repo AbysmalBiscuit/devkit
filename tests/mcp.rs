@@ -1,21 +1,12 @@
+use serde_json::{Value, json};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
-
-use serde_json::{Value, json};
-
-static COUNTER: AtomicU32 = AtomicU32::new(0);
-
-fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
-    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    devkit_testtmp::dir(&format!("devkit-mcp-{tag}-{n}"))
-}
 
 /// A project dir with a `.git` marker so `find_root_from`/normalization resolve.
-fn project() -> devkit_testtmp::TmpDir {
-    let p = scratch("proj");
-    std::fs::create_dir_all(p.join(".git")).unwrap();
+fn project() -> tempfile::TempDir {
+    let p = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(p.path().join(".git")).unwrap();
     p
 }
 
@@ -33,16 +24,16 @@ path = "apps/web"
 "#;
 
 /// A project dir that also carries a minimal devkit.toml with one app `web`.
-fn project_with_config() -> devkit_testtmp::TmpDir {
+fn project_with_config() -> tempfile::TempDir {
     let p = project();
-    std::fs::write(p.join("devkit.toml"), MINIMAL_CONFIG).unwrap();
+    std::fs::write(p.path().join("devkit.toml"), MINIMAL_CONFIG).unwrap();
     p
 }
 
 /// A real (empty) git repo so `git worktree list` resolves with only the main
 /// worktree — `issue.status` then returns empty without needing `gh`.
-fn git_repo() -> devkit_testtmp::TmpDir {
-    let p = scratch("repo");
+fn git_repo() -> tempfile::TempDir {
+    let p = tempfile::tempdir().unwrap();
     let ok = Command::new("git")
         .args(["init", "-q"])
         .current_dir(&p)
@@ -97,11 +88,11 @@ fn tool_json(resp: &Value, expect_error: bool) -> Value {
 #[test]
 fn ports_alloc_status_release_roundtrip() {
     let proj = project_with_config();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[
             call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
             call_req(2, "ports.status", json!({})),
@@ -126,11 +117,11 @@ fn ports_alloc_status_release_roundtrip() {
 #[test]
 fn ports_alloc_unknown_app_is_an_error() {
     let proj = project_with_config();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[call_req(
             1,
             "ports.alloc",
@@ -147,11 +138,11 @@ fn ports_alloc_unknown_app_is_an_error() {
 #[test]
 fn locks_acquire_then_other_holder_sees_conflict() {
     let proj = project();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[
             call_req(
                 1,
@@ -178,11 +169,11 @@ fn locks_acquire_then_other_holder_sees_conflict() {
 #[test]
 fn locks_acquire_then_release_clears_the_lock() {
     let proj = project();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[
             call_req(
                 1,
@@ -207,11 +198,11 @@ fn locks_acquire_then_release_clears_the_lock() {
 #[test]
 fn locks_release_without_paths_or_all_is_an_error() {
     let proj = project();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[call_req(
             1,
             "locks.release",
@@ -225,11 +216,11 @@ fn locks_release_without_paths_or_all_is_an_error() {
 #[test]
 fn locks_acquire_on_held_path_returns_conflicts_not_error() {
     let proj = project();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[
             call_req(
                 1,
@@ -258,11 +249,11 @@ fn locks_acquire_on_held_path_returns_conflicts_not_error() {
 #[test]
 fn devrun_status_lists_tracked_servers_for_root() {
     let proj = project_with_config();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[
             // Reserve a port so there is something to report.
             call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
@@ -286,8 +277,12 @@ fn devrun_status_lists_tracked_servers_for_root() {
 #[test]
 fn devrun_status_without_root_or_all_is_an_error() {
     let proj = project();
-    let state = scratch("state");
-    let resps = mcp(&proj, &state, &[call_req(1, "devrun.status", json!({}))]);
+    let state = tempfile::tempdir().unwrap();
+    let resps = mcp(
+        proj.path(),
+        state.path(),
+        &[call_req(1, "devrun.status", json!({}))],
+    );
     let payload = tool_json(&resps[0], true);
     assert!(payload.as_str().unwrap().contains("root"));
 }
@@ -295,11 +290,11 @@ fn devrun_status_without_root_or_all_is_an_error() {
 #[test]
 fn devrun_logs_unknown_app_is_an_error() {
     let proj = project();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[call_req(
             1,
             "devrun.logs",
@@ -313,11 +308,11 @@ fn devrun_logs_unknown_app_is_an_error() {
 #[test]
 fn devrun_down_releases_reserved_ports() {
     let proj = project_with_config();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[
             call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
             call_req(2, "devrun.down", json!({ "root": root })),
@@ -340,11 +335,11 @@ fn devrun_down_releases_reserved_ports() {
 #[test]
 fn devrun_up_unknown_app_is_an_error() {
     let proj = project_with_config();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[call_req(
             1,
             "devrun.up",
@@ -358,11 +353,11 @@ fn devrun_up_unknown_app_is_an_error() {
 #[test]
 fn devrun_up_requires_at_least_one_app() {
     let proj = project_with_config();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[call_req(
             1,
             "devrun.up",
@@ -376,10 +371,10 @@ fn devrun_up_requires_at_least_one_app() {
 #[test]
 fn issue_actions_are_described() {
     let proj = project();
-    let state = scratch("state");
+    let state = tempfile::tempdir().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[json!({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": "devkit_describe", "arguments": {} }
@@ -400,11 +395,11 @@ fn issue_actions_are_described() {
 #[test]
 fn issue_status_empty_for_repo_with_no_worktrees() {
     let proj = git_repo();
-    let state = scratch("state");
-    let root = proj.to_str().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let root = proj.path().to_str().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[call_req(1, "issue.status", json!({ "root": root }))],
     );
     let report = tool_json(&resps[0], false);
@@ -422,10 +417,10 @@ fn issue_status_empty_for_repo_with_no_worktrees() {
 #[test]
 fn handshake_lifecycle_initialize_notification_tools_list() {
     let proj = project();
-    let state = scratch("state");
+    let state = tempfile::tempdir().unwrap();
     let resps = mcp(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &[
             json!({
                 "jsonrpc": "2.0", "id": 1, "method": "initialize",

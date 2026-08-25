@@ -59,7 +59,7 @@ pub fn pid_in_ports_json(body: &str, app_name: &str) -> Option<u32> {
 
 /// A running `devkitd` instance bound to a throwaway HOME directory.
 pub struct Harness {
-    pub home: devkit_testtmp::TmpDir,
+    pub home: tempfile::TempDir,
     /// `$XDG_STATE_HOME` passed to the daemon — state lives under `<xdg_state>/devkit/`.
     pub xdg_state: PathBuf,
     child: Child,
@@ -115,16 +115,16 @@ impl Harness {
     /// Spawn a daemon bound to a throwaway HOME, with `extra` env on top of the
     /// fixed test env, then wait for its socket.
     fn start_with_env(extra: &[(&str, String)]) -> Self {
-        let home = devkit_testtmp::dir("portd-test");
+        let home = tempfile::tempdir().unwrap();
         // XDG_STATE_HOME is set explicitly so the daemon's state_dir() resolves
         // to a path inside the throwaway temp dir, even when the real user's
         // XDG_STATE_HOME env var is set in the surrounding shell.
-        let xdg_state = home.join("state");
+        let xdg_state = home.path().join("state");
         std::fs::create_dir_all(xdg_state.join("devkit/logs")).expect("create test HOME dirs");
 
         let bin = env!("CARGO_BIN_EXE_devkitd");
         let mut cmd = Command::new(bin);
-        cmd.env("HOME", &home)
+        cmd.env("HOME", home.path())
             .env("XDG_STATE_HOME", &xdg_state)
             // The daemon sets this itself; pre-setting it keeps facade calls in the
             // child resolving locally rather than connecting back over the socket.

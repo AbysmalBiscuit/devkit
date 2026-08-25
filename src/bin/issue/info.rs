@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn local_row_reads_branch_id_and_dirty() {
         use std::process::Command;
-        let base = devkit_testtmp::dir("devkit-localrow");
+        let base = tempfile::tempdir().unwrap();
         let run = |args: &[&str]| {
             assert!(
                 Command::new("git")
@@ -344,18 +344,18 @@ mod tests {
         run(&["init", "-q", "-b", "lev/eng-9-foo"]);
         run(&["config", "user.email", "t@t"]);
         run(&["config", "user.name", "t"]);
-        std::fs::write(base.join("f"), "x").unwrap();
+        std::fs::write(base.path().join("f"), "x").unwrap();
         run(&["add", "."]);
         run(&["commit", "-qm", "init"]);
 
-        let top = base.to_str().unwrap();
+        let top = base.path().to_str().unwrap();
         let r = local_row(top).unwrap();
         assert_eq!(r.issue_id, "ENG-9");
         assert_eq!(r.branch, "lev/eng-9-foo");
         assert_eq!(r.pr.number(), None);
         assert!(!r.dirty);
 
-        std::fs::write(base.join("g"), "y").unwrap();
+        std::fs::write(base.path().join("g"), "y").unwrap();
         assert!(local_row(top).unwrap().dirty);
     }
 

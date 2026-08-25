@@ -71,11 +71,11 @@ fn the_harness_confines_the_cache_home_to_its_sandbox() {
 
 #[test]
 fn moved_tag_reporting_only_claims_success_after_repair() {
-    let root = devkit_testtmp::dir("docm-reporting");
-    let home = root.join("home");
-    let data_home = root.join("data");
-    let project = root.join("project");
-    let upstream = root.join("upstream");
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let data_home = root.path().join("data");
+    let project = root.path().join("project");
+    let upstream = root.path().join("upstream");
     std::fs::create_dir_all(home.join(".config/devkit")).unwrap();
     std::fs::create_dir_all(&project).unwrap();
     fixture_repo(&upstream);
@@ -88,7 +88,7 @@ fn moved_tag_reporting_only_claims_success_after_repair() {
     )
     .unwrap();
 
-    let initial = run_docm(&root, &project);
+    let initial = run_docm(root.path(), &project);
     assert!(initial.status.success());
     let checkout = std::path::PathBuf::from(
         String::from_utf8(initial.stdout)
@@ -103,7 +103,7 @@ fn moved_tag_reporting_only_claims_success_after_repair() {
         .unwrap()
         .fetch()
         .unwrap();
-    let repaired = run_docm(&root, &project);
+    let repaired = run_docm(root.path(), &project);
     assert!(repaired.status.success());
     assert!(
         String::from_utf8_lossy(&repaired.stderr).contains("re-pointed"),
@@ -117,7 +117,7 @@ fn moved_tag_reporting_only_claims_success_after_repair() {
         .fetch()
         .unwrap();
     std::fs::write(checkout.join("src/lib.rs"), "// local change").unwrap();
-    let failed = run_docm(&root, &project);
+    let failed = run_docm(root.path(), &project);
     assert!(!failed.status.success());
     assert!(
         !String::from_utf8_lossy(&failed.stderr).contains("re-pointed"),

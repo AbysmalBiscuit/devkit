@@ -40,7 +40,7 @@ fn second_instance_exits_immediately() {
     let mut h = Harness::start();
 
     let status = Command::new(common::daemon_bin())
-        .env("HOME", &h.home)
+        .env("HOME", h.home.path())
         .env("XDG_STATE_HOME", &h.xdg_state)
         .env("DEVKIT_DAEMON_IDLE_SECS", "3600")
         .env("DEVKITD_SELF", "1")

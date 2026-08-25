@@ -20,8 +20,8 @@ fn concurrent_write_decide_yields_one_winner() {
         std::process::exit(0);
     }
 
-    let tmp = devkit_testtmp::dir("devkit-wrace");
-    let repo = tmp.join("repo");
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
     std::fs::create_dir_all(repo.join(".git")).unwrap();
     std::fs::create_dir_all(repo.join("src")).unwrap();
     let file = repo.join("src/a.rs");
@@ -33,8 +33,8 @@ fn concurrent_write_decide_yields_one_winner() {
             Command::new(&exe)
                 // Pin BOTH state-home inputs so the worker registry is isolated;
                 // setting only one leaks to the developer's real registry.
-                .env("HOME", &tmp)
-                .env("XDG_STATE_HOME", &tmp)
+                .env("HOME", tmp.path())
+                .env("XDG_STATE_HOME", tmp.path())
                 .env("DEVKIT_TEST_WRITE", holder)
                 .env("DEVKIT_TEST_FILE", &file)
                 .args([

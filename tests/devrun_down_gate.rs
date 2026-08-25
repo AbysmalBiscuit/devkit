@@ -7,17 +7,17 @@ mod common;
 #[test]
 fn down_all_without_tty_refuses() {
     // Throwaway state home with a seeded foreign reservation.
-    let home = devkit_testtmp::dir("devrun-gate");
-    let xdg_state = home.join("state");
+    let home = tempfile::tempdir().unwrap();
+    let xdg_state = home.path().join("state");
     let devkit_dir = xdg_state.join("devkit");
     std::fs::create_dir_all(devkit_dir.join("logs")).unwrap();
 
     // A foreign holder dir that exists on disk (so snapshot() does not prune it).
-    let foreign = home.join("foreign-wt");
+    let foreign = home.path().join("foreign-wt");
     std::fs::create_dir_all(&foreign).unwrap();
 
     // A current worktree that is a real git repo (toplevel resolves), distinct from foreign.
-    let cur = home.join("cur-wt");
+    let cur = home.path().join("cur-wt");
     std::fs::create_dir_all(&cur).unwrap();
     run_git(&cur, &["init", "-q"]);
 
@@ -34,7 +34,7 @@ fn down_all_without_tty_refuses() {
         .arg("-C")
         .arg(&cur)
         .args(["down", "--all"])
-        .env("HOME", &home)
+        .env("HOME", home.path())
         .env("XDG_STATE_HOME", &xdg_state)
         // No daemon; force the direct path.
         .stdin(std::process::Stdio::null())

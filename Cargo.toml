@@ -43,7 +43,6 @@ devkit-docs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-devkit-testtmp.workspace = true
 # A collapsed diff when the committed JSON schema drifts from the config types.
 similar = "2"
 devkit-common = { workspace = true, features = ["test-support"] }

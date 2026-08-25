@@ -41,49 +41,37 @@ pub fn write(worktree: &Path, pr: &CachedPr) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-info-cache-{tag}"))
-    }
-
     #[test]
     fn write_then_read_round_trips() {
-        let wt = scratch("rt");
-        let _ = std::fs::remove_dir_all(&wt);
-        std::fs::create_dir_all(&wt).unwrap();
+        let wt = tempfile::tempdir().unwrap();
         let pr = CachedPr {
             number: 123,
             state: "OPEN".into(),
             url: "https://x/pr/123".into(),
         };
-        write(&wt, &pr).unwrap();
-        assert_eq!(read(&wt), Some(pr));
-        let _ = std::fs::remove_dir_all(&wt);
+        write(wt.path(), &pr).unwrap();
+        assert_eq!(read(wt.path()), Some(pr));
     }
 
     #[test]
     fn read_missing_is_none() {
-        let wt = scratch("missing");
-        let _ = std::fs::remove_dir_all(&wt);
-        assert_eq!(read(&wt), None);
+        let wt = tempfile::tempdir().unwrap();
+        assert_eq!(read(wt.path()), None);
     }
 
     #[test]
     fn read_corrupt_is_none() {
-        let wt = scratch("corrupt");
-        let _ = std::fs::remove_dir_all(&wt);
-        std::fs::create_dir_all(wt.join(".devkit")).unwrap();
-        std::fs::write(wt.join(".devkit").join("pr.json"), b"not json").unwrap();
-        assert_eq!(read(&wt), None);
-        let _ = std::fs::remove_dir_all(&wt);
+        let wt = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(wt.path().join(".devkit")).unwrap();
+        std::fs::write(wt.path().join(".devkit").join("pr.json"), b"not json").unwrap();
+        assert_eq!(read(wt.path()), None);
     }
 
     #[test]
     fn write_leaves_no_temp_file() {
-        let wt = scratch("notmp");
-        let _ = std::fs::remove_dir_all(&wt);
-        std::fs::create_dir_all(&wt).unwrap();
+        let wt = tempfile::tempdir().unwrap();
         write(
-            &wt,
+            wt.path(),
             &CachedPr {
                 number: 1,
                 state: "MERGED".into(),
@@ -91,12 +79,11 @@ mod tests {
             },
         )
         .unwrap();
-        let leftover: Vec<_> = std::fs::read_dir(wt.join(".devkit"))
+        let leftover: Vec<_> = std::fs::read_dir(wt.path().join(".devkit"))
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .collect();
         assert!(leftover.is_empty(), "temp file left behind: {leftover:?}");
-        let _ = std::fs::remove_dir_all(&wt);
     }
 }

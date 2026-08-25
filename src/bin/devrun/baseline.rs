@@ -48,10 +48,10 @@ mod tests {
     use super::*;
     #[test]
     fn refuses_dirty_baseline() {
-        let tmp = devkit_testtmp::dir("bl");
-        let p = tmp.to_str().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().to_str().unwrap();
         git(&["init", "-q"], p).unwrap();
-        std::fs::write(tmp.join("f"), "x").unwrap();
+        std::fs::write(tmp.path().join("f"), "x").unwrap();
         // dirty (untracked) tree → guard trips
         let err = ensure_fresh(p, p, "origin/staging").unwrap_err();
         assert!(err.to_string().contains("dirty"));
@@ -59,13 +59,13 @@ mod tests {
 
     #[test]
     fn head_at_true_only_when_head_equals_ref() {
-        let tmp = devkit_testtmp::dir("headat");
-        let p = tmp.to_str().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().to_str().unwrap();
         git(&["init", "-q"], p).unwrap();
         git(&["config", "user.email", "t@t"], p).unwrap();
         git(&["config", "user.name", "t"], p).unwrap();
         git(&["config", "commit.gpgsign", "false"], p).unwrap();
-        std::fs::write(tmp.join("f"), "a").unwrap();
+        std::fs::write(tmp.path().join("f"), "a").unwrap();
         git(&["add", "-A"], p).unwrap();
         git(&["commit", "-qm", "init"], p).unwrap();
         git(&["branch", "target"], p).unwrap();
@@ -74,7 +74,7 @@ mod tests {
         assert!(head_at(p, "target"));
 
         // Move HEAD forward; `target` stays behind.
-        std::fs::write(tmp.join("f"), "b").unwrap();
+        std::fs::write(tmp.path().join("f"), "b").unwrap();
         git(&["commit", "-aqm", "second"], p).unwrap();
         assert!(!head_at(p, "target"));
     }

@@ -13,7 +13,7 @@ use devkit_ports::registry::Role;
 fn alloc_through_daemon_writes_registry() {
     let mut h = Harness::start();
     // Use the test's throwaway HOME as the holder (it exists on disk).
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     let resp = h.request(&Request::Alloc {
         holder: holder.clone(),
@@ -60,7 +60,7 @@ fn alloc_through_daemon_writes_registry() {
 #[test]
 fn snapshot_roundtrips() {
     let mut h = Harness::start();
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     // Alloc a slot.
     h.request(&Request::Alloc {

@@ -19,16 +19,16 @@ struct Project {
     home: PathBuf,
     /// Both paths above live inside this directory, which is removed when the
     /// `Project` drops. Every field a test reads is invalid without it.
-    _scratch: devkit_testtmp::TmpDir,
+    _scratch: tempfile::TempDir,
 }
 
 impl Project {
     /// A git checkout with a docs-only devkit.toml and a Cargo lockfile that
     /// declares `serde`, plus a global docs manifest registering it.
-    fn docs_only(tag: &str) -> Self {
-        let root = devkit_testtmp::dir(&format!("devkit-brief-{tag}"));
-        let home = root.join("home");
-        let repo = root.join("repo");
+    fn docs_only() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let repo = root.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         for args in [
             vec!["init", "-b", "main"],
@@ -64,10 +64,10 @@ impl Project {
 
     /// A directory the brief has nothing to say about: no devkit.toml, and a
     /// home with no docs manifest, so neither half of the brief renders.
-    fn nothing_to_say(tag: &str) -> Self {
-        let root = devkit_testtmp::dir(&format!("devkit-brief-{tag}"));
-        let home = root.join("home");
-        let repo = root.join("repo");
+    fn nothing_to_say() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let repo = root.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         std::fs::create_dir_all(&home).unwrap();
         Project {
@@ -155,7 +155,7 @@ fn brief_with_stdin(project: &Project, args: &[&str], stdin: &str, columns: &str
 
 #[test]
 fn pins_only_emits_just_the_library_section() {
-    let project = Project::docs_only("pins-only");
+    let project = Project::docs_only();
     project.set_config(&format!(
         "[config]\nroot = true\n\n{DEFAULTS}[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
@@ -171,7 +171,7 @@ fn the_two_emission_modes_are_mutually_exclusive() {
     // The watermark records the whole brief. Honouring both flags at once
     // would stamp it after emitting only the library table, and the next
     // full --if-changed run would suppress a brief the session never saw.
-    let project = Project::docs_only("modes-exclusive");
+    let project = Project::docs_only();
     let out = project.brief(&["--pins-only", "--if-changed"]);
     assert!(!out.status.success());
     assert!(out.stdout.is_empty());
@@ -179,7 +179,7 @@ fn the_two_emission_modes_are_mutually_exclusive() {
 
 #[test]
 fn if_changed_emits_once_per_session_and_ignores_width() {
-    let project = Project::docs_only("watermark");
+    let project = Project::docs_only();
     let session = r#"{"session_id":"abc-123"}"#;
 
     let first = brief_with_stdin(&project, &["--if-changed"], session, "100");
@@ -207,7 +207,7 @@ fn a_full_brief_is_not_repeated_to_the_session_that_received_it() {
     // SessionStart runs the bare brief and CwdChanged runs `--if-changed` in
     // the same checkout. Without a stamp on the bare path the second call
     // finds no watermark and re-emits everything the first already delivered.
-    let project = Project::docs_only("watermark-session-start");
+    let project = Project::docs_only();
     let session = r#"{"session_id":"start-then-cd"}"#;
 
     let start = brief_with_stdin(&project, &[], session, "100");
@@ -234,7 +234,7 @@ fn a_full_brief_is_not_repeated_to_the_session_that_received_it() {
 fn a_pins_only_emission_leaves_the_full_brief_owed() {
     // `--pins-only` carries neither the apps, tasks nor server sections, so
     // stamping after it would suppress a full brief the session never saw.
-    let project = Project::docs_only("watermark-pins-only");
+    let project = Project::docs_only();
     let session = r#"{"session_id":"pins-then-cd"}"#;
 
     assert!(
@@ -256,7 +256,7 @@ fn pins_only_clears_the_watermark_so_the_next_if_changed_call_re_emits_the_full_
     // CwdChanged's `--if-changed` compares against a watermark that already
     // matches the current state and stays silent — so a session coming out of
     // a compaction never gets the devrun half of its brief back.
-    let project = Project::docs_only("pins-only-clears-watermark");
+    let project = Project::docs_only();
     project.set_config(&format!(
         "[config]\nroot = true\n\n{DEFAULTS}[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
@@ -278,7 +278,7 @@ fn pins_only_clears_the_watermark_so_the_next_if_changed_call_re_emits_the_full_
 
 #[test]
 fn two_session_ids_do_not_share_a_watermark() {
-    let project = Project::docs_only("watermark-sessions");
+    let project = Project::docs_only();
     let a = brief_with_stdin(&project, &["--if-changed"], r#"{"session_id":"a"}"#, "100");
     assert!(!a.stdout.is_empty());
     let b = brief_with_stdin(&project, &["--if-changed"], r#"{"session_id":"b"}"#, "100");
@@ -310,7 +310,7 @@ fn no_session_id_emits_every_time() {
     // Falling back to a per-cwd key makes concurrent sessions share one
     // watermark, so A → B → A would suppress A's re-injection even though B
     // displaced it. A duplicate brief is the acceptable failure.
-    let project = Project::docs_only("watermark-anonymous");
+    let project = Project::docs_only();
     assert!(
         !brief_with_stdin(&project, &["--if-changed"], "", "100")
             .stdout
@@ -326,7 +326,7 @@ fn no_session_id_emits_every_time() {
 #[test]
 fn an_unwritable_state_dir_fails_open() {
     use std::io::Write;
-    let project = Project::docs_only("watermark-unwritable");
+    let project = Project::docs_only();
     // A session id is supplied, so this exercises the watermark path rather
     // than the no-id path.
     let run = || {
@@ -364,7 +364,7 @@ fn an_unwritable_state_dir_fails_open() {
 
 #[test]
 fn leaving_a_project_says_so_once() {
-    let project = Project::docs_only("watermark-leaving");
+    let project = Project::docs_only();
     let session = r#"{"session_id":"leaving"}"#;
     assert!(
         !brief_with_stdin(&project, &["--if-changed"], session, "100")
@@ -424,7 +424,7 @@ fn a_repo_with_no_devkit_toml_renders_pins() {
     // when there is no devkit.toml above the cwd and no personal config, so
     // today this repo gets no brief at all — even though its lockfile declares
     // a globally registered library.
-    let project = Project::docs_only("no-devkit-toml");
+    let project = Project::docs_only();
     std::fs::remove_file(project.root.join("devkit.toml")).unwrap();
 
     let out = project.brief(&[]);
@@ -439,7 +439,7 @@ fn an_unrelated_repo_stays_silent() {
     // The inverse, and it must hold at the same time: the machine-wide catalog
     // accumulates every library ever asked about, so a checkout that evidences
     // none of them gets no section — not an empty one.
-    let project = Project::docs_only("unrelated-repo");
+    let project = Project::docs_only();
     std::fs::remove_file(project.root.join("devkit.toml")).unwrap();
     std::fs::remove_file(project.root.join("Cargo.lock")).unwrap();
     std::fs::remove_file(project.root.join("Cargo.toml")).unwrap();
@@ -456,7 +456,7 @@ fn an_unrelated_repo_stays_silent() {
 #[test]
 fn a_docs_only_project_renders_pins() {
     // A devkit.toml with a [docs] section and nothing devrun can use.
-    let project = Project::docs_only("docs-only");
+    let project = Project::docs_only();
     let out = project.brief(&[]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "brief never fails: {out:?}");
@@ -474,7 +474,7 @@ fn a_pins_only_brief_makes_no_devrun_claim() {
     // ports, canned tasks, and cross-session file locks are
     // coordinated by the devkit CLIs" is false for a checkout with no
     // devkit.toml at all — an agent would act on that claim as fact.
-    let project = Project::docs_only("no-devrun-claim");
+    let project = Project::docs_only();
     std::fs::remove_file(project.root.join("devkit.toml")).unwrap();
 
     let text = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
@@ -489,7 +489,7 @@ fn a_pins_only_brief_makes_no_devrun_claim() {
 fn a_devrun_brief_still_makes_the_devrun_claim() {
     // The inverse of the above: the claim is accurate and must not
     // disappear when this checkout does have a devrun setup.
-    let project = Project::docs_only("devrun-claim");
+    let project = Project::docs_only();
     project.set_config(&format!(
         "[config]\nroot = true\n\n{DEFAULTS}[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
@@ -500,7 +500,7 @@ fn a_devrun_brief_still_makes_the_devrun_claim() {
 
 #[test]
 fn a_broken_docs_manifest_leaves_the_rest_of_the_brief() {
-    let project = Project::docs_only("broken-manifest");
+    let project = Project::docs_only();
     write(
         &project.home.join(".config/devkit/docs.toml"),
         "not toml [[[",
@@ -524,7 +524,7 @@ fn a_broken_docs_manifest_leaves_the_rest_of_the_brief() {
 
 #[test]
 fn brief_enabled_false_suppresses_everything() {
-    let project = Project::docs_only("gate-off");
+    let project = Project::docs_only();
     project.set_config(&format!(
         "[config]\nroot = true\n\n{DEFAULTS}[brief]\nenabled = false\n"
     ));
@@ -539,7 +539,7 @@ fn brief_enabled_false_suppresses_everything() {
 
 #[test]
 fn brief_pins_false_suppresses_only_that_section() {
-    let project = Project::docs_only("pins-off");
+    let project = Project::docs_only();
     project.set_config(&format!(
         "[config]\nroot = true\n\n{DEFAULTS}[brief]\npins = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
@@ -559,7 +559,7 @@ const API_APP: &str =
 
 #[test]
 fn a_config_that_does_not_load_is_reported_rather_than_swallowed() {
-    let project = Project::docs_only("broken-config");
+    let project = Project::docs_only();
     // `base_port` left out of an app entry: deserialization of the merged
     // config fails, which used to reach the user as an empty brief.
     project.set_config(&format!(
@@ -578,7 +578,7 @@ fn a_config_that_does_not_load_is_reported_rather_than_swallowed() {
 
 #[test]
 fn a_checkout_with_no_config_stays_silent() {
-    let project = Project::docs_only("no-config-quiet");
+    let project = Project::docs_only();
     std::fs::remove_file(project.root.join("devkit.toml")).unwrap();
     write(&project.home.join(".config/devkit/docs.toml"), "");
     let out = project.brief(&[]);
@@ -592,7 +592,7 @@ fn a_checkout_with_no_config_stays_silent() {
 
 #[test]
 fn brief_apps_false_drops_the_app_lines_that_are_configured() {
-    let project = Project::docs_only("apps-off");
+    let project = Project::docs_only();
     project.set_config(&format!(
         "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\napps = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
@@ -606,7 +606,7 @@ fn brief_apps_false_drops_the_app_lines_that_are_configured() {
 
 #[test]
 fn brief_tasks_false_drops_the_task_lines_that_are_configured() {
-    let project = Project::docs_only("tasks-off");
+    let project = Project::docs_only();
     project.set_config(&format!(
         "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\ntasks = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
@@ -619,7 +619,7 @@ fn brief_tasks_false_drops_the_task_lines_that_are_configured() {
 
 #[test]
 fn every_devrun_section_switched_off_drops_the_devrun_half() {
-    let project = Project::docs_only("devrun-off");
+    let project = Project::docs_only();
     project.set_config(&format!(
         "[config]\nroot = true\n\n{DEFAULTS}{API_APP}[brief]\napps = false\ntasks = false\nlocks = false\n\n[tasks.check]\nrun = [\"cargo\", \"test\"]\ndescription = \"tests\"\n"
     ));
@@ -637,7 +637,7 @@ fn the_gate_precedes_the_work() {
     // With enabled = false, no manifest is discovered and no importer runs:
     // point the config at a manifest whose resolution would fail loudly and
     // observe silence and exit 0.
-    let project = Project::docs_only("gate-first");
+    let project = Project::docs_only();
     write(
         &project.home.join(".config/devkit/docs.toml"),
         "not toml [[[",
@@ -657,7 +657,7 @@ fn the_gate_precedes_the_work() {
 
 #[test]
 fn a_hundred_column_render_is_bounded() {
-    let project = Project::docs_only("width-bound");
+    let project = Project::docs_only();
     // A library whose SOURCE cell is a full unresolved sentence.
     write(
         &project.home.join(".config/devkit/docs.toml"),
@@ -676,7 +676,7 @@ fn a_hundred_column_render_is_bounded() {
 fn both_callers_render_the_same_rows() {
     // One renderer, asserted rather than assumed: the brief's section and
     // `docm list --project` must agree row for row from the same cwd.
-    let project = Project::docs_only("both-callers");
+    let project = Project::docs_only();
     let listing =
         String::from_utf8_lossy(&project.docm(&["list", "--project"]).stdout).into_owned();
     let brief = String::from_utf8_lossy(&project.brief(&[]).stdout).into_owned();
@@ -696,7 +696,7 @@ fn a_machine_wide_undeclared_library_never_reaches_the_brief() {
     // The /docs-accumulation guard, end to end: two registered libraries where
     // only one is declared. The undeclared one produces no row and does not
     // suppress the one that resolved.
-    let project = Project::docs_only("accumulation-guard");
+    let project = Project::docs_only();
     write(
         &project.home.join(".config/devkit/docs.toml"),
         "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nrepo = \"https://example.invalid/serde\"\n\n[[libs]]\nname = \"tokio\"\necosystem = \"rust\"\nrepo = \"https://example.invalid/tokio\"\n",
@@ -721,7 +721,7 @@ fn envelope(out: &Output) -> serde_json::Value {
 
 #[test]
 fn additional_context_wraps_the_brief_in_codexs_envelope() {
-    let project = Project::docs_only("codex-envelope");
+    let project = Project::docs_only();
     project.set_config(&format!("[config]\nroot = true\n\n{DEFAULTS}"));
 
     let value = envelope(&project.brief(&["--pins-only", "--additional-context"]));
@@ -742,7 +742,7 @@ fn additional_context_wraps_the_brief_in_codexs_envelope() {
 fn additional_context_uses_cursors_field_when_cursor_runs_the_hook() {
     // The two harnesses spell the field differently and Codex refuses a
     // payload carrying both, so the host has to be told apart.
-    let project = Project::docs_only("cursor-envelope");
+    let project = Project::docs_only();
     project.set_config(&format!("[config]\nroot = true\n\n{DEFAULTS}"));
 
     let value = envelope(&project.brief_env(
@@ -762,7 +762,7 @@ fn additional_context_uses_cursors_field_when_cursor_runs_the_hook() {
 fn additional_context_stays_silent_when_there_is_no_brief() {
     // An empty envelope is not the same as no output: it hands the session a
     // context block with nothing in it.
-    let project = Project::nothing_to_say("no-brief");
+    let project = Project::nothing_to_say();
     let out = project.brief(&["--additional-context"]);
     assert!(
         out.stdout.is_empty(),

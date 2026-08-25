@@ -527,10 +527,6 @@ mod tests {
         assert_eq!(parsed.slug.as_deref(), Some("fix-bli-export"));
     }
 
-    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-prep-{tag}"))
-    }
-
     fn novars() -> BTreeMap<String, String> {
         BTreeMap::new()
     }
@@ -592,30 +588,30 @@ mod tests {
 
     #[test]
     fn hook_renders_args_and_runs_in_the_worktree() {
-        let dir = scratch("hook-render");
+        let dir = tempfile::tempdir().unwrap();
         let hooks = vec![vec![
             "git".to_string(),
             "init".to_string(),
             "{{ slug }}-wt".to_string(),
         ]];
-        run_after_worktree_create(&dir, &hooks, &ctx(), &novars(), &Steps::persistent());
-        assert!(dir.join("fix-wt").exists());
+        run_after_worktree_create(dir.path(), &hooks, &ctx(), &novars(), &Steps::persistent());
+        assert!(dir.path().join("fix-wt").exists());
     }
 
     #[test]
     fn failing_hook_does_not_stop_the_next_one() {
-        let dir = scratch("hook-failopen");
+        let dir = tempfile::tempdir().unwrap();
         let hooks = vec![
             vec!["devkit-no-such-program-xyz".to_string()],
             vec!["git".to_string(), "init".to_string(), "after".to_string()],
         ];
-        run_after_worktree_create(&dir, &hooks, &ctx(), &novars(), &Steps::persistent());
-        assert!(dir.join("after").exists());
+        run_after_worktree_create(dir.path(), &hooks, &ctx(), &novars(), &Steps::persistent());
+        assert!(dir.path().join("after").exists());
     }
 
     #[test]
     fn unrenderable_hook_does_not_stop_the_next_one() {
-        let dir = scratch("hook-badvar");
+        let dir = tempfile::tempdir().unwrap();
         let hooks = vec![
             vec![
                 "git".to_string(),
@@ -624,13 +620,13 @@ mod tests {
             ],
             vec!["git".to_string(), "init".to_string(), "after".to_string()],
         ];
-        run_after_worktree_create(&dir, &hooks, &ctx(), &novars(), &Steps::persistent());
-        assert!(dir.join("after").exists());
+        run_after_worktree_create(dir.path(), &hooks, &ctx(), &novars(), &Steps::persistent());
+        assert!(dir.path().join("after").exists());
     }
 
     #[test]
     fn every_hook_consumes_a_step_even_when_it_cannot_render() {
-        let dir = scratch("hook-steps");
+        let dir = tempfile::tempdir().unwrap();
         let hooks = vec![
             vec![
                 "git".to_string(),
@@ -640,27 +636,26 @@ mod tests {
             vec!["git".to_string(), "init".to_string(), "after".to_string()],
         ];
         let steps = Steps::persistent_with_total(hooks.len());
-        run_after_worktree_create(&dir, &hooks, &ctx(), &novars(), &steps);
+        run_after_worktree_create(dir.path(), &hooks, &ctx(), &novars(), &steps);
         assert_eq!(
             steps.started(),
             2,
             "an unrenderable hook must still consume its step"
         );
-        assert!(dir.join("after").exists(), "the next hook still ran");
-        std::fs::remove_dir_all(&dir).ok();
+        assert!(dir.path().join("after").exists(), "the next hook still ran");
     }
 
     #[test]
     fn renders_issue_context() {
-        let dir = scratch("render");
+        let dir = tempfile::tempdir().unwrap();
         let files = vec![PrepFile {
             path: ".env.local".into(),
             content: "ISSUE={{ issue }}\n".into(),
             overwrite: false,
         }];
-        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
+        write_prep_files(dir.path(), &files, &ctx(), &novars()).unwrap();
         assert_eq!(
-            std::fs::read_to_string(dir.join(".env.local")).unwrap(),
+            std::fs::read_to_string(dir.path().join(".env.local")).unwrap(),
             "ISSUE=eng-1\n"
         );
     }
@@ -683,76 +678,79 @@ mod tests {
 
     #[test]
     fn writes_content_verbatim_and_creates_parents() {
-        let dir = scratch("verbatim");
+        let dir = tempfile::tempdir().unwrap();
         let files = vec![PrepFile {
             path: "config/local.json".into(),
             content: "{\"mode\":\"local\"}\n".into(),
             overwrite: false,
         }];
-        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
-        let got = std::fs::read_to_string(dir.join("config/local.json")).unwrap();
+        write_prep_files(dir.path(), &files, &ctx(), &novars()).unwrap();
+        let got = std::fs::read_to_string(dir.path().join("config/local.json")).unwrap();
         assert_eq!(got, "{\"mode\":\"local\"}\n");
     }
 
     #[test]
     fn write_if_absent_preserves_existing() {
-        let dir = scratch("absent");
-        std::fs::write(dir.join(".env.local"), "ORIGINAL\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env.local"), "ORIGINAL\n").unwrap();
         let files = vec![PrepFile {
             path: ".env.local".into(),
             content: "REPLACED\n".into(),
             overwrite: false,
         }];
-        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
+        write_prep_files(dir.path(), &files, &ctx(), &novars()).unwrap();
         assert_eq!(
-            std::fs::read_to_string(dir.join(".env.local")).unwrap(),
+            std::fs::read_to_string(dir.path().join(".env.local")).unwrap(),
             "ORIGINAL\n"
         );
     }
 
     #[test]
     fn overwrite_replaces_existing() {
-        let dir = scratch("overwrite");
-        std::fs::write(dir.join(".env.local"), "ORIGINAL\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env.local"), "ORIGINAL\n").unwrap();
         let files = vec![PrepFile {
             path: ".env.local".into(),
             content: "REPLACED\n".into(),
             overwrite: true,
         }];
-        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
+        write_prep_files(dir.path(), &files, &ctx(), &novars()).unwrap();
         assert_eq!(
-            std::fs::read_to_string(dir.join(".env.local")).unwrap(),
+            std::fs::read_to_string(dir.path().join(".env.local")).unwrap(),
             "REPLACED\n"
         );
     }
 
     #[test]
     fn renders_app_name() {
-        let dir = scratch("appvar");
+        let dir = tempfile::tempdir().unwrap();
         let files = vec![PrepFile {
             path: "app.txt".into(),
             content: "{{ app }}".into(),
             overwrite: false,
         }];
-        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join("app.txt")).unwrap(), "web");
+        write_prep_files(dir.path(), &files, &ctx(), &novars()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("app.txt")).unwrap(),
+            "web"
+        );
     }
 
     #[test]
     fn unknown_var_is_an_error() {
-        let dir = scratch("badvar");
+        let dir = tempfile::tempdir().unwrap();
         let files = vec![PrepFile {
             path: ".env.local".into(),
             content: "{{ nope }}".into(),
             overwrite: false,
         }];
-        assert!(write_prep_files(&dir, &files, &ctx(), &novars()).is_err());
+        assert!(write_prep_files(dir.path(), &files, &ctx(), &novars()).is_err());
     }
 
     #[test]
     fn skipped_existing_file_is_not_rendered() {
-        let dir = scratch("skiprender");
-        std::fs::write(dir.join(".env.local"), "ORIGINAL\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env.local"), "ORIGINAL\n").unwrap();
         // A malformed template on an existing, non-overwrite file must not be
         // rendered (and so must not error) — the file is left untouched.
         let files = vec![PrepFile {
@@ -760,9 +758,9 @@ mod tests {
             content: "{{ nope }}".into(),
             overwrite: false,
         }];
-        write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
+        write_prep_files(dir.path(), &files, &ctx(), &novars()).unwrap();
         assert_eq!(
-            std::fs::read_to_string(dir.join(".env.local")).unwrap(),
+            std::fs::read_to_string(dir.path().join(".env.local")).unwrap(),
             "ORIGINAL\n"
         );
     }

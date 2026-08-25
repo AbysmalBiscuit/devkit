@@ -248,7 +248,6 @@ dependencies = [
  "devkit-locks",
  "devkit-mcp",
  "devkit-ports",
- "devkit-testtmp",
  "fd-lock",
  "indicatif",
  "interprocess",

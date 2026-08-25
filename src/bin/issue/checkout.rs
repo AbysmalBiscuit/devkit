@@ -503,8 +503,8 @@ mod tests {
     /// the original error, and leaves the worktree intact on success.
     #[test]
     fn with_cleanup_removes_worktree_on_error_and_preserves_on_success() {
-        let base = devkit_testtmp::dir("devkit-co-wc");
-        let repo = base.join("repo");
+        let base = tempfile::tempdir().unwrap();
+        let repo = base.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
 
         git_cmd(&["init", "-q", "-b", "main"], &repo);
@@ -515,7 +515,7 @@ mod tests {
         git_cmd(&["commit", "-qm", "init"], &repo);
 
         // Error path: closure fails → worktree must be removed.
-        let wt_err = base.join("wt-err");
+        let wt_err = base.path().join("wt-err");
         git_cmd(
             &[
                 "worktree",
@@ -541,7 +541,7 @@ mod tests {
         );
 
         // Success path: closure succeeds → worktree must remain intact.
-        let wt_ok = base.join("wt-ok");
+        let wt_ok = base.path().join("wt-ok");
         git_cmd(
             &[
                 "worktree",

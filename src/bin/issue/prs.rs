@@ -588,8 +588,8 @@ mod tests {
     #[test]
     fn old_format_reads_as_empty() {
         let old = r#"{"mine":{"12":{"review":"approved","check":"ok","action":"MERGE"}}}"#;
-        let dir = devkit_testtmp::dir("devkit-prs-snap");
-        let p = dir.join("repo.json");
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("repo.json");
         std::fs::write(&p, old).unwrap();
         let snap = load_snapshot(&p);
         assert!(snap.mine.is_empty());

@@ -145,15 +145,15 @@ mod tests {
         // as empty dirs, modeling a process-free orphan cgroup — which is exactly
         // the removable state reconcile expects (rmdir succeeds; a real cgroup's
         // memory.* pseudo-files do not block rmdir, and a tmpfs dir has none).
-        let base = devkit_testtmp::dir("devkitd-cg");
-        let servers = base.join("servers");
+        let base = tempfile::tempdir().unwrap();
+        let servers = base.path().join("servers");
         let live = key("/w", "api", Role::Issue);
         let orphan = key("/w", "ghost", Role::Issue);
         std::fs::create_dir_all(servers.join(leaf_name(&live))).unwrap();
         std::fs::create_dir_all(servers.join(leaf_name(&orphan))).unwrap();
-        let d = crate::test_daemon_with_base(base.to_path_buf(), 1 << 30);
+        let d = crate::test_daemon_with_base(base.path().to_path_buf(), 1 << 30);
         reconcile(&d, std::slice::from_ref(&live));
-        let left = devkit_common::sys::cgroup_list_leaves(&base);
+        let left = devkit_common::sys::cgroup_list_leaves(base.path());
         assert!(left.contains(&leaf_name(&live)), "live leaf kept");
         assert!(!left.contains(&leaf_name(&orphan)), "orphan leaf removed");
     }

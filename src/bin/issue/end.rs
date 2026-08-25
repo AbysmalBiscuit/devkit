@@ -295,10 +295,6 @@ pub fn run(
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-end-{tag}"))
-    }
-
     /// The summary filename carries the tracker's canonical id, which Linear
     /// spells in caps, while the record carries whatever spelling setup was
     /// given. The sweep has to bridge that.
@@ -320,10 +316,10 @@ mod tests {
 
     #[test]
     fn the_recorded_summary_path_is_what_gets_removed() {
-        let dir = scratch("recorded");
-        let wt = dir.join("wt");
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
-        let summary = dir.join("notes").join("ENG-1.md");
+        let summary = dir.path().join("notes").join("ENG-1.md");
         std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
         std::fs::write(&summary, "notes\n").unwrap();
         devkit_common::record::write(
@@ -345,9 +341,9 @@ mod tests {
 
     #[test]
     fn a_worktree_with_no_summary_has_nothing_to_remove() {
-        let dir = scratch("nosummary");
+        let dir = tempfile::tempdir().unwrap();
         devkit_common::record::write(
-            &dir,
+            dir.path(),
             &devkit_common::record::IssueRecord {
                 issue: "ENG-2".into(),
                 slug: "fix".into(),
@@ -357,13 +353,13 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(recorded_summary(&dir).is_none());
+        assert!(recorded_summary(dir.path()).is_none());
     }
 
     #[test]
     fn cleanup_removes_the_worktree_its_branch_and_its_summary() {
-        let dir = scratch("cleanup");
-        let main = dir.join("main");
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
         let g = |args: &[&str], cwd: &std::path::Path| {
             let ok = std::process::Command::new("git")
@@ -382,14 +378,14 @@ mod tests {
         g(&["add", "-A"], &main);
         g(&["commit", "-qm", "init"], &main);
 
-        let wt = dir.join("wt-eng-1");
+        let wt = dir.path().join("wt-eng-1");
         g(
             &["worktree", "add", "-q", "-b", "eng-1", wt.to_str().unwrap()],
             &main,
         );
 
         // The summary sits beside the worktree, as the default path template puts it.
-        let summary = dir.join("ISSUE_SUMMARY_ENG-1.md");
+        let summary = dir.path().join("ISSUE_SUMMARY_ENG-1.md");
         std::fs::write(&summary, "months of notes\n").unwrap();
         devkit_common::record::write(
             &wt,
@@ -421,8 +417,8 @@ mod tests {
 
     #[test]
     fn cleanup_leaves_a_summary_outside_the_record_alone() {
-        let dir = scratch("cleanup-unrecorded");
-        let main = dir.join("main");
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
         let g = |args: &[&str], cwd: &std::path::Path| {
             let ok = std::process::Command::new("git")
@@ -440,14 +436,14 @@ mod tests {
         std::fs::write(main.join("f.txt"), "x\n").unwrap();
         g(&["add", "-A"], &main);
         g(&["commit", "-qm", "init"], &main);
-        let wt = dir.join("wt-eng-2");
+        let wt = dir.path().join("wt-eng-2");
         g(
             &["worktree", "add", "-q", "-b", "eng-2", wt.to_str().unwrap()],
             &main,
         );
 
         // Another issue's notes, in the same directory. Ending ENG-2 must not touch them.
-        let other = dir.join("ISSUE_SUMMARY_ENG-99.md");
+        let other = dir.path().join("ISSUE_SUMMARY_ENG-99.md");
         std::fs::write(&other, "someone else\n").unwrap();
 
         cleanup(wt.to_str().unwrap(), "ENG-2", true, &Mutex::new(())).unwrap();
@@ -456,7 +452,7 @@ mod tests {
 
     #[test]
     fn a_worktree_with_no_record_has_nothing_to_remove() {
-        let dir = scratch("norecord");
-        assert!(recorded_summary(&dir).is_none());
+        let dir = tempfile::tempdir().unwrap();
+        assert!(recorded_summary(dir.path()).is_none());
     }
 }

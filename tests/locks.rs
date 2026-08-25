@@ -5,13 +5,9 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
-    devkit_testtmp::dir(&format!("devkit-lock-it-{tag}"))
-}
-
-fn project() -> devkit_testtmp::TmpDir {
-    let p = scratch("proj");
-    std::fs::create_dir_all(p.join(".git")).unwrap();
+fn project() -> tempfile::TempDir {
+    let p = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(p.path().join(".git")).unwrap();
     p
 }
 
@@ -33,13 +29,17 @@ fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
 #[test]
 fn second_holder_conflicts_with_overlap() {
     let proj = project();
-    let state = scratch("state");
-    let a = run(&proj, &state, &["acquire", "scenes", "--as", "alice"]);
+    let state = tempfile::tempdir().unwrap();
+    let a = run(
+        proj.path(),
+        state.path(),
+        &["acquire", "scenes", "--as", "alice"],
+    );
     assert!(a.status.success(), "alice should acquire");
 
     let b = run(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &["acquire", "scenes/player.tscn", "--as", "bob"],
     );
     assert_eq!(
@@ -54,12 +54,16 @@ fn second_holder_conflicts_with_overlap() {
 #[test]
 fn json_conflict_shape() {
     let proj = project();
-    let state = scratch("state");
-    run(&proj, &state, &["acquire", "scenes", "--as", "alice"]);
+    let state = tempfile::tempdir().unwrap();
+    run(
+        proj.path(),
+        state.path(),
+        &["acquire", "scenes", "--as", "alice"],
+    );
 
     let b = run(
-        &proj,
-        &state,
+        proj.path(),
+        state.path(),
         &["check", "scenes/x", "--as", "bob", "--json"],
     );
     assert_eq!(b.status.code(), Some(1));
@@ -71,27 +75,47 @@ fn json_conflict_shape() {
 #[test]
 fn release_frees_for_other_holder() {
     let proj = project();
-    let state = scratch("state");
-    run(&proj, &state, &["acquire", "scenes", "--as", "alice"]);
-    let r = run(&proj, &state, &["release", "scenes", "--as", "alice"]);
+    let state = tempfile::tempdir().unwrap();
+    run(
+        proj.path(),
+        state.path(),
+        &["acquire", "scenes", "--as", "alice"],
+    );
+    let r = run(
+        proj.path(),
+        state.path(),
+        &["release", "scenes", "--as", "alice"],
+    );
     assert!(r.status.success());
 
-    let b = run(&proj, &state, &["acquire", "scenes", "--as", "bob"]);
+    let b = run(
+        proj.path(),
+        state.path(),
+        &["acquire", "scenes", "--as", "bob"],
+    );
     assert!(b.status.success(), "bob can acquire after alice releases");
 }
 
 #[test]
 fn same_holder_reacquire_is_ok() {
     let proj = project();
-    let state = scratch("state");
+    let state = tempfile::tempdir().unwrap();
     assert!(
-        run(&proj, &state, &["acquire", "scenes", "--as", "alice"])
-            .status
-            .success()
+        run(
+            proj.path(),
+            state.path(),
+            &["acquire", "scenes", "--as", "alice"]
+        )
+        .status
+        .success()
     );
     assert!(
-        run(&proj, &state, &["acquire", "scenes", "--as", "alice"])
-            .status
-            .success()
+        run(
+            proj.path(),
+            state.path(),
+            &["acquire", "scenes", "--as", "alice"]
+        )
+        .status
+        .success()
     );
 }

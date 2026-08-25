@@ -128,10 +128,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-sum-{tag}"))
-    }
-
     fn details() -> devkit_common::tracker::IssueDetails {
         devkit_common::tracker::IssueDetails {
             id: "ENG-42".into(),
@@ -231,16 +227,16 @@ mod tests {
 
     #[test]
     fn write_creates_the_file_and_reports_it_written() {
-        let dir = scratch("write");
-        let p = dir.join("ISSUE_SUMMARY_ENG-42.md");
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ISSUE_SUMMARY_ENG-42.md");
         assert!(write_if_absent(&p, "body\n").unwrap());
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "body\n");
     }
 
     #[test]
     fn an_existing_summary_is_never_overwritten() {
-        let dir = scratch("keep");
-        let p = dir.join("ISSUE_SUMMARY_ENG-42.md");
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ISSUE_SUMMARY_ENG-42.md");
         std::fs::write(&p, "months of investigation\n").unwrap();
         assert!(!write_if_absent(&p, "fresh scaffold\n").unwrap());
         assert_eq!(
@@ -251,8 +247,8 @@ mod tests {
 
     #[test]
     fn write_creates_missing_parent_directories() {
-        let dir = scratch("parents");
-        let p = dir.join("nested/deeper/ISSUE.md");
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("nested/deeper/ISSUE.md");
         assert!(write_if_absent(&p, "body\n").unwrap());
         assert!(p.exists());
     }

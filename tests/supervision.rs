@@ -20,7 +20,7 @@ fn supervised_python_server_becomes_ready() {
     let port = common::free_port();
     // The holder must be an existing directory so liveness probes don't prune
     // the registry entry before we can observe it.
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
@@ -34,7 +34,7 @@ fn supervised_python_server_becomes_ready() {
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("sup.log"),
+        logfile: h.home.path().join("sup.log"),
         base_port: port,
     });
 
@@ -63,7 +63,7 @@ fn supervised_python_server_becomes_ready() {
 fn restart_after_kill() {
     let mut h = Harness::start();
     let port = common::free_port();
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
@@ -77,7 +77,7 @@ fn restart_after_kill() {
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("kill.log"),
+        logfile: h.home.path().join("kill.log"),
         base_port: port,
     });
     assert!(
@@ -136,7 +136,7 @@ fn restart_survives_concurrent_snapshot() {
 
     let mut h = Harness::start();
     let port = common::free_port();
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
@@ -150,7 +150,7 @@ fn restart_survives_concurrent_snapshot() {
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("snap.log"),
+        logfile: h.home.path().join("snap.log"),
         base_port: port,
     });
     assert!(
@@ -228,8 +228,8 @@ fn health_probe_restarts_hung_server() {
     // Probe every 1 s; restart after 2 consecutive post-arming failures.
     let mut h = Harness::start_with_health(3600, 1, 2);
     let port = common::free_port();
-    let holder = h.home.to_str().unwrap().to_string();
-    let sentinel = h.home.join("hung-once");
+    let holder = h.home.path().to_str().unwrap().to_string();
+    let sentinel = h.home.path().join("hung-once");
 
     // Listen on `port`, accepting connections. On first run (sentinel absent),
     // serve ~3 s — long enough for the 1 s probe to arm — then stop accepting but
@@ -267,7 +267,7 @@ while True:
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("hung.log"),
+        logfile: h.home.path().join("hung.log"),
         base_port: port,
     });
     assert!(
@@ -319,8 +319,8 @@ fn memory_restart_over_limit_server() {
     // Act past 60 MB after 2 consecutive over-limit ticks; generous restart budget.
     let mut h = Harness::start_with_memory(3600, 60, 2, 5);
     let port = common::free_port();
-    let holder = h.home.to_str().unwrap().to_string();
-    let sentinel = h.home.join("ballooned-once");
+    let holder = h.home.path().to_str().unwrap().to_string();
+    let sentinel = h.home.path().join("ballooned-once");
 
     // Bind + accept so wait_ready succeeds. First run (sentinel absent): touch
     // ~120 MB resident, then keep serving (alive, over limit). Later runs: small.
@@ -356,7 +356,7 @@ while True:
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("balloon.log"),
+        logfile: h.home.path().join("balloon.log"),
         base_port: port,
     });
     assert!(
@@ -406,7 +406,7 @@ fn memory_restart_gives_up_within_budget() {
     // Act past 60 MB after 2 over-limit ticks; allow only ONE restart.
     let mut h = Harness::start_with_memory(3600, 60, 2, 1);
     let port = common::free_port();
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     // Balloon on every run (no sentinel): each respawn re-breaches the limit.
     let script = r#"
@@ -437,7 +437,7 @@ while True:
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("balloon-loop.log"),
+        logfile: h.home.path().join("balloon-loop.log"),
         base_port: port,
     });
     assert!(
@@ -508,7 +508,7 @@ fn cgroup_cap_oom_kills_and_respawns() {
 
     let mut h = Harness::start_with_cgroup_cap(3600, base.to_str().unwrap(), 64);
     let port = common::free_port();
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     // Bind the port so wait_ready succeeds, then balloon past the 64 MB cap.
     // Imports trimmed to exactly what this fixture uses: socket, sys.
@@ -533,7 +533,7 @@ while True:
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("cgroup-balloon.log"),
+        logfile: h.home.path().join("cgroup-balloon.log"),
         base_port: port,
     });
     assert!(
@@ -579,7 +579,7 @@ fn cap_requested_without_delegation_falls_back() {
     // Point the override at a nonexistent path so setup fails (Unavailable).
     let mut h = Harness::start_with_cgroup_cap(3600, "/sys/fs/cgroup/nonexistent-devkit-test", 64);
     let port = common::free_port();
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
@@ -593,7 +593,7 @@ fn cap_requested_without_delegation_falls_back() {
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("fallback.log"),
+        logfile: h.home.path().join("fallback.log"),
         base_port: port,
     });
 
@@ -613,7 +613,7 @@ fn cap_requested_without_delegation_falls_back() {
 fn second_supervise_of_live_server_is_noop() {
     let mut h = Harness::start();
     let port = common::free_port();
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
     let req = Request::Supervise {
         holder: holder.clone(),
         app: "api".into(),
@@ -626,7 +626,7 @@ fn second_supervise_of_live_server_is_noop() {
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("noop.log"),
+        logfile: h.home.path().join("noop.log"),
         base_port: port,
     };
 
@@ -656,7 +656,7 @@ fn second_supervise_of_live_server_is_noop() {
 fn down_does_not_restart() {
     let mut h = Harness::start();
     let port = common::free_port();
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     let resp = h.request(&Request::Supervise {
         holder: holder.clone(),
@@ -670,7 +670,7 @@ fn down_does_not_restart() {
         ],
         cwd: ".".into(),
         env: BTreeMap::new(),
-        logfile: h.home.join("down.log"),
+        logfile: h.home.path().join("down.log"),
         base_port: port,
     });
     assert!(

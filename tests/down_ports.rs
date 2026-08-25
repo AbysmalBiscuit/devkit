@@ -11,7 +11,7 @@ fn down_ports_releases_listed_reservations() {
 
     // The holder must be an existing directory so liveness probes (`holder_alive`)
     // do not prune these pidless reservations before the assertions observe them.
-    let holder = h.home.to_str().unwrap().to_string();
+    let holder = h.home.path().to_str().unwrap().to_string();
 
     // Two pidless reservations under one holder.
     let alloc = h.request(&Request::Alloc {

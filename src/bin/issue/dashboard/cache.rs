@@ -108,41 +108,39 @@ pub fn put<T: Serialize>(scope: &CacheScope, key: &str, value: &T) {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> devkit_testtmp::TmpPath {
-        devkit_testtmp::path(&format!("devkit-dash-cache-{tag}"), "cache.json")
+    fn scratch() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        (dir, path)
     }
 
     #[test]
     fn read_fresh_roundtrips_within_ttl() {
-        let p = scratch("rt");
+        let (_guard, p) = scratch();
         write_at(&p, &vec![1u32, 2, 3], 1000);
         let back: Vec<u32> = read_fresh(&p, 600, 1300).expect("fresh within ttl");
         assert_eq!(back, vec![1, 2, 3]);
-        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
     fn read_fresh_rejects_stale() {
-        let p = scratch("stale");
+        let (_guard, p) = scratch();
         write_at(&p, &"hi".to_string(), 1000);
         // 1000s elapsed exceeds the 600s ttl.
         assert!(read_fresh::<String>(&p, 600, 2000).is_none());
-        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
     fn read_fresh_missing_is_none() {
-        let p = scratch("missing");
-        let _ = std::fs::remove_file(&p);
+        let (_guard, p) = scratch();
         assert!(read_fresh::<u32>(&p, 600, 1000).is_none());
     }
 
     #[test]
     fn ttl_zero_never_expires() {
-        let p = scratch("forever");
+        let (_guard, p) = scratch();
         write_at(&p, &7u32, 0);
         assert_eq!(read_fresh::<u32>(&p, 0, 1_000_000), Some(7));
-        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
