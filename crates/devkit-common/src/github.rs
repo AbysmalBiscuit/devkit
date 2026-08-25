@@ -173,34 +173,6 @@ pub fn rest_get(path: &str) -> Result<Value> {
     rest_get_opt(path)?.context("GitHub returned 404")
 }
 
-/// GET a paginated REST list, following `per_page=100` pages until a short page
-/// or `max` items. `path_with_query` may already carry a `?query`.
-fn rest_get_paged(path_with_query: &str, max: usize) -> Result<Vec<Value>> {
-    let sep = if path_with_query.contains('?') {
-        '&'
-    } else {
-        '?'
-    };
-    let mut out = Vec::new();
-    let mut page = 1u32;
-    loop {
-        let p = format!("{path_with_query}{sep}per_page=100&page={page}");
-        let Some(v) = rest_get_opt(&p)? else { break };
-        let arr = match v.as_array() {
-            Some(a) => a.clone(),
-            None => break,
-        };
-        let n = arr.len();
-        out.extend(arr);
-        if n < 100 || out.len() >= max {
-            break;
-        }
-        page += 1;
-    }
-    out.truncate(max);
-    Ok(out)
-}
-
 // --- url parsing -----------------------------------------------------------
 
 /// Parse the PR number out of a `…/pull/<n>` GitHub URL.
@@ -835,12 +807,6 @@ pub fn pr_by_head(repo: &Repo, branch: &str) -> HeadLookup {
 pub fn requested_reviewers(slug: &str, n: u64) -> Result<Vec<String>> {
     let v = rest_get(&format!("/repos/{slug}/pulls/{n}/requested_reviewers"))?;
     Ok(parse_requested_reviewers(&v))
-}
-
-/// Every PR in `slug` (any state), up to `max`, for worktree/status matching.
-pub fn list_prs(slug: &str, max: usize) -> Result<Vec<PrBrief>> {
-    let arr = rest_get_paged(&format!("/repos/{slug}/pulls?state=all"), max)?;
-    Ok(arr.iter().filter_map(parse_brief).collect())
 }
 
 /// Open/merge timestamps + line counts of one PR, for timeline charts.
