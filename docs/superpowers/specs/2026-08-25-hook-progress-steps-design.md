@@ -190,6 +190,11 @@ how long it took.
 - No test asserts that a bar drew. `Steps` is hidden off-TTY by design, so such
   a test would either pin nothing or pin the hiding rule that already has
   coverage.
+- The step-coverage rule in section 2 earns a regression test, since a stray
+  early return on a render failure would silently reintroduce the short count.
+  Asserting it needs a reader for the counter: `progress.rs` already asserts
+  step counts in its own tests through the private `label`, which the `issue`
+  binary cannot reach, so `Steps` gains a small `started()` accessor.
 - The existing schema drift test covers the doc-comment change in section 5: it
   fails until `schema/devkit-config.json` is regenerated, so the stale
   description cannot reach `main` unnoticed.
