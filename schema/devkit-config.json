@@ -338,7 +338,7 @@
       "properties": {
         "after_worktree_create": {
           "default": [],
-          "description": "Runs once in the root of a worktree `issue setup` or\n`issue checkout-pr` has just created, after its apps are prepared and\nbefore the command prints its JSON. Each argv element is rendered as\nminijinja over `worktree`, `branch`, `issue`, `slug`, `apps`, `prefix`,\nand `[templates.variables]`.",
+          "description": "Runs once in the root of a worktree `issue setup` or\n`issue checkout-pr` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `issue`, `slug`,\n`apps`, `prefix`, and `[templates.variables]`.",
           "items": {
             "items": {
               "type": "string"

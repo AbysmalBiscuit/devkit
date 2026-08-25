@@ -449,6 +449,8 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         "branch": meta.head_ref_name,
         "worktree": worktree_s,
     });
+    steps.suspend(|| report(meta.number, &meta.head_ref_name, worktree_s))?;
+
     crate::setup::run_after_worktree_create(
         &worktree,
         &cfg.hooks.after_worktree_create,
@@ -456,8 +458,6 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         &cfg.templates.variables,
         &steps,
     );
-
-    report(meta.number, &meta.head_ref_name, worktree_s)?;
     Ok(())
 }
 

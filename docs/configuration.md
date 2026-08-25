@@ -567,7 +567,7 @@ available.
 
 | Key | Fires on | Cwd |
 |---|---|---|
-| `after_worktree_create` | `issue setup` and `issue checkout-pr`, once the worktree exists and its apps are prepared, before the command prints its JSON | the new worktree's root |
+| `after_worktree_create` | `issue setup` and `issue checkout-pr`, once the worktree exists and its apps are prepared, after the command has reported the worktree | the new worktree's root |
 
 The event names a state change, not the caller. `after_worktree_create` fires
 from both `issue setup` and `issue checkout-pr`; naming it after either command

@@ -444,13 +444,6 @@ pub fn run(args: SetupArgs) -> Result<()> {
         obj.insert("branch".into(), serde_json::Value::String(branch.clone()));
         obj.insert("worktree".into(), serde_json::Value::String(holder.clone()));
     }
-    run_after_worktree_create(
-        &worktree,
-        &cfg.hooks.after_worktree_create,
-        &hook_ctx,
-        vars,
-        &steps,
-    );
 
     // Ports are not reserved here. A worktree's servers get their ports
     // dynamically from `devrun up`, which allocates against the live registry at
@@ -462,7 +455,19 @@ pub fn run(args: SetupArgs) -> Result<()> {
         branch,
         summary: summary_path,
     };
-    out.report()?;
+    // The worktree, its record, its includes and its apps are all in place by
+    // now, so the table is not a premature claim. `suspend` hides the live bars
+    // for the write: they draw on stderr and the table prints on stdout, and a
+    // redraw would tear it.
+    steps.suspend(|| out.report())?;
+
+    run_after_worktree_create(
+        &worktree,
+        &cfg.hooks.after_worktree_create,
+        &hook_ctx,
+        vars,
+        &steps,
+    );
     Ok(())
 }
 

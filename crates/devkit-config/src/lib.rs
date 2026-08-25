@@ -147,9 +147,9 @@ impl Default for BriefConfig {
 pub struct HooksConfig {
     /// Runs once in the root of a worktree `issue setup` or
     /// `issue checkout-pr` has just created, after its apps are prepared and
-    /// before the command prints its JSON. Each argv element is rendered as
-    /// minijinja over `worktree`, `branch`, `issue`, `slug`, `apps`, `prefix`,
-    /// and `[templates.variables]`.
+    /// after the command has reported the worktree. Each argv element is
+    /// rendered as minijinja over `worktree`, `branch`, `issue`, `slug`,
+    /// `apps`, `prefix`, and `[templates.variables]`.
     pub after_worktree_create: Vec<Vec<String>>,
 }
 
