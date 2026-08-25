@@ -1,45 +1,48 @@
 use chrono::{DateTime, Utc};
 use devkit_common::cmd::{capture, gh_json_in};
 use devkit_common::github;
-use devkit_common::tracker::{AssignedIssue, linear};
+use devkit_common::tracker::{AssignedIssue, Tracker};
 use serde::{Deserialize, Serialize};
 
 use super::bucket::parse_ts;
 use super::cache;
+use super::cache::CacheScope;
 
 /// How long a cached timeline fetch stays fresh. The timeline charts show
 /// slow-moving trends, so a few minutes of staleness is invisible; the live
 /// at-a-glance panel above them is never cached. `--no-cache` forces a refetch.
 const TTL_SECS: u64 = 900;
 
-/// Linear issues assigned to me, with history (empty if no key / on error).
-/// With `use_cache`, a fresh prior fetch is reused; failures are never cached.
-/// `on_page` is called after each page with the running total so the caller can
-/// update a progress indicator.
-pub fn issues(use_cache: bool, on_page: impl FnMut(usize)) -> Vec<AssignedIssue> {
-    let Some(key) = devkit_common::secrets::resolve("LINEAR_API_KEY") else {
-        return Vec::new();
-    };
-    if use_cache && let Some(v) = cache::get::<Vec<AssignedIssue>>("issues", TTL_SECS) {
+/// Issues assigned to me in `tracker`, with history (empty when the tracker
+/// is not ready, or on error). With `use_cache`, a fresh prior fetch is
+/// reused; failures are never cached. `on_page` is called after each page
+/// with the running total so the caller can update a progress indicator.
+pub fn issues(
+    tracker: &dyn Tracker,
+    scope: &CacheScope,
+    use_cache: bool,
+    mut on_page: impl FnMut(usize),
+) -> Vec<AssignedIssue> {
+    if use_cache && let Some(v) = cache::get::<Vec<AssignedIssue>>(scope, "issues", TTL_SECS) {
         return v;
     }
-    let v = match linear::assigned_issue_history_with_progress(&key, on_page) {
+    let v = match tracker.assigned_history(&mut on_page) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("Linear history fetch failed: {e}");
+            eprintln!("issue history fetch failed: {e}");
             Vec::new()
         }
     };
     if use_cache && !v.is_empty() {
-        cache::put("issues", &v);
+        cache::put(scope, "issues", &v);
     }
     v
 }
 
-/// Timeline origin: my Linear account creation, else the earliest issue createdAt.
-pub fn origin(issues: &[AssignedIssue]) -> Option<DateTime<Utc>> {
-    if let Some(key) = devkit_common::secrets::resolve("LINEAR_API_KEY")
-        && let Ok(s) = linear::viewer_created_at(&key)
+/// Timeline origin: `tracker`'s own answer (e.g. my Linear account creation),
+/// else the earliest issue `createdAt`.
+pub fn origin(tracker: &dyn Tracker, issues: &[AssignedIssue]) -> Option<DateTime<Utc>> {
+    if let Ok(Some(s)) = tracker.timeline_origin()
         && let Some(d) = parse_ts(&s)
     {
         return Some(d);
@@ -85,13 +88,14 @@ pub fn pr_timeline(
     all_roles: bool,
     use_cache: bool,
     repo: Option<&github::Repo>,
+    scope: &CacheScope,
 ) -> (Vec<DateTime<Utc>>, Vec<DateTime<Utc>>, i64, i64) {
     let key = if all_roles {
         "pr-timeline-all"
     } else {
         "pr-timeline-mine"
     };
-    if use_cache && let Some(c) = cache::get::<PrTimelineCache>(key, TTL_SECS) {
+    if use_cache && let Some(c) = cache::get::<PrTimelineCache>(scope, key, TTL_SECS) {
         return (
             to_datetimes(&c.opened),
             to_datetimes(&c.merged),
@@ -151,6 +155,7 @@ pub fn pr_timeline(
     let del = prs.iter().map(|p| p.deletions).sum();
     if use_cache && !(opened.is_empty() && merged.is_empty()) {
         cache::put(
+            scope,
             key,
             &PrTimelineCache {
                 opened: opened.iter().map(|d| d.timestamp()).collect(),
@@ -214,10 +219,53 @@ mod tests {
     /// branch directly.
     #[test]
     fn pr_timeline_with_no_repo_degrades_to_empty() {
-        let (opened, merged, add, del) = pr_timeline(true, false, None);
+        let (opened, merged, add, del) = pr_timeline(true, false, None, &test_scope());
         assert!(opened.is_empty());
         assert!(merged.is_empty());
         assert_eq!(add, 0);
         assert_eq!(del, 0);
+    }
+
+    use devkit_common::tracker::fake::FakeTracker;
+    use devkit_common::tracker::{State, StateKind};
+
+    fn assigned(id: &str) -> AssignedIssue {
+        AssignedIssue {
+            identifier: id.to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            state: State {
+                kind: StateKind::Started,
+                name: "In Progress".to_string(),
+                color: None,
+            },
+            history: Vec::new(),
+        }
+    }
+
+    fn test_scope() -> cache::CacheScope {
+        cache::CacheScope {
+            tracker: devkit_common::tracker::TrackerKind::Linear,
+            repo: String::new(),
+            viewer: String::new(),
+        }
+    }
+
+    /// `assigned_history` and `timeline_origin` had no caller anywhere outside
+    /// the tracker module: this fetched Linear directly rather than going
+    /// through the tracker devkit already resolved for the project.
+    /// `use_cache: false` skips the real cache dir entirely.
+    #[test]
+    fn the_dashboard_reads_the_configured_tracker() {
+        let t = FakeTracker::new().with_assigned(vec![assigned("ENG-1")]);
+        let got = issues(&t, &test_scope(), false, |_| {});
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].identifier, "ENG-1");
+    }
+
+    #[test]
+    fn origin_prefers_the_tracker_timeline_origin() {
+        let t = FakeTracker::new().with_timeline_origin("2020-06-15T00:00:00Z");
+        let got = origin(&t, &[]).expect("timeline origin parses");
+        assert_eq!(got.to_rfc3339(), "2020-06-15T00:00:00+00:00");
     }
 }

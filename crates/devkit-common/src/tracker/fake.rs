@@ -19,6 +19,8 @@ pub struct FakeTracker {
     titles: HashMap<String, String>,
     by_number: HashMap<u64, Vec<String>>,
     links: HashMap<String, Vec<String>>,
+    assigned: Vec<AssignedIssue>,
+    timeline_origin: Option<String>,
 }
 
 impl FakeTracker {
@@ -31,6 +33,8 @@ impl FakeTracker {
             titles: HashMap::new(),
             by_number: HashMap::new(),
             links: HashMap::new(),
+            assigned: Vec::new(),
+            timeline_origin: None,
         }
     }
 
@@ -73,6 +77,18 @@ impl FakeTracker {
             pr_url.to_string(),
             ids.into_iter().map(String::from).collect(),
         );
+        self
+    }
+
+    /// `assigned_history` answers with these issues.
+    pub fn with_assigned(mut self, issues: Vec<AssignedIssue>) -> Self {
+        self.assigned = issues;
+        self
+    }
+
+    /// `timeline_origin` answers with this timestamp.
+    pub fn with_timeline_origin(mut self, ts: &str) -> Self {
+        self.timeline_origin = Some(ts.to_string());
         self
     }
 }
@@ -138,10 +154,10 @@ impl Tracker for FakeTracker {
             .collect()
     }
     fn assigned_history(&self, _on_page: &mut dyn FnMut(usize)) -> Result<Vec<AssignedIssue>> {
-        Ok(Vec::new())
+        Ok(self.assigned.clone())
     }
     fn timeline_origin(&self) -> Result<Option<String>> {
-        Ok(None)
+        Ok(self.timeline_origin.clone())
     }
     fn issue_url(&self, id: &str) -> Option<String> {
         Some(format!("https://example.test/issue/{id}"))

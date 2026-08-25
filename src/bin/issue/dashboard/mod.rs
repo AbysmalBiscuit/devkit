@@ -47,17 +47,55 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let now: chrono::DateTime<Utc> = std::time::SystemTime::now().into();
     let width = devkit_common::ui::term_width();
 
+    // The tracker this project talks to, plus its GitHub repositories (when
+    // any resolve) — used both to fetch the timeline and to scope its cache
+    // entries so two projects, or two viewers of one project, never share
+    // a cache file (see `cache::CacheScope`).
+    let resolved = crate::tracker::configured(args.config.as_deref(), &start);
+    let tracker = resolved.tracker.as_ref();
+    let scope_repos = crate::tracker::repos(args.config.as_deref(), &start, None);
+    let scope_repo = scope_repos
+        .issues()
+        .or_else(|_| scope_repos.prs())
+        .map(|r| r.slug.clone())
+        .unwrap_or_default();
+    let viewer = if tracker.kind() == devkit_common::tracker::TrackerKind::Linear {
+        devkit_common::secrets::resolve("LINEAR_API_KEY").unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let scope = cache::CacheScope {
+        tracker: tracker.kind(),
+        repo: scope_repo,
+        viewer,
+    };
+
     // --- Issues by status over time ---
     let use_cache = !args.no_cache;
     let steps = devkit_common::progress::Steps::new();
-    let pb = steps.spinner("Loading Linear issue history…");
-    let issues = data::issues(use_cache, |n| {
-        pb.set_message(format!("Loading Linear issue history… {n} issues"));
+    let pb = steps.spinner(&format!("Loading {} issue history…", tracker.kind()));
+    let issues = data::issues(tracker, &scope, use_cache, |n| {
+        pb.set_message(format!(
+            "Loading {} issue history… {n} issues",
+            tracker.kind()
+        ));
     });
     steps.clear();
     if issues.is_empty() {
-        println!("\n(no Linear issues — set LINEAR_API_KEY for the issue timeline)");
-    } else if let Some(first) = data::origin(&issues) {
+        let kind = tracker.kind();
+        if !tracker.ready() {
+            let hint = match kind {
+                devkit_common::tracker::TrackerKind::Linear => "set LINEAR_API_KEY",
+                devkit_common::tracker::TrackerKind::Github => {
+                    "set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`"
+                }
+                devkit_common::tracker::TrackerKind::None => "set [tracker] kind",
+            };
+            println!("\n(no {kind} issues — {hint} for the issue timeline)");
+        } else {
+            println!("\n({kind} returned no assigned issues)");
+        }
+    } else if let Some(first) = data::origin(tracker, &issues) {
         let b = if args.bucket == "auto" {
             bucket::choose_bucket(first, now, width).to_string()
         } else {
@@ -111,7 +149,11 @@ pub fn run(args: DashboardArgs) -> Result<()> {
             }
         }
 
-        let title = format!("My Linear issues by status — per {b}, {}", args.mode);
+        let title = format!(
+            "My {} issues by status — per {b}, {}",
+            tracker.kind(),
+            args.mode
+        );
         if args.chart == "line" {
             chart::render_lines(&title, &series, &names, &colors);
         } else {
@@ -156,7 +198,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let _b1 = steps.spinner("[1/2] Loading PR history…");
     let _b2 = steps.spinner("[2/2] Loading commit history…");
     let (opened, merged, add, del, commits) = std::thread::scope(|s| {
-        let pr_t = s.spawn(|| data::pr_timeline(args.all_roles, use_cache, pr_repo));
+        let pr_t = s.spawn(|| data::pr_timeline(args.all_roles, use_cache, pr_repo, &scope));
         let commit_t = s.spawn(|| data::commit_dates(&monorepo, &author));
         let (opened, merged, add, del) = pr_t.join().expect("pr timeline thread panicked");
         let commits = commit_t.join().expect("commit thread panicked");

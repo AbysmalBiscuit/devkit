@@ -9,8 +9,10 @@
 //! render. A cache miss or write failure is never fatal: the fetch just runs.
 
 use devkit_common::paths;
+use devkit_common::tracker::TrackerKind;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -21,10 +23,34 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn path_for(key: &str) -> PathBuf {
+/// What a dashboard cache entry belongs to. Two projects on different trackers
+/// would otherwise serve each other's timelines, and two viewers of one
+/// project would serve each other's assigned issues.
+pub struct CacheScope {
+    pub tracker: TrackerKind,
+    pub repo: String,
+    pub viewer: String,
+}
+
+/// Every component is hashed rather than interpolated, so no value — not even
+/// a credential in `viewer` — reaches the filename. A configured repository
+/// slug reaches this scope and `devkit.toml` travels with a checkout, so a
+/// value carrying `..` would otherwise let a read-only dashboard command write
+/// outside the cache directory.
+///
+/// `DefaultHasher` is explicitly not stable across Rust releases; a toolchain
+/// upgrade invalidates every cached entry once, which is harmless for a cache
+/// this disposable — not a reason to reach for an external hash crate.
+fn path_for(scope: &CacheScope, key: &str) -> PathBuf {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    scope.tracker.as_str().hash(&mut h);
+    scope.repo.hash(&mut h);
+    scope.viewer.hash(&mut h);
+    let digest = format!("{:016x}", h.finish());
+    // `key` is a compile-time literal from this module; the scope is not.
     paths::cache_dir()
         .join("dashboard")
-        .join(format!("{key}.json"))
+        .join(format!("{key}-{digest}.json"))
 }
 
 #[derive(serde::Deserialize)]
@@ -65,17 +91,17 @@ fn write_at<T: Serialize>(path: &Path, value: &T, now: u64) {
     }
 }
 
-/// Cached value for `key` if present and younger than `ttl` seconds; `None`
-/// otherwise. Callers gate this on `--no-cache` themselves.
-pub fn get<T: DeserializeOwned>(key: &str, ttl: u64) -> Option<T> {
-    read_fresh(&path_for(key), ttl, now_secs())
+/// Cached value for `scope`/`key` if present and younger than `ttl` seconds;
+/// `None` otherwise. Callers gate this on `--no-cache` themselves.
+pub fn get<T: DeserializeOwned>(scope: &CacheScope, key: &str, ttl: u64) -> Option<T> {
+    read_fresh(&path_for(scope, key), ttl, now_secs())
 }
 
-/// Persist `value` under `key`, stamped with the current time. Best-effort.
-/// Callers skip this for empty/failed fetches so a transient miss never
-/// poisons the cache.
-pub fn put<T: Serialize>(key: &str, value: &T) {
-    write_at(&path_for(key), value, now_secs());
+/// Persist `value` under `scope`/`key`, stamped with the current time.
+/// Best-effort. Callers skip this for empty/failed fetches so a transient
+/// miss never poisons the cache.
+pub fn put<T: Serialize>(scope: &CacheScope, key: &str, value: &T) {
+    write_at(&path_for(scope, key), value, now_secs());
 }
 
 #[cfg(test)]
@@ -126,10 +152,47 @@ mod tests {
     #[test]
     fn get_put_roundtrip_under_real_cache_dir() {
         let key = "devkit-dash-cache-getput-probe";
-        let _ = std::fs::remove_file(path_for(key));
-        assert!(get::<Vec<i64>>(key, 600).is_none());
-        put(key, &vec![10i64, 20, 30]);
-        assert_eq!(get::<Vec<i64>>(key, 600), Some(vec![10, 20, 30]));
-        let _ = std::fs::remove_file(path_for(key));
+        let s = scope(TrackerKind::Linear, "acme", "me");
+        let _ = std::fs::remove_file(path_for(&s, key));
+        assert!(get::<Vec<i64>>(&s, key, 600).is_none());
+        put(&s, key, &vec![10i64, 20, 30]);
+        assert_eq!(get::<Vec<i64>>(&s, key, 600), Some(vec![10, 20, 30]));
+        let _ = std::fs::remove_file(path_for(&s, key));
+    }
+
+    fn scope(tracker: TrackerKind, repo: &str, viewer: &str) -> CacheScope {
+        CacheScope {
+            tracker,
+            repo: repo.to_string(),
+            viewer: viewer.to_string(),
+        }
+    }
+
+    #[test]
+    fn two_projects_do_not_share_a_cache_entry() {
+        // path_for was cache_dir()/dashboard/{key}.json with no project component,
+        // so `issues`, `pr-timeline-mine` and `pr-timeline-all` were already shared
+        // by every project on the machine. Two projects on different trackers would
+        // serve each other's timelines.
+        let a = path_for(&scope(TrackerKind::Linear, "acme", "me"), "issues");
+        let b = path_for(&scope(TrackerKind::Github, "o/r", "me"), "issues");
+        let c = path_for(&scope(TrackerKind::Github, "o/r", "someone"), "issues");
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+    }
+
+    #[test]
+    fn a_scope_component_cannot_escape_the_cache_directory() {
+        // issues_repo comes from devkit.toml, which travels with a checkout, and
+        // path_for interpolates straight into a filename.
+        let root = paths::cache_dir().join("dashboard");
+        let p = path_for(&scope(TrackerKind::Github, "../../../etc", "me"), "issues");
+        assert!(
+            p.starts_with(&root),
+            "{} escaped {}",
+            p.display(),
+            root.display()
+        );
+        assert!(!p.to_string_lossy().contains(".."), "{}", p.display());
     }
 }

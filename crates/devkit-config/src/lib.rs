@@ -199,6 +199,12 @@ impl TrackerKind {
     }
 }
 
+impl std::fmt::Display for TrackerKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The `[tracker]` table.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
