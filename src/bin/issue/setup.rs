@@ -137,9 +137,9 @@ pub(crate) fn prep_apps(
     Ok(())
 }
 
-/// Width a hook's command is elided to in its progress step: what fits an
-/// 80-column terminal beside the mark, the `[i/n]` counter, and the elapsed
-/// time.
+/// Width a hook's command is elided to in its progress step: sized for an
+/// 80-column terminal alongside the mark, the `[i/n]` counter, and the
+/// elapsed time.
 const HOOK_LABEL_MAX: usize = 56;
 
 /// Render one hook's argv against `ctx`/`vars`.
@@ -171,7 +171,10 @@ fn run_rendered(worktree: &Path, argv: &[String]) -> Result<()> {
 fn hook_label(argv: &[String]) -> String {
     format!(
         "Hook: {}",
-        devkit_common::ui::truncate(&argv.join(" "), HOOK_LABEL_MAX)
+        devkit_common::ui::truncate(
+            &argv.join(" ").replace(['\n', '\r', '\t'], " "),
+            HOOK_LABEL_MAX
+        )
     )
 }
 
@@ -573,6 +576,18 @@ mod tests {
             label.chars().count(),
             "Hook: ".chars().count() + HOOK_LABEL_MAX
         );
+    }
+
+    #[test]
+    fn hook_label_collapses_embedded_newlines() {
+        let argv = vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            "echo one\necho two".to_string(),
+        ];
+        let label = hook_label(&argv);
+        assert!(!label.contains('\n'), "label was {label:?}");
+        assert_eq!(label, "Hook: bash -c echo one\necho two".replace('\n', " "));
     }
 
     #[test]

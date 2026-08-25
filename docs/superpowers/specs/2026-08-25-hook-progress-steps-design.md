@@ -167,6 +167,14 @@ No streaming consumer is known in-tree or in the MCP surface. This is recorded
 because it is the only externally observable behavior change, not because a
 caller is known to depend on the old ordering.
 
+The sharper case is a consumer that closes the pipe early, such as `issue
+setup … | head -1`. The `println!` that writes the JSON now runs before
+`run_after_worktree_create`, so a closed pipe panics on EPIPE before any hook
+starts, and the hooks never run at all. Under the old ordering the hooks had
+already run by the time that same `println!` executed. A panic mid-command is
+broken either way; `?` cannot catch a `println!` panic, so no code change
+closes this gap.
+
 ## What this does not do
 
 It does not give the shell back. The process still runs until the last hook

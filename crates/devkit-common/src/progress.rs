@@ -121,17 +121,14 @@ impl Steps {
 
     /// In numbered mode, prefix `[i/total] ` and advance the counter. In
     /// persistent unnumbered mode, prefix a plain `n. ` ordinal. Otherwise
-    /// pass the message through unchanged.
+    /// pass the message through unchanged. Every mode mints an ordinal, even
+    /// the unnumbered/transient one that never shows it, so [`Steps::started`]
+    /// reports true step coverage regardless of display mode.
     fn label(&self, msg: &str) -> String {
+        let i = self.n.fetch_add(1, Ordering::Relaxed) + 1;
         match self.total {
-            Some(total) => {
-                let i = self.n.fetch_add(1, Ordering::Relaxed) + 1;
-                format!("[{i}/{total}] {msg}")
-            }
-            None if self.persist => {
-                let i = self.n.fetch_add(1, Ordering::Relaxed) + 1;
-                format!("{i}. {msg}")
-            }
+            Some(total) => format!("[{i}/{total}] {msg}"),
+            None if self.persist => format!("{i}. {msg}"),
             None => msg.to_string(),
         }
     }
@@ -350,6 +347,15 @@ mod tests {
     #[test]
     fn started_counts_every_step_that_began() {
         let steps = Steps::persistent_with_total(2);
+        steps.during("first", || ());
+        steps.during_result("second", || anyhow::Ok(())).unwrap();
+        assert_eq!(steps.started(), 2);
+        steps.clear();
+    }
+
+    #[test]
+    fn started_counts_steps_in_unnumbered_transient_mode() {
+        let steps = Steps::new();
         steps.during("first", || ());
         steps.during_result("second", || anyhow::Ok(())).unwrap();
         assert_eq!(steps.started(), 2);
