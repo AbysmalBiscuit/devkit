@@ -105,14 +105,15 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-fetch-gate-{tag}"))
+    /// A marker path that does not exist yet: `fetch_gated` stamps it, and the
+    /// tests turn on whether it is there and how old it is.
+    fn scratch(tag: &str) -> devkit_testtmp::TmpPath {
+        devkit_testtmp::path("devkit-fetch-gate", tag)
     }
 
     #[test]
     fn skips_when_marker_is_fresh() {
         let p = scratch("fresh");
-        let _ = std::fs::remove_file(&p);
         stamp(&p, 1000);
         let called = Cell::new(false);
         let fetched = fetch_gated(&p, 60, 1030, || {
@@ -122,7 +123,6 @@ mod tests {
         .unwrap();
         assert!(!fetched, "within ttl → skipped");
         assert!(!called.get(), "fetch closure not invoked when fresh");
-        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
@@ -138,17 +138,14 @@ mod tests {
         assert!(fetched && called.get(), "past ttl → fetched");
         // marker advanced to `now`
         assert!(is_fresh(&p, 60, 1200));
-        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
     fn fetches_when_marker_missing() {
         let p = scratch("missing");
-        let _ = std::fs::remove_file(&p);
         let fetched = fetch_gated(&p, 60, 5, || Ok(())).unwrap();
         assert!(fetched);
         assert!(p.exists(), "marker written after a fetch");
-        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
@@ -162,13 +159,11 @@ mod tests {
         })
         .unwrap();
         assert!(fetched && called.get(), "ttl 0 disables the gate");
-        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
     fn failed_fetch_leaves_no_marker() {
         let p = scratch("fail");
-        let _ = std::fs::remove_file(&p);
         let r = fetch_gated(&p, 60, 5, || anyhow::bail!("boom"));
         assert!(r.is_err());
         assert!(

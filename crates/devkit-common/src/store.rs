@@ -241,15 +241,16 @@ mod tests {
         }
     }
 
-    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
-        devkit_testtmp::dir(&format!("devkit-store-{tag}"))
+    /// A file path that does not exist yet — `tag` names the lock or the
+    /// document, and the store creates whichever it is handed.
+    fn scratch(tag: &str) -> devkit_testtmp::TmpPath {
+        devkit_testtmp::path("devkit-store", tag)
     }
 
     #[test]
     fn with_lock_persists_and_stamps_version() {
         let lock = scratch("a.lock");
         let data = scratch("a.json");
-        let _ = fs::remove_file(&data);
         with_lock::<Doc, _>(&lock, &data, |d| {
             d.items.insert(8080, "api".into());
             Ok(())
@@ -258,19 +259,14 @@ mod tests {
         let back = with_lock::<Doc, _>(&lock, &data, |d| Ok(d.clone())).unwrap();
         assert_eq!(back.items[&8080], "api");
         assert_eq!(back.version, VERSION);
-        let _ = fs::remove_file(&data);
-        let _ = fs::remove_file(&lock);
     }
 
     #[test]
     fn read_missing_is_default() {
         let lock = scratch("b.lock");
         let data = scratch("b.json");
-        let _ = fs::remove_file(&data);
         let out = with_lock::<Doc, _>(&lock, &data, |d| Ok(d.is_empty())).unwrap();
         assert!(out);
-        let _ = fs::remove_file(&data);
-        let _ = fs::remove_file(&lock);
     }
 
     #[test]
@@ -293,12 +289,10 @@ mod tests {
     #[test]
     fn load_save_roundtrip_and_missing_default() {
         let p = scratch("loadsave.json");
-        let _ = fs::remove_file(&p);
         assert!(load::<Doc>(&p).is_empty(), "missing file loads as default");
         let mut d = Doc::default();
         d.items.insert(8080, "api".into());
         save(&p, &d).unwrap();
         assert_eq!(load::<Doc>(&p).items[&8080], "api");
-        let _ = fs::remove_file(&p);
     }
 }
