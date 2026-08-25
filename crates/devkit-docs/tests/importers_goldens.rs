@@ -327,7 +327,6 @@ fn record() -> String {
             }
             out.push('\n');
         }
-        let _ = std::fs::remove_dir_all(root);
     }
     out
 }

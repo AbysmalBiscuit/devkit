@@ -6,9 +6,6 @@ use devkit_docs::importers::Evidence as Ev;
 use devkit_docs::pins::{self, Dropped, Outcome, Pin};
 use std::path::Path;
 
-#[allow(dead_code)]
-mod common;
-
 fn write(path: &Path, body: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, body).unwrap();
