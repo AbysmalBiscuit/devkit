@@ -30,12 +30,22 @@ fn agent() -> &'static ureq::Agent {
     })
 }
 
-fn resolve_token() -> Option<String> {
+/// Where the GitHub token devkit sends was found. `Env` names the variable so
+/// a report can print it; `Gh` means `gh auth token` produced it, which is the
+/// only case where gh's active account is also devkit's identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenSource {
+    Env(&'static str),
+    Gh,
+    None,
+}
+
+fn resolve_token() -> (Option<String>, TokenSource) {
     for key in ["GH_TOKEN", "GITHUB_TOKEN"] {
         if let Ok(v) = std::env::var(key) {
             let v = v.trim().to_string();
             if !v.is_empty() {
-                return Some(v);
+                return (Some(v), TokenSource::Env(key));
             }
         }
     }
@@ -43,17 +53,33 @@ fn resolve_token() -> Option<String> {
     // `--hostname` is explicit: with `GH_HOST` set, an unqualified call returns
     // an enterprise token, which the callers below would then send to
     // api.github.com.
-    crate::cmd::capture("gh", &["auth", "token", "--hostname", "github.com"], None)
+    let gh = crate::cmd::capture("gh", &["auth", "token", "--hostname", "github.com"], None)
         .ok()
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty());
+    match gh {
+        Some(v) => (Some(v), TokenSource::Gh),
+        None => (None, TokenSource::None),
+    }
+}
+
+/// Token and source, resolved together exactly once per process: env first,
+/// then `gh auth token`. Both [`token`] and [`token_source`] read this same
+/// cache so the two can never disagree about where a token came from.
+fn resolved() -> &'static (Option<String>, TokenSource) {
+    static T: OnceLock<(Option<String>, TokenSource)> = OnceLock::new();
+    T.get_or_init(resolve_token)
 }
 
 /// The GitHub token, resolved once per process: env first, then `gh auth token`.
 /// `None` when neither is available — callers then use their `gh` fallback.
 pub fn token() -> Option<&'static str> {
-    static T: OnceLock<Option<String>> = OnceLock::new();
-    T.get_or_init(resolve_token).as_deref()
+    resolved().0.as_deref()
+}
+
+/// Where [`token`] came from, from the same resolution `token` reads.
+pub fn token_source() -> TokenSource {
+    resolved().1
 }
 
 fn bearer() -> Result<String> {

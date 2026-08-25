@@ -21,11 +21,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Validate and store a Linear or Slack credential.
+    /// Validate and store a Linear or Slack credential, or report the GitHub
+    /// identity devkit would use (GitHub stores nothing — `gh auth login` or
+    /// `GH_TOKEN`/`GITHUB_TOKEN` already cover that credential).
     Auth {
-        /// Credential to validate and store.
+        /// Credential to validate and store, or `github` to report identity.
         provider: Provider,
         /// Provide the token non-interactively instead of being prompted.
+        /// Ignored for `github`.
         #[arg(long)]
         token: Option<String>,
     },
@@ -87,6 +90,7 @@ enum SchemaCmd {
 enum Provider {
     Linear,
     Slack,
+    Github,
 }
 
 impl Provider {
@@ -94,6 +98,7 @@ impl Provider {
         match self {
             Provider::Linear => "Linear",
             Provider::Slack => "Slack",
+            Provider::Github => "GitHub",
         }
     }
 }

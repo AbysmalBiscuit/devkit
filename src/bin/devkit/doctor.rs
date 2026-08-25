@@ -2,7 +2,7 @@ use anyhow::Result;
 use devkit_common::progress::Steps;
 use devkit_common::secrets::{self, Source};
 use devkit_common::slack;
-use devkit_common::tracker::{Resolved, linear};
+use devkit_common::tracker::{Resolved, TrackerKind, linear};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Check {
@@ -22,6 +22,7 @@ struct Row {
 const HINT_LINEAR: &str = "run: devkit auth linear   (https://linear.app/settings/api)";
 const HINT_SLACK: &str = "run: devkit auth slack    (Slack app → OAuth & Permissions)";
 const HINT_WORKSPACE: &str = "optional — falls back to the Linear API for issue links";
+const HINT_GITHUB: &str = "run: gh auth login   (or set GH_TOKEN/GITHUB_TOKEN)";
 
 /// Exit non-zero when a credential that is set fails validation, or when a
 /// config exists that does not load. An unset credential is a warning; an
@@ -101,17 +102,30 @@ fn resolve_tracker(start: &std::path::Path) -> Resolved {
 /// no error to explain it. Naming a `kind` turns that into a decision — except
 /// for a project that already named one devkit could not build, whose fix is
 /// the reason the row already carries.
+///
+/// GitHub is checked first, ahead of `declared`: a project that names
+/// `[tracker] kind = "github"` still resolves the real adapter with no
+/// repository lookup to fail, so an unset token is the one way that adapter
+/// is not ready, declared or not — and the fix is a token, not naming a
+/// tracker the project already named.
 fn tracker_check(r: &Resolved) -> Check {
     let detail = format!("{} — {}", r.tracker.kind().as_str(), r.reason);
-    if r.declared || r.tracker.ready() {
-        Check::Ok(detail)
-    } else if r.unbuilt_reason().is_some() {
-        Check::Warn(format!("{detail}; issue state gates stay closed"))
-    } else {
-        Check::Warn(format!(
-            "{detail}; issue state gates stay closed — set `[tracker] kind` \
-             to name this project's tracker"
-        ))
+    match (r.tracker.kind(), r.tracker.ready()) {
+        (TrackerKind::Github, false) => {
+            Check::Warn(format!("{detail}; no GitHub token — {HINT_GITHUB}"))
+        }
+        (TrackerKind::Linear, _) | (TrackerKind::Github, true) | (TrackerKind::None, _) => {
+            if r.declared || r.tracker.ready() {
+                Check::Ok(detail)
+            } else if r.unbuilt_reason().is_some() {
+                Check::Warn(format!("{detail}; issue state gates stay closed"))
+            } else {
+                Check::Warn(format!(
+                    "{detail}; issue state gates stay closed — set `[tracker] kind` \
+                     to name this project's tracker"
+                ))
+            }
+        }
     }
 }
 
@@ -393,6 +407,58 @@ mod tests {
                 );
             }
             other => panic!("a tracker devkit fell back to is worth a warning: {other:?}"),
+        }
+    }
+
+    /// A github fake tracker with `ready` forced false, standing in for a real
+    /// `GithubTracker` with no token — `ready()` on the real adapter reads the
+    /// process-global `github::token()`, which a unit test cannot pin.
+    fn unready_github(declared: bool, reason: &str) -> Resolved {
+        let mut tracker =
+            devkit_common::tracker::fake::FakeTracker::new().with_kind(TrackerKind::Github);
+        tracker.ready = false;
+        Resolved {
+            tracker: Box::new(tracker),
+            declared,
+            reason: reason.into(),
+        }
+    }
+
+    /// A project that names `[tracker] kind = "github"` still warns about a
+    /// missing token: the adapter is the project's own declared choice, so the
+    /// `declared || ready` arm would otherwise mark it Ok with no token in play.
+    #[test]
+    fn a_declared_github_tracker_with_no_token_warns_about_the_token() {
+        let r = unready_github(true, "[tracker] kind = \"github\"");
+        match tracker_check(&r) {
+            Check::Warn(d) => {
+                assert!(d.contains("no GitHub token"), "{d}");
+                assert!(d.contains("gh auth login"), "{d}");
+            }
+            other => panic!("a declared github tracker with no token is a warning: {other:?}"),
+        }
+    }
+
+    /// A detected GitHub origin with no token warns about the token, not about
+    /// naming `[tracker] kind` — the tracker already resolved to the real
+    /// adapter, so the generic "name your tracker" advice would be wrong.
+    #[test]
+    fn a_detected_github_tracker_with_no_token_warns_about_the_token_not_kind() {
+        let r = unready_github(
+            false,
+            &format!(
+                "{}github.com `origin` remote",
+                devkit_common::tracker::DETECTED
+            ),
+        );
+        match tracker_check(&r) {
+            Check::Warn(d) => {
+                assert!(d.contains("no GitHub token"), "{d}");
+                assert!(!d.contains("[tracker] kind"), "{d}");
+            }
+            other => {
+                panic!("a detected github tracker with no token warns about the token: {other:?}")
+            }
         }
     }
 
