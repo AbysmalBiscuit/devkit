@@ -478,11 +478,18 @@ effect is a Slack message to the author. So the exemption is a decision with a
 reason, not an omission, and the code carries the same reason where the gate
 would otherwise sit.
 
-The verdict is not gated on the oid either. FINISHED stays merged PR plus clean
-tree plus issue state; what protects it from a stranger's PR is the typed head
-lookup, whose `Ambiguous` answer holds the verdict open rather than picking a
-winner, together with the recorded binding that `review request` only writes
-once the oid agreed.
+The verdict is not gated on the oid either, and this one is a gap rather than a
+decision. FINISHED is merged PR plus clean tree plus issue state. Against a
+*stranger's* PR that holds up: an `Ambiguous` head lookup keeps the verdict open
+rather than picking a winner, and a recorded binding was only written once the
+oid agreed. Against the worktree's *own* PR it does not. A branch whose PR
+merged at one commit and which then took another commit locally has a clean
+tree, a completed issue and a single unambiguous PR, so it reports finished and
+`issue end` runs `git branch -D` on committed work that never landed. That is
+the deletion this section argues against, and closing it means comparing the
+merged PR's `headRefOid` with the worktree's `HEAD` where the verdict is
+decided. Doing so changes what reports finished for every project, not only
+GitHub ones, which is why it is named here rather than folded in.
 
 `review request` pushes the branch before it looks up the PR, so on the ordinary
 path the remote is current and the oids agree. Under `--no-push` they can
@@ -1018,7 +1025,7 @@ adapter is network-free under test.
 | `--pr`'s meaning | One meaning everywhere: use this PR for this run. Rebinding falls out of `review request` recording what it acted on, so `review finish --pr` keeps its one-run contract. |
 | Locator precedence | Explicit `--pr`, then the record, then branch discovery. |
 | Validating a PR on an acting path | Its `headRefOid` must equal the worktree's `HEAD` — explicit, recorded or branch-discovered alike. A branch-name match does not prove the PR carries these commits, and same-named branches across forks are the case this design assumes everywhere else. |
-| Which command that gates | `review request`, which edits the PR and writes the binding. `review finish` is exempt: it is the reviewer's command, run where `HEAD` goes stale by design as the author pushes, and it mutates neither the PR nor the record. The finished verdict is not gated on the oid either — it rests on the merged PR, the clean tree and the issue state, with an `Ambiguous` head lookup holding it open. |
+| Which command that gates | `review request`, which edits the PR and writes the binding. `review finish` is exempt: it is the reviewer's command, run where `HEAD` goes stale by design as the author pushes, and it mutates neither the PR nor the record. The finished verdict is not gated on the oid — that one is an open gap, not an exemption; it rests on the merged PR, the clean tree and the issue state, which a branch carrying a commit past its own merged PR satisfies. |
 | When that check runs | Before the call for an existing PR; immediately after, and before the record or any notification, for one just created. A PR that does not exist yet has no head to compare. |
 | `--no-push` under that rule | Fails closed. Declining to publish the branch is declining to make it checkable. |
 | `--repo` on `gh` | On every `gh pr` command, with no origin-defaulted exemption, spelled `github.com/owner/repo`. `gh api` and `gh auth token` take `--hostname github.com` instead. `GH_REPO` must not split the `gh` half from the HTTP half, and `GH_HOST` must not send a token to a host it was not issued for. |
