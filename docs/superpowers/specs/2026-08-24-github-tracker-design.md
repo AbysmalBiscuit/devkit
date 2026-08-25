@@ -452,8 +452,8 @@ rule stays strict and gains a human-supplied escape:
   --pr <n>` overrides for that run and leaves the record alone.
 - Branch discovery runs only when neither locator is present.
 
-**Every PR `review request` acts on has to belong to this worktree, and the
-branch name does not prove it.** The check is not about how the PR was chosen.
+**Every PR `review request` or `checkout-pr` acts on has to belong to this
+worktree, and the branch name does not prove it.** The check is not about how the PR was chosen.
 An explicit `--pr` with a mistyped number names a real PR that resolves cleanly;
 a recorded locator can have been written when the branch meant something else;
 and a branch-discovered `Unique` is unique only in that one repository's PRs
@@ -656,10 +656,10 @@ More consequentially, `devkit-issue::prs::gather` calls
 GitHub PR row would never receive the issues it closes — the column simply stays
 empty, and `issues_for_prs` stays dead in contradiction of this task's own gate.
 So the resolved tracker is injected into PR gathering and the trait method is
-called. `resolve_pr_links` keeps its meaning as *Linear's* opt-in, because the
-Linear implementation is the expensive one it was added to gate; GitHub's is a
-field on a query already being made. Both the CLI and MCP paths into `gather`
-change together.
+called. `resolve_pr_links` keeps its meaning as *Linear's* opt-in: it is a
+`[linear]` key, and a Linear key does not become a global switch. GitHub's
+linked issues are a batched round trip of their own, made unconditionally.
+Both the CLI and MCP paths into `gather` change together.
 
 `summary.rs` and `setup.rs` also pass `linear::IssueDetails` around as a type;
 that one is a naming problem rather than a behavioral one, and renaming it is
@@ -1021,11 +1021,11 @@ adapter is network-free under test.
 | The bare-number arm's issue candidates | Through `Tracker::candidates`, never the ambient `LINEAR_API_KEY`. |
 | `issue_ref`'s signature | `Result<IssueRef>`. It cannot refuse a foreign repository otherwise, and `checkout-pr`'s slash heuristic exists because it cannot. |
 | Parsing for an undeclared tracker | Keeps today's permissive `linear.app` parse. Routing it through `NoneTracker` would lose the slug for a project with no tracker and no key. |
-| `[linear] resolve_pr_links` | Stays, as Linear's own opt-in gate. GitHub's linked issues are a field on a query already being made. |
+| `[linear] resolve_pr_links` | Stays, as Linear's own opt-in gate — a `[linear]` key does not become a global switch. GitHub's linked issues cost a batched round trip of their own, made unconditionally. |
 | `--pr`'s meaning | One meaning everywhere: use this PR for this run. Rebinding falls out of `review request` recording what it acted on, so `review finish --pr` keeps its one-run contract. |
 | Locator precedence | Explicit `--pr`, then the record, then branch discovery. |
 | Validating a PR on an acting path | Its `headRefOid` must equal the worktree's `HEAD` — explicit, recorded or branch-discovered alike. A branch-name match does not prove the PR carries these commits, and same-named branches across forks are the case this design assumes everywhere else. |
-| Which command that gates | `review request`, which edits the PR and writes the binding. `review finish` is exempt: it is the reviewer's command, run where `HEAD` goes stale by design as the author pushes, and it mutates neither the PR nor the record. The finished verdict is not gated on the oid — that one is an open gap, not an exemption; it rests on the merged PR, the clean tree and the issue state, which a branch carrying a commit past its own merged PR satisfies. |
+| Which command that gates | `review request`, which edits the PR and writes the binding, and `checkout-pr`, which writes one too — it builds the worktree *from* the PR, so it has no head to compare until the checkout lands and validates immediately after, removing the worktree on a mismatch rather than leaving it. `review finish` is exempt: it is the reviewer's command, run where `HEAD` goes stale by design as the author pushes, and it mutates neither the PR nor the record. The finished verdict is not gated on the oid — that one is an open gap, not an exemption; it rests on the merged PR, the clean tree and the issue state, which a branch carrying a commit past its own merged PR satisfies. |
 | When that check runs | Before the call for an existing PR; immediately after, and before the record or any notification, for one just created. A PR that does not exist yet has no head to compare. |
 | `--no-push` under that rule | Fails closed. Declining to publish the branch is declining to make it checkable. |
 | `--repo` on `gh` | On every `gh pr` command, with no origin-defaulted exemption, spelled `github.com/owner/repo`. `gh api` and `gh auth token` take `--hostname github.com` instead. `GH_REPO` must not split the `gh` half from the HTTP half, and `GH_HOST` must not send a token to a host it was not issued for. |
@@ -1040,7 +1040,7 @@ adapter is network-free under test.
 | Truncated linked-PR results | Refused via `hasNextPage`, never ranked. |
 | Every other connection | Same rule. `pageInfo` on all of them; `closingIssuesReferences` reports incomplete, `timelineItems` paginates. A connection nested in a paginated one does not paginate with its parent. |
 | The linked-PR ranking tuple | State, then number within the top state group. A tie is a top state group spanning repositories, where numbers are not comparable — two merged PRs in one repository are ranked, not refused. |
-| Which PRs the OID check gates | All of them on `review request`: explicit, recorded, and branch-discovered. How the PR was chosen does not change what it can do. |
+| Which PRs the OID check gates | All of them on a command that writes a binding: explicit, recorded, and branch-discovered alike. How the PR was chosen does not change what it can do. |
 | `--repo`'s actual scope | Repository-scoped `gh pr` commands. `gh auth` and `gh api graphql` do not accept it; graphql names its repository in variables. The rule is that the environment never chooses the repository. |
 | Schema regeneration | In the task that changes the config type, not deferred to the documentation task. |
 | When GitHub goes live | After the recorded-PR and dashboard tasks, so the switch never exposes a half-wired tracker. |

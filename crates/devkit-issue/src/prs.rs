@@ -884,9 +884,9 @@ pub fn gather(
     Ok(report)
 }
 
-/// Attach each PR's closing issues. `resolve_pr_links` gates Linear only: it
-/// exists to make an expensive extra round trip opt-in, and GitHub answers
-/// from a field on a query already being made.
+/// Attach each PR's closing issues. `resolve_pr_links` gates Linear only: it is
+/// a `[linear]` key and does not become a global switch. GitHub answers
+/// unconditionally, at the cost of a batched round trip of its own.
 pub(crate) fn apply_tracker_links(report: &mut PrsReport, t: &dyn Tracker, resolve_pr_links: bool) {
     let gated = match t.kind() {
         TrackerKind::Linear => !resolve_pr_links,
@@ -937,9 +937,9 @@ mod tests {
 
     #[test]
     fn resolve_pr_links_still_gates_linear_only() {
-        // The flag was added to gate an expensive Linear round trip. GitHub's
-        // linked issues are a field on a query already being made, so the flag
-        // keeps its Linear meaning rather than becoming a global switch.
+        // The flag is a `[linear]` key and keeps its Linear meaning rather
+        // than becoming a global switch. GitHub pays a batched round trip of
+        // its own here, ungated.
         let lin = fake::FakeTracker::new()
             .with_kind(TrackerKind::Linear)
             .with_links("https://github.com/o/r/pull/7", vec!["ENG-1"]);

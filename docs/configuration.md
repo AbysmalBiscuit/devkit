@@ -548,10 +548,10 @@ with no key, or on any Linear error, the column falls back to the
 text-derived id — `issue prs` never fails because of Linear. The MCP
 `issue.prs` action honors the same flag.
 
-The flag gates Linear alone, because the round trip is what it exists to make
-opt-in. Under the GitHub tracker each PR's closing issues come back on a query
-`issue prs` already makes, so the ISSUE column carries them whether or not this
-is set.
+The flag gates Linear alone: it is a `[linear]` key, and a Linear key does not
+become a global switch. Under the GitHub tracker the ISSUE column carries each
+PR's closing issues whether or not this is set, at the cost of a batched round
+trip of its own.
 
 ```toml
 [linear]
