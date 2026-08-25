@@ -250,10 +250,9 @@ mod tests {
         }
     }
 
-    /// `assigned_history` and `timeline_origin` had no caller anywhere outside
-    /// the tracker module: this fetched Linear directly rather than going
-    /// through the tracker devkit already resolved for the project.
-    /// `use_cache: false` skips the real cache dir entirely.
+    /// The timeline reads whichever tracker the project resolved, not Linear:
+    /// the fake answers `assigned_history`, and its issue reaches the chart.
+    /// `use_cache: false` keeps the real cache directory out of the test.
     #[test]
     fn the_dashboard_reads_the_configured_tracker() {
         let t = FakeTracker::new().with_assigned(vec![assigned("ENG-1")]);

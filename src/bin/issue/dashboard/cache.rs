@@ -170,10 +170,10 @@ mod tests {
 
     #[test]
     fn two_projects_do_not_share_a_cache_entry() {
-        // path_for was cache_dir()/dashboard/{key}.json with no project component,
-        // so `issues`, `pr-timeline-mine` and `pr-timeline-all` were already shared
-        // by every project on the machine. Two projects on different trackers would
-        // serve each other's timelines.
+        // A cache entry belongs to one (tracker, repo, viewer). Every key this
+        // module stores — `issues`, `pr-timeline-mine`, `pr-timeline-all` — is a
+        // fixed literal, so the scope is the only thing keeping one project's
+        // timelines out of another's dashboard.
         let a = path_for(&scope(TrackerKind::Linear, "acme", "me"), "issues");
         let b = path_for(&scope(TrackerKind::Github, "o/r", "me"), "issues");
         let c = path_for(&scope(TrackerKind::Github, "o/r", "someone"), "issues");
@@ -183,8 +183,10 @@ mod tests {
 
     #[test]
     fn a_scope_component_cannot_escape_the_cache_directory() {
-        // issues_repo comes from devkit.toml, which travels with a checkout, and
-        // path_for interpolates straight into a filename.
+        // `issues_repo` reaches the scope from `devkit.toml`, which travels with a
+        // checkout, so a cache path is built partly from a value the checkout
+        // chose. Hashing every component is what keeps a `..` in one inside the
+        // cache directory.
         let root = paths::cache_dir().join("dashboard");
         let p = path_for(&scope(TrackerKind::Github, "../../../etc", "me"), "issues");
         assert!(
