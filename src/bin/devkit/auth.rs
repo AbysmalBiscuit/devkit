@@ -20,6 +20,13 @@ fn store_slack(path: &Path, token: &str) -> Result<()> {
 
 pub fn run(provider: Provider, token: Option<String>) -> Result<()> {
     if let Provider::Github = provider {
+        // Reporting has nowhere to put a token. Accepting one and discarding it
+        // would leave the caller believing devkit now holds their credential.
+        anyhow::ensure!(
+            token.is_none(),
+            "devkit stores no GitHub credential: `devkit auth github` reports the \
+             identity devkit resolves from GH_TOKEN, GITHUB_TOKEN or `gh auth token`"
+        );
         return run_github();
     }
     let token = acquire(provider, token)?;
@@ -220,6 +227,16 @@ mod tests {
             out.find("ci-bot").unwrap() < out.find("a-human").unwrap(),
             "{out}"
         );
+    }
+
+    /// The guard fires before any lookup, so this exercises the real entry
+    /// point without reaching the network.
+    #[test]
+    fn a_token_handed_to_github_is_refused_rather_than_discarded() {
+        let e = run(Provider::Github, Some("ghp_x".into())).unwrap_err();
+        let msg = format!("{e:#}");
+        assert!(msg.contains("stores no GitHub credential"), "{msg}");
+        assert!(msg.contains("GH_TOKEN"), "{msg}");
     }
 
     #[test]

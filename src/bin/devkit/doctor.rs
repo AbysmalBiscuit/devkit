@@ -103,11 +103,11 @@ fn resolve_tracker(start: &std::path::Path) -> Resolved {
 /// for a project that already named one devkit could not build, whose fix is
 /// the reason the row already carries.
 ///
-/// GitHub is checked first, ahead of `declared`: a project that names
-/// `[tracker] kind = "github"` still resolves the real adapter with no
-/// repository lookup to fail, so an unset token is the one way that adapter
-/// is not ready, declared or not — and the fix is a token, not naming a
-/// tracker the project already named.
+/// GitHub is checked ahead of `declared` because a built `GithubTracker` is
+/// ready only when a token is, and an unset token is the single way this arm
+/// is reached: a `kind = "github"` whose issues repository does not resolve
+/// never builds the adapter and arrives here as `TrackerKind::None`. So the
+/// fix is a token, not naming a tracker the project already named.
 fn tracker_check(r: &Resolved) -> Check {
     let detail = format!("{} — {}", r.tracker.kind().as_str(), r.reason);
     match (r.tracker.kind(), r.tracker.ready()) {
