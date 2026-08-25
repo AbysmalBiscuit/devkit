@@ -452,8 +452,10 @@ pub fn issues_for_prs_queries(urls: &[String]) -> Vec<(String, HashMap<String, S
 /// it closes. An issue in `slug`, the tracker's own issues repository, is a
 /// bare number; one anywhere else is `owner/name#number`, since GitHub lets a
 /// PR close an issue across a repository boundary and a bare number there
-/// would name a different issue. A node with no `repository` stays bare — a
-/// missing field is not evidence of a different repository.
+/// would name a different issue. The match is case-insensitive: GitHub returns
+/// a repository's canonical casing, while `slug` came verbatim from config or
+/// an origin remote. A node with no `repository` stays bare — a missing field
+/// is not evidence of a different repository.
 ///
 /// A connection reporting `hasNextPage` is dropped rather than kept partial —
 /// a partial link list is worse than none, since it feeds a column that is
@@ -482,7 +484,9 @@ pub fn parse_issues_for_prs(
             .filter_map(|n| {
                 let number = n["number"].as_u64()?;
                 Some(match n["repository"]["nameWithOwner"].as_str() {
-                    Some(other) if other != slug => format!("{other}#{number}"),
+                    Some(other) if !other.eq_ignore_ascii_case(slug) => {
+                        format!("{other}#{number}")
+                    }
                     _ => number.to_string(),
                 })
             })
@@ -1061,6 +1065,27 @@ mod tests {
             got["https://github.com/o/r/pull/1"],
             vec!["6".to_string(), "other/repo#42".to_string()]
         );
+    }
+
+    #[test]
+    fn a_closing_issue_repository_matches_its_slug_case_insensitively() {
+        // GitHub returns the canonical casing of a repository name, while the
+        // slug came verbatim from `[github] issues_repo` or an origin remote.
+        // Comparing them literally would qualify every issue in the project's
+        // own repository for anyone whose config disagrees on case.
+        let resp = serde_json::json!({
+            "data": { "p0": { "closingIssuesReferences": {
+                "pageInfo": { "hasNextPage": false },
+                "nodes": [{ "number": 6, "repository": { "nameWithOwner": "O/R" } }]
+            } } }
+        });
+        let mut aliases = HashMap::new();
+        aliases.insert(
+            "p0".to_string(),
+            "https://github.com/o/r/pull/1".to_string(),
+        );
+        let got = parse_issues_for_prs(&resp, &aliases, "o/r");
+        assert_eq!(got["https://github.com/o/r/pull/1"], vec!["6".to_string()]);
     }
 
     #[test]
