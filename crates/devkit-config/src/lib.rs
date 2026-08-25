@@ -383,7 +383,7 @@ pub const DEFAULT_ISSUE_SUMMARY_PATH: &str = "ISSUE_SUMMARY_{{ issue }}.md";
 pub const DEFAULT_ISSUE_SUMMARY: &str = "\
 # {{ issue }}: {{ title }}\n\
 \n\
-- **Linear:** {{ url }}\n\
+- **Issue:** {{ url }}\n\
 {% if parent %}- **Parent:** {{ parent }}\n{% endif %}\
 {% if project %}- **Project:** {{ project }}\n{% endif %}\
 - **Worktree:** {{ worktree }}\n\
@@ -394,7 +394,7 @@ pub const DEFAULT_ISSUE_SUMMARY: &str = "\
 {% if estimate %} / {{ estimate }}{% endif %}\n\
 {% if labels %}- **Labels:** {{ labels | join(\", \") }}\n{% endif %}\
 \n\
-## Linear description\n\
+## Description\n\
 \n\
 {{ description }}\n\
 \n\

@@ -195,6 +195,9 @@ mod tests {
         )
         .unwrap();
         assert!(out.starts_with("# ENG-42: Fix the login redirect\n"));
+        assert!(out.contains(
+            "- **Issue:** https://linear.app/acme/issue/ENG-42/fix-the-login-redirect\n"
+        ));
         assert!(out.contains("- **Parent:** ENG-1 \u{2014} Login epic\n"));
         assert!(out.contains("- **Project:** Q3 hardening\n"));
         assert!(out.contains("- **Branch:** lev/eng-42-fix\n"));
@@ -202,12 +205,12 @@ mod tests {
         assert!(out.contains("- **State / assignee:** Todo / Lev\n"));
         assert!(out.contains("- **Priority / estimate:** High / 3\n"));
         assert!(out.contains("- **Labels:** auth, web\n"));
-        assert!(out.contains("## Linear description\n\nClicking sign-in bounces to /.\n"));
+        assert!(out.contains("## Description\n\nClicking sign-in bounces to /.\n"));
         assert!(out.trim_end().ends_with("## Summary\n\n## Pointers"));
     }
 
     #[test]
-    fn absent_linear_fields_drop_their_lines_rather_than_render_empty() {
+    fn absent_fields_drop_their_lines_rather_than_render_empty() {
         let mut d = details();
         d.parent = String::new();
         d.project = String::new();

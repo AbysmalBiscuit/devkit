@@ -517,7 +517,7 @@ team = "platform"
 | `review_request` | `{{ input }} {{ pr_url }}` | review base + `input` = body arg, `pr_title`, `pr_url`, `name`, `slack_id` |
 | `review_finish` | `{{ input }} {{ pr_url }}` | `pr_url`, `pr_title`, `author`, `input`, `name`, `slack_id` |
 | `issue_summary_path` | `ISSUE_SUMMARY_{{ issue }}.md`, taken from `worktree_root` when relative | summary base |
-| `issue_summary` | a facts header, `## Linear description`, then empty `## Summary` / `## Pointers` | summary base |
+| `issue_summary` | a facts header, `## Description`, then empty `## Summary` / `## Pointers` | summary base |
 
 Summary base context for `issue_summary_path` and `issue_summary`: `issue`
 (Linear's own capitalisation), `title`, `url`, `description`, `state`,
