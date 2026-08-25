@@ -167,15 +167,20 @@ fn fetch_pr_meta(n: u64, cwd: &str, repo: &github::Repo) -> Result<PrMeta> {
 /// caller already holds is kept; otherwise the tracker is asked for one. That
 /// lookup is best-effort: the title only decorates the worktree name, so a
 /// tracker hiccup must not fail a checkout whose PR is already resolved.
+///
+/// The locator comes from the PR's URL so a PR outside `pr_repo` — which a
+/// split `[github]` config makes reachable — is fetched from the repository
+/// holding it. A URL that does not parse leaves the number to resolve against
+/// `pr_repo`.
 fn resolve_issue(id: &str, title: Option<String>, t: &dyn Tracker) -> Result<Resolved> {
     let pr = t
         .issue_pr(id)?
         .with_context(|| format!("issue {id} has no associated PR to check out"))?;
     Ok(Resolved {
-        loc: github::PrLocator {
+        loc: github::PrLocator::from_url(&pr.url).unwrap_or(github::PrLocator {
             repo: None,
             number: pr.number,
-        },
+        }),
         linear_id: Some(id.to_string()),
         linear_title: title.or_else(|| t.title(id).ok().flatten()),
     })
@@ -713,6 +718,28 @@ mod tests {
             decide_fuzzy(true, &[lref("ENG-1", "a")], false),
             FuzzyDecision::ErrorAmbiguous
         );
+    }
+
+    #[test]
+    fn a_linked_pr_is_checked_out_from_the_repository_its_url_names() {
+        // With issues_repo and pr_repo configured separately, the tracker's
+        // issue can name a PR outside pr_repo. Dropping the URL for the bare
+        // number checked out pr_repo's PR of the same number instead.
+        use devkit_common::tracker::fake;
+        let t =
+            fake::FakeTracker::new().with_pr("ENG-42", "https://github.com/other/repo/pull/7", 7);
+        let r = resolve_issue("ENG-42", None, &t).unwrap();
+        assert_eq!(r.loc.repo.as_deref(), Some("other/repo"));
+        assert_eq!(r.loc.number, 7);
+    }
+
+    #[test]
+    fn a_linked_pr_whose_url_does_not_parse_falls_back_to_its_number() {
+        use devkit_common::tracker::fake;
+        let t = fake::FakeTracker::new().with_pr("ENG-42", "not-a-pr-url", 7);
+        let r = resolve_issue("ENG-42", None, &t).unwrap();
+        assert_eq!(r.loc.repo, None);
+        assert_eq!(r.loc.number, 7);
     }
 
     #[test]

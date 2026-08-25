@@ -19,6 +19,7 @@ pub struct FakeTracker {
     titles: HashMap<String, String>,
     by_number: HashMap<u64, Vec<String>>,
     links: HashMap<String, Vec<String>>,
+    prs: HashMap<String, PrRef>,
     assigned: Vec<AssignedIssue>,
     timeline_origin: Option<String>,
 }
@@ -33,6 +34,7 @@ impl FakeTracker {
             titles: HashMap::new(),
             by_number: HashMap::new(),
             links: HashMap::new(),
+            prs: HashMap::new(),
             assigned: Vec::new(),
             timeline_origin: None,
         }
@@ -76,6 +78,18 @@ impl FakeTracker {
         self.links.insert(
             pr_url.to_string(),
             ids.into_iter().map(String::from).collect(),
+        );
+        self
+    }
+
+    /// `issue_pr(id)` answers with this PR.
+    pub fn with_pr(mut self, id: &str, url: &str, number: u64) -> Self {
+        self.prs.insert(
+            id.to_string(),
+            PrRef {
+                url: url.to_string(),
+                number,
+            },
         );
         self
     }
@@ -131,8 +145,8 @@ impl Tracker for FakeTracker {
             .filter_map(|i| self.states.get(i).map(|s| (i.clone(), s.clone())))
             .collect()
     }
-    fn issue_pr(&self, _id: &str) -> Result<Option<PrRef>> {
-        Ok(None)
+    fn issue_pr(&self, id: &str) -> Result<Option<PrRef>> {
+        Ok(self.prs.get(id).cloned())
     }
     fn candidates(&self, n: u64) -> Result<Vec<IssueRef>> {
         Ok(self
