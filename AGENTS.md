@@ -1,7 +1,7 @@
 # devkit
 
 A Rust workspace (edition 2024): a root `devkit` binary package whose six CLIs live
-in `src/bin/`, plus eight library crates, coordinating local development for a monorepo.
+in `src/bin/`, plus its library crates, coordinating local development for a monorepo.
 The engine is project-agnostic; every project-specific detail lives in `devkit.toml`.
 See `README.md` for user-facing CLI docs.
 
@@ -22,7 +22,7 @@ verifies) using the stable toolchain CI uses, so formatting matches.
 ## Layout
 
 The workspace root is the `devkit` binary package; its CLIs live in `src/bin/` and
-install together via `cargo install --path .`. Eight library crates are members.
+install together via `cargo install --path .`. Its library crates are members.
 
 | Unit | Role |
 |---|---|
@@ -33,7 +33,6 @@ install together via `cargo install --path .`. Eight library crates are members.
 | `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + tracker state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
 | `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks`/`devrun`/`issue` handlers) over the port + lock facades, the `devkit-ports::run` server-lifecycle facade, and the `devkit-issue` triage facade |
 | `crates/devkit-docs` | lib: version-correct library checkouts — manifest (global `docs.toml` + `devkit.toml` `[docs]`), importer-graph resolution (pnpm/bun/npm/Cargo/uv) matched to git tags, hard-error failure modes instead of a silent default-branch fallback (opt in per run with `--allow-default-branch`), bare-clone cache with ref-named worktrees (`/` encoded as `~`) under a reserved-stem-checked cache root, flock'd reference registry with reference-based prune, per-checkout pins that roll up a workspace root's members (JS lockfiles only — cargo and uv name members in a manifest) and union in the reference registry's rows for this project, and 0.12.x cache migration that moves the layout but hard-errors on a `meta.toml` it cannot parse, naming every such library in one run |
-| `crates/devkit-testtmp` | dev-only lib: `dir(prefix)` and `path(prefix, name)`, the scratch directories every test on this workspace uses. Both hand back a guard that derefs to `Path` and removes its tree on drop, so a test reads like it holds a `PathBuf` and leaves nothing behind. Not published; a dev-dependency of every other crate |
 | `src/bin/portm.rs` | CLI over the port registry |
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`, `task`); `reap` kills servers started outside devrun |
 | `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `info`, `end`, `prs`, `dashboard`, `review` |
@@ -132,12 +131,12 @@ expose a `completions <shell>` subcommand via `clap_complete`.
 - Commits follow Conventional Commits. Follow the active workflow skill's commit cadence (a design/plan skill
   commits its own artifact; per-task execution commits per task).
 - TDD: write the failing test first; `cargo test --workspace` is the merge gate.
-- Test scratch comes from `devkit-testtmp`: `dir(prefix)` for a directory,
-  `path(prefix, name)` for one file inside one. Never build a scratch path by
-  hand from `std::env::temp_dir()` — a hand-built path outlives the test and
-  fills `/tmp`. Both guards delete their tree on drop, so bind one for as long
-  as the path is used: a helper that returns a path derived from a guard must
-  hand back the guard too, or the directory is gone before the caller reads it.
+- Test scratch comes from `tempfile`: `tempfile::tempdir()` for a directory, a
+  path joined onto one for a file. Never build a scratch path by hand from
+  `std::env::temp_dir()` — a hand-built path outlives the test and fills `/tmp`.
+  `TempDir` deletes its tree on drop, so bind it for as long as the path is used:
+  a helper that returns a path derived from a guard must hand back the guard too,
+  or the directory is gone before the caller reads it.
 - `anyhow` everywhere — its `.context()` chain and backtrace are the error-reporting
   mechanism. Each binary installs `report::install_panic_hook` for crash diagnostics;
   `RUST_BACKTRACE=1` adds a backtrace to both errors and panics.
