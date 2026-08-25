@@ -50,10 +50,14 @@ to produce is withheld for the duration.
 `run_hook` renders each argv element and spawns the result in one function.
 Split the render half out as `render_hook(hook, ctx, vars) -> Result<Vec<String>>`.
 
-The loop then renders before it draws anything, so a step's label carries the
-rendered command (`zoxide add /home/lev/…`) rather than its template source
-(`zoxide add {{ worktree }}`). A hook that fails to render warns and the
-remaining hooks still run, as today, and it does so before any bar exists.
+The loop renders a hook before it draws that hook's bar, so the step label
+carries the rendered command (`zoxide add /home/lev/…`) rather than its
+template source (`zoxide add {{ worktree }}`).
+
+Rendering stays interleaved with execution rather than hoisted into one upfront
+pass. It could be hoisted safely, since rendering is pure expansion over a
+`ctx`/`vars` pair no hook can alter, but interleaving keeps the change smaller
+and keeps a hook's failure adjacent to its own step.
 
 ### 2. One step per hook
 
@@ -62,11 +66,27 @@ remaining hooks still run, as today, and it does so before any bar exists.
 The error is still swallowed with the existing stderr warning: the documented
 fail-open contract does not change, only its visibility.
 
+**Every hook consumes exactly one step, including one that fails to render.**
+`Steps::label` calls `n.fetch_add` (`crates/devkit-common/src/progress.rs:127`)
+and is reached only through `during`/`during_result`, so a hook that skips its
+step never advances the counter and a run with one unrenderable hook would end
+at `[3/4]`. The render therefore happens outside the closure to produce the
+label, and its `Err` is carried *into* `during_result` so the step still draws
+and settles `✗`:
+
+- render succeeds: label from the rendered argv, closure spawns it.
+- render fails: label from the unrendered argv, so the failing template is
+  visible in the step log; the closure returns the render error immediately.
+
+The unrendered fallback label is the reason the failure is legible at all. A
+config typo shows as `✗ [3/5] Hook: git init {{ nope }}` in the same log as
+everything else, not only as a stray stderr warning.
+
 `during_result` returns the hook's `Result`, and the loop warns on the `Err`
 after the step has settled. The mark and the warning therefore always agree,
 and the warning lands below the `✗` line rather than being overdrawn by it.
 
-The label is `Hook: <rendered command>`, the command passed through
+The label is `Hook: <command>`, passed through
 `ui::truncate` at 56 characters. That is what fits an 80-column terminal
 alongside the mark, the `[i/n]` counter, and the trailing elapsed time. Unlike
 the other step messages the label carries no trailing `…`, because `truncate`
@@ -74,8 +94,20 @@ appends its own ellipsis when it elides and two would read as a typo.
 
 ### 3. Honest numbering
 
-`issue setup`'s step total becomes `2 + apps + hooks.len()`, so `[3/4]` counts
-what actually runs. `issue checkout-pr` is unnumbered and needs no change.
+`issue setup`'s step total is currently
+`2 + usize::from(!args.apps.is_empty())` (`src/bin/issue/setup.rs:343`). The
+app term is a flag, not a count: a nonempty `--apps` list runs inside one
+`Preparing apps…` step regardless of length. The new total is therefore
+
+```rust
+let total = 2 + usize::from(!args.apps.is_empty())
+    + cfg.hooks.after_worktree_create.len();
+```
+
+Adding `args.apps.len()` instead would overshoot on any multi-app setup.
+
+Because every hook consumes a step, `hooks.len()` is exactly right and the run
+always ends on `[n/n]`. `issue checkout-pr` is unnumbered and needs no change.
 
 ### 4. Report before the hooks, not after
 
@@ -103,6 +135,26 @@ Resulting output:
 
 The table sits between steps 2 and 3. That is the honest picture: the worktree
 exists and here is where, and the remaining steps are extras configured on top.
+
+### 5. Correct the documented hook contract
+
+The hook timing is documented in three places, all of which currently say hooks
+run *before* the command prints its JSON. Reordering makes all three false, so
+they change with the code:
+
+| Location | What it is |
+|---|---|
+| `crates/devkit-config/src/lib.rs`, the `after_worktree_create` doc comment | the source of truth; `JsonSchema` derives the schema description from it |
+| `schema/devkit-config.json` | generated and committed; a test fails with a diff when it drifts |
+| `docs/configuration.md`, the hooks table row | the user-facing description |
+
+The wording becomes "after its apps are prepared, once the worktree is
+reported" or equivalent. Regenerate the schema with
+`DEVKIT_UPDATE_SCHEMA=1 cargo test` rather than hand-editing the JSON.
+
+Leaving these stale would be worse than the reorder itself: the schema is
+attached to every GitHub Release, so a wrong description ships to anyone
+pointing their editor at it.
 
 ## The one contract this changes
 
@@ -138,6 +190,9 @@ how long it took.
 - No test asserts that a bar drew. `Steps` is hidden off-TTY by design, so such
   a test would either pin nothing or pin the hiding rule that already has
   coverage.
+- The existing schema drift test covers the doc-comment change in section 5: it
+  fails until `schema/devkit-config.json` is regenerated, so the stale
+  description cannot reach `main` unnoticed.
 
 ## Out of scope
 
