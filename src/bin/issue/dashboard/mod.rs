@@ -58,10 +58,14 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         .or_else(|_| scope_repos.prs())
         .map(|r| r.slug.clone())
         .unwrap_or_default();
-    let viewer = if tracker.kind() == devkit_common::tracker::TrackerKind::Linear {
-        devkit_common::secrets::resolve("LINEAR_API_KEY").unwrap_or_default()
-    } else {
-        String::new()
+    let viewer = match tracker.kind() {
+        devkit_common::tracker::TrackerKind::Linear => {
+            devkit_common::secrets::resolve("LINEAR_API_KEY").unwrap_or_default()
+        }
+        devkit_common::tracker::TrackerKind::Github => devkit_common::github::token()
+            .unwrap_or_default()
+            .to_string(),
+        devkit_common::tracker::TrackerKind::None => String::new(),
     };
     let scope = cache::CacheScope {
         tracker: tracker.kind(),
