@@ -443,9 +443,16 @@ Which issue tracker backs the `issue` commands.
 
 devkit picks the tracker by detection: a resolvable `LINEAR_API_KEY`
 (environment or `~/.config/devkit/secrets.toml`) means Linear, otherwise a
-GitHub `origin` remote means GitHub, otherwise no tracker. There is no GitHub
-implementation behind `github`, so a project that lands there runs with no
-tracker.
+github.com `origin` remote means GitHub, otherwise no tracker.
+
+`github` talks to GitHub Issues in the repository the `[github]` table below
+resolves as `issues_repo`. It authenticates with the token `gh auth login`,
+`GH_TOKEN` or `GITHUB_TOKEN` supplies — devkit stores no GitHub credential of
+its own; run `gh auth login` once and `devkit auth github` to see which token
+devkit would send and who it belongs to. On a GitHub project a bare number is a
+PR, not an issue, so `issue checkout-pr 3340` needs no disambiguation. If no
+issues repository resolves there is nothing to ask, and the project falls back
+to running with no tracker; `devkit doctor`'s `tracker` row carries the reason.
 
 Detection is a floor, not a convenience: a `LINEAR_API_KEY` exported globally
 resolves to Linear for *every* project on the machine. `kind` names the tracker
@@ -472,10 +479,59 @@ which is the same silence a tracker with no key gives. `issue end` removes
 worktrees and deletes their branches, so it never acts on an unanswered
 question.
 
-Some Linear work sits outside the tracker seam and needs `LINEAR_API_KEY`
-whatever the tracker is: `issue setup`'s title-derived slug and summary file,
-`issue checkout-pr`'s disambiguation of a bare number, `issue dashboard`'s
-issue timeline, and `[linear] resolve_pr_links` below.
+Everything that asks a tracker a question goes through the resolved one:
+`issue setup`'s title-derived slug and summary file, `issue checkout-pr`'s
+disambiguation of a bare number, `issue dashboard`'s issue timeline, and the
+ISSUE column in `issue prs`. So each answers from the tracker this project
+declared rather than from whatever `LINEAR_API_KEY` happens to be exported in
+the shell. What stays Linear-specific is `LINEAR_WORKSPACE`, which supplies the
+workspace slug for clickable Linear issue links without a lookup, and
+`[linear] resolve_pr_links` below.
+
+### `[github]`
+
+Which GitHub repositories this project's issues and pull requests live in.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `issues_repo` | string | _(the `origin` remote)_ | `owner/repo` holding the issues, e.g. `org/planning`. |
+| `pr_repo` | string | _(the `origin` remote)_ | `owner/repo` pull requests are opened against, e.g. `upstream/app`. |
+
+The table is deliberately not under `[tracker]`: a Linear project with a fork
+workflow needs `pr_repo` just as much as a GitHub one does, and a project may
+track issues in a repository separate from its code.
+
+**Each key resolves on its own, and is required only where it is used.** A
+project that only reads PRs never has to supply an `issues_repo`, and a project
+that supplies neither pays nothing until a GitHub operation asks for one. When
+the key an operation needs cannot be resolved, the error names that key.
+
+**Defaulting from `origin` needs a github.com `origin`.** There is no
+`gh repo view` fallback and no second remote is consulted: if `origin` is
+absent, or is not a github.com URL, the key that would have defaulted from it
+fails and the error says to set `[github] issues_repo` / `pr_repo`. The error is
+the instruction. An SSH-alias remote is the case that surprises people — a
+remote spelled `gh:owner/repo.git`, pointing at a `~/.ssh/config` `Host gh`
+entry, contains no `github.com`, so nothing can be read from it. devkit's own
+repository is set up that way and names both keys outright as a result.
+
+**Unknown keys in this table are rejected, unlike every other table in this
+file.** A misspelled `issue_repo` silently ignored would leave the project
+resolving a *different* repository than it declared — devkit would default from
+`origin` and query someone else's issues while the config appeared to say
+otherwise. Failing the config load is the smaller harm, so this one table
+refuses what it does not recognise.
+
+```toml
+[github]
+issues_repo = "org/planning"
+pr_repo = "upstream/app"
+```
+
+`issue prs --repo owner/name` overrides `pr_repo` for a single invocation (as
+does the `repo` argument of the `issue.prs` MCP action); it does not touch
+`issues_repo`. Every repository-scoped `gh` invocation devkit makes carries the
+resolved repository explicitly, so an ambient `GH_REPO` cannot redirect it.
 
 ### `[linear]`
 
@@ -491,6 +547,11 @@ one extra batched round trip per 25 PRs, after the GitHub fetch. Fail-soft:
 with no key, or on any Linear error, the column falls back to the
 text-derived id — `issue prs` never fails because of Linear. The MCP
 `issue.prs` action honors the same flag.
+
+The flag gates Linear alone, because the round trip is what it exists to make
+opt-in. Under the GitHub tracker each PR's closing issues come back on a query
+`issue prs` already makes, so the ISSUE column carries them whether or not this
+is set.
 
 ```toml
 [linear]

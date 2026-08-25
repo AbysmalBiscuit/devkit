@@ -113,17 +113,17 @@ app's `static_env`, same as `devrun up --env`. `--dry-run` prints each rendered 
 issue setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary|--no-summary] [--dry-run] [--no-gitignore]
 issue checkout-pr <target> [<worktree-path>] [--setup] [--apps a,b]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
-issue info [selector] [--json] [--cache-only]         # one worktree's PR number + Linear id
+issue info [selector] [--json] [--cache-only]         # one worktree's PR number + issue id
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size N] [--retries N]
 issue dashboard [--chart bar|line] [--bucket B] [--mode M] [--all-roles] [--author gh] [--no-plots] [--no-cache]
-issue review request ["<message>"] [--to <alias|#channel>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--no-notify] [--arg k=v]
+issue review request ["<message>"] [--to <alias|#channel>] [--pr <URL|number>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--no-notify] [--arg k=v]
 issue review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg k=v]
 ```
 
 ### `issue setup`
 
-Mechanical start of a Linear issue. Creates a worktree off the baseline ref, symlinks
+Mechanical start of an issue, on whichever tracker the project uses. Creates a worktree off the baseline ref, symlinks
 env files, runs the per-app setup commands (e.g. `bun install`), and **prints a JSON
 summary to stdout** — an agent's stdout is not a terminal, so JSON is what you get; a
 person at a terminal sees the same fields as a table instead:
@@ -143,10 +143,10 @@ allocates them dynamically when the worktree's servers start.
 
 | Flag | Meaning |
 |---|---|
-| `<ID>` / `--issue <ID>` | Linear issue id or issue URL (positional or flag); drives the branch name and summary. **Required.** |
-| `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). Omit it and the slug comes from the pasted URL's own `…/issue/<ID>/<title-slug>` path, or failing that from the issue's Linear title, which needs a Linear key. A leading copy of the issue id is stripped so the branch does not repeat it. A **derived** slug is then shortened on a word boundary so the branch fits the 46-char width `issue status` prints — the budget is measured against your own `branch` template, so a longer `branch_prefix` takes from the slug. A slug you pass here is used verbatim, however long. |
+| `<ID>` / `--issue <ID>` | issue id or issue URL the tracker recognises — a Linear `ENG-123` or `linear.app` URL, a GitHub issue number or an issue URL in the project's `issues_repo` (positional or flag); drives the branch name and summary. **Required.** |
+| `--slug <slug>` | short kebab slug rendered into the branch and worktree dir name (e.g. `lev/eng-123-<slug>`). Omit it and the slug comes from a pasted Linear URL's own `…/issue/<ID>/<title-slug>` path, or failing that from the issue's title as the tracker reports it, which needs that tracker's credential. A leading copy of the issue id is stripped so the branch does not repeat it. A **derived** slug is then shortened on a word boundary so the branch fits the 46-char width `issue status` prints — the budget is measured against your own `branch` template, so a longer `branch_prefix` takes from the slug. A slug you pass here is used verbatim, however long. |
 | `--apps <a,b>` | comma-separated apps to bootstrap: writes each one's prep files and runs its setup commands. Omit for a worktree with no per-app setup. |
-| `--summary` | also write a markdown summary file: the issue's Linear facts (url, parent, project, state, assignee, priority, estimate, labels) and its description verbatim, then empty `## Summary` and `## Pointers` headings to fill in. Default path `ISSUE_SUMMARY_<ID>.md` under `worktree_root` — beside the worktree, so it survives `git worktree remove`; `templates.issue_summary_path` and `templates.issue_summary` override placement and body. Needs a Linear key. An existing file is left byte-for-byte and its path still reported. The fetch runs before the worktree is created, so an unknown issue fails clean. `issue end` removes the recorded file when it cleans the worktree up. `defaults.issue_summary = true` makes this the default. |
+| `--summary` | also write a markdown summary file: the issue's tracker facts (url, parent, project, state, assignee, priority, estimate, labels — a tracker with no equivalent of a field leaves it empty, as GitHub does for parent, project, priority and estimate) and its description verbatim, then empty `## Summary` and `## Pointers` headings to fill in. Default path `ISSUE_SUMMARY_<ID>.md` under `worktree_root` — beside the worktree, so it survives `git worktree remove`; `templates.issue_summary_path` and `templates.issue_summary` override placement and body. Needs the tracker's credential. An existing file is left byte-for-byte and its path still reported. The fetch runs before the worktree is created, so an unknown issue fails clean. `issue end` removes the recorded file when it cleans the worktree up. `defaults.issue_summary = true` makes this the default. |
 | `--no-summary` | skip the summary file for this run, whatever `defaults.issue_summary` says. |
 | `--dry-run` | print what it would do without creating the worktree. Reports the resolved `summary` path under `--summary` without writing it. |
 | `--no-gitignore` | skip updating the global gitignore (normally adds `.devkit/`, the per-worktree record and cache directory). |
@@ -154,8 +154,11 @@ allocates them dynamically when the worktree's servers start.
 ### `issue checkout-pr`
 
 Check out an **existing** PR into a new worktree — the review-side counterpart of
-`setup`. The target is `#3340`, `3340`, `PREFIX-3340`, a GitHub PR URL, or a Linear
-issue URL. The optional second positional overrides the worktree path (default: the
+`setup`. The target is `#3340`, `3340`, an issue id the tracker recognises
+(`PREFIX-3340`, whose linked PR is used), a GitHub PR URL, or an issue URL the tracker
+recognises. A bare `3340` is probed against both the PRs and the tracker's issues, so
+on a GitHub project — where issues and PRs share one numbering — it is always the PR.
+The optional second positional overrides the worktree path (default: the
 config-resolved placement). `--setup` also runs the per-app setup commands;
 `--apps a,b` narrows which apps that covers. Prints `pr`, `worktree`, and `branch` — JSON
 to a pipe, a table to a terminal.
@@ -173,6 +176,7 @@ object for an agent to forward.
 |---|---|
 | `[BODY]` | positional Slack body; fills the `review_request` template's `{{ input }}`. |
 | `--to <alias\|#channel>` | **repeatable.** A `[people]` alias (which carries both `slack` and an optional `github`, so one flag sets reviewer *and* recipient) or a literal `#channel`. |
+| `--pr <URL\|number>` | act on this PR for this run. A pasted GitHub PR URL keeps its own repository; a bare number means `pr_repo`. The command records whichever PR it acted on, so this is how a worktree bound to the wrong PR is rebound — including the superseded case, where the old and new PRs share a head branch and the branch lookup is ambiguous. Without it the PR comes from the worktree's record, and failing that from its branch. |
 | `--base <branch>` | PR base branch (defaults to the configured baseline). |
 | `--pr-title T` / `--pr-body B` | override the PR title/body. |
 | `--no-push` | open/update the PR without pushing first. |
@@ -182,28 +186,40 @@ object for an agent to forward.
 On an existing PR with no `--to`, it resolves the PR's current human reviewers and
 notifies them; `--no-notify` is how you suppress that.
 
+However the PR was resolved, its head commit must equal this worktree's `HEAD` or the
+command refuses it — a branch name is shared across forks and does not prove the PR
+carries this work. A squash- or rebase-merged PR still matches, since the comparison is
+against the branch head the PR carries. Under `--no-push` a branch ahead of its remote
+fails this check.
+
 **`issue review finish`** announces over Slack that you finished reviewing. `--to`
-(repeatable) defaults to the PR author. `--pr <n>` is required when you are not inside
-the PR's worktree. `[BODY]` fills the `review_finish` template's `{{ input }}`.
+(repeatable) defaults to the PR author. The PR comes from `--pr <n>`, else the
+worktree's record, else the branch; `--pr` applies to that run and rewrites nothing.
+There is no head-commit check here: this is the reviewer's command, run in a worktree
+`checkout-pr` built, where `HEAD` falls behind as soon as the author pushes again.
+`[BODY]` fills the `review_finish` template's `{{ input }}`.
 
 ### Other `issue` subcommands
 
 - **`status`** (also bare `issue`) — read-only triage table of every issue worktree.
-  A worktree is FINISHED only when its PR is merged, its Linear issue is Done, and the
-  tree is clean.
-- **`info`** — one worktree's PR number and Linear id. The optional selector is an
+  A worktree is FINISHED only when its PR is merged, its issue has reached a completed
+  state in the tracker, and the tree is clean. A project that declares no tracker has no
+  state to wait for and is decided by the merged PR and the clean tree alone; a tracker
+  that answers nothing for the issue holds the verdict open instead.
+- **`info`** — one worktree's PR number and issue id. The optional selector is an
   issue id, branch, worktree basename, or path; omit it for the current worktree.
   `--json` emits a single `IssueWorktree` object (scripts read `.pr_number` /
   `.issue_id`). `--cache-only` skips the network: the PR number comes from the
-  per-worktree cache at `<worktree>/.devkit/pr.json` and Linear renders as `—`. A live
-  run writes the PR through to that cache, which `git worktree remove` deletes with the
-  worktree.
-- **`end`** — removes FINISHED worktrees. `--pr-only` ignores the Linear and issue-id
-  gates (finished = PR merged + clean, even without a Linear-style branch name);
+  per-worktree cache at `<worktree>/.devkit/pr.json` and the tracker columns render as
+  `—`. A live run writes the PR through to that cache, which `git worktree remove`
+  deletes with the worktree.
+- **`end`** — removes FINISHED worktrees. `--pr-only` ignores the tracker-state and
+  issue-id gates (finished = PR merged + clean, even on a branch carrying no issue id);
   `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree
   guard; `-y` skips confirmation.
-- **`prs`** — GitHub PR triage of your open PRs and PRs awaiting your review.
-  `--no-cache` forces a fresh fetch. On a repo with many open PRs GitHub can return
+- **`prs`** — GitHub PR triage of your open PRs and PRs awaiting your review. The
+  repository is `[github] pr_repo`, defaulting to the `origin` remote; `-R owner/repo`
+  overrides it for one run. `--no-cache` forces a fresh fetch. On a repo with many open PRs GitHub can return
   HTTP 504: lower `--batch-size` (PRs per search page, 1–100) and raise `--retries`
   (extra attempts per page with backoff, 0–10).
 - **`dashboard`** — the triage + PR tables plus terminal timelines. `--chart bar|line`,
@@ -215,11 +231,20 @@ the PR's worktree. `[BODY]` fills the `review_finish` template's `{{ input }}`.
 
 ```sh
 devkit auth <linear|slack> [--token <value>]   # validate + store a credential
+devkit auth github                              # report the GitHub identity devkit would use
 devkit doctor [--json]                          # check configured credentials + diagnostics
 devkit brief [--pins-only|--if-changed]         # compact project brief
 devkit schema                                   # JSON Schema for devkit.toml, to stdout
 devkit schema init [<path>]                     # point a devkit.toml at the published schema
 ```
+
+**`auth github`** reports; it stores nothing. devkit keeps no GitHub credential of its
+own, because `gh auth login`, `GH_TOKEN` and `GITHUB_TOKEN` already cover it — the
+resolution order being `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth token`. The command
+prints the identity behind the token devkit would send and names which of the three
+supplied it, then lists `gh`'s own accounts below. Those two can differ, and the
+token's identity is the one devkit uses. A `--token` passed here is refused rather than
+silently discarded.
 
 **`brief`** prints the current checkout's devkit orientation — configured apps, the
 `[tasks]` table, this worktree's live servers, and registered library versions — and

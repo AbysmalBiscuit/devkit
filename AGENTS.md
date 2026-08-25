@@ -27,7 +27,7 @@ install together via `cargo install --path .`. Seven library crates are members.
 | Unit | Role |
 |---|---|
 | `crates/devkit-config` | lib: the `devkit.toml` shape — layer discovery and merge, `${VAR}` expansion and layer-relative path resolution, per-leaf provenance, and the `JsonSchema` derives `devkit schema` renders. A leaf crate with no internal dependencies, so `devkit-common` and `devkit-ports` both depend on it |
-| `crates/devkit-common` | shared lib: `paths`, `secrets`, `cmd` (git/gh wrappers) with `github` and `gitfetch`, `worktree` plus the `record` it reads (`.devkit/issue.toml`) and `gitignore`, `slug`, `template`, `ui` (tables/links) with `livetable` and `progress` (TTY-only spinners), `tracker` (the `Tracker` seam and its `linear` and `none` implementations), `slack`, `store` (flock'd JSON documents), `supervise`, `sys` (the platform boundary), `timing`, `report`, and a `daemon` client behind the `daemon` feature |
+| `crates/devkit-common` | shared lib: `paths`, `secrets`, `cmd` (git/gh wrappers) with `github` and `gitfetch`, `worktree` plus the `record` it reads (`.devkit/issue.toml`) and `gitignore`, `slug`, `template`, `ui` (tables/links) with `livetable` and `progress` (TTY-only spinners), `tracker` (the `Tracker` seam and its `linear`, `github` and `none` implementations), `slack`, `store` (flock'd JSON documents), `supervise`, `sys` (the platform boundary), `timing`, `report`, and a `daemon` client behind the `daemon` feature |
 | `crates/devkit-ports` | lib: `doppler` (yaml), `apps` (catalog), `load` (config + catalog), `registry` (flock'd port store), `run` (server lifecycle), `strays` (servers outside the registry), `daemon`, `task` (canned oneshot resolution/exec) |
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
 | `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + tracker state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
@@ -37,7 +37,7 @@ install together via `cargo install --path .`. Seven library crates are members.
 | `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`, `task`); `reap` kills servers started outside devrun |
 | `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `info`, `end`, `prs`, `dashboard`, `review` |
 | `src/bin/lockm.rs` | advisory file-lock CLI |
-| `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens), `doctor`, `brief` (session-hook project summary, silent outside a devkit project), `schema` (JSON Schema for `devkit.toml`, derived from the config types; `schema init` points a config at it, writing a fully-commented starter when absent; `schema/devkit-config.json` is committed, a test fails with a diff when it drifts, `DEVKIT_UPDATE_SCHEMA=1 cargo test` rewrites it, and release-please attaches it to each GitHub Release) |
+| `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens; `auth github` instead *reports* the identity behind the token `GH_TOKEN`/`GITHUB_TOKEN`/`gh auth token` resolve, storing nothing and refusing a `--token`), `doctor`, `brief` (session-hook project summary, silent outside a devkit project), `schema` (JSON Schema for `devkit.toml`, derived from the config types; `schema init` points a config at it, writing a fully-commented starter when absent; `schema/devkit-config.json` is committed, a test fails with a diff when it drifts, `DEVKIT_UPDATE_SCHEMA=1 cargo test` rewrites it, and release-please attaches it to each GitHub Release) |
 | `src/bin/docm.rs` | CLI over the docs cache: `add`, `rm`, `list`, `sync`, `path`, `info`, `forget`, `prune`, `completions` |
 | `src/bin/devkit-mcp` | meta-MCP stdio server exposing the port + lock facades to coding agents |
 | `src/bin/devkitd` | supervisor daemon serving both the port registry (`ports.sock`) and the lock registry (`locks.sock`), authoritative in memory, write-through to the files, gated by `devkitd.lock`; bin gated by the `daemon` feature (on by default) |
@@ -143,18 +143,36 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   catch-alls — map roles exhaustively.
 - The issue tracker is the `Tracker` trait in `devkit-common::tracker`.
   `tracker::resolve` picks the implementation: a resolvable `LINEAR_API_KEY`
-  means Linear, else a GitHub `origin` remote means GitHub, else `NoneTracker`,
-  whose empty answers are how `issue` degrades. The GitHub arm needs an issues
-  repository to talk to; without one it falls back to `NoneTracker`, undeclared,
-  with the failure in `reason`. `resolve` takes an explicit kind that wins over
+  means Linear, else a github.com `origin` remote means GitHub, else
+  `NoneTracker`, whose empty answers are how `issue` degrades. The GitHub arm is
+  built from `Repos::issues` — resolve is the *only* place a `GithubTracker` is
+  constructed, which is what lets its `ready` report on the token alone — and
+  without an issues repository it falls back to `NoneTracker`, undeclared, with
+  the failure in `reason`. `resolve` takes an explicit kind that wins over
   detection; `[tracker] kind` is where it comes from. It returns a `Resolved`, whose `declared` flag says whether the project
   named this tracker or devkit fell back to it — the finished verdict skips the
   issue-state gate only for a *declared* `TrackerKind::None`, because devkit
-  finding no tracker is silence, not an answer. Config loading belongs to the callers that have it — the `issue`
-  binary's `crate::tracker::select` and the MCP `issue.status` action —
+  finding no tracker is silence, not an answer. `reason` is prose except for one
+  load-bearing part: a reason produced by detection carries the `DETECTED`
+  prefix, and `unbuilt_reason` (free function, plus the `Resolved` method) reads
+  its absence on an undeclared `None` as "the project named a tracker devkit
+  could not build". That is what keeps such a project from being told to name
+  one — so keep the prefix on every detection arm. Config loading belongs to the callers that have it — the `issue`
+  binary's `crate::tracker::select` (which returns the `Repos` alongside, since
+  the two come from one config load) and the MCP `issue.status` action —
   and a config that does not load degrades to detection rather than failing the
-  command. `devkit-issue` reads no config: `status::gather_local` detects, and
-  every other caller injects its tracker via `status::gather_with`.
+  command. `devkit-issue` reads no config: `status::gather_local` detects with
+  repositories defaulted from `origin` alone, and every other caller injects its
+  tracker via `status::gather_with`.
+- GitHub repositories come from `[github] issues_repo` / `pr_repo` via
+  `devkit_common::github::Repos`, each key resolving independently, defaulting
+  to a github.com `origin` remote, and required only where it is used. `Repos`
+  is threaded to every GitHub operation rather than re-derived; the `[github]`
+  table is the one config table with `deny_unknown_fields`, because a typo'd key
+  silently ignored would resolve a different repository than the project
+  declared. Repository-scoped `gh` calls go through `cmd::gh_json_in` /
+  `cmd::gh_capture`, which append `--repo github.com/<slug>` to every argument
+  vector so an ambient `GH_REPO` or `GH_HOST` cannot redirect one.
 - `StateKind` (Triage/Backlog/Unstarted/Started/Completed/Canceled) is the state
   vocabulary every tracker maps onto — match it exhaustively, no `_ =>` arms.
   Only `Completed` and `Canceled` are closed.

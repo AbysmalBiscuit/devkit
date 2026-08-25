@@ -277,10 +277,15 @@ key config left unset — and the resolved value is handed to the tracker. Origi
 is required only when a key is missing, and the error names which key would fix
 it.
 
-This is what `ready` then rests on: **a resolved token plus a resolved
-`repos.issues`**, not `repo_slug(cwd)`. A GitHub project whose code lives
-elsewhere, or one worked on from a directory with no GitHub remote, is ready
-when its config says which repository holds the issues.
+This is also what lets `ready` rest on **the token alone**, rather than on
+`repo_slug(cwd)`. The repository half is settled once, at construction:
+`tracker::resolve` is the only place a `GithubTracker` is built, and it builds
+one only from an issues repository that already resolved, so by the time
+anything can call `ready` there is nothing left for it to check. That makes the
+single construction site load-bearing — a second one that skipped the check
+would leave `ready` claiming readiness with no repository to ask. A GitHub
+project whose code lives elsewhere, or one worked on from a directory with no
+GitHub remote, is ready when its config says which repository holds the issues.
 
 **Detection must validate the host too.** `slug_from_remote_url` parses any
 `https://host/owner/repo` shape without checking the host, so
@@ -296,16 +301,16 @@ callers already know they hold a GitHub URL.
 | Method | Source |
 |---|---|
 | `kind` | `TrackerKind::Github` |
-| `ready` | `github::token()` resolves and `repos.issues` resolved |
-| `issue_ref` | strips a leading `#`; recognizes a `github.com/…/issues/N` URL, refusing one whose repository is not `issues_repo` |
+| `ready` | `github::token()` resolves. The issues repository was already resolved to construct the tracker, so nothing checks it again |
+| `issue_ref` | a bare number, or a `github.com/…/issues/N` URL whose repository is `issues_repo` — one outside it is refused. No `#` stripping: `classify` resolves `#N` to a PR before any tracker is asked, and no implementation of this method strips one |
 | `title` / `details` | `repository.issue(number:)` fields |
 | `states` | `state` + `stateReason`, batched by alias the way `linear::build_query` batches |
 | `issue_pr` | `closedByPullRequestsReferences(first: 10, includeClosedPrs: true, orderByState: true)`, any repository; see below |
 | `candidates` | empty; a bare number is a PR |
-| `issues_for_prs` | each PR's `closingIssuesReferences` |
+| `issues_for_prs` | each PR's `closingIssuesReferences`, as a bare number for an issue in the tracker's own issues repository and `owner/name#number` for one anywhere else. The repository comparison is case-insensitive, since GitHub echoes the owner and name as they are spelled on the repository rather than as configured |
 | `assigned_history` | `issues(filterBy: {assignee: <viewer login>})`, paginated, each node carrying its `CLOSED_EVENT` / `REOPENED_EVENT` timeline |
 | `timeline_origin` | earliest issue `createdAt` in the repository |
-| `issue_url` | `https://github.com/{slug}/issues/{n}` |
+| `issue_url` | `https://github.com/{slug}/issues/{n}`; an `owner/name#number` id — the cross-repository form `issues_for_prs` emits — routes to the repository it names, a bare number to the tracker's own. Linear identifiers are `ENG-1`, so the two id vocabularies cannot collide |
 | `check` | viewer login, for `devkit doctor`'s identity line |
 
 ### State mapping
@@ -447,30 +452,37 @@ rule stays strict and gains a human-supplied escape:
   --pr <n>` overrides for that run and leaves the record alone.
 - Branch discovery runs only when neither locator is present.
 
-**Every PR entering an acting path has to belong to this worktree, and the
+**Every PR `review request` acts on has to belong to this worktree, and the
 branch name does not prove it.** The check is not about how the PR was chosen.
 An explicit `--pr` with a mistyped number names a real PR that resolves cleanly;
 a recorded locator can have been written when the branch meant something else;
 and a branch-discovered `Unique` is unique only in that one repository's PRs
 share the name — another fork's same-named branch produces exactly the same
-answer. All three then drive reviewer edits, Slack notifications, merges and the
-finished verdict. So the comparison gates all three, not the explicit one.
-Repository and number are not enough: with a wrong PR bound, the record makes
-it authoritative. When that unrelated PR merges, `issue end` sees a merged PR, a
-completed issue and a clean tree, and runs `git branch -D` on a worktree whose
-work never landed.
+answer. All three then drive reviewer edits, Slack notifications and the
+recorded binding the finished verdict later reads. So the comparison gates all
+three, not the explicit one. Repository and number are not enough: with a wrong
+PR bound, the record makes it authoritative. When that unrelated PR merges,
+`issue end` sees a merged PR, a completed issue and a clean tree, and runs
+`git branch -D` on a worktree whose work never landed.
 
 A branch-name match does not close it either, because same-named branches across
 forks are the case this design already acknowledges everywhere else. So the
 check is on the commit: the selected PR's `headRefOid` must equal the worktree's
 `HEAD`, and a mismatch is refused showing both.
 
-The same comparison gates the verdict, not only the binding. A merged PR
-satisfies `finished` only when its `headRefOid` is the worktree's `HEAD`;
-commits sitting locally beyond what the PR merged are unlanded work, and
-`issue end` deletes the branch they live on. That is the deletion this rule
-exists to prevent, so it is checked where the deletion is decided rather than
-only where the binding is written.
+**`review finish` is deliberately outside that rule.** It is the *reviewer's*
+command, run in a worktree `checkout-pr` built, where `HEAD` goes stale the
+moment the author pushes again — an equality gate there would refuse the
+ordinary flow, and the command mutates neither the PR nor the record: its whole
+effect is a Slack message to the author. So the exemption is a decision with a
+reason, not an omission, and the code carries the same reason where the gate
+would otherwise sit.
+
+The verdict is not gated on the oid either. FINISHED stays merged PR plus clean
+tree plus issue state; what protects it from a stranger's PR is the typed head
+lookup, whose `Ambiguous` answer holds the verdict open rather than picking a
+winner, together with the recorded binding that `review request` only writes
+once the oid agreed.
 
 `review request` pushes the branch before it looks up the PR, so on the ordinary
 path the remote is current and the oids agree. Under `--no-push` they can
@@ -553,9 +565,11 @@ So `devkit auth github` reports rather than stores.
 `GH_TOKEN`, then `GITHUB_TOKEN`, and only then falls back to `gh auth token`. So
 with either variable set, the active `gh` account is not the identity devkit
 uses, and reporting it as such would mislead precisely the user who most needs
-the answer. The command resolves the token the way `github::token()` does,
-queries `viewer { login }` with it, and reports that login and which source
-supplied the token.
+the answer. The command resolves the token the way `github::token()` does, asks
+GitHub which account it belongs to, and reports that login and which source
+supplied the token. A `--token` handed to it is refused rather than accepted and
+discarded: a report has nowhere to put a credential, and silently dropping one
+would leave the caller believing devkit now holds it.
 
 Beneath that it lists the `gh` accounts from `gh auth status --json hosts`,
 which returns per account a `login`, `host`, `active` flag, `scopes` string and
@@ -779,17 +793,17 @@ comes after all of them rather than after the adapter.
    Precedence becomes explicit locator, then record, then branch discovery, so
    `review finish --pr` keeps winning as it does today and stays a one-run
    override that writes nothing; `review request` gains the URL form, and its
-   existing write rule is what makes it a rebind. An explicit locator's
-   `headRefOid` must equal the worktree's `HEAD` or it is refused, and so must a
-   recorded or branch-discovered one. **Where the comparison happens depends on
-   whether the PR already exists.** Mutating an existing PR — adding reviewers,
-   commenting, merging — is gated before the call. A PR being created has no
-   head to compare until it exists, and `checkout-pr` builds the worktree *from*
-   the PR, so neither can be pre-gated; both validate immediately after the
-   call and before anything downstream — before the record is written, before
-   any notification, before hooks — and a mismatched checkout is cleaned up
-   rather than left behind. A merged PR satisfies the finished verdict only
-   under the same comparison. A recorded
+   existing write rule is what makes it a rebind. On `review request` a PR's
+   `headRefOid` must equal the worktree's `HEAD` or it is refused, however the
+   PR was chosen — explicit, recorded or branch-discovered alike. **Where the
+   comparison happens depends on whether the PR already exists.** Adding
+   reviewers to an existing PR is gated before the call. A PR being created has
+   no head to compare until it exists, so it is fetched back and validated
+   immediately after the call and before anything downstream — before the record
+   is written and before any notification — with the error saying the PR is open
+   with nothing recorded and nobody notified. `review finish` is exempt for the
+   reason given above, and the finished verdict rests on the merged PR, the
+   clean tree and the issue state rather than on this comparison. A recorded
    PR that no longer resolves reports unknown rather than falling back.
 8. **Wire the dashboard to the trait.** `dashboard/data.rs` resolves the
    configured tracker and calls `assigned_history` and `timeline_origin` instead
@@ -803,8 +817,11 @@ comes after all of them rather than after the adapter.
 9. **Selection and detection.** `TrackerKind::Github` constructs `GithubTracker`
    instead of the stand-in, with `declared` and the reason line;
    `tracker::resolve` regains `repo` and is handed the resolved `repos.issues`;
-   `ready` rests on a token plus that resolved repository rather than on
-   `repo_slug(cwd)`; detection validates the origin host is `github.com`. This
+   `ready` rests on the token alone, that construction site having already
+   settled the repository, rather than on `repo_slug(cwd)`; detection validates
+   the origin host is `github.com`. A `github` kind whose issues repository does
+   not resolve falls back to no tracker, undeclared, with the failure kept in
+   `reason` so the caller can say what stopped it. This
    lands after tasks 6 through 8 on purpose: it is the switch that makes GitHub
    live, and flipping it while the recorded-PR lifecycle or the dashboard is
    still half-wired would ship a tracker that reports confidently wrong
@@ -914,19 +931,17 @@ TDD throughout; `cargo test --workspace` is the merge gate.
   existing binding and sets one where none existed; a bare number binds within
   `pr_repo`; the supersede case — an old and a new PR sharing a head branch,
   which acting paths refuse as ambiguous — is recoverable through it, which is
-  the case that made the flag necessary. A PR whose `headRefOid` is not the
-  worktree's `HEAD` is refused whether it arrived by `--pr`, from the record, or
-  from a unique branch lookup. `review finish --pr <n>` still wins
+  the case that made the flag necessary. `review finish --pr <n>` still wins
   over both the record and branch discovery and leaves the record unchanged,
-  which is today's contract. A PR whose `headRefOid` is not the worktree's
-  `HEAD` is refused — before the call when the PR already exists, immediately
-  after it and before any record, notification or hook when it was just created
-  or checked out — and a squash- or rebase-merged PR still compares equal because
-  `headRefOid` is the branch head the PR carried, not the commit that landed on
-  the base; under `--no-push`, a branch ahead of its remote fails closed. A
-  merged PR whose head is not the worktree's `HEAD` does not satisfy the
-  finished verdict, so `issue end` cannot delete a branch carrying unlanded
-  commits.
+  which is today's contract. On `review request` a PR whose `headRefOid` is not
+  the worktree's `HEAD` is refused whether it arrived by `--pr`, from the
+  record, or from a unique branch lookup — before the call when the PR already
+  exists, and immediately after it, before the record is written and before any
+  notification, when it was just created — while a squash- or rebase-merged PR
+  still compares equal because `headRefOid` is the branch head the PR carried,
+  not the commit that landed on the base; under `--no-push`, a branch ahead of
+  its remote fails closed. `review finish` runs no such comparison; the
+  exemption and its reason are recorded where the gate would otherwise sit.
 - **`issue_ref` refusing.** A GitHub issue URL outside `issues_repo` returns an
   error naming both repositories rather than a mangled id, and `checkout-pr`
   classifies it as unrecognized without consulting a `/` in the result. A
@@ -983,6 +998,7 @@ adapter is network-free under test.
 | How `issue_pr` finds the PR | `closedByPullRequestsReferences`, not the timeline. Probe-driven. |
 | Several linked PRs | `orderByState` plus an explicit merged / open / highest rule; `checkout-pr` refuses a genuine tie. |
 | A linked PR in another repository | Returned, not filtered, and persisted in `IssueRecord` so status can see it. |
+| An issue a PR closes in another repository | Carried as `owner/name#number`, a bare number meaning the tracker's own issues repository; the comparison that decides which form to emit is case-insensitive, and `issue_url` follows a qualified id to the repository it names. Linear ids are `ENG-1`, so the two vocabularies cannot be confused for one another. |
 | Repository configuration | `[github] issues_repo` and `pr_repo`, separately configurable, both defaulting to origin. |
 | Where `[github]` sits | Top level, not under `[tracker]`. `pr_repo` serves Linear projects on a fork too. |
 | The PR head owner | Neither configured nor derived. `pr_by_head` searches GraphQL `headRefName` by branch name alone. |
@@ -1001,8 +1017,9 @@ adapter is network-free under test.
 | `[linear] resolve_pr_links` | Stays, as Linear's own opt-in gate. GitHub's linked issues are a field on a query already being made. |
 | `--pr`'s meaning | One meaning everywhere: use this PR for this run. Rebinding falls out of `review request` recording what it acted on, so `review finish --pr` keeps its one-run contract. |
 | Locator precedence | Explicit `--pr`, then the record, then branch discovery. |
-| Validating a PR on an acting path | Its `headRefOid` must equal the worktree's `HEAD` — explicit, recorded or branch-discovered alike — and again where a merged PR would satisfy the verdict. A branch-name match does not prove the PR carries these commits, and same-named branches across forks are the case this design assumes everywhere else. |
-| When that check runs | Before the call for an existing PR; immediately after, and before any record, notification or hook, for one just created or checked out. A PR that does not exist yet has no head to compare. |
+| Validating a PR on an acting path | Its `headRefOid` must equal the worktree's `HEAD` — explicit, recorded or branch-discovered alike. A branch-name match does not prove the PR carries these commits, and same-named branches across forks are the case this design assumes everywhere else. |
+| Which command that gates | `review request`, which edits the PR and writes the binding. `review finish` is exempt: it is the reviewer's command, run where `HEAD` goes stale by design as the author pushes, and it mutates neither the PR nor the record. The finished verdict is not gated on the oid either — it rests on the merged PR, the clean tree and the issue state, with an `Ambiguous` head lookup holding it open. |
+| When that check runs | Before the call for an existing PR; immediately after, and before the record or any notification, for one just created. A PR that does not exist yet has no head to compare. |
 | `--no-push` under that rule | Fails closed. Declining to publish the branch is declining to make it checkable. |
 | `--repo` on `gh` | On every `gh pr` command, with no origin-defaulted exemption, spelled `github.com/owner/repo`. `gh api` and `gh auth token` take `--hostname github.com` instead. `GH_REPO` must not split the `gh` half from the HTTP half, and `GH_HOST` must not send a token to a host it was not issued for. |
 | Whether both repository keys must resolve | No. Each resolves independently and is required only where used, so a Linear project with a fork workflow sets `pr_repo` alone. |
@@ -1016,13 +1033,13 @@ adapter is network-free under test.
 | Truncated linked-PR results | Refused via `hasNextPage`, never ranked. |
 | Every other connection | Same rule. `pageInfo` on all of them; `closingIssuesReferences` reports incomplete, `timelineItems` paginates. A connection nested in a paginated one does not paginate with its parent. |
 | The linked-PR ranking tuple | State, then number within the top state group. A tie is a top state group spanning repositories, where numbers are not comparable — two merged PRs in one repository are ranked, not refused. |
-| Which PRs the OID check gates | All of them on an acting path: explicit, recorded, and branch-discovered. How the PR was chosen does not change what it can do. |
+| Which PRs the OID check gates | All of them on `review request`: explicit, recorded, and branch-discovered. How the PR was chosen does not change what it can do. |
 | `--repo`'s actual scope | Repository-scoped `gh pr` commands. `gh auth` and `gh api graphql` do not accept it; graphql names its repository in variables. The rule is that the environment never chooses the repository. |
 | Schema regeneration | In the task that changes the config type, not deferred to the documentation task. |
 | When GitHub goes live | After the recorded-PR and dashboard tasks, so the switch never exposes a half-wired tracker. |
 | `tracker::resolve`'s signature | Regains `repo`, handed `repos.issues`. |
 | Host validation in detection | Added. A non-`github.com` origin no longer detects as GitHub. |
-| What `ready` means | A resolved token plus a resolved `repos.issues`, not `repo_slug(cwd)`. A project that names its repositories needs no GitHub origin. |
+| What `ready` means | A resolved token, not `repo_slug(cwd)`. The issues repository is checked once at the single construction site, so `ready` has nothing left to check; a second construction site that skipped it would have `ready` claim readiness with no repository to ask. A project that names its repositories needs no GitHub origin. |
 | The dashboard | Wired to the trait in this phase, not assumed. |
 | A `devkit auth github` credential store | No. It reports the resolved token's identity and lists `gh` accounts as diagnostics. |
 | Conventional-title parsing | Out of scope. Its own spec. |
