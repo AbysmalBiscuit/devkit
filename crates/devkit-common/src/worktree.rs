@@ -305,10 +305,6 @@ mod tests {
 
     use std::fs;
 
-    fn tmp() -> tempfile::TempDir {
-        tempfile::tempdir().unwrap()
-    }
-
     fn write(path: &Path, body: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, body).unwrap();
@@ -316,7 +312,7 @@ mod tests {
 
     #[test]
     fn copies_a_matching_file_preserving_relative_path() {
-        let base = tmp();
+        let base = tempfile::tempdir().unwrap();
         let src = base.path().join("src");
         let dst = base.path().join("dst");
         write(&src.join("apps/web/.env.local"), "SECRET=1");
@@ -333,7 +329,7 @@ mod tests {
 
     #[test]
     fn double_star_matches_nested_file() {
-        let base = tmp();
+        let base = tempfile::tempdir().unwrap();
         let src = base.path().join("src");
         let dst = base.path().join("dst");
         write(&src.join("a/b/c/.env.local"), "X=1");
@@ -346,7 +342,7 @@ mod tests {
 
     #[test]
     fn directory_pattern_copies_recursively() {
-        let base = tmp();
+        let base = tempfile::tempdir().unwrap();
         let src = base.path().join("src");
         let dst = base.path().join("dst");
         write(&src.join(".claude/hooks/pre.sh"), "echo pre");
@@ -369,7 +365,7 @@ mod tests {
 
     #[test]
     fn pattern_matching_nothing_is_silently_skipped() {
-        let base = tmp();
+        let base = tempfile::tempdir().unwrap();
         let src = base.path().join("src");
         let dst = base.path().join("dst");
         fs::create_dir_all(&src).unwrap();
@@ -382,7 +378,7 @@ mod tests {
 
     #[test]
     fn existing_destination_file_is_not_clobbered() {
-        let base = tmp();
+        let base = tempfile::tempdir().unwrap();
         let src = base.path().join("src");
         let dst = base.path().join("dst");
         write(&src.join(".tool-versions"), "node 20");
@@ -399,7 +395,7 @@ mod tests {
 
     #[test]
     fn empty_patterns_is_a_no_op() {
-        let base = tmp();
+        let base = tempfile::tempdir().unwrap();
         let src = base.path().join("src");
         let dst = base.path().join("dst");
         fs::create_dir_all(&src).unwrap();

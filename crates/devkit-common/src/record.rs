@@ -85,8 +85,8 @@ mod tests {
 
     #[test]
     fn read_missing_is_none() {
-        let dir = std::env::temp_dir().join("devkit-rec-does-not-exist-xyz");
-        assert_eq!(read(&dir), None);
+        let scratch = tempfile::tempdir().unwrap();
+        assert_eq!(read(&scratch.path().join("absent")), None);
     }
 
     #[test]
