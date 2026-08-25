@@ -136,7 +136,7 @@ cargo clippy -p devkit-common --all-targets -- -D warnings
 Both must pass. Run `a_worktree_with_neither_is_unknown` ten times in a row to
 confirm the flake is gone:
 ```bash
-for i in $(seq 10); do cargo test -p devkit-common a_worktree_with_neither_is_unknown -- --exact || break; done
+for i in $(seq 10); do cargo test -p devkit-common worktree::tests::a_worktree_with_neither_is_unknown -- --exact || break; done
 ```
 
 - [ ] **Step 5: Commit**
@@ -207,8 +207,10 @@ actually bites.
 **Files:**
 - Modify: `crates/devkit-docs/src/cache.rs`, `src/layout.rs`, `src/lib.rs`,
   `src/lockfiles.rs`, `src/manifest.rs`, `src/refs.rs`
-- Modify: `crates/devkit-docs/tests/common/mod.rs`, `tests/concurrency.rs`,
-  `tests/names.rs`, `tests/refs_race.rs`, `tests/doctor.rs`
+- Modify: every integration test under `crates/devkit-docs/tests/` that calls
+  the shared `common::unique_tmp` helper — deleting it reaches all of them, not
+  only `common/mod.rs`, `concurrency.rs`, `names.rs`, `refs_race.rs` and
+  `doctor.rs`. Enumerate the callers with `rg` before starting.
 - Modify: `crates/devkit-docs/Cargo.toml`
 
 **Interfaces:**
