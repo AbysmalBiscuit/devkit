@@ -291,7 +291,8 @@ pub fn run(args: SetupArgs) -> Result<()> {
         anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
     }
 
-    let resolved = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start));
+    let repos = devkit_common::github::Repos::resolve(&cfg.github, &start, None);
+    let resolved = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start), &repos);
     let t = resolved.tracker.as_ref();
     let issue_ref = parse_input(&resolved, &args.issue)?;
     let issue = issue_ref.id.clone();

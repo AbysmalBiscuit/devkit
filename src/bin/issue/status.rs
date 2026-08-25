@@ -153,7 +153,7 @@ fn progress_msg(prs_done: bool, states_done: bool) -> String {
 /// to stdout exactly as the silent gather would.
 pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<StatusReport> {
     let d = st::discover(start, ids)?;
-    let resolved = crate::tracker::configured(config, start);
+    let (resolved, repos) = crate::tracker::select(config, start, None);
     let info = TrackerInfo::of(&resolved);
     if d.is_empty() {
         // No worktrees means no PR fetch — the report is empty either way.
@@ -166,7 +166,6 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
         ));
     }
 
-    let repos = crate::tracker::repos(config, start, None);
     let repo = repos.prs()?;
     let m = d.len();
     let paths = d.worktree_paths();
@@ -271,8 +270,12 @@ fn tracker_hint(t: &TrackerInfo) -> Option<&'static str> {
             "No LINEAR_API_KEY — Linear state gates stay closed, so nothing reports finished. \
              Create a key at https://linear.app/settings/api",
         ),
+        TrackerKind::Github => Some(
+            "No GitHub token — GitHub state gates stay closed, so nothing reports finished. \
+             Set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`",
+        ),
         TrackerKind::None if t.declared => None,
-        TrackerKind::Github | TrackerKind::None => Some(
+        TrackerKind::None => Some(
             "No issue tracker devkit can read — issue state gates stay closed, so nothing \
              reports finished. Set `[tracker] kind` to name this project's tracker",
         ),
@@ -378,6 +381,15 @@ mod tests {
     #[test]
     fn a_tracker_that_answered_gets_no_hint() {
         assert_eq!(tracker_hint(&info(TrackerKind::Linear, true, true)), None);
+    }
+
+    /// A GitHub project has already named its tracker, so the fix is the token,
+    /// not the config key it already set.
+    #[test]
+    fn the_github_hint_points_at_the_token_not_the_config() {
+        let hint = tracker_hint(&info(TrackerKind::Github, false, true)).unwrap();
+        assert!(hint.contains("GH_TOKEN"), "{hint}");
+        assert!(!hint.contains("[tracker] kind"), "{hint}");
     }
 
     /// The Linear hint is the only one that can point at a fix the user makes

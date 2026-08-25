@@ -652,11 +652,14 @@ pub fn gather_with(
 /// --cache-only`) overlay cached data themselves.
 ///
 /// This crate reads no config, so the tracker is detected from `start` rather
-/// than named by one. Detection never yields a declared tracker, which keeps the
-/// state gate closed on every row until a caller overlays real data.
+/// than named by one, and its GitHub repositories come from the `origin` remote
+/// alone. Detection never yields a declared tracker, which keeps the state gate
+/// closed on every row until a caller overlays real data.
 pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
     let d = discover(start, ids)?;
-    let t = devkit_common::tracker::resolve(None, Path::new(start));
+    let repos =
+        devkit_common::github::Repos::resolve(&devkit_config::GithubConfig::default(), start, None);
+    let t = devkit_common::tracker::resolve(None, Path::new(start), &repos);
     let dirty = dirty_many(&d.worktree_paths());
     Ok(assemble(
         d,

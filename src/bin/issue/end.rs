@@ -185,8 +185,7 @@ pub fn run(
     config: Option<&str>,
 ) -> Result<()> {
     let steps = Steps::persistent();
-    let tracker = crate::tracker::configured(config, start);
-    let repos = crate::tracker::repos(config, start, None);
+    let (tracker, repos) = crate::tracker::select(config, start, None);
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),

@@ -87,10 +87,13 @@ fn count_strays() -> usize {
 /// for every project on the machine, including one that has nothing in Linear —
 /// so without this row nothing on any CLI path reveals the choice or its cause.
 fn resolve_tracker(start: &std::path::Path) -> Resolved {
-    let kind = devkit_ports::load::load(None, start)
-        .ok()
-        .and_then(|l| l.config.tracker.kind);
-    devkit_common::tracker::resolve(kind, start)
+    let cfg = devkit_ports::load::load(None, start).ok().map(|l| l.config);
+    let (kind, github) = match cfg {
+        Some(c) => (c.tracker.kind, c.github),
+        None => (None, devkit_config::GithubConfig::default()),
+    };
+    let repos = devkit_common::github::Repos::resolve(&github, &start.to_string_lossy(), None);
+    devkit_common::tracker::resolve(kind, start, &repos)
 }
 
 /// A tracker devkit fell back to answers nothing while looking like an answer:

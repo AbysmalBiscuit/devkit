@@ -325,12 +325,10 @@ pub fn run(
         .as_ref()
         .map(|l| &l.config.github)
         .unwrap_or(&default_gh);
-    let resolved = devkit_common::github::Repos::resolve(github_cfg, ".", repo.as_deref())
-        .prs()?
-        .slug
-        .clone();
+    let repos = devkit_common::github::Repos::resolve(github_cfg, ".", repo.as_deref());
+    let resolved = repos.prs()?.slug.clone();
     let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
-    let tracker = devkit_common::tracker::resolve(kind, Path::new("."));
+    let tracker = devkit_common::tracker::resolve(kind, Path::new("."), &repos);
     let repo_key = if no_cache {
         None
     } else {

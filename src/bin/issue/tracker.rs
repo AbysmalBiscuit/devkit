@@ -5,29 +5,27 @@ use devkit_common::tracker::Resolved;
 use devkit_ports::load;
 use std::path::Path;
 
-/// The tracker named by `[tracker] kind`, or the detected one when no config
-/// resolves. A project without a `devkit.toml` — or with one that fails to
-/// load — still gets its answer from detection: the tracker choice must never
-/// be what fails a command that would otherwise work.
-pub fn configured(config: Option<&str>, start: &str) -> Resolved {
-    let dir = Path::new(start);
-    let kind = load::load(config.map(Path::new), dir)
-        .ok()
-        .and_then(|l| l.config.tracker.kind);
-    devkit_common::tracker::resolve(kind, dir)
-}
-
-/// The `[github]` repositories named by config plus the `origin` remote. A
-/// project without a `devkit.toml` — or with one that fails to load — still
-/// resolves from origin alone, matching `configured`'s degrade-to-detection
-/// contract. `pr_override` is `issue prs --repo`.
-pub fn repos(config: Option<&str>, start: &str, pr_override: Option<&str>) -> Repos {
+/// The tracker this project talks to and the GitHub repositories its commands
+/// work against, resolved from `config` (or the layers discovered from `start`)
+/// plus the `origin` remote. The two come back together because they come from
+/// one config load: resolving the tracker needs the issues repository to build
+/// a GitHub adapter.
+///
+/// A project without a `devkit.toml` — or with one that fails to load — still
+/// gets its tracker from detection and its repositories from origin alone: the
+/// tracker choice must never be what fails a command that would otherwise work.
+/// `pr_override` is `issue prs --repo`.
+pub fn select(config: Option<&str>, start: &str, pr_override: Option<&str>) -> (Resolved, Repos) {
     let dir = Path::new(start);
     let cfg = load::load(config.map(Path::new), dir)
         .ok()
-        .map(|l| l.config.github)
-        .unwrap_or_default();
-    Repos::resolve(&cfg, start, pr_override)
+        .map(|l| l.config);
+    let (kind, github) = match cfg {
+        Some(c) => (c.tracker.kind, c.github),
+        None => (None, devkit_config::GithubConfig::default()),
+    };
+    let repos = Repos::resolve(&github, start, pr_override);
+    (devkit_common::tracker::resolve(kind, dir, &repos), repos)
 }
 
 #[cfg(test)]
@@ -68,7 +66,7 @@ mod tests {
             let path = dir.join(format!("{named}.toml"));
             write_config(&path, named);
             assert_eq!(
-                configured(path.to_str(), start).tracker.kind(),
+                select(path.to_str(), start, None).0.tracker.kind(),
                 kind,
                 "config naming {named}"
             );

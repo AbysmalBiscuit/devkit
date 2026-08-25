@@ -167,13 +167,18 @@ pub struct Resolved {
 /// `LINEAR_API_KEY` resolves to Linear for every project, so a GitHub project on
 /// such a machine must set `kind` explicitly. What detection buys is that every
 /// config predating `[tracker]` keeps behaving exactly as it did.
-pub fn resolve(kind: Option<TrackerKind>, cwd: &Path) -> Resolved {
-    resolve_with_key(kind, cwd, crate::secrets::resolve("LINEAR_API_KEY"))
+pub fn resolve(kind: Option<TrackerKind>, cwd: &Path, repos: &crate::github::Repos) -> Resolved {
+    resolve_with_key(kind, cwd, repos, crate::secrets::resolve("LINEAR_API_KEY"))
 }
 
 /// `resolve` with the Linear key supplied instead of read from the environment,
 /// so detection can be exercised whatever the ambient `LINEAR_API_KEY` holds.
-fn resolve_with_key(kind: Option<TrackerKind>, cwd: &Path, key: Option<String>) -> Resolved {
+fn resolve_with_key(
+    kind: Option<TrackerKind>,
+    cwd: &Path,
+    repos: &crate::github::Repos,
+    key: Option<String>,
+) -> Resolved {
     let declared = kind.is_some();
     match kind.unwrap_or_else(|| detect(cwd, key.as_deref())) {
         TrackerKind::Linear => Resolved {
@@ -185,14 +190,27 @@ fn resolve_with_key(kind: Option<TrackerKind>, cwd: &Path, key: Option<String>) 
                 "detected: LINEAR_API_KEY resolves".into()
             },
         },
-        // There is no GitHub implementation, so this arm hands back the
-        // no-tracker stand-in. It is never `declared`: what devkit can supply is
-        // not the tracker that was asked for, and reading its empty answers as
-        // the project's own would drop every issue-state gate.
-        TrackerKind::Github => Resolved {
-            tracker: Box::new(none::NoneTracker),
-            declared: false,
-            reason: "detected: a GitHub origin remote, which no tracker reads yet".into(),
+        // The only place a `GithubTracker` is built, and the issues repository
+        // it is handed has already resolved here. Its `ready` reports on the
+        // token alone because of that; a second construction site that skipped
+        // this check would have it claim readiness with no repository to ask.
+        TrackerKind::Github => match repos.issues() {
+            Ok(repo) => Resolved {
+                tracker: Box::new(github::GithubTracker::new(repo.clone())),
+                declared,
+                reason: if declared {
+                    "[tracker] kind = \"github\"".into()
+                } else {
+                    "detected: github.com `origin` remote".into()
+                },
+            },
+            // No issues repository resolves, so there is nothing to ask. This
+            // is devkit finding no answer, not the project declaring none.
+            Err(e) => Resolved {
+                tracker: Box::new(none::NoneTracker),
+                declared: false,
+                reason: format!("github selected but no issues repository: {e:#}"),
+            },
         },
         TrackerKind::None => Resolved {
             tracker: Box::new(none::NoneTracker),
@@ -220,6 +238,33 @@ fn detect(cwd: &Path, linear_key: Option<&str>) -> TrackerKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cfg(issues: Option<&str>, prs: Option<&str>) -> devkit_config::GithubConfig {
+        devkit_config::GithubConfig {
+            issues_repo: issues.map(String::from),
+            pr_repo: prs.map(String::from),
+        }
+    }
+
+    /// `Repos` where neither key resolves: no `[github]` config and no origin.
+    fn no_repos() -> crate::github::Repos {
+        crate::github::Repos::from_parts(&cfg(None, None), None, None)
+    }
+
+    /// `Repos` whose keys both default to one origin slug — the shape a project
+    /// with a github.com `origin` and no `[github]` config resolves to.
+    fn repos_with(slug: &str) -> crate::github::Repos {
+        crate::github::Repos::from_parts(&cfg(None, None), Some(slug.to_string()), None)
+    }
+
+    /// `detect` against a scratch repository whose `origin` is `url`.
+    fn detect_with_remote(url: &str, linear_key: Option<&str>) -> TrackerKind {
+        let dir = tempfile::tempdir().unwrap();
+        let at = dir.path().to_str().unwrap();
+        crate::cmd::git(&["init", "-q"], at).unwrap();
+        crate::cmd::git(&["remote", "add", "origin", url], at).unwrap();
+        detect(dir.path(), linear_key)
+    }
 
     #[test]
     fn state_kind_round_trips_through_its_wire_string() {
@@ -274,7 +319,7 @@ mod tests {
 
     #[test]
     fn the_none_tracker_answers_empty_and_is_never_ready() {
-        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere")).tracker;
+        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere"), &no_repos()).tracker;
         assert_eq!(t.kind(), TrackerKind::None);
         assert!(!t.ready());
         assert!(t.states(&["ENG-1".into()]).is_empty());
@@ -287,7 +332,7 @@ mod tests {
 
     #[test]
     fn the_none_tracker_passes_an_id_through_unchanged() {
-        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere")).tracker;
+        let t = resolve(Some(TrackerKind::None), Path::new("/nowhere"), &no_repos()).tracker;
         let r = t.issue_ref("  eng-1  ").unwrap();
         assert_eq!(r.id, "eng-1");
         assert_eq!(r.slug, None);
@@ -299,23 +344,23 @@ mod tests {
     /// the environment, so an ambient `LINEAR_API_KEY` cannot decide this.
     #[test]
     fn a_tracker_detection_fell_back_to_is_not_declared() {
-        let r = resolve_with_key(None, Path::new("/nonexistent-devkit-tracker-probe"), None);
+        let r = resolve_with_key(
+            None,
+            Path::new("/nonexistent-devkit-tracker-probe"),
+            &no_repos(),
+            None,
+        );
         assert_eq!(r.tracker.kind(), TrackerKind::None);
         assert!(!r.declared);
     }
 
-    /// A GitHub `origin` on a machine with no Linear key is the detection path
-    /// most projects land on, and devkit reads no GitHub issues: what comes back
-    /// is the no-tracker stand-in. Calling that stand-in the project's own answer
-    /// would drop the issue-state gate for every one of those projects, so the
-    /// GitHub arm must stay undeclared. The key is passed in as absent, so an
-    /// ambient `LINEAR_API_KEY` cannot steer detection past this.
+    /// A github.com `origin` on a machine with no Linear key is the detection
+    /// path most projects land on. It builds the real adapter, but `declared`
+    /// stays false: devkit chose this tracker, the project did not name it.
     #[test]
-    fn a_github_origin_resolves_to_an_undeclared_stand_in() {
-        let dir = std::env::temp_dir().join(format!("devkit-tracker-gh-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let at = dir.to_str().unwrap();
+    fn a_detected_github_origin_resolves_the_adapter_undeclared() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = dir.path().to_str().unwrap();
         crate::cmd::git(&["init", "-q"], at).unwrap();
         crate::cmd::git(
             &[
@@ -328,16 +373,65 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            detect(&dir, None),
-            TrackerKind::Github,
-            "the fixture has to reach the GitHub arm for the rest to mean anything"
-        );
-        let r = resolve_with_key(None, &dir, None);
-        assert_eq!(r.tracker.kind(), TrackerKind::None);
+        let r = resolve_with_key(None, dir.path(), &repos_with("acme/widget"), None);
+        assert_eq!(r.tracker.kind(), TrackerKind::Github);
         assert!(!r.declared, "{}", r.reason);
+        assert!(r.reason.contains("detected"), "{}", r.reason);
+    }
 
-        let _ = std::fs::remove_dir_all(&dir);
+    /// A github kind with no repository to ask degrades to the stand-in rather
+    /// than to an adapter that would report readiness it cannot back. It is not
+    /// declared: devkit found no answer here, the project did not give one.
+    #[test]
+    fn a_github_kind_without_an_issues_repository_falls_back_undeclared() {
+        let r = resolve(Some(TrackerKind::Github), Path::new("."), &no_repos());
+        assert_eq!(r.tracker.kind(), TrackerKind::None);
+        assert!(!r.declared);
+        assert!(r.reason.contains("no issues repository"), "{}", r.reason);
+    }
+
+    /// A project that names GitHub gets the GitHub adapter, and it is the
+    /// project's own answer: `declared` is what keeps the issue-state gate and
+    /// the "set `[tracker] kind`" hints off a project that already decided.
+    #[test]
+    fn a_declared_github_kind_builds_the_real_adapter() {
+        let repos = repos_with("me/widget");
+        let r = resolve(Some(TrackerKind::Github), Path::new("."), &repos);
+        assert_eq!(r.tracker.kind(), TrackerKind::Github);
+        assert!(r.declared);
+        assert!(r.reason.contains("kind = \"github\""), "{}", r.reason);
+    }
+
+    /// A project with both keys configured has everything the adapter needs;
+    /// gating readiness on an origin remote would leave every state gate closed
+    /// for a project whose repositories live elsewhere. `ready` needs a token
+    /// too, so on a machine without one the assertion is that nothing *else*
+    /// closed the gate.
+    #[test]
+    fn a_configured_project_is_ready_without_a_github_origin() {
+        let repos = crate::github::Repos::from_parts(
+            &cfg(Some("org/planning"), Some("up/app")),
+            None,
+            None,
+        );
+        let r = resolve(Some(TrackerKind::Github), Path::new("."), &repos);
+        assert_eq!(r.tracker.kind(), TrackerKind::Github);
+        assert!(r.tracker.ready() || crate::github::token().is_none());
+    }
+
+    /// `slug_from_remote_url` parses any `host/owner/repo` shape, so detection
+    /// has to check the host: a GitLab origin read as GitHub would point every
+    /// tracker call at an unrelated github.com repository.
+    #[test]
+    fn a_gitlab_origin_no_longer_detects_as_github() {
+        assert_eq!(
+            detect_with_remote("https://gitlab.com/o/r.git", None),
+            TrackerKind::None
+        );
+        assert_eq!(
+            detect_with_remote("https://github.com/o/r.git", None),
+            TrackerKind::Github
+        );
     }
 
     #[test]
@@ -345,6 +439,7 @@ mod tests {
         let r = resolve(
             Some(TrackerKind::None),
             Path::new("/nonexistent-devkit-tracker-probe"),
+            &no_repos(),
         );
         assert_eq!(r.tracker.kind(), TrackerKind::None);
         assert!(r.declared);
@@ -357,11 +452,15 @@ mod tests {
     fn the_same_directory_yields_whichever_kind_is_named() {
         let dir = Path::new("/nonexistent-devkit-tracker-probe");
         assert_eq!(
-            resolve(Some(TrackerKind::Linear), dir).tracker.kind(),
+            resolve(Some(TrackerKind::Linear), dir, &no_repos())
+                .tracker
+                .kind(),
             TrackerKind::Linear
         );
         assert_eq!(
-            resolve(Some(TrackerKind::None), dir).tracker.kind(),
+            resolve(Some(TrackerKind::None), dir, &no_repos())
+                .tracker
+                .kind(),
             TrackerKind::None
         );
     }

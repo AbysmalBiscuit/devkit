@@ -51,9 +51,8 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     // any resolve) — used both to fetch the timeline and to scope its cache
     // entries so two projects, or two viewers of one project, never share
     // a cache file (see `cache::CacheScope`).
-    let resolved = crate::tracker::configured(args.config.as_deref(), &start);
+    let (resolved, scope_repos) = crate::tracker::select(args.config.as_deref(), &start, None);
     let tracker = resolved.tracker.as_ref();
-    let scope_repos = crate::tracker::repos(args.config.as_deref(), &start, None);
     let scope_repo = scope_repos
         .issues()
         .or_else(|_| scope_repos.prs())

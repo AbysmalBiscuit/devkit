@@ -62,7 +62,7 @@ pub fn run(
     // `status` gather does.
     let d = st::discover(start, &[])?;
     let top = current_top(start);
-    let resolved = crate::tracker::configured(config, start);
+    let (resolved, repos) = crate::tracker::select(config, start, None);
     let tracker = resolved.tracker.as_ref();
     let mut info = TrackerInfo::of(&resolved);
 
@@ -106,7 +106,6 @@ pub fn run(
         if let Some(pr) = cached_pr {
             apply_cached_pr(&mut row, pr);
         }
-        let repos = crate::tracker::repos(config, start, None);
         let repo = repos.prs()?;
         info.link_base = live_enrich(&mut row, &d, &resolved, !json, repo)?;
 

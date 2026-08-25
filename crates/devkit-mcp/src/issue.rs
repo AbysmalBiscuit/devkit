@@ -47,14 +47,14 @@ fn status(_ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: StatusArgs = serde_json::from_value(args).context("invalid issue.status arguments")?;
     let root = a.root.unwrap_or_else(|| ".".to_string());
     let loaded = project_config(&root);
-    let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
-    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root));
     let default_gh = devkit_config::GithubConfig::default();
     let github_cfg = loaded
         .as_ref()
         .map(|l| &l.config.github)
         .unwrap_or(&default_gh);
     let repos = devkit_common::github::Repos::resolve(github_cfg, &root, None);
+    let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
+    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root), &repos);
     let report = status::gather_with(&root, &a.ids, &tracker, &repos)?;
     Ok(serde_json::to_value(report)?)
 }
@@ -115,12 +115,10 @@ fn prs_handler(_ctx: &ServerCtx, args: Value) -> Result<Value> {
         .as_ref()
         .map(|l| &l.config.github)
         .unwrap_or(&default_gh);
-    let repo = devkit_common::github::Repos::resolve(github_cfg, &root, a.repo.as_deref())
-        .prs()?
-        .slug
-        .clone();
+    let repos = devkit_common::github::Repos::resolve(github_cfg, &root, a.repo.as_deref());
+    let repo = repos.prs()?.slug.clone();
     let kind = loaded.as_ref().and_then(|l| l.config.tracker.kind);
-    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root));
+    let tracker = devkit_common::tracker::resolve(kind, std::path::Path::new(&root), &repos);
     let report = prs::gather(
         &root,
         a.mine,

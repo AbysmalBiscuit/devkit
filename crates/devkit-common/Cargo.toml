@@ -31,6 +31,7 @@ test-support = []
 # InMemoryTerm: lets tests drive a visible (non-hidden) MultiProgress and
 # assert what actually reaches the terminal.
 indicatif = { workspace = true, features = ["in_memory"] }
+tempfile = "3"
 
 # Unix process primitives (signals, sessions); unavailable on Windows.
 [target.'cfg(unix)'.dependencies]
