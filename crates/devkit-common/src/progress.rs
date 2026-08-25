@@ -197,6 +197,13 @@ impl Steps {
         let _ = self.mp.clear();
     }
 
+    /// How many steps have begun. A step counts from the moment its label is
+    /// minted, so a step still running is included. Callers outside this
+    /// module assert step coverage with it; `label` is private.
+    pub fn started(&self) -> usize {
+        self.n.load(Ordering::Relaxed)
+    }
+
     /// Run `f` with every bar in the group hidden, then redraw them. Use around
     /// a stdin prompt or any stdout write that would otherwise be torn by a live
     /// bar redrawing on stderr.
@@ -337,6 +344,15 @@ mod tests {
         // The ordinal advanced exactly once per step regardless of interleaving:
         // 8 steps ran, so the next label is the 9th.
         assert_eq!(steps.label("next"), "9. next");
+        steps.clear();
+    }
+
+    #[test]
+    fn started_counts_every_step_that_began() {
+        let steps = Steps::persistent_with_total(2);
+        steps.during("first", || ());
+        steps.during_result("second", || anyhow::Ok(())).unwrap();
+        assert_eq!(steps.started(), 2);
         steps.clear();
     }
 }

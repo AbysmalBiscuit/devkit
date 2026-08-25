@@ -137,20 +137,27 @@ pub(crate) fn prep_apps(
     Ok(())
 }
 
-/// Render one hook's argv against `ctx`/`vars` and run it in `worktree`.
-fn run_hook(
-    worktree: &Path,
+/// Width a hook's command is elided to in its progress step: what fits an
+/// 80-column terminal beside the mark, the `[i/n]` counter, and the elapsed
+/// time.
+const HOOK_LABEL_MAX: usize = 56;
+
+/// Render one hook's argv against `ctx`/`vars`.
+fn render_hook(
     hook: &[String],
     ctx: &serde_json::Value,
     vars: &BTreeMap<String, String>,
-) -> Result<()> {
-    let mut argv = Vec::with_capacity(hook.len());
-    for part in hook {
-        argv.push(
+) -> Result<Vec<String>> {
+    hook.iter()
+        .map(|part| {
             devkit_common::template::render(part, ctx, vars)
-                .with_context(|| format!("rendering hook argument `{part}`"))?,
-        );
-    }
+                .with_context(|| format!("rendering hook argument `{part}`"))
+        })
+        .collect()
+}
+
+/// Run an already-rendered hook argv in `worktree`.
+fn run_rendered(worktree: &Path, argv: &[String]) -> Result<()> {
     let (prog, rest) = argv.split_first().context("empty hook command")?;
     capture(
         prog,
@@ -160,17 +167,33 @@ fn run_hook(
     Ok(())
 }
 
+/// The progress-step label for a hook command.
+fn hook_label(argv: &[String]) -> String {
+    format!(
+        "Hook: {}",
+        devkit_common::ui::truncate(&argv.join(" "), HOOK_LABEL_MAX)
+    )
+}
+
 /// Run each `hooks.after_worktree_create` command in the new worktree, in
-/// order. Fail-open: the worktree already exists and is usable by the time
-/// these run, so a hook that fails warns on stderr and the rest still run.
+/// order, one progress step each. Fail-open: the worktree already exists and
+/// is usable by the time these run, so a hook that fails warns on stderr and
+/// the rest still run.
 pub(crate) fn run_after_worktree_create(
     worktree: &Path,
     hooks: &[Vec<String>],
     ctx: &serde_json::Value,
     vars: &BTreeMap<String, String>,
+    steps: &Steps,
 ) {
     for hook in hooks {
-        if let Err(e) = run_hook(worktree, hook, ctx, vars) {
+        let rendered = render_hook(hook, ctx, vars);
+        // A hook that cannot render still draws its step, labelled from the
+        // template source so the offending argument is visible. The step
+        // counter only advances inside `during_result`, so skipping the step
+        // would leave the run ending short of its total.
+        let label = hook_label(rendered.as_deref().unwrap_or(hook));
+        if let Err(e) = steps.during_result(&label, || run_rendered(worktree, &rendered?)) {
             eprintln!(
                 "warning: after_worktree_create hook `{}` failed: {e:#}",
                 hook.join(" ")
@@ -345,7 +368,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         worktree.display()
     );
     let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
-    let total = 2 + usize::from(!args.apps.is_empty());
+    let total = 2 + usize::from(!args.apps.is_empty()) + cfg.hooks.after_worktree_create.len();
     let steps = Steps::persistent_with_total(total);
     steps.during_result("Fetching from origin…", || {
         gitfetch::fetch("origin", monorepo_s)
@@ -421,7 +444,13 @@ pub fn run(args: SetupArgs) -> Result<()> {
         obj.insert("branch".into(), serde_json::Value::String(branch.clone()));
         obj.insert("worktree".into(), serde_json::Value::String(holder.clone()));
     }
-    run_after_worktree_create(&worktree, &cfg.hooks.after_worktree_create, &hook_ctx, vars);
+    run_after_worktree_create(
+        &worktree,
+        &cfg.hooks.after_worktree_create,
+        &hook_ctx,
+        vars,
+        &steps,
+    );
 
     // Ports are not reserved here. A worktree's servers get their ports
     // dynamically from `devrun up`, which allocates against the live registry at
@@ -503,6 +532,45 @@ mod tests {
     }
 
     #[test]
+    fn render_hook_expands_each_argument() {
+        let hook = vec![
+            "git".to_string(),
+            "init".to_string(),
+            "{{ slug }}-wt".to_string(),
+        ];
+        let argv = render_hook(&hook, &ctx(), &novars()).unwrap();
+        assert_eq!(argv, vec!["git", "init", "fix-wt"]);
+    }
+
+    #[test]
+    fn render_hook_reports_the_argument_it_could_not_render() {
+        let hook = vec!["git".to_string(), "{{ nope }}".to_string()];
+        let err = render_hook(&hook, &ctx(), &novars()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("{{ nope }}"),
+            "the error names the offending argument: {err:#}"
+        );
+    }
+
+    #[test]
+    fn hook_label_keeps_a_short_command_whole() {
+        let argv = vec!["bun".to_string(), "install".to_string()];
+        assert_eq!(hook_label(&argv), "Hook: bun install");
+    }
+
+    #[test]
+    fn hook_label_elides_a_long_command() {
+        let argv = vec!["bash".to_string(), "-c".to_string(), "x".repeat(200)];
+        let label = hook_label(&argv);
+        assert!(label.starts_with("Hook: bash -c "), "label was {label}");
+        assert!(label.ends_with('…'), "label was {label}");
+        assert_eq!(
+            label.chars().count(),
+            "Hook: ".chars().count() + HOOK_LABEL_MAX
+        );
+    }
+
+    #[test]
     fn hook_renders_args_and_runs_in_the_worktree() {
         let dir = scratch("hook-render");
         let hooks = vec![vec![
@@ -510,7 +578,7 @@ mod tests {
             "init".to_string(),
             "{{ slug }}-wt".to_string(),
         ]];
-        run_after_worktree_create(&dir, &hooks, &ctx(), &novars());
+        run_after_worktree_create(&dir, &hooks, &ctx(), &novars(), &Steps::persistent());
         assert!(dir.join("fix-wt").exists());
     }
 
@@ -521,7 +589,7 @@ mod tests {
             vec!["devkit-no-such-program-xyz".to_string()],
             vec!["git".to_string(), "init".to_string(), "after".to_string()],
         ];
-        run_after_worktree_create(&dir, &hooks, &ctx(), &novars());
+        run_after_worktree_create(&dir, &hooks, &ctx(), &novars(), &Steps::persistent());
         assert!(dir.join("after").exists());
     }
 
@@ -536,8 +604,30 @@ mod tests {
             ],
             vec!["git".to_string(), "init".to_string(), "after".to_string()],
         ];
-        run_after_worktree_create(&dir, &hooks, &ctx(), &novars());
+        run_after_worktree_create(&dir, &hooks, &ctx(), &novars(), &Steps::persistent());
         assert!(dir.join("after").exists());
+    }
+
+    #[test]
+    fn every_hook_consumes_a_step_even_when_it_cannot_render() {
+        let dir = scratch("hook-steps");
+        let hooks = vec![
+            vec![
+                "git".to_string(),
+                "init".to_string(),
+                "{{ nope }}".to_string(),
+            ],
+            vec!["git".to_string(), "init".to_string(), "after".to_string()],
+        ];
+        let steps = Steps::persistent_with_total(hooks.len());
+        run_after_worktree_create(&dir, &hooks, &ctx(), &novars(), &steps);
+        assert_eq!(
+            steps.started(),
+            2,
+            "an unrenderable hook must still consume its step"
+        );
+        assert!(dir.join("after").exists(), "the next hook still ran");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

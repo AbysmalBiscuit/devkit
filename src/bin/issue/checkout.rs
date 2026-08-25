@@ -454,6 +454,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         &cfg.hooks.after_worktree_create,
         &hook_ctx,
         &cfg.templates.variables,
+        &steps,
     );
 
     report(meta.number, &meta.head_ref_name, worktree_s)?;
