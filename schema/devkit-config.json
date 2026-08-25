@@ -578,7 +578,7 @@
           ]
         },
         "checkout_worktree_dir": {
-          "description": "Worktree directory name created by `issue checkout-pr`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are\nslugified, and the `linear_*` fields are empty on the PR-only path.",
+          "description": "Worktree directory name created by `issue checkout-pr`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are\nslugified, and the `linear_*` names are historical: they carry\nwhichever tracker's id and title resolved, and are empty on the\nPR-only path.",
           "type": [
             "string",
             "null"

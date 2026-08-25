@@ -814,9 +814,9 @@ fn fetch_section(repo: &str, section: Section, root: &str, f: Fetch) -> SectionN
 /// Fetch and classify the caller's PRs in a single GraphQL round-trip.
 /// Neither flag set ⇒ both groups. Stateless: no diff cache is read or
 /// written. `t`'s linked issues are unioned into each row via
-/// [`apply_tracker_links`] — for Linear that is one extra batched round trip,
-/// opted into by `resolve_pr_links`; for GitHub it is a field already on this
-/// query's response.
+/// [`apply_tracker_links`], which costs one extra batched round trip on both
+/// tracker paths — opted into by `resolve_pr_links` on Linear, unconditional
+/// on GitHub.
 #[allow(clippy::too_many_arguments)]
 pub fn gather(
     root: &str,

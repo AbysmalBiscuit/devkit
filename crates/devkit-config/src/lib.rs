@@ -420,7 +420,9 @@ pub struct Templates {
     pub worktree_dir: Option<String>,
     /// Worktree directory name created by `issue checkout-pr`. Context:
     /// `pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are
-    /// slugified, and the `linear_*` fields are empty on the PR-only path.
+    /// slugified, and the `linear_*` names are historical: they carry
+    /// whichever tracker's id and title resolved, and are empty on the
+    /// PR-only path.
     pub checkout_worktree_dir: Option<String>,
     /// Title of a PR opened by `issue review request`. `{{ input }}` is the
     /// `--pr-title` argument.

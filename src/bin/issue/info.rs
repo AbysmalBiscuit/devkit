@@ -57,9 +57,10 @@ pub fn run(
     config: Option<&str>,
 ) -> Result<()> {
     // `issue info` reports a single worktree, so discover once (one cheap
-    // `git worktree list`) and enrich only the target — never run the
-    // per-worktree dirty/PR/state work for every worktree the way a full
-    // `status` gather does.
+    // `git worktree list`) and narrow what is per-worktree: the dirty check
+    // and the tracker state run for the target alone. The PR lookup stays
+    // whole-set — `st::fetch_prs` aliases every discovered branch into one
+    // batch, so narrowing it would not save a round trip.
     let d = st::discover(start, &[])?;
     let top = current_top(start);
     let (resolved, repos) = crate::tracker::select(config, start, None);
