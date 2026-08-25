@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.13.3](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.2...v0.13.3) (2026-08-25)
+
+
+### Features
+
+* **config:** expand ${VAR} in config values ([093a128](https://github.com/AbysmalBiscuit/devkit/commit/093a1281608acfb2b40d0f4fb0df7f8719a1091b))
+* **config:** resolve default paths against their layer ([8f051ee](https://github.com/AbysmalBiscuit/devkit/commit/8f051ee2248c48c27929215037144cb8fe76c34d))
+* **dashboard:** read the timeline from the configured tracker ([dc3df67](https://github.com/AbysmalBiscuit/devkit/commit/dc3df67e480a7ff5a8c73ff7309e5d43caf653d0))
+* **devkit:** report the GitHub identity in devkit auth ([f0b9ed2](https://github.com/AbysmalBiscuit/devkit/commit/f0b9ed234469fa144804f17955f822d57a456be0))
+* **devkit:** report the resolved tracker in doctor ([89efe51](https://github.com/AbysmalBiscuit/devkit/commit/89efe51609eb07d5027891baa75f23ceb78ca5a6))
+* **github:** answer a head-branch lookup with a type ([b66fa51](https://github.com/AbysmalBiscuit/devkit/commit/b66fa511963ac21b69247337809eca213f88be59))
+* **github:** resolve issue and PR repositories from config ([18f1655](https://github.com/AbysmalBiscuit/devkit/commit/18f16555cb6f03ead918da6ea91dd189ca434b16))
+* **issue:** accept a Linear URL and reuse its slug ([e2164b7](https://github.com/AbysmalBiscuit/devkit/commit/e2164b7d3b23f7e6a092075ba9555a517f988fdb))
+* **issue:** bind a worktree to its pull request ([8b414f4](https://github.com/AbysmalBiscuit/devkit/commit/8b414f43ab846836b1589180bc51a770c91ab46f))
+* **issue:** carry a tagged PR status on every status row ([fe9f27b](https://github.com/AbysmalBiscuit/devkit/commit/fe9f27b3d6a38f774f55a2654e159d9a21748360))
+* **issue:** derive the setup slug from the Linear title ([24d54b4](https://github.com/AbysmalBiscuit/devkit/commit/24d54b49ca88590a2d18b968912d8efe7834bfae))
+* **issue:** fit a derived setup slug to the branch column ([d2f79d6](https://github.com/AbysmalBiscuit/devkit/commit/d2f79d6f325c70e32489af374bf369419e560343))
+* **issue:** keep a pasted PR URL's repository ([cbfc49f](https://github.com/AbysmalBiscuit/devkit/commit/cbfc49f4fe931aa4fcb297f3651babf9fb0e1b62))
+* **issue:** report the worktree before running hooks ([b3594ad](https://github.com/AbysmalBiscuit/devkit/commit/b3594ad2409d605bc0581e0bc7a96d365324f41a))
+* **issue:** select the tracker from [tracker] kind ([34ef825](https://github.com/AbysmalBiscuit/devkit/commit/34ef82565f85d2593a6686ffed416625f369453a))
+* **issue:** show a progress step per worktree hook ([2c9030c](https://github.com/AbysmalBiscuit/devkit/commit/2c9030cbcdd0a312d79b2605e82a7c540d86dfd6))
+* **issue:** tie the summary file to the worktree's lifetime ([fe10134](https://github.com/AbysmalBiscuit/devkit/commit/fe10134684d58a265253668f70bd00ac7d05b81e))
+* **issue:** write an issue summary file on setup ([f7ce10e](https://github.com/AbysmalBiscuit/devkit/commit/f7ce10e7badc9efbe89229e30dc14d2143570a19))
+* **tracker:** add a typed issue state vocabulary ([43f3982](https://github.com/AbysmalBiscuit/devkit/commit/43f3982fad5fc15f87f53293d88428bfd6b2412a))
+* **tracker:** add the GitHub Issues adapter ([a2c6222](https://github.com/AbysmalBiscuit/devkit/commit/a2c622237a595665aa40df509b6968918ce3f8b4))
+* **tracker:** add the Tracker trait and a no-tracker impl ([0c5c506](https://github.com/AbysmalBiscuit/devkit/commit/0c5c506fa4db22a9088ca814e2797f78894e9c90))
+* **tracker:** route setup, checkout and prs through the trait ([da7d270](https://github.com/AbysmalBiscuit/devkit/commit/da7d2707b9248bf48ab3b2e94a82286896ffc041))
+* **tracker:** select the GitHub adapter for kind = "github" ([2b2466f](https://github.com/AbysmalBiscuit/devkit/commit/2b2466f7fee6400a91702c1082c4a70430be59a0))
+
+
+### Bug Fixes
+
+* **config:** absolutize an explicit or env-named config layer ([6edef93](https://github.com/AbysmalBiscuit/devkit/commit/6edef93af680861315e2d6d98806c78f6cd78098))
+* **config:** fix path resolution edge cases from review ([2c11b52](https://github.com/AbysmalBiscuit/devkit/commit/2c11b527fe1e7e4e308d10eacfe9a073f26e12ca))
+* **config:** make the summary template tracker-neutral ([cdb1f1f](https://github.com/AbysmalBiscuit/devkit/commit/cdb1f1f906ade2d73a93eb15293c8f619ff172f3))
+* **config:** resolve `~` against USERPROFILE too ([9588db4](https://github.com/AbysmalBiscuit/devkit/commit/9588db4a74949560309a99729621b526236a7160))
+* **dashboard:** scope the github cache to its viewer ([0d3ee08](https://github.com/AbysmalBiscuit/devkit/commit/0d3ee0814160f282876e0a08d45add41beef013c))
+* **devkit:** refuse a token passed to auth github ([8b10950](https://github.com/AbysmalBiscuit/devkit/commit/8b109507cc9f5164b67ed536f8e1bdc0cbef4dfe))
+* **github:** address task 1 review findings ([fc02960](https://github.com/AbysmalBiscuit/devkit/commit/fc0296089192f81e9afd60740c1733c8c149aa42))
+* **github:** drop dead GraphQL error branch, dedupe ambiguity check ([f1ed27e](https://github.com/AbysmalBiscuit/devkit/commit/f1ed27e76de0f5d1cb94e8c175f53e71fe48b8b6))
+* **issue:** act on one repository per request ([4b11ae6](https://github.com/AbysmalBiscuit/devkit/commit/4b11ae661cd0c9b83d7bc683a3798ae13352525c))
+* **issue:** address hook-progress review findings ([022e133](https://github.com/AbysmalBiscuit/devkit/commit/022e13300434326d57aba6e4204ad0821de02aea))
+* **issue:** check out a linked pr from its repo ([3f96b29](https://github.com/AbysmalBiscuit/devkit/commit/3f96b29e1f72b82960ae404a71920e6581960a83))
+* **issue:** hold the state gate for a tracker devkit fell back to ([60cef84](https://github.com/AbysmalBiscuit/devkit/commit/60cef8459a8c0a14ec85a8864a8ce3a79481dd9c))
+* **issue:** let the live PR answer win over the cache ([b1e8773](https://github.com/AbysmalBiscuit/devkit/commit/b1e8773363faed9db1e4e83e76cd05ce4187014e))
+* **issue:** make pr_cell's colour choice actually testable ([04d10d6](https://github.com/AbysmalBiscuit/devkit/commit/04d10d6cfeb684ef20970b058c5ff4f471808a7a))
+* **issue:** match issue ids case-insensitively ([9d8870c](https://github.com/AbysmalBiscuit/devkit/commit/9d8870c3dc49e72c268db8ad697c4abeb0eba1c2))
+* **issue:** read a Linear URL's id by path position ([6c61e30](https://github.com/AbysmalBiscuit/devkit/commit/6c61e30d11ad9c9e50c6e79f8d354f925f995e6b))
+* **issue:** say the state gate is closed, not skipped ([c6a3ce9](https://github.com/AbysmalBiscuit/devkit/commit/c6a3ce9d54837eb741d54d42b4ceca1bde4492d2))
+* **issue:** skip the state gate only when there is no tracker ([89d9735](https://github.com/AbysmalBiscuit/devkit/commit/89d97356e399370c84efecd98bf32c0fb87e548b))
+* **issue:** sweep legacy summary files regardless of id case ([68699a3](https://github.com/AbysmalBiscuit/devkit/commit/68699a3a3986601ee30516fc97dd42b5d0acafcf))
+* **tracker:** accept partial GraphQL NOT_FOUND ([772e40a](https://github.com/AbysmalBiscuit/devkit/commit/772e40a694519e93a2e1c0c96305fc94dac1bdba))
+* **tracker:** link a closing issue to its own repo ([ea2fb21](https://github.com/AbysmalBiscuit/devkit/commit/ea2fb21e324668017215b94ae24a6b2c95eceee3))
+* **tracker:** match a closing issue repo case-blind ([7960c13](https://github.com/AbysmalBiscuit/devkit/commit/7960c1372be946144110d1b44cb7e8540da4b862))
+* **tracker:** match an issue url's repo case-blind ([a65cb04](https://github.com/AbysmalBiscuit/devkit/commit/a65cb0467db8990397b0129ad1bb71477f9be0eb))
+* **tracker:** say why a named tracker did not resolve ([987ed5b](https://github.com/AbysmalBiscuit/devkit/commit/987ed5b87ba0779155b23fe82e0f7c58838d7b32))
+* **tracker:** tighten declared-gate coverage and drop stale doc claims ([fa1d23d](https://github.com/AbysmalBiscuit/devkit/commit/fa1d23d84772270dfea3a8a50ff82d920f2ffcf6))
+
 ## [0.13.2](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.1...v0.13.2) (2026-08-19)
 
 
