@@ -28,11 +28,10 @@ daemon = ["dep:interprocess"]
 test-support = []
 
 [dev-dependencies]
-devkit-testtmp.workspace = true
 # InMemoryTerm: lets tests drive a visible (non-hidden) MultiProgress and
 # assert what actually reaches the terminal.
 indicatif = { workspace = true, features = ["in_memory"] }
-tempfile = "3"
+tempfile.workspace = true
 
 # Unix process primitives (signals, sessions); unavailable on Windows.
 [target.'cfg(unix)'.dependencies]

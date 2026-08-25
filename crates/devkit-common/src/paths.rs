@@ -194,9 +194,9 @@ mod tests {
     }
     #[test]
     fn migrate_moves_legacy_to_new() {
-        let base = devkit_testtmp::dir("devkit-paths");
-        let new = base.join("new/devkit");
-        let legacy = base.join("legacy/devkit");
+        let base = tempfile::tempdir().unwrap();
+        let new = base.path().join("new/devkit");
+        let legacy = base.path().join("legacy/devkit");
         std::fs::create_dir_all(&legacy).unwrap();
         std::fs::write(legacy.join("ports.json"), b"{}").unwrap();
 

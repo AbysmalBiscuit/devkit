@@ -107,13 +107,15 @@ mod tests {
 
     /// A marker path that does not exist yet: `fetch_gated` stamps it, and the
     /// tests turn on whether it is there and how old it is.
-    fn scratch(tag: &str) -> devkit_testtmp::TmpPath {
-        devkit_testtmp::path("devkit-fetch-gate", tag)
+    fn scratch(tag: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(tag);
+        (dir, path)
     }
 
     #[test]
     fn skips_when_marker_is_fresh() {
-        let p = scratch("fresh");
+        let (_guard, p) = scratch("fresh");
         stamp(&p, 1000);
         let called = Cell::new(false);
         let fetched = fetch_gated(&p, 60, 1030, || {
@@ -127,7 +129,7 @@ mod tests {
 
     #[test]
     fn fetches_when_marker_is_stale() {
-        let p = scratch("stale");
+        let (_guard, p) = scratch("stale");
         stamp(&p, 1000);
         let called = Cell::new(false);
         let fetched = fetch_gated(&p, 60, 1200, || {
@@ -142,7 +144,7 @@ mod tests {
 
     #[test]
     fn fetches_when_marker_missing() {
-        let p = scratch("missing");
+        let (_guard, p) = scratch("missing");
         let fetched = fetch_gated(&p, 60, 5, || Ok(())).unwrap();
         assert!(fetched);
         assert!(p.exists(), "marker written after a fetch");
@@ -150,7 +152,7 @@ mod tests {
 
     #[test]
     fn ttl_zero_always_fetches() {
-        let p = scratch("zero");
+        let (_guard, p) = scratch("zero");
         stamp(&p, 1000);
         let called = Cell::new(false);
         let fetched = fetch_gated(&p, 0, 1001, || {
@@ -163,7 +165,7 @@ mod tests {
 
     #[test]
     fn failed_fetch_leaves_no_marker() {
-        let p = scratch("fail");
+        let (_guard, p) = scratch("fail");
         let r = fetch_gated(&p, 60, 5, || anyhow::bail!("boom"));
         assert!(r.is_err());
         assert!(

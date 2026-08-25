@@ -212,6 +212,7 @@ pub fn with_lock_strict<D: Document, T>(
 mod tests {
     use super::*;
     use serde::Deserialize;
+    use std::path::PathBuf;
 
     const VERSION: u32 = 3;
 
@@ -242,15 +243,18 @@ mod tests {
     }
 
     /// A file path that does not exist yet — `tag` names the lock or the
-    /// document, and the store creates whichever it is handed.
-    fn scratch(tag: &str) -> devkit_testtmp::TmpPath {
-        devkit_testtmp::path("devkit-store", tag)
+    /// document, and the store creates whichever it is handed. The guard comes
+    /// back with it: dropping the guard removes the directory around the file.
+    fn scratch(tag: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(tag);
+        (dir, path)
     }
 
     #[test]
     fn with_lock_persists_and_stamps_version() {
-        let lock = scratch("a.lock");
-        let data = scratch("a.json");
+        let (_lock_guard, lock) = scratch("a.lock");
+        let (_data_guard, data) = scratch("a.json");
         with_lock::<Doc, _>(&lock, &data, |d| {
             d.items.insert(8080, "api".into());
             Ok(())
@@ -263,8 +267,8 @@ mod tests {
 
     #[test]
     fn read_missing_is_default() {
-        let lock = scratch("b.lock");
-        let data = scratch("b.json");
+        let (_lock_guard, lock) = scratch("b.lock");
+        let (_data_guard, data) = scratch("b.json");
         let out = with_lock::<Doc, _>(&lock, &data, |d| Ok(d.is_empty())).unwrap();
         assert!(out);
     }
@@ -288,7 +292,7 @@ mod tests {
 
     #[test]
     fn load_save_roundtrip_and_missing_default() {
-        let p = scratch("loadsave.json");
+        let (_guard, p) = scratch("loadsave.json");
         assert!(load::<Doc>(&p).is_empty(), "missing file loads as default");
         let mut d = Doc::default();
         d.items.insert(8080, "api".into());

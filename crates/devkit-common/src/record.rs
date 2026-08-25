@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips() {
-        let dir = devkit_testtmp::dir("devkit-rec");
+        let dir = tempfile::tempdir().unwrap();
         let rec = IssueRecord {
             issue: "ABC-123".into(),
             slug: "fix-login".into(),
@@ -64,20 +64,20 @@ mod tests {
                 number: 42,
             }),
         };
-        write(&dir, &rec).unwrap();
-        assert_eq!(read(&dir), Some(rec));
+        write(dir.path(), &rec).unwrap();
+        assert_eq!(read(dir.path()), Some(rec));
     }
 
     #[test]
     fn a_record_written_before_summaries_existed_still_reads() {
-        let dir = devkit_testtmp::dir("devkit-rec-old");
-        std::fs::create_dir_all(dir.join(".devkit")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(
-            dir.join(".devkit").join("issue.toml"),
+            dir.path().join(".devkit").join("issue.toml"),
             "issue = \"ABC-1\"\nslug = \"fix\"\napps = []\n",
         )
         .unwrap();
-        let got = read(&dir).expect("legacy record parses");
+        let got = read(dir.path()).expect("legacy record parses");
         assert_eq!(got.issue, "ABC-1");
         assert!(got.summary.is_none());
         assert!(got.pr.is_none());

@@ -93,13 +93,13 @@ mod tests {
 
     #[test]
     fn write_self_ignore_creates_then_preserves() {
-        let dir = devkit_testtmp::dir("devkit-selfignore");
-        write_self_ignore(&dir);
-        let f = dir.join(".gitignore");
+        let dir = tempfile::tempdir().unwrap();
+        write_self_ignore(dir.path());
+        let f = dir.path().join(".gitignore");
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "*\n");
         // Idempotent: an existing file is left untouched.
         std::fs::write(&f, "custom\n").unwrap();
-        write_self_ignore(&dir);
+        write_self_ignore(dir.path());
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "custom\n");
     }
 

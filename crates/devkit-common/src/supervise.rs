@@ -251,8 +251,8 @@ mod tests {
             eprintln!("skipping spawn_and_ready_on_python_tcp: no launchable python interpreter");
             return;
         };
-        let logdir = devkit_testtmp::dir("devrun-supervise");
-        let tmp = logdir.join("run.log");
+        let logdir = tempfile::tempdir().unwrap();
+        let tmp = logdir.path().join("run.log");
         // pick a free port
         let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = l.local_addr().unwrap().port();

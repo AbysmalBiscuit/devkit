@@ -157,18 +157,21 @@ pub fn store(key: &str, value: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn tmp(name: &str) -> devkit_testtmp::TmpPath {
-        devkit_testtmp::path(&format!("devkit-secrets-{name}"), "secrets.toml")
+    fn tmp() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.toml");
+        (dir, path)
     }
 
     #[test]
     fn missing_file_is_empty() {
-        assert_eq!(load_from(&tmp("missing")).unwrap(), Secrets::default());
+        let (_guard, p) = tmp();
+        assert_eq!(load_from(&p).unwrap(), Secrets::default());
     }
 
     #[test]
     fn store_then_load_round_trips() {
-        let p = tmp("round");
+        let (_guard, p) = tmp();
         let _ = std::fs::remove_file(&p);
         store_at(&p, "linear_api_key", "lin_123").unwrap();
         store_at(&p, "linear_workspace", "adaptyv").unwrap();
@@ -180,7 +183,7 @@ mod tests {
 
     #[test]
     fn store_preserves_siblings() {
-        let p = tmp("siblings");
+        let (_guard, p) = tmp();
         let _ = std::fs::remove_file(&p);
         store_at(&p, "linear_api_key", "k").unwrap();
         store_at(&p, "slack_token", "xoxb").unwrap();
@@ -220,7 +223,7 @@ mod tests {
     #[test]
     fn stored_file_is_0600() {
         use std::os::unix::fs::PermissionsExt;
-        let p = tmp("perms");
+        let (_guard, p) = tmp();
         let _ = std::fs::remove_file(&p);
         store_at(&p, "slack_token", "xoxb").unwrap();
         let mode = std::fs::metadata(&p).unwrap().permissions().mode();

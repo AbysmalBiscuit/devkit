@@ -221,57 +221,60 @@ mod tests {
 
     #[test]
     fn the_record_wins_over_the_branch_name() {
-        let dir = devkit_testtmp::dir("devkit-idrec");
-        std::fs::create_dir_all(dir.join(".devkit")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(
-            dir.join(".devkit").join("issue.toml"),
+            dir.path().join(".devkit").join("issue.toml"),
             "issue = \"87\"\nslug = \"fix\"\napps = []\n",
         )
         .unwrap();
         // The branch carries a Linear-shaped id that is NOT this worktree's issue.
-        assert_eq!(issue_id_of(&dir, "lev/eng-1-something"), "87");
+        assert_eq!(issue_id_of(dir.path(), "lev/eng-1-something"), "87");
     }
 
     #[test]
     fn without_a_record_the_branch_scan_still_works() {
-        let dir = devkit_testtmp::dir("devkit-idbranch");
-        assert_eq!(issue_id_of(&dir, "lev/eng-1-something"), "ENG-1");
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(issue_id_of(dir.path(), "lev/eng-1-something"), "ENG-1");
     }
 
     #[test]
     fn a_worktree_with_neither_is_unknown() {
-        // The directory name is a fallback source too, so it must carry no
-        // letters-dash-digits run of its own.
-        let dir = devkit_testtmp::dir("devkit.idnone");
-        assert_eq!(issue_id_of(&dir, "lev/no-id-here"), "UNKNOWN");
+        // The directory name is a fallback id source, so the worktree is given a
+        // name carrying no letters-dash-digits run rather than the scratch
+        // directory's own.
+        let scratch = tempfile::tempdir().unwrap();
+        let worktree = scratch.path().join("noidhere");
+        std::fs::create_dir_all(&worktree).unwrap();
+        assert_eq!(issue_id_of(&worktree, "lev/no-id-here"), "UNKNOWN");
     }
 
     /// The record holds the tracker's own spelling, so it comes back untouched.
     /// Uppercasing it would corrupt any id a tracker does not spell in caps.
     #[test]
     fn a_record_id_is_returned_verbatim() {
-        let dir = devkit_testtmp::dir("devkit-idverbatim");
-        std::fs::create_dir_all(dir.join(".devkit")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(
-            dir.join(".devkit").join("issue.toml"),
+            dir.path().join(".devkit").join("issue.toml"),
             "issue = \"eng-1234\"\nslug = \"x\"\napps = []\n",
         )
         .unwrap();
-        assert_eq!(issue_id_of(&dir, "DETACHED"), "eng-1234");
+        assert_eq!(issue_id_of(dir.path(), "DETACHED"), "eng-1234");
     }
 
     /// A record with no id is no answer at all: fall through to the scan rather
     /// than reporting an empty id.
     #[test]
     fn an_empty_record_id_falls_through_to_the_branch() {
-        let dir = devkit_testtmp::dir("devkit-idempty");
-        std::fs::create_dir_all(dir.join(".devkit")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(
-            dir.join(".devkit").join("issue.toml"),
+            dir.path().join(".devkit").join("issue.toml"),
             "issue = \"\"\nslug = \"x\"\napps = []\n",
         )
         .unwrap();
-        assert_eq!(issue_id_of(&dir, "lev/eng-1-something"), "ENG-1");
+        assert_eq!(issue_id_of(dir.path(), "lev/eng-1-something"), "ENG-1");
     }
 
     #[test]
@@ -302,11 +305,8 @@ mod tests {
 
     use std::fs;
 
-    fn tmp(tag: &str) -> devkit_testtmp::TmpDir {
-        let p = devkit_testtmp::dir(&format!("devkit-incl-{tag}"));
-        let _ = fs::remove_dir_all(&p);
-        fs::create_dir_all(&p).unwrap();
-        p
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     fn write(path: &Path, body: &str) {
@@ -316,9 +316,9 @@ mod tests {
 
     #[test]
     fn copies_a_matching_file_preserving_relative_path() {
-        let base = tmp("file");
-        let src = base.join("src");
-        let dst = base.join("dst");
+        let base = tmp();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
         write(&src.join("apps/web/.env.local"), "SECRET=1");
 
         let (n, warnings) = copy_includes(&src, &dst, &["apps/*/.env.local".to_string()]);
@@ -333,9 +333,9 @@ mod tests {
 
     #[test]
     fn double_star_matches_nested_file() {
-        let base = tmp("nested");
-        let src = base.join("src");
-        let dst = base.join("dst");
+        let base = tmp();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
         write(&src.join("a/b/c/.env.local"), "X=1");
 
         let (n, _) = copy_includes(&src, &dst, &["**/.env.local".to_string()]);
@@ -346,9 +346,9 @@ mod tests {
 
     #[test]
     fn directory_pattern_copies_recursively() {
-        let base = tmp("dir");
-        let src = base.join("src");
-        let dst = base.join("dst");
+        let base = tmp();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
         write(&src.join(".claude/hooks/pre.sh"), "echo pre");
         write(&src.join(".claude/hooks/sub/post.sh"), "echo post");
 
@@ -369,9 +369,9 @@ mod tests {
 
     #[test]
     fn pattern_matching_nothing_is_silently_skipped() {
-        let base = tmp("nomatch");
-        let src = base.join("src");
-        let dst = base.join("dst");
+        let base = tmp();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
         fs::create_dir_all(&src).unwrap();
 
         let (n, warnings) = copy_includes(&src, &dst, &["does/not/exist".to_string()]);
@@ -382,9 +382,9 @@ mod tests {
 
     #[test]
     fn existing_destination_file_is_not_clobbered() {
-        let base = tmp("noclobber");
-        let src = base.join("src");
-        let dst = base.join("dst");
+        let base = tmp();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
         write(&src.join(".tool-versions"), "node 20");
         write(&dst.join(".tool-versions"), "KEEP ME");
 
@@ -399,9 +399,9 @@ mod tests {
 
     #[test]
     fn empty_patterns_is_a_no_op() {
-        let base = tmp("empty");
-        let src = base.join("src");
-        let dst = base.join("dst");
+        let base = tmp();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
         fs::create_dir_all(&src).unwrap();
 
         let (n, warnings) = copy_includes(&src, &dst, &[]);
