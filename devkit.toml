@@ -1,3 +1,14 @@
 # devkit dogfoods its own write-access harness on this checkout.
 [harness]
 enforce_writes = true
+
+# The `origin` remote is an SSH alias, so nothing about it names github.com and
+# the repository cannot be derived from it. Both keys are spelled out instead.
+[github]
+issues_repo = "AbysmalBiscuit/devkit"
+pr_repo = "AbysmalBiscuit/devkit"
+
+# A globally exported LINEAR_API_KEY would otherwise make detection resolve
+# Linear for this project, which has nothing in Linear.
+[tracker]
+kind = "github"
