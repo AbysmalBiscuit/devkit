@@ -85,10 +85,7 @@ mod tests {
 
     #[test]
     fn gh_json_in_always_names_the_repository_and_host() {
-        let repo = crate::github::Repo {
-            slug: "o/r".into(),
-            origin: crate::github::Origin::Defaulted,
-        };
+        let repo = crate::github::Repo { slug: "o/r".into() };
         // Asserted on the argument vector, not on behavior: the point is that
         // neither GH_REPO nor GH_HOST can redirect the call, and behavior alone
         // cannot distinguish "no ambient variable set" from "flag present".

@@ -266,20 +266,10 @@ pub fn github_origin_slug(cwd: &str) -> Result<String> {
         .with_context(|| format!("no owner/repo in the origin URL `{}`", url.trim()))
 }
 
-/// Where a repository slug came from. A configured or overridden slug is a
-/// decision the project made; a defaulted one was read from the remote.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Origin {
-    Configured,
-    Overridden,
-    Defaulted,
-}
-
 /// One resolved repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Repo {
     pub slug: String,
-    pub origin: Origin,
 }
 
 impl Repo {
@@ -297,7 +287,6 @@ fn overridden_repo(slug: &str) -> Result<Repo> {
     validate_slug(slug)?;
     Ok(Repo {
         slug: slug.to_string(),
-        origin: Origin::Overridden,
     })
 }
 
@@ -428,14 +417,13 @@ fn build(
         issues: cfg
             .issues_repo
             .clone()
-            .map(|s| (s, Origin::Configured))
-            .or_else(|| origin.clone().map(|s| (s, Origin::Defaulted)))
+            .or_else(|| origin.clone())
             .ok_or_else(|| missing("issues_repo"))
             .and_then(checked),
         prs: pr_override
-            .map(|s| (s.to_string(), Origin::Overridden))
-            .or_else(|| cfg.pr_repo.clone().map(|s| (s, Origin::Configured)))
-            .or_else(|| origin.map(|s| (s, Origin::Defaulted)))
+            .map(str::to_string)
+            .or_else(|| cfg.pr_repo.clone())
+            .or(origin)
             .ok_or_else(|| missing("pr_repo"))
             .and_then(checked),
     }
@@ -444,9 +432,9 @@ fn build(
 /// Validate a resolved slug at the point of resolution, so a bad value is
 /// reported against the key that carries it rather than failing later inside a
 /// URL or a cache filename.
-fn checked((slug, origin): (String, Origin)) -> std::result::Result<Repo, String> {
+fn checked(slug: String) -> std::result::Result<Repo, String> {
     match validate_slug(&slug) {
-        Ok(()) => Ok(Repo { slug, origin }),
+        Ok(()) => Ok(Repo { slug }),
         Err(e) => Err(format!("{e:#}")),
     }
 }
@@ -1174,7 +1162,6 @@ mod tests {
         // lives outside GitHub still resolves.
         let r = Repos::from_parts(&cfg(Some("org/planning"), Some("up/app")), None, None);
         assert_eq!(r.issues().unwrap().slug, "org/planning");
-        assert_eq!(r.issues().unwrap().origin, Origin::Configured);
         assert_eq!(r.prs().unwrap().slug, "up/app");
 
         // Only pr_repo configured and no origin: the PR paths work, and only an
@@ -1187,13 +1174,11 @@ mod tests {
         // Neither configured, origin available: both default to it.
         let r = Repos::from_parts(&cfg(None, None), Some("me/fork".into()), None);
         assert_eq!(r.issues().unwrap().slug, "me/fork");
-        assert_eq!(r.issues().unwrap().origin, Origin::Defaulted);
         assert_eq!(r.prs().unwrap().slug, "me/fork");
 
-        // A per-invocation override beats pr_repo and is marked as such.
+        // A per-invocation override beats pr_repo.
         let r = Repos::from_parts(&cfg(None, Some("up/app")), None, Some("other/x"));
         assert_eq!(r.prs().unwrap().slug, "other/x");
-        assert_eq!(r.prs().unwrap().origin, Origin::Overridden);
     }
 
     #[test]
@@ -1211,9 +1196,7 @@ mod tests {
             repo: Some("fork/app".into()),
             number: 42,
         };
-        let r = pasted.resolve(&repos).unwrap();
-        assert_eq!(r.slug, "fork/app");
-        assert_eq!(r.origin, Origin::Overridden);
+        assert_eq!(pasted.resolve(&repos).unwrap().slug, "fork/app");
 
         let bare = PrLocator {
             repo: None,
@@ -1226,7 +1209,6 @@ mod tests {
     fn resolve_or_falls_back_to_the_given_default_not_pr_repo() {
         let default = Repo {
             slug: "me/fork".into(),
-            origin: Origin::Defaulted,
         };
         let bare = PrLocator {
             repo: None,
@@ -1238,9 +1220,7 @@ mod tests {
             repo: Some("other/app".into()),
             number: 9,
         };
-        let r = pasted.resolve_or(&default).unwrap();
-        assert_eq!(r.slug, "other/app");
-        assert_eq!(r.origin, Origin::Overridden);
+        assert_eq!(pasted.resolve_or(&default).unwrap().slug, "other/app");
     }
 
     /// A locator's slug is parsed out of untrusted pasted text, so it faces the
@@ -1259,10 +1239,7 @@ mod tests {
 
     #[test]
     fn a_repo_qualifies_itself_with_the_host() {
-        let r = Repo {
-            slug: "o/r".into(),
-            origin: Origin::Defaulted,
-        };
+        let r = Repo { slug: "o/r".into() };
         // `--repo o/r` leaves GH_HOST free to pick an enterprise host, so every
         // `gh pr` argument names github.com explicitly.
         assert_eq!(r.qualified(), "github.com/o/r");

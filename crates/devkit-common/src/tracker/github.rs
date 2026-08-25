@@ -706,7 +706,6 @@ mod tests {
     fn repo(slug: &str) -> Repo {
         Repo {
             slug: slug.to_string(),
-            origin: github::Origin::Configured,
         }
     }
 
@@ -973,8 +972,9 @@ mod tests {
             err.contains("other/thing") && err.contains("me/widget"),
             "{err}"
         );
-        // A `Defaulted` origin never wrote a `[github] issues_repo` key, so the
-        // message must not send the reader to edit a setting they don't have.
+        // A project whose issues repository came from its origin remote never
+        // wrote a `[github] issues_repo` key, so the message must not send the
+        // reader to edit a setting they don't have.
         assert!(!err.contains("[github]"), "{err}");
 
         assert_eq!(t.issue_ref("9").unwrap().id, "9");
