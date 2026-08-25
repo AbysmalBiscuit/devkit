@@ -28,7 +28,7 @@ enum Cmd {
         /// Credential to validate and store, or `github` to report identity.
         provider: Provider,
         /// Provide the token non-interactively instead of being prompted.
-        /// Ignored for `github`.
+        /// Refused for `github`, which stores nothing.
         #[arg(long)]
         token: Option<String>,
     },
