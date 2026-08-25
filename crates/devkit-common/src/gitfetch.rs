@@ -106,7 +106,8 @@ mod tests {
     use std::cell::Cell;
 
     /// A marker path that does not exist yet: `fetch_gated` stamps it, and the
-    /// tests turn on whether it is there and how old it is.
+    /// tests turn on whether it is there and how old it is. The guard comes
+    /// back with it: dropping the guard removes the directory around the marker.
     fn scratch(tag: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(tag);
