@@ -108,6 +108,11 @@ pub struct TrackerInfo {
     /// `TrackerKind::None`, where it separates a project that has no tracker
     /// from devkit having found none.
     pub declared: bool,
+    /// Why this tracker and not another. For an undeclared `TrackerKind::None`
+    /// it is the only account of what devkit tried, and so the only thing that
+    /// separates a project which named no tracker from one whose named tracker
+    /// could not be built.
+    pub reason: String,
     /// The tracker's issue URL built with an empty id, so
     /// `format!("{link_base}{id}")` is that issue's URL.
     pub link_base: Option<String>,
@@ -121,6 +126,7 @@ impl TrackerInfo {
             kind: r.tracker.kind(),
             ready: r.tracker.ready(),
             declared: r.declared,
+            reason: r.reason.clone(),
             link_base: None,
         }
     }
@@ -690,6 +696,7 @@ mod tests {
             kind,
             ready,
             declared: true,
+            reason: format!("[tracker] kind = {:?}", kind.as_str()),
             link_base: None,
         }
     }
@@ -701,6 +708,7 @@ mod tests {
             kind: TrackerKind::None,
             ready: false,
             declared: false,
+            reason: "detected: no LINEAR_API_KEY and no GitHub origin remote".into(),
             link_base: None,
         }
     }
@@ -816,6 +824,7 @@ mod tests {
             kind: TrackerKind::Linear,
             ready: true,
             declared: true,
+            reason: "[tracker] kind = \"linear\"".into(),
             link_base: Some("https://linear.app/acme/issue/".into()),
         };
         let report = assemble(d, vec![false], prs, states, info);

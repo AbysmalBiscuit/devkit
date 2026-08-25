@@ -151,7 +151,7 @@ expose a `completions <shell>` subcommand via `clap_complete`.
   named this tracker or devkit fell back to it — the finished verdict skips the
   issue-state gate only for a *declared* `TrackerKind::None`, because devkit
   finding no tracker is silence, not an answer. Config loading belongs to the callers that have it — the `issue`
-  binary's `crate::tracker::configured` and the MCP `issue.status` action —
+  binary's `crate::tracker::select` and the MCP `issue.status` action —
   and a config that does not load degrades to detection rather than failing the
   command. `devkit-issue` reads no config: `status::gather_local` detects, and
   every other caller injects its tracker via `status::gather_with`.

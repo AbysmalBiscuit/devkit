@@ -261,25 +261,34 @@ pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<
 /// why nothing reaches FINISHED — so the hint explains the closed gate and how
 /// to open it. The one project that genuinely skips the gate is the one that
 /// declared it has no tracker, and it asked for that, so it gets no note.
-fn tracker_hint(t: &TrackerInfo) -> Option<&'static str> {
+///
+/// A project whose named tracker could not be built is told what stopped it
+/// instead of being pointed at the config key it already set.
+fn tracker_hint(t: &TrackerInfo) -> Option<String> {
     if t.ready {
         return None;
     }
-    match t.kind {
-        TrackerKind::Linear => Some(
-            "No LINEAR_API_KEY — Linear state gates stay closed, so nothing reports finished. \
-             Create a key at https://linear.app/settings/api",
-        ),
-        TrackerKind::Github => Some(
-            "No GitHub token — GitHub state gates stay closed, so nothing reports finished. \
-             Set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`",
-        ),
-        TrackerKind::None if t.declared => None,
-        TrackerKind::None => Some(
-            "No issue tracker devkit can read — issue state gates stay closed, so nothing \
-             reports finished. Set `[tracker] kind` to name this project's tracker",
-        ),
+    if let Some(why) = devkit_common::tracker::unbuilt_reason(t.kind, t.declared, &t.reason) {
+        return Some(format!(
+            "{why} — issue state gates stay closed, so nothing reports finished"
+        ));
     }
+    let generic = match t.kind {
+        TrackerKind::Linear => {
+            "No LINEAR_API_KEY — Linear state gates stay closed, so nothing reports finished. \
+             Create a key at https://linear.app/settings/api"
+        }
+        TrackerKind::Github => {
+            "No GitHub token — GitHub state gates stay closed, so nothing reports finished. \
+             Set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`"
+        }
+        TrackerKind::None if t.declared => return None,
+        TrackerKind::None => {
+            "No issue tracker devkit can read — issue state gates stay closed, so nothing \
+             reports finished. Set `[tracker] kind` to name this project's tracker"
+        }
+    };
+    Some(generic.into())
 }
 
 pub fn run(start: &str, ids: &[String], config: Option<&str>) -> Result<()> {
@@ -292,7 +301,7 @@ pub fn run(start: &str, ids: &[String], config: Option<&str>) -> Result<()> {
         );
     }
     if let Some(hint) = tracker_hint(&report.tracker) {
-        println!("\n{}", ui::dim(hint));
+        println!("\n{}", ui::dim(&hint));
     }
     Ok(())
 }
@@ -310,15 +319,21 @@ mod tests {
             kind: TrackerKind::Linear,
             ready,
             declared: true,
+            reason: "[tracker] kind = \"linear\"".into(),
             link_base: None,
         }
     }
 
     fn info(kind: TrackerKind, ready: bool, declared: bool) -> TrackerInfo {
+        with_reason(kind, ready, declared, "detected: something")
+    }
+
+    fn with_reason(kind: TrackerKind, ready: bool, declared: bool, reason: &str) -> TrackerInfo {
         TrackerInfo {
             kind,
             ready,
             declared,
+            reason: reason.into(),
             link_base: None,
         }
     }
@@ -389,6 +404,23 @@ mod tests {
     fn the_github_hint_points_at_the_token_not_the_config() {
         let hint = tracker_hint(&info(TrackerKind::Github, false, true)).unwrap();
         assert!(hint.contains("GH_TOKEN"), "{hint}");
+        assert!(!hint.contains("[tracker] kind"), "{hint}");
+    }
+
+    /// A project whose named tracker could not be built lands on the same kind
+    /// and `declared` pair as a project that named nothing, and only the reason
+    /// tells them apart. Telling the first one to set the key it already set
+    /// points away from the actual fault, so the reason has to carry the hint.
+    #[test]
+    fn a_named_tracker_that_did_not_resolve_reports_why() {
+        let t = with_reason(
+            TrackerKind::None,
+            false,
+            false,
+            "github selected but no issues repository: no github.com `origin` remote",
+        );
+        let hint = tracker_hint(&t).expect("an unresolved tracker needs a hint");
+        assert!(hint.contains("no issues repository"), "{hint}");
         assert!(!hint.contains("[tracker] kind"), "{hint}");
     }
 

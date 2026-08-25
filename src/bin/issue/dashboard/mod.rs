@@ -82,7 +82,9 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     steps.clear();
     if issues.is_empty() {
         let kind = tracker.kind();
-        if !tracker.ready() {
+        if let Some(why) = resolved.unbuilt_reason() {
+            println!("\n(no issue timeline — {why})");
+        } else if !tracker.ready() {
             let hint = match kind {
                 devkit_common::tracker::TrackerKind::Linear => "set LINEAR_API_KEY",
                 devkit_common::tracker::TrackerKind::Github => {

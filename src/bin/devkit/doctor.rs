@@ -98,11 +98,15 @@ fn resolve_tracker(start: &std::path::Path) -> Resolved {
 
 /// A tracker devkit fell back to answers nothing while looking like an answer:
 /// every issue-state gate stays closed and `issue end` cleans up nothing, with
-/// no error to explain it. Naming a `kind` turns that into a decision.
+/// no error to explain it. Naming a `kind` turns that into a decision — except
+/// for a project that already named one devkit could not build, whose fix is
+/// the reason the row already carries.
 fn tracker_check(r: &Resolved) -> Check {
     let detail = format!("{} — {}", r.tracker.kind().as_str(), r.reason);
     if r.declared || r.tracker.ready() {
         Check::Ok(detail)
+    } else if r.unbuilt_reason().is_some() {
+        Check::Warn(format!("{detail}; issue state gates stay closed"))
     } else {
         Check::Warn(format!(
             "{detail}; issue state gates stay closed — set `[tracker] kind` \

@@ -316,7 +316,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
 
     let repos = github::Repos::resolve(&cfg.github, monorepo_s, None);
     let tracker =
-        devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start), &repos).tracker;
+        devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(monorepo_s), &repos).tracker;
     let steps = Steps::persistent();
     let resolved = resolve(&args.target, monorepo_s, &repos, tracker.as_ref(), &steps)?;
     let pr_repo = resolved.loc.resolve(&repos)?;

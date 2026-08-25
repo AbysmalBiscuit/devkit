@@ -160,8 +160,32 @@ pub struct Resolved {
     pub reason: String,
 }
 
-/// The tracker for this project. An explicit `kind` always wins; otherwise a
-/// resolvable Linear key, then a GitHub `origin` remote, then no tracker.
+impl Resolved {
+    /// The reason a stand-in is standing in for a tracker the project named and
+    /// devkit could not build, or `None` when the project named nothing and
+    /// detection came up empty. Both cases are an undeclared `TrackerKind::None`
+    /// and only the reason separates them, which is what keeps a project that
+    /// named a tracker from being told to name one.
+    pub fn unbuilt_reason(&self) -> Option<&str> {
+        unbuilt_reason(self.tracker.kind(), self.declared, &self.reason)
+    }
+}
+
+/// `Resolved::unbuilt_reason` for callers holding the pieces rather than the
+/// `Resolved` — the serialized tracker row of a status report, say.
+pub fn unbuilt_reason(kind: TrackerKind, declared: bool, reason: &str) -> Option<&str> {
+    (kind == TrackerKind::None && !declared && !reason.starts_with(DETECTED)).then_some(reason)
+}
+
+/// Prefix of every `Resolved::reason` that came from detection rather than from
+/// a `[tracker] kind` the project set. Its absence on a fallback tracker is how
+/// `unbuilt_reason` tells a named-but-unbuildable tracker from an empty search.
+pub const DETECTED: &str = "detected: ";
+
+/// The tracker for this project. An explicit `kind` wins over detection, except
+/// that `Github` needs an issues repository to talk to: without one it falls
+/// back to no tracker, undeclared, with the failure in `reason`. Detection order
+/// is a resolvable Linear key, then a GitHub `origin` remote, then no tracker.
 ///
 /// Detection is a floor, not a convenience: a globally exported
 /// `LINEAR_API_KEY` resolves to Linear for every project, so a GitHub project on
@@ -187,7 +211,7 @@ fn resolve_with_key(
             reason: if declared {
                 "[tracker] kind = \"linear\"".into()
             } else {
-                "detected: LINEAR_API_KEY resolves".into()
+                format!("{DETECTED}LINEAR_API_KEY resolves")
             },
         },
         // The only place a `GithubTracker` is built, and the issues repository
@@ -201,7 +225,7 @@ fn resolve_with_key(
                 reason: if declared {
                     "[tracker] kind = \"github\"".into()
                 } else {
-                    "detected: github.com `origin` remote".into()
+                    format!("{DETECTED}github.com `origin` remote")
                 },
             },
             // No issues repository resolves, so there is nothing to ask. This
@@ -218,7 +242,7 @@ fn resolve_with_key(
             reason: if declared {
                 "[tracker] kind = \"none\"".into()
             } else {
-                "detected: no LINEAR_API_KEY and no GitHub origin remote".into()
+                format!("{DETECTED}no LINEAR_API_KEY and no GitHub origin remote")
             },
         },
     }
@@ -352,6 +376,8 @@ mod tests {
         );
         assert_eq!(r.tracker.kind(), TrackerKind::None);
         assert!(!r.declared);
+        // Nothing was named, so the fix is to name something.
+        assert_eq!(r.unbuilt_reason(), None);
     }
 
     /// A github.com `origin` on a machine with no Linear key is the detection
@@ -388,6 +414,9 @@ mod tests {
         assert_eq!(r.tracker.kind(), TrackerKind::None);
         assert!(!r.declared);
         assert!(r.reason.contains("no issues repository"), "{}", r.reason);
+        // This project did name a tracker, so its reason — not the generic
+        // "name your tracker" advice — is what its surfaces show.
+        assert_eq!(r.unbuilt_reason(), Some(r.reason.as_str()));
     }
 
     /// A project that names GitHub gets the GitHub adapter, and it is the
