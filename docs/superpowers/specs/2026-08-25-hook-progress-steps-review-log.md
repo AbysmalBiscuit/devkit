@@ -53,3 +53,24 @@ the design, not a wording problem.
   stale description off `main`.
 
 **Rejected: none.**
+
+## Round 2: Codex
+
+Verdict: APPROVED. No remaining material problems.
+
+Confirmed against the revised spec:
+
+- Render failures consume exactly one failed step while fail-open execution
+  is preserved.
+- The setup total matches the single optional app-preparation step plus every
+  hook.
+- The reorder covers all three affected documentation artifacts and the schema
+  regeneration.
+- No new caller breakage, deadlock, or output corruption was introduced.
+
+### Outcome
+
+Two rounds, converged. The review's material contribution was finding 1: the
+step counter advances only inside `during_result`, so the original design would
+have ended a run at `[3/4]` whenever a hook failed to render. That defect was
+in the design, not the prose, and would have shipped.
