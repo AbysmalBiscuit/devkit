@@ -520,11 +520,11 @@ team = "platform"
 | `issue_summary` | a facts header, `## Description`, then empty `## Summary` / `## Pointers` | summary base |
 
 Summary base context for `issue_summary_path` and `issue_summary`: `issue`
-(Linear's own capitalisation), `title`, `url`, `description`, `state`,
+(the tracker's own spelling), `title`, `url`, `description`, `state`,
 `assignee`, `priority`, `estimate`, `labels`, `parent`, `project`, `worktree`,
-`branch`, `slug`, `prefix`, `apps`. Anything Linear left empty renders as the
-empty string, so `{% if parent %}` drops the line rather than printing a blank
-one. Render `{{ worktree }}` into `issue_summary_path` to keep the file inside
+`branch`, `slug`, `prefix`, `apps`. Anything the tracker left empty renders as
+the empty string, so `{% if parent %}` drops the line rather than printing a
+blank one. Render `{{ worktree }}` into `issue_summary_path` to keep the file inside
 the worktree instead.
 
 Review base context for `review_request`: `branch`, `issue`/`slug`/`apps` from
