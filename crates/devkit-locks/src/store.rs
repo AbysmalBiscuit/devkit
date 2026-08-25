@@ -321,13 +321,9 @@ mod tests {
 #[cfg(test)]
 mod seam_tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn tmp(tag: &str) -> PathBuf {
-        let p =
-            std::env::temp_dir().join(format!("devkit-lockseam-{}-{}", std::process::id(), tag));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    fn tmp(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-lockseam-{tag}"))
     }
 
     #[test]

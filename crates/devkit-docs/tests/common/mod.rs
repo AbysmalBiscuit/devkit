@@ -1,13 +1,10 @@
 //! Shared integration-test helpers: unique temp dirs and a local fixture
 //! git repo with two tagged versions (v1.0.0 → "// v1", v1.1.0 tip → "// v2").
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn unique_tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("devkit-docs-it-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+pub fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
+    devkit_testtmp::dir(&format!("devkit-docs-it-{tag}"))
 }
 
 fn sh(args: &[&str], cwd: &Path) {

@@ -180,11 +180,8 @@ mod tests {
     use super::*;
     use crate::manifest::Ecosystem;
 
-    fn unique_tmp(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("devkit-docs-lf-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-docs-lf-{tag}"))
     }
 
     const CARGO_LOCK: &str = "version = 4\n\n[[package]]\nname = \"tokio\"\nversion = \"1.38.0\"\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.203\"\n";
@@ -300,7 +297,7 @@ mod tests {
         let (dir, vs) = find_version(&deep, Ecosystem::Rust, "tokio")
             .unwrap()
             .unwrap();
-        assert_eq!(dir, root);
+        assert_eq!(dir, root.path());
         assert_eq!(vs, vec!["1.38.0"]);
         assert!(
             find_version(&deep, Ecosystem::Rust, "absent")

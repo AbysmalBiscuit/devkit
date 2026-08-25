@@ -542,13 +542,6 @@ fn cap_below_soft_limit(max_mb: u64, limit_mb: u64) -> bool {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-pub(crate) fn tests_unique() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static C: AtomicU64 = AtomicU64::new(0);
-    (std::process::id() as u64) << 32 | C.fetch_add(1, Ordering::Relaxed)
-}
-
-#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn test_daemon_with_base(base: std::path::PathBuf, max_bytes: u64) -> Daemon {
     Daemon {
         last_activity: Mutex::new(Instant::now()),

@@ -15,9 +15,7 @@ fn concurrent_records_never_lose_rows() {
         std::process::exit(0);
     }
 
-    let tmp = std::env::temp_dir().join(format!("devkit-docs-race-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).unwrap();
+    let tmp = devkit_testtmp::dir("devkit-docs-race");
     let exe = std::env::current_exe().unwrap();
 
     let mut kids = Vec::new();

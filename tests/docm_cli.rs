@@ -22,21 +22,20 @@ fn git(cwd: &Path, args: &[&str]) {
     );
 }
 
-/// A fresh temp directory named `name`, with every symlink on the way to it
-/// resolved. macOS puts `TMPDIR` under a `/var` -> `/private/var` symlink and a
-/// child process's cwd resolves through it, so a path the CLI reports would
-/// never equal one built from `temp_dir()`. Windows canonicalization instead
-/// prepends a `\\?\` verbatim prefix the CLI never prints, so it keeps the
-/// path as given.
-fn temp_root(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(name);
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    if cfg!(windows) {
-        root
+/// A fresh temp directory, with every symlink on the way to it resolved, plus
+/// the guard that removes it. macOS puts `TMPDIR` under a `/var` ->
+/// `/private/var` symlink and a child process's cwd resolves through it, so a
+/// path the CLI reports would never equal the guard's own. Windows
+/// canonicalization instead prepends a `\\?\` verbatim prefix the CLI never
+/// prints, so there the path is kept as given.
+fn temp_root(name: &str) -> (devkit_testtmp::TmpDir, PathBuf) {
+    let guard = devkit_testtmp::dir(name);
+    let root = if cfg!(windows) {
+        guard.to_path_buf()
     } else {
-        std::fs::canonicalize(&root).unwrap()
-    }
+        std::fs::canonicalize(&guard).unwrap()
+    };
+    (guard, root)
 }
 
 /// A repo on branch `main` with tags v1.0.0 and v1.1.0.
@@ -58,6 +57,9 @@ fn fixture_repo(dir: &Path) {
 }
 
 struct Env {
+    /// Every path below lives inside this directory, which is removed when the
+    /// `Env` drops.
+    _scratch: devkit_testtmp::TmpDir,
     root: PathBuf,
     home: PathBuf,
     data: PathBuf,
@@ -67,8 +69,9 @@ struct Env {
 
 impl Env {
     fn new(tag: &str) -> Self {
-        let root = temp_root(&format!("docm-cli-{tag}-{}", std::process::id()));
+        let (guard, root) = temp_root(&format!("docm-cli-{tag}"));
         let env = Env {
+            _scratch: guard,
             home: root.join("home"),
             data: root.join("data"),
             project: root.join("project"),

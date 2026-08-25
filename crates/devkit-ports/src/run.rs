@@ -1008,8 +1008,7 @@ mod tests {
         // holder path is gone (grace applies only after that check), so a
         // nonexistent holder lets a concurrent test's prune free this row
         // before bring_down runs.
-        let holderdir = std::env::temp_dir().join(format!("down-test-{}", std::process::id()));
-        std::fs::create_dir_all(&holderdir).unwrap();
+        let holderdir = devkit_testtmp::dir("down-test");
         let holder = holderdir.to_str().unwrap().to_string();
         registry::alloc(&holder, &[("web".to_string(), 7000)], Role::Issue).unwrap();
         let out = bring_down(&holder, None).unwrap();
@@ -1018,7 +1017,6 @@ mod tests {
         // Idempotent: a second down frees nothing.
         let again = bring_down(&holder, None).unwrap();
         assert!(again.freed.is_empty());
-        let _ = std::fs::remove_dir_all(&holderdir);
     }
 
     #[test]
@@ -1026,9 +1024,7 @@ mod tests {
         // A real holder dir so a concurrent prune (which drops reservations whose
         // holder path is gone) can't steal the still-reserved second port out from
         // under this test before it asserts.
-        let holderdir =
-            std::env::temp_dir().join(format!("down-ports-test-{}", std::process::id()));
-        std::fs::create_dir_all(&holderdir).unwrap();
+        let holderdir = devkit_testtmp::dir("down-ports-test");
         let holder = holderdir.to_str().unwrap().to_string();
         let got = registry::alloc(
             &holder,
@@ -1046,15 +1042,13 @@ mod tests {
         // The second is still reserved; clean it up.
         let rest = registry::release(&holder, None).unwrap();
         assert_eq!(rest, vec![ports[1]]);
-        let _ = std::fs::remove_dir_all(&holderdir);
     }
 
     #[test]
     fn read_log_tails_a_tracked_logfile() {
         // Use logdir as the holder so holder_alive returns true (snapshot prunes
         // entries whose holder path does not exist).
-        let logdir = std::env::temp_dir().join(format!("devrun-log-{}", std::process::id()));
-        std::fs::create_dir_all(&logdir).unwrap();
+        let logdir = devkit_testtmp::dir("devrun-log");
         let holder = logdir.to_str().unwrap().to_string();
         let logfile = logdir.join("issue-web.log");
         std::fs::write(&logfile, "line1\nline2\nline3\n").unwrap();
@@ -1083,7 +1077,6 @@ mod tests {
         assert!(read_log(&holder, "ghost", None, 10).is_err());
 
         let _ = registry::release(&holder, None);
-        let _ = std::fs::remove_dir_all(&logdir);
     }
 
     #[test]
@@ -1097,7 +1090,8 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         drop(l);
 
-        let tmp = std::env::temp_dir().join(format!("devrun-run-{}.log", std::process::id()));
+        let logdir = devkit_testtmp::dir("devrun-run");
+        let tmp = logdir.join("run.log");
         let mut argv = py;
         // Inline accept-loop listener rather than `-m http.server`: http.server's
         // `server_bind` resolves the bound address with `socket.getfqdn()`, a
@@ -1218,9 +1212,7 @@ mod tests {
         // A real holder dir: prune judges a reservation dead the moment its
         // holder path is gone, so a nonexistent holder would let a concurrent
         // test's prune free these rows before the assertions run.
-        let holderdir =
-            std::env::temp_dir().join(format!("resolve-ports-ok-{}", std::process::id()));
-        std::fs::create_dir_all(&holderdir).unwrap();
+        let holderdir = devkit_testtmp::dir("resolve-ports-ok");
         let holder = holderdir.to_str().unwrap().to_string();
 
         let mut catalog = HashMap::new();
@@ -1256,7 +1248,6 @@ mod tests {
         );
 
         let _ = registry::release(&holder, None);
-        let _ = std::fs::remove_dir_all(&holderdir);
     }
 
     #[test]

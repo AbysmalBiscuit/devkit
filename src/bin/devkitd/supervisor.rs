@@ -523,11 +523,12 @@ mod tests {
             app: "api".into(),
             role: Role::Issue,
         };
+        let log = devkit_testtmp::path("portd-test", "portd-test.log");
         let pid = devkit_common::supervise::spawn_detached(
             &argv,
             ".",
             &std::collections::BTreeMap::new(),
-            &std::env::temp_dir().join("portd-test.log"),
+            &log.to_path_buf(),
             None,
         )
         .unwrap();
@@ -535,7 +536,7 @@ mod tests {
             key.clone(),
             pid,
             9100,
-            std::env::temp_dir().join("portd-test.log"),
+            log.to_path_buf(),
             Launch {
                 argv: argv.clone(),
                 cwd: ".".into(),

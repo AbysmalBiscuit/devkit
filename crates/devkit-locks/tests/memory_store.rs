@@ -2,10 +2,8 @@ use devkit_locks::model::Data;
 use devkit_locks::store::{MemoryStore, acquire_with};
 use std::sync::{Arc, Mutex};
 
-fn tmp(tag: &str) -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!("devkit-lockmem-{}-{}", std::process::id(), tag));
-    std::fs::create_dir_all(&p).unwrap();
-    p
+fn tmp(tag: &str) -> devkit_testtmp::TmpDir {
+    devkit_testtmp::dir(&format!("devkit-lockmem-{tag}"))
 }
 
 #[test]

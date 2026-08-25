@@ -11,4 +11,5 @@ devkit-common.workspace = true
 devkit-config.workspace = true
 
 [dev-dependencies]
+devkit-testtmp.workspace = true
 devkit-common = { workspace = true, features = ["test-support"] }

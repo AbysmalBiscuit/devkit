@@ -13,8 +13,7 @@ fn concurrent_alloc_never_collides() {
         std::process::exit(0);
     }
 
-    let tmp = std::env::temp_dir().join(format!("devkit-race-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
+    let tmp = devkit_testtmp::dir("devkit-race");
     let exe = std::env::current_exe().unwrap();
 
     let mut kids = Vec::new();

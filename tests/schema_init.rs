@@ -15,11 +15,8 @@ fn init(dir: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
-fn tmp(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("devkit-schema-init-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn tmp(tag: &str) -> devkit_testtmp::TmpDir {
+    devkit_testtmp::dir(&format!("devkit-schema-init-{tag}"))
 }
 
 #[test]

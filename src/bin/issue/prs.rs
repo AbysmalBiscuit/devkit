@@ -588,14 +588,12 @@ mod tests {
     #[test]
     fn old_format_reads_as_empty() {
         let old = r#"{"mine":{"12":{"review":"approved","check":"ok","action":"MERGE"}}}"#;
-        let dir = std::env::temp_dir().join(format!("devkit-prs-snap-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = devkit_testtmp::dir("devkit-prs-snap");
         let p = dir.join("repo.json");
         std::fs::write(&p, old).unwrap();
         let snap = load_snapshot(&p);
         assert!(snap.mine.is_empty());
         assert!(snap.reviews.is_empty());
         assert!(snap.diff.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

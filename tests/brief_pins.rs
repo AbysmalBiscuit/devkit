@@ -17,14 +17,16 @@ const DEFAULTS: &str = "[defaults]\nworktree_root = \"/w\"\nbranch_prefix = \"x/
 struct Project {
     root: PathBuf,
     home: PathBuf,
+    /// Both paths above live inside this directory, which is removed when the
+    /// `Project` drops. Every field a test reads is invalid without it.
+    _scratch: devkit_testtmp::TmpDir,
 }
 
 impl Project {
     /// A git checkout with a docs-only devkit.toml and a Cargo lockfile that
     /// declares `serde`, plus a global docs manifest registering it.
     fn docs_only(tag: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("devkit-brief-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = devkit_testtmp::dir(&format!("devkit-brief-{tag}"));
         let home = root.join("home");
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
@@ -53,19 +55,26 @@ impl Project {
             &home.join(".config/devkit/docs.toml"),
             "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nrepo = \"https://example.invalid/serde\"\n",
         );
-        Project { root: repo, home }
+        Project {
+            root: repo,
+            home,
+            _scratch: root,
+        }
     }
 
     /// A directory the brief has nothing to say about: no devkit.toml, and a
     /// home with no docs manifest, so neither half of the brief renders.
     fn nothing_to_say(tag: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("devkit-brief-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = devkit_testtmp::dir(&format!("devkit-brief-{tag}"));
         let home = root.join("home");
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         std::fs::create_dir_all(&home).unwrap();
-        Project { root: repo, home }
+        Project {
+            root: repo,
+            home,
+            _scratch: root,
+        }
     }
 
     fn brief(&self, args: &[&str]) -> Output {

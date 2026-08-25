@@ -194,7 +194,7 @@ mod tests {
     }
     #[test]
     fn migrate_moves_legacy_to_new() {
-        let base = std::env::temp_dir().join(format!("devkit-paths-{}", std::process::id()));
+        let base = devkit_testtmp::dir("devkit-paths");
         let new = base.join("new/devkit");
         let legacy = base.join("legacy/devkit");
         std::fs::create_dir_all(&legacy).unwrap();
@@ -204,6 +204,5 @@ mod tests {
 
         assert!(new.join("ports.json").exists(), "data moved to new home");
         assert!(!legacy.exists(), "legacy home removed after move");
-        let _ = std::fs::remove_dir_all(&base);
     }
 }

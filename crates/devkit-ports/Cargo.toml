@@ -22,3 +22,5 @@ daemon = ["dep:interprocess", "devkit-common/daemon"]
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
 
+[dev-dependencies]
+devkit-testtmp.workspace = true

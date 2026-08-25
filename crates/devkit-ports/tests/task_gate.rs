@@ -48,8 +48,7 @@ fn build_task() -> TaskConfig {
 fn gate_waiver_scoping_and_lazy_resolution() {
     // The registry path comes from process-global env, so every scenario runs
     // sequentially inside this single test.
-    let tmp = std::env::temp_dir().join(format!("devkit-task-gate-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
+    let tmp = devkit_testtmp::dir("devkit-task-gate");
     unsafe {
         std::env::set_var("HOME", &tmp);
         std::env::set_var("XDG_STATE_HOME", &tmp);

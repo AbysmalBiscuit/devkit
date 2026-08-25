@@ -297,7 +297,7 @@ fn record() -> String {
         (case.build)(&root);
         for (ecosystem, start, package) in case.probes {
             let dir = if start.is_empty() {
-                root.clone()
+                root.to_path_buf()
             } else {
                 root.join(start)
             };

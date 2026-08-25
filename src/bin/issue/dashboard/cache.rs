@@ -108,12 +108,8 @@ pub fn put<T: Serialize>(scope: &CacheScope, key: &str, value: &T) {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "devkit-dash-cache-{}-{}.json",
-            std::process::id(),
-            tag
-        ))
+    fn scratch(tag: &str) -> devkit_testtmp::TmpPath {
+        devkit_testtmp::path(&format!("devkit-dash-cache-{tag}"), "cache.json")
     }
 
     #[test]

@@ -15,3 +15,6 @@ devkit-issue.workspace = true
 
 [features]
 daemon = ["devkit-ports/daemon", "devkit-locks/daemon"]
+
+[dev-dependencies]
+devkit-testtmp.workspace = true

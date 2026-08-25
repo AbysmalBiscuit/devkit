@@ -53,8 +53,7 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips() {
-        let dir = std::env::temp_dir().join(format!("devkit-rec-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = devkit_testtmp::dir("devkit-rec");
         let rec = IssueRecord {
             issue: "ABC-123".into(),
             slug: "fix-login".into(),
@@ -67,12 +66,11 @@ mod tests {
         };
         write(&dir, &rec).unwrap();
         assert_eq!(read(&dir), Some(rec));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn a_record_written_before_summaries_existed_still_reads() {
-        let dir = std::env::temp_dir().join(format!("devkit-rec-old-{}", std::process::id()));
+        let dir = devkit_testtmp::dir("devkit-rec-old");
         std::fs::create_dir_all(dir.join(".devkit")).unwrap();
         std::fs::write(
             dir.join(".devkit").join("issue.toml"),
@@ -83,7 +81,6 @@ mod tests {
         assert_eq!(got.issue, "ABC-1");
         assert!(got.summary.is_none());
         assert!(got.pr.is_none());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

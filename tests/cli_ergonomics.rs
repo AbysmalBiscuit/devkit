@@ -2,25 +2,15 @@
 //! command): subcommand aliases, a defaulted `--holder`, positional app/issue
 //! arguments. Each test isolates state via a private HOME/XDG_STATE_HOME.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU32, Ordering};
 
-fn scratch(tag: &str) -> PathBuf {
-    static N: AtomicU32 = AtomicU32::new(0);
-    let n = N.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!(
-        "devkit-ergo-it-{}-{}-{}",
-        std::process::id(),
-        tag,
-        n
-    ));
-    std::fs::create_dir_all(&p).unwrap();
-    p
+fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
+    devkit_testtmp::dir(&format!("devkit-ergo-it-{tag}"))
 }
 
 /// A real git repo (so `--show-toplevel` resolves) with a two-app devkit.toml.
-fn project() -> PathBuf {
+fn project() -> devkit_testtmp::TmpDir {
     let p = scratch("proj");
     let ok = Command::new("git")
         .args(["init", "-q"])

@@ -241,8 +241,8 @@ mod tests {
         }
     }
 
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("devkit-store-{}-{}", std::process::id(), tag))
+    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-store-{tag}"))
     }
 
     #[test]

@@ -189,10 +189,7 @@ mod tests {
 
     #[test]
     fn linear_store_persists_key_and_workspace() {
-        let p = std::env::temp_dir()
-            .join(format!("devkit-auth-{}", std::process::id()))
-            .join("secrets.toml");
-        let _ = std::fs::remove_file(&p);
+        let p = devkit_testtmp::path("devkit-auth", "secrets.toml");
         let id = linear::LinearIdentity {
             workspace_url_key: "adaptyv".into(),
             org_name: "Adaptyv".into(),

@@ -295,11 +295,8 @@ pub fn run(
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("devkit-end-{}-{}", std::process::id(), tag));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-end-{tag}"))
     }
 
     /// The summary filename carries the tracker's canonical id, which Linear
@@ -344,7 +341,6 @@ mod tests {
         let found = recorded_summary(&wt).expect("record names the summary");
         std::fs::remove_file(&found).unwrap();
         assert!(!summary.exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -362,7 +358,6 @@ mod tests {
         )
         .unwrap();
         assert!(recorded_summary(&dir).is_none());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -422,7 +417,6 @@ mod tests {
             String::from_utf8_lossy(&branches.stdout).trim().is_empty(),
             "branch deleted"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -458,13 +452,11 @@ mod tests {
 
         cleanup(wt.to_str().unwrap(), "ENG-2", true, &Mutex::new(())).unwrap();
         assert!(other.exists(), "another issue's summary is untouched");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn a_worktree_with_no_record_has_nothing_to_remove() {
         let dir = scratch("norecord");
         assert!(recorded_summary(&dir).is_none());
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

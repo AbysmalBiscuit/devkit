@@ -93,9 +93,7 @@ mod tests {
 
     #[test]
     fn write_self_ignore_creates_then_preserves() {
-        let dir = std::env::temp_dir().join(format!("devkit-selfignore-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = devkit_testtmp::dir("devkit-selfignore");
         write_self_ignore(&dir);
         let f = dir.join(".gitignore");
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "*\n");
@@ -103,7 +101,6 @@ mod tests {
         std::fs::write(&f, "custom\n").unwrap();
         write_self_ignore(&dir);
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "custom\n");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

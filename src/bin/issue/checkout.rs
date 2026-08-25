@@ -502,8 +502,7 @@ mod tests {
     /// the original error, and leaves the worktree intact on success.
     #[test]
     fn with_cleanup_removes_worktree_on_error_and_preserves_on_success() {
-        let base = std::env::temp_dir().join(format!("devkit-co-wc-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = devkit_testtmp::dir("devkit-co-wc");
         let repo = base.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
 
@@ -560,8 +559,6 @@ mod tests {
             wt_ok.exists(),
             "worktree must remain after a successful closure"
         );
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     fn lref(id: &str, slug: &str) -> IssueRef {

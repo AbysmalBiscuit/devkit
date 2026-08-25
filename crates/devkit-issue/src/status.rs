@@ -1288,8 +1288,7 @@ mod tests {
     #[test]
     fn dirty_stream_reports_every_index_once() {
         use std::sync::Mutex;
-        let base = std::env::temp_dir().join(format!("devkit-dstream-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = devkit_testtmp::dir("devkit-dstream");
         let paths: Vec<String> = (0..7)
             .map(|i| {
                 let p = base.join(format!("d{i}"));
@@ -1320,6 +1319,5 @@ mod tests {
                 .collect::<Vec<_>>(),
             want
         );
-        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -1295,11 +1295,8 @@ content = \"key = 1\\n\"\n"
         assert_eq!(origin["apps.api.static_env.A"], PathBuf::from("/b"));
     }
 
-    fn unique_tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("devkit-cfg-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-cfg-{tag}"))
     }
 
     /// An absolute path, spelled the way the host spells one. `resolve_path_key`
@@ -1938,7 +1935,7 @@ steps = [
 
     #[test]
     fn a_relative_path_resolves_against_its_declaring_layer() {
-        let tmp = std::env::temp_dir().join(format!("devkit-relcfg-{}", std::process::id()));
+        let tmp = devkit_testtmp::dir("devkit-relcfg");
         let proj = tmp.join("proj");
         write_cfg(
             &proj,
@@ -1959,12 +1956,11 @@ steps = [
                 .join("_baseline")
                 .to_string_lossy()
         );
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
     fn the_same_relative_path_resolves_alike_from_two_start_dirs() {
-        let tmp = std::env::temp_dir().join(format!("devkit-relcfg2-{}", std::process::id()));
+        let tmp = devkit_testtmp::dir("devkit-relcfg2");
         let proj = tmp.join("proj");
         let nested = proj.join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
@@ -1982,12 +1978,11 @@ steps = [
             from_root.defaults.worktree_root,
             from_nested.defaults.worktree_root
         );
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
     fn an_absolute_path_and_a_tilde_path_are_left_absolute() {
-        let tmp = std::env::temp_dir().join(format!("devkit-abscfg-{}", std::process::id()));
+        let tmp = devkit_testtmp::dir("devkit-abscfg");
         write_cfg(
             &tmp,
             &format!(
@@ -2005,12 +2000,11 @@ steps = [
             cfg.defaults.baseline_path,
             home.join("wt").join("_baseline").to_string_lossy()
         );
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
     fn an_empty_path_key_stays_empty() {
-        let tmp = std::env::temp_dir().join(format!("devkit-emptycfg-{}", std::process::id()));
+        let tmp = devkit_testtmp::dir("devkit-emptycfg");
         write_cfg(
             &tmp,
             "[defaults]\n\
@@ -2024,13 +2018,12 @@ steps = [
             cfg.defaults.baseline_path, "",
             "an unset path must not become the layer dir"
         );
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
     fn branch_prefix_expands_vars_but_is_not_a_path() {
         unsafe { std::env::set_var("DEVKIT_TEST_DEV", "lev") };
-        let tmp = std::env::temp_dir().join(format!("devkit-prefixcfg-{}", std::process::id()));
+        let tmp = devkit_testtmp::dir("devkit-prefixcfg");
         write_cfg(
             &tmp,
             "[defaults]\n\
@@ -2041,12 +2034,11 @@ steps = [
         );
         let (cfg, _) = resolve_with_home(None, &tmp, None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "lev/");
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
     fn an_unset_var_fails_the_whole_config_load() {
-        let tmp = std::env::temp_dir().join(format!("devkit-badvarcfg-{}", std::process::id()));
+        let tmp = devkit_testtmp::dir("devkit-badvarcfg");
         write_cfg(
             &tmp,
             "[defaults]\n\
@@ -2060,7 +2052,6 @@ steps = [
             err.to_string().contains("DEVKIT_TEST_MISSING_ROOT"),
             "{err}"
         );
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
@@ -2070,7 +2061,7 @@ steps = [
         // to `""` and must be treated the same as an unset optional path, not
         // silently resolved to the declaring layer's own directory.
         unsafe { std::env::set_var("DEVKIT_TEST_EMPTY", "") };
-        let tmp = std::env::temp_dir().join(format!("devkit-emptyvarcfg-{}", std::process::id()));
+        let tmp = devkit_testtmp::dir("devkit-emptyvarcfg");
         write_cfg(
             &tmp,
             "[defaults]\n\
@@ -2084,7 +2075,6 @@ steps = [
             cfg.defaults.baseline_path, "",
             "a set-but-empty variable must not become the layer dir"
         );
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
@@ -2092,7 +2082,7 @@ steps = [
         // `devkit doctor` calls `load(None, Path::new("."))` — a relative
         // `start` must not leak into the resolved `worktree_root`, since the
         // ports registry uses it as holder identity and for prefix matching.
-        let tmp = std::env::temp_dir().join(format!("devkit-relstart-{}", std::process::id()));
+        let tmp = devkit_testtmp::dir("devkit-relstart");
         write_cfg(
             &tmp,
             "[defaults]\n\
@@ -2120,7 +2110,6 @@ steps = [
         assert!(root.is_absolute(), "{root:?} must be absolute");
         let expected = here.parent().unwrap().join("proj-worktrees");
         assert_eq!(cfg.defaults.worktree_root, expected.to_string_lossy());
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

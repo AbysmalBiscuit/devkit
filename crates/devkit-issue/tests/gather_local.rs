@@ -1,6 +1,6 @@
 use devkit_common::tracker::fake::FakeTracker;
 use devkit_common::tracker::{Resolved, TrackerKind};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 fn git(args: &[&str], cwd: &Path) {
@@ -15,9 +15,8 @@ fn git(args: &[&str], cwd: &Path) {
 
 /// A repo with one commit and one `lev/eng-1-bar` worktree beside it, under a
 /// `tag`-specific directory so tests in this binary never share a fixture.
-fn fixture_repo(tag: &str) -> PathBuf {
-    let base = std::env::temp_dir().join(format!("devkit-gl-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+fn fixture_repo(tag: &str) -> devkit_testtmp::TmpDir {
+    let base = devkit_testtmp::dir(&format!("devkit-gl-{tag}"));
     let main = base.join("main");
     std::fs::create_dir_all(&main).unwrap();
 
@@ -58,8 +57,6 @@ fn gather_local_returns_offline_rows_without_network() {
     assert_eq!(row.pr.number(), None);
     assert!(row.state.is_none());
     assert!(!row.dirty);
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]
@@ -93,8 +90,6 @@ fn gather_with_builds_tracker_info_from_the_injected_tracker() {
     assert_eq!(report.tracker.kind, TrackerKind::None);
     assert!(report.tracker.ready);
     assert_eq!(report.tracker.link_base, None);
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// An issue id is a case-insensitive identifier, and the record stores whatever
@@ -123,6 +118,4 @@ fn a_lowercase_record_id_is_found_by_either_spelling() {
             .collect();
         assert_eq!(ids, ["eng-1234"], "filtering by {spelling}");
     }
-
-    let _ = std::fs::remove_dir_all(&base);
 }

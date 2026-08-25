@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -7,15 +7,13 @@ use serde_json::{Value, json};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-fn scratch(tag: &str) -> PathBuf {
+fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("devkit-mcp-{}-{}-{n}", std::process::id(), tag));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    devkit_testtmp::dir(&format!("devkit-mcp-{tag}-{n}"))
 }
 
 /// A project dir with a `.git` marker so `find_root_from`/normalization resolve.
-fn project() -> PathBuf {
+fn project() -> devkit_testtmp::TmpDir {
     let p = scratch("proj");
     std::fs::create_dir_all(p.join(".git")).unwrap();
     p
@@ -35,7 +33,7 @@ path = "apps/web"
 "#;
 
 /// A project dir that also carries a minimal devkit.toml with one app `web`.
-fn project_with_config() -> PathBuf {
+fn project_with_config() -> devkit_testtmp::TmpDir {
     let p = project();
     std::fs::write(p.join("devkit.toml"), MINIMAL_CONFIG).unwrap();
     p
@@ -43,7 +41,7 @@ fn project_with_config() -> PathBuf {
 
 /// A real (empty) git repo so `git worktree list` resolves with only the main
 /// worktree — `issue.status` then returns empty without needing `gh`.
-fn git_repo() -> PathBuf {
+fn git_repo() -> devkit_testtmp::TmpDir {
     let p = scratch("repo");
     let ok = Command::new("git")
         .args(["init", "-q"])

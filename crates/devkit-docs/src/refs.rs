@@ -473,11 +473,8 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    fn unique_tmp(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("devkit-docs-rf-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-docs-rf-{tag}"))
     }
 
     #[test]

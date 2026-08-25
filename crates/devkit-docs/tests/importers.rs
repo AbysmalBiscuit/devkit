@@ -433,7 +433,7 @@ source = { registry = "https://pypi.org/simple" }
 
     let selection = importers::select(&root, Ecosystem::Python, "httpx").unwrap();
     assert_eq!(selection.version, "0.28.1");
-    assert_eq!(selection.workspace, root);
+    assert_eq!(selection.workspace, root.path());
 }
 
 #[test]

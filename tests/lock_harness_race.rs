@@ -20,7 +20,7 @@ fn concurrent_write_decide_yields_one_winner() {
         std::process::exit(0);
     }
 
-    let tmp = std::env::temp_dir().join(format!("devkit-wrace-{}", std::process::id()));
+    let tmp = devkit_testtmp::dir("devkit-wrace");
     let repo = tmp.join("repo");
     std::fs::create_dir_all(repo.join(".git")).unwrap();
     std::fs::create_dir_all(repo.join("src")).unwrap();
@@ -64,5 +64,4 @@ fn concurrent_write_decide_yields_one_winner() {
     let denied = tags.iter().filter(|t| *t == "denied").count();
     assert_eq!(acquired, 1, "exactly one writer acquires: {tags:?}");
     assert_eq!(denied, 1, "the other is denied: {tags:?}");
-    let _ = std::fs::remove_dir_all(&tmp);
 }

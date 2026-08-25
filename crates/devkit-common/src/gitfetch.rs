@@ -105,8 +105,8 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-    fn scratch(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("devkit-fetch-gate-{}-{tag}", std::process::id()))
+    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-fetch-gate-{tag}"))
     }
 
     #[test]

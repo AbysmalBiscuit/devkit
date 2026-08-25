@@ -57,9 +57,7 @@ mod tests {
     /// `$DEVKIT_CONFIG` takes part.
     #[test]
     fn the_configured_kind_wins_over_detection() {
-        let dir = std::env::temp_dir().join(format!("devkit-tracker-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = devkit_testtmp::dir("devkit-tracker");
         let start = dir.to_str().unwrap();
 
         for (named, kind) in [("linear", TrackerKind::Linear), ("none", TrackerKind::None)] {
@@ -71,7 +69,5 @@ mod tests {
                 "config naming {named}"
             );
         }
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

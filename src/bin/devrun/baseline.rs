@@ -48,23 +48,18 @@ mod tests {
     use super::*;
     #[test]
     fn refuses_dirty_baseline() {
-        let tmp = std::env::temp_dir().join(format!("bl-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = devkit_testtmp::dir("bl");
         let p = tmp.to_str().unwrap();
         git(&["init", "-q"], p).unwrap();
         std::fs::write(tmp.join("f"), "x").unwrap();
         // dirty (untracked) tree → guard trips
         let err = ensure_fresh(p, p, "origin/staging").unwrap_err();
         assert!(err.to_string().contains("dirty"));
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn head_at_true_only_when_head_equals_ref() {
-        let tmp = std::env::temp_dir().join(format!("headat-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = devkit_testtmp::dir("headat");
         let p = tmp.to_str().unwrap();
         git(&["init", "-q"], p).unwrap();
         git(&["config", "user.email", "t@t"], p).unwrap();
@@ -82,7 +77,5 @@ mod tests {
         std::fs::write(tmp.join("f"), "b").unwrap();
         git(&["commit", "-aqm", "second"], p).unwrap();
         assert!(!head_at(p, "target"));
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

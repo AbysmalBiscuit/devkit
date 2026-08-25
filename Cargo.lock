@@ -248,6 +248,7 @@ dependencies = [
  "devkit-locks",
  "devkit-mcp",
  "devkit-ports",
+ "devkit-testtmp",
  "fd-lock",
  "indicatif",
  "interprocess",
@@ -273,6 +274,7 @@ dependencies = [
  "comfy-table",
  "console 0.15.11",
  "devkit-config",
+ "devkit-testtmp",
  "fd-lock",
  "glob",
  "indicatif",
@@ -295,6 +297,7 @@ name = "devkit-config"
 version = "0.13.2"
 dependencies = [
  "anyhow",
+ "devkit-testtmp",
  "schemars",
  "serde",
  "tempfile",
@@ -308,6 +311,7 @@ dependencies = [
  "anyhow",
  "clap",
  "devkit-common",
+ "devkit-testtmp",
  "fd-lock",
  "jsonc-parser",
  "schemars",
@@ -326,6 +330,7 @@ dependencies = [
  "anyhow",
  "devkit-common",
  "devkit-config",
+ "devkit-testtmp",
  "serde",
  "serde_json",
 ]
@@ -336,6 +341,7 @@ version = "0.13.2"
 dependencies = [
  "anyhow",
  "devkit-common",
+ "devkit-testtmp",
  "fd-lock",
  "interprocess",
  "schemars",
@@ -354,6 +360,7 @@ dependencies = [
  "devkit-issue",
  "devkit-locks",
  "devkit-ports",
+ "devkit-testtmp",
  "serde",
  "serde_json",
 ]
@@ -366,6 +373,7 @@ dependencies = [
  "clap",
  "devkit-common",
  "devkit-config",
+ "devkit-testtmp",
  "fd-lock",
  "interprocess",
  "nix",
@@ -374,6 +382,13 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "toml",
+]
+
+[[package]]
+name = "devkit-testtmp"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

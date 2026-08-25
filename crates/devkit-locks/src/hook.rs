@@ -366,8 +366,7 @@ mod tests {
 
     #[test]
     fn harness_enabled_reads_flag() {
-        let dir = std::env::temp_dir().join(format!("devkit-harness-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = devkit_testtmp::dir("devkit-harness");
         std::fs::write(
             dir.join("devkit.toml"),
             "[harness]\nenforce_writes = true\n",
@@ -388,7 +387,6 @@ mod tests {
         assert!(!harness_enabled(&dir)); // missing section → off, despite unrelated keys
         let _ = std::fs::remove_file(dir.join("devkit.toml"));
         assert!(!harness_enabled(&dir)); // no devkit.toml → off
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -38,10 +38,7 @@ fn no_library_can_claim_the_name_of_a_control_lock() {
 /// advisory lock behind them is not reentrant.
 #[test]
 fn removing_a_library_named_after_a_control_lock_returns_instead_of_blocking() {
-    let root =
-        std::env::temp_dir().join(format!("devkit-docs-control-name-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = devkit_testtmp::dir("devkit-docs-control-name");
     let manifest = root.join("docs.toml");
     let cache_root = root.join("cache");
 
@@ -163,8 +160,7 @@ fn concurrent_adds_of_different_libraries_both_survive() {
         return;
     }
 
-    let root =
-        std::env::temp_dir().join(format!("devkit-docs-manifest-race-{}", std::process::id()));
+    let root = devkit_testtmp::dir("devkit-docs-manifest-race");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let manifest = root.join("docs.toml");

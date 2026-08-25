@@ -349,10 +349,8 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("devkit-lib-{}-{}", std::process::id(), tag));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-lib-{tag}"))
     }
 
     #[test]
@@ -409,7 +407,7 @@ mod tests {
         std::fs::create_dir_all(root.join(".git")).unwrap();
         let deep = root.join("a/b/c");
         std::fs::create_dir_all(&deep).unwrap();
-        assert_eq!(find_root_from(&deep), root);
+        assert_eq!(find_root_from(&deep), root.path());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -424,7 +422,7 @@ mod tests {
             "a `.git` above {} decides the walk before the fallback runs",
             start.display()
         );
-        assert_eq!(find_root_from(&start), start);
+        assert_eq!(find_root_from(&start), start.path());
         let _ = std::fs::remove_dir_all(&start);
     }
 
@@ -454,7 +452,7 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         let file = root.join("src/a.rs");
         let (r, rel) = write_ctx(file.to_str().unwrap()).unwrap();
-        assert_eq!(PathBuf::from(&r), root);
+        assert_eq!(PathBuf::from(&r), root.path());
         assert_eq!(rel, "src/a.rs");
         let _ = std::fs::remove_dir_all(&root);
     }

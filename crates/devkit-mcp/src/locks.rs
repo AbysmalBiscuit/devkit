@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn acquire_status_release_roundtrip_through_handlers() {
-        let root = std::env::temp_dir().join(format!("devkit-mcp-locks-{}", std::process::id()));
+        let root = devkit_testtmp::dir("devkit-mcp-locks");
         std::fs::create_dir_all(root.join(".git")).unwrap();
         let r = root.to_string_lossy().into_owned();
         let c = ctx();
@@ -250,7 +250,5 @@ mod tests {
         let rel =
             release(&c, serde_json::json!({ "root": r, "paths": ["x.rs"] })).expect("release");
         assert_eq!(rel["released"], serde_json::json!(["x.rs"]));
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

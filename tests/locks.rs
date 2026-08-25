@@ -2,24 +2,14 @@
 //! release, and exit codes. Each test is isolated via a private temp project
 //! (with a `.git` marker) and a private `XDG_STATE_HOME`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU32, Ordering};
 
-fn scratch(tag: &str) -> PathBuf {
-    static N: AtomicU32 = AtomicU32::new(0);
-    let n = N.fetch_add(1, Ordering::Relaxed);
-    let p = std::env::temp_dir().join(format!(
-        "devkit-lock-it-{}-{}-{}",
-        std::process::id(),
-        tag,
-        n
-    ));
-    std::fs::create_dir_all(&p).unwrap();
-    p
+fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
+    devkit_testtmp::dir(&format!("devkit-lock-it-{tag}"))
 }
 
-fn project() -> PathBuf {
+fn project() -> devkit_testtmp::TmpDir {
     let p = scratch("proj");
     std::fs::create_dir_all(p.join(".git")).unwrap();
     p

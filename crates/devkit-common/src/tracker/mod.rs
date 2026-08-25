@@ -385,8 +385,8 @@ mod tests {
     /// stays false: devkit chose this tracker, the project did not name it.
     #[test]
     fn a_detected_github_origin_resolves_the_adapter_undeclared() {
-        let dir = tempfile::tempdir().unwrap();
-        let at = dir.path().to_str().unwrap();
+        let dir = devkit_testtmp::dir("devkit-tracker-gh");
+        let at = dir.to_str().unwrap();
         crate::cmd::git(&["init", "-q"], at).unwrap();
         crate::cmd::git(
             &[

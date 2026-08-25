@@ -15,3 +15,6 @@ interprocess = { workspace = true, optional = true }
 
 [features]
 daemon = ["dep:interprocess", "devkit-common/daemon"]
+
+[dev-dependencies]
+devkit-testtmp.workspace = true

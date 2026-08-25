@@ -41,8 +41,8 @@ pub fn write(worktree: &Path, pr: &CachedPr) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("devkit-info-cache-{}-{}", std::process::id(), tag))
+    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-info-cache-{tag}"))
     }
 
     #[test]

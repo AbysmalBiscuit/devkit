@@ -136,9 +136,7 @@ fn case_folding_keys_let_a_caller_spot_a_host_collision() {
 
 #[test]
 fn a_manifest_holding_both_a_slash_b_and_a_tilde_b_is_rejected_on_load() {
-    let dir = std::env::temp_dir().join(format!("docm-names-load-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = devkit_testtmp::dir("docm-names-load");
     let global = dir.join("docs.toml");
     std::fs::write(
         &global,

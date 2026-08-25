@@ -71,8 +71,7 @@ fn the_harness_confines_the_cache_home_to_its_sandbox() {
 
 #[test]
 fn moved_tag_reporting_only_claims_success_after_repair() {
-    let root = std::env::temp_dir().join(format!("docm-reporting-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = devkit_testtmp::dir("docm-reporting");
     let home = root.join("home");
     let data_home = root.join("data");
     let project = root.join("project");

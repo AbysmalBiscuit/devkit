@@ -468,11 +468,8 @@ mod tests {
     use super::*;
     use std::io;
 
-    fn unique_tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("devkit-docs-root-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn unique_tmp(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-docs-root-{tag}"))
     }
 
     #[test]

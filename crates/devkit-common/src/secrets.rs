@@ -157,10 +157,8 @@ pub fn store(key: &str, value: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn tmp(name: &str) -> PathBuf {
-        std::env::temp_dir()
-            .join(format!("devkit-secrets-{}-{name}", std::process::id()))
-            .join("secrets.toml")
+    fn tmp(name: &str) -> devkit_testtmp::TmpPath {
+        devkit_testtmp::path(&format!("devkit-secrets-{name}"), "secrets.toml")
     }
 
     #[test]

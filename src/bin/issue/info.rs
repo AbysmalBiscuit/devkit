@@ -330,9 +330,7 @@ mod tests {
     #[test]
     fn local_row_reads_branch_id_and_dirty() {
         use std::process::Command;
-        let base = std::env::temp_dir().join(format!("devkit-localrow-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        let base = devkit_testtmp::dir("devkit-localrow");
         let run = |args: &[&str]| {
             assert!(
                 Command::new("git")
@@ -359,8 +357,6 @@ mod tests {
 
         std::fs::write(base.join("g"), "y").unwrap();
         assert!(local_row(top).unwrap().dirty);
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -42,7 +42,8 @@ devkit-mcp.workspace = true
 devkit-docs.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
+devkit-testtmp.workspace = true
 # A collapsed diff when the committed JSON schema drifts from the config types.
 similar = "2"
 devkit-common = { workspace = true, features = ["test-support"] }
@@ -53,7 +54,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-testtmp"]
 
 [workspace.package]
 edition = "2024"
@@ -103,6 +104,8 @@ devkit-issue = { path = "crates/devkit-issue" }
 devkit-mcp = { path = "crates/devkit-mcp" }
 toml_edit = { version = "0.22", features = ["serde"] }
 devkit-docs = { path = "crates/devkit-docs" }
+devkit-testtmp = { path = "crates/devkit-testtmp" }
+tempfile = "3"
 
 [profile.release]
 opt-level = 3        # tools do little compute; keep the registry/diff hot paths fast

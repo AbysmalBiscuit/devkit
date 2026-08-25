@@ -59,7 +59,7 @@ pub fn pid_in_ports_json(body: &str, app_name: &str) -> Option<u32> {
 
 /// A running `devkitd` instance bound to a throwaway HOME directory.
 pub struct Harness {
-    pub home: PathBuf,
+    pub home: devkit_testtmp::TmpDir,
     /// `$XDG_STATE_HOME` passed to the daemon — state lives under `<xdg_state>/devkit/`.
     pub xdg_state: PathBuf,
     child: Child,
@@ -115,7 +115,7 @@ impl Harness {
     /// Spawn a daemon bound to a throwaway HOME, with `extra` env on top of the
     /// fixed test env, then wait for its socket.
     fn start_with_env(extra: &[(&str, String)]) -> Self {
-        let home = std::env::temp_dir().join(format!("portd-test-{}", unique()));
+        let home = devkit_testtmp::dir("portd-test");
         // XDG_STATE_HOME is set explicitly so the daemon's state_dir() resolves
         // to a path inside the throwaway temp dir, even when the real user's
         // XDG_STATE_HOME env var is set in the surrounding shell.
@@ -265,11 +265,10 @@ impl Harness {
 
 impl Drop for Harness {
     fn drop(&mut self) {
-        // Best-effort cleanup — kill the child (already exited in happy paths),
-        // then remove the throwaway HOME.
+        // Best-effort: the child has already exited in the happy paths. The
+        // throwaway HOME removes itself when `home` drops.
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.home);
     }
 }
 

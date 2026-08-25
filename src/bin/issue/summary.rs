@@ -128,11 +128,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("devkit-sum-{}-{}", std::process::id(), tag));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-sum-{tag}"))
     }
 
     fn details() -> devkit_common::tracker::IssueDetails {
@@ -238,7 +235,6 @@ mod tests {
         let p = dir.join("ISSUE_SUMMARY_ENG-42.md");
         assert!(write_if_absent(&p, "body\n").unwrap());
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "body\n");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -251,7 +247,6 @@ mod tests {
             std::fs::read_to_string(&p).unwrap(),
             "months of investigation\n"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -260,6 +255,5 @@ mod tests {
         let p = dir.join("nested/deeper/ISSUE.md");
         assert!(write_if_absent(&p, "body\n").unwrap());
         assert!(p.exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

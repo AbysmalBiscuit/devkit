@@ -443,7 +443,6 @@ mod tests {
     use devkit_common::tracker::fake;
     use devkit_config::Templates;
     use serde_json::json;
-    use std::path::PathBuf;
 
     #[test]
     fn setup_takes_its_slug_from_the_tracker() {
@@ -491,12 +490,8 @@ mod tests {
         assert_eq!(parsed.slug.as_deref(), Some("fix-bli-export"));
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        // Unique per process + tag; no tempfile dependency.
-        let dir = std::env::temp_dir().join(format!("devkit-prep-{}-{}", std::process::id(), tag));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> devkit_testtmp::TmpDir {
+        devkit_testtmp::dir(&format!("devkit-prep-{tag}"))
     }
 
     fn novars() -> BTreeMap<String, String> {
@@ -517,7 +512,6 @@ mod tests {
         ]];
         run_after_worktree_create(&dir, &hooks, &ctx(), &novars());
         assert!(dir.join("fix-wt").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -529,7 +523,6 @@ mod tests {
         ];
         run_after_worktree_create(&dir, &hooks, &ctx(), &novars());
         assert!(dir.join("after").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -545,7 +538,6 @@ mod tests {
         ];
         run_after_worktree_create(&dir, &hooks, &ctx(), &novars());
         assert!(dir.join("after").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -561,7 +553,6 @@ mod tests {
             std::fs::read_to_string(dir.join(".env.local")).unwrap(),
             "ISSUE=eng-1\n"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -591,7 +582,6 @@ mod tests {
         write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
         let got = std::fs::read_to_string(dir.join("config/local.json")).unwrap();
         assert_eq!(got, "{\"mode\":\"local\"}\n");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -608,7 +598,6 @@ mod tests {
             std::fs::read_to_string(dir.join(".env.local")).unwrap(),
             "ORIGINAL\n"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -625,7 +614,6 @@ mod tests {
             std::fs::read_to_string(dir.join(".env.local")).unwrap(),
             "REPLACED\n"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -638,7 +626,6 @@ mod tests {
         }];
         write_prep_files(&dir, &files, &ctx(), &novars()).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("app.txt")).unwrap(), "web");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -650,13 +637,11 @@ mod tests {
             overwrite: false,
         }];
         assert!(write_prep_files(&dir, &files, &ctx(), &novars()).is_err());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn skipped_existing_file_is_not_rendered() {
         let dir = scratch("skiprender");
-        std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".env.local"), "ORIGINAL\n").unwrap();
         // A malformed template on an existing, non-overwrite file must not be
         // rendered (and so must not error) — the file is left untouched.
@@ -670,6 +655,5 @@ mod tests {
             std::fs::read_to_string(dir.join(".env.local")).unwrap(),
             "ORIGINAL\n"
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

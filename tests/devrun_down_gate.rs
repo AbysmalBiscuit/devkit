@@ -3,12 +3,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 mod common;
-use common::unique;
 
 #[test]
 fn down_all_without_tty_refuses() {
     // Throwaway state home with a seeded foreign reservation.
-    let home = std::env::temp_dir().join(format!("devrun-gate-{}", unique()));
+    let home = devkit_testtmp::dir("devrun-gate");
     let xdg_state = home.join("state");
     let devkit_dir = xdg_state.join("devkit");
     std::fs::create_dir_all(devkit_dir.join("logs")).unwrap();
@@ -57,8 +56,6 @@ fn down_all_without_tty_refuses() {
     // The reservation must be untouched.
     let after = std::fs::read_to_string(devkit_dir.join("ports.json")).unwrap();
     assert!(after.contains("9100"), "reservation must survive a refusal");
-
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 fn run_git(dir: &PathBuf, args: &[&str]) {

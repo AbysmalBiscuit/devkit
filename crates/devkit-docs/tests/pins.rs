@@ -779,7 +779,7 @@ fn a_registry_row_surfaces_a_library_no_lockfile_evidences() {
         &root.join("docs.toml"),
         "[[libs]]\nname = \"zod\"\necosystem = \"js\"\nrepo = \"https://example.invalid/zod\"\n",
     );
-    registry(&cache, &[(root.as_path(), "zod", "4.4.3")]);
+    registry(&cache, &[(root.path(), "zod", "4.4.3")]);
 
     let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
     assert_eq!(out[0].resolved.as_deref(), Some("4.4.3"));
@@ -796,7 +796,7 @@ fn a_registry_row_that_disagrees_with_the_lockfile_is_flagged() {
     let root = common::unique_tmp("pins-registry-stale");
     let cache = root.join("cache");
     bun_monorepo(&root);
-    registry(&cache, &[(root.as_path(), "h3", "1.0.0")]);
+    registry(&cache, &[(root.path(), "h3", "1.0.0")]);
 
     let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();
     let table = pins::render(&out);
@@ -834,7 +834,7 @@ fn an_encoded_checkout_dirname_is_not_a_disagreement() {
     );
     registry(
         &cache,
-        &[(root.as_path(), "typescript-go", "typescript~v7.0.2")],
+        &[(root.path(), "typescript-go", "typescript~v7.0.2")],
     );
 
     let out = pins::pins_with_cache(&root, Some(&root.join("docs.toml")), Some(&cache)).unwrap();

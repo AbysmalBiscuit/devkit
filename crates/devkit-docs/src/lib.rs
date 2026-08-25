@@ -296,8 +296,7 @@ mod tests {
 
     #[test]
     fn doctor_summary_counts_libs_and_unreferenced_worktrees() {
-        let root = std::env::temp_dir().join(format!("devkit-docs-dr-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = devkit_testtmp::dir("devkit-docs-dr");
         // One lib with a referenced worktree, an unreferenced one, and default.
         for wt in ["1.0.0", "2.0.0", "default", "repo.git"] {
             std::fs::create_dir_all(root.join("tokio").join(wt)).unwrap();
@@ -317,9 +316,7 @@ mod tests {
 
     #[test]
     fn doctor_summary_skips_registry_lock_directory() {
-        let root =
-            std::env::temp_dir().join(format!("devkit-docs-dr-controls-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = devkit_testtmp::dir("devkit-docs-dr-controls");
         std::fs::create_dir_all(root.join("tokio/default")).unwrap();
         std::fs::create_dir_all(root.join("registry.locks")).unwrap();
 

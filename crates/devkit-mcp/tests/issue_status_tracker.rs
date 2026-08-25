@@ -2,7 +2,7 @@
 //! `devkit.toml` names a tracker.
 
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 fn git(args: &[&str], cwd: &Path) {
@@ -18,11 +18,9 @@ fn git(args: &[&str], cwd: &Path) {
 /// A one-commit repo with no remote, whose `devkit.toml` forces `kind` — or
 /// omits the `[tracker]` table entirely when `kind` is `None`, leaving the
 /// choice to detection.
-fn fixture(kind: Option<&str>) -> PathBuf {
+fn fixture(kind: Option<&str>) -> devkit_testtmp::TmpDir {
     let tag = kind.unwrap_or("detect");
-    let dir = std::env::temp_dir().join(format!("devkit-mcp-tracker-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = devkit_testtmp::dir(&format!("devkit-mcp-tracker-{tag}"));
     git(&["init", "-q", "-b", "main"], &dir);
     git(&["config", "user.email", "t@t"], &dir);
     git(&["config", "user.name", "t"], &dir);
@@ -92,7 +90,6 @@ fn the_status_action_reports_the_configured_tracker_kind() {
             "a config named this tracker, in {}",
             dir.display()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // No `[tracker]` table: whichever kind detection lands on, nobody declared
@@ -110,5 +107,4 @@ fn the_status_action_reports_the_configured_tracker_kind() {
         "detection produced this tracker, in {}",
         dir.display()
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
