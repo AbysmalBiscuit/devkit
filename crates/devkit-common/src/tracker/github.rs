@@ -578,7 +578,7 @@ impl Tracker for GithubTracker {
         let (repo, number) = parse_issue_url(s)
             .with_context(|| format!("unrecognized GitHub issue identifier: {s}"))?;
         anyhow::ensure!(
-            repo == self.repo.slug,
+            repo.eq_ignore_ascii_case(&self.repo.slug),
             "issue {number} is in {repo}, but this project's issues repository is {}",
             self.repo.slug
         );
@@ -983,6 +983,20 @@ mod tests {
                 .unwrap()
                 .id,
             "9"
+        );
+    }
+
+    #[test]
+    fn an_issue_url_matches_the_configured_repository_case_blind() {
+        // A slug comes verbatim from `[github] issues_repo` or an origin
+        // remote, while a pasted URL carries GitHub's canonical casing. GitHub
+        // treats the two as one repository, so the comparison must too.
+        let t = GithubTracker::new(repo("acme/widget"));
+        assert_eq!(
+            t.issue_ref("https://github.com/acme/Widget/issues/42")
+                .unwrap()
+                .id,
+            "42"
         );
     }
 
