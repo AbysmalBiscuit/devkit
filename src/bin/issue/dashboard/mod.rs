@@ -274,7 +274,9 @@ pub fn run(args: DashboardArgs) -> Result<()> {
 }
 
 fn capture_email(start: &str) -> String {
-    devkit_common::cmd::git(&["config", "user.email"], start)
+    devkit_common::git::Git::at(std::path::Path::new(start))
+        .args(["config", "user.email"])
+        .output()
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
 }

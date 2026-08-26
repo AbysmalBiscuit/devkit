@@ -8,13 +8,10 @@ use std::process::{Command, Output};
 /// A real git repo (so `--show-toplevel` resolves) with a two-app devkit.toml.
 fn project() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    let ok = Command::new("git")
+    devkit_common::git::Git::fixture(p.path())
         .args(["init", "-q"])
-        .current_dir(&p)
-        .status()
-        .expect("git init")
-        .success();
-    assert!(ok, "git init failed");
+        .output()
+        .unwrap();
     std::fs::write(
         p.path().join("devkit.toml"),
         r#"
@@ -59,12 +56,10 @@ fn run(bin: &str, project: &Path, state: &Path, args: &[&str]) -> Output {
 }
 
 fn toplevel(project: &Path) -> String {
-    let out = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(project)
-        .output()
-        .expect("git rev-parse");
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
+    devkit_common::git::checkout_root(project)
+        .expect("git rev-parse")
+        .to_string_lossy()
+        .into_owned()
 }
 
 // ---- lockm ----

@@ -9,21 +9,11 @@ use std::time::{Duration, Instant};
 const READY: Duration = Duration::from_secs(60);
 const CONTENTION: Duration = Duration::from_secs(30);
 
-/// Git ignores the developer's real global/system config, so a fixture commit
-/// or tag can't inherit ambient settings like `commit.gpgsign`.
 fn git(cwd: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    devkit_common::git::Git::fixture(cwd)
+        .args(args.iter().copied())
         .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+        .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
 }
 
 /// A fresh temp directory, with every symlink on the way to it resolved, plus
@@ -46,8 +36,6 @@ fn temp_root() -> (tempfile::TempDir, PathBuf) {
 fn fixture_repo(dir: &Path) {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     git(dir, &["init", "-b", "main"]);
-    git(dir, &["config", "user.email", "t@t"]);
-    git(dir, &["config", "user.name", "t"]);
     std::fs::write(dir.join("src/lib.rs"), "// v1").unwrap();
     git(dir, &["add", "."]);
     git(dir, &["commit", "-m", "v1"]);
@@ -562,15 +550,10 @@ fn info_and_list_report_the_ref_commit_and_clone_origin() {
     let info = env.docm(&["info", "up"]);
     assert_ran(&info, "docm info up");
     let out = stdout(&info);
-    let head = String::from_utf8(
-        Command::new("git")
-            .args(["rev-parse", "v1.0.0^{commit}"])
-            .current_dir(&env.upstream)
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
+    let head = devkit_common::git::Git::fixture(Path::new(&env.upstream))
+        .args(["rev-parse", "v1.0.0^{commit}"])
+        .output()
+        .unwrap();
     let head = head.trim();
     for line in [
         format!("repo     {}", env.upstream),

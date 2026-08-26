@@ -3,20 +3,12 @@
 
 use serde_json::{Value, json};
 use std::path::Path;
-use std::process::Command;
 
-/// Git ignores the developer's real global/system config, so a fixture commit
-/// can't inherit ambient settings like `commit.gpgsign`.
 fn git(args: &[&str], cwd: &Path) {
-    let ok = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .status()
-        .expect("git runs")
-        .success();
-    assert!(ok, "git {args:?} failed");
+    devkit_common::git::Git::fixture(cwd)
+        .args(args.iter().copied())
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
 }
 
 /// A one-commit repo with no remote, whose `devkit.toml` forces `kind` — or
@@ -25,8 +17,6 @@ fn git(args: &[&str], cwd: &Path) {
 fn fixture(kind: Option<&str>) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     git(&["init", "-q", "-b", "main"], dir.path());
-    git(&["config", "user.email", "t@t"], dir.path());
-    git(&["config", "user.name", "t"], dir.path());
     let table = match kind {
         Some(k) => format!("\n[tracker]\nkind = \"{k}\"\n"),
         None => String::new(),

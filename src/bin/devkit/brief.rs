@@ -367,11 +367,10 @@ fn watermark_path(session: &str) -> PathBuf {
 /// rule has to match `render`'s exactly, or a digest saying "changed" for a
 /// brief `render` refuses to emit would rewrite the watermark and stay silent.
 fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
-    let cwd_str = cwd.to_str()?;
-    let root = devkit_common::cmd::git(&["rev-parse", "--show-toplevel"], cwd_str)
+    let root = devkit_common::git::checkout_root(cwd)
         .ok()?
-        .trim()
-        .to_string();
+        .to_string_lossy()
+        .into_owned();
 
     let pins = checkout_pins(cwd, settings);
     let (relevant, _) = devkit_docs::pins::relevant(&pins);
@@ -498,11 +497,10 @@ fn fault_text(why: &str) -> String {
 }
 
 fn render(cwd: &Path, settings: &BriefConfig) -> Option<String> {
-    let cwd_str = cwd.to_str()?;
-    let root = devkit_common::cmd::git(&["rev-parse", "--show-toplevel"], cwd_str)
+    let root = devkit_common::git::checkout_root(cwd)
         .ok()?
-        .trim()
-        .to_string();
+        .to_string_lossy()
+        .into_owned();
 
     // Pins are computed before `load`: a devkit.toml carrying [docs] and
     // nothing devrun can use must still produce a brief.

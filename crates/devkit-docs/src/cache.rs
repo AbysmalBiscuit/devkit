@@ -6,11 +6,10 @@ use crate::locks;
 use crate::refs::RefStore;
 use crate::tags::TagPattern;
 use anyhow::{Context, Result, bail};
-use devkit_common::cmd;
+use devkit_common::git::{Git, NETWORK_TIMEOUT};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// `~/.local/share/devkit/docs` (or `$XDG_DATA_HOME/devkit/docs`).
 ///
@@ -196,7 +195,9 @@ impl LibCache {
         if self.cloned() {
             let actual = match meta.origin.clone() {
                 Some(origin) => origin,
-                None => cmd::git(&["config", "--get", "remote.origin.url"], &self.bare_str())
+                None => Git::at(&self.bare())
+                    .args(["config", "--get", "remote.origin.url"])
+                    .output()
                     .with_context(|| format!("reading origin for {}", self.dir.display()))?
                     .trim()
                     .to_string(),
@@ -213,12 +214,12 @@ impl LibCache {
         }
         self.ensure_dir()?;
         let dest = self.bare_str();
-        let args = ["clone", "--bare", "--filter=blob:none", repo, dest.as_str()];
-        let filtered = Command::new("git")
-            .args(args)
-            .output()
+        let filtered = Git::bare()
+            .args(["clone", "--bare", "--filter=blob:none", repo, dest.as_str()])
+            .timeout(NETWORK_TIMEOUT)
+            .success()
             .context("failed to spawn `git` for filtered bare clone")?;
-        if !filtered.status.success() {
+        if !filtered {
             match std::fs::remove_dir_all(self.bare()) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -227,51 +228,55 @@ impl LibCache {
                         .with_context(|| format!("removing incomplete clone at {dest}"));
                 }
             }
-            cmd::capture("git", &["clone", "--bare", repo, dest.as_str()], None)
+            Git::bare()
+                .args(["clone", "--bare", repo, dest.as_str()])
+                .timeout(NETWORK_TIMEOUT)
+                .output()
                 .with_context(|| format!("cloning {repo}"))?;
         }
         // Bare clones get no fetch refspec; heads must track the remote so
         // sync can fast-forward the default worktree.
-        cmd::git(
-            &[
+        Git::at(&self.bare())
+            .args([
                 "config",
                 "remote.origin.fetch",
                 "+refs/heads/*:refs/heads/*",
-            ],
-            &dest,
-        )?;
+            ])
+            .output()?;
         meta.origin = Some(repo.to_string());
         Ok(())
     }
 
     pub fn fetch(&self) -> Result<()> {
-        cmd::git(
-            &[
+        Git::at(&self.bare())
+            .args([
                 "fetch",
                 "--force",
                 "--tags",
                 "--prune",
                 "--prune-tags",
                 "origin",
-            ],
-            &self.bare_str(),
-        )
-        .map(|_| ())
+            ])
+            .timeout(NETWORK_TIMEOUT)
+            .output()
+            .map(|_| ())
     }
 
     pub fn tags(&self) -> Result<Vec<String>> {
-        Ok(cmd::git(&["tag", "--list"], &self.bare_str())?
+        Ok(Git::at(&self.bare())
+            .args(["tag", "--list"])
+            .output()?
             .lines()
             .map(str::to_string)
             .collect())
     }
 
     pub fn default_branch(&self) -> Result<String> {
-        Ok(
-            cmd::git(&["symbolic-ref", "--short", "HEAD"], &self.bare_str())?
-                .trim()
-                .to_string(),
-        )
+        Ok(Git::at(&self.bare())
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .output()?
+            .trim()
+            .to_string())
     }
 
     pub fn worktree_path(&self, dirname: &str) -> PathBuf {
@@ -320,34 +325,28 @@ impl LibCache {
 
     fn peel_commit(&self, git_ref: &str) -> Result<Option<String>> {
         let spec = format!("{git_ref}^{{commit}}");
-        let bare = self.bare_str();
-        let output = Command::new("git")
-            .args([
-                "-C",
-                bare.as_str(),
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                "--end-of-options",
-                spec.as_str(),
-            ])
-            .output()
-            .with_context(|| format!("spawning git to resolve {git_ref} in {bare}"))?;
-        if output.status.success() {
-            let commit = String::from_utf8(output.stdout)
-                .with_context(|| format!("reading commit for {git_ref} in {bare}"))?
-                .trim()
-                .to_string();
-            return Ok(Some(commit));
-        }
-        if output.status.code() == Some(1) {
+        let bare = self.bare();
+        let args = [
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            spec.as_str(),
+        ];
+        if !Git::at(&bare)
+            .args(args)
+            .success()
+            .with_context(|| format!("resolving {git_ref} in {}", bare.display()))?
+        {
             return Ok(None);
         }
-        bail!(
-            "resolving {git_ref} in {bare} failed ({}):\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
+        let commit = Git::at(&bare)
+            .args(args)
+            .output()
+            .with_context(|| format!("reading commit for {git_ref} in {}", bare.display()))?
+            .trim()
+            .to_string();
+        Ok(Some(commit))
     }
 
     /// Materialize at `commit`, re-pointing an existing worktree that drifted.
@@ -355,44 +354,49 @@ impl LibCache {
         let path = self.worktree_path(dirname);
         if !path.is_dir() {
             let path_string = path.to_string_lossy().into_owned();
-            cmd::git(
-                &["worktree", "add", "--detach", path_string.as_str(), commit],
-                &self.bare_str(),
-            )
-            .with_context(|| format!("materializing {dirname} at {commit}"))?;
+            Git::at(&self.bare())
+                .args(["worktree", "add", "--detach", path_string.as_str(), commit])
+                .output()
+                .with_context(|| format!("materializing {dirname} at {commit}"))?;
             if let Err(exact_error) = assert_dir_exact(&self.dir, dirname) {
-                cmd::git(
-                    &["worktree", "remove", "--force", path_string.as_str()],
-                    &self.bare_str(),
-                )
-                .with_context(|| {
-                    format!("cleaning up inexact worktree {dirname} after: {exact_error}")
-                })?;
-                cmd::git(&["worktree", "prune"], &self.bare_str()).with_context(|| {
-                    format!("pruning inexact worktree {dirname} after: {exact_error}")
-                })?;
+                Git::at(&self.bare())
+                    .args(["worktree", "remove", "--force", path_string.as_str()])
+                    .output()
+                    .with_context(|| {
+                        format!("cleaning up inexact worktree {dirname} after: {exact_error}")
+                    })?;
+                Git::at(&self.bare())
+                    .args(["worktree", "prune"])
+                    .output()
+                    .with_context(|| {
+                        format!("pruning inexact worktree {dirname} after: {exact_error}")
+                    })?;
                 return Err(exact_error);
             }
             return Ok((path, false));
         }
         assert_dir_exact(&self.dir, dirname)?;
-        let path_string = path.to_string_lossy().into_owned();
-        let head = cmd::git(&["rev-parse", "HEAD"], &path_string)
+        let head = Git::at(&path)
+            .args(["rev-parse", "HEAD"])
+            .output()
             .with_context(|| format!("reading HEAD for {dirname}"))?
             .trim()
             .to_string();
         if head == commit {
             return Ok((path, false));
         }
-        cmd::git(&["checkout", "--detach", commit], path_string.as_str())
+        Git::at(&path)
+            .args(["checkout", "--detach", commit])
+            .output()
             .with_context(|| format!("re-pointing {dirname} from {head} to {commit}"))?;
         Ok((path, true))
     }
 
     /// Reject source that differs from the resolved commit.
     pub fn assert_clean(&self, path: &Path) -> Result<()> {
-        let path_string = path.to_string_lossy().into_owned();
-        let output = cmd::git(&["status", "--porcelain"], &path_string)
+        let output = Git::at(path)
+            .args(["status", "--porcelain"])
+            .output()
             .with_context(|| format!("checking {} for local modifications", path.display()))?;
         if !output.trim().is_empty() {
             bail!(
@@ -423,11 +427,10 @@ impl LibCache {
     /// keeps a concurrent resolve from materializing into the same directory.
     pub fn remove_worktree_locked(&self, dirname: &str) -> Result<()> {
         let p = self.worktree_path(dirname).to_string_lossy().into_owned();
-        cmd::git(
-            &["worktree", "remove", "--force", p.as_str()],
-            &self.bare_str(),
-        )
-        .with_context(|| format!("removing worktree {dirname}"))?;
+        Git::at(&self.bare())
+            .args(["worktree", "remove", "--force", p.as_str()])
+            .output()
+            .with_context(|| format!("removing worktree {dirname}"))?;
         Ok(())
     }
 

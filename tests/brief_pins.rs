@@ -30,17 +30,10 @@ impl Project {
         let home = root.path().join("home");
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        for args in [
-            vec!["init", "-b", "main"],
-            vec!["config", "user.email", "t@t"],
-            vec!["config", "user.name", "t"],
-        ] {
-            Command::new("git")
-                .args(&args)
-                .current_dir(&repo)
-                .output()
-                .unwrap();
-        }
+        devkit_common::git::Git::fixture(&repo)
+            .args(["init", "-b", "main"])
+            .output()
+            .unwrap();
         write(
             &repo.join("Cargo.toml"),
             "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1.0.200\"\n",

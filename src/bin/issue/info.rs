@@ -1,6 +1,5 @@
 use crate::triage::render;
 use anyhow::Result;
-use devkit_common::cmd::git;
 use devkit_common::livetable::{Cell, LiveTable};
 use devkit_common::tracker::{Resolved, State};
 use devkit_issue::status::{self as st, IssueWorktree, PrStatus, StatusReport, TrackerInfo};
@@ -43,9 +42,9 @@ fn same_path(a: &str, b: &str) -> bool {
 
 /// The current worktree's root (`git rev-parse --show-toplevel`), trimmed.
 fn current_top(start: &str) -> Option<String> {
-    git(&["rev-parse", "--show-toplevel"], start)
+    devkit_common::git::checkout_root(Path::new(start))
         .ok()
-        .map(|s| s.trim().to_string())
+        .map(|p| p.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
 }
 
@@ -322,25 +321,14 @@ mod tests {
 
     #[test]
     fn local_row_reads_branch_id_and_dirty() {
-        use std::process::Command;
         let base = tempfile::tempdir().unwrap();
-        // Git ignores the developer's real global/system config, so this
-        // fixture commit can't inherit ambient settings like `commit.gpgsign`.
         let run = |args: &[&str]| {
-            assert!(
-                Command::new("git")
-                    .args(args)
-                    .current_dir(&base)
-                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                    .env("GIT_CONFIG_SYSTEM", "/dev/null")
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            devkit_common::git::Git::fixture(base.path())
+                .args(args.iter().copied())
+                .output()
+                .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
         };
         run(&["init", "-q", "-b", "lev/eng-9-foo"]);
-        run(&["config", "user.email", "t@t"]);
-        run(&["config", "user.name", "t"]);
         std::fs::write(base.path().join("f"), "x").unwrap();
         run(&["add", "."]);
         run(&["commit", "-qm", "init"]);

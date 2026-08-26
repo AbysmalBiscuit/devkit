@@ -5,20 +5,12 @@ use devkit_docs::cache::{self, LibCache, Meta, WorktreeMeta};
 use devkit_docs::tags::TagPattern;
 use std::path::Path;
 
-/// A follow-up git operation against an already-built `fixture_repo`. Git
-/// ignores the developer's real global/system config, so it can't inherit
-/// ambient settings like `commit.gpgsign`; the repo's identity is already set
-/// locally by `fixture_repo`.
+/// A follow-up git operation against an already-built `fixture_repo`.
 fn git(args: &[&str], dir: &Path) {
-    let ok = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .status()
-        .unwrap()
-        .success();
-    assert!(ok, "git {args:?} failed");
+    devkit_common::git::Git::fixture(dir)
+        .args(args.iter().copied())
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
 }
 
 #[test]

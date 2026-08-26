@@ -1,5 +1,5 @@
 //! `devrun down --all` refuses to touch another worktree without a terminal.
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 
 mod common;
@@ -58,14 +58,11 @@ fn down_all_without_tty_refuses() {
     assert!(after.contains("9100"), "reservation must survive a refusal");
 }
 
-fn run_git(dir: &PathBuf, args: &[&str]) {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .status()
-        .expect("run git");
-    assert!(status.success(), "git {args:?} failed");
+fn run_git(dir: &Path, args: &[&str]) {
+    devkit_common::git::Git::fixture(dir)
+        .args(args.iter().copied())
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
 }
 
 fn now_secs() -> u64 {

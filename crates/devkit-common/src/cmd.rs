@@ -23,13 +23,6 @@ pub fn capture(program: &str, args: &[&str], cwd: Option<&str>) -> Result<String
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// `git -C <cwd> <args...>`.
-pub fn git(args: &[&str], cwd: &str) -> Result<String> {
-    let mut full = vec!["-C", cwd];
-    full.extend_from_slice(args);
-    capture("git", &full, None)
-}
-
 /// `gh <args...>` parsed as JSON.
 pub fn gh_json<T: serde::de::DeserializeOwned>(args: &[&str], cwd: &str) -> Result<T> {
     let out = capture("gh", args, Some(cwd))?;

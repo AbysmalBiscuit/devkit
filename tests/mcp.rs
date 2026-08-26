@@ -37,13 +37,10 @@ fn project_with_config() -> tempfile::TempDir {
 /// worktree — `issue.status` then returns empty without needing `gh`.
 fn git_repo() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    let ok = Command::new("git")
+    devkit_common::git::Git::fixture(p.path())
         .args(["init", "-q"])
-        .current_dir(&p)
-        .status()
-        .expect("spawn git init")
-        .success();
-    assert!(ok, "git init failed");
+        .output()
+        .unwrap();
     p
 }
 

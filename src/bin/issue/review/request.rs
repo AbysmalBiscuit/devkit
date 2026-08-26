@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
-use devkit_common::cmd::{gh_capture, gh_json_in, git};
+use devkit_common::cmd::{gh_capture, gh_json_in};
+use devkit_common::git::Git;
 use devkit_common::github;
 use devkit_common::progress::Steps;
 use devkit_config::Person;
@@ -257,7 +258,9 @@ pub fn run(args: Args) -> Result<()> {
     let mut vars = tmpls.variables.clone();
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
 
-    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)?
+    let branch = Git::at(std::path::Path::new(&start))
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()?
         .trim()
         .to_string();
     guard_branch(&branch)?;
@@ -266,7 +269,9 @@ pub fn run(args: Args) -> Result<()> {
     if !args.no_push {
         steps
             .during_result("Pushing branch…", || {
-                git(&["push", "-u", "origin", &branch], &start)
+                Git::at(std::path::Path::new(&start))
+                    .args(["push", "-u", "origin", &branch])
+                    .output()
             })
             .context("git push failed (refusing to force-push)")?;
     }
@@ -277,9 +282,9 @@ pub fn run(args: Args) -> Result<()> {
         .map(|v| resolve_target(v, people))
         .collect::<Result<_>>()?;
 
-    let toplevel = git(&["rev-parse", "--show-toplevel"], &start)?
-        .trim()
-        .to_string();
+    let toplevel = devkit_common::git::checkout_root(std::path::Path::new(&start))?
+        .to_string_lossy()
+        .into_owned();
     let record = devkit_common::record::read(std::path::Path::new(&toplevel));
     let missing_at = if record.is_none() {
         Some(toplevel.as_str())
@@ -302,7 +307,11 @@ pub fn run(args: Args) -> Result<()> {
         missing_at,
     )?;
 
-    let head = git(&["rev-parse", "HEAD"], &start)?.trim().to_string();
+    let head = Git::at(std::path::Path::new(&start))
+        .args(["rev-parse", "HEAD"])
+        .output()?
+        .trim()
+        .to_string();
 
     // Explicit `--pr`, then the record, then the worktree branch's PR.
     let explicit_loc = args.pr.as_deref().map(parse_pr_flag).transpose()?;

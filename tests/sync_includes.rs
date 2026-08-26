@@ -5,21 +5,11 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-/// Git ignores the developer's real global/system config, so a fixture commit
-/// can't inherit ambient settings like `commit.gpgsign`.
 fn git(args: &[&str], cwd: &Path) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
+    devkit_common::git::Git::fixture(cwd)
+        .args(args.iter().copied())
         .output()
         .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
-    assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
 /// A monorepo at `main/` with two worktrees beside it, a committed `devkit.toml`

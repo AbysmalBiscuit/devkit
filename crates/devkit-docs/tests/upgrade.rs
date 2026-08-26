@@ -3,6 +3,18 @@ use std::process::Command;
 
 mod common;
 
+/// `cwd` is `None` for a clone, which has no repository to run inside yet.
+fn git(args: &[&str], cwd: Option<&str>) -> anyhow::Result<String> {
+    match cwd {
+        Some(dir) => devkit_common::git::Git::fixture(std::path::Path::new(dir))
+            .args(args.iter().copied())
+            .output(),
+        None => devkit_common::git::Git::bare()
+            .args(args.iter().copied())
+            .output(),
+    }
+}
+
 #[test]
 fn a_nested_scoped_cache_migrates_and_its_worktree_still_works() {
     let base_dir = tempfile::tempdir().unwrap();
@@ -14,14 +26,8 @@ fn a_nested_scoped_cache_migrates_and_its_worktree_still_works() {
     let old = cache.join("@scope/pkg");
     std::fs::create_dir_all(&old).unwrap();
     let bare = old.join("repo.git");
-    devkit_common::cmd::capture(
-        "git",
-        &["clone", "--bare", &repo, bare.to_str().unwrap()],
-        None,
-    )
-    .unwrap();
-    devkit_common::cmd::capture(
-        "git",
+    git(&["clone", "--bare", &repo, bare.to_str().unwrap()], None).unwrap();
+    git(
         &[
             "worktree",
             "add",
@@ -35,8 +41,7 @@ fn a_nested_scoped_cache_migrates_and_its_worktree_still_works() {
 
     // Capture what the worktree pointed at, so the assertion below is about
     // preservation rather than merely about the directory existing.
-    let before_head = devkit_common::cmd::capture(
-        "git",
+    let before_head = git(
         &["rev-parse", "HEAD"],
         Some(old.join("v1.0.0").to_str().unwrap()),
     )
@@ -53,8 +58,7 @@ fn a_nested_scoped_cache_migrates_and_its_worktree_still_works() {
 
     // A clean status alone would also pass for a worktree pointing at the wrong
     // commit, so assert the exact HEAD.
-    let after_head = devkit_common::cmd::capture(
-        "git",
+    let after_head = git(
         &["rev-parse", "HEAD"],
         Some(new.join("v1.0.0").to_str().unwrap()),
     )
@@ -66,8 +70,7 @@ fn a_nested_scoped_cache_migrates_and_its_worktree_still_works() {
         "the migrated worktree must keep its commit"
     );
 
-    let status = devkit_common::cmd::capture(
-        "git",
+    let status = git(
         &["status", "--porcelain"],
         Some(new.join("v1.0.0").to_str().unwrap()),
     )
@@ -92,14 +95,8 @@ fn a_worktree_whose_link_cannot_be_repaired_is_rebuilt_at_its_recorded_commit() 
     let old = cache.join("@scope/pkg");
     std::fs::create_dir_all(&old).unwrap();
     let bare = old.join("repo.git");
-    devkit_common::cmd::capture(
-        "git",
-        &["clone", "--bare", &repo, bare.to_str().unwrap()],
-        None,
-    )
-    .unwrap();
-    devkit_common::cmd::capture(
-        "git",
+    git(&["clone", "--bare", &repo, bare.to_str().unwrap()], None).unwrap();
+    git(
         &[
             "worktree",
             "add",
@@ -110,8 +107,7 @@ fn a_worktree_whose_link_cannot_be_repaired_is_rebuilt_at_its_recorded_commit() 
         Some(bare.to_str().unwrap()),
     )
     .unwrap();
-    let head = devkit_common::cmd::capture(
-        "git",
+    let head = git(
         &["rev-parse", "HEAD"],
         Some(old.join("v1.0.0").to_str().unwrap()),
     )
@@ -136,7 +132,7 @@ fn a_worktree_whose_link_cannot_be_repaired_is_rebuilt_at_its_recorded_commit() 
     // for prune to trip over.
     let new = cache.join("@scope~pkg").join("v1.0.0");
     assert_eq!(
-        devkit_common::cmd::capture("git", &["rev-parse", "HEAD"], Some(new.to_str().unwrap()))
+        git(&["rev-parse", "HEAD"], Some(new.to_str().unwrap()))
             .unwrap()
             .trim(),
         head
@@ -156,14 +152,8 @@ fn a_crash_between_rename_and_repair_is_finished_by_the_next_run() {
     let old = cache.join("@scope/pkg");
     std::fs::create_dir_all(&old).unwrap();
     let bare = old.join("repo.git");
-    devkit_common::cmd::capture(
-        "git",
-        &["clone", "--bare", &repo, bare.to_str().unwrap()],
-        None,
-    )
-    .unwrap();
-    devkit_common::cmd::capture(
-        "git",
+    git(&["clone", "--bare", &repo, bare.to_str().unwrap()], None).unwrap();
+    git(
         &[
             "worktree",
             "add",
@@ -174,8 +164,7 @@ fn a_crash_between_rename_and_repair_is_finished_by_the_next_run() {
         Some(bare.to_str().unwrap()),
     )
     .unwrap();
-    let head = devkit_common::cmd::capture(
-        "git",
+    let head = git(
         &["rev-parse", "HEAD"],
         Some(old.join("v1.0.0").to_str().unwrap()),
     )
@@ -189,12 +178,7 @@ fn a_crash_between_rename_and_repair_is_finished_by_the_next_run() {
     std::fs::remove_dir_all(cache.join("@scope")).ok();
     let moved = cache.join("@scope~pkg").join("v1.0.0");
     assert!(
-        devkit_common::cmd::capture(
-            "git",
-            &["status", "--porcelain"],
-            Some(moved.to_str().unwrap())
-        )
-        .is_err(),
+        git(&["status", "--porcelain"], Some(moved.to_str().unwrap())).is_err(),
         "the fixture must actually be broken, or this test proves nothing"
     );
 
@@ -204,7 +188,7 @@ fn a_crash_between_rename_and_repair_is_finished_by_the_next_run() {
         "phase 5 must repair a library that needs no rename"
     );
     assert_eq!(
-        devkit_common::cmd::capture("git", &["rev-parse", "HEAD"], Some(moved.to_str().unwrap()))
+        git(&["rev-parse", "HEAD"], Some(moved.to_str().unwrap()))
             .unwrap()
             .trim(),
         head
@@ -224,14 +208,8 @@ fn a_crash_between_worktree_prune_and_worktree_add_is_recovered_from_the_journal
     let lib = cache.join("@scope~pkg");
     std::fs::create_dir_all(&lib).unwrap();
     let bare = lib.join("repo.git");
-    devkit_common::cmd::capture(
-        "git",
-        &["clone", "--bare", &repo, bare.to_str().unwrap()],
-        None,
-    )
-    .unwrap();
-    let head = devkit_common::cmd::capture(
-        "git",
+    git(&["clone", "--bare", &repo, bare.to_str().unwrap()], None).unwrap();
+    let head = git(
         &["rev-parse", "v1.0.0^{commit}"],
         Some(bare.to_str().unwrap()),
     )
@@ -259,8 +237,7 @@ fn a_crash_between_worktree_prune_and_worktree_add_is_recovered_from_the_journal
         "the recovery must be reported: {done:?}"
     );
     assert_eq!(
-        devkit_common::cmd::capture(
-            "git",
+        git(
             &["rev-parse", "HEAD"],
             Some(lib.join("v1.0.0").to_str().unwrap()),
         )
@@ -285,8 +262,7 @@ fn a_rename_whose_target_already_exists_migrates_nothing() {
     // Old nested form and the new encoded form both present.
     let old = cache.join("@scope/pkg");
     std::fs::create_dir_all(&old).unwrap();
-    devkit_common::cmd::capture(
-        "git",
+    git(
         &[
             "clone",
             "--bare",
@@ -320,8 +296,7 @@ fn an_already_migrated_cache_is_left_alone() {
     let cache = base.join("cache");
     let lib = cache.join("@scope~pkg");
     std::fs::create_dir_all(&lib).unwrap();
-    devkit_common::cmd::capture(
-        "git",
+    git(
         &[
             "clone",
             "--bare",
@@ -346,14 +321,8 @@ fn a_stale_administrative_back_pointer_is_repaired_before_prune_can_read_it_as_a
     let lib = cache.join("@scope~pkg");
     std::fs::create_dir_all(&lib).unwrap();
     let bare = lib.join("repo.git");
-    devkit_common::cmd::capture(
-        "git",
-        &["clone", "--bare", &repo, bare.to_str().unwrap()],
-        None,
-    )
-    .unwrap();
-    devkit_common::cmd::capture(
-        "git",
+    git(&["clone", "--bare", &repo, bare.to_str().unwrap()], None).unwrap();
+    git(
         &[
             "worktree",
             "add",
@@ -377,10 +346,8 @@ fn a_stale_administrative_back_pointer_is_repaired_before_prune_can_read_it_as_a
         "the stale back-pointer must be repaired: {done:?}"
     );
 
-    devkit_common::cmd::capture("git", &["worktree", "prune"], Some(bare.to_str().unwrap()))
-        .unwrap();
-    let listed = devkit_common::cmd::capture(
-        "git",
+    git(&["worktree", "prune"], Some(bare.to_str().unwrap())).unwrap();
+    let listed = git(
         &["worktree", "list", "--porcelain"],
         Some(bare.to_str().unwrap()),
     )
@@ -401,16 +368,10 @@ fn one_unrepairable_checkout_does_not_cost_its_healthy_sibling_its_registration(
     let old = cache.join("@scope/pkg");
     std::fs::create_dir_all(&old).unwrap();
     let bare = old.join("repo.git");
-    devkit_common::cmd::capture(
-        "git",
-        &["clone", "--bare", &repo, bare.to_str().unwrap()],
-        None,
-    )
-    .unwrap();
+    git(&["clone", "--bare", &repo, bare.to_str().unwrap()], None).unwrap();
     let mut heads = Vec::new();
     for tag in ["v1.0.0", "v1.1.0"] {
-        devkit_common::cmd::capture(
-            "git",
+        git(
             &[
                 "worktree",
                 "add",
@@ -422,8 +383,7 @@ fn one_unrepairable_checkout_does_not_cost_its_healthy_sibling_its_registration(
         )
         .unwrap();
         heads.push(
-            devkit_common::cmd::capture(
-                "git",
+            git(
                 &["rev-parse", "HEAD"],
                 Some(old.join(tag).to_str().unwrap()),
             )
@@ -454,8 +414,7 @@ fn one_unrepairable_checkout_does_not_cost_its_healthy_sibling_its_registration(
     );
     for (tag, head) in ["v1.0.0", "v1.1.0"].iter().zip(&heads) {
         assert_eq!(
-            devkit_common::cmd::capture(
-                "git",
+            git(
                 &["rev-parse", "HEAD"],
                 Some(new.join(tag).to_str().unwrap()),
             )
@@ -477,14 +436,8 @@ fn a_recreated_checkout_clears_the_registration_its_removal_left_behind() {
     let lib = cache.join("@scope~pkg");
     std::fs::create_dir_all(&lib).unwrap();
     let bare = lib.join("repo.git");
-    devkit_common::cmd::capture(
-        "git",
-        &["clone", "--bare", &repo, bare.to_str().unwrap()],
-        None,
-    )
-    .unwrap();
-    devkit_common::cmd::capture(
-        "git",
+    git(&["clone", "--bare", &repo, bare.to_str().unwrap()], None).unwrap();
+    git(
         &[
             "worktree",
             "add",
@@ -495,8 +448,7 @@ fn a_recreated_checkout_clears_the_registration_its_removal_left_behind() {
         Some(bare.to_str().unwrap()),
     )
     .unwrap();
-    let head = devkit_common::cmd::capture(
-        "git",
+    let head = git(
         &["rev-parse", "HEAD"],
         Some(lib.join("v1.0.0").to_str().unwrap()),
     )
@@ -525,8 +477,7 @@ fn a_recreated_checkout_clears_the_registration_its_removal_left_behind() {
         "the recovery must be reported: {done:?}"
     );
     assert_eq!(
-        devkit_common::cmd::capture(
-            "git",
+        git(
             &["rev-parse", "HEAD"],
             Some(lib.join("v1.0.0").to_str().unwrap()),
         )
@@ -542,17 +493,11 @@ fn a_recreated_checkout_clears_the_registration_its_removal_left_behind() {
 fn seed_library(repo: &str, lib: &std::path::Path, checkouts: &[&str]) -> Vec<String> {
     std::fs::create_dir_all(lib).unwrap();
     let bare = lib.join("repo.git");
-    devkit_common::cmd::capture(
-        "git",
-        &["clone", "--bare", repo, bare.to_str().unwrap()],
-        None,
-    )
-    .unwrap();
+    git(&["clone", "--bare", repo, bare.to_str().unwrap()], None).unwrap();
     checkouts
         .iter()
         .map(|checkout| {
-            devkit_common::cmd::capture(
-                "git",
+            git(
                 &[
                     "worktree",
                     "add",
@@ -563,8 +508,7 @@ fn seed_library(repo: &str, lib: &std::path::Path, checkouts: &[&str]) -> Vec<St
                 Some(bare.to_str().unwrap()),
             )
             .unwrap();
-            devkit_common::cmd::capture(
-                "git",
+            git(
                 &["rev-parse", "HEAD"],
                 Some(lib.join(checkout).to_str().unwrap()),
             )
@@ -609,8 +553,7 @@ fn a_husk_left_by_an_interrupted_removal_is_rebuilt_rather_than_forgotten() {
         "the husk must be healed, not skipped: {done:?}"
     );
     assert_eq!(
-        devkit_common::cmd::capture(
-            "git",
+        git(
             &["rev-parse", "HEAD"],
             Some(lib.join("v1.0.0").to_str().unwrap()),
         )
@@ -688,8 +631,7 @@ fn a_git_that_cannot_spawn_is_not_a_commit_the_repository_lost() {
     let cache = base.join("cache");
     let lib = cache.join("@scope~pkg");
     seed_library(&repo, &lib, &[]);
-    let head = devkit_common::cmd::capture(
-        "git",
+    let head = git(
         &["rev-parse", "v1.0.0^{commit}"],
         Some(lib.join("repo.git").to_str().unwrap()),
     )
@@ -806,8 +748,7 @@ fn a_rename_another_process_already_applied_is_not_an_error() {
         "the rename was another process's to report: {done:?}"
     );
     assert_eq!(
-        devkit_common::cmd::capture(
-            "git",
+        git(
             &["rev-parse", "HEAD"],
             Some(new.join("v1.0.0").to_str().unwrap()),
         )

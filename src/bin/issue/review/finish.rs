@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use devkit_common::cmd::{gh_json_in, git};
+use devkit_common::cmd::gh_json_in;
 use devkit_common::github;
 use devkit_common::progress::Steps;
 use devkit_config::Person;
@@ -183,12 +183,10 @@ pub fn run(args: Args) -> Result<()> {
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
 
     let steps = Steps::persistent();
-    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &start)
+    let branch = devkit_common::git::branch(std::path::Path::new(&start)).ok();
+    let record = devkit_common::git::checkout_root(std::path::Path::new(&start))
         .ok()
-        .map(|b| b.trim().to_string());
-    let record = git(&["rev-parse", "--show-toplevel"], &start)
-        .ok()
-        .and_then(|top| devkit_common::record::read(std::path::Path::new(top.trim())));
+        .and_then(|top| devkit_common::record::read(&top));
 
     // Explicit `--pr`, then the record, then the worktree branch's PR (best
     // effort). A recorded locator can name a repository other than `pr_repo`.

@@ -15,13 +15,10 @@ fn setup() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     let git = |args: &[&str]| {
-        let ok = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .status()
-            .expect("git")
-            .success();
-        assert!(ok, "git {args:?} failed");
+        devkit_common::git::Git::fixture(root)
+            .args(args.iter().copied())
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
     };
     git(&["init", "-q"]);
     std::fs::write(

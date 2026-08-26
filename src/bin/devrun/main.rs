@@ -4,9 +4,10 @@ mod config;
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use devkit::completions::Shell;
+use devkit_common::git::Git;
 use devkit_common::progress::Steps;
 use devkit_common::supervise;
-use devkit_common::{cmd::git, ui};
+use devkit_common::ui;
 use devkit_config::expand_tilde;
 use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
@@ -235,9 +236,9 @@ fn cwd_of(cli: &Cli) -> String {
 }
 
 fn toplevel(cwd: &str) -> Result<String> {
-    Ok(git(&["rev-parse", "--show-toplevel"], cwd)?
-        .trim()
-        .to_string())
+    Ok(devkit_common::git::checkout_root(Path::new(cwd))?
+        .to_string_lossy()
+        .into_owned())
 }
 
 /// Pick known apps whose files appear in a `git diff --stat` against the baseline.
@@ -626,15 +627,14 @@ fn cmd_up(
     let mut apps: Vec<String> = if !apps_arg.is_empty() {
         apps_arg.to_vec()
     } else {
-        let diff = git(
-            &[
+        let diff = Git::at(Path::new(cwd))
+            .args([
                 "diff",
                 &format!("{}...HEAD", cfg.defaults.baseline_ref),
                 "--stat",
-            ],
-            cwd,
-        )
-        .unwrap_or_default();
+            ])
+            .output()
+            .unwrap_or_default();
         apps_from_diff(&diff, &known, &cfg.defaults.apps_dir)
     };
     for a in &apps {

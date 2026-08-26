@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use devkit_common::cmd::git;
+use devkit_common::git::Git;
 use devkit_common::gitfetch;
 use std::path::Path;
 
@@ -10,10 +10,16 @@ pub fn ensure_fresh(main_repo: &str, path: &str, git_ref: &str) -> Result<()> {
     let (remote, _) = git_ref.split_once('/').unwrap_or(("origin", git_ref));
     if !Path::new(path).exists() {
         gitfetch::fetch(remote, main_repo)?;
-        git(&["worktree", "add", "--detach", path, git_ref], main_repo)?;
+        Git::at(Path::new(main_repo))
+            .args(["worktree", "add", "--detach", path, git_ref])
+            .output()?;
         return Ok(());
     }
-    let dirty = !git(&["status", "--porcelain"], path)?.trim().is_empty();
+    let dirty = !Git::at(Path::new(path))
+        .args(["status", "--porcelain"])
+        .output()?
+        .trim()
+        .is_empty();
     if dirty {
         bail!(
             "baseline worktree {path} is dirty — refusing to reset --hard. Clean it or remove it."
@@ -23,7 +29,9 @@ pub fn ensure_fresh(main_repo: &str, path: &str, git_ref: &str) -> Result<()> {
     if head_at(path, git_ref) {
         return Ok(());
     }
-    git(&["reset", "--hard", git_ref], path)?;
+    Git::at(Path::new(path))
+        .args(["reset", "--hard", git_ref])
+        .output()?;
     Ok(())
 }
 
@@ -32,7 +40,9 @@ pub fn ensure_fresh(main_repo: &str, path: &str, git_ref: &str) -> Result<()> {
 /// `reset --hard git_ref` would be a no-op and can be skipped.
 fn head_at(path: &str, git_ref: &str) -> bool {
     let rev = |r: &str| {
-        git(&["rev-parse", r], path)
+        Git::at(Path::new(path))
+            .args(["rev-parse", r])
+            .output()
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -46,24 +56,11 @@ fn head_at(path: &str, git_ref: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Context;
 
-    /// Git ignores the developer's real global/system config, so a fixture
-    /// commit can't inherit ambient settings like `commit.gpgsign`.
     fn git_test(args: &[&str], cwd: &str) -> Result<String> {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        Git::fixture(Path::new(cwd))
+            .args(args.iter().copied())
             .output()
-            .context("failed to spawn `git`")?;
-        anyhow::ensure!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     #[test]
@@ -82,8 +79,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().to_str().unwrap();
         git_test(&["init", "-q"], p).unwrap();
-        git_test(&["config", "user.email", "t@t"], p).unwrap();
-        git_test(&["config", "user.name", "t"], p).unwrap();
         std::fs::write(tmp.path().join("f"), "a").unwrap();
         git_test(&["add", "-A"], p).unwrap();
         git_test(&["commit", "-qm", "init"], p).unwrap();

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use devkit_common::cmd::git;
+use devkit_common::git::Git;
 use devkit_common::github;
 use devkit_common::tracker::{Resolved, State, StateKind, TrackerKind};
 use devkit_common::worktree;
@@ -258,7 +258,9 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
 
 /// True when a worktree has uncommitted changes.
 pub fn dirty_of(path: &str) -> bool {
-    !git(&["status", "--porcelain"], path)
+    !Git::at(Path::new(path))
+        .args(["status", "--porcelain"])
+        .output()
         .unwrap_or_default()
         .trim()
         .is_empty()
@@ -1297,7 +1299,10 @@ mod tests {
             })
             .collect();
         // A repo with an untracked file: `git status --porcelain` is non-empty.
-        git(&["init", "-q", "-b", "main"], &paths[3]).unwrap();
+        Git::fixture(Path::new(&paths[3]))
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
         std::fs::write(std::path::Path::new(&paths[3]).join("f"), "x").unwrap();
 
         let got: Mutex<Vec<Option<bool>>> = Mutex::new(vec![None; paths.len()]);

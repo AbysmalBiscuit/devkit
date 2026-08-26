@@ -15,13 +15,10 @@ fn devrun() -> Command {
 fn setup() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
-    let ok = Command::new("git")
+    devkit_common::git::Git::fixture(root)
         .args(["init", "-q"])
-        .current_dir(root)
-        .status()
-        .expect("git")
-        .success();
-    assert!(ok, "git init failed");
+        .output()
+        .unwrap();
     std::fs::write(
         root.join("devkit.toml"),
         r#"

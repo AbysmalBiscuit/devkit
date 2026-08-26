@@ -1,6 +1,7 @@
 use crate::slug::slugify;
 use anyhow::{Context, Result};
-use devkit_common::cmd::{gh_capture, gh_json_in, git};
+use devkit_common::cmd::{gh_capture, gh_json_in};
+use devkit_common::git::Git;
 use devkit_common::gitfetch;
 use devkit_common::github;
 use devkit_common::progress::Steps;
@@ -292,15 +293,14 @@ fn with_cleanup<T>(worktree: &Path, monorepo: &str, f: impl FnOnce() -> Result<T
     match f() {
         Ok(v) => Ok(v),
         Err(e) => {
-            let _ = git(
-                &[
+            let _ = Git::at(Path::new(monorepo))
+                .args([
                     "worktree",
                     "remove",
                     "--force",
                     worktree.to_str().unwrap_or_default(),
-                ],
-                monorepo,
-            );
+                ])
+                .output();
             Err(e)
         }
     }
@@ -362,16 +362,15 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         gitfetch::fetch("origin", monorepo_s)
     })?;
     steps.during_result("Creating worktree…", || {
-        git(
-            &[
+        Git::at(Path::new(monorepo_s))
+            .args([
                 "worktree",
                 "add",
                 "--detach",
                 worktree_s,
                 &cfg.defaults.baseline_ref,
-            ],
-            monorepo_s,
-        )
+            ])
+            .output()
     })?;
 
     // Once the worktree exists, any failure through record::write leaves an
@@ -392,7 +391,11 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         // The worktree is built *from* the PR, so it has no head to compare
         // until the checkout lands — validated immediately after, before the
         // record is written, rather than pre-gated.
-        let head = git(&["rev-parse", "HEAD"], worktree_s)?.trim().to_string();
+        let head = Git::at(Path::new(worktree_s))
+            .args(["rev-parse", "HEAD"])
+            .output()?
+            .trim()
+            .to_string();
         let checked_out = github::pr_meta_full(&pr_repo, meta.number)
             .with_context(|| format!("verifying PR #{}", meta.number))?;
         crate::review::finish::assert_belongs(&checked_out, &head)?;
@@ -487,20 +490,12 @@ fn report(pr: u64, branch: &str, worktree: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
-    /// Git ignores the developer's real global/system config, so a fixture
-    /// commit can't inherit ambient settings like `commit.gpgsign`.
     fn git_cmd(args: &[&str], cwd: &std::path::Path) {
-        let ok = Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .status()
-            .expect("git runs")
-            .success();
-        assert!(ok, "git {args:?} failed");
+        devkit_common::git::Git::fixture(cwd)
+            .args(args.iter().copied())
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
     }
 
     /// Verify that `with_cleanup` removes the worktree on failure and returns
@@ -512,8 +507,6 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
 
         git_cmd(&["init", "-q", "-b", "main"], &repo);
-        git_cmd(&["config", "user.email", "t@t"], &repo);
-        git_cmd(&["config", "user.name", "t"], &repo);
         std::fs::write(repo.join("f"), "x").unwrap();
         git_cmd(&["add", "."], &repo);
         git_cmd(&["commit", "-qm", "init"], &repo);

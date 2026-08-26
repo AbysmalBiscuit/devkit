@@ -264,8 +264,10 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
 /// says it may be transient rather than claiming a settled mismatch.
 fn inspect(label: &str, path: &Path, recorded: Option<&cache::WorktreeMeta>) -> Vec<String> {
     let mut problems = Vec::new();
-    let dir = path.to_string_lossy().into_owned();
-    match devkit_common::cmd::git(&["status", "--porcelain"], &dir) {
+    match devkit_common::git::Git::at(path)
+        .args(["status", "--porcelain"])
+        .output()
+    {
         Ok(status) if !status.trim().is_empty() => problems.push(format!(
             "{label} has local modifications:\n    {}",
             status.trim().replace('\n', "\n    ")
@@ -276,7 +278,10 @@ fn inspect(label: &str, path: &Path, recorded: Option<&cache::WorktreeMeta>) -> 
     let Some(recorded) = recorded else {
         return problems;
     };
-    match devkit_common::cmd::git(&["rev-parse", "HEAD"], &dir) {
+    match devkit_common::git::Git::at(path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+    {
         Ok(head) if head.trim() != recorded.commit => problems.push(format!(
             "{label} is at {}, but {} resolved to {} (may be transient during a \
              concurrent `docm` run)",

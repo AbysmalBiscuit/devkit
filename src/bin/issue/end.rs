@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use devkit_common::cmd::git;
 use devkit_common::progress::Steps;
 use std::io::{self, Write};
 use std::path::Path;
@@ -76,15 +75,10 @@ impl std::error::Error for Dirty {}
 /// `--git-common-dir` resolves to the main repo's `.git`, whose parent is the
 /// root.
 fn main_repo(start: &str) -> Result<String> {
-    let common = git(
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        start,
-    )?
-    .trim()
-    .to_string();
-    let main = Path::new(&common)
-        .parent()
-        .context("git-common-dir has no parent")?;
+    let start = Path::new(start);
+    let main = devkit_common::git::main_checkout(start)?
+        .map(Ok)
+        .unwrap_or_else(|| devkit_common::git::checkout_root(start))?;
     main.to_str()
         .map(str::to_string)
         .context("main path not UTF-8")
@@ -111,33 +105,28 @@ fn cleanup(
     if cwd_c == wt || cwd_c.starts_with(&wt) {
         anyhow::bail!("cd out of {wt_s} before removing it");
     }
-    let dirty = !git(&["status", "--porcelain"], &wt_s)?.trim().is_empty();
+    let dirty = !devkit_common::git::Git::at(&wt)
+        .args(["status", "--porcelain"])
+        .output()?
+        .trim()
+        .is_empty();
     if dirty && !force {
         return Err(Dirty.into());
     }
     let summary = recorded_summary(&wt);
 
-    let common = git(
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        &wt_s,
-    )?
-    .trim()
-    .to_string();
-    let main = Path::new(&common)
-        .parent()
-        .context("git-common-dir has no parent")?;
+    let main = devkit_common::git::main_checkout(&wt)?
+        .map(Ok)
+        .unwrap_or_else(|| devkit_common::git::checkout_root(&wt))?;
     let parent = main.parent().context("main repo has no parent")?;
-    let main_s = main.to_str().context("main path not UTF-8")?;
-    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &wt_s)?
-        .trim()
-        .to_string();
+    let branch = devkit_common::git::branch(&wt)?;
 
     let mut rm: Vec<&str> = vec!["worktree", "remove"];
     if force {
         rm.push("--force");
     }
     rm.push(wt_s.as_str());
-    git(&rm, main_s)?;
+    devkit_common::git::Git::at(&main).args(rm).output()?;
 
     if let Some(path) = summary {
         let _ = std::fs::remove_file(path);
@@ -149,18 +138,18 @@ fn cleanup(
     // section is a git call with no invariant to corrupt.)
     {
         let _guard = branch_lock.lock().unwrap_or_else(|e| e.into_inner());
-        if git(
-            &[
+        if devkit_common::git::Git::at(&main)
+            .args([
                 "show-ref",
                 "--verify",
                 "--quiet",
                 &format!("refs/heads/{branch}"),
-            ],
-            main_s,
-        )
-        .is_ok()
+            ])
+            .success()?
         {
-            let _ = git(&["branch", "-D", &branch], main_s);
+            let _ = devkit_common::git::Git::at(&main)
+                .args(["branch", "-D", &branch])
+                .output();
         }
     }
 
@@ -281,7 +270,9 @@ pub fn run(
     // Every removal has joined; a single prune reclaims any stale worktree
     // entries without racing a concurrent removal.
     if let Some(main) = main {
-        let _ = git(&["worktree", "prune"], &main);
+        let _ = devkit_common::git::Git::at(Path::new(&main))
+            .args(["worktree", "prune"])
+            .output();
     }
     println!(
         "\nRemoved {} of {}.",
@@ -361,21 +352,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let main = dir.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
-        // Git ignores the developer's real global/system config, so this
-        // fixture commit can't inherit ambient settings like `commit.gpgsign`.
         let g = |args: &[&str], cwd: &std::path::Path| {
-            let ok = std::process::Command::new("git")
-                .args(args)
-                .current_dir(cwd)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_SYSTEM", "/dev/null")
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
+            devkit_common::git::Git::fixture(cwd)
+                .args(args.iter().copied())
                 .output()
-                .unwrap();
-            assert!(ok.status.success(), "git {args:?}: {ok:?}");
+                .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
         };
         g(&["init", "-q", "-b", "main"], &main);
         std::fs::write(main.join("f.txt"), "x\n").unwrap();
@@ -408,15 +389,11 @@ mod tests {
 
         assert!(!wt.exists(), "worktree removed");
         assert!(!summary.exists(), "recorded summary removed");
-        let branches = std::process::Command::new("git")
+        let branches = devkit_common::git::Git::fixture(&main)
             .args(["branch", "--list", "eng-1"])
-            .current_dir(&main)
             .output()
             .unwrap();
-        assert!(
-            String::from_utf8_lossy(&branches.stdout).trim().is_empty(),
-            "branch deleted"
-        );
+        assert!(branches.trim().is_empty(), "branch deleted");
     }
 
     #[test]
@@ -424,21 +401,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let main = dir.path().join("main");
         std::fs::create_dir_all(&main).unwrap();
-        // Git ignores the developer's real global/system config, so this
-        // fixture commit can't inherit ambient settings like `commit.gpgsign`.
         let g = |args: &[&str], cwd: &std::path::Path| {
-            let ok = std::process::Command::new("git")
-                .args(args)
-                .current_dir(cwd)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_SYSTEM", "/dev/null")
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
+            devkit_common::git::Git::fixture(cwd)
+                .args(args.iter().copied())
                 .output()
-                .unwrap();
-            assert!(ok.status.success(), "git {args:?}: {ok:?}");
+                .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
         };
         g(&["init", "-q", "-b", "main"], &main);
         std::fs::write(main.join("f.txt"), "x\n").unwrap();

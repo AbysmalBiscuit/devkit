@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use devkit_common::cmd::{capture, git};
+use devkit_common::cmd::capture;
+use devkit_common::git::Git;
 use devkit_common::gitfetch;
 use devkit_common::progress::Steps;
 use devkit_common::tracker::{IssueDetails, IssueRef, Resolved, Tracker};
@@ -376,26 +377,23 @@ pub fn run(args: SetupArgs) -> Result<()> {
     steps.during_result("Fetching from origin…", || {
         gitfetch::fetch("origin", monorepo_s)
     })?;
-    if git(
-        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
-        monorepo_s,
-    )
-    .is_ok()
+    if Git::at(Path::new(monorepo_s))
+        .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
+        .success()?
     {
         anyhow::bail!("branch {branch} already exists — let /issue-setup decide how to proceed");
     }
     steps.during_result("Creating worktree…", || {
-        git(
-            &[
+        Git::at(Path::new(monorepo_s))
+            .args([
                 "worktree",
                 "add",
                 "-b",
                 &branch,
                 worktree.to_str().unwrap(),
                 &cfg.defaults.baseline_ref,
-            ],
-            monorepo_s,
-        )
+            ])
+            .output()
     })?;
 
     // The summary lands before the record so the record can name it: that is

@@ -2,28 +2,18 @@
 //! versions (v1.0.0 → "// v1", v1.1.0 tip → "// v2").
 
 use std::path::Path;
-use std::process::Command;
 
-/// Git ignores the developer's real global/system config, so a fixture commit
-/// or tag can't inherit ambient settings like `commit.gpgsign`.
 fn sh(args: &[&str], cwd: &Path) {
-    let ok = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .status()
-        .unwrap()
-        .success();
-    assert!(ok, "git {args:?} failed");
+    devkit_common::git::Git::fixture(cwd)
+        .args(args.iter().copied())
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
 }
 
 /// Returns the repo path as a clone URL (plain local path).
 pub fn fixture_repo(dir: &Path) -> String {
     std::fs::create_dir_all(dir).unwrap();
     sh(&["init", "-b", "main"], dir);
-    sh(&["config", "user.email", "t@t"], dir);
-    sh(&["config", "user.name", "t"], dir);
     std::fs::create_dir_all(dir.join("docs")).unwrap();
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("docs/guide.md"), "# guide").unwrap();

@@ -1,20 +1,12 @@
 use devkit_common::tracker::fake::FakeTracker;
 use devkit_common::tracker::{Resolved, TrackerKind};
 use std::path::Path;
-use std::process::Command;
 
-/// Git ignores the developer's real global/system config, so a fixture commit
-/// can't inherit ambient settings like `commit.gpgsign`.
 fn git(args: &[&str], cwd: &Path) {
-    let ok = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .status()
-        .expect("git runs")
-        .success();
-    assert!(ok, "git {args:?} failed");
+    devkit_common::git::Git::fixture(cwd)
+        .args(args.iter().copied())
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
 }
 
 /// A repo with one commit and one `lev/eng-1-bar` worktree beside it, in a
@@ -25,8 +17,6 @@ fn fixture_repo() -> tempfile::TempDir {
     std::fs::create_dir_all(&main).unwrap();
 
     git(&["init", "-q", "-b", "main"], &main);
-    git(&["config", "user.email", "t@t"], &main);
-    git(&["config", "user.name", "t"], &main);
     std::fs::write(main.join("f"), "x").unwrap();
     git(&["add", "."], &main);
     git(&["commit", "-qm", "init"], &main);

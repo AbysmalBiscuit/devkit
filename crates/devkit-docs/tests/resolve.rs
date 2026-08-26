@@ -5,25 +5,12 @@ use devkit_docs::manifest::{Ecosystem, LibEntry};
 use devkit_docs::refs::RefStore;
 use devkit_docs::resolve::{Options, resolve};
 
-/// A follow-up git operation against an already-built `fixture_repo`. Git
-/// ignores the developer's real global/system config, so a tag created here
-/// can't be coerced into an annotated, signed one by an ambient
-/// `tag.gpgsign`; the repo's identity is already set locally by
-/// `fixture_repo`.
+/// A follow-up git operation against an already-built `fixture_repo`.
 fn git(args: &[&str], cwd: &str) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    devkit_common::git::Git::fixture(std::path::Path::new(cwd))
+        .args(args.iter().copied())
         .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
+        .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"))
 }
 
 #[test]

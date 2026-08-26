@@ -9,11 +9,10 @@
 
 use crate::{cache, locks, names};
 use anyhow::{Context, Result, bail};
-use devkit_common::cmd;
+use devkit_common::git::Git;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const JOURNAL_SUFFIX: &str = ".migration.json";
 
@@ -329,7 +328,9 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
         // Repair has to precede any prune: while a worktree's administrative
         // back-pointer is stale, prune reads it as abandoned and deletes the
         // entry that records its commit.
-        let _ = cmd::git(&["worktree", "repair", path_str.as_str()], &bare_str);
+        let _ = Git::at(&bare)
+            .args(["worktree", "repair", path_str.as_str()])
+            .output();
         match head_at(&path) {
             Ok(head) if head == commit => lines.push(format!("repaired {dirname}/{checkout}")),
             _ => pending.push(Pending {
@@ -372,11 +373,10 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     for step in pending.iter().filter(|step| step.occupied) {
         let path = lib_dir.join(&step.checkout);
         let path_str = path.to_string_lossy().into_owned();
-        if cmd::git(
-            &["worktree", "remove", "--force", path_str.as_str()],
-            &bare_str,
-        )
-        .is_err()
+        if Git::at(&bare)
+            .args(["worktree", "remove", "--force", path_str.as_str()])
+            .output()
+            .is_err()
         {
             match std::fs::remove_dir_all(&path) {
                 Ok(()) => {}
@@ -389,28 +389,30 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     }
     // A directory removed outside git leaves its administrative entry behind,
     // and `worktree add` refuses a name that is still registered.
-    cmd::git(&["worktree", "prune"], &bare_str).with_context(|| {
-        format!(
-            "pruning worktrees of {dirname}, listed by {}",
-            journal_file.display()
-        )
-    })?;
+    Git::at(&bare)
+        .args(["worktree", "prune"])
+        .output()
+        .with_context(|| {
+            format!(
+                "pruning worktrees of {dirname}, listed by {}",
+                journal_file.display()
+            )
+        })?;
     for step in &pending {
         let Pending {
             checkout, commit, ..
         } = step;
         let path_str = lib_dir.join(checkout).to_string_lossy().into_owned();
-        cmd::git(
-            &["worktree", "add", "--detach", path_str.as_str(), commit],
-            &bare_str,
-        )
-        .with_context(|| {
-            format!(
-                "recreating {dirname}/{checkout} at {commit}, recorded in {}; delete that file \
+        Git::at(&bare)
+            .args(["worktree", "add", "--detach", path_str.as_str(), commit])
+            .output()
+            .with_context(|| {
+                format!(
+                    "recreating {dirname}/{checkout} at {commit}, recorded in {}; delete that file \
                  to abandon the record and re-resolve the library instead",
-                journal_file.display()
-            )
-        })?;
+                    journal_file.display()
+                )
+            })?;
         lines.push(format!("{} {dirname}/{checkout} at {commit}", step.verb));
     }
     if journal_satisfied(&lib_dir, &bare, &journal) {
@@ -439,12 +441,11 @@ fn abandoned(dirname: &str, checkout: &str, commit: &str, journal_file: &Path) -
 /// of a commit the repository still has is not recoverable.
 fn has_commit(bare: &str, commit: &str) -> Result<bool> {
     let spec = format!("{commit}^{{commit}}");
-    let output = Command::new("git")
-        .args(["-C", bare, "cat-file", "-e", spec.as_str()])
+    Git::at(Path::new(bare))
+        .args(["cat-file", "-e", spec.as_str()])
         .env("GIT_NO_LAZY_FETCH", "1")
-        .output()
-        .with_context(|| format!("spawning git to look for {commit} in {bare}"))?;
-    Ok(output.status.success())
+        .success()
+        .with_context(|| format!("spawning git to look for {commit} in {bare}"))
 }
 
 fn backfill_origin(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
@@ -453,8 +454,10 @@ fn backfill_origin(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     if meta.origin.is_some() {
         return Ok(Vec::new());
     }
-    let bare = lib_dir.join("repo.git").to_string_lossy().into_owned();
-    let origin = cmd::git(&["config", "--get", "remote.origin.url"], &bare)
+    let bare = lib_dir.join("repo.git");
+    let origin = Git::at(&bare)
+        .args(["config", "--get", "remote.origin.url"])
+        .output()
         .ok()
         .map(|url| url.trim().to_string())
         .filter(|url| !url.is_empty());
@@ -511,8 +514,11 @@ fn links_ok(bare: &Path, checkout: &Path) -> bool {
 }
 
 fn head_at(checkout: &Path) -> Result<String> {
-    let path = checkout.to_string_lossy().into_owned();
-    Ok(cmd::git(&["rev-parse", "HEAD"], &path)?.trim().to_string())
+    Ok(Git::at(checkout)
+        .args(["rev-parse", "HEAD"])
+        .output()?
+        .trim()
+        .to_string())
 }
 
 fn expected_commit(
@@ -612,9 +618,10 @@ fn real_commit(value: &str) -> Option<String> {
 }
 
 fn list_worktrees(bare: &Path) -> Result<BTreeMap<String, String>> {
-    let bare_str = bare.to_string_lossy().into_owned();
-    let output = cmd::git(&["worktree", "list", "--porcelain"], &bare_str)
-        .with_context(|| format!("listing worktrees of {bare_str}"))?;
+    let output = Git::at(bare)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .with_context(|| format!("listing worktrees of {}", bare.display()))?;
     let mut listed = BTreeMap::new();
     let mut checkout: Option<String> = None;
     for line in output.lines() {

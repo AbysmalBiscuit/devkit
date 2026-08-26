@@ -23,7 +23,10 @@ fn materialize(git_ref: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    devkit_common::cmd::capture("git", args, Some(cwd.to_str().unwrap())).unwrap();
+    devkit_common::git::Git::fixture(cwd)
+        .args(args.iter().copied())
+        .output()
+        .unwrap();
 }
 
 #[test]
