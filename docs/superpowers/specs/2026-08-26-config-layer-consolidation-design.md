@@ -58,38 +58,98 @@ enforcement and the project docs catalog, or stop it being a sole-layer
 override. Neither is acceptable, so the shared piece is the project layers
 only.
 
-### The same ancestor walk, written five ways
+### Five ways to ask which checkout this is
 
-`Path::ancestors()` is used correctly at `docs/importers.rs:241`, `:437`,
-`:760` and `locks/lib.rs:419`. It is also hand-rolled as
-`while let Some(d) = dir` at `locks/lib.rs:45`, `config/lib.rs:722`,
-`docs/manifest.rs:169`, `docs/resolve.rs:75`, and `docs/lockfiles.rs:38`.
-Three of those five are `ancestors().find(...)` spelled long.
+"Which checkout am I in" is answered by five different mechanisms that do not
+agree with each other:
+
+| Mechanism | Answers | Call sites |
+| --- | --- | --- |
+| `git rev-parse --show-toplevel` | current worktree root | `brief.rs:371`, `:502`, `devrun/main.rs:238`, `info.rs:46`, `portm.rs:59`, `review/request.rs:280`, `review/finish.rs:189` |
+| `git rev-parse --git-common-dir` | main checkout's git dir | `end.rs:80`, `:121` |
+| `find_root_from` | nearest ancestor holding `.git`, no git call | `locks/lib.rs:39` |
+| parsing the `.git` file | linked-worktree detection | `docs/upgrade.rs:480`, `:485` |
+| `git worktree list --porcelain` | every worktree of the repo | `common/worktree.rs:93` |
+
+Every one of the subprocess spellings goes through `cmd::capture`
+(`cmd.rs:5`), which inherits the environment and has no timeout. So an ambient
+`GIT_DIR` redirects `issue end`'s common-dir lookup to an unrelated repository
+today, and any git that fails to return blocks its caller indefinitely.
+
+The ancestor walk itself is written five ways too. `Path::ancestors()` is used
+correctly at `docs/importers.rs:241`, `:437`, `:760` and `locks/lib.rs:419`, and
+hand-rolled as `while let Some(d) = dir` at `locks/lib.rs:45`,
+`config/lib.rs:722`, `docs/manifest.rs:169`, `docs/resolve.rs:75`, and
+`docs/lockfiles.rs:38`.
 
 ## Design
 
 Four changes, sequenced so each lands green on its own.
 
-### 0. Ancestor walks, and one home for the checkout root
+### 0. One git module
 
-Replace the five hand-rolled loops with `Path::ancestors()`. No helper is added
-to `devkit-common`: the standard library already provides the iterator, and a
-`walk_up` wrapper would be a third spelling of it in a codebase that has two.
+Every git invocation in the workspace moves behind one module,
+`devkit_common::git`. Git is already a required dependency (`devkit doctor`
+checks for it), so this shells out — it does not add a git library and does not
+reimplement anything git already answers.
 
-Move `find_root_from` (`locks/lib.rs:39`) into `devkit-config`, beside the
-layer discovery of step 1. "Which checkout am I in" is the first question layer
-discovery asks, and `devkit-config` must be able to answer it without reaching
-across the workspace. `devkit-locks` gains a `devkit-config` dependency — which
-step 1 requires anyway — and re-exports the function so its existing callers
-(lock context construction, root lookup, write normalization, `lockm`) are
-untouched.
+The module owns spawning, because git needs a spawn policy that generic
+`cmd::capture` must not have:
 
-`devkit-docs::resolve::project_root` (`resolve.rs:73`) **stays.** It is not
-provenance: its return value becomes the reference-registry workspace key
-(`resolve.rs:248`), and `pins::project_keys` (`pins.rs:119`) relies on each
-linked worktree having its own identity. Resolving it through an inherited
-main-checkout layer would collapse every worktree of a repository onto one key.
-It is rewritten with `ancestors()` and otherwise left alone.
+- **Sanitized environment.** `GIT_DIR`, `GIT_COMMON_DIR`, `GIT_WORK_TREE`, and
+  `GIT_INDEX_FILE` are stripped from every invocation. An ambient value for any
+  of them silently redirects git to a different repository, which for devkit
+  means loading a stranger's `[apps] launch` and `[tasks] run` as executable
+  config. `cmd::capture` cannot strip them, because `gh` and `doppler` need
+  their environments intact.
+- **A timeout.** `cmd::capture` uses `Command::output()`, which blocks until the
+  child exits. `enforcement_enabled` runs in the PreToolUse write hook, so a git
+  that never returns blocks the write. Failing open cannot rescue a call that
+  does not come back.
+
+Its surface is the questions the workspace already asks, each answered by the
+git command that answers it:
+
+```rust
+/// `rev-parse --show-toplevel` — the checkout containing `start`.
+pub fn checkout_root(start: &Path) -> Result<PathBuf>;
+
+/// The main checkout of `start`'s repository: the parent of
+/// `rev-parse --path-format=absolute --git-common-dir`, or `None` when that is
+/// already `start`'s own checkout or is not a checkout at all.
+pub fn main_checkout(start: &Path) -> Result<Option<PathBuf>>;
+
+/// `worktree list --porcelain`.
+pub fn worktrees(start: &Path) -> Result<Vec<Worktree>>;
+
+/// `rev-parse --abbrev-ref HEAD`.
+pub fn branch(start: &Path) -> Result<String>;
+
+/// `git <args>` with the sanitized environment and the timeout — the escape
+/// hatch for operations without a named function here.
+pub fn run(args: &[&str], cwd: &Path) -> Result<String>;
+```
+
+Every call site in the problem table moves onto it. `find_root_from`
+(`locks/lib.rs:39`) becomes a call to `checkout_root`, with `devkit-locks`
+re-exporting the name so its own callers are untouched. `end.rs:80` and `:121`
+call `main_checkout`, which is what closes their `GIT_DIR` hole.
+`common::worktree::discover` calls `worktrees`. The seven `--show-toplevel`
+sites call `checkout_root`. `docs::upgrade`'s hand-rolled `.git` inspection
+(`upgrade.rs:480`, `:485`) goes away in favor of asking git.
+
+**`devkit-config` does not call git.** It stays a leaf crate with no internal
+dependencies, and receives the main checkout as a parameter — see step 1. This
+is what lets the module live in `devkit-common` without inverting the
+`common` → `config` edge.
+
+`devkit-docs::resolve::project_root` (`resolve.rs:73`) is not a git question and
+stays. It asks for the nearest ancestor holding a `devkit.toml`, and its answer
+is the reference-registry workspace key (`resolve.rs:248`), which
+`pins::project_keys` (`pins.rs:119`) needs to differ per worktree. It is
+rewritten with `ancestors()` and otherwise left alone. The other four
+hand-rolled ancestor loops become `Path::ancestors()` too; no walking helper is
+added, because the standard library already is one.
 
 ### 1. One project-layer discovery, three consumers
 
@@ -148,36 +208,33 @@ crate that has no opinion about them.
 
 ### 2. The main-checkout layer
 
-`project_layers` gains one source: the main checkout of the git repository the
-start directory belongs to, resolved by reading `.git` directly. No subprocess.
+`project_layers` gains one source: the main checkout of the repository the
+start directory belongs to. It does not resolve that itself — the caller passes
+what `devkit_common::git::main_checkout` returned, so the git question is asked
+in exactly one place and `devkit-config` keeps no git knowledge.
 
-```
-root = find_root_from(start)
-if <root>/.git is a directory        → root is the main checkout; add nothing
-if <root>/.git is a file:
-    read it; require a single `gitdir: <path>` line
-    resolve <path> against <root> when relative
-    require it to end with `worktrees/<name>`; strip both components → common
-    require common.file_name() == ".git"
-    candidate = common.parent()
-    require canonicalize(<candidate>/.git) == canonicalize(common)
-    → candidate is the main checkout
-any failed requirement → no layer, no error
+```rust
+pub fn project_layers(start: &Path, main_checkout: Option<&Path>) -> Result<Vec<Layer>>;
 ```
 
-**Why not `git rev-parse --git-common-dir`.** It answers a different question
-and answers it unsafely. `cmd::capture` (`cmd.rs:5`) inherits the environment,
-so an ambient `GIT_DIR` or `GIT_COMMON_DIR` redirects the answer to an
-unrelated repository, whose `devkit.toml` would then contribute executable
-`[apps]` and `[tasks]` entries. `capture` also has no timeout, and this code
-runs in the PreToolUse write hook: a `git` that never returns blocks the write,
-and failing open cannot help a call that does not come back. Reading one file
-has neither problem, and the validation above is stricter than git's answer.
+`config::resolve` grows the same parameter. It has two production callers
+(`devkit-ports/src/load.rs:17`, `src/bin/devkit/brief.rs:465`), both in crates
+that already depend on `devkit-common`; everything else reaches config through
+`load::load`. The harness and the docs manifest resolve it the same way, from
+crates that also already depend on `devkit-common`.
 
-**Edge cases fall out of the validation rather than being special-cased.** A
-submodule's gitdir has no `worktrees/` component. A `--separate-git-dir` clone
-produces a common dir not named `.git`. A bare main worktree fails the same
-name check. Each adds no layer.
+Passing `None` means "no main-checkout layer" and is what every caller does
+when git fails, when the start directory is not in a repository, or when it is
+already the main checkout. Config resolution must not start failing because git
+is absent: `devkit brief` is required to stay silent outside a devkit project,
+and the `lockm` hook must never block a write. A git invocation that fails for
+any reason yields `None`, not an error.
+
+**Edge cases resolve to `None` in `main_checkout`, not in config.** A submodule
+and a `--separate-git-dir` clone both produce a common dir whose parent is not a
+checkout of that repository; a bare main worktree has no checkout at all.
+`main_checkout` verifies its answer is a real checkout before returning it, so
+each of these yields `None` rather than a path that happens to hold no config.
 
 **Precedence**, lowest first: home config (in `discover` only), ancestor layers
 outermost-first, the main checkout's `devkit.toml` then `devkit.local.toml`,
@@ -265,9 +322,15 @@ Each is intended. Listed so none of them arrives as a surprise.
   the main checkout's untracked `devkit.local.toml`, which is what the layer is
   primarily for.
 - The `lockm` PreToolUse hook goes from two flat file reads to an ancestor walk
-  plus one `.git` read. It runs on `Edit|MultiEdit|Write|NotebookEdit`
-  (`hooks/hooks.json:44`), so the cost lands on writes specifically. The
-  `DEVKIT_ENFORCE_WRITES` short-circuit removes all of it when the env decides.
+  plus one `git rev-parse`. It runs on `Edit|MultiEdit|Write|NotebookEdit`
+  (`hooks/hooks.json:44`), so the cost lands on writes specifically, measured at
+  1.0 ms against 0.69 ms for a bare process spawn. The `DEVKIT_ENFORCE_WRITES`
+  short-circuit removes all of it when the env decides, and the module's timeout
+  bounds it when git misbehaves.
+- Every git invocation loses `GIT_DIR`, `GIT_COMMON_DIR`, `GIT_WORK_TREE`, and
+  `GIT_INDEX_FILE` from its environment. A workflow that deliberately sets one
+  of these to steer devkit stops working; none is known to exist, and the
+  redirect they enable is the hole this closes.
 - devkit's own worktrees under `devkit-worktrees/` begin resolving
   `devkit/devkit.toml`, so they pick up its `[harness]`, `[github]`, and
   `[tracker]`. They run without all three today. This is the bug being fixed,
@@ -275,17 +338,19 @@ Each is intended. Listed so none of them arrives as a surprise.
 
 ## Non-goals
 
-- **The `common` / `config` dependency inversion is out of scope.** It was in
-  an earlier draft as the enabler for git-based resolution; reading `.git`
-  directly needs nothing from `devkit-common`, so the inversion is now an
-  unrelated refactor. It is also larger than that draft claimed: `Repos::resolve`
-  has eleven call sites, not two, and `expand_tilde` has seven production
-  consumers, not two. And `devkit-common` is not a primitives crate today — it
-  carries HTTP, GitHub, Slack, UI, tracing, storage, supervision, and the
-  optional daemon client — so pointing `devkit-config` at all of it would trade
-  one awkward edge for a heavier one. If the boundary is worth fixing, the shape
-  is a small leaf crate for path and repository primitives with `devkit-config`
-  and `devkit-common` as siblings, and that deserves its own spec.
+- **The `common` / `config` dependency inversion is out of scope, and is not
+  needed.** An earlier draft made it the enabler for git-based resolution.
+  Injecting the main checkout instead (step 2) keeps `devkit-config` a leaf, so
+  the git module lives in `devkit-common` with no edge to invert. Doing it
+  anyway would be a large unrelated refactor — `Repos::resolve` has eleven call
+  sites and `expand_tilde` seven production consumers — and `devkit-common` is
+  not a primitives crate today: it carries HTTP, GitHub, Slack, UI, tracing,
+  storage, supervision, and the optional daemon client, all of which
+  `devkit-config` would inherit. If that boundary is worth fixing, it deserves
+  its own spec.
+- **No git library.** Git is already a required dependency, so the module shells
+  out. Adding `gix` or `git2` would answer questions git already answers, and
+  `git2` would put a C build in front of the Windows CI job.
 - `issue sync-includes` (`docs/superpowers/plans/2026-08-26-issue-sync-includes.md`)
   is unaffected and still needed. It covers the rest of `worktree_include`:
   `CLAUDE.local.md`, `.env.local`, hook scripts. This change only removes
@@ -293,20 +358,24 @@ Each is intended. Listed so none of them arrives as a surprise.
 - No new config key. The main checkout is derived, not declared. A key naming
   it would have to live in the file the worktree cannot yet see.
 - No caching. The hook is a fresh process per invocation, so a process-lifetime
-  cache would not help it, and one file read does not warrant a cross-process
-  one.
+  cache would not help it, and 1 ms does not warrant a cross-process one.
 
 ## Gate
 
 `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
 `cargo fmt --all`, on each step independently.
 
-Step 2 requires tests for each resolution outcome: linked worktree resolves its
-main checkout; main checkout adds nothing; submodule, `--separate-git-dir`, and
-bare main each add nothing; a malformed `.git` file adds nothing and does not
-error; an ambient `GIT_DIR` pointing elsewhere changes no result. Precedence,
-per-kind cutoff, and canonicalized dedupe each get a test, including a worktree
-nested beneath its own main checkout.
+Step 0 requires a test that an ambient `GIT_DIR`, `GIT_COMMON_DIR`, and
+`GIT_WORK_TREE` change no answer the module gives, and one that a hanging git is
+bounded by the timeout rather than blocking its caller. It also requires that no
+`Command::new("git")`, `cmd::git`, or `capture("git", …)` remains outside the
+module — greppable, so it can be a test.
+
+Step 2 requires a test per resolution outcome: a linked worktree resolves its
+main checkout; a main checkout adds nothing; submodule, `--separate-git-dir`,
+and bare main each yield `None`; a git failure yields `None` and not an error.
+Precedence, per-kind cutoff, and canonicalized dedupe each get a test, including
+a worktree nested beneath its own main checkout.
 
 Step 3 requires the committed `schema/devkit-config.json` to match, which
 `cargo test` already enforces.
@@ -314,6 +383,7 @@ Step 3 requires the committed `schema/devkit-config.json` to match, which
 ## Unresolved
 
 None. The scope question (worktrees need zero devkit files, harness included),
-the resolution mechanism (parse and validate `.git`, no subprocess, no config
-key), the sharing boundary (project layers only), and the anchoring rule (by
+the resolution mechanism (one git module in `devkit-common`, shelling out, with
+the main checkout injected into config rather than resolved there), the sharing
+boundary (project layers only), and the anchoring rule (by
 key kind) are settled.
