@@ -7,6 +7,7 @@ use std::process::Command;
 fn completions_contain_name(bin: &str, exe: &str, shell: &str) {
     let out = Command::new(exe)
         .args(["completions", shell])
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .expect("spawn completions");
     assert!(

@@ -6,6 +6,7 @@ use std::process::Command;
 fn portm_shim_parses_portm_arguments() {
     let (_dir, link) = shimtest::linked("portm");
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .args(["--help"])
         .output()
         .expect("spawn portm shim");
@@ -28,6 +29,7 @@ fn portm_shim_defaults_to_status() {
     let (_dir, link) = shimtest::linked("portm");
     let state = tempfile::tempdir().expect("state dir");
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env("HOME", state.path())
         .env("XDG_STATE_HOME", state.path())
         .output()
@@ -43,6 +45,7 @@ fn portm_shim_defaults_to_status() {
 fn portm_shim_reports_the_package_version() {
     let (_dir, link) = shimtest::linked("portm");
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .arg("--version")
         .output()
         .expect("spawn portm --version");
@@ -57,6 +60,7 @@ fn portm_shim_reports_the_package_version() {
 #[test]
 fn devkit_ports_reaches_the_same_command() {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .args(["ports", "--help"])
         .output()
         .expect("spawn devkit ports --help");
@@ -71,6 +75,7 @@ fn devkit_ports_reaches_the_same_command() {
 fn lockm_shim_parses_lockm_arguments() {
     let (_dir, link) = shimtest::linked("lockm");
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .arg("--help")
         .output()
         .expect("spawn lockm shim");
@@ -89,6 +94,7 @@ fn lockm_shim_runs_the_pretooluse_hook() {
     let (_dir, link) = shimtest::linked("lockm");
     let state = tempfile::tempdir().expect("state dir");
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .args(["hook", "pretooluse"])
         .env("HOME", state.path())
         .env("XDG_STATE_HOME", state.path())
@@ -105,6 +111,7 @@ fn lockm_shim_runs_the_pretooluse_hook() {
 fn docm_shim_parses_docm_arguments() {
     let (_dir, link) = shimtest::linked("docm");
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .arg("--help")
         .output()
         .expect("spawn docm shim");
@@ -120,6 +127,7 @@ fn docm_shim_parses_docm_arguments() {
 fn devrun_shim_parses_devrun_arguments() {
     let (_dir, link) = shimtest::linked("devrun");
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .arg("--help")
         .output()
         .expect("spawn devrun shim");
@@ -175,6 +183,7 @@ launch = ["git", "version"]
     .expect("write devkit.toml");
 
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .arg("-C")
         .arg(project.path())
         .arg("reap")
@@ -215,6 +224,7 @@ fn empty_repo() -> tempfile::TempDir {
 fn issue_shim_parses_issue_arguments() {
     let (_dir, link) = shimtest::linked("issue");
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .arg("--help")
         .output()
         .expect("spawn issue shim");
@@ -233,6 +243,7 @@ fn issue_shim_defaults_to_status() {
     let state = tempfile::tempdir().expect("state dir");
     let project = empty_repo();
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .current_dir(project.path())
         .env("HOME", state.path())
         .env("XDG_STATE_HOME", state.path())
@@ -257,6 +268,7 @@ fn devkit_issue_defaults_to_status() {
     let state = tempfile::tempdir().expect("state dir");
     let project = empty_repo();
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .arg("issue")
         .current_dir(project.path())
         .env("HOME", state.path())
@@ -279,6 +291,7 @@ fn devkit_issue_defaults_to_status() {
 fn devkit_mcp_shim_reports_the_package_version() {
     let (_dir, link) = shimtest::linked("devkit-mcp");
     let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .arg("--version")
         .output()
         .expect("spawn devkit-mcp --version");
@@ -298,6 +311,7 @@ fn devkit_mcp_shim_serves_a_request() {
     let (_dir, link) = shimtest::linked("devkit-mcp");
     let state = tempfile::tempdir().expect("state dir");
     let mut child = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env("HOME", state.path())
         .env("XDG_STATE_HOME", state.path())
         .stdin(std::process::Stdio::piped())

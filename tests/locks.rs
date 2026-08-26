@@ -25,6 +25,7 @@ fn run(exe: &Path, project: &Path, state: &Path, args: &[&str]) -> Output {
         // reads $HOME/.claude/state/devkit. Pointing HOME at the throwaway temp dir
         // keeps the test from ever touching the developer's real state home.
         .env("HOME", state)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove("DEVKIT_SESSION")
         .env_remove("TMUX_PANE")
         .output()

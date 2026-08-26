@@ -27,9 +27,21 @@ fn retry_on_busy<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> T {
     }
 }
 
-/// Run `install-links` (with `args` appended) against `exe`.
+/// Run `install-links` (with `args` appended) against `exe`, isolated to a
+/// throwaway `HOME`/`XDG_STATE_HOME`. `links::run` takes the `links.lock`
+/// gate and writes the `links-version` stamp itself now (so a manual run
+/// leaves the same steady state an automatic one would); without this, every
+/// test that goes through this helper would write both into the developer's
+/// real state dir.
 fn run(exe: &std::path::Path, args: &[&str]) -> Output {
-    retry_on_busy(|| Command::new(exe).args(args).output())
+    let state = tempfile::tempdir().expect("state dir");
+    retry_on_busy(|| {
+        Command::new(exe)
+            .args(args)
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    })
 }
 
 /// Run `install-links` against a throwaway directory holding a copy of the
@@ -53,6 +65,12 @@ fn shim_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
     })
 }
 
+/// Runs with the automatic pass fully live (no `DEVKIT_SKIP_AUTOLINK`,
+/// `run`'s own isolated `HOME`/`XDG_STATE_HOME` aside) — this is the
+/// configuration real users run in, and the one `ensure_current` must stay
+/// out of: were it to link ahead of `install-links` here, every shim would
+/// already exist by the time `link_all` looked, and the report below would
+/// say `current` for all six instead of `created`.
 #[test]
 fn creates_every_shim() {
     let (dir, exe) = staged();
@@ -62,10 +80,16 @@ fn creates_every_shim() {
         "install-links failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
     for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
         assert!(
             shim_path(dir.path(), name).exists(),
             "install-links did not create {name}"
+        );
+        assert!(
+            text.lines()
+                .any(|l| l.contains("created") && l.contains(name)),
+            "should report {name} created, not preempted by the automatic pass: {text}"
         );
     }
 }
@@ -322,12 +346,12 @@ fn running_twice_is_idempotent() {
     }
 }
 
-/// Task 9 calls `is_devkit_binary`'s probes on every shim invocation, and
-/// `lockm hook pretooluse` reads its real payload from stdin — a foreign
-/// binary sitting at a shim name while being probed must never be able to
-/// consume that payload. Pipes a known sentinel into the outer
-/// `install-links` process's own stdin and asserts a foreign script at a
-/// shim name never received it: with the probe's stdin correctly nulled,
+/// `ensure_current` calls `is_devkit_binary`'s probes on every shim
+/// invocation, and `lockm hook pretooluse` reads its real payload from
+/// stdin — a foreign binary sitting at a shim name while being probed must
+/// never be able to consume that payload. Pipes a known sentinel into the
+/// outer `install-links` process's own stdin and asserts a foreign script at
+/// a shim name never received it: with the probe's stdin correctly nulled,
 /// the script sees immediate EOF and writes nothing to the capture file.
 #[test]
 #[cfg(unix)]
@@ -348,9 +372,12 @@ fn probes_never_consume_the_callers_stdin() {
             .expect("make foreign script executable");
     }
 
+    let state = tempfile::tempdir().expect("state dir");
     let mut child = retry_on_busy(|| {
         Command::new(&exe)
             .arg("install-links")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -382,7 +409,6 @@ fn first_run_links_automatically() {
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
-            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     let _ = out;
@@ -404,7 +430,6 @@ fn automatic_linking_never_claims_a_foreign_name() {
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
-            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     assert_eq!(
@@ -427,7 +452,6 @@ fn second_run_writes_this_versions_stamp() {
                 .arg("doctor")
                 .env("HOME", state.path())
                 .env("XDG_STATE_HOME", state.path())
-                .env_remove("DEVKIT_SKIP_AUTOLINK")
                 .output()
         });
     }
@@ -463,7 +487,6 @@ fn stamped_run_skips_relinking_work() {
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
-            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     let portm = shim_path(dir.path(), "portm");
@@ -478,7 +501,6 @@ fn stamped_run_skips_relinking_work() {
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
-            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     assert!(
@@ -511,7 +533,6 @@ fn probe_flag_never_triggers_linking() {
             .arg("--devkit-shim-probe")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
-            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     assert!(out.status.success(), "the probe flag call must succeed");
@@ -554,7 +575,6 @@ fn a_contended_gate_is_skipped_without_blocking() {
             .args(["doctor", "--json"])
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
-            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     assert!(
@@ -587,7 +607,6 @@ fn same_version_reinstall_relinks() {
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
-            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     let portm = shim_path(dir.path(), "portm");
@@ -619,7 +638,6 @@ fn same_version_reinstall_relinks() {
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
-            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
 
@@ -658,5 +676,51 @@ fn skip_autolink_env_prevents_linking() {
     assert!(
         !state.path().join("devkit/links-version").exists(),
         "DEVKIT_SKIP_AUTOLINK must prevent writing the stamp"
+    );
+}
+
+/// `install-links` must take the same `links.lock` gate `ensure_current`
+/// uses, held for its whole pass — not just check the stamp. Without this,
+/// a probe child spawned mid-pass at a candidate that really is a devkit
+/// binary would find the gate free and run its own automatic pass against
+/// the same directory concurrently with this one. Simulated here by holding
+/// the gate ourselves before invoking `install-links`: unlike
+/// `ensure_current`'s silent backoff, a losing `install-links` must hard
+/// error (the user asked for this pass specifically) and name the
+/// contention, not silently link nothing while reporting success.
+#[test]
+fn install_links_hard_errors_when_the_gate_is_contended() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let state_devkit = state.path().join("devkit");
+    std::fs::create_dir_all(&state_devkit).expect("create state dir");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(state_devkit.join("links.lock"))
+        .expect("open links.lock");
+    let mut gate = fd_lock::RwLock::new(lock_file);
+    let _held = gate.try_write().expect("hold the gate for the test");
+
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("install-links")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+    assert!(
+        !out.status.success(),
+        "install-links must hard-error when the gate is contended"
+    );
+    assert!(
+        !shim_path(dir.path(), "portm").exists(),
+        "no shim should be linked while the gate is contended"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("already linking"),
+        "the error should explain the contention: {stderr}"
     );
 }

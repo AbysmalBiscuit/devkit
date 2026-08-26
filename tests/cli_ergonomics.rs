@@ -45,6 +45,7 @@ fn run(exe: &Path, project: &Path, state: &Path, args: &[&str]) -> Output {
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
         .env("XDG_CONFIG_HOME", state.join("config"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove("DEVKIT_SESSION")
         .env_remove("TMUX_PANE")
         .output()

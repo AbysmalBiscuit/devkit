@@ -12,6 +12,7 @@ use std::process::Command;
 fn generated() -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
         .arg("schema")
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .unwrap();
     assert!(out.status.success(), "`devkit schema` failed");

@@ -11,6 +11,7 @@ fn init(dir: &Path, args: &[&str]) -> Output {
         .args(["schema", "init"])
         .args(args)
         .current_dir(dir)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .unwrap()
 }

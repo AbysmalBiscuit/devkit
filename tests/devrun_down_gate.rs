@@ -36,6 +36,7 @@ fn down_all_without_tty_refuses() {
         .args(["down", "--all"])
         .env("HOME", home.path())
         .env("XDG_STATE_HOME", &xdg_state)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         // No daemon; force the direct path.
         .stdin(std::process::Stdio::null())
         .output()

@@ -53,6 +53,7 @@ fn mcp(project: &Path, state: &Path, requests: &[Value]) -> Vec<Value> {
         .current_dir(project)
         .env("XDG_STATE_HOME", state)
         .env("HOME", state)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove("DEVKIT_SESSION")
         .env_remove("TMUX_PANE")
         .stdin(Stdio::piped())

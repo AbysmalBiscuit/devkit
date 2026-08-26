@@ -55,9 +55,9 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 ///
 /// Stdin is a null device, never inherited from the caller: a probe must
 /// never consume real input meant for something else. That matters beyond
-/// tidiness once this runs on every shim invocation (Task 9) — `lockm hook
-/// pretooluse` reads its payload from stdin, and a foreign binary sitting at
-/// that shim name must not be able to eat it.
+/// tidiness once `ensure_current` runs this on every shim invocation —
+/// `lockm hook pretooluse` reads its payload from stdin, and a foreign
+/// binary sitting at that shim name must not be able to eat it.
 ///
 /// Both output streams are read on background threads, started before the
 /// wait loop so a chatty child can't deadlock against a full pipe buffer
@@ -333,21 +333,25 @@ pub const SKIP_AUTOLINK_ENV: &str = "DEVKIT_SKIP_AUTOLINK";
 /// shims it has not yet reached. Six shims x three probes x `PROBE_TIMEOUT`
 /// is a 90s worst case, and this pass runs on the first invocation of *every*
 /// shim after a version bump — including `lockm hook pretooluse` under an
-/// editor's own hook timeout. A touch over one shim's own worst case (15s)
-/// caps the damage from one hung foreign binary at roughly its own cost,
-/// without adding a second, finer-grained cancellation path into `probe`.
+/// editor's own hook timeout. Checked only before starting the next shim,
+/// not mid-probe, so the real bound is this plus one shim's own worst case
+/// (roughly 35s, not 20s) — still far short of 90s, without adding a second,
+/// finer-grained cancellation path into `probe`.
 const AUTOLINK_DEADLINE: Duration = Duration::from_secs(20);
 
 /// The stamp line for `exe`: its version, the directory it links into, and
 /// its own mtime (nanoseconds since the epoch — a portable, stable integer;
-/// `file_index`/inode identity isn't available here for the same reason
-/// Task 8 couldn't use it). Comparing the whole line, not the version alone,
-/// is what makes two cases relink instead of being silently skipped forever
-/// because the version string didn't move: a same-version reinstall (a fresh
-/// build replacing the file the old hardlinks still point at — an ordinary
-/// pre-release loop) changes the mtime, and a second install at another
-/// prefix changes the directory. `None` if the executable's own metadata or
-/// mtime can't be read; that is simply never a match, not an error.
+/// there is no cross-platform way to read a file-identity handle like
+/// `file_index`/inode from outside the process holding it, which is why
+/// this uses mtime instead). Comparing the whole line, not the version
+/// alone, is what makes two cases relink instead of being silently skipped
+/// forever because the version string didn't move: a same-version reinstall
+/// (a fresh build replacing the file the old hardlinks still point at — an
+/// ordinary pre-release loop) changes the mtime, and a second install at
+/// another prefix changes the directory. `None` if the executable's own
+/// metadata or mtime can't be read — `ensure_current` treats that the same
+/// as any other failure to compute the current stamp: it links nothing and
+/// returns, rather than guessing either way.
 fn stamp_line(exe: &Path, dir: &Path) -> Option<String> {
     let modified = std::fs::metadata(exe).ok()?.modified().ok()?;
     let nanos = modified
@@ -359,6 +363,37 @@ fn stamp_line(exe: &Path, dir: &Path) -> Option<String> {
         env!("CARGO_PKG_VERSION"),
         dir.display()
     ))
+}
+
+/// Open (creating if absent) `links.lock` under `state`, ready for
+/// `try_write`. Shared by `ensure_current` and `run` so both take the same
+/// gate before touching any shim name.
+fn open_gate(state: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(state.join("links.lock"))
+}
+
+/// Best-effort record of who holds the gate, written into `links.lock`'s own
+/// content right after acquiring it. Advisory only: a plain read (unlike
+/// another `try_write`) isn't blocked by the flock, so `run`'s contention
+/// error can read this back to name a likely culprit — this is never
+/// consulted to make a linking decision. A crashed holder can leave a stale
+/// pid behind and pids get reused, so it is a hint, not a fact.
+fn record_gate_owner(held: &mut std::fs::File) {
+    use std::io::Write as _;
+    let _ = held.set_len(0);
+    let _ = held.write_all(std::process::id().to_string().as_bytes());
+}
+
+/// Read back the hint `record_gate_owner` wrote. `None` on anything
+/// unreadable or empty, which the caller degrades to a generic message.
+fn gate_owner_hint(state: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(state.join("links.lock")).ok()?;
+    let pid = text.trim();
+    (!pid.is_empty()).then(|| pid.to_string())
 }
 
 /// Link the shim names when the stamp does not match this build (see
@@ -388,12 +423,7 @@ pub fn ensure_current(exe: &Path) {
     if std::fs::create_dir_all(&state).is_err() {
         return;
     }
-    let Ok(gate) = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(state.join("links.lock"))
-    else {
+    let Ok(gate) = open_gate(&state) else {
         return;
     };
     let mut gate = fd_lock::RwLock::new(gate);
@@ -403,12 +433,16 @@ pub fn ensure_current(exe: &Path) {
     // and re-enter `ensure_current` in the spawned child. A `try_write` —
     // never a blocking `write` — is what keeps that bounded: the child finds
     // the gate already held by its own ancestor and returns immediately
-    // instead of relinking (and probing) all over again.
-    let Ok(_held) = gate.try_write() else {
-        // Another process — an ancestor probe, or a genuinely concurrent
-        // devkit invocation — is linking right now; it will write the stamp.
+    // instead of relinking (and probing) all over again. `run` (`devkit
+    // install-links`) takes the same gate around its own whole pass, so an
+    // explicit run and an automatic one never link concurrently either.
+    let Ok(mut held) = gate.try_write() else {
+        // Another process — an ancestor probe, a genuinely concurrent
+        // automatic pass, or a manual `install-links` — is linking right
+        // now; it will write the stamp.
         return;
     };
+    record_gate_owner(&mut held);
     let deadline = Instant::now() + AUTOLINK_DEADLINE;
     let mut truncated = false;
     for s in SHIMS {
@@ -433,11 +467,36 @@ pub fn ensure_current(exe: &Path) {
     let _ = std::fs::write(&stamp, format!("{current}\n"));
 }
 
+/// `devkit install-links` — the manual pass. Takes the same `links.lock`
+/// gate as `ensure_current`, held for its entire run: without it, a probe
+/// child spawned at a candidate that really is a devkit binary would find
+/// the gate free during this call and run its own automatic pass against
+/// the same directory concurrently with this one. Unlike `ensure_current`,
+/// contention here is a hard error — the user asked for this pass
+/// specifically and a silent no-op would look like success.
 pub fn run(args: InstallLinksArgs) -> Result<()> {
     let exe = std::env::current_exe().context("resolving the running executable")?;
     let dir = exe
         .parent()
         .context("the running executable has no parent directory")?;
+    let state = devkit_common::paths::state_dir();
+    std::fs::create_dir_all(&state).with_context(|| format!("creating {}", state.display()))?;
+    let lock_path = state.join("links.lock");
+    let gate_file =
+        open_gate(&state).with_context(|| format!("opening {}", lock_path.display()))?;
+    let mut gate = fd_lock::RwLock::new(gate_file);
+    let Ok(mut held) = gate.try_write() else {
+        let holder = gate_owner_hint(&state)
+            .map(|pid| format!(" (pid {pid}, if it is still alive)"))
+            .unwrap_or_default();
+        anyhow::bail!(
+            "another devkit invocation is already linking{holder} — holding {}; \
+             try again once it finishes",
+            lock_path.display()
+        );
+    };
+    record_gate_owner(&mut held);
+
     let results = link_all(&exe, dir, args.force);
     let mut failed = 0;
     for (name, outcome) in &results {
@@ -453,6 +512,9 @@ pub fn run(args: InstallLinksArgs) -> Result<()> {
                 eprintln!("failed    {name}: {e}");
             }
         }
+    }
+    if let Some(current) = stamp_line(&exe, dir) {
+        let _ = std::fs::write(state.join("links-version"), format!("{current}\n"));
     }
     anyhow::ensure!(failed == 0, "{failed} link(s) could not be created");
     Ok(())

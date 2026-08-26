@@ -65,6 +65,7 @@ fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("LOCALAPPDATA", &state) // Windows: keep the registry off the real one
         .env("USERPROFILE", dir) // Windows: keep config resolution off the real home
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .expect("run devkit run")
 }

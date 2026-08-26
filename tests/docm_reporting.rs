@@ -37,6 +37,7 @@ fn docm_command(exe: &Path, root: &Path, project: &Path) -> Command {
         // Without this, `docs_root` computes its legacy path from the
         // caller's cache home and moves a real store into the temp tree.
         .env("XDG_CACHE_HOME", root.join("xdg-cache"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove(devkit_docs::barrier::VAR);
     command
 }

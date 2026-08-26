@@ -9,6 +9,7 @@ use std::process::Command;
 fn version_output(exe: &str) -> (bool, String) {
     let out = Command::new(exe)
         .arg("--version")
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .unwrap_or_else(|e| panic!("spawn {exe}: {e}"));
     let text = format!(
@@ -40,6 +41,7 @@ fn portm_reports_version() {
 #[test]
 fn devkit_ports_reports_the_package_version() {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .args(["ports", "--version"])
         .output()
         .expect("spawn devkit ports --version");
@@ -70,6 +72,7 @@ fn lockm_reports_version() {
 #[test]
 fn devkit_locks_reports_the_package_version() {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .args(["locks", "--version"])
         .output()
         .expect("spawn devkit locks --version");
@@ -100,6 +103,7 @@ fn issue_reports_version() {
 #[test]
 fn devkit_issue_reports_the_package_version() {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .args(["issue", "--version"])
         .output()
         .expect("spawn devkit issue --version");
@@ -130,6 +134,7 @@ fn devrun_reports_version() {
 #[test]
 fn devkit_run_reports_the_package_version() {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .args(["run", "--version"])
         .output()
         .expect("spawn devkit run --version");
@@ -165,6 +170,7 @@ fn docm_reports_version() {
 #[test]
 fn devkit_docs_reports_the_package_version() {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .args(["docs", "--version"])
         .output()
         .expect("spawn devkit docs --version");
@@ -195,6 +201,7 @@ fn devkit_mcp_reports_version() {
 #[test]
 fn devkit_mcp_reports_the_package_version() {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .args(["mcp", "--version"])
         .output()
         .expect("spawn devkit mcp --version");

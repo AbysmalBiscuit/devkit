@@ -182,7 +182,19 @@ fn main() -> Result<()> {
     let shim = argv0.as_deref().and_then(shim::resolve);
     devkit_common::report::install_panic_hook(shim.map_or("devkit", |s| s.name));
     devkit_common::paths::migrate_legacy_state();
-    if let Ok(exe) = std::env::current_exe() {
+    // Checked against the raw argv, the same way the probe intercept above
+    // is: `Cli::parse()` hasn't run yet, so this can't ask clap which
+    // subcommand it resolved to. Over-matching an argument vector that merely
+    // contains this string is fine — the cost is one skipped automatic pass,
+    // and the next invocation does it. Skipping is what keeps `install-links`
+    // able to report `created`/`replaced`: run unconditionally, this pass
+    // would already have linked everything, and every outcome `links::run`
+    // sees would be `AlreadyLinked`.
+    let is_install_links = args
+        .iter()
+        .skip(1)
+        .any(|a| a.as_os_str() == std::ffi::OsStr::new("install-links"));
+    if !is_install_links && let Ok(exe) = std::env::current_exe() {
         links::ensure_current(&exe);
     }
     match shim {
