@@ -56,7 +56,11 @@ fn replaces_an_existing_devkit_binary() {
         .expect("spawn install-links");
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(text.contains("portm"), "should report portm: {text}");
+    assert!(
+        text.lines()
+            .any(|l| l.contains("replaced") && l.contains("portm")),
+        "should report portm replaced: {text}"
+    );
     assert!(
         shimtest::same_inode(&exe, &stale),
         "portm should now be a hardlink to devkit"
@@ -65,8 +69,10 @@ fn replaces_an_existing_devkit_binary() {
 
 /// A name held by something else is never destroyed. On Unix the script is
 /// made executable so it actually runs and answers `--version` with output
-/// that does not name devkit — reaching `is_devkit_binary`'s content check,
-/// not just its "won't even execute" fallback.
+/// that does not name devkit — reaching the content-comparison branch, not
+/// just the "won't even execute" fallback. On Windows the same bytes are not
+/// a valid PE, so there this test only re-exercises the can't-spawn branch;
+/// the content-comparison coverage is Unix-only.
 #[test]
 fn leaves_a_foreign_binary_alone() {
     let (dir, exe) = staged();
@@ -92,7 +98,57 @@ fn leaves_a_foreign_binary_alone() {
         b"#!/bin/sh\necho not devkit\n",
         "a foreign file at a shim name must not be replaced"
     );
-    assert!(text.contains("skipped"), "should report the skip: {text}");
+    assert!(
+        text.lines()
+            .any(|l| l.contains("skipped") && l.contains("issue")),
+        "should report the skip: {text}"
+    );
+}
+
+/// A foreign binary that convincingly answers `--version` with `issue 1.2.3`
+/// must still be rejected. Matching the version line alone is exactly what
+/// the old, too-loose check accepted (a prefix match against the whole shim
+/// set) — the fix requires `--help` to also name every real `issue`
+/// subcommand, which this script's generic help text does not. On Unix the
+/// script is made executable so it actually runs this scenario; on Windows
+/// the bytes are not a valid executable, so there this test only re-exercises
+/// the can't-spawn branch, the same as `leaves_a_foreign_binary_alone` — the
+/// anchored-match/subcommand-probe rejection is Unix-only coverage.
+#[test]
+fn leaves_a_convincingly_named_foreign_binary_alone() {
+    let (dir, exe) = staged();
+    let foreign = shim_path(dir.path(), "issue");
+    let script: &[u8] = b"#!/bin/sh\ncase \"$1\" in\n  --version) echo \"issue 1.2.3\" ;;\n  --help) echo \"issue 1.2.3\"; echo \"a foreign issue tracker, unrelated to devkit\" ;;\n  *) exit 1 ;;\nesac\n";
+    std::fs::write(&foreign, script).expect("write convincing foreign issue");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&foreign, std::fs::Permissions::from_mode(0o755))
+            .expect("make foreign script executable");
+    }
+    let out = Command::new(&exe)
+        .arg("install-links")
+        .output()
+        .expect("spawn install-links");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read(&foreign).expect("foreign still readable"),
+        script,
+        "a foreign file at a shim name must not be replaced, even one echoing a matching version"
+    );
+    assert!(
+        !shimtest::same_inode(&exe, &foreign),
+        "a binary that only echoes a matching version string must not be linked over: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|l| l.contains("skipped") && l.contains("issue")),
+        "should report the skip: {text}"
+    );
 }
 
 #[test]

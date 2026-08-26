@@ -131,7 +131,7 @@ impl Provider {
 
 /// Build a tool's `Command` as a root command under `shim_name`, so an installed
 /// hardlink of that name reports its own name and version instead of `devkit`'s.
-fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::Command {
+pub(crate) fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::Command {
     Cli::command()
         .find_subcommand(subcommand)
         .unwrap_or_else(|| panic!("no `{subcommand}` subcommand"))
