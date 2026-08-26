@@ -104,51 +104,46 @@ pub fn discover(start: &str) -> Result<(PathBuf, Vec<Worktree>)> {
 /// error is collected as a warning string rather than propagated, so backfill
 /// never aborts worktree creation. Returns (files_copied, warnings).
 pub fn copy_includes(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<String>) {
-    let opts = glob::MatchOptions {
-        case_sensitive: true,
-        require_literal_separator: false,
-        // Match dotfiles with wildcards, mirroring shell `dotglob`.
-        require_literal_leading_dot: false,
-    };
+    let plan = plan_includes(source, dest, patterns);
+    let (copied, apply_warnings) = apply_includes(source, dest, &plan, false);
+    let mut warnings = plan.warnings;
+    warnings.extend(apply_warnings);
+    (copied, warnings)
+}
+
+/// Copy the files an `IncludePlan` found: every path in `missing` always, and
+/// every path in `existing` only when `overwrite` is true. Both vectors hold
+/// paths relative to `dest`, as `plan_includes` returns them. Fail-open, like
+/// `plan_includes`: a copy error is collected as a warning string rather than
+/// propagated. Returns (files_copied, warnings).
+pub fn apply_includes(
+    source: &Path,
+    dest: &Path,
+    plan: &IncludePlan,
+    overwrite: bool,
+) -> (usize, Vec<String>) {
     let mut copied = 0usize;
     let mut warnings = Vec::new();
 
-    for pattern in patterns {
-        // A trailing slash signals a directory (gitignore idiom); strip it so the
-        // glob matches the directory entry, then recurse because it is a dir.
-        let trimmed = pattern.trim_end_matches('/');
-        let joined = source.join(trimmed);
-        let Some(pat_str) = joined.to_str() else {
-            warnings.push(format!("include pattern is not valid UTF-8: {pattern}"));
-            continue;
-        };
-        let entries = match glob::glob_with(pat_str, opts) {
-            Ok(paths) => paths,
-            Err(e) => {
-                warnings.push(format!("bad include pattern `{pattern}`: {e}"));
-                continue;
-            }
-        };
-        for entry in entries {
-            let matched = match entry {
-                Ok(p) => p,
-                Err(e) => {
-                    warnings.push(format!("reading match for `{pattern}`: {e}"));
-                    continue;
-                }
-            };
-            let Ok(rel) = matched.strip_prefix(source) else {
-                warnings.push(format!("match outside source: {}", matched.display()));
-                continue;
-            };
-            let target = dest.join(rel);
-            if matched.is_dir() {
-                copy_dir(&matched, &target, &mut copied, &mut warnings);
-            } else {
-                copy_file(&matched, &target, &mut copied, &mut warnings);
-            }
+    for rel in &plan.missing {
+        copy_file(
+            &source.join(rel),
+            &dest.join(rel),
+            &mut copied,
+            &mut warnings,
+        );
+    }
+    if overwrite {
+        for rel in &plan.existing {
+            copy_file(
+                &source.join(rel),
+                &dest.join(rel),
+                &mut copied,
+                &mut warnings,
+            );
         }
     }
+
     (copied, warnings)
 }
 
@@ -270,12 +265,9 @@ fn plan_dir(
     }
 }
 
-/// Copy a single file, skipping if the destination already exists. Errors are
-/// pushed as warnings.
+/// Copy a single file, creating its destination's parent directories as
+/// needed. Errors are pushed as warnings.
 fn copy_file(src: &Path, dst: &Path, copied: &mut usize, warnings: &mut Vec<String>) {
-    if dst.exists() {
-        return;
-    }
     if let Some(parent) = dst.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -289,33 +281,6 @@ fn copy_file(src: &Path, dst: &Path, copied: &mut usize, warnings: &mut Vec<Stri
             src.display(),
             dst.display()
         )),
-    }
-}
-
-/// Recursively copy a directory's files, skipping existing destinations.
-fn copy_dir(src: &Path, dst: &Path, copied: &mut usize, warnings: &mut Vec<String>) {
-    let entries = match std::fs::read_dir(src) {
-        Ok(e) => e,
-        Err(e) => {
-            warnings.push(format!("reading dir {}: {e}", src.display()));
-            return;
-        }
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                warnings.push(format!("reading entry in {}: {e}", src.display()));
-                continue;
-            }
-        };
-        let child = entry.path();
-        let target = dst.join(entry.file_name());
-        if child.is_dir() {
-            copy_dir(&child, &target, copied, warnings);
-        } else {
-            copy_file(&child, &target, copied, warnings);
-        }
     }
 }
 
@@ -585,6 +550,44 @@ mod tests {
         assert!(plan.missing.is_empty());
         assert!(plan.existing.is_empty());
         assert_eq!(plan.warnings.len(), 1);
+    }
+
+    #[test]
+    fn apply_includes_without_overwrite_leaves_existing_untouched() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+        write(&dst.join(".tool-versions"), "KEEP ME");
+
+        let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
+        let (n, warnings) = apply_includes(&src, &dst, &plan, false);
+
+        assert_eq!(n, 0);
+        assert!(warnings.is_empty());
+        assert_eq!(
+            fs::read_to_string(dst.join(".tool-versions")).unwrap(),
+            "KEEP ME"
+        );
+    }
+
+    #[test]
+    fn apply_includes_with_overwrite_replaces_existing() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+        write(&dst.join(".tool-versions"), "KEEP ME");
+
+        let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
+        let (n, warnings) = apply_includes(&src, &dst, &plan, true);
+
+        assert_eq!(n, 1);
+        assert!(warnings.is_empty());
+        assert_eq!(
+            fs::read_to_string(dst.join(".tool-versions")).unwrap(),
+            "node 20"
+        );
     }
 
     #[test]
