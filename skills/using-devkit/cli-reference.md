@@ -115,6 +115,7 @@ issue checkout-pr <target> [<worktree-path>] [--setup] [--apps a,b]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue info [selector] [--json] [--cache-only]         # one worktree's PR number + issue id
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
+issue sync-includes [selectors…] [--overwrite [--all]] [-y] [--dry-run]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size N] [--retries N]
 issue dashboard [--chart bar|line] [--bucket B] [--mode M] [--all-roles] [--author gh] [--no-plots] [--no-cache]
 issue review request ["<message>"] [--to <alias|#channel>] [--pr <URL|number>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--no-notify] [--arg k=v]
@@ -217,6 +218,17 @@ There is no head-commit check here: this is the reviewer's command, run in a wor
   issue-id gates (finished = PR merged + clean, even on a branch carrying no issue id);
   `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree
   guard; `-y` skips confirmation.
+- **`sync-includes`** — re-copies the `defaults.worktree_include` files from the
+  monorepo into worktrees that already exist, the list `setup` and `checkout-pr`
+  backfill at creation time; reach for it when that list gains an entry after a
+  worktree was made. Selectors match as `info`'s do; omit them to sync every
+  worktree. The monorepo is the source and never a target. Files the worktree
+  already has are left alone and named in a warning. `--overwrite` replaces them
+  instead, prompting once per worktree; declining that prompt still copies what
+  the worktree is missing. Those files are untracked ones git cannot restore, so
+  `--overwrite` needs a scope — one or more selectors, or `--all` for every
+  worktree — and `-y` answers the prompt (it does nothing without `--overwrite`).
+  `--dry-run` writes nothing.
 - **`prs`** — GitHub PR triage of your open PRs and PRs awaiting your review. The
   repository is `[github] pr_repo`, defaulting to the `origin` remote; `-R owner/repo`
   overrides it for one run. `--no-cache` forces a fresh fetch. On a repo with many open PRs GitHub can return

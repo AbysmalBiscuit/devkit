@@ -257,8 +257,9 @@ pub struct Defaults {
     /// Glob patterns (relative to the monorepo root) for untracked local files to
     /// copy into a newly created worktree. Each match is copied to the same
     /// relative path; a match that is a directory (or a pattern ending in `/`) is
-    /// copied recursively. Existing destinations are never clobbered. Empty by
-    /// default — the backfill is opt-in.
+    /// copied recursively. Existing destinations are left alone, and only
+    /// `issue sync-includes --overwrite` replaces them. Empty by default — the
+    /// backfill is opt-in.
     #[serde(default)]
     pub worktree_include: Vec<String>,
     /// Write the issue summary file on every `issue setup`, as though
