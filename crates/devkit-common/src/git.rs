@@ -327,32 +327,24 @@ mod tests {
     /// `Git::at` has to hand git the exact bytes of `cwd`, not a lossy
     /// rendering of them: a path containing invalid UTF-8 is real on Linux,
     /// and `to_string_lossy` would rewrite it to a path that does not exist.
-    /// The assertions stick to ASCII-only git output (`init` succeeding,
-    /// `--is-inside-work-tree` printing `true`) rather than decoding a path
-    /// back out of stdout, since `Git::output` itself goes through a lossy
-    /// `String` conversion that a real non-UTF-8 path would not survive.
+    ///
+    /// This inspects the `Command` `Git` built rather than running git
+    /// against a real directory of that name: APFS and HFS+ reject a
+    /// non-UTF-8 filename outright (`EILSEQ`), so creating one would panic
+    /// this test on macOS for a filesystem limitation that has nothing to do
+    /// with the invariant under test — that the bytes reach the `Command`
+    /// unchanged. Constructing the non-UTF-8 `OsStr` is still platform
+    /// specific, hence the `cfg(unix)` on the test itself.
     #[cfg(unix)]
     #[test]
     fn at_preserves_a_non_utf8_path() {
-        use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
 
-        let base = tempfile::tempdir().unwrap();
-        let dir = base.path().join(OsStr::from_bytes(b"br\xffken"));
-        std::fs::create_dir(&dir).unwrap();
+        let raw = b"br\xffken";
+        let cwd = Path::new(OsStr::from_bytes(raw));
 
-        // A lossy `-C` argument points git at a path with different bytes
-        // than the one just created, so this already fails here if `cwd`
-        // wasn't passed through intact.
-        Git::fixture(&dir)
-            .args(["init", "-q", "-b", "main"])
-            .output()
-            .unwrap();
-
-        let inside = Git::at(&dir)
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .output()
-            .unwrap();
-        assert_eq!(inside.trim(), "true");
+        let git = Git::at(cwd);
+        let args: Vec<&OsStr> = git.command.get_args().collect();
+        assert_eq!(args, [OsStr::new("-C"), OsStr::from_bytes(raw)]);
     }
 }
