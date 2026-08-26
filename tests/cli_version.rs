@@ -23,10 +23,36 @@ fn version_output(exe: &str) -> (bool, String) {
 fn assert_reports_version(name: &str, exe: &str) {
     let (ok, text) = version_output(exe);
     assert!(ok, "`{name} --version` should exit 0, got: {text}");
+    assert_eq!(
+        text.trim(),
+        format!("{name} {}", env!("CARGO_PKG_VERSION")),
+        "`{name} --version` should name itself and this version"
+    );
+}
+
+/// A version line names the command the user typed. A subcommand's default is
+/// clap's `<parent>-<name>`, which spells commands that do not exist —
+/// `devkit-ports`, `devkit-locks` — and sends anyone who reads one looking for
+/// a binary by that name.
+fn assert_subcommand_reports_version(sub: &str) {
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .args([sub, "--version"])
+        .output()
+        .unwrap_or_else(|e| panic!("spawn devkit {sub} --version: {e}"));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(
-        text.contains(env!("CARGO_PKG_VERSION")),
-        "`{name} --version` should print {}, got: {text}",
-        env!("CARGO_PKG_VERSION")
+        out.status.success(),
+        "`devkit {sub} --version` should exit 0, got: {text}"
+    );
+    assert_eq!(
+        text.trim(),
+        format!("devkit {sub} {}", env!("CARGO_PKG_VERSION")),
+        "`devkit {sub} --version` should name the command the user typed"
     );
 }
 
@@ -40,25 +66,7 @@ fn portm_reports_version() {
 /// `devkit ports`, version output included.
 #[test]
 fn devkit_ports_reports_the_package_version() {
-    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .args(["ports", "--version"])
-        .output()
-        .expect("spawn devkit ports --version");
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        out.status.success(),
-        "`devkit ports --version` should exit 0, got: {text}"
-    );
-    assert!(
-        text.contains(env!("CARGO_PKG_VERSION")),
-        "`devkit ports --version` should print {}, got: {text}",
-        env!("CARGO_PKG_VERSION")
-    );
+    assert_subcommand_reports_version("ports");
 }
 
 #[test]
@@ -71,25 +79,7 @@ fn lockm_reports_version() {
 /// `devkit locks`, version output included.
 #[test]
 fn devkit_locks_reports_the_package_version() {
-    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .args(["locks", "--version"])
-        .output()
-        .expect("spawn devkit locks --version");
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        out.status.success(),
-        "`devkit locks --version` should exit 0, got: {text}"
-    );
-    assert!(
-        text.contains(env!("CARGO_PKG_VERSION")),
-        "`devkit locks --version` should print {}, got: {text}",
-        env!("CARGO_PKG_VERSION")
-    );
+    assert_subcommand_reports_version("locks");
 }
 
 #[test]
@@ -102,25 +92,7 @@ fn issue_reports_version() {
 /// `devkit issue`, version output included.
 #[test]
 fn devkit_issue_reports_the_package_version() {
-    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .args(["issue", "--version"])
-        .output()
-        .expect("spawn devkit issue --version");
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        out.status.success(),
-        "`devkit issue --version` should exit 0, got: {text}"
-    );
-    assert!(
-        text.contains(env!("CARGO_PKG_VERSION")),
-        "`devkit issue --version` should print {}, got: {text}",
-        env!("CARGO_PKG_VERSION")
-    );
+    assert_subcommand_reports_version("issue");
 }
 
 #[test]
@@ -133,25 +105,7 @@ fn devrun_reports_version() {
 /// `devkit run`, version output included.
 #[test]
 fn devkit_run_reports_the_package_version() {
-    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .args(["run", "--version"])
-        .output()
-        .expect("spawn devkit run --version");
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        out.status.success(),
-        "`devkit run --version` should exit 0, got: {text}"
-    );
-    assert!(
-        text.contains(env!("CARGO_PKG_VERSION")),
-        "`devkit run --version` should print {}, got: {text}",
-        env!("CARGO_PKG_VERSION")
-    );
+    assert_subcommand_reports_version("run");
 }
 
 #[test]
@@ -169,25 +123,7 @@ fn docm_reports_version() {
 /// `devkit docs`, version output included.
 #[test]
 fn devkit_docs_reports_the_package_version() {
-    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .args(["docs", "--version"])
-        .output()
-        .expect("spawn devkit docs --version");
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        out.status.success(),
-        "`devkit docs --version` should exit 0, got: {text}"
-    );
-    assert!(
-        text.contains(env!("CARGO_PKG_VERSION")),
-        "`devkit docs --version` should print {}, got: {text}",
-        env!("CARGO_PKG_VERSION")
-    );
+    assert_subcommand_reports_version("docs");
 }
 
 #[test]
@@ -200,25 +136,7 @@ fn devkit_mcp_reports_version() {
 /// `devkit mcp`, version output included.
 #[test]
 fn devkit_mcp_reports_the_package_version() {
-    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .args(["mcp", "--version"])
-        .output()
-        .expect("spawn devkit mcp --version");
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        out.status.success(),
-        "`devkit mcp --version` should exit 0, got: {text}"
-    );
-    assert!(
-        text.contains(env!("CARGO_PKG_VERSION")),
-        "`devkit mcp --version` should print {}, got: {text}",
-        env!("CARGO_PKG_VERSION")
-    );
+    assert_subcommand_reports_version("mcp");
 }
 
 #[cfg(feature = "daemon")]

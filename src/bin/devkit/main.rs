@@ -96,17 +96,23 @@ enum Cmd {
         shell: Shell,
     },
     /// Port registry for local dev servers.
+    #[command(display_name = "devkit ports")]
     Ports(ports::PortsCli),
     /// Advisory file locks across sessions.
+    #[command(display_name = "devkit locks")]
     Locks(locks::LocksCli),
     /// Version-correct local library docs and source checkouts.
+    #[command(display_name = "devkit docs")]
     Docs(docs::DocsCli),
     /// Supervised dev servers and canned project tasks for an issue worktree,
     /// with optional baseline A/B.
+    #[command(display_name = "devkit run")]
     Run(run::RunCli),
     /// Issue lifecycle: setup, checkout-pr, status, info, end, sync-includes, prs, dashboard, review.
+    #[command(display_name = "devkit issue")]
     Issue(issue::IssueCli),
     /// Serve the devkit MCP tools over stdio.
+    #[command(display_name = "devkit mcp")]
     Mcp(mcp::McpCli),
     /// Install the old command names (`issue`, `devrun`, …) as hardlinks
     /// beside this executable.
@@ -149,6 +155,9 @@ pub(crate) fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::C
         .unwrap_or_else(|| panic!("no `{subcommand}` subcommand"))
         .clone()
         .name(shim_name)
+        // Overrides the `devkit <sub>` spelling the subcommand carries for its
+        // own version line: under this name it *is* the root command.
+        .display_name(shim_name)
         .bin_name(shim_name)
         .version(env!("CARGO_PKG_VERSION"))
 }
