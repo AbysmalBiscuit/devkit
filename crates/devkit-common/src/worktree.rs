@@ -236,9 +236,9 @@ fn classify_file(dst: &Path, rel: &Path, missing: &mut Vec<PathBuf>, existing: &
     }
 }
 
-/// Recursively classify a directory's files, mirroring `copy_dir`'s traversal
-/// without writing anything. `rel` tracks the path relative to `dest` in
-/// lockstep with `src` so classified paths stay dest-relative.
+/// Recursively classify a directory's files without writing anything. `rel`
+/// tracks the path relative to `dest` in lockstep with `src` so classified
+/// paths stay dest-relative.
 fn plan_dir(
     src: &Path,
     rel: &Path,
