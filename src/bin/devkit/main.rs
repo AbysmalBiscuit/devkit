@@ -9,6 +9,7 @@ mod brief;
 mod docs;
 mod doctor;
 mod issue;
+mod links;
 mod locks;
 mod mcp;
 mod ports;
@@ -95,6 +96,9 @@ enum Cmd {
     Issue(issue::IssueCli),
     /// Serve the devkit MCP tools over stdio.
     Mcp(mcp::McpCli),
+    /// Install the old command names (`issue`, `devrun`, …) as hardlinks
+    /// beside this executable.
+    InstallLinks(links::InstallLinksArgs),
 }
 
 #[derive(Subcommand)]
@@ -189,6 +193,7 @@ fn main() -> Result<()> {
         Cmd::Run(c) => run::run(c),
         Cmd::Issue(c) => issue::run(c),
         Cmd::Mcp(c) => mcp::run(c),
+        Cmd::InstallLinks(a) => links::run(a),
     }
 }
 

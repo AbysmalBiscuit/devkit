@@ -1,4 +1,8 @@
 //! Run the built `devkit` under a shim name, the way an installed hardlink does.
+//!
+//! Compile-time unused helpers are expected: different test binaries include
+//! this module via `#[path]` and use different subsets of it.
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 
@@ -25,4 +29,25 @@ pub fn linked(name: &str) -> (tempfile::TempDir, PathBuf) {
     let link = dir.path().join(link_name);
     std::fs::hard_link(&exe, &link).unwrap_or_else(|e| panic!("hardlink devkit as {name}: {e}"));
     (dir, link)
+}
+
+/// Whether two paths name the same file on disk. A hardlink shares an inode
+/// with its target on Unix and a file index on Windows.
+pub fn same_inode(a: &std::path::Path, b: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+            return false;
+        };
+        ma.dev() == mb.dev() && ma.ino() == mb.ino()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+            return false;
+        };
+        ma.file_size() == mb.file_size() && ma.creation_time() == mb.creation_time()
+    }
 }
