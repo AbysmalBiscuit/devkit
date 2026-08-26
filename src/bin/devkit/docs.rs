@@ -1,28 +1,23 @@
 use anyhow::{Context, Result};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::Subcommand;
 use devkit::completions::Shell;
 use devkit_docs::manifest::{self, Discovered, Ecosystem, LibEntry};
 use devkit_docs::{ManifestTarget, cache, lookup, refs, resolve, upgrade};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-#[derive(Parser)]
-#[command(
-    name = "docm",
-    version,
-    about = "Version-correct local library docs and source checkouts"
-)]
-struct Cli {
+#[derive(clap::Args)]
+pub struct DocsCli {
     #[command(subcommand)]
-    cmd: Cmd,
+    pub cmd: Cmd,
     /// Check out the default branch when no tag or ref pins a version,
     /// instead of failing with a hard error.
     #[arg(long, global = true)]
-    allow_default_branch: bool,
+    pub allow_default_branch: bool,
 }
 
 #[derive(Subcommand)]
-enum Cmd {
+pub(crate) enum Cmd {
     /// Register a library: a package name (looked up on crates.io/npm/PyPI) or a git URL.
     Add {
         /// Package name to look up, or a git URL to clone directly.
@@ -45,7 +40,7 @@ enum Cmd {
         /// Layout override: docs directory inside the checkout.
         #[arg(long)]
         docs_dir: Option<String>,
-        /// Freeform notes surfaced by `docm info`.
+        /// Freeform notes surfaced by `info`.
         #[arg(long)]
         notes: Option<String>,
         /// Write to the nearest devkit.toml [docs] section instead of the global manifest.
@@ -109,9 +104,7 @@ enum Cmd {
     },
 }
 
-fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("docm");
-    let cli = Cli::parse();
+pub fn run(cli: DocsCli) -> Result<()> {
     // A shell rc sources the completion script on every new shell, and the
     // script is written from the CLI definition alone — migrating the cache
     // for it would put cache diagnostics, or a cache failure, in shell startup.
@@ -151,7 +144,7 @@ fn main() -> Result<()> {
         Cmd::Forget { names } => cmd_forget(&names),
         Cmd::Prune { yes } => cmd_prune(yes),
         Cmd::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "docm", &mut std::io::stdout());
+            crate::emit_completions(shell, "docs", "docm");
             Ok(())
         }
     }

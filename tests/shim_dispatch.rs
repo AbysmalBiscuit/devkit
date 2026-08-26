@@ -100,3 +100,18 @@ fn lockm_shim_runs_the_pretooluse_hook() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn docm_shim_parses_docm_arguments() {
+    let (_dir, link) = shimtest::linked("docm");
+    let out = Command::new(&link)
+        .arg("--help")
+        .output()
+        .expect("spawn docm shim");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "docm --help exited non-zero: {text}");
+    assert!(
+        text.contains("prune"),
+        "shim should list docm's own subcommands: {text}"
+    );
+}

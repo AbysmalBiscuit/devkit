@@ -1,3 +1,8 @@
+//! Reporting behavior of the `docm` shim (a hardlinked `devkit`): a sandboxed
+//! cache home, and the success/failure messages a moved-tag repair emits.
+
+#[path = "common/shimtest.rs"]
+mod shimtest;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -22,8 +27,8 @@ fn fixture_repo(dir: &Path) {
     git(dir, &["tag", "v1.1.0"]);
 }
 
-fn docm_command(root: &Path, project: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_docm"));
+fn docm_command(exe: &Path, root: &Path, project: &Path) -> Command {
+    let mut command = Command::new(exe);
     command
         .args(["path", "up"])
         .current_dir(project)
@@ -36,8 +41,8 @@ fn docm_command(root: &Path, project: &Path) -> Command {
     command
 }
 
-fn run_docm(root: &Path, project: &Path) -> Output {
-    docm_command(root, project).output().unwrap()
+fn run_docm(exe: &Path, root: &Path, project: &Path) -> Output {
+    docm_command(exe, root, project).output().unwrap()
 }
 
 /// `docs_root` migrates a legacy store by renaming it, so a harness that
@@ -45,8 +50,9 @@ fn run_docm(root: &Path, project: &Path) -> Output {
 /// store the moment the suite runs.
 #[test]
 fn the_harness_confines_the_cache_home_to_its_sandbox() {
+    let (_dir, link) = shimtest::linked("docm");
     let root = Path::new("/sandbox-root");
-    let command = docm_command(root, Path::new("/sandbox-root/project"));
+    let command = docm_command(&link, root, Path::new("/sandbox-root/project"));
     let cache_home = command
         .get_envs()
         .find(|(key, _)| *key == OsStr::new("XDG_CACHE_HOME"))
@@ -61,6 +67,7 @@ fn the_harness_confines_the_cache_home_to_its_sandbox() {
 
 #[test]
 fn moved_tag_reporting_only_claims_success_after_repair() {
+    let (_dir, link) = shimtest::linked("docm");
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     let data_home = root.path().join("data");
@@ -78,7 +85,7 @@ fn moved_tag_reporting_only_claims_success_after_repair() {
     )
     .unwrap();
 
-    let initial = run_docm(root.path(), &project);
+    let initial = run_docm(&link, root.path(), &project);
     assert!(initial.status.success());
     let checkout = std::path::PathBuf::from(
         String::from_utf8(initial.stdout)
@@ -93,7 +100,7 @@ fn moved_tag_reporting_only_claims_success_after_repair() {
         .unwrap()
         .fetch()
         .unwrap();
-    let repaired = run_docm(root.path(), &project);
+    let repaired = run_docm(&link, root.path(), &project);
     assert!(repaired.status.success());
     assert!(
         String::from_utf8_lossy(&repaired.stderr).contains("re-pointed"),
@@ -107,7 +114,7 @@ fn moved_tag_reporting_only_claims_success_after_repair() {
         .fetch()
         .unwrap();
     std::fs::write(checkout.join("src/lib.rs"), "// local change").unwrap();
-    let failed = run_docm(root.path(), &project);
+    let failed = run_docm(&link, root.path(), &project);
     assert!(!failed.status.success());
     assert!(
         !String::from_utf8_lossy(&failed.stderr).contains("re-pointed"),

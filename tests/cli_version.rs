@@ -106,7 +106,32 @@ fn devkit_reports_version() {
 
 #[test]
 fn docm_reports_version() {
-    assert_reports_version("docm", env!("CARGO_BIN_EXE_docm"));
+    let (_dir, link) = shimtest::linked("docm");
+    assert_reports_version("docm", link.to_str().expect("utf-8 link path"));
+}
+
+/// Parity requirement: a `docm` user must see the same behavior through
+/// `devkit docs`, version output included.
+#[test]
+fn devkit_docs_reports_the_package_version() {
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .args(["docs", "--version"])
+        .output()
+        .expect("spawn devkit docs --version");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "`devkit docs --version` should exit 0, got: {text}"
+    );
+    assert!(
+        text.contains(env!("CARGO_PKG_VERSION")),
+        "`devkit docs --version` should print {}, got: {text}",
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 #[test]

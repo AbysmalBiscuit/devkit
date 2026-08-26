@@ -1,5 +1,7 @@
 //! End-to-end `devkit brief`: what a session-start hook actually receives.
 
+#[path = "common/shimtest.rs"]
+mod shimtest;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -20,6 +22,10 @@ struct Project {
     /// Both paths above live inside this directory, which is removed when the
     /// `Project` drops. Every field a test reads is invalid without it.
     _scratch: tempfile::TempDir,
+    /// Holds the hardlinked `docm` shim `docm()` runs; removed when the
+    /// `Project` drops.
+    _link_dir: tempfile::TempDir,
+    link: PathBuf,
 }
 
 impl Project {
@@ -48,10 +54,13 @@ impl Project {
             &home.join(".config/devkit/docs.toml"),
             "[[libs]]\nname = \"serde\"\necosystem = \"rust\"\nrepo = \"https://example.invalid/serde\"\n",
         );
+        let (link_dir, link) = shimtest::linked("docm");
         Project {
             root: repo,
             home,
             _scratch: root,
+            _link_dir: link_dir,
+            link,
         }
     }
 
@@ -63,10 +72,13 @@ impl Project {
         let repo = root.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         std::fs::create_dir_all(&home).unwrap();
+        let (link_dir, link) = shimtest::linked("docm");
         Project {
             root: repo,
             home,
             _scratch: root,
+            _link_dir: link_dir,
+            link,
         }
     }
 
@@ -96,7 +108,7 @@ impl Project {
     }
 
     fn docm(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_docm"))
+        Command::new(&self.link)
             .args(args)
             .current_dir(&self.root)
             .env("HOME", &self.home)

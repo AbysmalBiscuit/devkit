@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 mod auth;
 mod brief;
+mod docs;
 mod doctor;
 mod locks;
 mod ports;
@@ -82,6 +83,8 @@ enum Cmd {
     Ports(ports::PortsCli),
     /// Advisory file locks across sessions.
     Locks(locks::LocksCli),
+    /// Version-correct local library docs and source checkouts.
+    Docs(docs::DocsCli),
 }
 
 #[derive(Subcommand)]
@@ -136,6 +139,7 @@ fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
     match s.subcommand {
         "ports" => ports::run(ports::PortsCli::from_arg_matches(&matches)?),
         "locks" => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
+        "docs" => docs::run(docs::DocsCli::from_arg_matches(&matches)?),
         other => unreachable!("shim `{}` selects unknown subcommand `{other}`", s.name),
     }
 }
@@ -169,5 +173,6 @@ fn main() -> Result<()> {
         }
         Cmd::Ports(c) => ports::run(c),
         Cmd::Locks(c) => locks::run(c),
+        Cmd::Docs(c) => docs::run(c),
     }
 }

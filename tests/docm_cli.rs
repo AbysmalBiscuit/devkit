@@ -1,7 +1,10 @@
-//! End-to-end `docm` tests: each drives the installed binary with `HOME` and
-//! `XDG_DATA_HOME` redirected into a temporary tree, so the manifest and the
-//! cache under test are the ones production code computes for itself.
+//! End-to-end `docm` tests: each drives a `docm` shim (a hardlinked `devkit`)
+//! with `HOME` and `XDG_DATA_HOME` redirected into a temporary tree, so the
+//! manifest and the cache under test are the ones production code computes
+//! for itself.
 
+#[path = "common/shimtest.rs"]
+mod shimtest;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -50,6 +53,10 @@ struct Env {
     /// Every path below lives inside this directory, which is removed when the
     /// `Env` drops.
     _scratch: tempfile::TempDir,
+    /// Holds the hardlinked `docm` shim `command()` runs; removed when the
+    /// `Env` drops.
+    _link_dir: tempfile::TempDir,
+    link: PathBuf,
     root: PathBuf,
     home: PathBuf,
     data: PathBuf,
@@ -60,8 +67,11 @@ struct Env {
 impl Env {
     fn new() -> Self {
         let (guard, root) = temp_root();
+        let (link_dir, link) = shimtest::linked("docm");
         let env = Env {
             _scratch: guard,
+            _link_dir: link_dir,
+            link,
             home: root.join("home"),
             data: root.join("data"),
             project: root.join("project"),
@@ -91,7 +101,7 @@ impl Env {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_docm"));
+        let mut command = Command::new(&self.link);
         command
             .args(args)
             .current_dir(&self.project)
