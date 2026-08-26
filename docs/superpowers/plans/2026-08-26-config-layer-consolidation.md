@@ -37,20 +37,40 @@
 
 ---
 
-## Task 1: The git module — spawning
+## Task 1: The git module — the `Git` builder
 
 **Files:**
 - Create: `crates/devkit-common/src/git.rs`
 - Modify: `crates/devkit-common/src/lib.rs:1-22` (add `pub mod git;`)
+- Modify: `crates/devkit-common/Cargo.toml` (add a `test-support` feature)
 - Test: `crates/devkit-common/src/git.rs` (inline `#[cfg(test)] mod tests`)
 
 **Interfaces:**
 - Consumes: `crate::timing::subprocess_span` (existing, `timing.rs`).
-- Produces four entry points, each a distinct question. All share the sanitized environment and the 10s timeout.
-  - `pub fn run(args: &[&str], cwd: &Path) -> Result<String>` — `git -C <cwd> <args…>`, stdout, error on non-zero. The common case.
-  - `pub fn run_bare(args: &[&str]) -> Result<String>` — no `-C`, for `clone`, which has no repository to run inside yet (`docs/cache.rs:217`).
-  - `pub fn succeeded(args: &[&str], cwd: Option<&Path>, extra_env: &[(&str, &str)]) -> Result<bool>` — exit status without treating non-zero as an error. `docs/cache.rs:217` probes a filtered clone and falls back; `docs/upgrade.rs:442` asks whether a commit exists and needs `GIT_NO_LAZY_FETCH=1`, which is why the env pairs are a parameter rather than another function.
-  - `pub fn fixture(args: &[&str], cwd: &Path) -> Result<String>` — for tests only. Adds `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` pointed at the null device, plus a fixed author and committer identity. Production must **not** scrub git config: credential helpers, aliases, and `user.signingkey` are the user's and have to work.
+- Produces: `pub struct Git`, wrapping a private `std::process::Command`.
+  - `Git::at(cwd: &Path) -> Git` — the usual constructor; adds `-C <cwd>`.
+  - `Git::bare() -> Git` — no working directory, for `clone`, which has no repository to run inside yet (`docs/cache.rs:217`).
+  - `.args<'a>(self, args: impl IntoIterator<Item = &'a str>) -> Git`
+  - `.env(self, key: &str, value: &str) -> Git` — for git's own behavior flags, e.g. `GIT_NO_LAZY_FETCH` (`docs/upgrade.rs:442`).
+  - `.output(self) -> Result<String>` — terminal; enforces the timeout, errors on non-zero.
+  - `.success(self) -> Result<bool>` — terminal; enforces the timeout, non-zero is `false` rather than an error.
+  - `Git::fixture(cwd: &Path) -> Git`, behind `#[cfg(any(test, feature = "test-support"))]`.
+
+**Why a builder and not a set of functions.** Three axes vary independently —
+working directory or none, captured output or exit status, extra environment or
+none — so free functions enumerate combinations and stop at whichever four
+someone got tired of writing. More importantly, the inner `Command` stays
+private. A factory that *returned* a `Command` would be more idiomatic-looking
+and wrong: the caller would finish it with `.output()`, which is the call with no
+timeout, and an invariant callers can skip is not an invariant.
+
+**Why the working directory is a constructor argument.** It decides *which* git
+to spawn, not just where to run it. `alacritree/src/worktree.rs:149` takes the
+same shape for a real reason: a path inside a WSL distro has to run git through
+`wsl.exe`, because a Windows-side git would see the 9p mount rather than the
+distro's own filesystem. devkit does not need that branch today, but taking the
+directory before any argument is attached is what leaves room for it in one
+place instead of twenty-five.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -62,19 +82,19 @@ mod tests {
     use super::*;
 
     /// An ambient `GIT_DIR` redirects git to another repository. Every call in
-    /// the workspace goes through `run`, so stripping it here is what stops a
-    /// stranger's config being read as this repository's.
+    /// the workspace goes through this builder, so stripping it here is what
+    /// stops a stranger's config being read as this repository's.
     #[test]
-    fn run_strips_ambient_git_dir() {
+    fn ambient_git_dir_cannot_redirect_a_call() {
         let repo = tempfile::tempdir().unwrap();
-        run(&["init", "-q", "-b", "main"], repo.path()).unwrap();
+        Git::fixture(repo.path()).args(["init", "-q", "-b", "main"]).output().unwrap();
 
         let decoy = tempfile::tempdir().unwrap();
-        run(&["init", "-q", "-b", "main"], decoy.path()).unwrap();
+        Git::fixture(decoy.path()).args(["init", "-q", "-b", "main"]).output().unwrap();
 
-        // SAFETY: single-threaded test; the var is removed before returning.
+        // SAFETY: single-threaded test; the var is removed before asserting.
         unsafe { std::env::set_var("GIT_DIR", decoy.path().join(".git")) };
-        let out = run(&["rev-parse", "--show-toplevel"], repo.path());
+        let out = Git::at(repo.path()).args(["rev-parse", "--show-toplevel"]).output();
         unsafe { std::env::remove_var("GIT_DIR") };
 
         let toplevel = std::fs::canonicalize(out.unwrap().trim()).unwrap();
@@ -82,10 +102,25 @@ mod tests {
     }
 
     #[test]
-    fn run_reports_stderr_on_failure() {
-        let repo = tempfile::tempdir().unwrap();
-        let err = run(&["rev-parse", "--show-toplevel"], repo.path()).unwrap_err();
+    fn output_reports_stderr_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = Git::at(dir.path())
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .unwrap_err();
         assert!(err.to_string().contains("not a git repository"), "{err}");
+    }
+
+    /// `success` answers a question; a non-zero exit is one of the answers.
+    #[test]
+    fn success_reports_a_failure_as_false() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            !Git::at(dir.path())
+                .args(["rev-parse", "--show-toplevel"])
+                .success()
+                .unwrap()
+        );
     }
 }
 ```
@@ -100,14 +135,19 @@ Expected: FAIL — the module does not exist (`unresolved import`).
 Create `crates/devkit-common/src/git.rs`:
 
 ```rust
-//! The single door to git. Every git invocation in the workspace goes through
-//! here so that two properties hold everywhere rather than nowhere: the
-//! environment cannot redirect the call to another repository, and a git that
-//! stops responding cannot block its caller forever.
+//! The single door to git. Every git invocation in the workspace is built here
+//! so that two properties hold everywhere rather than nowhere: the environment
+//! cannot redirect the call to another repository, and a git that stops
+//! responding cannot block its caller forever.
+//!
+//! The inner `Command` is private on purpose. Handing one back would let a
+//! caller finish it with `output()`, which has no timeout — and this runs on
+//! the write path.
 
 use anyhow::{Result, bail};
+use std::ffi::OsStr;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 /// Backstop for a git that never returns. Long enough that no healthy call
@@ -125,50 +165,113 @@ const REDIRECTING_VARS: [&str; 4] = [
     "GIT_INDEX_FILE",
 ];
 
-/// `git -C <cwd> <args…>`, capturing stdout. The escape hatch for operations
-/// this module has no named function for.
-pub fn run(args: &[&str], cwd: &Path) -> Result<String> {
-    let _span = crate::timing::subprocess_span("git", args).entered();
-
-    let mut command = Command::new("git");
-    command.arg("-C").arg(cwd).args(args);
-    for var in REDIRECTING_VARS {
-        command.env_remove(var);
-    }
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let mut child = command
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("failed to spawn `git`: {e}"))?;
-
-    // Poll rather than block: `wait_with_output` has no timeout, and this runs
-    // on the write path. The 1ms step keeps a healthy call's overhead under the
-    // spawn cost it already pays. Output is drained only after exit, which is
-    // safe for the volumes git produces here.
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        if child.try_wait()?.is_some() {
-            break;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!("`git {}` did not finish within {TIMEOUT:?}", args.join(" "));
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-
-    let out = child.wait_with_output()?;
-    if !out.status.success() {
-        bail!(
-            "`git {}` failed ({}):\n{}",
-            args.join(" "),
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+/// A git invocation under construction. Configure freely; the only way to run
+/// one is a terminal method here, which is what makes the timeout unskippable.
+pub struct Git {
+    command: Command,
 }
+
+impl Git {
+    /// Run git against `cwd`. The working directory is taken before any
+    /// argument because it decides which git to spawn, not merely where to run
+    /// it — see the module docs on WSL.
+    pub fn at(cwd: &Path) -> Self {
+        let mut git = Self::bare();
+        git.command.arg("-C").arg(cwd);
+        git
+    }
+
+    /// Run git with no working directory — `clone`, which has no repository to
+    /// run inside yet.
+    pub fn bare() -> Self {
+        let mut command = Command::new("git");
+        for var in REDIRECTING_VARS {
+            command.env_remove(var);
+        }
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        Self { command }
+    }
+
+    /// A git invocation for building a test fixture: the developer's real
+    /// global and system config are ignored, and identity comes from the
+    /// environment rather than `git config`.
+    ///
+    /// Production never scrubs git config — credential helpers, aliases, and
+    /// signing keys belong to the user and have to work. Identity is set
+    /// through the environment because a `git config` call that loses its
+    /// working directory writes into whatever repository it lands in.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fixture(cwd: &Path) -> Self {
+        Self::at(cwd)
+            .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+            .env("GIT_CONFIG_SYSTEM", NULL_DEVICE)
+            .env("GIT_AUTHOR_NAME", "devkit test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "devkit test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+    }
+
+    pub fn args<'a>(mut self, args: impl IntoIterator<Item = &'a str>) -> Self {
+        self.command.args(args);
+        self
+    }
+
+    /// Set one of git's own behavior variables, e.g. `GIT_NO_LAZY_FETCH`.
+    pub fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
+        self.command.env(key, value);
+        self
+    }
+
+    /// Run it, returning stdout. A non-zero exit is an error carrying stderr.
+    pub fn output(self) -> Result<String> {
+        let out = self.wait()?;
+        if !out.status.success() {
+            bail!(
+                "git failed ({}):\n{}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Run it, reporting only whether it succeeded. For probes where a non-zero
+    /// exit is an answer rather than a fault.
+    pub fn success(self) -> Result<bool> {
+        Ok(self.wait()?.status.success())
+    }
+
+    /// Spawn and wait, bounded. Polling rather than blocking because
+    /// `wait_with_output` has no timeout and this runs on the write path. The
+    /// 1ms step keeps a healthy call's overhead below the spawn it already
+    /// pays. Output is drained after exit, which is safe for the volumes git
+    /// produces here.
+    fn wait(mut self) -> Result<Output> {
+        let _span = crate::timing::subprocess_span("git", &[]).entered();
+        let mut child = self
+            .command
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("failed to spawn `git`: {e}"))?;
+
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            if child.try_wait()?.is_some() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("git did not finish within {TIMEOUT:?}");
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Ok(child.wait_with_output()?)
+    }
+}
+
+/// The path that makes git skip a config level entirely.
+#[cfg(any(test, feature = "test-support"))]
+const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 ```
 
 Add to `crates/devkit-common/src/lib.rs`, keeping the list alphabetical:
@@ -177,22 +280,39 @@ Add to `crates/devkit-common/src/lib.rs`, keeping the list alphabetical:
 pub mod git;
 ```
 
+Add to `crates/devkit-common/Cargo.toml`:
+
+```toml
+[features]
+test-support = []
+```
+
+Every crate whose tests build fixtures adds it to dev-dependencies:
+
+```toml
+[dev-dependencies]
+devkit-common = { workspace = true, features = ["test-support"] }
+```
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p devkit-common git::tests -- --test-threads=1`
-Expected: PASS, 2 tests.
+Expected: PASS, 3 tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/devkit-common/src/git.rs crates/devkit-common/src/lib.rs
-git commit -m "feat(common): add the single git module
+git add crates/devkit-common/src/git.rs crates/devkit-common/src/lib.rs crates/devkit-common/Cargo.toml
+git commit -m "feat(common): add the single git builder
 
-Every git call in the workspace routes through one function so the
-environment cannot repoint it at another repository and a wedged git
-cannot block its caller. GIT_DIR, GIT_COMMON_DIR, GIT_WORK_TREE, and
-GIT_INDEX_FILE are stripped; cmd::capture cannot strip them because gh
-and doppler need their environments intact.
+Every git call in the workspace is built here so the environment cannot
+repoint it at another repository and a wedged git cannot block its
+caller. The inner Command stays private: a factory returning one would
+let callers finish it with output(), which is the call with no timeout.
+
+GIT_DIR, GIT_COMMON_DIR, GIT_WORK_TREE, and GIT_INDEX_FILE are stripped.
+cmd::capture cannot strip them because gh and doppler need their
+environments intact.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
@@ -207,7 +327,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Test: `crates/devkit-common/src/git.rs` (inline tests)
 
 **Interfaces:**
-- Consumes: `run` (Task 1).
+- Consumes: `git::Git` (Task 1).
 - Produces:
   - `pub struct Worktree { pub path: PathBuf, pub branch: String, pub bare: bool }`
   - `pub fn parse_porcelain(out: &str) -> Vec<Worktree>`
@@ -227,12 +347,12 @@ Append to the `tests` module in `crates/devkit-common/src/git.rs`:
     /// directory alive for as long as it uses the path.
     fn repo_with_commit() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        run(&["init", "-q", "-b", "main"], dir.path()).unwrap();
-        run(&["config", "user.email", "t@example.com"], dir.path()).unwrap();
-        run(&["config", "user.name", "Test"], dir.path()).unwrap();
+        Git::fixture(dir.path()).args(["init", "-q", "-b", "main"]).output().unwrap();
+        Git::fixture(dir.path()).args(["config", "user.email", "t@example.com"]).output().unwrap();
+        Git::fixture(dir.path()).args(["config", "user.name", "Test"]).output().unwrap();
         std::fs::write(dir.path().join("f.txt"), "x").unwrap();
-        run(&["add", "."], dir.path()).unwrap();
-        run(&["commit", "-qm", "init"], dir.path()).unwrap();
+        Git::fixture(dir.path()).args(["add", "."]).output().unwrap();
+        Git::fixture(dir.path()).args(["commit", "-qm", "init"]).output().unwrap();
         dir
     }
 
@@ -266,7 +386,7 @@ Append to the `tests` module in `crates/devkit-common/src/git.rs`:
     fn bare_main_yields_none() {
         let dir = tempfile::tempdir().unwrap();
         let bare = dir.path().join("b.git");
-        run(&["init", "-q", "--bare", bare.to_str().unwrap()], dir.path()).unwrap();
+        Git::fixture(dir.path()).args(["init", "-q", "--bare", bare.to_str().unwrap()]).output().unwrap();
         assert_eq!(main_checkout(&bare).unwrap(), None);
     }
 
@@ -346,16 +466,15 @@ pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
 /// repository; a caller wanting a fallback declares one.
 pub fn checkout_root(start: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(
-        run(&["rev-parse", "--show-toplevel"], start)?.trim(),
+        Git::at(start).args(["rev-parse", "--show-toplevel"]).output()?.trim(),
     ))
 }
 
 /// Every worktree of `start`'s repository, main first.
 pub fn worktrees(start: &Path) -> Result<Vec<Worktree>> {
-    Ok(parse_porcelain(&run(
-        &["worktree", "list", "--porcelain"],
-        start,
-    )?))
+    Ok(parse_porcelain(
+        &Git::at(start).args(["worktree", "list", "--porcelain"]).output()?,
+    ))
 }
 
 /// `start`'s repository's main checkout, or `None` when `start` is already in
@@ -377,7 +496,7 @@ pub fn main_checkout(start: &Path) -> Result<Option<PathBuf>> {
 
 /// The branch checked out at `start`.
 pub fn branch(start: &Path) -> Result<String> {
-    Ok(run(&["rev-parse", "--abbrev-ref", "HEAD"], start)?
+    Ok(Git::at(start).args(["rev-parse", "--abbrev-ref", "HEAD"]).output()?
         .trim()
         .to_string())
 }
@@ -447,7 +566,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Test: existing tests in those modules
 
 **Interfaces:**
-- Consumes: `git::run` (Task 1).
+- Consumes: `git::Git` (Task 1).
 - Produces: nothing new. `cmd::git` loses its `devkit-common`-internal callers.
 
 - [ ] **Step 1: Find every internal caller**
@@ -457,16 +576,16 @@ Expected: matches in `gitfetch.rs`, `github.rs`, `tracker/mod.rs`.
 
 - [ ] **Step 2: Rewrite each call**
 
-`cmd::git(args, cwd_str)` becomes `git::run(args, Path::new(cwd_str))`. The
-argument order is unchanged; only the `cwd` type differs, from `&str` to
-`&Path`. In `gitfetch.rs` replace `use crate::cmd::git;` with `use crate::git;`
-and each `git(&[...], cwd)` with `git::run(&[...], Path::new(cwd))`.
+`cmd::git(args, cwd_str)` becomes `Git::at(Path::new(cwd_str)).args(args).output()`.
+In `gitfetch.rs` replace `use crate::cmd::git;` with `use crate::git::Git;`.
 
 `gitignore.rs:44` calls `capture("git", &["config", "--global", …], None)` with
 no working directory. It becomes:
 
 ```rust
-let configured = crate::git::run(&["config", "--global", "core.excludesfile"], Path::new("."))
+let configured = crate::git::Git::bare()
+    .args(["config", "--global", "core.excludesfile"])
+    .output()
 ```
 
 - [ ] **Step 3: Run the crate's tests**
@@ -510,7 +629,7 @@ Replace the fixture line in `crates/devkit-locks/src/lib.rs:403` (the test asser
     /// A directory named `.git` is not a repository. The fixture is a real one
     /// so this asserts root resolution rather than the presence of a filename.
     fn init_repo(at: &Path) {
-        devkit_common::git::run(&["init", "-q", "-b", "main"], at).unwrap();
+        devkit_common::git::Git::fixture(at).args(["init", "-q", "-b", "main"]).output().unwrap();
     }
 
     #[test]
@@ -564,7 +683,7 @@ std::fs::create_dir_all(p.path().join(".git")).unwrap();
 with:
 
 ```rust
-devkit_common::git::run(&["init", "-q", "-b", "main"], p.path()).unwrap();
+devkit_common::git::Git::fixture(p.path()).args(["init", "-q", "-b", "main"]).output().unwrap();
 ```
 
 matching each site's local variable name for the directory.
@@ -599,7 +718,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Test: `tests/no_stray_git.rs` (create)
 
 **Interfaces:**
-- Consumes: everything from Task 2, plus `run_bare`, `succeeded`, and `fixture` from Task 1.
+- Consumes: everything from Task 2, plus `Git::bare`, `.success()`, `.env()`, and `Git::fixture` from Task 1.
 - Produces: `cmd::git` no longer exists. `git::checkout_root` replaces every `rev-parse --show-toplevel`; `git::main_checkout` replaces `end.rs`'s two `--git-common-dir` calls; `git::branch` replaces every `rev-parse --abbrev-ref HEAD`.
 
 **Inventory.** Run `rg -n 'Command::new\("git"\)|cmd::git|capture\("git"' -g '!target' -g '!docs'` first and work the list it prints. It is larger than the `cmd::git` sites alone: around twenty-five call sites, nine of them production code that reaches for `Command` because it needs an exit status rather than an error, a custom environment variable, or no `-C`. Those three needs are why Task 1 produces four entry points instead of one.
@@ -721,7 +840,8 @@ let main = devkit_common::git::main_checkout(Path::new(wt))?
 `docs/upgrade.rs:480` (`path.join(".git").is_file()`) asks whether a checkout is
 a linked worktree. Replace with a `main_checkout(path)?.is_some()` call.
 
-Everything else becomes `git::run(args, Path::new(cwd))`.
+Everything else becomes `Git::at(Path::new(cwd)).args(args).output()?`, or
+`.success()?` where the site wanted an exit status rather than an error.
 
 Finally delete `pub fn git` from `crates/devkit-common/src/cmd.rs:26-31`.
 
@@ -1070,7 +1190,7 @@ Add to the `tests` module in `crates/devkit-locks/src/hook.rs`:
     #[test]
     fn harness_declared_in_a_nested_directory_is_honored() {
         let repo = tempfile::tempdir().unwrap();
-        devkit_common::git::run(&["init", "-q", "-b", "main"], repo.path()).unwrap();
+        devkit_common::git::Git::fixture(repo.path()).args(["init", "-q", "-b", "main"]).output().unwrap();
         std::fs::write(repo.path().join("devkit.toml"), "").unwrap();
         let nested = repo.path().join("packages/thing");
         std::fs::create_dir_all(&nested).unwrap();
@@ -1412,24 +1532,18 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
     #[test]
     fn harness_is_inherited_from_the_main_checkout() {
         let main = tempfile::tempdir().unwrap();
-        devkit_common::git::run(&["init", "-q", "-b", "main"], main.path()).unwrap();
-        devkit_common::git::run(&["config", "user.email", "t@example.com"], main.path()).unwrap();
-        devkit_common::git::run(&["config", "user.name", "Test"], main.path()).unwrap();
+        devkit_common::git::Git::fixture(main.path()).args(["init", "-q", "-b", "main"]).output().unwrap();
         std::fs::write(
             main.path().join("devkit.toml"),
             "[harness]\nenforce_writes = true\n",
         )
         .unwrap();
-        devkit_common::git::run(&["add", "."], main.path()).unwrap();
-        devkit_common::git::run(&["commit", "-qm", "init"], main.path()).unwrap();
+        devkit_common::git::Git::fixture(main.path()).args(["add", "."]).output().unwrap();
+        devkit_common::git::Git::fixture(main.path()).args(["commit", "-qm", "init"]).output().unwrap();
 
         let holder = tempfile::tempdir().unwrap();
         let linked = holder.path().join("wt");
-        devkit_common::git::run(
-            &["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "side"],
-            main.path(),
-        )
-        .unwrap();
+        devkit_common::git::Git::fixture(main.path()).args(["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "side"]).output().unwrap();
         std::fs::remove_file(linked.join("devkit.toml")).ok();
 
         assert!(enforcement_enabled(&linked));
@@ -1689,10 +1803,10 @@ No spec requirement is unclaimed.
 3. `end.rs` wants the main checkout even when run from it, where `main_checkout`
    returns `None`. Task 5 gives the fallback; check both call sites still mean
    what they meant.
-4. `GIT_CONFIG_GLOBAL=/dev/null` is the value the existing fixtures use and the
-   one `git::fixture` should adopt for consistency. Confirm it holds on the
-   Windows CI job before relying on it; if it does not, the null device there is
-   `NUL`, and `git::fixture` is the single place that has to know which.
+4. `Git::fixture` picks the null device with `cfg!(windows)`, because the
+   existing fixtures hardcode `/dev/null` and CI runs a Windows job. Confirm
+   which value git-for-Windows actually honors; the builder is the one place
+   that has to know.
 5. Task 5 is large — roughly twenty-five call sites. Split it if a reviewer
    would rather gate production and test migrations separately; the guard test
    only needs to land with whichever half goes second.
