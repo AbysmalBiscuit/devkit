@@ -1744,6 +1744,47 @@ Keep it free of hard numbers, per the repo's persistent-writing rule: "the CLIs 
 
 The install section tells a reader to run `cargo install --path .` and get several binaries. Say instead that it installs `devkit` and `devkitd`, and that the old names appear on first run, with `devkit install-links` as the manual fallback. Document `--force` and what it overrides.
 
+- [ ] **Step 2b: Update the PowerShell bootstrap hook and its test**
+
+`hooks/bootstrap-binaries.ps1:38` carries the same presence list as the shell hook. Replace
+
+```powershell
+$missing = @('devkit', 'lockm', 'devkit-mcp') | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
+```
+
+with
+
+```powershell
+$missing = @('devkit') | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
+```
+
+`tests/hooks/bootstrap-binaries.test.sh` encodes the list twice: the loop at line 54 (`for b in devkit lockm devkit-mcp; do`) and the comment at lines 81-82 describing what the `binaries` fixture puts on PATH. Both must agree with the hooks or the test fails. Change the loop to `for b in devkit; do` and rewrite the comment to name only `devkit`.
+
+Run: `bash tests/hooks/bootstrap-binaries.test.sh`
+Expected: PASS.
+
+- [ ] **Step 2c: Confirm the shipped bin targets and the second hooks file**
+
+Run: `rg -n -A3 '\[\[bin\]\]' Cargo.toml && ls src/bin/`
+Expected: one explicit `[[bin]]` for `devkitd`, and `src/bin/` holding only `devkit/` and `devkitd/`. Cargo auto-discovers `src/bin/devkit/main.rs` as the package binary. A surviving old bin directory or `[[bin]]` entry is stale and still ships.
+
+Run: `rg -n 'lockm|devkit-mcp|devrun|docm' hooks/hooks-codex.json`
+Expected: `lockm hook …` calls, unchanged. This file is the Codex twin of `hooks/hooks.json` and works through the same shims, so it needs no edit either.
+
+- [ ] **Step 4b: Document the shim mechanics in README.md**
+
+Three things a reader now needs and cannot learn anywhere else:
+
+- `devkit install-links` creates the hardlinks. `--force` claims a name held by something that is not a devkit binary; without it, such a name is reported as skipped and left alone.
+- The links refresh on their own. Any `devkit` invocation relinks when the binary's version, directory, or modification time stops matching the recorded stamp, so an upgrade needs no manual step.
+- `DEVKIT_SKIP_AUTOLINK`, set to any value, turns that automatic pass off. It is the opt-out for a packager who manages the links themselves and for anything that must not write the state directory.
+
+- [ ] **Step 4c: Update the agent-facing skill docs**
+
+`skills/using-devkit/SKILL.md`, `skills/using-devkit/cli-reference.md`, and `skills/docs/SKILL.md` teach agents the command surface, and they name the old binaries throughout. Those spellings still work, so this is an addition, not a rewrite: state once, near the top of each file that names a binary, that every command also spells as a `devkit` subcommand, with one example (`docm list` and `devkit docs list` are the same command). Leave the existing examples alone. An agent that reads only `devkit --help` has to be able to find these commands; an agent carrying the old spellings must not be told they are gone.
+
+`docs/configuration.md` gets the same treatment, only where it names a binary as the thing to run.
+
 - [ ] **Step 5: Run the full gate**
 
 Run: `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
