@@ -114,9 +114,9 @@ git command that answers it:
 /// `rev-parse --show-toplevel` — the checkout containing `start`.
 pub fn checkout_root(start: &Path) -> Result<PathBuf>;
 
-/// The main checkout of `start`'s repository: the parent of
-/// `rev-parse --path-format=absolute --git-common-dir`, or `None` when that is
-/// already `start`'s own checkout or is not a checkout at all.
+/// The main checkout of `start`'s repository — the first entry of
+/// `worktree list --porcelain`, which git documents as the main worktree.
+/// `None` when that entry is `bare`, or when it is `start`'s own checkout.
 pub fn main_checkout(start: &Path) -> Result<Option<PathBuf>>;
 
 /// `worktree list --porcelain`.
@@ -190,10 +190,19 @@ where they are.
 stays exactly as it is, OR'd in **outside** the layer stack, so that
 `[config] root = true` in a repository cannot switch off machine-wide write
 enforcement. `resolve_enforcement` keeps its `DEVKIT_ENFORCE_WRITES`
-override and its precedence (`hook.rs:183`), and `enforcement_enabled` keeps
-its signature, so `src/bin/lockm.rs:168` is untouched. The env override
-short-circuits before any filesystem work: when `DEVKIT_ENFORCE_WRITES` decides
-the answer, no layer is collected and no file is read.
+override and its precedence (`hook.rs:183`).
+
+**`enforcement_enabled` takes the payload CWD, not the checkout root.** Today
+`src/bin/lockm.rs:159` collapses the CWD to a root with `find_root_from` before
+calling it. Handing that root to `project_layers` would discard every layer
+between the root and the directory the write came from, so a nested
+`devkit.toml` — and a nested `[config] root` cutoff — would be invisible to the
+harness while the resolver's own tests passed. The signature changes to take the
+CWD and derive the root internally, and `lockm.rs:159` stops pre-resolving it.
+That reordering is also what makes the env short-circuit real: with
+`find_root_from` in the caller, an ancestor walk already ran before
+`DEVKIT_ENFORCE_WRITES` was consulted. It is checked first, before any
+filesystem work.
 
 `docm --project` writes to `Discovered::project_devkit_toml` (`docm.rs:262`),
 so that field is restricted to a `Checkout` or `Ancestor` layer and **never**
@@ -230,11 +239,15 @@ is absent: `devkit brief` is required to stay silent outside a devkit project,
 and the `lockm` hook must never block a write. A git invocation that fails for
 any reason yields `None`, not an error.
 
-**Edge cases resolve to `None` in `main_checkout`, not in config.** A submodule
-and a `--separate-git-dir` clone both produce a common dir whose parent is not a
-checkout of that repository; a bare main worktree has no checkout at all.
-`main_checkout` verifies its answer is a real checkout before returning it, so
-each of these yields `None` rather than a path that happens to hold no config.
+**Edge cases are git's answer, not devkit's inference.** Deriving the main
+checkout as the parent of `--git-common-dir` cannot distinguish a real main
+worktree from a bare repository at `/x/.git` or a `--separate-git-dir=/x/.git`
+clone whose working tree is elsewhere: all three yield `/x`, and `/x/devkit.toml`
+would then contribute executable `[apps]` and `[tasks]` entries from a directory
+that is not a checkout of this repository. `worktree list --porcelain` avoids the
+inference entirely — it names the main worktree directly and marks a bare one
+`bare` — so submodules, `--separate-git-dir`, and bare mains need no
+special-casing and no `.git` naming assumption.
 
 **Precedence**, lowest first: home config (in `discover` only), ancestor layers
 outermost-first, the main checkout's `devkit.toml` then `devkit.local.toml`,
@@ -244,16 +257,25 @@ ancestor because it is more specific to this repository than any directory
 containing it, and below the checkout you are standing in so a worktree can
 always override by dropping its own file.
 
-**Cutoff.** `[config] root = true` applies per layer kind. In a `Checkout` or
-`Ancestor` layer it cuts off everything below it, main-checkout layer included.
-In a `MainCheckout` layer it is ignored: that layer is already the bottom of
-the project stack, and honoring it there would let the main checkout suppress
-the home config for every worktree at once.
+**Cutoff.** `[config] root = true` is a positional barrier: it drops every layer
+*lower in precedence* than the layer declaring it, and the home config with
+them. No per-kind rule. This matches what `discover` does today — stop walking
+outward, keep everything nearer `start` (`lib.rs:718`) — and it reads the same
+from any directory. An inner ancestor marked root drops the outer ancestors and
+leaves the main and checkout layers alone; a root marked in the main checkout
+drops the ancestors, which is what makes a repository boundary isolate its
+linked worktrees instead of isolating only the main checkout.
 
-**Dedupe.** Layers are deduplicated by canonicalized path, not by string. A
-worktree nested beneath the main checkout finds those files during the upward
-walk, and a symlinked path spells the same file differently; both contribute
-once, at the highest precedence position they occupy.
+**Dedupe.** Canonicalized paths are the dedupe *key* only. `Layer.path` keeps
+the original spelling of the highest-precedence occurrence, and that occurrence's
+`kind` is the one that survives. A worktree nested beneath the main checkout
+finds those files during the upward walk, and a symlink spells the same file
+two ways; both contribute once. Returning the canonical path instead would
+defeat the write restriction above — a checkout `devkit.toml` symlinked to the
+main checkout's file would keep `LayerKind::Checkout` while pointing at the main
+checkout, authorizing exactly the cross-worktree `docm --project` write the kind
+exists to prevent. Dedupe runs before the cutoff, so a barrier is evaluated at
+one position rather than at whichever duplicate came first.
 
 ### 3. Path anchoring by what a key means
 
@@ -371,11 +393,16 @@ bounded by the timeout rather than blocking its caller. It also requires that no
 `Command::new("git")`, `cmd::git`, or `capture("git", …)` remains outside the
 module — greppable, so it can be a test.
 
+Step 1 requires an end-to-end hook test run from a directory *below* a nested
+harness declaration, which is the case the current caller cannot pass.
+
 Step 2 requires a test per resolution outcome: a linked worktree resolves its
-main checkout; a main checkout adds nothing; submodule, `--separate-git-dir`,
-and bare main each yield `None`; a git failure yields `None` and not an error.
-Precedence, per-kind cutoff, and canonicalized dedupe each get a test, including
-a worktree nested beneath its own main checkout.
+main checkout; a main checkout yields `None`; submodule, `--separate-git-dir`
+with the git dir named `.git`, and bare main each yield `None`; a git failure
+yields `None` and not an error. Precedence, the positional cutoff from each kind
+of layer, and dedupe each get a test — including a worktree nested beneath its
+own main checkout, and a `Checkout` layer symlinked to the main checkout's file
+driven through `docm --project`.
 
 Step 3 requires the committed `schema/devkit-config.json` to match, which
 `cargo test` already enforces.

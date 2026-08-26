@@ -188,3 +188,132 @@ in whole or in part; the spec was rewritten rather than patched.
 
 Net: five steps became four, one step was deleted outright, and the hot path
 lost its subprocess.
+
+## Round 2 — Codex
+
+_Reviewed `ffa2e12`. Between this round being launched and its critique landing, the design changed direction on the user's instruction: all git goes through one `devkit_common::git` module that shells out, and `devkit-config` no longer touches git at all (`82a7f76`). Finding 1's literal target — the hand-rolled `.git` parser — no longer exists, but its substance survived the rewrite and is answered below._
+
+## Verdict
+
+REVISE. The dependency structure is now sound, but Steps 1–2 still contain three correctness failures and one write-safety ambiguity.
+
+## High severity
+
+### 1. The `.git` validation does not prove that `candidate` is a main checkout
+
+What breaks: In the proposed algorithm, once `common.file_name() == ".git"`, `candidate = common.parent()` makes `candidate/.git == common` by construction. The canonicalization comparison at [the spec’s lines 160–164](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/docs/superpowers/specs/2026-08-26-config-layer-consolidation-design.md:160) is therefore tautological.
+
+Both cases the spec claims to reject can pass:
+
+- A bare repository located at `/x/.git` with linked worktrees identifies `/x` as the supposed main checkout.
+- `--separate-git-dir=/x/.git` does the same even though its real working tree is elsewhere.
+
+Git permits the caller to choose the separate Git directory, while a bare clone makes its chosen directory the repository itself. The name `.git` is not proof of either layout. [Git clone documentation](https://git-scm.com/docs/git-clone), [Git repository-layout documentation](https://git-scm.com/docs/gitrepository-layout). Git’s own worktree implementation notes that a main worktree represented by a gitfile cannot reliably be recovered from another worktree. [Git worktree source](https://github.com/git/git/blob/master/worktree.c)
+
+The current real layout also contains two validation inputs the design ignores: `worktrees/<id>/commondir` and its `gitdir` backlink. Consequently, a syntactically valid `.git` file pointing at an unrelated existing `.../.git/worktrees/<id>` also passes.
+
+Why it matters: devkit can load executable `[apps]`, `[tasks]`, and setup hooks from `/x/devkit.toml`, even when `/x` is not a checkout of the current repository.
+
+One-line fix: Do not land Step 2 until main-checkout identity is explicit or provable; at minimum validate `commondir` and the `gitdir` backlink, then either reject or document the still-ambiguous separate-git-dir-named-`.git` layout and test it.
+
+### 2. The hook discards the start directory before calling `project_layers`
+
+What breaks: The spec says `enforcement_enabled` keeps its signature and [the `lockm` call remains untouched](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/docs/superpowers/specs/2026-08-26-config-layer-consolidation-design.md:129). The existing caller first turns the payload CWD into the checkout root at [lockm.rs:159](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/src/bin/lockm.rs:159), then calls `enforcement_enabled(&root)` at [lockm.rs:168](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/src/bin/lockm.rs:168).
+
+`project_layers(root)` cannot discover a nested `devkit.toml` or `devkit.local.toml` between the checkout root and the original CWD. Nested root cutoffs are also invisible. This directly contradicts the claimed full-walk behavior.
+
+It also disproves the stronger environment-short-circuit claim: `find_root_from` has already performed an ancestor filesystem walk before `DEVKIT_ENFORCE_WRITES` is checked.
+
+Why it matters: Step 1 can compile and its resolver tests can pass while the actual PreToolUse hook silently fails to enforce a nested project declaration.
+
+One-line fix: Pass the original payload CWD to `enforcement_enabled`, let `project_layers` derive the checkout root, and add an end-to-end hook test launched below a nested harness layer.
+
+### 3. The cutoff rule contradicts both precedence and existing `root` semantics
+
+What breaks: The stack is ordered `Ancestor → MainCheckout → Checkout`, but [the cutoff rule](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/docs/superpowers/specs/2026-08-26-config-layer-consolidation-design.md:190) says:
+
+- An `Ancestor` root removes the higher-precedence main layer.
+- A `MainCheckout` root is ignored, leaving lower-precedence ancestors active.
+
+That is backwards. Existing behavior stops walking upward at the root marker while retaining layers closer to `start`, as shown by [config discovery](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/crates/devkit-config/src/lib.rs:718).
+
+For example, with `outer ancestor → inner ancestor(root) → main → checkout`, the inner ancestor should remove only the outer ancestor. It must not suppress main or checkout. Conversely, a root marker in main should remove ancestor project layers; otherwise the same main config excludes ancestors in the main checkout but inherits them from every linked worktree.
+
+Why it matters: A broad ancestor config can suppress the repository’s `[harness]`, while a repository boundary marked in main fails to isolate linked worktrees from outer executable config.
+
+One-line fix: Deduplicate first, then apply `root` as a positional barrier that removes only earlier/lower-precedence project layers; compose each reader’s global inputs under an explicit separate rule.
+
+## Major severity
+
+### 4. Canonical dedupe leaves the docs write invariant implementation-dependent
+
+What breaks: `Discovered::project_devkit_toml` is an actual mutation target at [docm.rs:262](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/src/bin/docm.rs:262). The spec says dedupe uses canonical paths but does not state whether `Layer.path` retains the original highest-precedence spelling or is replaced by the canonical path.
+
+For a checkout `devkit.toml` symlinked to the main checkout’s file, the surviving kind is `Checkout`. If the canonical path is returned, the `LayerKind` filter authorizes a direct main-checkout write despite the claimed read-only invariant. Cutoff behavior also changes depending on whether dedupe happens before or after root evaluation.
+
+Why it matters: A plausible implementation of “deduplicated by canonicalized path” defeats the exact write restriction the type was introduced to enforce.
+
+One-line fix: Specify that canonicalization is used only as a dedupe key, preserve the original highest-precedence path, run dedupe before cutoff, and test a canonical alias across `Checkout` and `MainCheckout` through `docm --project`.
+
+## What now holds
+
+- The dependency inversion is genuinely gone rather than relocated. Adding direct `devkit-locks → devkit-config` and `devkit-docs → devkit-config` edges is acyclic; both currently reach config transitively through [devkit-common](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/crates/devkit-common/Cargo.toml:8).
+- Source and graph inspection confirm the three config parsers are still `devkit-config::discover`, the lock hook, and docs manifest discovery. `docs::resolve::project_root` is another `devkit.toml` path search, but it is project identity rather than config resolution and is correctly retained.
+- No remaining move touches `expand_tilde`, `TrackerKind`, or `GithubConfig`. `find_root_from` is the only moved symbol; the re-export covers its existing lock-context, status, write-normalization, and `lockm` callers.
+- Steps 0 and 3 are independently landable. Step 1 is not behaviorally green because of the hook caller, and Step 2’s proposed gate misses the two `.git`-named bare/separate layouts and invalid backpointers.
+
+VERDICT: REVISE
+### Claude's response
+
+All four findings verified against source. All four accepted.
+
+1. *The `.git` validation is tautological.* Correct, and the objection outlived
+   the algorithm it was aimed at. `candidate = common.parent()` makes
+   `candidate/.git == common` true by construction, so the comparison proved
+   nothing — and the replacement in `82a7f76`, taking the parent of
+   `rev-parse --git-common-dir`, inherits the identical ambiguity. A bare
+   repository at `/x/.git` and a `--separate-git-dir=/x/.git` clone both yield
+   `/x`, and `/x/devkit.toml` would contribute executable `[apps]` and `[tasks]`
+   from a directory that is not a checkout of this repository.
+
+   Rather than adding the `commondir` and `gitdir` backlink checks Codex
+   proposed, `main_checkout` now takes the first entry of
+   `worktree list --porcelain`, which git documents as the main worktree.
+   Verified: from a linked worktree it names the main checkout, and a bare
+   repository's first entry carries `bare`. That removes the path arithmetic
+   and the `.git` naming assumption together, so submodule,
+   `--separate-git-dir`, and bare mains stop being cases to reject and become
+   answers git gives directly. The gate keeps a test for each.
+
+2. *The hook discards the start directory.* Confirmed at `lockm.rs:159`:
+   `find_root_from` collapses the payload CWD to a root before
+   `enforcement_enabled(&root)` at `:168`. Handing that root to `project_layers`
+   would hide every nested layer and nested cutoff between root and CWD, while
+   the resolver's own tests passed — exactly the silent failure described. The
+   signature now takes the CWD and derives the root internally. This also
+   disproved my env short-circuit claim, since the ancestor walk was already
+   running in the caller before `DEVKIT_ENFORCE_WRITES` was read; the order is
+   now explicit. The gate gains an end-to-end hook test run below a nested
+   harness declaration.
+
+3. *The cutoff rule is backwards.* Confirmed against `lib.rs:718`: the existing
+   marker stops the outward walk and keeps everything nearer `start`. My rule
+   had an `Ancestor` root suppressing the higher-precedence main layer while a
+   `MainCheckout` root did nothing, which is inverted on both halves, and
+   Codex's second example is the sharper one — a repository boundary that
+   isolates only the main checkout and not its linked worktrees is not a
+   boundary. Replaced with a single positional barrier that drops every layer
+   lower in precedence than the one declaring it, home config included. The
+   per-kind rule is gone, which makes this shorter than what it replaced.
+
+4. *Canonical dedupe leaves the write invariant implementation-dependent.*
+   Accepted in full, including the attack path: a `Checkout` layer symlinked to
+   the main checkout's file keeps `LayerKind::Checkout` while pointing at the
+   main checkout, so returning the canonical path would authorize the exact
+   cross-worktree `docm --project` write the kind was introduced to prevent.
+   Canonicalization is now specified as the dedupe key only, the original
+   highest-precedence spelling is preserved, and dedupe runs before cutoff so a
+   barrier is evaluated at one position. Tested through `docm --project`.
+
+Round 3 re-reviews the current spec rather than this one, since the git
+direction changed underneath this round.
