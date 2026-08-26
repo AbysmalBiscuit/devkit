@@ -1,14 +1,13 @@
-use std::io::{BufReader, Write};
+//! The stdio MCP server. `.mcp.json` starts it as `devkit-mcp`, so the shim
+//! name stays even though the code now lives in `devkit`.
 
 use anyhow::Result;
+use std::io::{BufReader, Write};
 
-fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("devkit-mcp");
-    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
-        println!("devkit-mcp {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-    devkit_common::paths::migrate_legacy_state();
+#[derive(clap::Args)]
+pub struct McpCli {}
+
+pub fn run(_cli: McpCli) -> Result<()> {
     let ctx = devkit_mcp::ServerCtx {
         default_holder: devkit_mcp::mint_holder(),
     };

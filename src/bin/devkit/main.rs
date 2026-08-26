@@ -10,6 +10,7 @@ mod docs;
 mod doctor;
 mod issue;
 mod locks;
+mod mcp;
 mod ports;
 mod run;
 mod schema;
@@ -92,6 +93,8 @@ enum Cmd {
     Run(run::RunCli),
     /// Issue lifecycle: setup, checkout-pr, status, info, end, sync-includes, prs, dashboard, review.
     Issue(issue::IssueCli),
+    /// Serve the devkit MCP tools over stdio.
+    Mcp(mcp::McpCli),
 }
 
 #[derive(Subcommand)]
@@ -149,6 +152,7 @@ fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
         "docs" => docs::run(docs::DocsCli::from_arg_matches(&matches)?),
         "run" => run::run(run::RunCli::from_arg_matches(&matches)?),
         "issue" => issue::run(issue::IssueCli::from_arg_matches(&matches)?),
+        "mcp" => mcp::run(mcp::McpCli::from_arg_matches(&matches)?),
         other => unreachable!("shim `{}` selects unknown subcommand `{other}`", s.name),
     }
 }
@@ -185,5 +189,27 @@ fn main() -> Result<()> {
         Cmd::Docs(c) => docs::run(c),
         Cmd::Run(c) => run::run(c),
         Cmd::Issue(c) => issue::run(c),
+        Cmd::Mcp(c) => mcp::run(c),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `dispatch_shim` matches on a `&str` with `unreachable!` as the
+    /// fallback, so a `SHIMS` entry with no dispatch arm is a runtime panic
+    /// rather than a build error. This is the compile-time-adjacent guard for
+    /// that: every shim's subcommand must actually exist on `Cli`.
+    #[test]
+    fn every_shim_selects_a_real_subcommand() {
+        for s in shim::SHIMS {
+            assert!(
+                Cli::command().find_subcommand(s.subcommand).is_some(),
+                "shim `{}` selects unknown subcommand `{}`",
+                s.name,
+                s.subcommand
+            );
+        }
     }
 }

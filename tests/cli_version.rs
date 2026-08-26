@@ -186,7 +186,32 @@ fn devkit_docs_reports_the_package_version() {
 
 #[test]
 fn devkit_mcp_reports_version() {
-    assert_reports_version("devkit-mcp", env!("CARGO_BIN_EXE_devkit-mcp"));
+    let (_dir, link) = shimtest::linked("devkit-mcp");
+    assert_reports_version("devkit-mcp", link.to_str().expect("utf-8 link path"));
+}
+
+/// Parity requirement: a `devkit-mcp` user must see the same behavior through
+/// `devkit mcp`, version output included.
+#[test]
+fn devkit_mcp_reports_the_package_version() {
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .args(["mcp", "--version"])
+        .output()
+        .expect("spawn devkit mcp --version");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "`devkit mcp --version` should exit 0, got: {text}"
+    );
+    assert!(
+        text.contains(env!("CARGO_PKG_VERSION")),
+        "`devkit mcp --version` should print {}, got: {text}",
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 #[cfg(feature = "daemon")]

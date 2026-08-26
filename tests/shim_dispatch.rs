@@ -274,3 +274,45 @@ fn devkit_issue_defaults_to_status() {
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+#[test]
+fn devkit_mcp_shim_reports_the_package_version() {
+    let (_dir, link) = shimtest::linked("devkit-mcp");
+    let out = Command::new(&link)
+        .arg("--version")
+        .output()
+        .expect("spawn devkit-mcp --version");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains(env!("CARGO_PKG_VERSION")),
+        "devkit-mcp --version should print {}, got: {text}",
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+/// The server answers a JSON-RPC request on stdin when run through the shim,
+/// which is how `.mcp.json` starts it.
+#[test]
+fn devkit_mcp_shim_serves_a_request() {
+    use std::io::Write;
+    let (_dir, link) = shimtest::linked("devkit-mcp");
+    let state = tempfile::tempdir().expect("state dir");
+    let mut child = Command::new(&link)
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn devkit-mcp shim");
+    let req = br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin.write_all(req).expect("write request");
+    stdin.write_all(b"\n").expect("write newline");
+    drop(stdin);
+    let out = child.wait_with_output().expect("wait for mcp shim");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains("\"id\":1"),
+        "shim should answer the request: {text}"
+    );
+}

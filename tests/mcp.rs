@@ -1,3 +1,5 @@
+#[path = "common/shimtest.rs"]
+mod shimtest;
 use serde_json::{Value, json};
 use std::io::Write;
 use std::path::Path;
@@ -46,7 +48,8 @@ fn git_repo() -> tempfile::TempDir {
 
 /// Spawn the server, feed the requests as NDJSON, return parsed responses in order.
 fn mcp(project: &Path, state: &Path, requests: &[Value]) -> Vec<Value> {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_devkit-mcp"))
+    let (_dir, link) = shimtest::linked("devkit-mcp");
+    let mut child = Command::new(&link)
         .current_dir(project)
         .env("XDG_STATE_HOME", state)
         .env("HOME", state)
