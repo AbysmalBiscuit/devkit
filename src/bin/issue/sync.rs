@@ -84,13 +84,13 @@ pub fn run(
     config: Option<&str>,
 ) -> Result<()> {
     anyhow::ensure!(
-        !overwrite || all || !selectors.is_empty(),
+        !overwrite || dry_run || all || !selectors.is_empty(),
         "--overwrite needs one or more selectors (issue id, branch, or worktree path), or --all for every worktree"
     );
     let loaded = load::load(config.map(Path::new), Path::new(start))?;
     let patterns = &loaded.config.defaults.worktree_include;
     if patterns.is_empty() {
-        println!("defaults.worktree_include is empty — nothing to sync.");
+        println!("defaults.worktree_include is empty, nothing to sync.");
         return Ok(());
     }
 

@@ -186,6 +186,33 @@ fn overwrite_without_a_scope_is_refused() {
     );
 }
 
+/// A dry run writes nothing, so the scope gate would only stop you from
+/// surveying what `--overwrite` would clobber before you opt into `--all`.
+#[test]
+fn an_unscoped_overwrite_dry_run_is_allowed() {
+    let t = project("\".env.local\"");
+    let state = tempfile::tempdir().unwrap();
+    std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
+
+    let out = run(
+        t.path(),
+        state.path(),
+        &["sync-includes", "--overwrite", "--dry-run"],
+    );
+    assert!(
+        out.status.success(),
+        "a dry run writes nothing and needs no scope: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(env_local(t.path(), "wt-eng-1").as_deref(), Some("OLD=1\n"));
+    assert_eq!(env_local(t.path(), "wt-eng-2"), None);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(".env.local"),
+        "the survey names the file it would clobber: {stdout}"
+    );
+}
+
 #[test]
 fn a_selector_scopes_an_overwrite() {
     let t = project("\".env.local\"");
