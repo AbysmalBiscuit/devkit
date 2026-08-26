@@ -132,7 +132,31 @@ fn dry_run_writes_nothing() {
 }
 
 #[test]
-fn overwrite_with_yes_replaces_an_existing_file() {
+fn overwrite_with_all_and_yes_replaces_an_existing_file() {
+    let t = project("\".env.local\"");
+    let state = tempfile::tempdir().unwrap();
+    std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
+
+    let out = run(
+        t.path(),
+        state.path(),
+        &["sync-includes", "--overwrite", "--all", "--yes"],
+    );
+    ok(&out);
+    assert_eq!(
+        env_local(t.path(), "wt-eng-1").as_deref(),
+        Some("FRESH=1\n")
+    );
+    assert_eq!(
+        env_local(t.path(), "wt-eng-2").as_deref(),
+        Some("FRESH=1\n")
+    );
+}
+
+/// `--overwrite` replaces untracked files git cannot restore, so it may not
+/// run against every worktree in the repo by accident.
+#[test]
+fn overwrite_without_a_scope_is_refused() {
     let t = project("\".env.local\"");
     let state = tempfile::tempdir().unwrap();
     std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
@@ -142,11 +166,33 @@ fn overwrite_with_yes_replaces_an_existing_file() {
         state.path(),
         &["sync-includes", "--overwrite", "--yes"],
     );
+    assert!(!out.status.success(), "an unscoped --overwrite must fail");
+    assert_eq!(env_local(t.path(), "wt-eng-1").as_deref(), Some("OLD=1\n"));
+    assert_eq!(env_local(t.path(), "wt-eng-2"), None);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--overwrite") && err.contains("--all"),
+        "the refusal names both ways to scope the run: {err}"
+    );
+}
+
+#[test]
+fn a_selector_scopes_an_overwrite() {
+    let t = project("\".env.local\"");
+    let state = tempfile::tempdir().unwrap();
+    std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
+
+    let out = run(
+        t.path(),
+        state.path(),
+        &["sync-includes", "--overwrite", "--yes", "eng-1"],
+    );
     ok(&out);
     assert_eq!(
         env_local(t.path(), "wt-eng-1").as_deref(),
         Some("FRESH=1\n")
     );
+    assert_eq!(env_local(t.path(), "wt-eng-2"), None);
 }
 
 /// Without `--yes` the overwrite asks first, and an empty answer (stdin is
@@ -157,9 +203,17 @@ fn overwrite_without_yes_leaves_an_unconfirmed_file_alone() {
     let state = tempfile::tempdir().unwrap();
     std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
 
-    let out = run(t.path(), state.path(), &["sync-includes", "--overwrite"]);
+    let out = run(
+        t.path(),
+        state.path(),
+        &["sync-includes", "--overwrite", "--all"],
+    );
     ok(&out);
     assert_eq!(env_local(t.path(), "wt-eng-1").as_deref(), Some("OLD=1\n"));
+    assert_eq!(
+        env_local(t.path(), "wt-eng-2").as_deref(),
+        Some("FRESH=1\n")
+    );
 }
 
 #[test]

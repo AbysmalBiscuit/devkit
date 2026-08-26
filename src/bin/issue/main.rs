@@ -162,9 +162,14 @@ enum Cmd {
         /// every worktree.
         selectors: Vec<String>,
         /// Replace files the worktree already has instead of leaving them
-        /// alone. Asks once per worktree before clobbering anything.
+        /// alone. Asks once per worktree before clobbering anything, and needs
+        /// a scope: one or more selectors, or --all.
         #[arg(long)]
         overwrite: bool,
+        /// Widen --overwrite to every worktree in the repository, other
+        /// sessions' included.
+        #[arg(long)]
+        all: bool,
         /// Answer the --overwrite prompt yes. Does nothing on its own: without
         /// --overwrite there is no prompt and nothing is replaced.
         #[arg(short = 'y', long)]
@@ -355,12 +360,14 @@ fn main() -> Result<()> {
         Some(Cmd::SyncIncludes {
             selectors,
             overwrite,
+            all,
             yes,
             dry_run,
         }) => sync::run(
             &start(&cli.dir),
             &selectors,
             overwrite,
+            all,
             yes,
             dry_run,
             cli.config.as_deref(),

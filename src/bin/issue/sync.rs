@@ -71,14 +71,21 @@ fn report_dry(plan: &IncludePlan, overwrite: bool) {
 /// Copy every `defaults.worktree_include` match from the monorepo into each
 /// selected worktree. Files already present are left alone unless `overwrite`,
 /// which prompts once per worktree with the list it would clobber.
+/// `overwrite` replaces untracked files git cannot restore, so it needs a scope:
+/// `selectors`, or `all` for every worktree.
 pub fn run(
     start: &str,
     selectors: &[String],
     overwrite: bool,
+    all: bool,
     yes: bool,
     dry_run: bool,
     config: Option<&str>,
 ) -> Result<()> {
+    anyhow::ensure!(
+        !overwrite || all || !selectors.is_empty(),
+        "--overwrite needs one or more selectors (issue id, branch, or worktree path), or --all for every worktree"
+    );
     let loaded = load::load(config.map(Path::new), Path::new(start))?;
     let patterns = &loaded.config.defaults.worktree_include;
     if patterns.is_empty() {
