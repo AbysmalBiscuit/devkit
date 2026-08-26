@@ -18,18 +18,17 @@ fn git(args: &[&str], cwd: &Path) {
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
-/// A monorepo at `main/` with two worktrees beside it, a `devkit.toml` whose
-/// `worktree_include` is `include` verbatim, and untracked `.env.local`
-/// and `.tool-versions` present only in the monorepo. The guard owns the whole tree, so callers must
-/// hold it for as long as they read the paths under it.
+/// A monorepo at `main/` with two worktrees beside it, a committed `devkit.toml`
+/// whose `worktree_include` is `include` verbatim, and untracked `.env.local`
+/// and `.tool-versions` files present only in the monorepo. The guard owns the
+/// whole tree, so callers must hold it for as long as they read the paths under
+/// it.
 fn project(include: &str) -> tempfile::TempDir {
     let t = tempfile::tempdir().unwrap();
     let main = t.path().join("main");
     std::fs::create_dir_all(&main).unwrap();
     git(&["init", "-q", "-b", "main"], &main);
     std::fs::write(main.join("f.txt"), "x\n").unwrap();
-    git(&["add", "-A"], &main);
-    git(&["commit", "-qm", "init"], &main);
     std::fs::write(
         main.join("devkit.toml"),
         format!(
@@ -44,6 +43,9 @@ worktree_include = [{include}]
         ),
     )
     .unwrap();
+    // Committed, so a run started from a worktree finds the same config.
+    git(&["add", "-A"], &main);
+    git(&["commit", "-qm", "init"], &main);
     std::fs::write(main.join(".env.local"), "FRESH=1\n").unwrap();
     std::fs::write(main.join(".tool-versions"), "node 20\n").unwrap();
     for (dir, branch) in [("wt-eng-1", "eng-1"), ("wt-eng-2", "eng-2")] {
@@ -57,9 +59,15 @@ worktree_include = [{include}]
 }
 
 fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
+    run_in(project, "main", state, args)
+}
+
+/// Drive the binary from `cwd`, a directory name under the project tree, so a
+/// test can run from a worktree rather than from the monorepo.
+fn run_in(project: &Path, cwd: &str, state: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_issue"))
         .args(args)
-        .current_dir(project.join("main"))
+        .current_dir(project.join(cwd))
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
         .env("XDG_CONFIG_HOME", state.join("config"))
@@ -236,6 +244,26 @@ fn declining_the_overwrite_still_copies_what_is_missing() {
         std::fs::read_to_string(t.path().join("wt-eng-1").join(".tool-versions")).ok(),
         Some("node 20\n".to_string())
     );
+}
+
+/// The monorepo is the copy source and never a target, and the worktree the
+/// command runs from is a target like any other.
+#[test]
+fn syncing_from_a_worktree_leaves_the_monorepo_alone() {
+    let t = project("\".env.local\"");
+    let state = tempfile::tempdir().unwrap();
+
+    let out = run_in(t.path(), "wt-eng-1", state.path(), &["sync-includes"]);
+    ok(&out);
+    assert_eq!(
+        env_local(t.path(), "wt-eng-1").as_deref(),
+        Some("FRESH=1\n")
+    );
+    assert_eq!(
+        env_local(t.path(), "wt-eng-2").as_deref(),
+        Some("FRESH=1\n")
+    );
+    assert_eq!(env_local(t.path(), "main").as_deref(), Some("FRESH=1\n"));
 }
 
 #[test]
