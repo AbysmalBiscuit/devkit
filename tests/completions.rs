@@ -35,7 +35,8 @@ fn portm_emits_completions() {
 
 #[test]
 fn devrun_emits_completions() {
-    emits_every_shell("devrun", env!("CARGO_BIN_EXE_devrun"));
+    let (_dir, link) = shimtest::linked("devrun");
+    emits_every_shell("devrun", link.to_str().expect("utf-8 link path"));
 }
 
 #[test]

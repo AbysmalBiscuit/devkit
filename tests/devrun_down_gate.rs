@@ -29,8 +29,9 @@ fn down_all_without_tty_refuses() {
     );
     std::fs::write(devkit_dir.join("ports.json"), ports_json).unwrap();
 
-    let bin = env!("CARGO_BIN_EXE_devrun");
+    let bin = env!("CARGO_BIN_EXE_devkit");
     let out = Command::new(bin)
+        .arg("run")
         .arg("-C")
         .arg(&cur)
         .args(["down", "--all"])

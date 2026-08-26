@@ -1,4 +1,4 @@
-use crate::Cli;
+use super::RunCli;
 use anyhow::{Context, Result};
 use devkit_common::ui;
 use devkit_config::{self as config, Config, Provenance};
@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 /// `devrun config show [--origin] [--json]`
-pub fn show(cli: &Cli, cwd: &str, origin: bool, json: bool) -> Result<()> {
+pub fn show(cli: &RunCli, cwd: &str, origin: bool, json: bool) -> Result<()> {
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     let cfg = &loaded.config;
     let prov = &loaded.provenance;
@@ -32,7 +32,7 @@ pub fn show(cli: &Cli, cwd: &str, origin: bool, json: bool) -> Result<()> {
 }
 
 /// `devrun config apps [--json]` — a pure readout of the merged app catalog.
-pub fn apps(cli: &Cli, cwd: &str, json: bool) -> Result<()> {
+pub fn apps(cli: &RunCli, cwd: &str, json: bool) -> Result<()> {
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     if json {
         println!(
@@ -46,7 +46,7 @@ pub fn apps(cli: &Cli, cwd: &str, json: bool) -> Result<()> {
 }
 
 /// `devrun config tasks [--json]` — a pure readout of the merged `[tasks]`.
-pub fn tasks(cli: &Cli, cwd: &str, json: bool) -> Result<()> {
+pub fn tasks(cli: &RunCli, cwd: &str, json: bool) -> Result<()> {
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     let rows = task::list(&loaded.config);
     if json {

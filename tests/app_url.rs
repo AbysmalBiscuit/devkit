@@ -6,7 +6,9 @@ use std::path::Path;
 use std::process::Command;
 
 fn devrun() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_devrun"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.arg("run");
+    cmd
 }
 
 /// A temp dir that is a git repo with a devkit.toml defining a URL provider with

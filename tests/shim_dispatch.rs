@@ -115,3 +115,40 @@ fn docm_shim_parses_docm_arguments() {
         "shim should list docm's own subcommands: {text}"
     );
 }
+
+#[test]
+fn devrun_shim_parses_devrun_arguments() {
+    let (_dir, link) = shimtest::linked("devrun");
+    let out = Command::new(&link)
+        .arg("--help")
+        .output()
+        .expect("spawn devrun shim");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        out.status.success(),
+        "devrun --help exited non-zero: {text}"
+    );
+    assert!(
+        text.contains("supervise") || text.contains("baseline"),
+        "shim should list devrun's own subcommands: {text}"
+    );
+}
+
+/// `reap` is TTY-gated with no bypass. A shim inherits the same non-terminal
+/// stdin a hook or agent has, so it must still refuse.
+#[test]
+fn devrun_shim_still_refuses_reap_without_a_terminal() {
+    let (_dir, link) = shimtest::linked("devrun");
+    let state = tempfile::tempdir().expect("state dir");
+    let out = Command::new(&link)
+        .arg("reap")
+        .stdin(std::process::Stdio::null())
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .output()
+        .expect("spawn devrun reap");
+    assert!(
+        !out.status.success(),
+        "reap through a shim must refuse without a TTY"
+    );
+}

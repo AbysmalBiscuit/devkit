@@ -96,7 +96,32 @@ fn issue_reports_version() {
 
 #[test]
 fn devrun_reports_version() {
-    assert_reports_version("devrun", env!("CARGO_BIN_EXE_devrun"));
+    let (_dir, link) = shimtest::linked("devrun");
+    assert_reports_version("devrun", link.to_str().expect("utf-8 link path"));
+}
+
+/// Parity requirement: a `devrun` user must see the same behavior through
+/// `devkit run`, version output included.
+#[test]
+fn devkit_run_reports_the_package_version() {
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .args(["run", "--version"])
+        .output()
+        .expect("spawn devkit run --version");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "`devkit run --version` should exit 0, got: {text}"
+    );
+    assert!(
+        text.contains(env!("CARGO_PKG_VERSION")),
+        "`devkit run --version` should print {}, got: {text}",
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 #[test]

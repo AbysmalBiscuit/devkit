@@ -2,9 +2,8 @@ mod baseline;
 mod config;
 
 use anyhow::{Context, Result};
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Subcommand, ValueEnum};
 use devkit::completions::Shell;
-use devkit_common::git::Git;
 use devkit_common::progress::Steps;
 use devkit_common::supervise;
 use devkit_common::ui;
@@ -19,7 +18,7 @@ use std::path::{Path, PathBuf};
 /// `--timing` verbosity, parsed by clap. `--timing` alone = summary,
 /// `--timing=trace` = per-op detail.
 #[derive(Clone, Copy, clap::ValueEnum)]
-enum TimingFlag {
+pub(crate) enum TimingFlag {
     Summary,
     Trace,
 }
@@ -34,30 +33,26 @@ fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
     }
 }
 
-#[derive(Parser)]
-#[command(
-    version,
-    about = "Run local dev servers for an issue worktree (with optional baseline A/B)"
-)]
-struct Cli {
-    /// Run as if devrun had started in DIR instead of the current directory.
+#[derive(clap::Args)]
+pub struct RunCli {
+    /// Run as if this command had started in DIR instead of the current directory.
     #[arg(short = 'C', long = "dir", global = true)]
-    dir: Option<String>,
+    pub dir: Option<String>,
     /// devkit.toml to load instead of the one discovered from the start directory.
     #[arg(long, global = true)]
-    config: Option<String>,
+    pub config: Option<String>,
     /// Print IO timing to stderr. `--timing` = summary, `--timing=trace` = per-op.
     #[arg(long, global = true, value_name = "MODE", num_args = 0..=1, default_missing_value = "summary")]
-    timing: Option<TimingFlag>,
+    pub timing: Option<TimingFlag>,
     /// Write one JSON record per timed IO op to FILE.
     #[arg(long = "timing-log", global = true, value_name = "FILE")]
-    timing_log: Option<PathBuf>,
+    pub timing_log: Option<PathBuf>,
     #[command(subcommand)]
-    cmd: Cmd,
+    pub cmd: Cmd,
 }
 
 #[derive(Subcommand)]
-enum Cmd {
+pub(crate) enum Cmd {
     /// Bring up dev servers for the selected apps.
     Up {
         /// Apps to start; omit to infer them from the diff against the baseline
@@ -128,7 +123,7 @@ enum Cmd {
         #[arg(long)]
         all: bool,
     },
-    /// Kill dev servers running outside devrun. This worktree by default; `--all`
+    /// Kill untracked dev servers. This worktree by default; `--all`
     /// reaches every worktree. Requires an interactive terminal (no agent path).
     Reap {
         /// Reach every worktree, not only this one.
@@ -174,7 +169,7 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
-enum ConfigCmd {
+pub(crate) enum ConfigCmd {
     /// Print the effective merged config (TOML by default).
     Show {
         /// Annotate each value with the file it was resolved from.
@@ -201,7 +196,7 @@ enum ConfigCmd {
 /// CLI selector over registry roles. `Both` runs/affects the issue branch and a
 /// fresh baseline side-by-side; it is not itself a registry `Role`.
 #[derive(Clone, Copy, ValueEnum, PartialEq)]
-enum RoleSelector {
+pub(crate) enum RoleSelector {
     /// The issue branch's servers.
     Issue,
     /// The baseline checkout's servers, for A/B comparison.
@@ -231,7 +226,7 @@ impl RoleSelector {
     }
 }
 
-fn cwd_of(cli: &Cli) -> String {
+fn cwd_of(cli: &RunCli) -> String {
     cli.dir.clone().unwrap_or_else(|| ".".to_string())
 }
 
@@ -411,10 +406,7 @@ fn print_summary(rows: &[Row]) {
     println!("{t}");
 }
 
-fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("devrun");
-    devkit_common::paths::migrate_legacy_state();
-    let cli = Cli::parse();
+pub fn run(cli: RunCli) -> Result<()> {
     let _timing = devkit_common::timing::init(timing_mode(cli.timing), cli.timing_log.clone());
     let cwd = cwd_of(&cli);
     match &cli.cmd {
@@ -482,12 +474,7 @@ fn main() -> Result<()> {
             ConfigCmd::Tasks { json } => config::tasks(&cli, &cwd, *json),
         },
         Cmd::Completions { shell } => {
-            clap_complete::generate(
-                *shell,
-                &mut Cli::command(),
-                "devrun",
-                &mut std::io::stdout(),
-            );
+            crate::emit_completions(*shell, "run", "devrun");
             Ok(())
         }
         Cmd::Task {
@@ -507,7 +494,7 @@ fn main() -> Result<()> {
 }
 
 fn cmd_task(
-    cli: &Cli,
+    cli: &RunCli,
     cwd: &str,
     name: Option<&str>,
     env_pairs: &[String],
@@ -608,7 +595,7 @@ fn run_task_step(plan: &devkit_ports::task::CommandPlan, dry_run: bool) -> Resul
 }
 
 fn cmd_up(
-    cli: &Cli,
+    cli: &RunCli,
     cwd: &str,
     apps_arg: &[String],
     role: RoleSelector,
@@ -916,7 +903,7 @@ fn render_strays(strays: &[devkit_ports::strays::Stray]) -> String {
             s.command.clone().unwrap_or_else(|| "-".into()),
         ]);
     }
-    format!("untracked (outside devrun):\n{t}")
+    format!("untracked (outside the registry):\n{t}")
 }
 
 /// Reap refuses to do anything destructive without an interactive terminal —

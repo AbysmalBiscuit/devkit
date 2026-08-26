@@ -6,7 +6,9 @@ use std::path::Path;
 use std::process::Command;
 
 fn devrun() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_devrun"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.arg("run");
+    cmd
 }
 
 /// A temp dir that is a git repo (cmd_task resolves the worktree root) with a
