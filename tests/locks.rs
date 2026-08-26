@@ -2,6 +2,8 @@
 //! release, and exit codes. Each test is isolated via a private temp project
 //! (a real git repository) and a private `XDG_STATE_HOME`.
 
+#[path = "common/shimtest.rs"]
+mod shimtest;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -14,8 +16,8 @@ fn project() -> tempfile::TempDir {
     p
 }
 
-fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_lockm"))
+fn run(exe: &Path, project: &Path, state: &Path, args: &[&str]) -> Output {
+    Command::new(exe)
         .args(args)
         .current_dir(project)
         .env("XDG_STATE_HOME", state)
@@ -31,9 +33,11 @@ fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
 
 #[test]
 fn second_holder_conflicts_with_overlap() {
+    let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let a = run(
+        &link,
         proj.path(),
         state.path(),
         &["acquire", "scenes", "--as", "alice"],
@@ -41,6 +45,7 @@ fn second_holder_conflicts_with_overlap() {
     assert!(a.status.success(), "alice should acquire");
 
     let b = run(
+        &link,
         proj.path(),
         state.path(),
         &["acquire", "scenes/player.tscn", "--as", "bob"],
@@ -56,15 +61,18 @@ fn second_holder_conflicts_with_overlap() {
 
 #[test]
 fn json_conflict_shape() {
+    let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     run(
+        &link,
         proj.path(),
         state.path(),
         &["acquire", "scenes", "--as", "alice"],
     );
 
     let b = run(
+        &link,
         proj.path(),
         state.path(),
         &["check", "scenes/x", "--as", "bob", "--json"],
@@ -77,14 +85,17 @@ fn json_conflict_shape() {
 
 #[test]
 fn release_frees_for_other_holder() {
+    let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     run(
+        &link,
         proj.path(),
         state.path(),
         &["acquire", "scenes", "--as", "alice"],
     );
     let r = run(
+        &link,
         proj.path(),
         state.path(),
         &["release", "scenes", "--as", "alice"],
@@ -92,6 +103,7 @@ fn release_frees_for_other_holder() {
     assert!(r.status.success());
 
     let b = run(
+        &link,
         proj.path(),
         state.path(),
         &["acquire", "scenes", "--as", "bob"],
@@ -101,10 +113,12 @@ fn release_frees_for_other_holder() {
 
 #[test]
 fn same_holder_reacquire_is_ok() {
+    let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     assert!(
         run(
+            &link,
             proj.path(),
             state.path(),
             &["acquire", "scenes", "--as", "alice"]
@@ -114,6 +128,7 @@ fn same_holder_reacquire_is_ok() {
     );
     assert!(
         run(
+            &link,
             proj.path(),
             state.path(),
             &["acquire", "scenes", "--as", "alice"]

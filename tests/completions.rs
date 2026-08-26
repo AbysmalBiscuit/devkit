@@ -45,7 +45,8 @@ fn issue_emits_completions() {
 
 #[test]
 fn lockm_emits_completions() {
-    emits_every_shell("lockm", env!("CARGO_BIN_EXE_lockm"));
+    let (_dir, link) = shimtest::linked("lockm");
+    emits_every_shell("lockm", link.to_str().expect("utf-8 link path"));
 }
 
 #[test]

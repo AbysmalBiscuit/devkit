@@ -7,6 +7,7 @@ use std::path::PathBuf;
 mod auth;
 mod brief;
 mod doctor;
+mod locks;
 mod ports;
 mod schema;
 mod shim;
@@ -79,6 +80,8 @@ enum Cmd {
     },
     /// Port registry for local dev servers.
     Ports(ports::PortsCli),
+    /// Advisory file locks across sessions.
+    Locks(locks::LocksCli),
 }
 
 #[derive(Subcommand)]
@@ -109,9 +112,8 @@ impl Provider {
     }
 }
 
-/// Build a tool's `Command` as a root command under `shim_name`. Subcommands do
-/// not inherit `version` from the root, so set it explicitly or `--version`
-/// through a shim reports nothing.
+/// Build a tool's `Command` as a root command under `shim_name`, so an installed
+/// hardlink of that name reports its own name and version instead of `devkit`'s.
 fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::Command {
     Cli::command()
         .find_subcommand(subcommand)
@@ -133,6 +135,7 @@ fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
     let matches = shim_command(s.subcommand, s.name).get_matches_from(args);
     match s.subcommand {
         "ports" => ports::run(ports::PortsCli::from_arg_matches(&matches)?),
+        "locks" => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
         other => unreachable!("shim `{}` selects unknown subcommand `{other}`", s.name),
     }
 }
@@ -165,5 +168,6 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Ports(c) => ports::run(c),
+        Cmd::Locks(c) => locks::run(c),
     }
 }

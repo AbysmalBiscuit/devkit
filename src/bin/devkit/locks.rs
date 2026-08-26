@@ -1,22 +1,17 @@
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::Subcommand;
 use devkit::completions::Shell;
 use devkit_locks::hook::{self, HookEvent};
 use devkit_locks::model::{Conflict, LockEntry, WriteDecision};
 
-#[derive(Parser)]
-#[command(
-    name = "lockm",
-    version,
-    about = "Advisory file locks for parallel local sessions"
-)]
-struct Cli {
+#[derive(clap::Args)]
+pub struct LocksCli {
     #[command(subcommand)]
-    cmd: Cmd,
+    pub cmd: Cmd,
 }
 
 #[derive(Subcommand)]
-enum Cmd {
+pub(crate) enum Cmd {
     /// Claim one or more paths (files or directories). Fails if any is held by another session.
     Acquire {
         /// Files or directories to claim.
@@ -201,10 +196,7 @@ fn run_hook(event: &str) {
     }
 }
 
-fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("lockm");
-    devkit_common::paths::migrate_legacy_state();
-    let cli = Cli::parse();
+pub fn run(cli: LocksCli) -> Result<()> {
     match cli.cmd {
         Cmd::Acquire {
             paths,
@@ -295,7 +287,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "lockm", &mut std::io::stdout());
+            crate::emit_completions(shell, "locks", "lockm");
             Ok(())
         }
         Cmd::Hook { event } => {

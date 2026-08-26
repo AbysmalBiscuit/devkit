@@ -62,14 +62,10 @@ fn toplevel(project: &Path) -> String {
 
 #[test]
 fn lockm_list_aliases_status() {
+    let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let out = run(
-        Path::new(env!("CARGO_BIN_EXE_lockm")),
-        proj.path(),
-        state.path(),
-        &["list"],
-    );
+    let out = run(&link, proj.path(), state.path(), &["list"]);
     assert!(
         out.status.success(),
         "`lockm list` should work as an alias of `status`: {}",
@@ -79,10 +75,11 @@ fn lockm_list_aliases_status() {
 
 #[test]
 fn lockm_status_with_paths_points_at_check() {
+    let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let out = run(
-        Path::new(env!("CARGO_BIN_EXE_lockm")),
+        &link,
         proj.path(),
         state.path(),
         &["status", "src/some/file.rs"],

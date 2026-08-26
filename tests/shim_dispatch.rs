@@ -66,3 +66,37 @@ fn devkit_ports_reaches_the_same_command() {
         "devkit ports should show portm's about text: {text}"
     );
 }
+
+#[test]
+fn lockm_shim_parses_lockm_arguments() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let out = Command::new(&link)
+        .arg("--help")
+        .output()
+        .expect("spawn lockm shim");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "lockm --help exited non-zero: {text}");
+    assert!(
+        text.contains("acquire"),
+        "shim should list lockm's own subcommands: {text}"
+    );
+}
+
+/// The PreToolUse hook runs this on every edit; it must keep working through a
+/// shim and must not require a terminal.
+#[test]
+fn lockm_shim_runs_the_pretooluse_hook() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let state = tempfile::tempdir().expect("state dir");
+    let out = Command::new(&link)
+        .args(["hook", "pretooluse"])
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .output()
+        .expect("spawn lockm hook pretooluse");
+    assert!(
+        out.status.success(),
+        "lockm hook pretooluse should exit 0: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
