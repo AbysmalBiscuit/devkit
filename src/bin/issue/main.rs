@@ -41,7 +41,7 @@ fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
 #[command(
     name = "issue",
     version,
-    about = "Issue lifecycle: setup, status, info, end, prs, dashboard, review"
+    about = "Issue lifecycle: setup, checkout-pr, status, info, end, sync-includes, prs, dashboard, review"
 )]
 struct Cli {
     /// Run as if issue had started in DIR instead of the current directory.
