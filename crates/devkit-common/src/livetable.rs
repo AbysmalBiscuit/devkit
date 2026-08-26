@@ -270,13 +270,16 @@ mod tests {
         ["A", "B"].iter().map(|s| s.to_string()).collect()
     }
 
-    // render_lines is pure: title line + header + one line per row. Off-TTY
-    // colour helpers pass through, so content asserts are plain strings.
+    // render_lines is pure: title line + header + one line per row. The block
+    // draws on stderr, so the title expectation paints from that stream.
     #[test]
     fn render_lines_shows_cells_and_frames() {
         let rows = vec![vec![Cell::Ready("one".into()), Cell::Pending]];
         let lines = render_lines("TITLE", &headers(), &rows, 2);
-        assert_eq!(lines[0], "TITLE");
+        assert_eq!(
+            lines[0],
+            ui::Paint::on(ui::Stream::Stderr).bold_cyan("TITLE")
+        );
         let body = lines.join("\n");
         assert!(body.contains("one"), "{body}");
         assert!(body.contains(FRAMES[2]), "{body}");

@@ -285,10 +285,18 @@ mod tests {
 
     #[test]
     fn finish_line_marks_ok_and_err() {
-        // Off-TTY colours pass through, so the glyph and text are plain.
+        // The mark keys off stderr, so the expectation paints from that stream
+        // too and holds whether or not colour is enabled.
+        let paint = crate::ui::Paint::on(crate::ui::Stream::Stderr);
         let d = Duration::from_millis(312);
-        assert_eq!(finish_line(true, "1. foo", d), "✓ 1. foo (312ms)");
-        assert_eq!(finish_line(false, "2. bar", d), "✗ 2. bar (312ms)");
+        assert_eq!(
+            finish_line(true, "1. foo", d),
+            format!("{} 1. foo (312ms)", paint.green("✓"))
+        );
+        assert_eq!(
+            finish_line(false, "2. bar", d),
+            format!("{} 2. bar (312ms)", paint.red("✗"))
+        );
     }
 
     #[test]

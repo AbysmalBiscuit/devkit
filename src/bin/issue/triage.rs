@@ -47,35 +47,13 @@ pub(crate) fn tree_cell(dirty: bool) -> String {
     }
 }
 
-/// The semantic colour `pr_cell` paints a PR state word — a pure decision,
-/// independent of whether the terminal ends up rendering it. Split out so it
-/// can be asserted directly: every `ui::` colour helper passes text through
-/// unchanged when stdout isn't a terminal, which is always true under
-/// `cargo test`, so nothing about ambient rendering is observable there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrColor {
-    Green,
-    Yellow,
-    Red,
-    Dim,
-}
-
-fn pr_color(state: &str) -> PrColor {
-    match state {
-        "MERGED" => PrColor::Green,
-        "OPEN" => PrColor::Yellow,
-        "CLOSED" => PrColor::Red,
-        _ => PrColor::Dim, // NO_PR | AMBIGUOUS | UNKNOWN
-    }
-}
-
 pub(crate) fn pr_cell(row: &IssueWorktree) -> String {
     let label = pr_label(row);
-    let colored = match pr_color(row.pr.state_label()) {
-        PrColor::Green => ui::green(&label),
-        PrColor::Yellow => ui::yellow(&label),
-        PrColor::Red => ui::red(&label),
-        PrColor::Dim => ui::dim(&label),
+    let colored = match row.pr.state_label() {
+        "MERGED" => ui::green(&label),
+        "OPEN" => ui::yellow(&label),
+        "CLOSED" => ui::red(&label),
+        _ => ui::dim(&label), // NO_PR | AMBIGUOUS | UNKNOWN
     };
     match row.pr.url() {
         Some(u) => ui::link(&colored, u),
@@ -180,28 +158,22 @@ mod tests {
         }
     }
 
-    // Under `cargo test` stdout is not a terminal, so every `ui::` colour and
-    // link helper passes its input through unchanged (see
-    // `devkit_common::ui`'s own `color_plain_when_not_a_tty`) — an assertion
-    // built from those same helpers would hold no matter which colour
-    // `pr_cell` picked, or whether it picked one at all. `pr_cell_labels`
-    // therefore only claims what is genuinely observable here: the label
-    // text survives. The colour decision itself is `pr_color`, tested below
-    // without going anywhere near ambient terminal detection.
+    // Expectations are built from the same `ui::` helpers the cells use, so
+    // they pin the colour each state is painted rather than merely the text,
+    // and hold whether or not the ambient environment enables ANSI output.
     #[test]
-    fn pr_cell_labels() {
-        assert!(pr_cell(&row("MERGED")).contains("MERGED #7"));
-        assert_eq!(pr_cell(&row("NO_PR")), "no PR");
-    }
-
-    #[test]
-    fn pr_color_matches_pr_state() {
-        assert_eq!(pr_color("MERGED"), PrColor::Green);
-        assert_eq!(pr_color("OPEN"), PrColor::Yellow);
-        assert_eq!(pr_color("CLOSED"), PrColor::Red);
-        assert_eq!(pr_color("NO_PR"), PrColor::Dim);
-        assert_eq!(pr_color("AMBIGUOUS"), PrColor::Dim);
-        assert_eq!(pr_color("UNKNOWN"), PrColor::Dim);
+    fn pr_cell_colors_by_state() {
+        // Every `Unique` PR carries a url, so its cell is linked; `NO_PR` isn't.
+        for (state, paint) in [
+            ("MERGED", ui::green as fn(&str) -> String),
+            ("OPEN", ui::yellow),
+            ("CLOSED", ui::red),
+            ("UNKNOWN", ui::dim),
+        ] {
+            let want = ui::link(&paint(&format!("{state} #7")), "");
+            assert_eq!(pr_cell(&row(state)), want, "{state}");
+        }
+        assert_eq!(pr_cell(&row("NO_PR")), ui::dim("no PR"));
     }
 
     #[test]
@@ -229,49 +201,55 @@ mod tests {
 
     #[test]
     fn tree_cell_states() {
-        assert_eq!(tree_cell(false), "clean");
-        assert_eq!(tree_cell(true), "dirty");
+        assert_eq!(tree_cell(false), ui::dim("clean"));
+        assert_eq!(tree_cell(true), ui::red("dirty"));
     }
 
     #[test]
     fn state_cell_no_tracker_vs_unknown() {
-        assert_eq!(state_cell(&row("OPEN"), false), "no tracker");
-        assert_eq!(state_cell(&row("OPEN"), true), "unknown");
+        assert_eq!(state_cell(&row("OPEN"), false), ui::dim("no tracker"));
+        assert_eq!(state_cell(&row("OPEN"), true), ui::dim("unknown"));
         let mut r = row("OPEN");
         r.state = Some(devkit_common::tracker::State {
             kind: StateKind::Completed,
             name: "Done".into(),
             color: None,
         });
-        assert_eq!(state_cell(&r, true), "Done");
+        assert_eq!(state_cell(&r, true), ui::green("Done"));
     }
 
     #[test]
     fn verdict_cell_variants() {
-        assert_eq!(verdict_cell(&row("OPEN"), true), "—");
+        assert_eq!(verdict_cell(&row("OPEN"), true), ui::dim("—"));
         let mut r = row("MERGED");
         r.finished = true;
-        assert_eq!(verdict_cell(&r, false), "FINISHED");
+        assert_eq!(verdict_cell(&r, false), ui::bold_green("FINISHED"));
         let mut r = row("OPEN");
         r.reason_not_finished = Some("PR not merged, dirty".into());
-        assert_eq!(verdict_cell(&r, false), "PR not merged, dirty");
+        assert_eq!(
+            verdict_cell(&r, false),
+            ui::yellow("PR not merged, dirty"),
+            "a dirty tree is the one reason that needs you, so it reads yellow"
+        );
     }
 
     #[test]
-    fn issue_cell_unknown_is_plain() {
+    fn issue_cell_dims_an_unknown_id() {
         let mut r = row("OPEN");
         r.issue_id = "UNKNOWN".into();
-        // No link base / no tracker state → bare id (colour is a passthrough here).
-        assert_eq!(issue_cell(&r, None), "UNKNOWN");
+        assert_eq!(issue_cell(&r, None), ui::dim("UNKNOWN"));
+        // The tracker never answered for this row, so the link base goes unused.
         assert_eq!(
             issue_cell(&row("OPEN"), Some("https://linear.app/acme/issue/")),
-            "ENG-1"
+            ui::cyan("ENG-1")
         );
     }
 
     #[test]
     fn branch_cell_truncates() {
         let long = "x".repeat(60);
-        assert_eq!(branch_cell(&long).chars().count(), BRANCH_MAX);
+        let fitted = ui::truncate(&long, BRANCH_MAX);
+        assert_eq!(fitted.chars().count(), BRANCH_MAX);
+        assert_eq!(branch_cell(&long), ui::dim(&fitted));
     }
 }

@@ -127,19 +127,23 @@ pub enum Stream {
 /// Whether to emit ANSI colour on `stream`. `NO_COLOR` (https://no-color.org)
 /// always wins; `FORCE_COLOR` opts in even when piped (e.g. into `less -R`);
 /// otherwise colour is emitted only when that stream is a real terminal.
-/// Piped output therefore stays plain by default, which also keeps
-/// rendered-table tests deterministic.
 pub(crate) fn color_enabled_on(stream: Stream) -> bool {
-    if std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
-        return false;
-    }
-    if std::env::var_os("FORCE_COLOR").is_some_and(|v| !v.is_empty()) {
-        return true;
-    }
-    match stream {
+    let is_tty = match stream {
         Stream::Stdout => std::io::stdout().is_terminal(),
         Stream::Stderr => std::io::stderr().is_terminal(),
-    }
+    };
+    color_choice(
+        std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
+        std::env::var_os("FORCE_COLOR").is_some_and(|v| !v.is_empty()),
+        is_tty,
+    )
+}
+
+/// The colour precedence: `NO_COLOR` beats `FORCE_COLOR`, which beats terminal
+/// detection. Split from [`color_enabled_on`] so the rule is testable without
+/// reading process-global environment.
+fn color_choice(no_color: bool, force_color: bool, is_tty: bool) -> bool {
+    !no_color && (force_color || is_tty)
 }
 
 /// Colour helpers keyed to one [`Stream`]. The free helpers (`green`, `dim`,
@@ -372,15 +376,12 @@ mod tests {
     }
 
     #[test]
-    fn color_plain_when_not_a_tty() {
-        // Tests do not run under a tty, so colour helpers pass text through
-        // unchanged — keeping rendered output deterministic.
-        assert_eq!(green("ok"), "ok");
-        assert_eq!(dim("x"), "x");
-        assert_eq!(cyan("ENG-1"), "ENG-1");
-        assert_eq!(bold_green("FINISHED"), "FINISHED");
-        assert_eq!(bold_cyan("TITLE"), "TITLE");
-        assert_eq!(dim_strike("old"), "old");
+    fn no_color_beats_force_color_beats_tty() {
+        assert!(!color_choice(true, true, true));
+        assert!(!color_choice(true, false, true));
+        assert!(color_choice(false, true, false));
+        assert!(color_choice(false, false, true));
+        assert!(!color_choice(false, false, false));
     }
 
     #[test]
@@ -392,14 +393,12 @@ mod tests {
             on.dim_all("a \x1b[32mok\x1b[0m b"),
             "\x1b[2ma \x1b[32mok\x1b[0m\x1b[2m b\x1b[0m"
         );
-        // Colour off: passthrough, like every other colour helper — and the
-        // public entry point is off-tty in tests.
+        // Colour off: passthrough, like every other colour helper.
         let off = Paint { enabled: false };
         assert_eq!(
             off.dim_all("a \x1b[32mok\x1b[0m b"),
             "a \x1b[32mok\x1b[0m b"
         );
-        assert_eq!(dim_all("x"), "x");
     }
 
     #[test]

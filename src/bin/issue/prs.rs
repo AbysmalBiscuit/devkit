@@ -511,10 +511,11 @@ mod tests {
 
     #[test]
     fn diff_cell_shows_change() {
-        // Tests are not a tty, so colour/strike helpers pass text through and the
-        // change reads as a plain `old → new`.
+        // The injected paint is a passthrough, so what is left to pin is the
+        // shape: struck-through old value, dim arrow, then the new value.
         let plain = |s: &str| s.to_string();
-        assert_eq!(diff_cell(Some("ok"), "fail", plain), "ok → fail");
+        let changed = format!("{}{}fail", ui::dim_strike("ok"), ui::dim(" → "));
+        assert_eq!(diff_cell(Some("ok"), "fail", plain), changed);
         assert_eq!(diff_cell(Some("ok"), "ok", plain), "ok");
         assert_eq!(diff_cell(None, "ok", plain), "ok");
     }
