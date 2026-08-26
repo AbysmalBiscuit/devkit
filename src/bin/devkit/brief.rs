@@ -103,7 +103,12 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
     let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
     };
-    let settings = brief_config(&cwd);
+    // Resolved once for the whole invocation: every function below that would
+    // otherwise ask git for it again takes it as a parameter instead, so a
+    // session-hook run spawns git for it at most once rather than once per
+    // caller.
+    let main_checkout = devkit_common::git::main_checkout(&cwd).ok().flatten();
+    let settings = brief_config(&cwd, main_checkout.as_deref());
     if !settings.enabled {
         return Ok(());
     }
@@ -123,20 +128,20 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
             }
             return Ok(());
         }
-        if let Some(text) = render(&cwd, &settings) {
+        if let Some(text) = render(&cwd, &settings, main_checkout.as_deref()) {
             out.text(&text);
-            stamp(&cwd, &settings);
+            stamp(&cwd, &settings, main_checkout.as_deref());
         }
         return Ok(());
     }
 
     let session = session_id();
-    let digest = snapshot(&cwd, &settings).map(|s| s.digest());
+    let digest = snapshot(&cwd, &settings, main_checkout.as_deref()).map(|s| s.digest());
     let Some(session) = session else {
         // No id means emit without persisting: a shared per-cwd key would let
         // one session's brief suppress another's re-injection, and a withheld
         // brief is the worse failure.
-        if let Some(text) = render(&cwd, &settings) {
+        if let Some(text) = render(&cwd, &settings, main_checkout.as_deref()) {
             out.text(&text);
         }
         return Ok(());
@@ -151,7 +156,7 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
     if let Some(current) = &current {
         write_watermark(&path, current);
     }
-    match render(&cwd, &settings) {
+    match render(&cwd, &settings, main_checkout.as_deref()) {
         Some(text) => out.text(&text),
         // Left the project: silence would leave the previous checkout's brief
         // as the most recent thing the agent was told.
@@ -318,11 +323,11 @@ impl PinKey {
 /// Record the full brief this session has just been told, so `--if-changed`
 /// has something to compare against. Without a session id — an interactive run
 /// — there is no session to record it for.
-fn stamp(cwd: &Path, settings: &BriefConfig) {
+fn stamp(cwd: &Path, settings: &BriefConfig, main_checkout: Option<&Path>) {
     let Some(session) = session_id() else {
         return;
     };
-    let Some(digest) = snapshot(cwd, settings).map(|s| s.digest()) else {
+    let Some(digest) = snapshot(cwd, settings, main_checkout).map(|s| s.digest()) else {
         return;
     };
     write_watermark(&watermark_path(&session), &format!("{digest:016x}"));
@@ -366,7 +371,11 @@ fn watermark_path(session: &str) -> PathBuf {
 /// hashes. `None` when this checkout produces no brief at all — the emptiness
 /// rule has to match `render`'s exactly, or a digest saying "changed" for a
 /// brief `render` refuses to emit would rewrite the watermark and stay silent.
-fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
+fn snapshot(
+    cwd: &Path,
+    settings: &BriefConfig,
+    main_checkout: Option<&Path>,
+) -> Option<BriefSnapshot> {
     let root = devkit_common::git::checkout_root(cwd)
         .ok()?
         .to_string_lossy()
@@ -440,7 +449,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
         servers: !servers.is_empty(),
         locks,
     };
-    let config_fault = config_fault(cwd);
+    let config_fault = config_fault(cwd, main_checkout);
     if pin_keys.is_empty() && !facilities.any() && config_fault.is_none() {
         return None;
     }
@@ -460,9 +469,8 @@ fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
 /// not `load::load`: `load` also reads doppler.yaml and builds the app
 /// catalog, which is what fails on a docs-only project. An unreadable config
 /// falls open to the defaults.
-fn brief_config(cwd: &Path) -> BriefConfig {
-    let main_checkout = devkit_common::git::main_checkout(cwd).ok().flatten();
-    config::resolve(None, cwd, main_checkout.as_deref())
+fn brief_config(cwd: &Path, main_checkout: Option<&Path>) -> BriefConfig {
+    config::resolve(None, cwd, main_checkout)
         .map(|(cfg, _)| cfg.brief)
         .unwrap_or_default()
 }
@@ -470,9 +478,8 @@ fn brief_config(cwd: &Path) -> BriefConfig {
 /// The reason this checkout's config does not load, or `None` when it loads or
 /// does not exist. An absent config is how every non-devkit repository looks,
 /// so only a config that exists and fails is worth a word.
-fn config_fault(cwd: &Path) -> Option<String> {
-    let main_checkout = devkit_common::git::main_checkout(cwd).ok().flatten();
-    match config::health(cwd, main_checkout.as_deref()) {
+fn config_fault(cwd: &Path, main_checkout: Option<&Path>) -> Option<String> {
+    match config::health(cwd, main_checkout) {
         config::Health::Broken(why) => Some(why),
         config::Health::Ok | config::Health::Absent => None,
     }
@@ -498,7 +505,7 @@ fn fault_text(why: &str) -> String {
     out
 }
 
-fn render(cwd: &Path, settings: &BriefConfig) -> Option<String> {
+fn render(cwd: &Path, settings: &BriefConfig, main_checkout: Option<&Path>) -> Option<String> {
     let root = devkit_common::git::checkout_root(cwd)
         .ok()?
         .to_string_lossy()
@@ -508,7 +515,7 @@ fn render(cwd: &Path, settings: &BriefConfig) -> Option<String> {
     // nothing devrun can use must still produce a brief.
     let pins = pins_section(&checkout_pins(cwd, settings));
     let devrun = devrun_sections(&root, cwd, settings);
-    let fault = config_fault(cwd);
+    let fault = config_fault(cwd, main_checkout);
     if pins.is_none() && devrun.is_none() && fault.is_none() {
         return None;
     }
@@ -818,7 +825,7 @@ mod tests {
     fn a_malformed_config_falls_back_to_the_defaults() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("devkit.toml"), "this is not toml [[[").unwrap();
-        let cfg = brief_config(tmp.path());
+        let cfg = brief_config(tmp.path(), None);
         assert!(
             cfg.enabled,
             "an unreadable config costs a brief, never withholds one"
