@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::Subcommand;
 use devkit::completions::Shell;
 use std::path::PathBuf;
 
@@ -22,7 +22,7 @@ mod triage;
 /// `--timing` verbosity, parsed by clap. `--timing` alone = summary,
 /// `--timing=trace` = per-op detail.
 #[derive(Clone, Copy, clap::ValueEnum)]
-enum TimingFlag {
+pub(crate) enum TimingFlag {
     Summary,
     Trace,
 }
@@ -37,31 +37,26 @@ fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
     }
 }
 
-#[derive(Parser)]
-#[command(
-    name = "issue",
-    version,
-    about = "Issue lifecycle: setup, checkout-pr, status, info, end, sync-includes, prs, dashboard, review"
-)]
-struct Cli {
-    /// Run as if issue had started in DIR instead of the current directory.
+#[derive(clap::Args)]
+pub struct IssueCli {
+    /// Run as if this command had started in DIR instead of the current directory.
     #[arg(short = 'C', long = "dir", global = true)]
-    dir: Option<String>,
+    pub dir: Option<String>,
     /// devkit.toml to load instead of the one discovered from the start directory.
     #[arg(long, global = true)]
-    config: Option<String>,
+    pub config: Option<String>,
     /// Print IO timing to stderr. `--timing` = summary, `--timing=trace` = per-op.
     #[arg(long, global = true, value_name = "MODE", num_args = 0..=1, default_missing_value = "summary")]
-    timing: Option<TimingFlag>,
+    pub timing: Option<TimingFlag>,
     /// Write one JSON record per timed IO op to FILE.
     #[arg(long = "timing-log", global = true, value_name = "FILE")]
-    timing_log: Option<PathBuf>,
+    pub timing_log: Option<PathBuf>,
     #[command(subcommand)]
-    cmd: Option<Cmd>,
+    pub cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
-enum Cmd {
+pub(crate) enum Cmd {
     /// Prepare an issue worktree: branch, per-app setup commands, reserved ports.
     Setup {
         /// Linear issue id or issue URL (equivalent to --issue).
@@ -238,7 +233,7 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
-enum ReviewCmd {
+pub(crate) enum ReviewCmd {
     /// Push, open/reuse the PR, request review, and Slack the reviewers.
     Request {
         /// Slack body; fills the `review_request` template's `{{ input }}`.
@@ -290,10 +285,7 @@ fn start(dir: &Option<String>) -> String {
     dir.clone().unwrap_or_else(|| ".".to_string())
 }
 
-fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("issue");
-    devkit_common::paths::migrate_legacy_state();
-    let cli = Cli::parse();
+pub fn run(cli: IssueCli) -> Result<()> {
     let _timing = devkit_common::timing::init(timing_mode(cli.timing), cli.timing_log.clone());
     match cli.cmd {
         Some(Cmd::Setup {
@@ -443,7 +435,7 @@ fn main() -> Result<()> {
             }),
         },
         Some(Cmd::Completions { shell }) => {
-            clap_complete::generate(shell, &mut Cli::command(), "issue", &mut std::io::stdout());
+            crate::emit_completions(shell, "issue", "issue");
             Ok(())
         }
         None => status::run(&start(&cli.dir), &[], cli.config.as_deref()),

@@ -1,6 +1,10 @@
 //! `issue sync-includes` pushes the `defaults.worktree_include` files from the
-//! monorepo into worktrees that already exist. Each test drives the real binary
-//! against a real git repo, with a private HOME/XDG_STATE_HOME.
+//! monorepo into worktrees that already exist. Each test drives an `issue` shim
+//! (a hardlinked `devkit`) against a real git repo, with a private
+//! HOME/XDG_STATE_HOME.
+
+#[path = "common/shimtest.rs"]
+mod shimtest;
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -59,7 +63,10 @@ fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
 /// Drive the binary from `cwd`, a directory name under the project tree, so a
 /// test can run from a worktree rather than from the monorepo.
 fn run_in(project: &Path, cwd: &str, state: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_issue"))
+    // The link's guard lives to the end of this function, which is safe because
+    // `output()` waits for the child before returning.
+    let (_dir, exe) = shimtest::linked("issue");
+    Command::new(&exe)
         .args(args)
         .current_dir(project.join(cwd))
         .env("HOME", state)

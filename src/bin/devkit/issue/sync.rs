@@ -36,7 +36,7 @@ fn select<'a>(rows: &'a [(Worktree, String)], selectors: &[String]) -> Vec<&'a (
         let mut hit = false;
         for row in rows {
             let (wt, id) = row;
-            if crate::select::matches_parts(&wt.path.to_string_lossy(), &wt.branch, id, sel) {
+            if crate::issue::select::matches_parts(&wt.path.to_string_lossy(), &wt.branch, id, sel) {
                 hit = true;
                 if seen.insert(wt.path.clone()) {
                     chosen.push(row);

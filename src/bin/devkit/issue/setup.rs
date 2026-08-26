@@ -238,7 +238,7 @@ fn resolve_slug(
         return Ok(s);
     }
     if let Some(s) = &issue.slug {
-        return Ok(crate::slug::cap(s, budget));
+        return Ok(crate::issue::slug::cap(s, budget));
     }
     let title = match details {
         Some(d) => d.title.clone(),
@@ -247,7 +247,7 @@ fn resolve_slug(
             .with_context(|| format!("fetching the title for {}", issue.id))?
             .with_context(|| format!("no issue {} \u{2014} pass --slug", issue.id))?,
     };
-    let slug = crate::slug::cap(&crate::slug::from_title(&issue.id, &title)?, budget);
+    let slug = crate::issue::slug::cap(&crate::issue::slug::from_title(&issue.id, &title)?, budget);
     eprintln!("slug from {}: {slug}", t.kind().as_str());
     Ok(slug)
 }
@@ -304,7 +304,7 @@ fn parse_input(resolved: &Resolved, input: &str) -> Result<IssueRef> {
     if resolved.declared {
         resolved.tracker.issue_ref(input)
     } else {
-        Ok(crate::slug::parse_issue_ref(input))
+        Ok(crate::issue::slug::parse_issue_ref(input))
     }
 }
 
@@ -351,7 +351,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
     let summary_path = details
         .as_ref()
-        .map(|d| crate::summary::plan_path(cfg, d, &wt_root, &holder, &branch, &slug, &args.apps))
+        .map(|d| {
+            crate::issue::summary::plan_path(cfg, d, &wt_root, &holder, &branch, &slug, &args.apps)
+        })
         .transpose()?;
 
     if args.dry_run {
@@ -402,8 +404,9 @@ pub fn run(args: SetupArgs) -> Result<()> {
     // said at setup time.
     let summary_path = match &details {
         Some(d) => {
-            let (path, written) =
-                crate::summary::write(cfg, d, &wt_root, &holder, &branch, &slug, &args.apps)?;
+            let (path, written) = crate::issue::summary::write(
+                cfg, d, &wt_root, &holder, &branch, &slug, &args.apps,
+            )?;
             if !written {
                 eprintln!("summary already exists, left untouched: {}", path.display());
             }

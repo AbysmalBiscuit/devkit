@@ -91,7 +91,32 @@ fn devkit_locks_reports_the_package_version() {
 
 #[test]
 fn issue_reports_version() {
-    assert_reports_version("issue", env!("CARGO_BIN_EXE_issue"));
+    let (_dir, link) = shimtest::linked("issue");
+    assert_reports_version("issue", link.to_str().expect("utf-8 link path"));
+}
+
+/// Parity requirement: an `issue` user must see the same behavior through
+/// `devkit issue`, version output included.
+#[test]
+fn devkit_issue_reports_the_package_version() {
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .args(["issue", "--version"])
+        .output()
+        .expect("spawn devkit issue --version");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "`devkit issue --version` should exit 0, got: {text}"
+    );
+    assert!(
+        text.contains(env!("CARGO_PKG_VERSION")),
+        "`devkit issue --version` should print {}, got: {text}",
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 #[test]

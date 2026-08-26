@@ -8,6 +8,7 @@ mod auth;
 mod brief;
 mod docs;
 mod doctor;
+mod issue;
 mod locks;
 mod ports;
 mod run;
@@ -89,6 +90,8 @@ enum Cmd {
     /// Supervised dev servers and canned project tasks for an issue worktree,
     /// with optional baseline A/B.
     Run(run::RunCli),
+    /// Issue lifecycle: setup, checkout-pr, status, info, end, sync-includes, prs, dashboard, review.
+    Issue(issue::IssueCli),
 }
 
 #[derive(Subcommand)]
@@ -145,6 +148,7 @@ fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
         "locks" => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
         "docs" => docs::run(docs::DocsCli::from_arg_matches(&matches)?),
         "run" => run::run(run::RunCli::from_arg_matches(&matches)?),
+        "issue" => issue::run(issue::IssueCli::from_arg_matches(&matches)?),
         other => unreachable!("shim `{}` selects unknown subcommand `{other}`", s.name),
     }
 }
@@ -180,5 +184,6 @@ fn main() -> Result<()> {
         Cmd::Locks(c) => locks::run(c),
         Cmd::Docs(c) => docs::run(c),
         Cmd::Run(c) => run::run(c),
+        Cmd::Issue(c) => issue::run(c),
     }
 }

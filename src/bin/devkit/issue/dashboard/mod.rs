@@ -1,4 +1,4 @@
-use crate::{prs, triage};
+use crate::issue::{prs, triage};
 use anyhow::{Context, Result};
 
 mod bucket;
@@ -22,7 +22,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
 
     // At-a-glance: worktree triage, then my PRs + PRs awaiting my review.
-    let report = crate::status::gather_live(&start, &[], args.config.as_deref())?;
+    let report = crate::issue::status::gather_live(&start, &[], args.config.as_deref())?;
     triage::render(&report, false);
     println!();
     // The PR tables are a secondary panel; if gh is unavailable the rest of the
@@ -51,7 +51,8 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     // any resolve) — used both to fetch the timeline and to scope its cache
     // entries so two projects, or two viewers of one project, never share
     // a cache file (see `cache::CacheScope`).
-    let (resolved, scope_repos) = crate::tracker::select(args.config.as_deref(), &start, None);
+    let (resolved, scope_repos) =
+        crate::issue::tracker::select(args.config.as_deref(), &start, None);
     let tracker = resolved.tracker.as_ref();
     let scope_repo = scope_repos
         .issues()

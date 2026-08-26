@@ -195,3 +195,82 @@ launch = ["git", "version"]
         "stderr was: {stderr}"
     );
 }
+
+/// A git repo with no issue worktrees, which is all `status` needs to render an
+/// empty table and exit 0. Outside a repo it fails on `git worktree list`, so a
+/// bare-`issue` test that skipped the repo would never reach `status::run`.
+fn empty_repo() -> tempfile::TempDir {
+    let project = tempfile::tempdir().expect("project dir");
+    let ok = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(project.path())
+        .status()
+        .expect("git init")
+        .success();
+    assert!(ok, "git init failed");
+    project
+}
+
+#[test]
+fn issue_shim_parses_issue_arguments() {
+    let (_dir, link) = shimtest::linked("issue");
+    let out = Command::new(&link)
+        .arg("--help")
+        .output()
+        .expect("spawn issue shim");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "issue --help exited non-zero: {text}");
+    assert!(
+        text.contains("checkout-pr"),
+        "shim should list issue's own subcommands: {text}"
+    );
+}
+
+/// Bare `issue` runs `status`, the invocation most users type.
+#[test]
+fn issue_shim_defaults_to_status() {
+    let (_dir, link) = shimtest::linked("issue");
+    let state = tempfile::tempdir().expect("state dir");
+    let project = empty_repo();
+    let out = Command::new(&link)
+        .current_dir(project.path())
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .output()
+        .expect("spawn bare issue shim");
+    assert!(
+        out.status.success(),
+        "bare issue should run status: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ISSUE WORKTREES"),
+        "bare issue should render the status table: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// Parity requirement: the defaulted subcommand must reach `status` through
+/// `devkit issue` too, not just through the shim.
+#[test]
+fn devkit_issue_defaults_to_status() {
+    let state = tempfile::tempdir().expect("state dir");
+    let project = empty_repo();
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .arg("issue")
+        .current_dir(project.path())
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .output()
+        .expect("spawn bare devkit issue");
+    assert!(
+        out.status.success(),
+        "bare `devkit issue` should run status: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("ISSUE WORKTREES"),
+        "bare `devkit issue` should render the status table: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}

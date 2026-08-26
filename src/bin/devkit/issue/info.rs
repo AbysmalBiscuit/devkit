@@ -1,4 +1,4 @@
-use crate::triage::render;
+use crate::issue::triage::render;
 use anyhow::Result;
 use devkit_common::livetable::{Cell, LiveTable};
 use devkit_common::tracker::{Resolved, State};
@@ -23,7 +23,9 @@ fn pick_index(
     current_top: Option<&str>,
 ) -> Option<usize> {
     match selector {
-        Some(sel) => rows.iter().position(|r| crate::select::matches(r, sel)),
+        Some(sel) => rows
+            .iter()
+            .position(|r| crate::issue::select::matches(r, sel)),
         None => {
             let top = current_top?;
             rows.iter().position(|r| same_path(&r.worktree, top))
@@ -62,7 +64,7 @@ pub fn run(
     // batch, so narrowing it would not save a round trip.
     let d = st::discover(start, &[])?;
     let top = current_top(start);
-    let (resolved, repos) = crate::tracker::select(config, start, None);
+    let (resolved, repos) = crate::issue::tracker::select(config, start, None);
     let tracker = resolved.tracker.as_ref();
     let mut info = TrackerInfo::of(&resolved);
 
@@ -83,7 +85,7 @@ pub fn run(
 
     let recorded_pr = devkit_common::record::read(Path::new(&row.worktree)).and_then(|r| r.pr);
     let cached_pr = seedable_cached_pr(
-        crate::info_cache::read(Path::new(&row.worktree)),
+        crate::issue::info_cache::read(Path::new(&row.worktree)),
         recorded_pr.as_ref(),
     );
 
@@ -110,9 +112,9 @@ pub fn run(
         info.link_base = live_enrich(&mut row, &d, &resolved, !json, repo)?;
 
         if let PrStatus::Unique { number, state, url } = &row.pr {
-            let _ = crate::info_cache::write(
+            let _ = crate::issue::info_cache::write(
                 Path::new(&row.worktree),
-                &crate::info_cache::CachedPr {
+                &crate::issue::info_cache::CachedPr {
                     number: *number,
                     state: state.clone(),
                     url: url.clone(),
@@ -153,18 +155,34 @@ fn live_enrich(
 ) -> Result<Option<String>> {
     let t = resolved.tracker.as_ref();
     let mut lt = if render {
-        LiveTable::new("ISSUE WORKTREES", &crate::triage::HEADERS, 1)
+        LiveTable::new("ISSUE WORKTREES", &crate::issue::triage::HEADERS, 1)
     } else {
-        LiveTable::hidden("ISSUE WORKTREES", &crate::triage::HEADERS, 1)
+        LiveTable::hidden("ISSUE WORKTREES", &crate::issue::triage::HEADERS, 1)
     };
-    lt.set(0, 0, Cell::Ready(crate::triage::issue_cell(row, None)));
-    lt.set(0, 1, Cell::Ready(crate::triage::branch_cell(&row.branch)));
-    lt.set(0, 2, Cell::Ready(crate::triage::tree_cell(row.dirty)));
+    lt.set(
+        0,
+        0,
+        Cell::Ready(crate::issue::triage::issue_cell(row, None)),
+    );
+    lt.set(
+        0,
+        1,
+        Cell::Ready(crate::issue::triage::branch_cell(&row.branch)),
+    );
+    lt.set(
+        0,
+        2,
+        Cell::Ready(crate::issue::triage::tree_cell(row.dirty)),
+    );
     let want_state = row.issue_id != "UNKNOWN";
     if !want_state {
         // No tracker fetch reports for an UNKNOWN id, so render the same dim
         // cell the final table shows instead of a spinner that never resolves.
-        lt.set(0, 4, Cell::Ready(crate::triage::state_cell(row, t.ready())));
+        lt.set(
+            0,
+            4,
+            Cell::Ready(crate::issue::triage::state_cell(row, t.ready())),
+        );
     }
     lt.redraw();
 
@@ -215,14 +233,18 @@ fn live_enrich(
                         prs.apply(row);
                     }
                     got_prs = true;
-                    lt.set(0, 3, Cell::Ready(crate::triage::pr_cell(row)));
+                    lt.set(0, 3, Cell::Ready(crate::issue::triage::pr_cell(row)));
                 }
                 Update::States(states) => {
                     if let Some(s) = states.get(&row.issue_id) {
                         row.state = Some(s.clone());
                     }
                     got_state = true;
-                    lt.set(0, 4, Cell::Ready(crate::triage::state_cell(row, t.ready())));
+                    lt.set(
+                        0,
+                        4,
+                        Cell::Ready(crate::issue::triage::state_cell(row, t.ready())),
+                    );
                 }
                 Update::LinkBase(base) => {
                     got_link_base = true;
@@ -233,7 +255,11 @@ fn live_enrich(
                 let reason = st::reason_not_finished(row, &verdict_tracker, false);
                 row.finished = reason.is_none();
                 row.reason_not_finished = reason;
-                lt.set(0, 5, Cell::Ready(crate::triage::verdict_cell(row, false)));
+                lt.set(
+                    0,
+                    5,
+                    Cell::Ready(crate::issue::triage::verdict_cell(row, false)),
+                );
             }
             Ok(got_prs && got_state && got_link_base)
         })
@@ -270,9 +296,9 @@ fn local_row(top: &str) -> Result<IssueWorktree> {
 /// answer of "the recorded PR does not resolve" would otherwise leave the
 /// superseded PR on the row — with its own state driving the verdict.
 fn seedable_cached_pr(
-    cached: Option<crate::info_cache::CachedPr>,
+    cached: Option<crate::issue::info_cache::CachedPr>,
     recorded: Option<&devkit_common::github::PrLocator>,
-) -> Option<crate::info_cache::CachedPr> {
+) -> Option<crate::issue::info_cache::CachedPr> {
     let cached = cached?;
     match recorded {
         Some(loc) if loc.number != cached.number => None,
@@ -283,7 +309,7 @@ fn seedable_cached_pr(
 /// Overlay a cached PR onto an offline row. The verdict is cleared because it
 /// cannot be computed without a tracker fetch, and a `NO_PR` verdict would
 /// contradict the cached PR.
-fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::info_cache::CachedPr) {
+fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::issue::info_cache::CachedPr) {
     row.pr = PrStatus::Unique {
         number: pr.number,
         state: pr.state,
@@ -364,7 +390,7 @@ mod tests {
 
     #[test]
     fn a_cache_the_record_contradicts_never_seeds_the_row() {
-        let cached = crate::info_cache::CachedPr {
+        let cached = crate::issue::info_cache::CachedPr {
             number: 7,
             state: "MERGED".into(),
             url: "https://github.com/o/r/pull/7".into(),
@@ -393,7 +419,7 @@ mod tests {
         r.reason_not_finished = Some("no PR, tracker state unknown".into());
         apply_cached_pr(
             &mut r,
-            crate::info_cache::CachedPr {
+            crate::issue::info_cache::CachedPr {
                 number: 123,
                 state: "OPEN".into(),
                 url: "https://x/pr/123".into(),
@@ -419,7 +445,7 @@ mod tests {
         let mut r = row("/a", "lev/eng-1-x", "ENG-1");
         apply_cached_pr(
             &mut r,
-            crate::info_cache::CachedPr {
+            crate::issue::info_cache::CachedPr {
                 number: 7,
                 state: "OPEN".into(),
                 url: "https://github.com/o/r/pull/7".into(),
@@ -453,7 +479,7 @@ mod tests {
         let mut r = row("/a", "lev/eng-1-x", "ENG-1");
         apply_cached_pr(
             &mut r,
-            crate::info_cache::CachedPr {
+            crate::issue::info_cache::CachedPr {
                 number: 7,
                 state: "OPEN".into(),
                 url: "https://github.com/o/r/pull/7".into(),
@@ -473,7 +499,7 @@ mod tests {
         let mut r = row("/a", "lev/eng-1-x", "ENG-1");
         apply_cached_pr(
             &mut r,
-            crate::info_cache::CachedPr {
+            crate::issue::info_cache::CachedPr {
                 number: 7,
                 state: "OPEN".into(),
                 url: "https://github.com/o/r/pull/7".into(),

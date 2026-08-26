@@ -184,12 +184,13 @@ fn portm_release_without_holder_frees_current_worktree() {
 
 #[test]
 fn issue_setup_accepts_positional_issue_id() {
+    let (_dir, link) = shimtest::linked("issue");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     // No full config here — the point is only that clap accepts the shape
     // (a later config/network error exits 1, never clap's usage error 2).
     let out = run(
-        Path::new(env!("CARGO_BIN_EXE_issue")),
+        &link,
         proj.path(),
         state.path(),
         &["setup", "ABC-123", "--slug", "s", "--dry-run"],
@@ -208,10 +209,11 @@ fn issue_setup_accepts_positional_issue_id() {
 
 #[test]
 fn issue_setup_rejects_both_positional_and_flag() {
+    let (_dir, link) = shimtest::linked("issue");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let out = run(
-        Path::new(env!("CARGO_BIN_EXE_issue")),
+        &link,
         proj.path(),
         state.path(),
         &["setup", "ABC-123", "--issue", "ABC-999", "--slug", "s"],

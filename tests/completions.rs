@@ -41,7 +41,8 @@ fn devrun_emits_completions() {
 
 #[test]
 fn issue_emits_completions() {
-    emits_every_shell("issue", env!("CARGO_BIN_EXE_issue"));
+    let (_dir, link) = shimtest::linked("issue");
+    emits_every_shell("issue", link.to_str().expect("utf-8 link path"));
 }
 
 #[test]

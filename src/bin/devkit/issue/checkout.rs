@@ -1,4 +1,4 @@
-use crate::slug::slugify;
+use crate::issue::slug::slugify;
 use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_capture, gh_json_in};
 use devkit_common::git::Git;
@@ -400,7 +400,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             .to_string();
         let checked_out = github::pr_meta_full(&pr_repo, meta.number)
             .with_context(|| format!("verifying PR #{}", meta.number))?;
-        crate::review::finish::assert_belongs(&checked_out, &head)?;
+        crate::issue::review::finish::assert_belongs(&checked_out, &head)?;
 
         let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
         devkit_common::record::write(
@@ -425,7 +425,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         Ok(issue)
     })?;
 
-    crate::setup::backfill_includes(monorepo_s, &worktree, &cfg.defaults.worktree_include);
+    crate::issue::setup::backfill_includes(monorepo_s, &worktree, &cfg.defaults.worktree_include);
 
     if args.setup {
         let setup_ctx = serde_json::json!({
@@ -435,7 +435,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             "apps": args.apps,
         });
         steps.during_result("Preparing apps…", || {
-            crate::setup::prep_apps(
+            crate::issue::setup::prep_apps(
                 &worktree,
                 &meta.head_ref_name,
                 &args.apps,
@@ -456,7 +456,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     });
     steps.suspend(|| report(meta.number, &meta.head_ref_name, worktree_s))?;
 
-    crate::setup::run_after_worktree_create(
+    crate::issue::setup::run_after_worktree_create(
         &worktree,
         &cfg.hooks.after_worktree_create,
         &hook_ctx,

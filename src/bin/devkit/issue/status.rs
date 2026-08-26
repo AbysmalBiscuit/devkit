@@ -1,4 +1,4 @@
-use crate::triage::{self, render};
+use crate::issue::triage::{self, render};
 use anyhow::Result;
 use devkit_common::livetable::{Cell, LiveTable};
 use devkit_common::tracker::{State, TrackerKind};
@@ -153,7 +153,7 @@ fn progress_msg(prs_done: bool, states_done: bool) -> String {
 /// to stdout exactly as the silent gather would.
 pub fn gather_live(start: &str, ids: &[String], config: Option<&str>) -> Result<StatusReport> {
     let d = st::discover(start, ids)?;
-    let (resolved, repos) = crate::tracker::select(config, start, None);
+    let (resolved, repos) = crate::issue::tracker::select(config, start, None);
     let info = TrackerInfo::of(&resolved);
     if d.is_empty() {
         // No worktrees means no PR fetch — the report is empty either way.

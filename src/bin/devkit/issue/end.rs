@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::triage::render;
+use crate::issue::triage::render;
 use devkit_issue::status::{IssueWorktree, gather_with, label, reason_not_finished};
 
 fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWorktree> {
@@ -14,7 +14,7 @@ fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWor
     for sel in selectors {
         let hits: Vec<&IssueWorktree> = rows
             .iter()
-            .filter(|r| crate::select::matches(r, sel))
+            .filter(|r| crate::issue::select::matches(r, sel))
             .collect();
         if hits.is_empty() {
             eprintln!("no worktree matches '{sel}'");
@@ -177,7 +177,7 @@ pub fn run(
     config: Option<&str>,
 ) -> Result<()> {
     let steps = Steps::persistent();
-    let (tracker, repos) = crate::tracker::select(config, start, None);
+    let (tracker, repos) = crate::issue::tracker::select(config, start, None);
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
