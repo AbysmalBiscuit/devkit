@@ -1,8 +1,7 @@
-//! `devrun down --all` refuses to touch another worktree without a terminal.
+//! `down --all` refuses to touch another worktree without a terminal, driven
+//! through `devkit run` directly (not the `devrun` shim).
 use std::path::Path;
 use std::process::Command;
-
-mod common;
 
 #[test]
 fn down_all_without_tty_refuses() {

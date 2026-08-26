@@ -129,26 +129,69 @@ fn devrun_shim_parses_devrun_arguments() {
         "devrun --help exited non-zero: {text}"
     );
     assert!(
-        text.contains("supervise") || text.contains("baseline"),
+        text.contains("reap"),
         "shim should list devrun's own subcommands: {text}"
     );
 }
 
 /// `reap` is TTY-gated with no bypass. A shim inherits the same non-terminal
-/// stdin a hook or agent has, so it must still refuse.
+/// stdin a hook or agent has, so it must still refuse — and it must actually
+/// reach the gate: an in-process listener on a configured app's port gives
+/// `strays::scan` a real port-band stray to find, so the run can't return
+/// early on "no stray servers found" before ever checking the terminal.
 #[test]
 fn devrun_shim_still_refuses_reap_without_a_terminal() {
     let (_dir, link) = shimtest::linked("devrun");
     let state = tempfile::tempdir().expect("state dir");
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind stray listener");
+    let port = listener.local_addr().expect("listener addr").port();
+
+    let project = tempfile::tempdir().expect("project dir");
+    let ok = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(project.path())
+        .status()
+        .expect("git init")
+        .success();
+    assert!(ok, "git init failed");
+    std::fs::write(
+        project.path().join("devkit.toml"),
+        format!(
+            r#"
+[defaults]
+worktree_root = "wts"
+branch_prefix = "x/"
+baseline_ref = "origin/main"
+baseline_path = "b"
+
+[apps.api]
+base_port = {port}
+path = "."
+launch = ["git", "version"]
+"#
+        ),
+    )
+    .expect("write devkit.toml");
+
     let out = Command::new(&link)
+        .arg("-C")
+        .arg(project.path())
         .arg("reap")
         .stdin(std::process::Stdio::null())
         .env("HOME", state.path())
         .env("XDG_STATE_HOME", state.path())
         .output()
         .expect("spawn devrun reap");
+    drop(listener);
+
     assert!(
         !out.status.success(),
         "reap through a shim must refuse without a TTY"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("reap requires an interactive terminal"),
+        "stderr was: {stderr}"
     );
 }

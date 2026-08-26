@@ -1,11 +1,12 @@
-//! `devrun task` end-to-end: listing, dry-run rendering with a registry-
-//! allocated port, execution, and exit-code propagation. Uses an isolated
-//! HOME/XDG_STATE_HOME so the port registry never touches the real one.
+//! `devkit run task` end-to-end: listing, dry-run rendering with a registry-
+//! allocated port, execution, and exit-code propagation. Drives `devkit run`
+//! directly (not the `devrun` shim). Uses an isolated HOME/XDG_STATE_HOME so
+//! the port registry never touches the real one.
 
 use std::path::Path;
 use std::process::Command;
 
-fn devrun() -> Command {
+fn devkit_run() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
     cmd.arg("run");
     cmd
@@ -58,7 +59,7 @@ steps = [{ up = "api" }, { task = "hello" }]
 
 fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
     let state = dir.join("state");
-    devrun()
+    devkit_run()
         .args(args)
         .current_dir(dir)
         .env("HOME", dir)
@@ -67,7 +68,7 @@ fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
         .env("LOCALAPPDATA", &state) // Windows: keep the registry off the real one
         .env("USERPROFILE", dir) // Windows: keep config resolution off the real home
         .output()
-        .expect("run devrun")
+        .expect("run devkit run")
 }
 
 #[test]
