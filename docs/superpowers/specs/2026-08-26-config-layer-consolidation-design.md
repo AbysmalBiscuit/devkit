@@ -127,7 +127,12 @@ pub fn worktrees(start: &Path) -> Result<Vec<Worktree>>;
 pub fn branch(start: &Path) -> Result<String>;
 
 /// `git <args>` with the sanitized environment and the timeout — the escape
-/// hatch for operations without a named function here.
+/// hatch for operations without a named function here. Alongside it,
+/// `run_bare` (no `-C`, for `clone`), `succeeded` (exit status rather than an
+/// error, with extra environment for cases like `GIT_NO_LAZY_FETCH`), and
+/// `fixture` (tests only: scrubs `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` and
+/// fixes the author identity). Production never scrubs git config — credential
+/// helpers and aliases are the user's and must work.
 pub fn run(args: &[&str], cwd: &Path) -> Result<String>;
 ```
 

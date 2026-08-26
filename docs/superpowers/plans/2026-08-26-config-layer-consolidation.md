@@ -46,7 +46,11 @@
 
 **Interfaces:**
 - Consumes: `crate::timing::subprocess_span` (existing, `timing.rs`).
-- Produces: `pub fn run(args: &[&str], cwd: &Path) -> Result<String>` — `git -C <cwd> <args…>` with `GIT_DIR`, `GIT_COMMON_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` removed from the environment and a 10s timeout. Every later task builds on this.
+- Produces four entry points, each a distinct question. All share the sanitized environment and the 10s timeout.
+  - `pub fn run(args: &[&str], cwd: &Path) -> Result<String>` — `git -C <cwd> <args…>`, stdout, error on non-zero. The common case.
+  - `pub fn run_bare(args: &[&str]) -> Result<String>` — no `-C`, for `clone`, which has no repository to run inside yet (`docs/cache.rs:217`).
+  - `pub fn succeeded(args: &[&str], cwd: Option<&Path>, extra_env: &[(&str, &str)]) -> Result<bool>` — exit status without treating non-zero as an error. `docs/cache.rs:217` probes a filtered clone and falls back; `docs/upgrade.rs:442` asks whether a commit exists and needs `GIT_NO_LAZY_FETCH=1`, which is why the env pairs are a parameter rather than another function.
+  - `pub fn fixture(args: &[&str], cwd: &Path) -> Result<String>` — for tests only. Adds `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` pointed at the null device, plus a fixed author and committer identity. Production must **not** scrub git config: credential helpers, aliases, and `user.signingkey` are the user's and have to work.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -595,8 +599,14 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Test: `tests/no_stray_git.rs` (create)
 
 **Interfaces:**
-- Consumes: everything from Task 2.
+- Consumes: everything from Task 2, plus `run_bare`, `succeeded`, and `fixture` from Task 1.
 - Produces: `cmd::git` no longer exists. `git::checkout_root` replaces every `rev-parse --show-toplevel`; `git::main_checkout` replaces `end.rs`'s two `--git-common-dir` calls; `git::branch` replaces every `rev-parse --abbrev-ref HEAD`.
+
+**Inventory.** Run `rg -n 'Command::new\("git"\)|cmd::git|capture\("git"' -g '!target' -g '!docs'` first and work the list it prints. It is larger than the `cmd::git` sites alone: around twenty-five call sites, nine of them production code that reaches for `Command` because it needs an exit status rather than an error, a custom environment variable, or no `-C`. Those three needs are why Task 1 produces four entry points instead of one.
+
+**Fixtures already carry a hand-rolled version of `fixture`.** `crates/devkit-docs/tests/common/mod.rs:10`, `crates/devkit-docs/tests/cache.rs:13`, `crates/devkit-docs/tests/resolve.rs:14`, and `src/bin/issue/end.rs:367` each define a local git helper that sets `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM`. They exist because a fixture inheriting the developer's real config tried to GPG-sign and hung. Each becomes a call to `git::fixture`, which is where that policy belongs.
+
+**One of these fixtures caused real damage.** `fixture_repo` runs `git config user.email t@t` with the fixture directory as the working directory. A helper that loses its directory writes that identity into the *devkit* repository's local config, and commits made afterward are authored `t <t@t>`. `git::fixture` takes the working directory as a required parameter and sets identity through `GIT_AUTHOR_*` and `GIT_COMMITTER_*` rather than `git config`, so there is no file to leak into.
 
 - [ ] **Step 1: Write the failing guard test**
 
@@ -1679,6 +1689,13 @@ No spec requirement is unclaimed.
 3. `end.rs` wants the main checkout even when run from it, where `main_checkout`
    returns `None`. Task 5 gives the fallback; check both call sites still mean
    what they meant.
+4. `GIT_CONFIG_GLOBAL=/dev/null` is the value the existing fixtures use and the
+   one `git::fixture` should adopt for consistency. Confirm it holds on the
+   Windows CI job before relying on it; if it does not, the null device there is
+   `NUL`, and `git::fixture` is the single place that has to know which.
+5. Task 5 is large — roughly twenty-five call sites. Split it if a reviewer
+   would rather gate production and test migrations separately; the guard test
+   only needs to land with whichever half goes second.
 
 **Type consistency.** `Layer`/`LayerKind` are defined in Task 6 and used with
 those names in 7, 8, 9, 10. `Worktree` gains `bare` in Task 2 and every
