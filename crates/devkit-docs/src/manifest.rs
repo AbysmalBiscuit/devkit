@@ -494,9 +494,8 @@ mod tests {
         assert_eq!(d.project_devkit_toml, None);
     }
 
-    /// `[docs]` in an untracked local file is part of the manifest. The docs
-    /// walk read only devkit.toml, which surprised anyone who had learned how
-    /// other tables resolve.
+    /// `[docs]` in an untracked local file counts toward the manifest, the
+    /// same as `[docs]` in the tracked file.
     #[test]
     fn local_config_contributes_docs_entries() {
         let dir = tempfile::tempdir().unwrap();
@@ -521,6 +520,22 @@ mod tests {
         std::fs::write(dir.path().join("devkit.local.toml"), "").unwrap();
         let d = discover(dir.path(), Some(&dir.path().join("missing.toml"))).unwrap();
         assert_eq!(d.project_devkit_toml, Some(dir.path().join("devkit.toml")));
+    }
+
+    /// The nearest config-bearing directory can hold only the untracked
+    /// local file, with the tracked file living in a directory above it.
+    /// `project_devkit_toml` still resolves to that outer tracked file
+    /// rather than coming back empty.
+    #[test]
+    fn project_devkit_toml_resolves_to_a_tracked_ancestor_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let outer = dir.path().join("outer");
+        let nested = outer.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(outer.join("devkit.toml"), "").unwrap();
+        std::fs::write(nested.join("devkit.local.toml"), "").unwrap();
+        let d = discover(&nested, Some(&dir.path().join("missing.toml"))).unwrap();
+        assert_eq!(d.project_devkit_toml, Some(outer.join("devkit.toml")));
     }
 
     /// `[config] root = true` cuts off layers above it for the docs manifest
