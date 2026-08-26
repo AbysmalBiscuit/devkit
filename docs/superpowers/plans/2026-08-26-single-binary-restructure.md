@@ -935,6 +935,15 @@ git commit -m "feat(devkit): merge devkit-mcp into devkit mcp"
 
 ### Task 8: `devkit install-links`
 
+> The shipped implementation diverges from the code below. This section's
+> `is_devkit_binary` accepted any program that printed its own name first,
+> which is what clap does by default, so it would have deleted an unrelated
+> binary sitting at one of these names. The replacement anchors the version
+> line to the shim being judged, requires a non-empty subcommand set to appear
+> in `--help`, and adds a marker probe. `Outcome::SkippedForeign` carries the
+> reason. Read `src/bin/devkit/links.rs` for what exists; the reasoning is in
+> the ledger under Task 8.
+
 **Files:**
 - Create: `src/bin/devkit/links.rs`
 - Create: `tests/install_links.rs`
