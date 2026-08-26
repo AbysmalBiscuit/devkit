@@ -140,11 +140,21 @@ fn harness_flag_in(body: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// True iff `<root>/devkit.toml` opts this checkout into write enforcement.
-pub fn harness_enabled(root: &Path) -> bool {
-    std::fs::read_to_string(root.join("devkit.toml"))
-        .map(|b| harness_flag_in(&b))
-        .unwrap_or(false)
+/// True iff any project layer applying at `cwd` sets `[harness] enforce_writes`.
+/// Checked with `any` rather than by precedence: enforcement ratchets on, and
+/// only `DEVKIT_ENFORCE_WRITES=0` turns it off, so one layer opting in must win
+/// even if a lower-precedence layer (or the same directory's other file)
+/// leaves the flag unset or false. Resolving by precedence instead would let a
+/// closer, silent layer mask an explicit opt-in further out.
+fn harness_enabled(cwd: &Path) -> bool {
+    let Ok(layers) = devkit_config::project_layers(cwd, None) else {
+        return false;
+    };
+    layers.iter().any(|layer| {
+        std::fs::read_to_string(&layer.path)
+            .map(|b| harness_flag_in(&b))
+            .unwrap_or(false)
+    })
 }
 
 /// Parse the `DEVKIT_ENFORCE_WRITES` override into an explicit on/off, or `None`
@@ -187,14 +197,16 @@ fn resolve_enforcement(env: Option<bool>, checkout: bool, global: bool) -> bool 
     }
 }
 
-/// Whether write enforcement is active for the checkout rooted at `root`, across
+/// Whether write enforcement is active for a write originating at `cwd`, across
 /// all opt-in sources: the `DEVKIT_ENFORCE_WRITES` env var (explicit override),
-/// the checkout's `devkit.toml`, and the global devkit config — see
-/// [`resolve_enforcement`] for precedence.
-pub fn enforcement_enabled(root: &Path) -> bool {
+/// the project layers applying at `cwd`, and the global devkit config — see
+/// [`resolve_enforcement`] for precedence. Takes the working directory rather
+/// than a pre-resolved checkout root, so a declaration in a directory between
+/// the root and the write is part of the answer.
+pub fn enforcement_enabled(cwd: &Path) -> bool {
     resolve_enforcement(
         parse_env_override(std::env::var("DEVKIT_ENFORCE_WRITES").ok().as_deref()),
-        harness_enabled(root),
+        harness_enabled(cwd),
         global_harness_enabled(),
     )
 }
@@ -414,6 +426,28 @@ mod tests {
         // no [harness] section, or junk → off (never panics)
         assert!(!harness_flag_in("[defaults]\nworktree_root = \"x\"\n"));
         assert!(!harness_flag_in("not even toml ["));
+    }
+
+    /// A harness declaration below the checkout root must be seen. The caller
+    /// used to collapse the CWD to a root first, which hid it.
+    #[test]
+    fn harness_declared_in_a_nested_directory_is_honored() {
+        let repo = tempfile::tempdir().unwrap();
+        devkit_common::git::Git::fixture(repo.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        std::fs::write(repo.path().join("devkit.toml"), "").unwrap();
+        let nested = repo.path().join("packages/thing");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join("devkit.local.toml"),
+            "[harness]\nenforce_writes = true\n",
+        )
+        .unwrap();
+
+        assert!(harness_enabled(&nested));
+        assert!(!harness_enabled(repo.path()));
     }
 
     #[test]

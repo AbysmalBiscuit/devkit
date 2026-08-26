@@ -156,17 +156,15 @@ fn run_hook(event: &str) {
         return; // malformed → allow
     };
 
-    // Resolve the checkout root from the payload cwd (fallback: process cwd).
-    let root = payload
+    let cwd = payload
         .get("cwd")
         .and_then(|v| v.as_str())
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
-        .map(|p| devkit_locks::find_root_from(&p))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    if !hook::enforcement_enabled(&root) {
-        return; // no opt-in (env, checkout, or global config) → no enforcement
+    if !hook::enforcement_enabled(&cwd) {
+        return; // no opt-in (env, project layers, or global config) → no enforcement
     }
 
     match hook::parse_event(event, &payload) {
