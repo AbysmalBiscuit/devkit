@@ -53,6 +53,12 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 /// foreign program that hangs (waiting on a socket, say) would otherwise wedge
 /// the caller indefinitely.
 ///
+/// Stdin is a null device, never inherited from the caller: a probe must
+/// never consume real input meant for something else. That matters beyond
+/// tidiness once this runs on every shim invocation (Task 9) — `lockm hook
+/// pretooluse` reads its payload from stdin, and a foreign binary sitting at
+/// that shim name must not be able to eat it.
+///
 /// Both output streams are read on background threads, started before the
 /// wait loop so a chatty child can't deadlock against a full pipe buffer
 /// while nothing drains it. Each thread hands its buffer back over an `mpsc`
@@ -65,6 +71,7 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 fn probe(path: &Path, arg: &str, timeout: Duration) -> Option<Output> {
     let mut child = Command::new(path)
         .arg(arg)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
