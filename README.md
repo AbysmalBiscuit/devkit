@@ -633,9 +633,10 @@ as hardlinks — so `docm list` and `devkit docs list` are the same command.
 
 ## Shell completions
 
-Every command generates its own completion script via a `completions <shell>`
-subcommand (bash, zsh, fish, elvish, nushell, powershell). That covers `devkit`
-itself and each of the old names, which complete their own subcommands:
+`devkit` and every old name except `devkit-mcp`, which takes no subcommands at
+all, generate their own completion script via a `completions <shell>` subcommand
+(bash, zsh, fish, elvish, nushell, powershell), each completing its own
+subcommands:
 
 ```sh
 devkit completions zsh  > ~/.zfunc/_devkit

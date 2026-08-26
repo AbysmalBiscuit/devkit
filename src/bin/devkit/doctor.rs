@@ -226,6 +226,13 @@ fn plugin_cache_dir() -> Option<std::path::PathBuf> {
 /// The version each name resolves to is the point of the row: a stale binary
 /// shadowing this devkit is otherwise reported only as "not this devkit",
 /// which is not the fact the reader needs.
+/// Deliberately unbounded as a whole, unlike the automatic linking pass: each
+/// name costs at most two `PROBE_TIMEOUT` probes, so six names held by hanging
+/// binaries is a minute of `devkit doctor`. The automatic pass takes a deadline
+/// because it runs ahead of a command the user actually asked for, and dropping
+/// a name there costs only a later relink. Here the probes *are* what the user
+/// asked for, and abandoning them would leave the rows unanswered — the one
+/// outcome a diagnostic cannot have.
 fn occupied_shim_check(path: &std::path::Path, shim: &crate::shim::Shim) -> Check {
     let identity = crate::links::is_devkit_binary(path, shim);
     let reported = identity
