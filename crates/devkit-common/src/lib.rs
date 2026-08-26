@@ -1,6 +1,7 @@
 pub mod cmd;
 #[cfg(feature = "daemon")]
 pub mod daemon;
+pub mod git;
 pub mod gitfetch;
 pub mod github;
 pub mod gitignore;
