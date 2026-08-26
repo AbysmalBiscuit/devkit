@@ -31,7 +31,7 @@ stamp="${state_dir}/bootstrap-version"
 failed="${state_dir}/bootstrap-failed"
 
 missing=""
-for bin in devkit lockm devkit-mcp; do
+for bin in devkit; do
     command -v "$bin" >/dev/null 2>&1 || missing="${missing} ${bin}"
 done
 

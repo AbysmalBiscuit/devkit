@@ -386,8 +386,10 @@ and `NotebookEdit` — the structured write tools. Shell-level writes made via
 manually with `lockm acquire`).
 
 **Activation requires `lockm` on `PATH`.** The hooks invoke bare `lockm hook
-<event>`. Install via `cargo install --path .`; the binary must be resolvable
-from the shell that runs hook commands.
+<event>` — the same command as `devkit locks hook <event>`. Install `devkit`
+via `cargo install --path .`; its first run creates the `lockm` link
+automatically (or run `devkit install-links` directly). The resolved name
+must be reachable from the shell that runs hook commands.
 
 **Fail-open / fail-closed behaviour.**
 

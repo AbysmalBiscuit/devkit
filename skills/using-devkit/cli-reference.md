@@ -3,6 +3,8 @@
 Full command/flag reference for the devkit binaries. `SKILL.md` covers the
 coordination *discipline*; this file is the lookup table. Every user-facing CLI
 also has `--help` on each subcommand and a `completions <shell>` subcommand.
+Every command below also spells as a `devkit` subcommand — `portm status` and
+`devkit ports status` run the same code.
 
 `lockm` lives in `SKILL.md` (Lock command reference) — it is the collaboration
 tool, not a lookup. `docm`, the version-correct library-docs cache, belongs to

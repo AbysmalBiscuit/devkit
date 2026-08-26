@@ -1,8 +1,10 @@
 # devkit
 
-A Rust workspace of six binaries that coordinate local development for a monorepo. Devkit provides flock'd port and file-lock registries (both served from memory by an optional `devkitd` supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and a single `issue` command covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
+A Rust workspace built around a single `devkit` binary (plus the separate `devkitd` daemon) that coordinates local development for a monorepo. Devkit provides flock'd port and file-lock registries (both served from memory by an optional `devkitd` supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and an `issue` subcommand covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
 
 ## Binaries
+
+`devkit` bundles every command below as a subcommand (`devkit ports`, `devkit run`, `devkit issue`, `devkit locks`, `devkit docs`, `devkit mcp`). Each is also reachable under the name in its heading, through a hardlink `devkit` creates beside itself — see [Install](#install) for how that link is made and kept current. The examples below use the old names; `devkit <subcommand> …` runs the identical command.
 
 ### `portm`: Port Registry
 
@@ -182,6 +184,7 @@ devkit brief [--pins-only] [--if-changed] [--additional-context]   # compact pro
 devkit schema                                   # JSON Schema for devkit.toml, for editor validation
 devkit schema init [PATH]                       # point a devkit.toml at that schema (starter if absent)
 devkit completions <shell>
+devkit install-links [--force]                  # (re)create the old-name hardlinks — see "Old-name links" below
 ~~~
 
 - **`auth`**: prompts for the token without echo (or reads `--token`/piped stdin),
@@ -202,8 +205,10 @@ devkit completions <shell>
   complaint. Also warns when the installed binaries are older than the newest
   devkit plugin checkout in `~/.claude/plugins/cache` (skewed binaries make
   agents follow docs for features the binaries lack), when servers run outside
-  devrun, and when the docs cache holds unreferenced checkouts. The `tracker`
-  row names the tracker `issue` talks to here and how devkit arrived at it —
+  devrun, when the docs cache holds unreferenced checkouts, and — one row per
+  old name — when a shim is missing or a name is held by something other than
+  devkit; a shim problem is always a warning and never changes `doctor`'s exit
+  code. The `tracker` row names the tracker `issue` talks to here and how devkit arrived at it —
   `[tracker] kind` or detection — and warns when devkit fell back to no tracker,
   which holds every issue-state gate closed.
 - **`brief`**: prints a compact orientation for the current checkout — configured
@@ -319,8 +324,8 @@ commit records they hold are all re-derived.
 
 ## devkit-mcp (MCP server)
 
-`devkit-mcp` exposes devkit's port and file-lock coordination to MCP-capable
-coding agents over stdio. It presents two tools:
+`devkit-mcp` (equivalently, `devkit mcp`) exposes devkit's port and file-lock
+coordination to MCP-capable coding agents over stdio. It presents two tools:
 
 - `devkit_describe`: list the available actions, or fetch one action's argument
   schema (`{"action": "locks.acquire"}`).
@@ -364,12 +369,15 @@ Either way the binaries must be on your `PATH` — the plugin's MCP entry and
 every config below invoke `devkit-mcp` by name (see [Install](#install) for
 feature flags).
 
-The **plugin bootstraps them for you**. Claude Code, Codex, and Cursor have no
-install-time hook, so a session-start hook checks for `devkit`, `lockm`, and
-`devkit-mcp` and, when they are missing, runs the [dist](#prebuilt-binaries-no-rust-toolchain)
-installer for the GitHub release matching the plugin's own version — so the
-binaries stay in lockstep with the hooks and MCP server that drive them. It
-re-runs on plugin update, when the version moves.
+The **plugin bootstraps `devkit` for you**. Claude Code, Codex, and Cursor have
+no install-time hook, so a session-start hook checks for `devkit` and, when it
+is missing, runs the [dist](#prebuilt-binaries-no-rust-toolchain) installer for
+the GitHub release matching the plugin's own version — so the binary stays in
+lockstep with the hooks and MCP server that drive them. The `devkit brief` hook
+that runs right after creates the `lockm`, `devkit-mcp`, and other old-name
+links automatically (see [Install](#install)), so the plugin's other hooks and
+its MCP entry find them on `PATH` without a separate install step. It re-runs
+on plugin update, when the version moves.
 
 Two cases where it stays out of the way:
 
@@ -452,9 +460,10 @@ ln -s "$(pwd)" ~/.cursor/plugins/local/devkit
 ### Other agents (Zed, generic MCP clients)
 
 No plugin manifest exists for these. Register `devkit-mcp` as a stdio MCP server
-in the host's own config — the command is just `devkit-mcp` (on `PATH` after
-`cargo install`) — and point the agent at `AGENTS.md` for context. Zed reads
-`AGENTS.md` directly.
+in the host's own config — the command is just `devkit-mcp` (on `PATH` once
+`devkit` has run once, or after `devkit install-links`; see [Install](#install))
+— and point the agent at `AGENTS.md` for context. Zed reads `AGENTS.md`
+directly.
 
 After wiring up any host, confirm `devkit_describe` and `devkit_call` appear.
 
@@ -563,8 +572,7 @@ register the plugin afterward — see
 
 ### From source
 
-Install all binaries (`portm`, `devrun`, `issue`, `lockm`, `devkit`,
-`devkit-mcp`, `devkitd`) into `~/.cargo/bin` with one command — from a clone:
+Install `devkit` and `devkitd` into `~/.cargo/bin` with one command — from a clone:
 
 ```sh
 cargo install --path .
@@ -587,6 +595,25 @@ Or just build into `target/release` without installing:
 ```sh
 cargo build --release
 ```
+
+#### Old-name links
+
+`devkit` bundles the whole CLI surface as subcommands, and installs the old
+names (`portm`, `devrun`, `issue`, `lockm`, `docm`, `devkit-mcp`) beside itself
+as hardlinks — so `docm list` and `devkit docs list` are the same command.
+`devkit --help` ends with a block mapping every old name to its subcommand.
+
+- `devkit install-links` creates those links explicitly, next to whichever
+  `devkit` executable you run it from. `--force` claims a name even when
+  something already occupies it — as long as that something is not itself a
+  devkit binary, so it can never clobber an unrelated tool of the same name;
+  without `--force` such a name is reported as skipped and left alone.
+- The links refresh on their own: any `devkit` invocation relinks when the
+  binary's version, directory, or modification time stops matching the
+  recorded stamp, so an upgrade or a move needs no manual step.
+- Set `DEVKIT_SKIP_AUTOLINK` (to any value) to turn that automatic pass off —
+  the opt-out for a packager who manages the links itself, or for anything
+  that must not write the state directory.
 
 ## Shell completions
 

@@ -106,6 +106,10 @@ Add `--json` to `acquire`/`check`/`status` for machine-readable output. Run
 
 ## Tool overview
 
+Every command below also spells as a `devkit` subcommand — `docm list` and
+`devkit docs list` run the same code, reachable through a hardlink `devkit
+install-links` creates beside itself.
+
 | Binary | What it does |
 |---|---|
 | `lockm` | Advisory file locks for parallel sessions — the collaboration tool above. |

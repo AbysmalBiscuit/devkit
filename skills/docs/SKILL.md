@@ -9,6 +9,9 @@ allowed-tools: Bash(docm list), Bash(docm list --project)
 Answer library-usage questions from a local, version-correct checkout of the
 library's own source and docs — not from memory.
 
+Every `docm` command below also spells as `devkit docs` — `docm list` and
+`devkit docs list` are the same command.
+
 Libraries this checkout evidences — name, version, and where that version
 came from. A trailing count, when present, is of registered libraries this
 checkout does not evidence; they are still registered, and `docm list`
@@ -57,7 +60,8 @@ step 1.
   against the installed package under `node_modules` (or the ecosystem's
   equivalent) — that is ground truth for what actually runs.
 - If `docm` is not on PATH, tell the user to `cargo install --path .` in the
-  devkit repo.
+  devkit repo, then run `devkit docs list` (or any `devkit` command) once to
+  create the `docm` link, or run `devkit install-links` directly.
 - Comparing against another version is a lookup, not a recollection. The bare
   clone under the cache already holds every tag, so `git -C <checkout> show
   <other-tag>:<path>` reads the other version's file directly — do not answer

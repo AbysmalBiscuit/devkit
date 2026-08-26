@@ -1,15 +1,16 @@
 # devkit
 
-A Rust workspace (edition 2024): a root `devkit` binary package whose six CLIs live
-in `src/bin/`, plus the library crates, coordinating local development for a monorepo.
-The engine is project-agnostic; every project-specific detail lives in `devkit.toml`.
-See `README.md` for user-facing CLI docs.
+A Rust workspace (edition 2024): a root `devkit` binary package whose subcommands
+cover the CLI surface, plus the separate `devkitd` daemon and the library crates,
+coordinating local development for a monorepo. The engine is project-agnostic;
+every project-specific detail lives in `devkit.toml`. See `README.md` for
+user-facing CLI docs.
 
 ## Commands
 
 ```sh
-cargo build --release                       # all six binaries → target/release
-cargo install --path .                       # install all six into ~/.cargo/bin
+cargo build --release                       # devkit, devkitd → target/release
+cargo install --path .                       # install devkit, devkitd into ~/.cargo/bin
 cargo test --workspace                       # full gate — must stay green
 cargo clippy --workspace --all-targets -- -D warnings   # zero-warning policy
 cargo test -p devkit-ports --test registry   # multiprocess flock race test
@@ -21,9 +22,8 @@ verifies) using the stable toolchain CI uses, so formatting matches.
 
 ## Layout
 
-The workspace root is the `devkit` package; its CLIs live in `src/bin/` and install
-together via `cargo install --path .`, over a thin `src/lib.rs` holding what more
-than one of them needs. The library crates are members.
+The workspace root is the `devkit` binary package; it and `devkitd` install
+together via `cargo install --path .`. The library crates are members.
 
 | Unit | Role |
 |---|---|
@@ -34,16 +34,10 @@ than one of them needs. The library crates are members.
 | `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + tracker state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
 | `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks`/`devrun`/`issue` handlers) over the port + lock facades, the `devkit-ports::run` server-lifecycle facade, and the `devkit-issue` triage facade |
 | `crates/devkit-docs` | lib: version-correct library checkouts — manifest (global `docs.toml` + `devkit.toml` `[docs]`), importer-graph resolution (pnpm/bun/npm/Cargo/uv) matched to git tags, hard-error failure modes instead of a silent default-branch fallback (opt in per run with `--allow-default-branch`), bare-clone cache with ref-named worktrees (`/` encoded as `~`) under a reserved-stem-checked cache root, flock'd reference registry with reference-based prune, per-checkout pins that roll up a workspace root's members (JS lockfiles only — cargo and uv name members in a manifest) and union in the reference registry's rows for this project, and 0.12.x cache migration that moves the layout but hard-errors on a `meta.toml` it cannot parse, naming every such library in one run |
-| `src/bin/portm.rs` | CLI over the port registry |
-| `src/bin/devrun` | supervised dev-server runner (`env`, `supervise`, `baseline`, `task`); `reap` kills servers started outside devrun |
-| `src/bin/issue` | issue lifecycle: `setup`, `checkout-pr`, `status`, `info`, `end`, `sync-includes`, `prs`, `dashboard`, `review` |
-| `src/bin/lockm.rs` | advisory file-lock CLI |
-| `src/bin/devkit` | credential setup + diagnostics: `auth` (validate + store Linear/Slack tokens; `auth github` instead *reports* the identity behind the token `GH_TOKEN`/`GITHUB_TOKEN`/`gh auth token` resolve, storing nothing and refusing a `--token`), `doctor`, `brief` (session-hook project summary, silent outside a devkit project), `schema` (JSON Schema for `devkit.toml`, derived from the config types; `schema init` points a config at it, writing a fully-commented starter when absent; `schema/devkit-config.json` is committed, a test fails with a diff when it drifts, `DEVKIT_UPDATE_SCHEMA=1 cargo test` rewrites it, and release-please attaches it to each GitHub Release) |
-| `src/bin/docm.rs` | CLI over the docs cache: `add`, `rm`, `list`, `sync`, `path`, `info`, `forget`, `prune`, `completions` |
-| `src/bin/devkit-mcp` | meta-MCP stdio server exposing the port + lock facades to coding agents |
+| `src/bin/devkit/` | the merged CLI: `auth` (validate + store Linear/Slack tokens; `auth github` instead *reports* the identity behind the token `GH_TOKEN`/`GITHUB_TOKEN`/`gh auth token` resolve, storing nothing and refusing a `--token`), `doctor`, `brief` (session-hook project summary, silent outside a devkit project), `schema` (JSON Schema for `devkit.toml`, derived from the config types; `schema init` points a config at it, writing a fully-commented starter when absent; `schema/devkit-config.json` is committed, a test fails with a diff when it drifts, `DEVKIT_UPDATE_SCHEMA=1 cargo test` rewrites it, and release-please attaches it to each GitHub Release), `install-links`, and the operational subcommands folded in from the tools this replaced — `ports` (port registry), `run` (supervised dev-server runner: `env`, `supervise`, `baseline`, `task`; `reap` kills servers started outside it), `issue` (issue lifecycle: `setup`, `checkout-pr`, `status`, `info`, `end`, `sync-includes`, `prs`, `dashboard`, `review`), `locks` (advisory file locks), `docs` (docs cache: `add`, `rm`, `list`, `sync`, `path`, `info`, `forget`, `prune`), and `mcp` (stdio MCP server exposing the port + lock facades to coding agents). Each operational subcommand is also reachable under its pre-merge name (`portm`, `devrun`, `issue`, `lockm`, `docm`, `devkit-mcp`) through a hardlink `devkit install-links` creates beside the binary |
 | `src/bin/devkitd` | supervisor daemon serving both the port registry (`ports.sock`) and the lock registry (`locks.sock`), authoritative in memory, write-through to the files, gated by `devkitd.lock`; bin gated by the `daemon` feature (on by default) |
 
-The six user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`, `devkit`, `docm`) each
+`devkit` and its `ports`, `run`, `issue`, `locks`, and `docs` subcommands each
 expose a `completions <shell>` subcommand. The shell argument is
 `devkit::completions::Shell`, not `clap_complete::Shell`: the latter is closed and
 has no nushell variant, so the shared enum adds one and forwards each variant to
@@ -66,7 +60,7 @@ so adding a shell must not rename an existing one.
   reservation looks stale must still receive SIGTERM.
 - **Cross-worktree `devrun down` is TTY-gated.** A selection touching a holder
   other than the current worktree is refused unless stdin is an interactive
-  terminal (`cmd_down` in `src/bin/devrun/main.rs`), and is reachable only via the
+  terminal (`cmd_down` in `src/bin/devkit/run/mod.rs`), and is reachable only via the
   named scope flags `--all`/`--others`/`--holder` — so an agent (no PTY) cannot
   stop another worktree's servers, and a harness can deny those flags by name. The
   MCP `devrun.down` handler stays root-scoped and never gains a cross-holder arg.
@@ -170,7 +164,7 @@ so adding a shell must not rename an existing one.
   its absence on an undeclared `None` as "the project named a tracker devkit
   could not build". That is what keeps such a project from being told to name
   one — so keep the prefix on every detection arm. Config loading belongs to the callers that have it — the `issue`
-  binary's `crate::tracker::select` (which returns the `Repos` alongside, since
+  subcommand's `crate::issue::tracker::select` (which returns the `Repos` alongside, since
   the two come from one config load) and the MCP `issue.status` action —
   and a config that does not load degrades to detection rather than failing the
   command. `devkit-issue` reads no config: `status::gather_local` detects with
@@ -191,11 +185,16 @@ so adding a shell must not rename an existing one.
 - CI runs the `test` job (and `clippy`) on ubuntu, macos, and windows. Tests that spawn or
   reap processes must poll for the expected state, not sleep a fixed interval — a loaded
   Windows runner exits a child later than a short fixed sleep allows.
-- **`devkit` configures and diagnoses the toolkit itself** — credentials
-  (`auth`) and `doctor`. The operational verbs (`portm`, `devrun`, `issue`,
-  `lockm`) stay in their own binaries; `config` stays on `devrun`. Token reads
-  resolve through `devkit-common::secrets` (env → `secrets.toml`), never from
-  `config.toml`.
+- **Every user-facing verb is a `devkit` subcommand** — credential setup and
+  diagnosis (`auth`, `doctor`) alongside the operational subcommands (`ports`,
+  `run`, `issue`, `locks`, `docs`, `mcp`) folded in from the tools they
+  replaced. Each operational subcommand is also reachable under its pre-merge
+  name (`portm`, `devrun`, `issue`, `lockm`, `docm`, `devkit-mcp`) through a
+  hardlink `devkit install-links` creates beside the binary. `config` stays on
+  `run`. `devkitd` stays a separate binary because `devkitd_bin()` finds it as
+  a sibling file and `install-service` writes its path into a systemd unit.
+  Token reads resolve through `devkit-common::secrets` (env → `secrets.toml`),
+  never from `config.toml`.
 - **Timing:** `issue`/`devrun` accept `--timing[=trace]` / `--timing-log <FILE>`
   (or `DEVKIT_TIMING`). Timing wraps the shared IO primitives (`cmd::capture`,
   `github`, `tracker::linear::send`, `slack`) via `devkit-common::timing`; a global tracing

@@ -35,7 +35,7 @@ function Read-Marker($path) {
     try { (Get-Content -Raw -ErrorAction Stop $path).Trim() } catch { '' }
 }
 
-$missing = @('devkit', 'lockm', 'devkit-mcp') | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
+$missing = @('devkit') | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
 
 if ($missing.Count -eq 0) {
     switch (Read-Marker $stamp) {

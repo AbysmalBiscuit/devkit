@@ -51,7 +51,7 @@ EOF
 
 chmod +x "${STUB}/curl" "${STUB}/powershell.exe" "${STUB}/uname"
 
-for b in devkit lockm devkit-mcp; do
+for b in devkit; do
     printf '#!/usr/bin/env bash\n' >"${BIN}/${b}"
     chmod +x "${BIN}/${b}"
 done
@@ -78,8 +78,8 @@ new_state() {
     mkdir -p "$state"
 }
 
-# `binaries` selects whether PATH also carries devkit/lockm/devkit-mcp, which is
-# what the hook probes. env -i keeps the caller's real devkit off PATH.
+# `binaries` selects whether PATH also carries devkit, which is what the hook
+# probes. env -i keeps the caller's real devkit off PATH.
 run_hook() {
     local binaries="$1"
     shift
