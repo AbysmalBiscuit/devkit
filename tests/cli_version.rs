@@ -2,6 +2,9 @@
 //! to a release matching its own version, so a user (or the hook) needs a way
 //! to see which version is actually on PATH.
 
+mod common;
+
+use common::shimtest;
 use std::process::Command;
 
 fn version_output(exe: &str) -> (bool, String) {
@@ -29,7 +32,8 @@ fn assert_reports_version(name: &str, exe: &str) {
 
 #[test]
 fn portm_reports_version() {
-    assert_reports_version("portm", env!("CARGO_BIN_EXE_portm"));
+    let (_dir, link) = shimtest::linked("portm");
+    assert_reports_version("portm", link.to_str().expect("utf-8 link path"));
 }
 
 #[test]

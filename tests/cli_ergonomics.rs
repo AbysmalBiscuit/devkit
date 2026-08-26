@@ -2,6 +2,9 @@
 //! command): subcommand aliases, a defaulted `--holder`, positional app/issue
 //! arguments. Each test isolates state via a private HOME/XDG_STATE_HOME.
 
+mod common;
+
+use common::shimtest;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -36,13 +39,7 @@ launch = ["git", "version"]
     p
 }
 
-fn run(bin: &str, project: &Path, state: &Path, args: &[&str]) -> Output {
-    let exe = match bin {
-        "lockm" => env!("CARGO_BIN_EXE_lockm"),
-        "portm" => env!("CARGO_BIN_EXE_portm"),
-        "issue" => env!("CARGO_BIN_EXE_issue"),
-        other => panic!("unknown bin {other}"),
-    };
+fn run(exe: &Path, project: &Path, state: &Path, args: &[&str]) -> Output {
     Command::new(exe)
         .args(args)
         .current_dir(project)
@@ -52,7 +49,7 @@ fn run(bin: &str, project: &Path, state: &Path, args: &[&str]) -> Output {
         .env_remove("DEVKIT_SESSION")
         .env_remove("TMUX_PANE")
         .output()
-        .unwrap_or_else(|e| panic!("spawn {bin}: {e}"))
+        .unwrap_or_else(|e| panic!("spawn {}: {e}", exe.display()))
 }
 
 fn toplevel(project: &Path) -> String {
@@ -68,7 +65,12 @@ fn toplevel(project: &Path) -> String {
 fn lockm_list_aliases_status() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let out = run("lockm", proj.path(), state.path(), &["list"]);
+    let out = run(
+        Path::new(env!("CARGO_BIN_EXE_lockm")),
+        proj.path(),
+        state.path(),
+        &["list"],
+    );
     assert!(
         out.status.success(),
         "`lockm list` should work as an alias of `status`: {}",
@@ -81,7 +83,7 @@ fn lockm_status_with_paths_points_at_check() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let out = run(
-        "lockm",
+        Path::new(env!("CARGO_BIN_EXE_lockm")),
         proj.path(),
         state.path(),
         &["status", "src/some/file.rs"],
@@ -98,9 +100,10 @@ fn lockm_status_with_paths_points_at_check() {
 
 #[test]
 fn portm_reserve_aliases_alloc() {
+    let (_dir, link) = shimtest::linked("portm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let out = run("portm", proj.path(), state.path(), &["reserve", "--help"]);
+    let out = run(&link, proj.path(), state.path(), &["reserve", "--help"]);
     assert!(
         out.status.success(),
         "`portm reserve` should work as an alias of `alloc`: {}",
@@ -110,9 +113,10 @@ fn portm_reserve_aliases_alloc() {
 
 #[test]
 fn portm_alloc_defaults_holder_to_worktree_root() {
+    let (_dir, link) = shimtest::linked("portm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let out = run("portm", proj.path(), state.path(), &["alloc", "api"]);
+    let out = run(&link, proj.path(), state.path(), &["alloc", "api"]);
     assert!(
         out.status.success(),
         "alloc without --holder should default to the worktree root: {}",
@@ -124,7 +128,7 @@ fn portm_alloc_defaults_holder_to_worktree_root() {
         "prints the reserved port: {stdout}"
     );
 
-    let status = run("portm", proj.path(), state.path(), &["status"]);
+    let status = run(&link, proj.path(), state.path(), &["status"]);
     let table = String::from_utf8_lossy(&status.stdout);
     let leaf = Path::new(&toplevel(proj.path()))
         .file_name()
@@ -139,23 +143,24 @@ fn portm_alloc_defaults_holder_to_worktree_root() {
 
 #[test]
 fn portm_release_positional_apps_frees_only_those() {
+    let (_dir, link) = shimtest::linked("portm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let alloc = run("portm", proj.path(), state.path(), &["alloc", "api", "web"]);
+    let alloc = run(&link, proj.path(), state.path(), &["alloc", "api", "web"]);
     assert!(
         alloc.status.success(),
         "alloc: {}",
         String::from_utf8_lossy(&alloc.stderr)
     );
 
-    let rel = run("portm", proj.path(), state.path(), &["release", "api"]);
+    let rel = run(&link, proj.path(), state.path(), &["release", "api"]);
     assert!(
         rel.status.success(),
         "`portm release api` should release that app's port: {}",
         String::from_utf8_lossy(&rel.stderr)
     );
 
-    let status = run("portm", proj.path(), state.path(), &["status"]);
+    let status = run(&link, proj.path(), state.path(), &["status"]);
     let table = String::from_utf8_lossy(&status.stdout);
     assert!(!table.contains("api"), "api's reservation is gone: {table}");
     assert!(table.contains("web"), "web's reservation survives: {table}");
@@ -163,17 +168,18 @@ fn portm_release_positional_apps_frees_only_those() {
 
 #[test]
 fn portm_release_without_holder_frees_current_worktree() {
+    let (_dir, link) = shimtest::linked("portm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    run("portm", proj.path(), state.path(), &["alloc", "api"]);
+    run(&link, proj.path(), state.path(), &["alloc", "api"]);
 
-    let rel = run("portm", proj.path(), state.path(), &["release"]);
+    let rel = run(&link, proj.path(), state.path(), &["release"]);
     assert!(
         rel.status.success(),
         "bare `portm release` should default to the worktree root: {}",
         String::from_utf8_lossy(&rel.stderr)
     );
-    let status = run("portm", proj.path(), state.path(), &["status"]);
+    let status = run(&link, proj.path(), state.path(), &["status"]);
     let table = String::from_utf8_lossy(&status.stdout);
     assert!(!table.contains("api"), "reservation released: {table}");
 }
@@ -187,7 +193,7 @@ fn issue_setup_accepts_positional_issue_id() {
     // No full config here — the point is only that clap accepts the shape
     // (a later config/network error exits 1, never clap's usage error 2).
     let out = run(
-        "issue",
+        Path::new(env!("CARGO_BIN_EXE_issue")),
         proj.path(),
         state.path(),
         &["setup", "ABC-123", "--slug", "s", "--dry-run"],
@@ -209,7 +215,7 @@ fn issue_setup_rejects_both_positional_and_flag() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let out = run(
-        "issue",
+        Path::new(env!("CARGO_BIN_EXE_issue")),
         proj.path(),
         state.path(),
         &["setup", "ABC-123", "--issue", "ABC-999", "--slug", "s"],

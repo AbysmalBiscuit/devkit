@@ -1,11 +1,13 @@
 use anyhow::Result;
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use devkit::completions::Shell;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 mod auth;
 mod brief;
 mod doctor;
+mod ports;
 mod schema;
 mod shim;
 
@@ -74,6 +76,8 @@ enum Cmd {
         /// Shell to emit the script for.
         shell: Shell,
     },
+    /// Port registry for local dev servers (also installed as `portm`).
+    Ports(ports::PortsCli),
 }
 
 #[derive(Subcommand)]
@@ -104,8 +108,44 @@ impl Provider {
     }
 }
 
+/// Build a tool's `Command` as a root command under `shim_name`. Subcommands do
+/// not inherit `version` from the root, so set it explicitly or `--version`
+/// through a shim reports nothing.
+fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::Command {
+    Cli::command()
+        .find_subcommand(subcommand)
+        .unwrap_or_else(|| panic!("no `{subcommand}` subcommand"))
+        .clone()
+        .name(shim_name)
+        .bin_name(shim_name)
+        .version(env!("CARGO_PKG_VERSION"))
+}
+
+/// Emit a completion script for a tool under the name it is invoked as: the
+/// shim name when installed as one, `devkit <sub>` otherwise.
+fn emit_completions(shell: Shell, subcommand: &str, shim_name: &'static str) {
+    let mut cmd = shim_command(subcommand, shim_name);
+    clap_complete::generate(shell, &mut cmd, shim_name, &mut std::io::stdout());
+}
+
+fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
+    let matches = shim_command(s.subcommand, s.name).get_matches_from(args);
+    match s.subcommand {
+        "ports" => ports::run(ports::PortsCli::from_arg_matches(&matches)?),
+        other => unreachable!("shim `{}` selects unknown subcommand `{other}`", s.name),
+    }
+}
+
 fn main() -> Result<()> {
+    let args: Vec<OsString> = std::env::args_os().collect();
+    let argv0 = args.first().map(|a| a.to_string_lossy().into_owned());
+    if let Some(s) = argv0.as_deref().and_then(shim::resolve) {
+        devkit_common::report::install_panic_hook(s.name);
+        devkit_common::paths::migrate_legacy_state();
+        return dispatch_shim(s, args);
+    }
     devkit_common::report::install_panic_hook("devkit");
+    devkit_common::paths::migrate_legacy_state();
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Auth { provider, token } => auth::run(provider, token),
@@ -123,5 +163,6 @@ fn main() -> Result<()> {
             clap_complete::generate(shell, &mut Cli::command(), "devkit", &mut std::io::stdout());
             Ok(())
         }
+        Cmd::Ports(c) => ports::run(c),
     }
 }

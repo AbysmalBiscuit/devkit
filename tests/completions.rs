@@ -1,5 +1,8 @@
 //! Each user-facing CLI emits a shell-completion script via `<bin> completions <shell>`.
 
+mod common;
+
+use common::shimtest;
 use std::process::Command;
 
 fn completions_contain_name(bin: &str, exe: &str, shell: &str) {
@@ -27,7 +30,8 @@ fn emits_every_shell(bin: &str, exe: &str) {
 
 #[test]
 fn portm_emits_completions() {
-    emits_every_shell("portm", env!("CARGO_BIN_EXE_portm"));
+    let (_dir, link) = shimtest::linked("portm");
+    emits_every_shell("portm", link.to_str().expect("utf-8 link path"));
 }
 
 #[test]

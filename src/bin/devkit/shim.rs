@@ -5,10 +5,6 @@
 //! `devkit` for every shim, while `argv[0]` carries the name the caller
 //! actually typed under both hardlinks and symlinks.
 
-// The dispatcher that calls `resolve` lives in `main.rs`; this table has no
-// caller inside this crate on its own.
-#![allow(dead_code)]
-
 use std::path::Path;
 
 pub struct Shim {

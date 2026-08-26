@@ -1,20 +1,20 @@
 use anyhow::{Context, Result};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::Subcommand;
 use devkit::completions::Shell;
 use devkit_ports::registry::{self, Data, Role};
 
-#[derive(Parser)]
-#[command(version, about = "Port registry for local dev servers")]
-struct Cli {
+#[derive(clap::Args)]
+#[command(about = "Port registry for local dev servers")]
+pub struct PortsCli {
     /// Run as if portm had started in DIR instead of the current directory.
     #[arg(short = 'C', long = "dir")]
-    dir: Option<String>,
+    pub dir: Option<String>,
     #[command(subcommand)]
-    cmd: Option<Cmd>,
+    pub cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
-enum Cmd {
+pub(crate) enum Cmd {
     /// Show reserved/live ports for this project (every worktree of it).
     Status,
     /// Reserve a port per app for a holder (default: this worktree).
@@ -61,14 +61,11 @@ fn resolve_holder(explicit: Option<String>, cwd: &str) -> Result<String> {
         .into_owned())
 }
 
-fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("portm");
-    devkit_common::paths::migrate_legacy_state();
-    let cli = Cli::parse();
+pub fn run(cli: PortsCli) -> Result<()> {
     let cwd = cli.dir.clone().unwrap_or_else(|| ".".into());
     match cli.cmd.unwrap_or(Cmd::Status) {
         Cmd::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "portm", &mut std::io::stdout());
+            crate::emit_completions(shell, "ports", "portm");
         }
         Cmd::Status => status()?,
         Cmd::Prune => {
