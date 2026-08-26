@@ -59,6 +59,13 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 /// `lockm hook pretooluse` reads its payload from stdin, and a foreign
 /// binary sitting at that shim name must not be able to eat it.
 ///
+/// `DEVKIT_SKIP_AUTOLINK` is set on the child for the same reason: a
+/// candidate that really is a devkit binary is a full invocation, and left to
+/// itself it would run its own automatic pass and relink the whole directory
+/// to *itself* — turning any caller that merely asks "what is at this name"
+/// into one that repoints every other name. A probe observes; it never lets
+/// what it observes act.
+///
 /// Both output streams are read on background threads, started before the
 /// wait loop so a chatty child can't deadlock against a full pipe buffer
 /// while nothing drains it. Each thread hands its buffer back over an `mpsc`
@@ -71,6 +78,7 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 fn probe(path: &Path, arg: &str, timeout: Duration) -> Option<Output> {
     let mut child = Command::new(path)
         .arg(arg)
+        .env(SKIP_AUTOLINK_ENV, "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -228,7 +236,7 @@ pub fn is_devkit_binary(path: &Path, shim: &Shim) -> Identity {
         reported,
         format!(
             "reports `{first_line}` but did not answer the identity probe — a devkit older \
-             than the probe costs one --force here (this build then carries it for future runs)"
+             than the probe never does"
         ),
     )
 }
@@ -312,9 +320,10 @@ const AUTOLINK_DEADLINE: Duration = Duration::from_secs(20);
 /// retried (see `stamp_permits_skip`). The trade is repair latency against
 /// re-running a pass whose worst case is `AUTOLINK_DEADLINE` plus one shim's
 /// own probes, on a path `lockm hook pretooluse` takes on every editor write.
-/// Only one invocation per window pays that — the retry rewrites the stamp
-/// with its own start time, and concurrent invocations lose the `links.lock`
-/// gate and return immediately — so a quarter hour bounds the cost at one
+/// Only one invocation per window pays that — the retry rewrites the stamp as
+/// it finishes, so the next window opens a full cooldown after the last
+/// attempt ended, and concurrent invocations lose the `links.lock` gate and
+/// return immediately — so a quarter hour bounds the cost at one
 /// stalled invocation per window while still repairing a transient failure
 /// (an install directory remounted read-write, a name freed) inside a single
 /// working session.
@@ -465,15 +474,16 @@ pub fn ensure_current(exe: &Path) {
         return;
     };
     let mut gate = fd_lock::RwLock::new(gate);
-    // This is also the reentrancy guard against `is_devkit_binary`'s own
-    // `--version` and `--help` probes: both fall straight through the
-    // probe-flag intercept in `main` (only the marker flag is intercepted)
-    // and re-enter `ensure_current` in the spawned child. A `try_write` —
-    // never a blocking `write` — is what keeps that bounded: the child finds
-    // the gate already held by its own ancestor and returns immediately
-    // instead of relinking (and probing) all over again. `run` (`devkit
+    // A `try_write` — never a blocking `write` — because this runs ahead of
+    // every command: an invocation that finds another one already linking
+    // skips its own pass rather than waiting on it. `run` (`devkit
     // install-links`) takes the same gate around its own whole pass, so an
     // explicit run and an automatic one never link concurrently either.
+    //
+    // What keeps a *probe* child from re-entering this is not the gate:
+    // `is_devkit_binary` spawns candidates from callers that hold no lock at
+    // all (`doctor`'s rows). `probe` sets `DEVKIT_SKIP_AUTOLINK` on every
+    // child it spawns, which returns above before any of this.
     let Ok(mut held) = gate.try_write() else {
         // Another process — an ancestor probe, a genuinely concurrent
         // automatic pass, or a manual `install-links` — is linking right

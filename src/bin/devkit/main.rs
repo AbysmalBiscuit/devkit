@@ -189,12 +189,11 @@ fn main() -> Result<()> {
     // stdin. Every shim is this same binary, so this one intercept covers all
     // six names.
     //
-    // This does NOT bound `is_devkit_binary`'s other two probes: `--version`
-    // and `--help` are ordinary subcommand-shaped args, so a probed child
-    // spawned with either one falls straight through to `ensure_current`
-    // below, same as any real invocation. What stops that from cascading is
-    // the `try_write` gate inside `ensure_current` itself — see the comment
-    // there.
+    // The other probe — `--version` — is an ordinary subcommand-shaped arg
+    // with no intercept here, so a child spawned with it parses and runs the
+    // way any real invocation does. What keeps that child from linking
+    // anything is `DEVKIT_SKIP_AUTOLINK`, which `links::probe` sets on every
+    // child it spawns; `ensure_current` returns on it before doing any work.
     if args.get(1).map(OsString::as_os_str) == Some(std::ffi::OsStr::new(shim::PROBE_FLAG)) {
         println!("{}", shim::PROBE_MARKER);
         return Ok(());

@@ -1001,6 +1001,64 @@ fn doctor_reports_a_dangling_symlink_as_occupied() {
     );
 }
 
+/// Doctor is a report. Judging a shim name means *running* the file that
+/// holds it, and that child is a full devkit invocation: left to itself it
+/// runs its own automatic linking pass and repoints every other name in the
+/// directory at itself, so the diagnostic creates the state its own rows go on
+/// to describe. Nothing outside the probe holds a lock by then — the parent's
+/// pass finished and released long before doctor gathers its rows.
+///
+/// Deliberately without `DEVKIT_SKIP_AUTOLINK`: the probe child inherits the
+/// caller's environment, so setting it here would hide exactly what this test
+/// is for.
+#[test]
+fn doctor_never_relinks_through_a_probe() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let linked = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("install-links")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+    assert!(
+        linked.status.success(),
+        "install-links failed: {}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    let stamp_before = read_stamp(state.path());
+
+    // A second copy of devkit takes one name — the case doctor reports as
+    // "another devkit", and the only one where the probed child is willing and
+    // able to link the whole directory to itself.
+    let other = shim_path(dir.path(), "issue");
+    std::fs::remove_file(&other).expect("free the issue name");
+    std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &other).expect("stage a second devkit");
+
+    let cwd = tempfile::tempdir().expect("cwd outside any project");
+    retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("doctor")
+            .current_dir(cwd.path())
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+
+    for name in ["devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+        assert!(
+            shimtest::same_inode(&exe, &shim_path(dir.path(), name)),
+            "{name} must still link to the devkit that ran doctor, not to what doctor probed"
+        );
+    }
+    assert_eq!(
+        read_stamp(state.path()),
+        stamp_before,
+        "a probed binary must not overwrite the stamp"
+    );
+}
+
 #[test]
 fn doctor_reports_a_foreign_shim_name() {
     let (dir, exe) = staged();
