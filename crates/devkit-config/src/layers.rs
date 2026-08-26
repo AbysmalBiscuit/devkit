@@ -19,8 +19,7 @@ pub const LOCAL_CONFIG_FILE: &str = "devkit.local.toml";
 pub enum LayerKind {
     /// Above the nearest config-bearing directory.
     Ancestor,
-    /// The nearest config-bearing directory itself, or nested below it on
-    /// the way down to `start`.
+    /// The nearest config-bearing directory itself.
     Checkout,
     /// Inherited from this repository's main checkout.
     MainCheckout,
@@ -72,14 +71,10 @@ pub(crate) fn project_layers_rooted(
         ordered.extend(files_in(main, LayerKind::MainCheckout));
     }
 
-    // The nearest config-bearing directory, then anything nested between it
-    // and `start`.
-    let mut inner: Vec<&Path> = start.ancestors().take_while(|d| *d != root).collect();
-    inner.push(root);
-    inner.reverse();
-    for dir in inner {
-        ordered.extend(files_in(dir, LayerKind::Checkout));
-    }
+    // `root` is by construction the nearest config-bearing directory to
+    // `start`, so no directory strictly between it and `start` can hold a
+    // config file — only `root`'s own files ever contribute here.
+    ordered.extend(files_in(root, LayerKind::Checkout));
 
     dedupe(&mut ordered);
     let rooted = apply_cutoff(&mut ordered)?;
@@ -97,10 +92,10 @@ fn files_in(dir: &Path, kind: LayerKind) -> Vec<Layer> {
         .collect()
 }
 
-/// Keep the highest-precedence occurrence of each file. The canonical path is
-/// the key only — `Layer.path` keeps its original spelling and its kind,
-/// because a `Checkout` layer symlinked to the main checkout's file must not
-/// become a writable handle on the main checkout.
+/// Keep the highest-precedence occurrence of each file. Canonicalizing is
+/// only how two layers are recognized as the same file — the surviving
+/// `Layer` keeps its original path spelling and the `LayerKind` it was
+/// found under, rather than being replaced by the canonical form.
 fn dedupe(layers: &mut Vec<Layer>) {
     let mut seen: Vec<PathBuf> = Vec::new();
     let mut keep = vec![true; layers.len()];
@@ -130,12 +125,17 @@ fn declares_root(path: &Path) -> Result<bool> {
 /// `devkit.toml` and the untracked `devkit.local.toml` beside it — and the
 /// marker in either one draws the barrier at the directory: both of that
 /// directory's layers survive, and everything above the directory is
-/// dropped. Returns whether a barrier was found.
+/// dropped. Scans from the nearest-to-`start` layer backward and stops at
+/// the first (i.e. last in precedence order) match, so nothing below the
+/// barrier is ever read — a malformed or unreadable ancestor layer the
+/// barrier was meant to hide never gets parsed. Returns whether a barrier
+/// was found.
 fn apply_cutoff(layers: &mut Vec<Layer>) -> Result<bool> {
     let mut barrier = None;
-    for (i, layer) in layers.iter().enumerate() {
+    for (i, layer) in layers.iter().enumerate().rev() {
         if declares_root(&layer.path)? {
             barrier = Some(i);
+            break;
         }
     }
     let Some(mut cut) = barrier else {

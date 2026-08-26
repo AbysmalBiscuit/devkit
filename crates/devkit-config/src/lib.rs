@@ -687,7 +687,7 @@ pub struct LayerMarker {
     pub root: bool,
 }
 
-/// Whether a parsed layer declares `[config] root = true` (stop walking upward).
+/// Whether a parsed layer declares `[config] root = true`.
 pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
     t.get("config")
         .and_then(|c| c.as_table())
