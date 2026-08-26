@@ -218,8 +218,47 @@ fn plugin_cache_dir() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(home).join(".claude/plugins/cache/devkit/devkit"))
 }
 
+/// One row per shim name: linked, missing, or held by something else. The
+/// automatic linker warns once and then stays quiet, so this is where a name it
+/// could not claim stays visible.
+fn shim_rows() -> Vec<Row> {
+    let Ok(exe) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    let Some(dir) = exe.parent() else {
+        return Vec::new();
+    };
+    crate::shim::SHIMS
+        .iter()
+        .map(|s| {
+            let path = dir.join(if cfg!(windows) {
+                format!("{}.exe", s.name)
+            } else {
+                s.name.to_string()
+            });
+            let check = if !path.exists() {
+                Check::Unset("run: devkit install-links")
+            } else if crate::links::same_file(&exe, &path) {
+                Check::Ok(format!("linked to {}", exe.display()))
+            } else {
+                Check::Warn(format!(
+                    "{} is not this devkit; run: devkit install-links --force",
+                    path.display()
+                ))
+            };
+            Row {
+                key: s.name,
+                // Doctor's non-credential rows already use `Unset`; a shim has
+                // no env or secrets.toml origin to report.
+                source: Source::Unset,
+                check,
+            }
+        })
+        .collect()
+}
+
 fn gather(steps: &Steps) -> Vec<Row> {
-    vec![
+    let mut rows = vec![
         Row {
             key: "linear_api_key",
             source: secrets::source("LINEAR_API_KEY"),
@@ -274,7 +313,9 @@ fn gather(steps: &Steps) -> Vec<Row> {
             source: Source::Unset,
             check: docs_cache_check(),
         },
-    ]
+    ];
+    rows.extend(shim_rows());
+    rows
 }
 
 fn source_label(s: &Source) -> &'static str {

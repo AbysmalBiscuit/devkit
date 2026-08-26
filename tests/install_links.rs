@@ -724,3 +724,42 @@ fn install_links_hard_errors_when_the_gate_is_contended() {
         "the error should explain the contention: {stderr}"
     );
 }
+
+#[test]
+fn doctor_reports_a_foreign_shim_name() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let foreign = shim_path(dir.path(), "issue");
+    std::fs::write(&foreign, b"#!/bin/sh\necho not devkit\n").expect("write foreign issue");
+    let out = Command::new(&exe)
+        .arg("doctor")
+        // Without this, doctor's config row reads whatever devkit.toml sits
+        // at the test process's own cwd — this repo's own, which is missing
+        // `[defaults]` and fails independently of shim state. `dir` has none.
+        .current_dir(dir.path())
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .output()
+        .expect("spawn devkit doctor");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // `issue` alone is not evidence: doctor's tracker row already prints
+    // "issue state gates stay closed". Assert on the shim row's own wording.
+    assert!(
+        text.contains("is not this devkit"),
+        "doctor should say the `issue` name is held by something else: {text}"
+    );
+    assert!(
+        text.contains("run: devkit install-links"),
+        "doctor should say how to claim the missing shims: {text}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "an unclaimed shim is a warning, not a doctor failure: {text}"
+    );
+}
