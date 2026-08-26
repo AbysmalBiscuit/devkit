@@ -469,7 +469,8 @@ fn snapshot(
 /// catalog, which is what fails on a docs-only project. An unreadable config
 /// falls open to the defaults.
 fn brief_config(cwd: &Path, main_checkout: Option<&Path>) -> BriefConfig {
-    config::resolve(None, cwd, main_checkout)
+    let checkout_root = devkit_common::git::checkout_root(cwd).ok();
+    config::resolve(None, cwd, main_checkout, checkout_root.as_deref())
         .map(|(cfg, _)| cfg.brief)
         .unwrap_or_default()
 }

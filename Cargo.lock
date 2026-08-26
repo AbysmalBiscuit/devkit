@@ -307,6 +307,7 @@ name = "devkit-config"
 version = "0.13.4"
 dependencies = [
  "anyhow",
+ "devkit-common",
  "schemars",
  "serde",
  "tempfile",

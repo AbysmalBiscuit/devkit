@@ -106,7 +106,7 @@ Either beats pointing at `main`, which validates your config against keys no
 released binary accepts yet.
 
 The schema is generated from the same Rust types serde reads — the doc comments
-in `crates/devkit-ports/src/config.rs` become the hover text — so it cannot
+in `crates/devkit-config/src/lib.rs` become the hover text — so it cannot
 describe a shape the binaries do not accept. It catches what config resolution
 would otherwise only report at run time, and only through `devrun config show`:
 an `[apps.x]` without `base_port` or `launch`, a value of the wrong type, a
@@ -168,9 +168,15 @@ config loads, in this order:
    error naming both the config key and the variable. `$$` is a literal `$`; a
    `$` followed by anything else is left alone.
 2. A leading `~/` expands to `$HOME`.
-3. A path that is still relative is resolved against **the directory of the
-   config file that declared it**, not the working directory, and `.` / `..` are
-   folded out.
+3. A path that is still relative is anchored by what it names, never by the
+   working directory, and `.` / `..` are folded out either way:
+   - `worktree_root` and `baseline_path` name a location **on this machine**,
+     so they resolve against the directory of the config file that declared
+     them — including when that file is a linked worktree's main checkout.
+   - `doppler_yaml` names a file **inside the repository being worked on**, so
+     it resolves against the checkout reading the config instead: each
+     worktree resolves its own copy, and a branch that edits it takes effect
+     without merging first.
 
 `branch_prefix` gets step 1 only.
 

@@ -15,7 +15,13 @@ pub struct Loaded {
 
 pub fn load(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
     let main_checkout = devkit_common::git::main_checkout(start).ok().flatten();
-    let (cfg, provenance) = config::resolve(explicit, start, main_checkout.as_deref())?;
+    let checkout_root = devkit_common::git::checkout_root(start).ok();
+    let (cfg, provenance) = config::resolve(
+        explicit,
+        start,
+        main_checkout.as_deref(),
+        checkout_root.as_deref(),
+    )?;
     let yaml_path = config::expand_tilde(&cfg.defaults.doppler_yaml);
     let p2p = match std::fs::read_to_string(&yaml_path) {
         Ok(y) => doppler::path_to_project(&y)?,

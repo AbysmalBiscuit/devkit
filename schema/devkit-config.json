@@ -199,7 +199,7 @@
           "type": "string"
         },
         "baseline_path": {
-          "description": "Checkout path for the baseline server. `~` is expanded.",
+          "description": "Checkout path for the baseline server. `~` is expanded. Names a\nlocation on this machine, so a relative value anchors to the\ndirectory of the config layer that declared it, even when that layer\nis the repository's main checkout.",
           "type": "string"
         },
         "baseline_ref": {
@@ -212,7 +212,7 @@
         },
         "doppler_yaml": {
           "default": "",
-          "description": "Path to the repo's `doppler.yaml`; its `setup` paths seed app path\ninference. `~` is expanded. Leave empty and every app needs its own\n`path`.",
+          "description": "Path to the repo's `doppler.yaml`; its `setup` paths seed app path\ninference. `~` is expanded. Names a file inside the repository being\nworked on, so a relative value anchors to the checkout reading the\nconfig rather than to the layer that declared it — each worktree\nresolves its own copy. Leave empty and every app needs its own\n`path`.",
           "type": "string"
         },
         "ignored_checks": {
@@ -255,7 +255,7 @@
           "type": "array"
         },
         "worktree_root": {
-          "description": "Directory issue worktrees are created under. `~` is expanded.",
+          "description": "Directory issue worktrees are created under. `~` is expanded. Names a\nlocation on this machine, so a relative value anchors to the\ndirectory of the config layer that declared it, even when that layer\nis the repository's main checkout.",
           "type": "string"
         }
       },

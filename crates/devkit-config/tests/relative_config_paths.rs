@@ -38,11 +38,11 @@ fn a_relative_config_path_resolves_like_the_discovered_one() {
         .to_string_lossy()
         .into_owned();
 
-    let (discovered, _) = devkit_config::resolve(None, &proj, None).unwrap();
+    let (discovered, _) = devkit_config::resolve(None, &proj, None, None).unwrap();
     assert_eq!(discovered.defaults.worktree_root, expected);
 
     let (explicit, prov) =
-        devkit_config::resolve(Some(Path::new("devkit.toml")), &proj, None).unwrap();
+        devkit_config::resolve(Some(Path::new("devkit.toml")), &proj, None, None).unwrap();
     assert_eq!(
         explicit.defaults.worktree_root, expected,
         "a relative --config resolves like the discovered config"
@@ -54,7 +54,7 @@ fn a_relative_config_path_resolves_like_the_discovered_one() {
     );
 
     unsafe { std::env::set_var("DEVKIT_CONFIG", "devkit.toml") };
-    let (from_env, _) = devkit_config::resolve(None, &proj, None).unwrap();
+    let (from_env, _) = devkit_config::resolve(None, &proj, None, None).unwrap();
     assert_eq!(
         from_env.defaults.worktree_root, expected,
         "a relative $DEVKIT_CONFIG resolves like the discovered config"
