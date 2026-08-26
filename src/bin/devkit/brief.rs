@@ -103,10 +103,9 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
     let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
     };
-    // Resolved once for the whole invocation: every function below that would
-    // otherwise ask git for it again takes it as a parameter instead, so a
-    // session-hook run spawns git for it at most once rather than once per
-    // caller.
+    // Resolved once for the functions in this file, which take it as a
+    // parameter rather than each asking git for it again. `devrun_project`
+    // still resolves it a second time, inside `load::load`.
     let main_checkout = devkit_common::git::main_checkout(&cwd).ok().flatten();
     let settings = brief_config(&cwd, main_checkout.as_deref());
     if !settings.enabled {

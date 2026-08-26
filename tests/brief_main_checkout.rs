@@ -4,8 +4,9 @@
 //! worktree's own upward walk never reaches it. Each covers a distinct
 //! caller of that threading, over one shared fixture shape.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 fn git(args: &[&str], cwd: &Path) {
     devkit_common::git::Git::fixture(cwd)
@@ -63,6 +64,36 @@ fn devkit(args: &[&str], cwd: &Path, state: &Path) -> Output {
         .env_remove("TMUX_PANE")
         .output()
         .unwrap_or_else(|e| panic!("spawn devkit {args:?}: {e}"))
+}
+
+/// `devkit brief --if-changed` reads its session id from stdin JSON — a real
+/// pipe, never the test process's own stdin, so `session_id`'s
+/// terminal check and its JSON read behave the same regardless of how the
+/// test itself was invoked.
+fn devkit_if_changed(cwd: &Path, state: &Path, session: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .args(["brief", "--if-changed"])
+        .current_dir(cwd)
+        .env("HOME", state)
+        .env("XDG_STATE_HOME", state)
+        .env("XDG_CONFIG_HOME", state.join("config"))
+        .env_remove("DEVKIT_CONFIG")
+        .env_remove("DEVKIT_SESSION")
+        .env_remove("TMUX_PANE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn devkit brief --if-changed: {e}"));
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(format!("{{\"session_id\":\"{session}\"}}").as_bytes())
+        .unwrap_or_else(|e| panic!("write session id: {e}"));
+    child
+        .wait_with_output()
+        .unwrap_or_else(|e| panic!("wait devkit brief --if-changed: {e}"))
 }
 
 /// A config that fails to load in the main checkout is exactly as fatal from
@@ -154,5 +185,53 @@ fn brief_lists_an_app_declared_only_in_the_main_checkout() {
     assert!(
         stdout.contains("web (web)"),
         "an app declared only in the main checkout should be listed from the worktree: {stdout:?}"
+    );
+}
+
+/// `--if-changed` suppresses a repeat brief by comparing a digest of the
+/// checkout's state against the last one it stamped for this session. A
+/// config fault that lives only in the main checkout has to be part of
+/// that digest: appearing there must register as a change (producing
+/// output), and once reported, an unchanged repeat must go back to being
+/// suppressed — the same contract every other digest input already gets.
+#[test]
+fn if_changed_treats_a_main_checkout_only_fault_as_a_change() {
+    let body = format!("{DEFAULTS}[apps.web]\nbase_port = 1\nlaunch = [\"run\"]\npath = \"web\"\n");
+    let (t, worktree) = project_with_main_config(&body);
+    let state = tempfile::tempdir().unwrap();
+    let session = "if-changed-fault-session";
+
+    // Baseline: the worktree's own config is enough on its own, so the first
+    // call reports it and stamps a watermark for `session`.
+    let baseline = devkit_if_changed(&worktree, state.path(), session);
+    let baseline_out = String::from_utf8_lossy(&baseline.stdout);
+    assert!(
+        baseline_out.contains("web (web)"),
+        "the baseline call should report the worktree's own app: {baseline_out:?}"
+    );
+
+    // A fault appears only in the main checkout; nothing in the worktree
+    // itself changes. This must register as a change against the stamped
+    // watermark and produce output, not be swallowed as if nothing moved.
+    std::fs::write(
+        t.path().join("main").join("devkit.toml"),
+        "not valid toml [[[",
+    )
+    .unwrap();
+    let faulted = devkit_if_changed(&worktree, state.path(), session);
+    let faulted_out = String::from_utf8_lossy(&faulted.stdout);
+    assert!(
+        faulted_out.contains("devkit.toml does not load"),
+        "a fault appearing only in the main checkout should be reported: {faulted_out:?}"
+    );
+
+    // Nothing has changed since the fault was reported: a repeat call must
+    // go back to being suppressed, which only holds if the digest that
+    // reported the fault also stamped a watermark reflecting it.
+    let repeat = devkit_if_changed(&worktree, state.path(), session);
+    let repeat_out = String::from_utf8_lossy(&repeat.stdout);
+    assert!(
+        repeat_out.trim().is_empty(),
+        "an unchanged repeat after the fault was already reported should stay silent: {repeat_out:?}"
     );
 }
