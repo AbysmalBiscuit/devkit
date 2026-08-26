@@ -103,9 +103,10 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
     let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
     };
-    // Resolved once for the functions in this file, which take it as a
-    // parameter rather than each asking git for it again. `devrun_project`
-    // still resolves it a second time, inside `load::load`.
+    // `run` resolves this once for the functions in this file, which take it
+    // as a parameter. Resolvers below it do not share this value: `load::load`
+    // and the `config::resolve` callers each ask git for their own main
+    // checkout.
     let main_checkout = devkit_common::git::main_checkout(&cwd).ok().flatten();
     let settings = brief_config(&cwd, main_checkout.as_deref());
     if !settings.enabled {
