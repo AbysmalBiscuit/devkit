@@ -149,27 +149,26 @@ fn replaces_a_real_devkit_binary_at_every_shim_name() {
     }
 }
 
-/// Coverage for the hide-filter itself, not just the marker responder: a
-/// real devkit copy always answers the marker probe and is `Accepted` before
-/// the `--help` path ever runs, so `replaces_a_real_devkit_binary_at_every_shim_name`
-/// alone never reaches the subcommand check `lockm`'s hidden `hook` broke.
-/// This wrapper is a faithful pre-marker devkit: it forwards `--version` and
-/// `--help` to the real staged binary (`exec -a` forces its argv[0] to
-/// `lockm`, so the output is genuinely lockm's own — `hook` is a real
-/// subcommand but never printed in `--help`) while refusing the probe flag
-/// outright, forcing `is_devkit_binary` down the `--help`/subcommand path
-/// this test exists to guard. Unix-only: `exec -a` is a bash extension with
-/// no portable Windows equivalent.
+/// The most convincing candidate there is short of the marker probe: a
+/// wrapper that forwards `--version` and `--help` to the real staged binary
+/// (`exec -a` forces its argv[0] to `lockm`, so the output is genuinely
+/// lockm's own) while refusing the probe flag, exactly as a pre-marker 0.13.x
+/// binary at that name would. Identity is settled by the marker probe alone,
+/// so even this is left alone — no `--help` heuristic can be made sound
+/// against a program that wants to be mistaken for devkit, and the cost of
+/// being wrong is deleting something on the user's PATH. `--force` is what
+/// claims it. Unix-only: `exec -a` is a bash extension with no portable
+/// Windows equivalent.
 #[test]
 #[cfg(unix)]
-fn replaces_a_faithful_pre_marker_lockm() {
+fn leaves_a_faithful_pre_marker_lockm_alone() {
     let (dir, exe) = staged();
     let wrapper = shim_path(dir.path(), "lockm");
     let script = format!(
         "#!/usr/bin/env bash\nif [ \"$1\" = \"--devkit-shim-probe\" ]; then\n  exit 1\nfi\nexec -a lockm \"{}\" \"$@\"\n",
         exe.display()
     );
-    std::fs::write(&wrapper, script).expect("write pre-marker lockm wrapper");
+    std::fs::write(&wrapper, &script).expect("write pre-marker lockm wrapper");
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
@@ -184,12 +183,24 @@ fn replaces_a_faithful_pre_marker_lockm() {
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
         text.lines()
-            .any(|l| l.contains("replaced") && l.contains("lockm")),
-        "a faithful pre-marker lockm must be replaced via the subcommand path: {text}"
+            .any(|l| l.contains("skipped") && l.contains("lockm")),
+        "a binary that will not answer the marker probe must be skipped: {text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&wrapper).expect("wrapper still readable"),
+        script,
+        "a skipped name must be left exactly as it was"
+    );
+
+    let forced = run(&exe, &["install-links", "--force"]);
+    assert!(
+        forced.status.success(),
+        "install-links --force failed: {}",
+        String::from_utf8_lossy(&forced.stderr)
     );
     assert!(
         shimtest::same_inode(&exe, &wrapper),
-        "lockm should now be a hardlink to devkit"
+        "--force should claim a pre-marker name"
     );
 }
 
@@ -228,20 +239,20 @@ fn leaves_a_foreign_binary_alone() {
     );
 }
 
-/// A foreign binary that convincingly answers `--version` with `issue 1.2.3`
-/// must still be rejected. Matching the version line alone is exactly what
-/// the old, too-loose check accepted (a prefix match against the whole shim
-/// set) — the fix requires `--help` to also name every real `issue`
-/// subcommand, which this script's generic help text does not. On Unix the
-/// script is made executable so it actually runs this scenario; on Windows
-/// the bytes are not a valid executable, so there this test only re-exercises
-/// the can't-spawn branch, the same as `leaves_a_foreign_binary_alone` — the
-/// anchored-match/subcommand-probe rejection is Unix-only coverage.
+/// A foreign binary that answers every question a devkit binary would, short
+/// of the marker probe, must still be rejected: an anchored `issue 1.2.3`
+/// version line *and* a `--help` naming the real `issue` subcommands. Help
+/// text is written by the program being judged, so a candidate that wants to
+/// be mistaken for devkit can print whatever the check reads — which is why
+/// nothing but the marker probe decides. On Unix the script is made
+/// executable so it actually runs this scenario; on Windows the bytes are not
+/// a valid executable, so there this test only re-exercises the can't-spawn
+/// branch, the same as `leaves_a_foreign_binary_alone`.
 #[test]
 fn leaves_a_convincingly_named_foreign_binary_alone() {
     let (dir, exe) = staged();
     let foreign = shim_path(dir.path(), "issue");
-    let script: &[u8] = b"#!/bin/sh\ncase \"$1\" in\n  --version) echo \"issue 1.2.3\" ;;\n  --help) echo \"issue 1.2.3\"; echo \"a foreign issue tracker, unrelated to devkit\" ;;\n  *) exit 1 ;;\nesac\n";
+    let script: &[u8] = b"#!/bin/sh\ncase \"$1\" in\n  --version) echo \"issue 1.2.3\" ;;\n  --help) echo \"issue 1.2.3\"; echo \"usage: issue setup checkout-pr status info end sync-includes prs dashboard review completions help\" ;;\n  *) exit 1 ;;\nesac\n";
     std::fs::write(&foreign, script).expect("write convincing foreign issue");
     #[cfg(unix)]
     {
@@ -255,14 +266,16 @@ fn leaves_a_convincingly_named_foreign_binary_alone() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(
-        std::fs::read(&foreign).expect("foreign still readable"),
-        script,
-        "a foreign file at a shim name must not be replaced, even one echoing a matching version"
+    // Compared as a boolean rather than through `assert_eq!`: on a failure the
+    // file is a 100MB+ binary, and the mismatch message would carry all of it.
+    let unchanged = std::fs::read(&foreign).expect("foreign still readable") == script;
+    assert!(
+        unchanged,
+        "a foreign file at a shim name must not be replaced, even one that answers like devkit: {text}"
     );
     assert!(
         !shimtest::same_inode(&exe, &foreign),
-        "a binary that only echoes a matching version string must not be linked over: {text}"
+        "a binary that only echoes what devkit would must not be linked over: {text}"
     );
     assert!(
         text.lines()
@@ -271,11 +284,10 @@ fn leaves_a_convincingly_named_foreign_binary_alone() {
     );
 }
 
-/// The zero-subcommand exploit: `devkit-mcp` has no subcommands (`McpCli`
-/// is a unit struct), so a foreign binary cannot be accepted by the
-/// subcommand-set probe — there is nothing in it to check — and it does not
-/// know to answer the identity-probe marker either. A bare anchored-version
-/// check alone would have wrongly accepted this script.
+/// The same rejection at the shim with nothing but a version line to go on:
+/// `devkit-mcp` has no subcommands (`McpCli` is a unit struct), so its help
+/// text is the one place a lenient check would have had nothing to weigh. An
+/// anchored version line is not identity on its own — the marker probe is.
 #[test]
 fn leaves_a_convincing_but_markerless_devkit_mcp_alone() {
     let (dir, exe) = staged();

@@ -140,25 +140,6 @@ fn version_line_matches(text: &str, name: &str) -> bool {
     tokens.next() == Some(name) && tokens.next().is_some_and(looks_like_version)
 }
 
-/// Whether `needle` appears in `haystack` bounded by non-word characters on
-/// both sides (or the start/end of the text). A bare substring search would
-/// accept a subcommand named `rm` inside "confirm", or `info` inside
-/// "information" — exactly the kind of prose a foreign `--help` output is
-/// likely to contain.
-fn contains_word(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return false;
-    }
-    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
-    let bytes = haystack.as_bytes();
-    haystack.match_indices(needle).any(|(start, matched)| {
-        let end = start + matched.len();
-        let before_ok = start == 0 || !is_word_byte(bytes[start - 1]);
-        let after_ok = end == bytes.len() || !is_word_byte(bytes[end]);
-        before_ok && after_ok
-    })
-}
-
 /// Whether `path` answers the identity probe (`PROBE_FLAG`) with exactly
 /// `PROBE_MARKER` on stdout. This is the accept path a current build (and any
 /// future one) uses: `main` intercepts the flag before clap parsing or
@@ -183,28 +164,24 @@ pub enum Judgement {
 /// Whether the file at `path` is genuinely the devkit binary `shim` selects,
 /// judged by running it — never by inspecting its bytes.
 ///
-/// `--version` must report `shim`'s own name (anchored to the first token,
-/// not a prefix match against the whole shim set) followed by a version; a
-/// failure here is foreign outright. Past that, identity is settled by
-/// *either* of two probes:
+/// Two things must hold. `--version` reports `shim`'s own name (anchored to
+/// the first token, not a prefix match against the whole shim set) followed
+/// by a version, *and* the marker probe answers
+/// (`PROBE_FLAG`/`PROBE_MARKER`, see `answers_probe_marker`). Nothing else
+/// accepts.
 ///
-/// 1. The marker probe (`PROBE_FLAG`/`PROBE_MARKER`, see `answers_probe_marker`).
-/// 2. `--help` names every *visible* subcommand this build's `shim_command`
-///    exposes for `shim` (hidden ones, like `lockm hook`, are never printed
-///    by a genuine binary either, so they're excluded from what's required).
-///    Read from clap at runtime rather than a hardcoded list, so the check
-///    tracks the CLI as it grows. An *empty* expected set (`devkit-mcp` has
-///    no subcommands) can never satisfy this probe on its own — otherwise
-///    the version line alone would decide, which is the check this replaced.
+/// In particular a candidate's own `--help` never does, however faithfully it
+/// names the subcommands this build expects: help text is written by the
+/// program being judged, so no heuristic over it can be made sound against a
+/// program that wants to be mistaken for devkit — and what an accept costs
+/// when it is wrong is deleting something on the user's PATH, unprompted. A
+/// devkit build old enough to predate the marker is therefore reported
+/// skipped and costs one `--force`, after which the binary at that name
+/// carries the marker itself.
 ///
-/// The marker probe is what keeps a subcommand-less shim linkable at all
-/// once one run has installed a marker-aware binary; the subcommand probe is
-/// what a pre-marker devkit build relies on instead. A pre-marker binary at a
-/// subcommand-less shim name satisfies neither and costs one `--force`.
-///
-/// A file that will not execute, that times out, or that satisfies neither
-/// probe is foreign and left alone. That is the safe direction to err in: a
-/// stale or ambiguous binary is skipped rather than silently accepted.
+/// A file that will not execute, that times out, or that misses either half
+/// is foreign and left alone. That is the safe direction to err in: a stale
+/// or ambiguous binary is skipped rather than silently accepted.
 pub fn is_devkit_binary(path: &Path, shim: &Shim) -> Judgement {
     let Some(version_out) = probe(path, "--version", PROBE_TIMEOUT) else {
         return Judgement::Foreign("did not answer --version".to_string());
@@ -225,47 +202,10 @@ pub fn is_devkit_binary(path: &Path, shim: &Shim) -> Judgement {
     if answers_probe_marker(path, PROBE_TIMEOUT) {
         return Judgement::Accepted;
     }
-
-    let Some(help_out) = probe(path, "--help", PROBE_TIMEOUT) else {
-        return Judgement::Foreign(format!(
-            "reports `{first_line}` but did not answer the probe marker or --help"
-        ));
-    };
-    if !help_out.status.success() {
-        return Judgement::Foreign(format!(
-            "reports `{first_line}` but did not answer the probe marker, and --help exited non-zero"
-        ));
-    }
-    let help_text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&help_out.stdout),
-        String::from_utf8_lossy(&help_out.stderr)
-    );
-    let expected = crate::shim_command(shim.sub.name(), shim.name);
-    let expected_names: Vec<&str> = expected
-        .get_subcommands()
-        .filter(|c| !c.is_hide_set())
-        .map(|c| c.get_name())
-        .collect();
-    if expected_names.is_empty() {
-        return Judgement::Foreign(format!(
-            "reports `{first_line}` but this shim has no subcommands to verify against, \
-             and did not answer the probe marker either — a pre-restructure devkit binary \
-             here costs one --force (this build then carries the marker for future runs)"
-        ));
-    }
-    let missing: Vec<&str> = expected_names
-        .into_iter()
-        .filter(|n| !contains_word(&help_text, n))
-        .collect();
-    if !missing.is_empty() {
-        return Judgement::Foreign(format!(
-            "reports `{first_line}` but did not answer the probe marker, and --help is \
-             missing subcommand(s) {}",
-            missing.join(", ")
-        ));
-    }
-    Judgement::Accepted
+    Judgement::Foreign(format!(
+        "reports `{first_line}` but did not answer the identity probe — a devkit older \
+         than the probe costs one --force here (this build then carries it for future runs)"
+    ))
 }
 
 fn shim_file_name(name: &str) -> String {
@@ -330,13 +270,14 @@ fn link_one(exe: &Path, shim: &Shim, dest: &Path, force: bool) -> Outcome {
 pub const SKIP_AUTOLINK_ENV: &str = "DEVKIT_SKIP_AUTOLINK";
 
 /// How long the automatic linking pass may run before abandoning whatever
-/// shims it has not yet reached. Six shims x three probes x `PROBE_TIMEOUT`
-/// is a 90s worst case, and this pass runs on the first invocation of *every*
-/// shim after a version bump — including `lockm hook pretooluse` under an
-/// editor's own hook timeout. Checked only before starting the next shim,
-/// not mid-probe, so the real bound is this plus one shim's own worst case
-/// (roughly 35s, not 20s) — still far short of 90s, without adding a second,
-/// finer-grained cancellation path into `probe`.
+/// shims it has not yet reached. Six shims x two probes (`--version`, then
+/// the marker) x `PROBE_TIMEOUT` is a 60s worst case, and this pass runs on
+/// the first invocation of *every* shim after a version bump — including
+/// `lockm hook pretooluse` under an editor's own hook timeout. Checked only
+/// before starting the next shim, not mid-probe, so the real bound is this
+/// plus one shim's own worst case (roughly 30s, not 20s) — still well short
+/// of 60s, without adding a second, finer-grained cancellation path into
+/// `probe`.
 const AUTOLINK_DEADLINE: Duration = Duration::from_secs(20);
 
 /// How long a partial stamp suppresses the automatic pass before it is
@@ -633,17 +574,6 @@ mod tests {
         assert!(!version_line_matches("devkitty 2.0\n", "devkit"));
         assert!(!version_line_matches("issue\n", "issue"));
         assert!(!version_line_matches("", "issue"));
-    }
-
-    /// The exact false-positive the re-reviewer reproduced against a bare
-    /// substring search: `rm` inside "confirm", `info` inside "information".
-    #[test]
-    fn contains_word_rejects_a_substring_inside_a_longer_word() {
-        assert!(!contains_word("please confirm your choice", "rm"));
-        assert!(!contains_word("see the information page", "info"));
-        assert!(contains_word("run `rm` to delete it", "rm"));
-        assert!(contains_word("info: nothing to do", "info"));
-        assert!(!contains_word("anything", ""));
     }
 
     const IDENTITY: &str = "0.13.3\t/opt/bin\t1700000000000000000";
