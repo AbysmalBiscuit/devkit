@@ -56,8 +56,18 @@ impl Git {
     /// Run git against `cwd`. The working directory is taken before any
     /// argument because it decides which git to spawn, not merely where to run
     /// it — see the module docs on WSL.
+    ///
+    /// The path goes on the `Command` as the raw `OsStr`; only a lossy copy
+    /// goes into the args vector kept for error messages and the timing span.
+    /// A non-UTF-8 path is real on Linux, and `to_string_lossy` rewrites its
+    /// bytes to U+FFFD — sending that to git points `-C` at a path that does
+    /// not exist.
     pub fn at(cwd: &Path) -> Self {
-        Self::bare().args(["-C", &cwd.to_string_lossy()])
+        let mut git = Self::bare();
+        git.command.arg("-C").arg(cwd);
+        git.args.push("-C".to_string());
+        git.args.push(cwd.to_string_lossy().into_owned());
+        git
     }
 
     /// Run git with no working directory — `clone`, which has no repository to
@@ -191,8 +201,9 @@ impl Git {
                 }
             }
             if Instant::now() >= deadline {
-                // Kill first so the reader threads see EOF and join instead of
-                // blocking on a pipe that will never close.
+                // Kill first so the reader threads see EOF and stop blocking
+                // on a pipe that would otherwise never close; their output is
+                // discarded below, not joined into an `Output`.
                 let _ = child.kill();
                 let _ = child.wait();
                 bail!("`{command_line}` did not finish within {:?}", self.timeout);
@@ -250,9 +261,10 @@ mod tests {
 
     /// Reading stdout only after the child exits deadlocks once output
     /// exceeds the OS pipe buffer: the child blocks in `write()` while this
-    /// thread blocks in `wait()`, and neither yields. `git tag` over enough
-    /// refs reproduces it well under the timeout this test would otherwise
-    /// hit.
+    /// thread blocks in `wait()`, and neither yields. Long tag names clear
+    /// the buffer with a couple hundred refs rather than thousands — a loose
+    /// ref is one file, and thousands of them are slow enough on a Windows
+    /// CI runner to make this a bogus timeout instead of an assertion.
     #[test]
     fn output_larger_than_a_pipe_buffer_comes_back_whole() {
         let dir = tempfile::tempdir().unwrap();
@@ -275,13 +287,18 @@ mod tests {
             .unwrap();
         let commit = commit.trim();
 
-        // One `update-ref --stdin` batch beats spawning thousands of `git
-        // tag` calls; this is fixture setup, not the code under test, so it
-        // goes through a raw `Command` rather than `Git`.
-        const TAG_COUNT: usize = 12_000;
+        // One `update-ref --stdin` batch beats spawning one `git tag` call
+        // per ref; this is fixture setup, not the code under test, so it
+        // goes through a raw `Command` rather than `Git`. Each name is padded
+        // to 195 bytes: a loose ref is a file named after it, git locks it
+        // through a sibling `<name>.lock`, and the combined length has to
+        // clear ext4/NTFS's 255-byte filename limit with room to spare.
+        const TAG_COUNT: usize = 750;
+        const NAME_LEN: usize = 195;
         let mut batch = String::new();
         for i in 0..TAG_COUNT {
-            batch.push_str(&format!("create refs/tags/t{i:05} {commit}\n"));
+            let name = format!("{i:0>NAME_LEN$}");
+            batch.push_str(&format!("create refs/tags/t{name} {commit}\n"));
         }
         let mut update_ref = Command::new("git")
             .arg("-C")
@@ -305,5 +322,37 @@ mod tests {
         let tags = Git::fixture(dir.path()).args(["tag"]).output().unwrap();
         assert_eq!(tags.lines().count(), TAG_COUNT);
         assert!(tags.len() > 64_000, "only {} bytes", tags.len());
+    }
+
+    /// `Git::at` has to hand git the exact bytes of `cwd`, not a lossy
+    /// rendering of them: a path containing invalid UTF-8 is real on Linux,
+    /// and `to_string_lossy` would rewrite it to a path that does not exist.
+    /// The assertions stick to ASCII-only git output (`init` succeeding,
+    /// `--is-inside-work-tree` printing `true`) rather than decoding a path
+    /// back out of stdout, since `Git::output` itself goes through a lossy
+    /// `String` conversion that a real non-UTF-8 path would not survive.
+    #[cfg(unix)]
+    #[test]
+    fn at_preserves_a_non_utf8_path() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join(OsStr::from_bytes(b"br\xffken"));
+        std::fs::create_dir(&dir).unwrap();
+
+        // A lossy `-C` argument points git at a path with different bytes
+        // than the one just created, so this already fails here if `cwd`
+        // wasn't passed through intact.
+        Git::fixture(&dir)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+
+        let inside = Git::at(&dir)
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .output()
+            .unwrap();
+        assert_eq!(inside.trim(), "true");
     }
 }

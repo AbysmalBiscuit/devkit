@@ -25,7 +25,8 @@ interprocess = { workspace = true, optional = true }
 [features]
 daemon = ["dep:interprocess"]
 # Test-only surface for other crates' fixtures: the in-memory `tracker::fake`
-# tracker, and `git::Git::fixture` with its `NULL_DEVICE` constant.
+# tracker, and `git::Git::fixture` (which builds on the private `NULL_DEVICE`
+# constant, not exposed on its own).
 test-support = []
 
 [dev-dependencies]
