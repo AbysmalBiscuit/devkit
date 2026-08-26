@@ -313,13 +313,19 @@ pub fn main_checkout(start: &Path) -> Result<Option<PathBuf>> {
     Ok((!same_path(&main.path, &here)).then(|| main.path.clone()))
 }
 
-/// The branch checked out at `start`.
+/// The branch checked out at `start`, or `DETACHED` when `start` has no
+/// branch checked out.
 pub fn branch(start: &Path) -> Result<String> {
-    Ok(Git::at(start)
+    let branch = Git::at(start)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()?
         .trim()
-        .to_string())
+        .to_string();
+    Ok(if branch == "HEAD" {
+        "DETACHED".to_string()
+    } else {
+        branch
+    })
 }
 
 /// Compare two paths by identity where the filesystem can answer, falling back
@@ -536,5 +542,18 @@ mod tests {
         let parsed = parse_porcelain("worktree /x/b.git\nbare\n");
         assert_eq!(parsed.len(), 1);
         assert!(parsed[0].bare);
+    }
+
+    #[test]
+    fn branch_names_a_checked_out_branch() {
+        let repo = repo_with_commit();
+        assert_eq!(branch(repo.path()).unwrap(), "main");
+    }
+
+    #[test]
+    fn branch_is_detached_with_no_branch_checked_out() {
+        let repo = repo_with_commit();
+        run(&["checkout", "-q", "--detach"], repo.path()).unwrap();
+        assert_eq!(branch(repo.path()).unwrap(), "DETACHED");
     }
 }

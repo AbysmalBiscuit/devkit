@@ -251,14 +251,7 @@ fn live_enrich(
 /// state stay empty — the main clone has neither — while the cache-only path
 /// still overlays a cached PR if one happens to exist.
 fn local_row(top: &str) -> Result<IssueWorktree> {
-    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], top)?
-        .trim()
-        .to_string();
-    let branch = if branch == "HEAD" {
-        "DETACHED".to_string()
-    } else {
-        branch
-    };
+    let branch = devkit_common::git::branch(Path::new(top))?;
     let issue_id = devkit_common::worktree::issue_id_of(Path::new(top), &branch);
     Ok(IssueWorktree {
         worktree: top.to_string(),

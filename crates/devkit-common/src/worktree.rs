@@ -1,8 +1,6 @@
-use crate::git;
+use crate::git::{self, Worktree};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-
-pub use crate::git::{Worktree, parse_porcelain};
 
 /// This worktree's issue id. The setup record is authoritative because it holds
 /// whatever the tracker actually calls the issue; the branch and directory scan
@@ -61,10 +59,9 @@ pub fn find_id(s: &str) -> Option<String> {
 
 /// (main_repo_path, other_worktrees) from a path inside any worktree.
 pub fn discover(start: &str) -> Result<(PathBuf, Vec<Worktree>)> {
-    let mut all = git::worktrees(Path::new(start))?;
-    anyhow::ensure!(!all.is_empty(), "not inside a git repo: {start}");
-    let main = all.remove(0);
-    Ok((main.path, all))
+    let mut all = git::worktrees(Path::new(start))?.into_iter();
+    let main = all.next().expect("git never lists zero worktrees");
+    Ok((main.path, all.collect()))
 }
 
 /// Copy files matching `patterns` (path globs relative to `source`) into `dest`
@@ -275,6 +272,7 @@ fn copy_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::parse_porcelain;
     use std::path::Path;
     #[test]
     fn parses_two_worktrees() {

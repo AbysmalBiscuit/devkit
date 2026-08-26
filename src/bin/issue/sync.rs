@@ -1,5 +1,6 @@
 use anyhow::Result;
-use devkit_common::worktree::{self, IncludePlan, Worktree};
+use devkit_common::git::Worktree;
+use devkit_common::worktree::{self, IncludePlan};
 use devkit_ports::load;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
