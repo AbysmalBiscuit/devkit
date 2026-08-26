@@ -1,3 +1,4 @@
+use crate::issue::select::matches_parts;
 use anyhow::Result;
 use devkit_common::git::Worktree;
 use devkit_common::worktree::{self, IncludePlan};
@@ -36,7 +37,7 @@ fn select<'a>(rows: &'a [(Worktree, String)], selectors: &[String]) -> Vec<&'a (
         let mut hit = false;
         for row in rows {
             let (wt, id) = row;
-            if crate::issue::select::matches_parts(&wt.path.to_string_lossy(), &wt.branch, id, sel) {
+            if matches_parts(&wt.path.to_string_lossy(), &wt.branch, id, sel) {
                 hit = true;
                 if seen.insert(wt.path.clone()) {
                     chosen.push(row);
