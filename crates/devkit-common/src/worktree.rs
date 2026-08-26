@@ -111,11 +111,13 @@ pub fn copy_includes(source: &Path, dest: &Path, patterns: &[String]) -> (usize,
     (copied, warnings)
 }
 
-/// Copy the files an `IncludePlan` found: every path in `missing` always, and
-/// every path in `existing` only when `overwrite` is true. Both vectors hold
-/// paths relative to `dest`, as `plan_includes` returns them. Fail-open, like
-/// `plan_includes`: a copy error is collected as a warning string rather than
-/// propagated. Returns (files_copied, warnings).
+/// Copy the files an `IncludePlan` found: every path in `missing`, and every
+/// path in `existing` only when `overwrite` is true. Both vectors hold paths
+/// relative to `dest`, as `plan_includes` returns them. A plan is a snapshot,
+/// so unless `overwrite` is set each copy re-checks the destination and skips a
+/// file that appeared since. Fail-open, like `plan_includes`: a copy error is
+/// collected as a warning string rather than propagated. Returns
+/// (files_copied, warnings).
 pub fn apply_includes(
     source: &Path,
     dest: &Path,
@@ -129,6 +131,7 @@ pub fn apply_includes(
         copy_file(
             &source.join(rel),
             &dest.join(rel),
+            overwrite,
             &mut copied,
             &mut warnings,
         );
@@ -138,6 +141,7 @@ pub fn apply_includes(
             copy_file(
                 &source.join(rel),
                 &dest.join(rel),
+                true,
                 &mut copied,
                 &mut warnings,
             );
@@ -266,8 +270,18 @@ fn plan_dir(
 }
 
 /// Copy a single file, creating its destination's parent directories as
-/// needed. Errors are pushed as warnings.
-fn copy_file(src: &Path, dst: &Path, copied: &mut usize, warnings: &mut Vec<String>) {
+/// needed. Unless `overwrite` is set, a destination that exists at this moment
+/// is left untouched. Errors are pushed as warnings.
+fn copy_file(
+    src: &Path,
+    dst: &Path,
+    overwrite: bool,
+    copied: &mut usize,
+    warnings: &mut Vec<String>,
+) {
+    if !overwrite && dst.exists() {
+        return;
+    }
     if let Some(parent) = dst.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -561,6 +575,29 @@ mod tests {
         write(&dst.join(".tool-versions"), "KEEP ME");
 
         let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
+        let (n, warnings) = apply_includes(&src, &dst, &plan, false);
+
+        assert_eq!(n, 0);
+        assert!(warnings.is_empty());
+        assert_eq!(
+            fs::read_to_string(dst.join(".tool-versions")).unwrap(),
+            "KEEP ME"
+        );
+    }
+
+    /// The plan is a snapshot; the never-clobber guarantee is about the write.
+    /// A file that appears between planning and applying must survive.
+    #[test]
+    fn a_destination_appearing_after_the_plan_is_not_clobbered() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+
+        let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
+        assert_eq!(plan.missing, vec![PathBuf::from(".tool-versions")]);
+        write(&dst.join(".tool-versions"), "KEEP ME");
+
         let (n, warnings) = apply_includes(&src, &dst, &plan, false);
 
         assert_eq!(n, 0);
