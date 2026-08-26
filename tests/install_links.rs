@@ -653,6 +653,112 @@ fn same_version_reinstall_relinks() {
     );
 }
 
+/// The recorded stamp, split into the identity half `stamp_line` builds and
+/// the completeness half the pass appends.
+fn read_stamp(state: &std::path::Path) -> (String, String) {
+    let text = std::fs::read_to_string(state.join("devkit/links-version")).expect("stamp written");
+    let (identity, status) = text
+        .trim_end()
+        .rsplit_once('\t')
+        .expect("stamp carries a completeness field");
+    (identity.to_string(), status.to_string())
+}
+
+/// A pass that reached a decision for every shim name is complete, so the next
+/// invocation skips outright. A name left alone because something foreign holds
+/// it is one of those decisions: re-probing it every invocation would put a
+/// subprocess call per shim on `lockm hook pretooluse`'s path for an answer
+/// that cannot change.
+#[test]
+fn a_skipped_foreign_name_still_completes_the_pass() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let foreign = shim_path(dir.path(), "issue");
+    std::fs::write(&foreign, b"#!/bin/sh\necho not devkit\n").expect("write foreign issue");
+    retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("doctor")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+    let (_, status) = read_stamp(state.path());
+    assert_eq!(
+        status, "complete",
+        "a skipped foreign name is a decision, not a failure"
+    );
+}
+
+/// A pass that could not link is recorded as partial, and a partial stamp only
+/// suppresses the retry until `RETRY_COOLDOWN` has elapsed. Without that, the
+/// stamp records that a pass ran rather than that the links are correct: an
+/// install directory that was briefly unwritable would leave every shim name
+/// unlinked forever.
+///
+/// Unix-only: the failure is produced by making the install directory
+/// unwritable, and Windows has no equivalent `chmod`.
+#[test]
+#[cfg(unix)]
+fn a_failed_pass_is_partial_and_retries_once_the_cooldown_elapses() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let doctor = |state: &std::path::Path| {
+        retry_on_busy(|| {
+            Command::new(&exe)
+                .arg("doctor")
+                .env("HOME", state)
+                .env("XDG_STATE_HOME", state)
+                .output()
+        })
+    };
+
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555))
+        .expect("make the install dir unwritable");
+    doctor(state.path());
+    let portm = shim_path(dir.path(), "portm");
+    let unwritable_left_it_unlinked = !portm.exists();
+    let (identity, status) = read_stamp(state.path());
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
+        .expect("restore the install dir");
+    assert!(
+        unwritable_left_it_unlinked,
+        "an unwritable install dir should have failed every link"
+    );
+    assert!(
+        status.starts_with("partial:"),
+        "a pass with failed links must record a partial stamp, got {status}"
+    );
+
+    doctor(state.path());
+    assert!(
+        !portm.exists(),
+        "a partial stamp within the cooldown must still suppress the retry"
+    );
+
+    let aged = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after the epoch")
+        .as_secs()
+        - 86_400;
+    std::fs::write(
+        state.path().join("devkit/links-version"),
+        format!("{identity}\tpartial:{aged}\n"),
+    )
+    .expect("age the stamp");
+    doctor(state.path());
+    assert!(
+        portm.exists(),
+        "a partial stamp older than the cooldown must be retried"
+    );
+    let (_, status) = read_stamp(state.path());
+    assert_eq!(
+        status, "complete",
+        "the retry linked everything, so it must record a complete stamp"
+    );
+}
+
 /// `DEVKIT_SKIP_AUTOLINK` must prevent the linking work itself, not merely
 /// let the surrounding command exit 0 regardless of whether it ran. Checked
 /// on what would otherwise be a completely fresh first run: no shim gets

@@ -339,6 +339,26 @@ pub const SKIP_AUTOLINK_ENV: &str = "DEVKIT_SKIP_AUTOLINK";
 /// finer-grained cancellation path into `probe`.
 const AUTOLINK_DEADLINE: Duration = Duration::from_secs(20);
 
+/// How long a partial stamp suppresses the automatic pass before it is
+/// retried (see `stamp_permits_skip`). The trade is repair latency against
+/// re-running a pass whose worst case is `AUTOLINK_DEADLINE` plus one shim's
+/// own probes, on a path `lockm hook pretooluse` takes on every editor write.
+/// Only one invocation per window pays that — the retry rewrites the stamp
+/// with its own start time, and concurrent invocations lose the `links.lock`
+/// gate and return immediately — so a quarter hour bounds the cost at one
+/// stalled invocation per window while still repairing a transient failure
+/// (an install directory remounted read-write, a name freed) inside a single
+/// working session.
+const RETRY_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+
+/// Whether a pass reached a terminal decision — linked, already linked, or
+/// skipped as foreign — for every shim name.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    Complete,
+    Partial,
+}
+
 /// The stamp line for `exe`: its version, the directory it links into, and
 /// its own mtime (nanoseconds since the epoch — a portable, stable integer;
 /// there is no cross-platform way to read a file-identity handle like
@@ -363,6 +383,55 @@ fn stamp_line(exe: &Path, dir: &Path) -> Option<String> {
         env!("CARGO_PKG_VERSION"),
         dir.display()
     ))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Record the stamp: the identity line `stamp_line` built, plus how the pass
+/// that produced it ended. A partial pass carries the wall-clock second it
+/// ran, which `RETRY_COOLDOWN` is measured from.
+fn write_stamp(stamp: &Path, identity: &str, pass: Pass) {
+    let status = match pass {
+        Pass::Complete => "complete".to_string(),
+        Pass::Partial => format!("partial:{}", now_secs()),
+    };
+    let _ = std::fs::write(stamp, format!("{identity}\t{status}\n"));
+}
+
+/// Whether the recorded stamp `text` lets a pass be skipped for a build whose
+/// identity line is `identity`.
+///
+/// A complete stamp settles it: every shim name reached a terminal decision,
+/// and none of them can change until the executable does. A partial one —
+/// written by a pass that ran out of time or could not create some link —
+/// records only that a pass ran, so it holds off the retry for
+/// `RETRY_COOLDOWN` and no longer. Anything that does not parse (an older
+/// stamp format included) is a mismatch, which already means relink.
+///
+/// A recorded time in the future (a clock stepped backwards) reads as
+/// expired rather than as an unbounded suppression.
+fn stamp_permits_skip(text: &str, identity: &str, now: u64) -> bool {
+    let Some((recorded, status)) = text.trim_end().rsplit_once('\t') else {
+        return false;
+    };
+    if recorded != identity {
+        return false;
+    }
+    if status == "complete" {
+        return true;
+    }
+    let Some(ran_at) = status
+        .strip_prefix("partial:")
+        .and_then(|s| s.parse::<u64>().ok())
+    else {
+        return false;
+    };
+    now.checked_sub(ran_at)
+        .is_some_and(|elapsed| elapsed < RETRY_COOLDOWN.as_secs())
 }
 
 /// Open (creating if absent) `links.lock` under `state`, ready for
@@ -417,7 +486,7 @@ pub fn ensure_current(exe: &Path) {
     };
     let state = devkit_common::paths::state_dir();
     let stamp = state.join("links-version");
-    if std::fs::read_to_string(&stamp).is_ok_and(|s| s.trim() == current) {
+    if std::fs::read_to_string(&stamp).is_ok_and(|s| stamp_permits_skip(&s, &current, now_secs())) {
         return;
     }
     if std::fs::create_dir_all(&state).is_err() {
@@ -444,14 +513,20 @@ pub fn ensure_current(exe: &Path) {
     };
     record_gate_owner(&mut held);
     let deadline = Instant::now() + AUTOLINK_DEADLINE;
-    let mut truncated = false;
+    let mut pass = Pass::Complete;
     for s in SHIMS {
         if Instant::now() >= deadline {
-            truncated = true;
+            pass = Pass::Partial;
+            eprintln!(
+                "devkit: automatic linking ran out of time; run `devkit install-links` to finish"
+            );
             break;
         }
         match link_one(exe, s, &dir.join(shim_file_name(s.name)), false) {
-            Outcome::Failed(e) => eprintln!("devkit: could not link {}: {e}", s.name),
+            Outcome::Failed(e) => {
+                pass = Pass::Partial;
+                eprintln!("devkit: could not link {}: {e}", s.name);
+            }
             Outcome::SkippedForeign(why) => eprintln!(
                 "devkit: {} on PATH is not a devkit binary ({why}); left alone",
                 s.name
@@ -459,12 +534,7 @@ pub fn ensure_current(exe: &Path) {
             Outcome::Created | Outcome::Replaced | Outcome::AlreadyLinked => {}
         }
     }
-    if truncated {
-        eprintln!(
-            "devkit: automatic linking ran out of time; run `devkit install-links` to finish"
-        );
-    }
-    let _ = std::fs::write(&stamp, format!("{current}\n"));
+    write_stamp(&stamp, &current, pass);
 }
 
 /// `devkit install-links` — the manual pass. Takes the same `links.lock`
@@ -514,7 +584,12 @@ pub fn run(args: InstallLinksArgs) -> Result<()> {
         }
     }
     if let Some(current) = stamp_line(&exe, dir) {
-        let _ = std::fs::write(state.join("links-version"), format!("{current}\n"));
+        let pass = if failed == 0 {
+            Pass::Complete
+        } else {
+            Pass::Partial
+        };
+        write_stamp(&state.join("links-version"), &current, pass);
     }
     anyhow::ensure!(failed == 0, "{failed} link(s) could not be created");
     Ok(())
@@ -551,6 +626,70 @@ mod tests {
         assert!(contains_word("run `rm` to delete it", "rm"));
         assert!(contains_word("info: nothing to do", "info"));
         assert!(!contains_word("anything", ""));
+    }
+
+    const IDENTITY: &str = "0.13.3\t/opt/bin\t1700000000000000000";
+
+    #[test]
+    fn a_complete_stamp_skips_the_pass_only_for_this_build() {
+        let now = 1_700_000_000;
+        assert!(stamp_permits_skip(
+            &format!("{IDENTITY}\tcomplete\n"),
+            IDENTITY,
+            now
+        ));
+        assert!(!stamp_permits_skip(
+            "0.13.2\t/opt/bin\t1\tcomplete\n",
+            IDENTITY,
+            now
+        ));
+    }
+
+    #[test]
+    fn a_partial_stamp_expires_after_the_cooldown() {
+        let now = 1_700_000_000;
+        let fresh = now - RETRY_COOLDOWN.as_secs() / 2;
+        assert!(stamp_permits_skip(
+            &format!("{IDENTITY}\tpartial:{fresh}\n"),
+            IDENTITY,
+            now
+        ));
+        let stale = now - RETRY_COOLDOWN.as_secs() - 1;
+        assert!(!stamp_permits_skip(
+            &format!("{IDENTITY}\tpartial:{stale}\n"),
+            IDENTITY,
+            now
+        ));
+    }
+
+    /// A clock stepped backwards must not suppress the retry indefinitely.
+    #[test]
+    fn a_partial_stamp_written_in_the_future_is_retried() {
+        let now = 1_700_000_000;
+        assert!(!stamp_permits_skip(
+            &format!("{IDENTITY}\tpartial:{}\n", now + 86_400),
+            IDENTITY,
+            now
+        ));
+    }
+
+    /// A stamp this build cannot parse — the format written before the
+    /// completeness field existed included — is a mismatch, which relinks.
+    #[test]
+    fn an_unparsable_stamp_relinks() {
+        let now = 1_700_000_000;
+        assert!(!stamp_permits_skip(&format!("{IDENTITY}\n"), IDENTITY, now));
+        assert!(!stamp_permits_skip(
+            &format!("{IDENTITY}\tpartial:soon\n"),
+            IDENTITY,
+            now
+        ));
+        assert!(!stamp_permits_skip(
+            &format!("{IDENTITY}\thalf-done\n"),
+            IDENTITY,
+            now
+        ));
+        assert!(!stamp_permits_skip("", IDENTITY, now));
     }
 
     /// A path that cannot even be spawned is judged foreign, not accepted —
