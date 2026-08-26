@@ -364,13 +364,16 @@ for a given checkout from, in order:
 1. **`DEVKIT_ENFORCE_WRITES`** (env) — an explicit master switch. `1`/`true`/`yes`/`on`
    forces enforcement on; `0`/`false`/`no`/`off` forces it off, overriding both
    config files. Unset/blank/unrecognized → no opinion, fall through.
-2. **The checkout's own `devkit.toml`** `[harness] enforce_writes` — per-checkout
-   opt-in, read from the checkout root (the first ancestor containing `.git`).
+2. **The project layers applying where the write happens** `[harness] enforce_writes`
+   — every layer the config walk resolves for that location, including
+   `devkit.local.toml` and a linked worktree's inherited main-checkout layer,
+   opts in if any of them sets the flag. The checkout root the walk anchors to
+   comes from asking git, not from scanning ancestors for a `.git` entry.
 3. **The global config** `[harness] enforce_writes` — read from `$DEVKIT_CONFIG`
    (else `~/.config/devkit/config.toml`). Set it here to enforce across **every**
    checkout without a per-checkout file.
 
-With the env var unset, enforcement is on when **either** the checkout file **or**
+With the env var unset, enforcement is on when **either** a project layer **or**
 the global config opts in. Set `enforce_writes = true` in the global config for a
 machine-wide default; drop a per-checkout `devkit.toml` only when you want to opt a
 single checkout in (or, with the global default on, set the env var to `off` to opt
