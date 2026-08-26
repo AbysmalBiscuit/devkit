@@ -39,9 +39,23 @@ fn now() -> u64 {
 /// repository. The fallback is deliberate: `lockm` is usable outside a
 /// repository, and its locks still need a scope. Asking git rather than
 /// looking for a directory named `.git` is what keeps that answer honest — the
-/// filename is not the repository.
+/// filename is not the repository. When git itself could not be run — as
+/// opposed to running and reporting no repository — the same fallback
+/// applies, but only after a warning: silently scoping to `start` would let
+/// two callers under one repository, one hit while git is transiently
+/// unavailable, land on two different roots with nothing to explain why.
 pub fn find_root_from(start: &Path) -> PathBuf {
-    devkit_common::git::checkout_root(start).unwrap_or_else(|_| start.to_path_buf())
+    match devkit_common::git::checkout_root_opt(start) {
+        Ok(Some(root)) => root,
+        Ok(None) => start.to_path_buf(),
+        Err(e) => {
+            eprintln!(
+                "warning: git could not be run ({e:#}); scoping locks to {}",
+                start.display()
+            );
+            start.to_path_buf()
+        }
+    }
 }
 
 fn find_root() -> Result<PathBuf> {

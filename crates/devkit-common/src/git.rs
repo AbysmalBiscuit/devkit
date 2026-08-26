@@ -279,12 +279,27 @@ pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
 /// The checkout containing `start`. Errors when `start` is not in a
 /// repository; a caller wanting a fallback declares one.
 pub fn checkout_root(start: &Path) -> Result<PathBuf> {
-    Ok(PathBuf::from(
-        Git::at(start)
-            .args(["rev-parse", "--show-toplevel"])
-            .output()?
-            .trim(),
-    ))
+    checkout_root_opt(start)?
+        .with_context(|| format!("not inside a git repository: {}", start.display()))
+}
+
+/// The checkout containing `start`, distinguishing "there is no repository
+/// here" from "git could not answer". `Ok(None)` means git ran and reported no
+/// repository. `Err` means git itself could not be run — missing binary,
+/// timeout, spawn failure — which is not the same answer and must not be
+/// treated as one: a caller that folds both into "no repository" scopes
+/// itself to the wrong root the moment git is merely unavailable rather than
+/// genuinely outside a checkout.
+pub fn checkout_root_opt(start: &Path) -> Result<Option<PathBuf>> {
+    let out = Git::at(start)
+        .args(["rev-parse", "--show-toplevel"])
+        .wait()?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(PathBuf::from(
+        String::from_utf8_lossy(&out.stdout).trim().to_string(),
+    )))
 }
 
 /// Every worktree of `start`'s repository, main first.
@@ -535,6 +550,18 @@ mod tests {
     fn checkout_root_errors_outside_a_repository() {
         let dir = tempfile::tempdir().unwrap();
         assert!(checkout_root(dir.path()).is_err());
+    }
+
+    /// Outside a repository git runs and answers "no repository here" —
+    /// distinct from git failing to run at all, which surfaces as `Err`
+    /// instead. Forcing the `Err` arm would mean making the `git` spawn
+    /// itself fail (missing binary, broken `PATH`), which this suite has no
+    /// clean way to do without mutating process-wide environment state that
+    /// other tests running concurrently in the same binary would also see.
+    #[test]
+    fn checkout_root_opt_distinguishes_no_repository_from_a_git_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(checkout_root_opt(dir.path()).unwrap(), None);
     }
 
     #[test]
