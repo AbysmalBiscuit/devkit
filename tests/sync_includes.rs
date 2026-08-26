@@ -28,6 +28,7 @@ fn project(include: &str) -> tempfile::TempDir {
     let main = t.path().join("main");
     std::fs::create_dir_all(&main).unwrap();
     git(&["init", "-q", "-b", "main"], &main);
+    git(&["config", "commit.gpgsign", "false"], &main);
     std::fs::write(main.join("f.txt"), "x\n").unwrap();
     std::fs::write(
         main.join("devkit.toml"),
