@@ -111,7 +111,8 @@ Its surface is the questions the workspace already asks, each answered by the
 git command that answers it:
 
 ```rust
-/// `rev-parse --show-toplevel` — the checkout containing `start`.
+/// `rev-parse --show-toplevel` — the checkout containing `start`. Errors when
+/// `start` is not in a repository; callers that want a fallback say so.
 pub fn checkout_root(start: &Path) -> Result<PathBuf>;
 
 /// The main checkout of `start`'s repository — the first entry of
@@ -130,9 +131,29 @@ pub fn branch(start: &Path) -> Result<String>;
 pub fn run(args: &[&str], cwd: &Path) -> Result<String>;
 ```
 
-Every call site in the problem table moves onto it. `find_root_from`
-(`locks/lib.rs:39`) becomes a call to `checkout_root`, with `devkit-locks`
-re-exporting the name so its own callers are untouched. `end.rs:80` and `:121`
+**No git question is answered without asking git.** The rule has no exception,
+including the one place that looks like it deserves one: `find_root_from`
+(`locks/lib.rs:39`) answers from the filesystem today and becomes a call to
+`checkout_root`, with `devkit-locks` re-exporting the name so its own callers
+are untouched. Keeping it filesystem-based would preserve a real defect —
+finding a directory *named* `.git` is not finding a repository, and when it
+finds none it returns `start` itself, so a caller outside a repository gets a
+"checkout root" that is not one and scopes its locks to it silently.
+`checkout_root` returns a `Result`, so that case becomes an answer a caller can
+act on.
+
+The one caller that wants the old fallback keeps it explicitly:
+`src/bin/lockm.rs` falls back to the CWD when git reports the path is not in a
+repository, so `lockm` outside a repository behaves as it does now, by
+declaration rather than by accident.
+
+Seven test fixtures fake a repository with `create_dir_all(".git")`
+(`locks/lib.rs:366`, `:403`, `:451`, `mcp/locks.rs:236`, `tests/locks.rs:10`,
+`tests/mcp.rs:9`, `tests/lock_harness_race.rs:25`). An empty directory is not a
+repository, so these assert the old implementation detail rather than the
+behavior. They become real `git init -q` repositories.
+
+The remaining call sites in the problem table move across unchanged in meaning. `end.rs:80` and `:121`
 call `main_checkout`, which is what closes their `GIT_DIR` hole.
 `common::worktree::discover` calls `worktrees`. The seven `--show-toplevel`
 sites call `checkout_root`. `docs::upgrade`'s hand-rolled `.git` inspection
@@ -349,6 +370,10 @@ Each is intended. Listed so none of them arrives as a surprise.
   1.0 ms against 0.69 ms for a bare process spawn. The `DEVKIT_ENFORCE_WRITES`
   short-circuit removes all of it when the env decides, and the module's timeout
   bounds it when git misbehaves.
+- `lockm` outside a git repository scopes locks to the CWD by explicit fallback
+  rather than by `find_root_from` returning its own argument. Same behavior,
+  now declared. Anywhere else that relied on that silent fallback gets an error
+  instead, which is the point.
 - Every git invocation loses `GIT_DIR`, `GIT_COMMON_DIR`, `GIT_WORK_TREE`, and
   `GIT_INDEX_FILE` from its environment. A workflow that deliberately sets one
   of these to steer devkit stops working; none is known to exist, and the
@@ -391,7 +416,9 @@ Step 0 requires a test that an ambient `GIT_DIR`, `GIT_COMMON_DIR`, and
 `GIT_WORK_TREE` change no answer the module gives, and one that a hanging git is
 bounded by the timeout rather than blocking its caller. It also requires that no
 `Command::new("git")`, `cmd::git`, or `capture("git", …)` remains outside the
-module — greppable, so it can be a test.
+module — greppable, so it can be a test — and that no fixture builds a
+repository with `create_dir_all(".git")`, which is greppable for the same
+reason. A test covers `lockm` outside a repository keeping its CWD scope.
 
 Step 1 requires an end-to-end hook test run from a directory *below* a nested
 harness declaration, which is the case the current caller cannot pass.
