@@ -1,26 +1,33 @@
 use devkit_issue::status::IssueWorktree;
 use std::path::Path;
 
-/// True when `sel` names this worktree by issue id, branch, worktree basename,
-/// full path (all compared case-insensitively), or the PR number (`3124` or
-/// `#3124`).
-pub fn matches(row: &IssueWorktree, sel: &str) -> bool {
+/// True when `sel` names a worktree by issue id, branch, worktree basename, or
+/// full path, all compared case-insensitively. This is the half of the matcher
+/// that needs nothing but local git facts, so callers that never fetch PR or
+/// tracker state can select without paying for the network.
+pub fn matches_parts(worktree_path: &str, branch: &str, issue_id: &str, sel: &str) -> bool {
     let s = sel.to_lowercase();
-    let base = Path::new(&row.worktree)
+    let base = Path::new(worktree_path)
         .file_name()
         .and_then(|x| x.to_str())
         .unwrap_or("")
         .to_lowercase();
-    if [
-        row.issue_id.to_lowercase(),
-        row.branch.to_lowercase(),
+    [
+        issue_id.to_lowercase(),
+        branch.to_lowercase(),
         base,
-        row.worktree.to_lowercase(),
+        worktree_path.to_lowercase(),
     ]
     .contains(&s)
-    {
+}
+
+/// True when `sel` names this worktree by any of `matches_parts`' names or by
+/// the PR number (`3124` or `#3124`).
+pub fn matches(row: &IssueWorktree, sel: &str) -> bool {
+    if matches_parts(&row.worktree, &row.branch, &row.issue_id, sel) {
         return true;
     }
+    let s = sel.to_lowercase();
     row.pr
         .number()
         .is_some_and(|pr| s.strip_prefix('#').unwrap_or(&s) == pr.to_string())
