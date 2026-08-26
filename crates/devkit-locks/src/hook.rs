@@ -428,8 +428,8 @@ mod tests {
         assert!(!harness_flag_in("not even toml ["));
     }
 
-    /// A harness declaration below the checkout root must be seen. The caller
-    /// used to collapse the CWD to a root first, which hid it.
+    /// A directory between the checkout root and the write is part of the
+    /// layer stack: a harness declaration there must be seen.
     #[test]
     fn harness_declared_in_a_nested_directory_is_honored() {
         let repo = tempfile::tempdir().unwrap();

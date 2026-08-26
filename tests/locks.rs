@@ -157,7 +157,16 @@ fn run_hook(cwd: &Path, state: &Path, holder: &str, target: &Path) -> Output {
     child.wait_with_output().expect("lockm hook output")
 }
 
-fn is_deny(out: &Output) -> bool {
+/// Whether a hook invocation's stdout carries a deny decision. Panics with
+/// the exit status and stderr if the process did not exit successfully: a
+/// crashed hook must be diagnosed, not misread as "allowed".
+fn is_deny(label: &str, out: &Output) -> bool {
+    assert!(
+        out.status.success(),
+        "{label}: lockm hook exited with {:?}; stderr: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stdout = stdout.trim();
     if stdout.is_empty() {
@@ -188,17 +197,26 @@ fn hook_honors_a_harness_declaration_in_a_nested_directory() {
     // file, the second is denied.
     let target = nested.join("a.rs");
     let first = run_hook(&nested, state.path(), "alice", &target);
-    assert!(!is_deny(&first), "first write should be allowed: {first:?}");
+    assert!(
+        !is_deny("first write (nested)", &first),
+        "first write should be allowed: {first:?}"
+    );
     let second = run_hook(&nested, state.path(), "bob", &target);
     assert!(
-        is_deny(&second),
+        is_deny("second write (nested)", &second),
         "second write should be denied: {second:?}"
     );
 
     // Enforcement is off at the checkout root: neither write is denied.
     let other = proj.path().join("b.rs");
     let third = run_hook(proj.path(), state.path(), "carol", &other);
-    assert!(!is_deny(&third), "root has no opt-in: {third:?}");
+    assert!(
+        !is_deny("first write (root)", &third),
+        "root has no opt-in: {third:?}"
+    );
     let fourth = run_hook(proj.path(), state.path(), "dave", &other);
-    assert!(!is_deny(&fourth), "root has no opt-in: {fourth:?}");
+    assert!(
+        !is_deny("second write (root)", &fourth),
+        "root has no opt-in: {fourth:?}"
+    );
 }
