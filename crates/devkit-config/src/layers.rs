@@ -222,6 +222,20 @@ mod tests {
         );
     }
 
+    /// A barrier hides what is above it, not just what is below the point
+    /// where the walk used to stop: a malformed layer the barrier makes
+    /// irrelevant must not fail the lookup.
+    #[test]
+    fn root_marker_hides_a_malformed_layer_above_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let child = dir.path().join("child");
+        write(dir.path(), "devkit.toml", "not valid toml [[[");
+        write(&child, "devkit.toml", "[config]\nroot = true\n");
+        let layers = project_layers(&child, None).unwrap();
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].path.parent().unwrap(), child);
+    }
+
     /// Two directories on the path to `start` can each declare `root = true`.
     /// The barrier is the one nearest `start` — the outer marker is moot
     /// because the walk it once broke never reached that far.
