@@ -51,7 +51,19 @@ EOF
 
 chmod +x "${STUB}/curl" "${STUB}/powershell.exe" "${STUB}/uname"
 
-for b in devkit; do
+PARTIAL="${WORK}/partial"
+mkdir -p "$PARTIAL"
+
+# `devkit` logs what it was asked to do, so a case can tell a relink from a
+# download; the old names are inert stand-ins for "this name is on PATH".
+cat >"${BIN}/devkit" <<'EOF'
+#!/usr/bin/env bash
+echo "devkit $*" >>"$CURL_LOG"
+EOF
+chmod +x "${BIN}/devkit"
+cp "${BIN}/devkit" "${PARTIAL}/devkit"
+
+for b in issue devrun portm lockm docm devkit-mcp; do
     printf '#!/usr/bin/env bash\n' >"${BIN}/${b}"
     chmod +x "${BIN}/${b}"
 done
@@ -78,13 +90,17 @@ new_state() {
     mkdir -p "$state"
 }
 
-# `binaries` selects whether PATH also carries devkit, which is what the hook
-# probes. env -i keeps the caller's real devkit off PATH.
+# `binaries` selects which of the names the hook probes — `devkit` and the old
+# command names it links — PATH carries: all of them, `devkit` alone, or none.
+# env -i keeps the caller's real devkit off PATH.
 run_hook() {
     local binaries="$1"
     shift
     local path="$STUB"
-    [ "$binaries" = "with-binaries" ] && path="${BIN}:${STUB}"
+    case "$binaries" in
+        with-binaries) path="${BIN}:${STUB}" ;;
+        devkit-only) path="${PARTIAL}:${STUB}" ;;
+    esac
     rm -f "$CALLS"
     env -i HOME="$WORK" PATH="${path}:/usr/bin:/bin" XDG_STATE_HOME="$state" \
         CURL_LOG="$CALLS" "$@" bash "$HOOK" >"${WORK}/out" 2>&1
@@ -135,6 +151,17 @@ set_stamp 0.0.1
 run_hook with-binaries
 check "stale stamp reinstalls" "$VERSION" "$(stamp)"
 check "reinstall pins the new release" "$EXPECTED_CURL" "$(calls)"
+
+# devkit itself is on PATH but the old names it links are gone: relink, never
+# download. This is the hole an automatic pass can leave — a truncated or
+# failed pass, or a name deleted by hand — and `install-links` has neither the
+# automatic pass's deadline nor its stamp gate.
+new_state
+set_stamp "$VERSION"
+run_hook devkit-only
+check "a missing old name relinks" "devkit install-links" "$(calls)"
+check "relinking exits 0" 0 "$last_exit"
+check "relinking keeps the stamp" "$VERSION" "$(stamp)"
 
 new_state
 run_hook without-binaries CURL_FAIL=1

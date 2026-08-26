@@ -31,11 +31,20 @@ stamp="${state_dir}/bootstrap-version"
 failed="${state_dir}/bootstrap-failed"
 
 missing=""
-for bin in devkit; do
+for bin in devkit issue devrun portm lockm docm devkit-mcp; do
     command -v "$bin" >/dev/null 2>&1 || missing="${missing} ${bin}"
 done
 
-if [ -z "$missing" ]; then
+if command -v devkit >/dev/null 2>&1; then
+    # devkit itself is here, so a missing old name is a link it can restore on
+    # its own — no download involved. `install-links` carries neither the
+    # deadline nor the stamp gate the automatic pass runs under, so it repairs
+    # what a truncated or failed automatic pass left behind too.
+    if [ -n "$missing" ]; then
+        warn "restoring devkit command names:${missing}"
+        devkit install-links >/dev/null 2>&1 ||
+            warn "devkit install-links could not claim every name; run it yourself to see why"
+    fi
     case "$(cat "$stamp" 2>/dev/null || true)" in
         "$version") exit 0 ;;
         # Binaries we did not install (cargo, a distro package, a source build).

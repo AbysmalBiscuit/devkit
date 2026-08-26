@@ -35,9 +35,22 @@ function Read-Marker($path) {
     try { (Get-Content -Raw -ErrorAction Stop $path).Trim() } catch { '' }
 }
 
-$missing = @('devkit') | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
+$names = @('devkit', 'issue', 'devrun', 'portm', 'lockm', 'docm', 'devkit-mcp')
+$missing = @($names | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
 
-if ($missing.Count -eq 0) {
+if (Get-Command devkit -ErrorAction SilentlyContinue) {
+    # devkit itself is here, so a missing old name is a link it can restore on
+    # its own — no download involved. `install-links` carries neither the
+    # deadline nor the stamp gate the automatic pass runs under, so it repairs
+    # what a truncated or failed automatic pass left behind too.
+    if ($missing.Count -gt 0) {
+        Write-Note "restoring devkit command names: $($missing -join ' ')"
+        $global:LASTEXITCODE = 0
+        try { & devkit install-links *> $null } catch { $global:LASTEXITCODE = 1 }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Note 'devkit install-links could not claim every name; run it yourself to see why'
+        }
+    }
     switch (Read-Marker $stamp) {
         $version { exit 0 }
         # Binaries we did not install (cargo, a source build). Record that and
