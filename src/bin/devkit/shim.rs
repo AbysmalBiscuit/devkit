@@ -35,6 +35,16 @@ impl Sub {
     }
 }
 
+/// The argv[1] a probe passes to ask "are you genuinely devkit" without
+/// invoking any real subcommand or touching stdin — intercepted in `main`
+/// before any clap parsing. Defined next to `SHIMS` so the probe
+/// (`links::is_devkit_binary`) and the responder (`main`) cannot drift apart.
+pub const PROBE_FLAG: &str = "--devkit-shim-probe";
+
+/// The fixed line the probe responder prints and the probe expects back
+/// verbatim.
+pub const PROBE_MARKER: &str = "devkit-shim-ok";
+
 pub struct Shim {
     /// The executable name on PATH.
     pub name: &'static str,

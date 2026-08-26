@@ -31,32 +31,11 @@ pub fn linked(name: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, link)
 }
 
-/// Whether two paths name the same file on disk. A hardlink shares an inode
-/// with its target on Unix and a file index on Windows.
+/// Whether two paths name the same file on disk — a hardlink shares an inode
+/// with its target on Unix and a file index on Windows. Delegated to the
+/// `same-file` crate (the direct analogue of `links::same_file`, which this
+/// mirrors for tests) rather than hand-rolled per-platform metadata
+/// comparison; an error resolving either path is "not the same file".
 pub fn same_inode(a: &std::path::Path, b: &std::path::Path) -> bool {
-    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        ma.dev() == mb.dev() && ma.ino() == mb.ino()
-    }
-    #[cfg(windows)]
-    {
-        // `file_index` plus the volume serial is the direct analogue of the
-        // Unix dev+ino pair above; size/creation-time ties too easily across
-        // two builds of the same binary (NTFS file tunneling can even
-        // restore a replaced file's original creation time).
-        use std::os::windows::fs::MetadataExt;
-        match (
-            ma.file_index(),
-            mb.file_index(),
-            ma.volume_serial_number(),
-            mb.volume_serial_number(),
-        ) {
-            (Some(ia), Some(ib), Some(va), Some(vb)) => ia == ib && va == vb,
-            _ => false,
-        }
-    }
+    same_file::is_same_file(a, b).unwrap_or(false)
 }

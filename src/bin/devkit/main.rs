@@ -162,6 +162,14 @@ fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
 
 fn main() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().collect();
+    // The identity probe `links::is_devkit_binary` uses: answered before any
+    // clap parsing, any panic-hook/state-migration setup, and — critically —
+    // before `devkit-mcp`'s normal path would start blocking on stdin. Every
+    // shim is this same binary, so this one intercept covers all six names.
+    if args.get(1).map(OsString::as_os_str) == Some(std::ffi::OsStr::new(shim::PROBE_FLAG)) {
+        println!("{}", shim::PROBE_MARKER);
+        return Ok(());
+    }
     let argv0 = args.first().map(|a| a.to_string_lossy().into_owned());
     if let Some(s) = argv0.as_deref().and_then(shim::resolve) {
         devkit_common::report::install_panic_hook(s.name);

@@ -1,7 +1,29 @@
 #[path = "common/shimtest.rs"]
 mod shimtest;
 
-use std::process::Command;
+use std::process::{Command, Output};
+use std::time::Duration;
+
+/// Run `install-links` (with `args` appended) against `exe`, retrying briefly
+/// on a transient `ExecutableFileBusy`. `staged()` just finished writing
+/// `exe` moments earlier, and `cargo test`'s default parallelism runs several
+/// of these tests at once, each copying-then-executing its own freshly
+/// staged binary; occasionally that races a kernel-level "busy" window on
+/// the just-closed write handle (never a real conflict between two tests —
+/// each stages into its own tempdir). The race clears within milliseconds.
+fn run(exe: &std::path::Path, args: &[&str]) -> Output {
+    let mut attempts = 0;
+    loop {
+        match Command::new(exe).args(args).output() {
+            Ok(out) => return out,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 40 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => panic!("spawn {} {args:?}: {e}", exe.display()),
+        }
+    }
+}
 
 /// Run `install-links` against a throwaway directory holding a copy of the
 /// built binary, so the test never touches the real CARGO_HOME.
@@ -27,10 +49,7 @@ fn shim_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
 #[test]
 fn creates_every_shim() {
     let (dir, exe) = staged();
-    let out = Command::new(&exe)
-        .arg("install-links")
-        .output()
-        .expect("spawn install-links");
+    let out = run(&exe, &["install-links"]);
     assert!(
         out.status.success(),
         "install-links failed: {}",
@@ -50,10 +69,7 @@ fn replaces_an_existing_devkit_binary() {
     let (dir, exe) = staged();
     let stale = shim_path(dir.path(), "portm");
     std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &stale).expect("stage a stale portm");
-    let out = Command::new(&exe)
-        .arg("install-links")
-        .output()
-        .expect("spawn install-links");
+    let out = run(&exe, &["install-links"]);
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
@@ -65,6 +81,41 @@ fn replaces_an_existing_devkit_binary() {
         shimtest::same_inode(&exe, &stale),
         "portm should now be a hardlink to devkit"
     );
+}
+
+/// The upgrade path must work at every shim name, not just `portm`. This is
+/// the test that would have caught `lockm`'s hidden-subcommand breakage:
+/// `replaces_an_existing_devkit_binary` alone never touched `lockm`, whose
+/// `hook` subcommand is `#[command(hide = true)]` and so never appears in
+/// its own `--help` output.
+#[test]
+fn replaces_a_real_devkit_binary_at_every_shim_name() {
+    let (dir, exe) = staged();
+    let mut stale_paths = Vec::new();
+    for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+        let stale = shim_path(dir.path(), name);
+        std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &stale)
+            .unwrap_or_else(|e| panic!("stage a stale {name}: {e}"));
+        stale_paths.push((name, stale));
+    }
+    let out = run(&exe, &["install-links"]);
+    assert!(
+        out.status.success(),
+        "install-links failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    for (name, stale) in &stale_paths {
+        assert!(
+            text.lines()
+                .any(|l| l.contains("replaced") && l.contains(name)),
+            "should report {name} replaced: {text}"
+        );
+        assert!(
+            shimtest::same_inode(&exe, stale),
+            "{name} should now be a hardlink to devkit"
+        );
+    }
 }
 
 /// A name held by something else is never destroyed. On Unix the script is
@@ -84,10 +135,7 @@ fn leaves_a_foreign_binary_alone() {
         std::fs::set_permissions(&foreign, std::fs::Permissions::from_mode(0o755))
             .expect("make foreign script executable");
     }
-    let out = Command::new(&exe)
-        .arg("install-links")
-        .output()
-        .expect("spawn install-links");
+    let out = run(&exe, &["install-links"]);
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -126,10 +174,7 @@ fn leaves_a_convincingly_named_foreign_binary_alone() {
         std::fs::set_permissions(&foreign, std::fs::Permissions::from_mode(0o755))
             .expect("make foreign script executable");
     }
-    let out = Command::new(&exe)
-        .arg("install-links")
-        .output()
-        .expect("spawn install-links");
+    let out = run(&exe, &["install-links"]);
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -151,15 +196,51 @@ fn leaves_a_convincingly_named_foreign_binary_alone() {
     );
 }
 
+/// The zero-subcommand exploit: `devkit-mcp` has no subcommands (`McpCli`
+/// is a unit struct), so a foreign binary cannot be accepted by the
+/// subcommand-set probe — there is nothing in it to check — and it does not
+/// know to answer the identity-probe marker either. A bare anchored-version
+/// check alone would have wrongly accepted this script.
+#[test]
+fn leaves_a_convincing_but_markerless_devkit_mcp_alone() {
+    let (dir, exe) = staged();
+    let foreign = shim_path(dir.path(), "devkit-mcp");
+    let script: &[u8] = b"#!/bin/sh\ncase \"$1\" in\n  --version) echo \"devkit-mcp 1.2.3\" ;;\n  --help) echo \"devkit-mcp 1.2.3\"; echo \"a foreign mcp-like tool, unrelated to devkit\" ;;\n  *) exit 1 ;;\nesac\n";
+    std::fs::write(&foreign, script).expect("write convincing foreign devkit-mcp");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&foreign, std::fs::Permissions::from_mode(0o755))
+            .expect("make foreign script executable");
+    }
+    let out = run(&exe, &["install-links"]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read(&foreign).expect("foreign still readable"),
+        script,
+        "a foreign file at devkit-mcp must not be replaced, even one echoing a matching version"
+    );
+    assert!(
+        !shimtest::same_inode(&exe, &foreign),
+        "a binary with no subcommands to verify against must not be linked over: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|l| l.contains("skipped") && l.contains("devkit-mcp")),
+        "should report the skip: {text}"
+    );
+}
+
 #[test]
 fn force_takes_over_a_foreign_binary() {
     let (dir, exe) = staged();
     let foreign = shim_path(dir.path(), "issue");
     std::fs::write(&foreign, b"#!/bin/sh\necho not devkit\n").expect("write foreign issue");
-    let out = Command::new(&exe)
-        .args(["install-links", "--force"])
-        .output()
-        .expect("spawn install-links --force");
+    let out = run(&exe, &["install-links", "--force"]);
     assert!(out.status.success());
     assert!(
         shimtest::same_inode(&exe, &foreign),
@@ -172,16 +253,10 @@ fn force_takes_over_a_foreign_binary() {
 #[test]
 fn running_twice_is_idempotent() {
     let (dir, exe) = staged();
-    let first = Command::new(&exe)
-        .arg("install-links")
-        .output()
-        .expect("spawn first install-links");
+    let first = run(&exe, &["install-links"]);
     assert!(first.status.success());
 
-    let second = Command::new(&exe)
-        .arg("install-links")
-        .output()
-        .expect("spawn second install-links");
+    let second = run(&exe, &["install-links"]);
     assert!(second.status.success());
     let text = String::from_utf8_lossy(&second.stdout).to_string();
     assert!(
