@@ -831,6 +831,46 @@ fn install_links_hard_errors_when_the_gate_is_contended() {
     );
 }
 
+/// The `links.lock` gate keeps two passes off one directory, but it lives in
+/// the state home — and `install-links` is the bootstrap command. A state home
+/// devkit cannot create must cost a warning, not every link: the install
+/// directory here is writable the whole time, and a probe child reading the
+/// same broken state home cannot link either, so the invariant the gate
+/// protects still holds.
+#[test]
+fn install_links_falls_open_on_an_unusable_state_dir() {
+    let (dir, exe) = staged();
+    let home = tempfile::tempdir().expect("home");
+    let blocked = home.path().join("state-home-is-a-file");
+    std::fs::write(&blocked, b"").expect("occupy the state home with a file");
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("install-links")
+            .env("HOME", home.path())
+            .env("XDG_STATE_HOME", &blocked)
+            .output()
+    });
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "install-links must still run without a usable state dir: {text}"
+    );
+    for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+        assert!(
+            shim_path(dir.path(), name).exists(),
+            "{name} should have been linked despite the state dir: {text}"
+        );
+    }
+    assert!(
+        text.contains("without the gate"),
+        "the fallback should say the gate was skipped: {text}"
+    );
+}
+
 #[test]
 fn doctor_reports_a_foreign_shim_name() {
     let (dir, exe) = staged();

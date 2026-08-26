@@ -550,22 +550,40 @@ pub fn run(args: InstallLinksArgs) -> Result<()> {
         .parent()
         .context("the running executable has no parent directory")?;
     let state = devkit_common::paths::state_dir();
-    std::fs::create_dir_all(&state).with_context(|| format!("creating {}", state.display()))?;
     let lock_path = state.join("links.lock");
-    let gate_file =
-        open_gate(&state).with_context(|| format!("opening {}", lock_path.display()))?;
-    let mut gate = fd_lock::RwLock::new(gate_file);
-    let Ok(mut held) = gate.try_write() else {
-        let holder = gate_owner_hint(&state)
-            .map(|pid| format!(" (pid {pid}, if it is still alive)"))
-            .unwrap_or_default();
-        anyhow::bail!(
-            "another devkit invocation is already linking{holder} — holding {}; \
-             try again once it finishes",
-            lock_path.display()
-        );
+    // A state home devkit cannot create costs the gate, not the pass: this is
+    // the bootstrap command, and the install directory it links into is a
+    // different one entirely. What the gate protects still holds — a probe
+    // child reading the same unusable state home cannot open it either, so it
+    // cannot start a pass of its own.
+    let gate_file = match std::fs::create_dir_all(&state).and_then(|()| open_gate(&state)) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!(
+                "devkit: cannot use {} ({e}); linking without the gate",
+                lock_path.display()
+            );
+            None
+        }
     };
-    record_gate_owner(&mut held);
+    let mut gate = gate_file.map(fd_lock::RwLock::new);
+    let _held = match gate.as_mut() {
+        Some(gate) => {
+            let Ok(mut held) = gate.try_write() else {
+                let holder = gate_owner_hint(&state)
+                    .map(|pid| format!(" (pid {pid}, if it is still alive)"))
+                    .unwrap_or_default();
+                anyhow::bail!(
+                    "another devkit invocation is already linking{holder} — holding {}; \
+                     try again once it finishes",
+                    lock_path.display()
+                );
+            };
+            record_gate_owner(&mut held);
+            Some(held)
+        }
+        None => None,
+    };
 
     let results = link_all(&exe, dir, args.force);
     let mut failed = 0;
