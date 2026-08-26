@@ -26,7 +26,7 @@ fn repository_relative_paths_anchor_to_the_checkout_root() {
     .unwrap();
 
     let checkout = tempfile::tempdir().unwrap();
-    devkit_common::git::Git::at(checkout.path())
+    devkit_common::git::Git::fixture(checkout.path())
         .args(["init", "-q"])
         .output()
         .unwrap();

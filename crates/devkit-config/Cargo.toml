@@ -11,4 +11,4 @@ toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-devkit-common.workspace = true
+devkit-common = { workspace = true, features = ["test-support"] }
