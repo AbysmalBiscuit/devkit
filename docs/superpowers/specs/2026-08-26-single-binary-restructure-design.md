@@ -156,6 +156,10 @@ tool's subcommands at the top level, so an installed script keeps working
 unchanged. The implementation takes the subcommand's `clap::Command`, renames it
 to the shim name, and generates from that as the root.
 
+Verified against clap_complete 4 on a two-level command: the generated bash
+script names the shim, exposes the shim's own subcommands at the top level, and
+contains no mention of the parent command.
+
 `devkit completions <shell>` emits the full nested tree.
 
 ### 8. Help
@@ -182,11 +186,13 @@ unlisted.
 
 Ordered so the tree builds and tests pass at every step.
 
-1. `devkit install-links` and its shim-set constant, while the separate binaries
-   still exist. Links are created but nothing dispatches yet.
-2. argv[0] dispatch in `devkit`, with each merged CLI's `Cli` nested as a
-   subcommand. The old `[[bin]]` targets stay, so both paths work.
-3. Completions under a shim name.
+1. argv[0] dispatch in `devkit`, with each merged CLI's `Cli` nested as a
+   subcommand. The old `[[bin]]` targets stay, so both paths work and the tree
+   stays shippable.
+2. Completions under a shim name.
+3. `devkit install-links` and its shim-set constant. It comes after dispatch,
+   not before: a link created while `devkit` still ignores `argv[0]` would
+   replace a working `issue` with one that prints `devkit` help.
 4. Delete the merged `[[bin]]` sources and rework the four test files that reach
    binaries through `env!("CARGO_BIN_EXE_<name>")`.
 5. `hooks/bootstrap-binaries`, `dist-workspace.toml`, `doctor`, `README.md`, and
@@ -245,5 +251,3 @@ per-subcommand work. This branch rebases onto it.
 2. Should `install-links` run automatically on first use of a shim that is
    missing, or stay explicit? Automatic is friendlier and writes to
    `CARGO_HOME/bin` as a side effect of an unrelated command.
-3. Does `clap_complete` generate a usable script from a renamed subcommand
-   `Command` used as a root? Section 7 assumes yes. Verify before task 3.
