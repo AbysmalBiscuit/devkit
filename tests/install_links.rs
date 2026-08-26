@@ -883,23 +883,112 @@ fn install_links_falls_open_on_an_unusable_state_dir() {
     );
 }
 
+/// Run `devkit doctor` against the staged directory and return its report.
+///
+/// The cwd is the staged directory rather than the test process's own: doctor
+/// reads whatever `devkit.toml` sits at its cwd, and a config layer there
+/// would put rows in this report that have nothing to do with shim names.
+fn doctor_report(exe: &std::path::Path, dir: &std::path::Path) -> Output {
+    let state = tempfile::tempdir().expect("state dir");
+    retry_on_busy(|| {
+        Command::new(exe)
+            .arg("doctor")
+            .current_dir(dir)
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .output()
+    })
+}
+
+/// The one report line for `key`, so an assertion about a shim name cannot be
+/// satisfied by wording from some other row. Rows print as
+/// `<mark> <key> <source> <detail>`.
+fn doctor_row<'a>(text: &'a str, key: &str) -> &'a str {
+    text.lines()
+        .find(|l| l.split_whitespace().nth(1) == Some(key))
+        .unwrap_or_else(|| panic!("no doctor row for {key}: {text}"))
+}
+
+/// The mitigation the design named for its top risk — a stale binary from
+/// before the merge shadowing this devkit — is doctor reporting which version
+/// each shim name resolves to. Comparing file identity alone renders that case
+/// as "not this devkit" with no version anywhere, which is the one fact the
+/// user needs.
+#[test]
+#[cfg(unix)]
+fn doctor_reports_the_version_a_shim_name_resolves_to() {
+    let (dir, exe) = staged();
+    let stale = shim_path(dir.path(), "issue");
+    std::fs::write(
+        &stale,
+        b"#!/bin/sh\ncase \"$1\" in\n  --version) echo \"issue 0.9.9\" ;;\n  *) exit 1 ;;\nesac\n",
+    )
+    .expect("write a stale issue");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o755))
+            .expect("make it executable");
+    }
+    let out = doctor_report(&exe, dir.path());
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let row = doctor_row(&text, "issue");
+    assert!(
+        row.contains("0.9.9"),
+        "doctor should report the version the `issue` name resolves to: {row}"
+    );
+}
+
+/// `--force` is the flag that deletes an unrelated tool from the user's PATH.
+/// A second copy of this same devkit is not that: plain `install-links`
+/// replaces it. Prescribing `--force` for every name that is merely not this
+/// file trains users past the safety gate.
+#[test]
+fn doctor_prescribes_force_only_for_a_foreign_name() {
+    let (dir, exe) = staged();
+    let other = shim_path(dir.path(), "issue");
+    std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &other).expect("stage a second devkit copy");
+    let out = doctor_report(&exe, dir.path());
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let row = doctor_row(&text, "issue");
+    assert!(
+        !row.contains("--force"),
+        "another devkit copy is replaced by plain install-links: {row}"
+    );
+    assert!(
+        row.contains("install-links"),
+        "doctor should still say how to claim the name: {row}"
+    );
+    assert!(
+        row.contains(env!("CARGO_PKG_VERSION")),
+        "doctor should report the version that name resolves to: {row}"
+    );
+}
+
+/// A dangling symlink at a shim name occupies it: `install-links` reports it
+/// skipped, and `hard_link` would fail with `EEXIST`. Reporting it as unset
+/// with "run: devkit install-links" is advice that provably does nothing.
+#[test]
+#[cfg(unix)]
+fn doctor_reports_a_dangling_symlink_as_occupied() {
+    let (dir, exe) = staged();
+    std::os::unix::fs::symlink(dir.path().join("nowhere"), shim_path(dir.path(), "issue"))
+        .expect("dangle a symlink at the issue name");
+    let out = doctor_report(&exe, dir.path());
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let row = doctor_row(&text, "issue");
+    assert!(
+        row.contains("is not this devkit"),
+        "a dangling symlink holds the name; doctor must not call it unset: {row}"
+    );
+}
+
 #[test]
 fn doctor_reports_a_foreign_shim_name() {
     let (dir, exe) = staged();
-    let state = tempfile::tempdir().expect("state dir");
     let foreign = shim_path(dir.path(), "issue");
     std::fs::write(&foreign, b"#!/bin/sh\necho not devkit\n").expect("write foreign issue");
-    let out = Command::new(&exe)
-        .arg("doctor")
-        // Without this, doctor's config row reads whatever devkit.toml sits
-        // at the test process's own cwd — this repo's own, which is missing
-        // `[defaults]` and fails independently of shim state. `dir` has none.
-        .current_dir(dir.path())
-        .env("HOME", state.path())
-        .env("XDG_STATE_HOME", state.path())
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .output()
-        .expect("spawn devkit doctor");
+    let out = doctor_report(&exe, dir.path());
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),

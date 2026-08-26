@@ -161,6 +161,24 @@ pub enum Judgement {
     Foreign(String),
 }
 
+/// What running a candidate at a shim name said about it. `reported` is the
+/// first line of its `--version` — `None` if it never answered one — kept
+/// alongside the verdict so a caller that wants to *name* the version does
+/// not have to spawn the binary a second time to ask.
+pub struct Identity {
+    pub reported: Option<String>,
+    pub judgement: Judgement,
+}
+
+impl Identity {
+    fn foreign(reported: Option<&str>, reason: String) -> Self {
+        Identity {
+            reported: reported.map(str::to_string),
+            judgement: Judgement::Foreign(reason),
+        }
+    }
+}
+
 /// Whether the file at `path` is genuinely the devkit binary `shim` selects,
 /// judged by running it — never by inspecting its bytes.
 ///
@@ -182,12 +200,12 @@ pub enum Judgement {
 /// A file that will not execute, that times out, or that misses either half
 /// is foreign and left alone. That is the safe direction to err in: a stale
 /// or ambiguous binary is skipped rather than silently accepted.
-pub fn is_devkit_binary(path: &Path, shim: &Shim) -> Judgement {
+pub fn is_devkit_binary(path: &Path, shim: &Shim) -> Identity {
     let Some(version_out) = probe(path, "--version", PROBE_TIMEOUT) else {
-        return Judgement::Foreign("did not answer --version".to_string());
+        return Identity::foreign(None, "did not answer --version".to_string());
     };
     if !version_out.status.success() {
-        return Judgement::Foreign("--version exited non-zero".to_string());
+        return Identity::foreign(None, "--version exited non-zero".to_string());
     }
     let version_text = format!(
         "{}{}",
@@ -195,20 +213,30 @@ pub fn is_devkit_binary(path: &Path, shim: &Shim) -> Judgement {
         String::from_utf8_lossy(&version_out.stderr)
     );
     let first_line = version_text.lines().next().unwrap_or("").trim();
+    let reported = (!first_line.is_empty()).then_some(first_line);
     if !version_line_matches(&version_text, shim.name) {
-        return Judgement::Foreign(format!("reports `{first_line}`"));
+        return Identity::foreign(reported, format!("reports `{first_line}`"));
     }
 
     if answers_probe_marker(path, PROBE_TIMEOUT) {
-        return Judgement::Accepted;
+        return Identity {
+            reported: reported.map(str::to_string),
+            judgement: Judgement::Accepted,
+        };
     }
-    Judgement::Foreign(format!(
-        "reports `{first_line}` but did not answer the identity probe — a devkit older \
-         than the probe costs one --force here (this build then carries it for future runs)"
-    ))
+    Identity::foreign(
+        reported,
+        format!(
+            "reports `{first_line}` but did not answer the identity probe — a devkit older \
+             than the probe costs one --force here (this build then carries it for future runs)"
+        ),
+    )
 }
 
-fn shim_file_name(name: &str) -> String {
+/// The file name a shim occupies in a directory: its own name, plus the `.exe`
+/// suffix Windows requires to execute it. Every caller that looks for a shim
+/// name on disk goes through this, so the rule lives in one place.
+pub fn shim_file_name(name: &str) -> String {
     if cfg!(windows) {
         format!("{name}.exe")
     } else {
@@ -243,7 +271,7 @@ fn link_one(exe: &Path, shim: &Shim, dest: &Path, force: bool) -> Outcome {
         if same_file(exe, dest) {
             return Outcome::AlreadyLinked;
         }
-        if !force && let Judgement::Foreign(reason) = is_devkit_binary(dest, shim) {
+        if !force && let Judgement::Foreign(reason) = is_devkit_binary(dest, shim).judgement {
             return Outcome::SkippedForeign(reason);
         }
         if let Err(e) = std::fs::remove_file(dest) {
@@ -649,7 +677,7 @@ mod tests {
             .find(|s| s.name == "issue")
             .expect("issue shim");
         assert!(matches!(
-            is_devkit_binary(Path::new("/no/such/binary-at-all"), shim),
+            is_devkit_binary(Path::new("/no/such/binary-at-all"), shim).judgement,
             Judgement::Foreign(_)
         ));
     }

@@ -218,6 +218,31 @@ fn plugin_cache_dir() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(home).join(".claude/plugins/cache/devkit/devkit"))
 }
 
+/// What a shim name held by some other file resolves to, and which command
+/// claims it. `install-links` replaces another devkit without complaint, so
+/// only a name it would refuse to touch needs `--force` — the flag that
+/// deletes an unrelated tool from the user's PATH.
+///
+/// The version each name resolves to is the point of the row: a stale binary
+/// shadowing this devkit is otherwise reported only as "not this devkit",
+/// which is not the fact the reader needs.
+fn occupied_shim_check(path: &std::path::Path, shim: &crate::shim::Shim) -> Check {
+    let identity = crate::links::is_devkit_binary(path, shim);
+    let reported = identity
+        .reported
+        .unwrap_or_else(|| "no version reported".to_string());
+    match identity.judgement {
+        crate::links::Judgement::Accepted => Check::Warn(format!(
+            "{} is another devkit ({reported}); run: devkit install-links",
+            path.display()
+        )),
+        crate::links::Judgement::Foreign(_) => Check::Warn(format!(
+            "{} is not this devkit ({reported}); run: devkit install-links --force",
+            path.display()
+        )),
+    }
+}
+
 /// One row per shim name: linked, missing, or held by something else. The
 /// automatic linker warns once and then stays quiet, so this is where a name it
 /// could not claim stays visible.
@@ -231,20 +256,16 @@ fn shim_rows() -> Vec<Row> {
     crate::shim::SHIMS
         .iter()
         .map(|s| {
-            let path = dir.join(if cfg!(windows) {
-                format!("{}.exe", s.name)
-            } else {
-                s.name.to_string()
-            });
-            let check = if !path.exists() {
+            let path = dir.join(crate::links::shim_file_name(s.name));
+            // `symlink_metadata`, not `exists`: a dangling symlink occupies the
+            // name — `hard_link` fails on it with `EEXIST` — while `exists`
+            // follows it and reports the name free.
+            let check = if std::fs::symlink_metadata(&path).is_err() {
                 Check::Unset("run: devkit install-links")
             } else if crate::links::same_file(&exe, &path) {
                 Check::Ok(format!("linked to {}", exe.display()))
             } else {
-                Check::Warn(format!(
-                    "{} is not this devkit; run: devkit install-links --force",
-                    path.display()
-                ))
+                occupied_shim_check(&path, s)
             };
             Row {
                 key: s.name,
