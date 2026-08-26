@@ -174,9 +174,10 @@ fn run_hook(event: &str) {
             file_paths, holder, ..
         } => {
             let mut conflicts = Vec::new();
+            let mut resolver = devkit_locks::WriteResolver::new();
             for path in &file_paths {
                 let target = resolve_against(&payload, path);
-                match devkit_locks::decide_write(&target, &holder, Some("write-harness"), 1800) {
+                match resolver.decide_write(&target, &holder, Some("write-harness"), 1800) {
                     Ok(WriteDecision::Denied(c)) => conflicts.extend(c),
                     Ok(_) => {}
                     Err(e) => {

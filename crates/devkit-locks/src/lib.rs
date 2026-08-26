@@ -278,43 +278,30 @@ pub fn prune() -> Result<usize> {
 }
 
 /// Resolve a write target (absolute, or cwd-relative) to (project_root, root-relative
-/// path). The root is the nearest `.git` ancestor of the file's directory, so the
-/// decision does not depend on where the hook process was spawned.
+/// path). The root is git's checkout root for the file's own directory, not the
+/// process's cwd, so the decision does not depend on where the hook process was
+/// spawned; outside a repository the root falls back to that directory itself.
 fn write_ctx(path_in: &str) -> Result<(String, String)> {
-    let p = Path::new(path_in);
-    let abs = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .context("getting current dir")?
-            .join(p)
-    };
-    let start = abs.parent().unwrap_or(abs.as_path());
-    let root = find_root_from(start);
-    let rel = normalize_under_root(&abs, &root)?;
-    Ok((root.to_string_lossy().into_owned(), rel))
+    WriteResolver::new().ctx(path_in)
 }
 
-/// Enforced-write decision for `path_in` by an explicit `holder` (the hook derives
-/// the holder from the agent payload; identity is not resolved here). Free → acquire;
-/// self/ancestor → allow; otherwise deny.
-pub fn decide_write(
-    path_in: &str,
+// The hook process is ephemeral; harness locks are reclaimed by lifecycle
+// release (SubagentStop/SessionEnd) or the TTL backstop, never by pid
+// liveness. Anchoring to a pid would cause locks to be treated as dead if
+// the hook ever ran attached to a tty.
+fn decide_write_at(
+    root: &str,
+    path: &str,
     holder: &str,
     note: Option<&str>,
     ttl: u64,
 ) -> Result<model::WriteDecision> {
-    let (root, path) = write_ctx(path_in)?;
-    // The hook process is ephemeral; harness locks are reclaimed by lifecycle
-    // release (SubagentStop/SessionEnd) or the TTL backstop, never by pid
-    // liveness. Anchoring to a pid would cause locks to be treated as dead if
-    // the hook ever ran attached to a tty.
     let pid: Option<u32> = None;
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::WriteDecide {
-        root: root.clone(),
+        root: root.to_string(),
         holder: holder.to_string(),
-        path: path.clone(),
+        path: path.to_string(),
         pid,
         note: note.map(str::to_string),
         ttl,
@@ -327,14 +314,84 @@ pub fn decide_write(
     }
     store::write_decide_with(
         &store::FlockStore::new(),
-        &root,
+        root,
         holder,
-        &path,
+        path,
         pid,
         note,
         ttl,
         now(),
     )
+}
+
+/// Enforced-write decision for `path_in` by an explicit `holder` (the hook derives
+/// the holder from the agent payload; identity is not resolved here). Free → acquire;
+/// self/ancestor → allow; otherwise deny. Resolves its own checkout root on every
+/// call; a caller deciding several paths in one batch should use
+/// [`WriteResolver`] instead so paths sharing a directory share one resolution.
+pub fn decide_write(
+    path_in: &str,
+    holder: &str,
+    note: Option<&str>,
+    ttl: u64,
+) -> Result<model::WriteDecision> {
+    let (root, path) = write_ctx(path_in)?;
+    decide_write_at(&root, &path, holder, note, ttl)
+}
+
+/// Decides write requests for a batch of paths handled in one hook invocation.
+/// Each path's checkout root is resolved from that file's own directory, not
+/// the process's cwd — a batch can touch files that belong to different
+/// repositories than wherever the hook process happened to be spawned, and
+/// scoping to cwd would put such a file's lock under the wrong root. The root
+/// for a given directory is resolved once and reused for every later path in
+/// the same directory, so a batch of files that share a directory pays for
+/// one `git` call instead of one per file.
+#[derive(Default)]
+pub struct WriteResolver {
+    roots: std::collections::HashMap<PathBuf, PathBuf>,
+}
+
+impl WriteResolver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn root_for(&mut self, start: &Path) -> PathBuf {
+        if let Some(root) = self.roots.get(start) {
+            return root.clone();
+        }
+        let root = find_root_from(start);
+        self.roots.insert(start.to_path_buf(), root.clone());
+        root
+    }
+
+    fn ctx(&mut self, path_in: &str) -> Result<(String, String)> {
+        let p = Path::new(path_in);
+        let abs = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .context("getting current dir")?
+                .join(p)
+        };
+        let start = abs.parent().unwrap_or(abs.as_path());
+        let root = self.root_for(start);
+        let rel = normalize_under_root(&abs, &root)?;
+        Ok((root.to_string_lossy().into_owned(), rel))
+    }
+
+    /// Same decision as [`decide_write`], but sharing this resolver's cache.
+    pub fn decide_write(
+        &mut self,
+        path_in: &str,
+        holder: &str,
+        note: Option<&str>,
+        ttl: u64,
+    ) -> Result<model::WriteDecision> {
+        let (root, path) = self.ctx(path_in)?;
+        decide_write_at(&root, &path, holder, note, ttl)
+    }
 }
 
 /// Release every lock held by `holder_prefix` or its descendants, across all roots.
@@ -482,5 +539,39 @@ mod tests {
         assert_eq!(PathBuf::from(&r), root.path());
         assert_eq!(rel, "src/a.rs");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A shared cache keyed on the wrong thing (e.g. "last root resolved"
+    /// rather than "root resolved for this directory") would scope the
+    /// second file to the first file's repository; `normalize_under_root`
+    /// would then reject it as outside that root, since the two directories
+    /// share no ancestor.
+    #[test]
+    fn resolver_scopes_each_batch_member_to_its_own_repository() {
+        let repo_a = tempfile::tempdir().unwrap();
+        init_repo(repo_a.path());
+        std::fs::create_dir_all(repo_a.path().join("src")).unwrap();
+        let file_a = repo_a.path().join("src/a.rs");
+
+        let repo_b = tempfile::tempdir().unwrap();
+        init_repo(repo_b.path());
+        std::fs::create_dir_all(repo_b.path().join("src")).unwrap();
+        let file_b = repo_b.path().join("src/a.rs");
+
+        let holder = format!("resolver-test-{}", std::process::id());
+        let mut resolver = WriteResolver::new();
+
+        let a = resolver
+            .decide_write(file_a.to_str().unwrap(), &holder, None, 60)
+            .expect("file in repo_a resolves to repo_a");
+        assert!(matches!(a, model::WriteDecision::Acquired));
+
+        let b = resolver
+            .decide_write(file_b.to_str().unwrap(), &holder, None, 60)
+            .expect("file in repo_b resolves to repo_b, not repo_a's cached root");
+        assert!(matches!(b, model::WriteDecision::Acquired));
+
+        let _ = release_all_resolved(&repo_a.path().to_string_lossy(), &holder);
+        let _ = release_all_resolved(&repo_b.path().to_string_lossy(), &holder);
     }
 }
