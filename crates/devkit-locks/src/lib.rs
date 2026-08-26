@@ -425,6 +425,17 @@ mod tests {
         assert_eq!(find_root_from(start.path()), start.path());
     }
 
+    /// A directory named `.git` without `HEAD`, `objects`, and `refs` is not a
+    /// repository, so root resolution falls through to the start directory.
+    #[test]
+    fn a_bare_dot_git_directory_is_not_a_checkout_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        let deep = tmp.path().join("a/b");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(find_root_from(&deep), deep);
+    }
+
     #[test]
     fn normalize_makes_root_relative() {
         let root = Path::new("/repo");
