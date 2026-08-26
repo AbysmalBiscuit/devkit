@@ -603,28 +603,47 @@ names (`portm`, `devrun`, `issue`, `lockm`, `docm`, `devkit-mcp`) beside itself
 as hardlinks — so `docm list` and `devkit docs list` are the same command.
 `devkit --help` ends with a block mapping every old name to its subcommand.
 
-- `devkit install-links` creates those links explicitly, next to whichever
-  `devkit` executable you run it from. `--force` claims a name even when
-  something already occupies it — as long as that something is not itself a
-  devkit binary, so it can never clobber an unrelated tool of the same name;
-  without `--force` such a name is reported as skipped and left alone.
+- Running `devkit` at all is enough: every invocation links the old names
+  beside the executable it ran from. A `target/release` after a source build,
+  or the directory a release archive was unpacked into, gains all six names on
+  the first command you run there — including `devkit --help`.
+- `devkit install-links` does the same pass explicitly, next to whichever
+  `devkit` executable you run it from.
+- A name already occupied by something devkit cannot identify as itself is
+  reported as skipped and left alone. `--force` claims such a name anyway,
+  deleting whatever holds it — an unrelated tool of the same name included.
+  That is what the flag is for, and the reason it is not the default.
+- Upgrading from 0.13.x: the separate `portm`, `devrun`, `issue`, `lockm`,
+  `docm` and `devkit-mcp` binaries predate the identity probe devkit
+  recognizes itself by, so they are reported skipped too. `devkit
+  install-links --force` claims them; each name is then a hardlink carrying
+  the probe, and later upgrades need no flag.
 - The links refresh on their own: any `devkit` invocation relinks when the
   binary's version, directory, or modification time stops matching the
-  recorded stamp, so an upgrade or a move needs no manual step.
+  recorded stamp, so an upgrade or a move needs no manual step. A pass that
+  could not finish — a name it failed to create, or probes slow enough to
+  reach the pass's own deadline — is retried by a later invocation instead of
+  being recorded as done.
+- `devkit doctor` reports a row per name: which are linked to the running
+  binary, what version each of the others resolves to, and which command
+  claims it.
 - Set `DEVKIT_SKIP_AUTOLINK` (to any value) to turn that automatic pass off —
   the opt-out for a packager who manages the links itself, or for anything
   that must not write the state directory.
 
 ## Shell completions
 
-The CLIs generate their own completion scripts via a `completions <shell>`
-subcommand (bash, zsh, fish, elvish, nushell, powershell). For example:
+Every command generates its own completion script via a `completions <shell>`
+subcommand (bash, zsh, fish, elvish, nushell, powershell). That covers `devkit`
+itself and each of the old names, which complete their own subcommands:
 
 ```sh
+devkit completions zsh  > ~/.zfunc/_devkit
 issue completions zsh   > ~/.zfunc/_issue
 devrun completions zsh  > ~/.zfunc/_devrun
 portm completions zsh   > ~/.zfunc/_portm
 lockm completions zsh   > ~/.zfunc/_lockm
+docm completions zsh    > ~/.zfunc/_docm
 # bash:
 issue completions bash > ~/.local/share/bash-completion/completions/issue
 ```
