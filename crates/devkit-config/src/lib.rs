@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 mod layers;
-pub use layers::{Layer, LayerKind, project_layers};
+pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Config {

@@ -138,15 +138,18 @@ pub fn global_docs_path() -> PathBuf {
 #[derive(Debug)]
 pub struct Discovered {
     pub manifest: DocsManifest,
-    /// Nearest `devkit.toml` walking up from the start dir (whether or not it
-    /// has a `[docs]` section) — the target of `--project` writes.
+    /// Nearest tracked `devkit.toml` layer applying to the start dir (whether
+    /// or not it has a `[docs]` section) — the target of `--project` writes.
+    /// Never an untracked `devkit.local.toml`, even where one outranks it.
     pub project_devkit_toml: Option<PathBuf>,
 }
 
 /// Build the merged manifest: global file lowest precedence, then each
-/// `devkit.toml`'s `[docs]` section from the filesystem root down to `start`
-/// (deepest wins). A missing global file or absent `[docs]` sections are not
-/// errors — an empty manifest is valid.
+/// project config layer's `[docs]` section, highest-precedence layer
+/// winning. Layers come from `devkit_config::project_layers`, so a
+/// `devkit.local.toml` and a `[config] root = true` cutoff apply the same
+/// way they do to every other table. A missing global file or absent
+/// `[docs]` sections are not errors — an empty manifest is valid.
 pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
     let global_path = global
         .map(Path::to_path_buf)
@@ -162,25 +165,17 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
     };
     stamp(&mut manifest, &global_path);
 
-    // Collect devkit.toml [docs] layers deepest-first, then apply shallowest-first.
-    let mut layers: Vec<DocsManifest> = Vec::new();
     let mut nearest: Option<PathBuf> = None;
-    let mut dir = Some(start);
-    while let Some(d) = dir {
-        let c = d.join("devkit.toml");
-        if c.is_file() {
-            if nearest.is_none() {
-                nearest = Some(c.clone());
-            }
-            if let Some(mut layer) = docs_layer(&c)? {
-                stamp(&mut layer, &c);
-                layers.push(layer);
-            }
+    for layer in devkit_config::project_layers(start, None)? {
+        if layer.kind != devkit_config::LayerKind::MainCheckout
+            && layer.path.file_name() == Some(std::ffi::OsStr::new(devkit_config::CONFIG_FILE))
+        {
+            nearest = Some(layer.path.clone());
         }
-        dir = d.parent();
-    }
-    for layer in layers.into_iter().rev() {
-        manifest = merge(manifest, layer);
+        if let Some(mut docs) = docs_layer(&layer.path)? {
+            stamp(&mut docs, &layer.path);
+            manifest = merge(manifest, docs);
+        }
     }
     let mut problems: Vec<String> = Vec::new();
     let mut seen: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
@@ -497,6 +492,57 @@ mod tests {
         let d = discover(root, Some(&root.join("missing.toml"))).unwrap();
         assert!(d.manifest.libs.is_empty());
         assert_eq!(d.project_devkit_toml, None);
+    }
+
+    /// `[docs]` in an untracked local file is part of the manifest. The docs
+    /// walk read only devkit.toml, which surprised anyone who had learned how
+    /// other tables resolve.
+    #[test]
+    fn local_config_contributes_docs_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("devkit.toml"), "").unwrap();
+        std::fs::write(
+            dir.path().join("devkit.local.toml"),
+            "[[docs.libs]]\nname='zod'\nrepo='https://example.invalid/zod'\n",
+        )
+        .unwrap();
+        let d = discover(dir.path(), Some(&dir.path().join("missing.toml"))).unwrap();
+        assert!(d.manifest.libs.iter().any(|l| l.name == "zod"));
+    }
+
+    /// `project_devkit_toml` is the target of `--project` writes, so it must
+    /// stay pinned to the tracked file even when an untracked local file
+    /// outranks it in precedence — writing a library registration into a
+    /// file nobody commits would silently drop it.
+    #[test]
+    fn project_devkit_toml_prefers_the_tracked_file_over_local() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("devkit.toml"), "").unwrap();
+        std::fs::write(dir.path().join("devkit.local.toml"), "").unwrap();
+        let d = discover(dir.path(), Some(&dir.path().join("missing.toml"))).unwrap();
+        assert_eq!(d.project_devkit_toml, Some(dir.path().join("devkit.toml")));
+    }
+
+    /// `[config] root = true` cuts off layers above it for the docs manifest
+    /// the same way it does for every other table.
+    #[test]
+    fn root_cutoff_excludes_docs_layers_above_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let child = dir.path().join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[[docs.libs]]\nname='outer'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            child.join("devkit.toml"),
+            "[config]\nroot = true\n[[docs.libs]]\nname='inner'\n",
+        )
+        .unwrap();
+        let d = discover(&child, Some(&dir.path().join("missing.toml"))).unwrap();
+        let names: Vec<_> = d.manifest.libs.iter().map(|l| l.name.clone()).collect();
+        assert_eq!(names, vec!["inner".to_string()]);
     }
 
     #[test]

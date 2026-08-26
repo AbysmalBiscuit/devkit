@@ -320,6 +320,7 @@ dependencies = [
  "anyhow",
  "clap",
  "devkit-common",
+ "devkit-config",
  "fd-lock",
  "jsonc-parser",
  "schemars",
