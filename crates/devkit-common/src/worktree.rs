@@ -162,8 +162,10 @@ pub struct IncludePlan {
 
 /// Walk `patterns` the way `copy_includes` does, but classify matches instead
 /// of copying them: each matched file lands in `missing` or `existing`
-/// depending on whether `dest` already has it. A directory match contributes
-/// its files recursively, never the directory entry itself. Fail-open, like
+/// depending on whether `dest` already has it. Both vectors come back sorted,
+/// so a caller's rendering does not vary with filesystem iteration order. A
+/// directory match contributes its files recursively, never the directory
+/// entry itself. Fail-open, like
 /// `copy_includes`: a bad glob, an unreadable directory, or a non-UTF-8
 /// pattern becomes a warning string.
 pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> IncludePlan {
@@ -217,6 +219,8 @@ pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> Include
             }
         }
     }
+    missing.sort();
+    existing.sort();
     IncludePlan {
         missing,
         existing,
@@ -536,6 +540,31 @@ mod tests {
             vec![PathBuf::from(".claude/hooks/sub/post.sh")]
         );
         assert!(plan.warnings.is_empty());
+    }
+
+    /// `read_dir` order is the filesystem's, so an unsorted plan would print a
+    /// different `copied N file(s)` list on every run and platform.
+    #[test]
+    fn plan_vectors_come_back_sorted() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        for name in ["d.sh", "b.sh", "a.sh", "c.sh"] {
+            write(&src.join("hooks").join(name), "x");
+        }
+        write(&dst.join("hooks/c.sh"), "old");
+        write(&dst.join("hooks/a.sh"), "old");
+
+        let plan = plan_includes(&src, &dst, &["hooks/".to_string()]);
+
+        assert_eq!(
+            plan.missing,
+            vec![PathBuf::from("hooks/b.sh"), PathBuf::from("hooks/d.sh")]
+        );
+        assert_eq!(
+            plan.existing,
+            vec![PathBuf::from("hooks/a.sh"), PathBuf::from("hooks/c.sh")]
+        );
     }
 
     #[test]
