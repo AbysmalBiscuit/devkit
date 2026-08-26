@@ -15,6 +15,7 @@ mod setup;
 mod slug;
 mod status;
 mod summary;
+mod sync;
 mod tracker;
 mod triage;
 
@@ -153,6 +154,24 @@ enum Cmd {
         /// Requires at least one selector.
         #[arg(long = "clean-worktree")]
         clean_worktree: bool,
+    },
+    /// Re-copy the `defaults.worktree_include` files from the monorepo into
+    /// worktrees that already exist.
+    SyncIncludes {
+        /// Issue ids, branches, worktree basenames, or paths to sync; omit for
+        /// every worktree.
+        selectors: Vec<String>,
+        /// Replace files the worktree already has instead of leaving them
+        /// alone. Asks once per worktree before clobbering anything.
+        #[arg(long)]
+        overwrite: bool,
+        /// Answer the --overwrite prompt yes. Does nothing on its own: without
+        /// --overwrite there is no prompt and nothing is replaced.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Report what would be copied without writing anything.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// At-a-glance triage of your GitHub PRs via gh.
     Prs {
@@ -331,6 +350,19 @@ fn main() -> Result<()> {
             force,
             pr_only,
             clean_worktree,
+            cli.config.as_deref(),
+        ),
+        Some(Cmd::SyncIncludes {
+            selectors,
+            overwrite,
+            yes,
+            dry_run,
+        }) => sync::run(
+            &start(&cli.dir),
+            &selectors,
+            overwrite,
+            yes,
+            dry_run,
             cli.config.as_deref(),
         ),
         Some(Cmd::Prs {
