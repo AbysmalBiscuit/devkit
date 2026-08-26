@@ -70,7 +70,8 @@ fn report_dry(plan: &IncludePlan, overwrite: bool) {
 
 /// Copy every `defaults.worktree_include` match from the monorepo into each
 /// selected worktree. Files already present are left alone unless `overwrite`,
-/// which prompts once per worktree with the list it would clobber.
+/// which prompts once per worktree with the list it would clobber; declining
+/// that prompt falls back to the default behaviour for that worktree.
 /// `overwrite` replaces untracked files git cannot restore, so it needs a scope:
 /// `selectors`, or `all` for every worktree.
 pub fn run(
@@ -112,7 +113,7 @@ pub fn run(
         let label = if id == "UNKNOWN" { &wt.branch } else { id };
         println!("\n{label}  {}", wt.path.display());
 
-        let plan = worktree::plan_includes(&source, &wt.path, patterns);
+        let mut plan = worktree::plan_includes(&source, &wt.path, patterns);
         for w in &plan.warnings {
             eprintln!("warning: {w}");
         }
@@ -120,18 +121,28 @@ pub fn run(
             report_dry(&plan, overwrite);
             continue;
         }
+
+        let mut clobber = overwrite;
         if overwrite && !plan.existing.is_empty() {
             println!("  will overwrite: {}", list(&plan.existing));
-            if !(yes || confirm(label)) {
-                println!("  skipped");
-                continue;
+            if !yes {
+                if confirm(label) {
+                    // A confirmation is human-scale, so disk may have moved
+                    // under it; apply a plan taken now rather than the one the
+                    // answer was given against.
+                    plan = worktree::plan_includes(&source, &wt.path, patterns);
+                    for w in &plan.warnings {
+                        eprintln!("warning: {w}");
+                    }
+                } else {
+                    // Declining the clobber is not declining the safe work.
+                    println!("  not overwriting, copying only what is missing");
+                    clobber = false;
+                }
             }
         }
 
-        // The confirmation above is human-scale, so disk may have moved under
-        // it; apply a plan taken now rather than the one that was displayed.
-        let plan = worktree::plan_includes(&source, &wt.path, patterns);
-        let (copied, warnings) = worktree::apply_includes(&source, &wt.path, &plan, overwrite);
+        let (copied, warnings) = worktree::apply_includes(&source, &wt.path, &plan, clobber);
         for w in &warnings {
             eprintln!("warning: {w}");
         }
@@ -146,7 +157,7 @@ pub fn run(
         if copied == 0 {
             println!("  copied nothing");
         } else {
-            let names = if overwrite {
+            let names = if clobber {
                 let mut all = plan.missing.clone();
                 all.extend(plan.existing.iter().cloned());
                 list(&all)

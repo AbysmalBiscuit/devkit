@@ -19,8 +19,8 @@ fn git(args: &[&str], cwd: &Path) {
 }
 
 /// A monorepo at `main/` with two worktrees beside it, a `devkit.toml` whose
-/// `worktree_include` is `include` verbatim, and an untracked `.env.local`
-/// present only in the monorepo. The guard owns the whole tree, so callers must
+/// `worktree_include` is `include` verbatim, and untracked `.env.local`
+/// and `.tool-versions` present only in the monorepo. The guard owns the whole tree, so callers must
 /// hold it for as long as they read the paths under it.
 fn project(include: &str) -> tempfile::TempDir {
     let t = tempfile::tempdir().unwrap();
@@ -45,6 +45,7 @@ worktree_include = [{include}]
     )
     .unwrap();
     std::fs::write(main.join(".env.local"), "FRESH=1\n").unwrap();
+    std::fs::write(main.join(".tool-versions"), "node 20\n").unwrap();
     for (dir, branch) in [("wt-eng-1", "eng-1"), ("wt-eng-2", "eng-2")] {
         let p = t.path().join(dir);
         git(
@@ -213,6 +214,27 @@ fn overwrite_without_yes_leaves_an_unconfirmed_file_alone() {
     assert_eq!(
         env_local(t.path(), "wt-eng-2").as_deref(),
         Some("FRESH=1\n")
+    );
+}
+
+/// Declining the prompt refuses the clobber, not the safe half of the run: the
+/// worktree still receives the files it simply does not have.
+#[test]
+fn declining_the_overwrite_still_copies_what_is_missing() {
+    let t = project("\".env.local\", \".tool-versions\"");
+    let state = tempfile::tempdir().unwrap();
+    std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
+
+    let out = run(
+        t.path(),
+        state.path(),
+        &["sync-includes", "--overwrite", "eng-1"],
+    );
+    ok(&out);
+    assert_eq!(env_local(t.path(), "wt-eng-1").as_deref(), Some("OLD=1\n"));
+    assert_eq!(
+        std::fs::read_to_string(t.path().join("wt-eng-1").join(".tool-versions")).ok(),
+        Some("node 20\n".to_string())
     );
 }
 
