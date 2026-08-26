@@ -185,10 +185,10 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         Some(a) => a,
         None => capture_email(&start),
     };
-    let monorepo = monorepo_dir(&args)?;
+    let monorepo = monorepo_dir(&start)?;
     // The `[github]` config lives beside `start`'s `devkit.toml`, not
-    // `monorepo` (the doppler-derived checkout root) — only the `origin`
-    // remote lookup runs against `monorepo`.
+    // `monorepo` (the main checkout) — only the `origin` remote lookup runs
+    // against `monorepo`.
     let loaded = devkit_ports::load::load(
         args.config.as_deref().map(std::path::Path::new),
         std::path::Path::new(&start),
@@ -281,18 +281,67 @@ fn capture_email(start: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The monorepo root where commits land, derived from the configured
-/// `doppler_yaml` path (its parent directory) rather than a hardcoded layout —
-/// `doppler.yaml` lives at the repo root.
-fn monorepo_dir(args: &DashboardArgs) -> anyhow::Result<String> {
-    let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
-    let loaded = devkit_ports::load::load(
-        args.config.as_deref().map(std::path::Path::new),
-        std::path::Path::new(&start),
-    )?;
-    let yaml = devkit_config::expand_tilde(&loaded.config.defaults.doppler_yaml);
-    let dir = yaml
-        .parent()
-        .context("doppler_yaml has no parent directory to locate the monorepo")?;
-    Ok(dir.to_string_lossy().into_owned())
+/// The monorepo root where commits land: `start`'s main checkout, or `start`
+/// itself when it already is the main checkout.
+fn monorepo_dir(start: &str) -> anyhow::Result<String> {
+    let start = std::path::Path::new(start);
+    let main = devkit_common::git::main_checkout(start)?
+        .map(Ok)
+        .unwrap_or_else(|| devkit_common::git::checkout_root(start))?;
+    main.to_str()
+        .map(str::to_string)
+        .context("monorepo path not UTF-8")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `doppler_yaml` may be declared only in the main checkout and inherited
+    /// by every linked worktree (`devkit-config`'s main-checkout layering), so
+    /// `monorepo_dir` cannot infer the monorepo root from that config value —
+    /// it has to ask git, which is what this pins.
+    #[test]
+    fn monorepo_dir_resolves_a_linked_worktree_to_its_main_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let g = |args: &[&str], cwd: &std::path::Path| {
+            devkit_common::git::Git::fixture(cwd)
+                .args(args.iter().copied())
+                .output()
+                .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
+        };
+        g(&["init", "-q", "-b", "main"], &main);
+        std::fs::write(main.join("f.txt"), "x\n").unwrap();
+        g(&["add", "-A"], &main);
+        g(&["commit", "-qm", "init"], &main);
+        std::fs::write(
+            main.join("devkit.toml"),
+            "[defaults]\nworktree_root = \"wt\"\nbranch_prefix = \"x/\"\n\
+             baseline_ref = \"origin/main\"\nbaseline_path = \"\"\n\
+             doppler_yaml = \"doppler.yaml\"\n",
+        )
+        .unwrap();
+        std::fs::write(main.join("doppler.yaml"), "").unwrap();
+
+        let wt = dir.path().join("wt-side");
+        g(
+            &["worktree", "add", "-q", "-b", "side", wt.to_str().unwrap()],
+            &main,
+        );
+
+        let resolved = monorepo_dir(wt.to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            std::fs::canonicalize(&resolved).unwrap(),
+            std::fs::canonicalize(&main).unwrap(),
+            "resolves to the main checkout, not the linked worktree that has no devkit.toml of its own"
+        );
+        assert_ne!(
+            std::fs::canonicalize(&resolved).unwrap(),
+            std::fs::canonicalize(&wt).unwrap(),
+            "non-vacuous: the worktree and the main checkout are genuinely different paths"
+        );
+    }
 }

@@ -27,7 +27,7 @@ than one of them needs. The library crates are members.
 
 | Unit | Role |
 |---|---|
-| `crates/devkit-config` | lib: the `devkit.toml` shape — layer discovery and merge, `${VAR}` expansion and layer-relative path resolution, per-leaf provenance, and the `JsonSchema` derives `devkit schema` renders. A leaf crate with no internal dependencies, so `devkit-common` and `devkit-ports` both depend on it |
+| `crates/devkit-config` | lib: the `devkit.toml` shape — layer discovery and merge, `${VAR}` expansion and layer-relative path resolution, per-leaf provenance, and the `JsonSchema` derives `devkit schema` renders. A leaf crate with no internal *library* dependencies (its dev-dependencies pull in `devkit-common` for git fixtures in tests only), so `devkit-common` and `devkit-ports` both depend on it |
 | `crates/devkit-common` | shared lib: `paths`, `secrets`, `cmd` (git/gh wrappers) with `github` and `gitfetch`, `worktree` plus the `record` it reads (`.devkit/issue.toml`) and `gitignore`, `slug`, `template`, `ui` (tables/links) with `livetable` and `progress` (TTY-only spinners), `tracker` (the `Tracker` seam and its `linear`, `github` and `none` implementations), `slack`, `store` (flock'd JSON documents), `supervise`, `sys` (the platform boundary), `timing`, `report`, and a `daemon` client behind the `daemon` feature |
 | `crates/devkit-ports` | lib: `doppler` (yaml), `apps` (catalog), `load` (config + catalog), `registry` (flock'd port store), `run` (server lifecycle), `strays` (servers outside the registry), `daemon`, `task` (canned oneshot resolution/exec) |
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
