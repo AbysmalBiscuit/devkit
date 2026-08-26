@@ -7,6 +7,7 @@ mod auth;
 mod brief;
 mod doctor;
 mod schema;
+mod shim;
 
 #[derive(Parser)]
 #[command(
