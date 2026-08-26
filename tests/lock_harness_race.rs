@@ -22,7 +22,11 @@ fn concurrent_write_decide_yields_one_winner() {
 
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
-    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(&repo).unwrap();
+    devkit_common::git::Git::fixture(&repo)
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
     std::fs::create_dir_all(repo.join("src")).unwrap();
     let file = repo.join("src/a.rs");
     let exe = std::env::current_exe().unwrap();

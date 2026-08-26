@@ -18,3 +18,4 @@ daemon = ["devkit-ports/daemon", "devkit-locks/daemon"]
 
 [dev-dependencies]
 tempfile.workspace = true
+devkit-common = { workspace = true, features = ["test-support"] }

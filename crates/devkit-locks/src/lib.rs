@@ -35,18 +35,13 @@ fn now() -> u64 {
         .as_secs()
 }
 
-/// Nearest ancestor of `start` containing a `.git` entry; `start` itself if none.
+/// The checkout containing `start`, or `start` itself when it is not in a
+/// repository. The fallback is deliberate: `lockm` is usable outside a
+/// repository, and its locks still need a scope. Asking git rather than
+/// looking for a directory named `.git` is what keeps that answer honest — the
+/// filename is not the repository.
 pub fn find_root_from(start: &Path) -> PathBuf {
-    let mut dir = start;
-    loop {
-        if dir.join(".git").exists() {
-            return dir.to_path_buf();
-        }
-        match dir.parent() {
-            Some(p) => dir = p,
-            None => return start.to_path_buf(),
-        }
-    }
+    devkit_common::git::checkout_root(start).unwrap_or_else(|_| start.to_path_buf())
 }
 
 fn find_root() -> Result<PathBuf> {
@@ -363,7 +358,10 @@ mod tests {
         // No daemon runs in unit tests, so the `_resolved` fns fall through to the
         // FlockStore path. A unique root namespaces these lock rows.
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        devkit_common::git::Git::fixture(root.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
         let r = root.path().to_string_lossy().into_owned();
         let paths = vec!["a.rs".to_string()];
 
@@ -397,33 +395,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn find_root_walks_up_to_git() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join(".git")).unwrap();
-        let deep = root.path().join("a/b/c");
-        std::fs::create_dir_all(&deep).unwrap();
-        assert_eq!(find_root_from(&deep), root.path());
-        let _ = std::fs::remove_dir_all(&root);
+    /// A directory named `.git` is not a repository. The fixture is a real one
+    /// so this asserts root resolution rather than the presence of a filename.
+    fn init_repo(at: &Path) {
+        devkit_common::git::Git::fixture(at)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
     }
 
     #[test]
-    fn find_root_falls_back_to_start_without_git() {
-        let start = tempfile::tempdir().unwrap();
-        // The fallback is only reachable when the walk exhausts every parent,
-        // so a stray `.git` above the temp dir — even an empty one, which the
-        // walk cannot tell from a repository — answers first.
-        assert!(
-            start
-                .path()
-                .ancestors()
-                .skip(1)
-                .all(|d| !d.join(".git").exists()),
-            "a `.git` above {} decides the walk before the fallback runs",
-            start.path().display()
+    fn root_resolves_from_a_subdirectory() {
+        let root = tempfile::tempdir().unwrap();
+        init_repo(root.path());
+        let deep = root.path().join("a/b/c");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(find_root_from(&deep)).unwrap(),
+            std::fs::canonicalize(root.path()).unwrap()
         );
+    }
+
+    /// Outside a repository, lock scoping falls back to the start directory.
+    /// Declared, because `lockm` is usable outside a repository and its locks
+    /// must still be scoped to somewhere.
+    #[test]
+    fn root_falls_back_to_start_outside_a_repository() {
+        let start = tempfile::tempdir().unwrap();
         assert_eq!(find_root_from(start.path()), start.path());
-        let _ = std::fs::remove_dir_all(&start);
     }
 
     #[test]
@@ -448,7 +447,10 @@ mod tests {
     #[test]
     fn write_ctx_derives_root_and_relpath() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        devkit_common::git::Git::fixture(root.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
         std::fs::create_dir_all(root.path().join("src")).unwrap();
         let file = root.path().join("src/a.rs");
         let (r, rel) = write_ctx(file.to_str().unwrap()).unwrap();

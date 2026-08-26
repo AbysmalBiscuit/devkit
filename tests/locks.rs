@@ -1,13 +1,16 @@
 //! End-to-end coverage of the `lockm` binary: conflict detection, JSON output,
 //! release, and exit codes. Each test is isolated via a private temp project
-//! (with a `.git` marker) and a private `XDG_STATE_HOME`.
+//! (a real git repository) and a private `XDG_STATE_HOME`.
 
 use std::path::Path;
 use std::process::{Command, Output};
 
 fn project() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(p.path().join(".git")).unwrap();
+    devkit_common::git::Git::fixture(p.path())
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
     p
 }
 

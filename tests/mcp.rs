@@ -3,10 +3,13 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// A project dir with a `.git` marker so `find_root_from`/normalization resolve.
+/// A project dir that is a real git repository so `find_root_from`/normalization resolve.
 fn project() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(p.path().join(".git")).unwrap();
+    devkit_common::git::Git::fixture(p.path())
+        .args(["init", "-q", "-b", "main"])
+        .output()
+        .unwrap();
     p
 }
 

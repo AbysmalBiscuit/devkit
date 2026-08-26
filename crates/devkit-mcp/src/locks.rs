@@ -233,7 +233,10 @@ mod tests {
     #[test]
     fn acquire_status_release_roundtrip_through_handlers() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        devkit_common::git::Git::fixture(root.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
         let r = root.path().to_string_lossy().into_owned();
         let c = ctx();
 
