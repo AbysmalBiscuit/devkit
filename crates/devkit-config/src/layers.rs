@@ -222,9 +222,8 @@ mod tests {
         );
     }
 
-    /// A barrier hides what is above it, not just what is below the point
-    /// where the walk used to stop: a malformed layer the barrier makes
-    /// irrelevant must not fail the lookup.
+    /// A barrier hides what is above it entirely: a malformed layer the
+    /// barrier makes irrelevant must not fail the lookup.
     #[test]
     fn root_marker_hides_a_malformed_layer_above_it() {
         let dir = tempfile::tempdir().unwrap();
