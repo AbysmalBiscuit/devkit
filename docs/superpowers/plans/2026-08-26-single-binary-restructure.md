@@ -1495,6 +1495,7 @@ fn doctor_reports_a_foreign_shim_name() {
         .arg("doctor")
         .env("HOME", state.path())
         .env("XDG_STATE_HOME", state.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .expect("spawn devkit doctor");
     let text = format!(
@@ -1502,9 +1503,20 @@ fn doctor_reports_a_foreign_shim_name() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    // `issue` alone is not evidence: doctor's tracker row already prints
+    // "issue state gates stay closed". Assert on the shim row's own wording.
     assert!(
-        text.contains("issue"),
-        "doctor should name the shim it could not claim: {text}"
+        text.contains("is not this devkit"),
+        "doctor should say the `issue` name is held by something else: {text}"
+    );
+    assert!(
+        text.contains("run: devkit install-links"),
+        "doctor should say how to claim the missing shims: {text}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "an unclaimed shim is a warning, not a doctor failure: {text}"
     );
 }
 ```
@@ -1597,8 +1609,9 @@ Append to `tests/cli_ergonomics.rs`:
 ```rust
 /// `devkit` is the one name an agent can guess from a `devkit.toml`. Its help
 /// has to name the shim spellings, because a subcommand list alone never says
-/// that `issue status` also works as a bare command. Driving the assertion off
-/// the shim table makes a name added later fail here.
+/// that `issue status` also works as a bare command. Asserting on the whole
+/// mapping line, not the bare name, is what keeps this from passing on the
+/// subcommand list alone — `issue`, `docs`, and `ports` already appear there.
 #[test]
 fn devkit_help_names_every_shim() {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
@@ -1606,10 +1619,17 @@ fn devkit_help_names_every_shim() {
         .output()
         .expect("spawn devkit --help");
     let text = String::from_utf8(out.stdout).expect("utf-8 help");
-    for name in ["issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"] {
+    for line in [
+        "issue       = devkit issue",
+        "devrun      = devkit run",
+        "portm       = devkit ports",
+        "lockm       = devkit locks",
+        "docm        = devkit docs",
+        "devkit-mcp  = devkit mcp",
+    ] {
         assert!(
-            text.contains(name),
-            "`devkit --help` never names the `{name}` shim:\n{text}"
+            text.contains(line),
+            "`devkit --help` never maps the shim: {line}\n{text}"
         );
     }
 }
@@ -1638,6 +1658,23 @@ Run `devkit install-links` if any of them are missing.";
 ```
 
 and add `after_help = SHIM_HELP` to the existing `#[command(...)]` attribute on `Cli`. Use `after_help` rather than `after_long_help` so `-h` shows it too; an agent is as likely to type the short form.
+
+`SHIM_HELP` restates the `SHIMS` table, so guard the drift where both are in scope. Add to `main.rs`'s unit tests:
+
+```rust
+#[test]
+fn shim_help_names_every_shim() {
+    for s in crate::shim::SHIMS {
+        assert!(
+            SHIM_HELP.contains(s.name),
+            "SHIM_HELP never names the `{}` shim",
+            s.name
+        );
+    }
+}
+```
+
+An integration test cannot see `SHIMS`, which is why the table-driven check lives here and the rendered-output check lives in `tests/cli_ergonomics.rs`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
