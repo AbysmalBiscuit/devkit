@@ -24,7 +24,8 @@ interprocess = { workspace = true, optional = true }
 
 [features]
 daemon = ["dep:interprocess"]
-# The in-memory `tracker::fake` tracker, for other crates' tests.
+# Test-only surface for other crates' fixtures: the in-memory `tracker::fake`
+# tracker, and `git::Git::fixture` with its `NULL_DEVICE` constant.
 test-support = []
 
 [dev-dependencies]
@@ -32,6 +33,10 @@ test-support = []
 # assert what actually reaches the terminal.
 indicatif = { workspace = true, features = ["in_memory"] }
 tempfile.workspace = true
+# Enables `test-support` on the lib build linked into this crate's own
+# integration tests (tests/*.rs links the lib as an ordinary, non-`cfg(test)`
+# dependency, so `Git::fixture` is otherwise compiled out there).
+devkit-common = { workspace = true, features = ["test-support"] }
 
 # Unix process primitives (signals, sessions); unavailable on Windows.
 [target.'cfg(unix)'.dependencies]

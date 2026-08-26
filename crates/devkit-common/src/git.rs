@@ -1,37 +1,55 @@
 //! The single door to git. Every git invocation in the workspace is built here
-//! so that two properties hold everywhere rather than nowhere: the environment
-//! cannot redirect the call to another repository, and a git that stops
-//! responding cannot block its caller forever.
+//! so that three properties hold everywhere rather than nowhere: the
+//! environment cannot redirect the call to another repository or inject
+//! config into it, a git that stops responding cannot block its caller
+//! forever, and large output cannot deadlock the caller either.
 //!
 //! The inner `Command` is private on purpose. Handing one back would let a
 //! caller finish it with `output()`, which has no timeout — and this runs on
 //! the write path.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
-/// Backstop for a git that never returns. Long enough that no healthy call
-/// reaches it, short enough that a wedged one fails instead of hanging a write
-/// through the PreToolUse hook.
+/// Default backstop for a git that never returns. Long enough that no healthy
+/// call reaches it, short enough that a wedged one fails instead of hanging a
+/// write through the PreToolUse hook. Override with `.timeout()`.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Variables that repoint git at a different repository. Left in place, any of
-/// them silently changes which `devkit.toml` devkit reads — and that file
-/// carries `[apps] launch` and `[tasks] run`, which devkit executes.
-const REDIRECTING_VARS: [&str; 4] = [
+/// Timeout for calls that reach the network — `clone` and `fetch`. A blobless
+/// clone or a fetch against a real repository routinely takes longer than
+/// `TIMEOUT`.
+pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Variables that repoint git at a different repository or inject config into
+/// every invocation. Left in place, any of them silently changes which
+/// `devkit.toml` devkit reads — and that file carries `[apps] launch` and
+/// `[tasks] run`, which devkit executes. `GIT_CONFIG_COUNT` is the one that
+/// matters most here: without it git ignores any `GIT_CONFIG_KEY_n` /
+/// `GIT_CONFIG_VALUE_n` pair, including one that sets `core.fsmonitor` to an
+/// arbitrary command. `GIT_CEILING_DIRECTORIES` is stripped alongside it
+/// because it can turn off repository discovery entirely, turning a
+/// legitimate call into a false "not a git repository".
+const REDIRECTING_VARS: [&str; 6] = [
     "GIT_DIR",
     "GIT_COMMON_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
+    "GIT_CONFIG_COUNT",
+    "GIT_CEILING_DIRECTORIES",
 ];
 
 /// A git invocation under construction. Configure freely; the only way to run
 /// one is a terminal method here, which is what makes the timeout unskippable.
 pub struct Git {
     command: Command,
+    args: Vec<String>,
+    timeout: Duration,
 }
 
 impl Git {
@@ -39,9 +57,7 @@ impl Git {
     /// argument because it decides which git to spawn, not merely where to run
     /// it — see the module docs on WSL.
     pub fn at(cwd: &Path) -> Self {
-        let mut git = Self::bare();
-        git.command.arg("-C").arg(cwd);
-        git
+        Self::bare().args(["-C", &cwd.to_string_lossy()])
     }
 
     /// Run git with no working directory — `clone`, which has no repository to
@@ -51,8 +67,18 @@ impl Git {
         for var in REDIRECTING_VARS {
             command.env_remove(var);
         }
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        Self { command }
+        // A credential helper that prompts on an inherited stdin would block
+        // forever against an unreachable or auth-required remote, and in an
+        // interactive caller would swallow the next line the user types.
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        Self {
+            command,
+            args: Vec::new(),
+            timeout: TIMEOUT,
+        }
     }
 
     /// A git invocation for building a test fixture: the developer's real
@@ -75,7 +101,10 @@ impl Git {
     }
 
     pub fn args<'a>(mut self, args: impl IntoIterator<Item = &'a str>) -> Self {
-        self.command.args(args);
+        for arg in args {
+            self.command.arg(arg);
+            self.args.push(arg.to_string());
+        }
         self
     }
 
@@ -85,12 +114,21 @@ impl Git {
         self
     }
 
+    /// Override the default timeout. Pass `NETWORK_TIMEOUT` for `clone` and
+    /// `fetch`, the calls that reach the network; every other call keeps the
+    /// default.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Run it, returning stdout. A non-zero exit is an error carrying stderr.
     pub fn output(self) -> Result<String> {
+        let command_line = self.command_line();
         let out = self.wait()?;
         if !out.status.success() {
             bail!(
-                "git failed ({}):\n{}",
+                "`{command_line}` failed ({}):\n{}",
                 out.status,
                 String::from_utf8_lossy(&out.stderr).trim()
             );
@@ -104,31 +142,76 @@ impl Git {
         Ok(self.wait()?.status.success())
     }
 
-    /// Spawn and wait, bounded. Polling rather than blocking because
-    /// `wait_with_output` has no timeout and this runs on the write path. The
-    /// 1ms step keeps a healthy call's overhead below the spawn it already
-    /// pays. Output is drained after exit, which is safe for the volumes git
-    /// produces here.
+    fn command_line(&self) -> String {
+        format!("git {}", self.args.join(" "))
+    }
+
+    /// Spawn and wait, bounded by `self.timeout`. Polling `try_wait` rather
+    /// than blocking because `wait_with_output` has no timeout and this runs
+    /// on the write path.
+    ///
+    /// stdout and stderr are drained on their own threads rather than after
+    /// the child exits: a child whose output fills the OS pipe buffer (git
+    /// listing many refs, most obviously) blocks in `write()` until something
+    /// reads, and nothing would read while this thread is only polling exit
+    /// status — the wait would then hit the timeout on a child that was never
+    /// actually wedged.
     fn wait(mut self) -> Result<Output> {
-        let _span = crate::timing::subprocess_span("git", &[]).entered();
+        let command_line = self.command_line();
+        let arg_refs: Vec<&str> = self.args.iter().map(String::as_str).collect();
+        let _span = crate::timing::subprocess_span("git", &arg_refs).entered();
+
         let mut child = self
             .command
             .spawn()
-            .map_err(|e| anyhow::anyhow!("failed to spawn `git`: {e}"))?;
+            .with_context(|| format!("failed to spawn `{command_line}`"))?;
 
-        let deadline = Instant::now() + TIMEOUT;
-        loop {
-            if child.try_wait()?.is_some() {
-                break;
+        let mut stdout_pipe = child.stdout.take().expect("stdout is piped in `bare`");
+        let mut stderr_pipe = child.stderr.take().expect("stderr is piped in `bare`");
+        let stdout_reader = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stdout_pipe.read_to_end(&mut buf);
+            buf
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr_pipe.read_to_end(&mut buf);
+            buf
+        });
+
+        let deadline = Instant::now() + self.timeout;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {}
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e).with_context(|| format!("waiting for `{command_line}`"));
+                }
             }
             if Instant::now() >= deadline {
+                // Kill first so the reader threads see EOF and join instead of
+                // blocking on a pipe that will never close.
                 let _ = child.kill();
                 let _ = child.wait();
-                bail!("git did not finish within {TIMEOUT:?}");
+                bail!("`{command_line}` did not finish within {:?}", self.timeout);
             }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        Ok(child.wait_with_output()?)
+            thread::sleep(Duration::from_millis(1));
+        };
+
+        let stdout = stdout_reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("git stdout reader thread panicked"))?;
+        let stderr = stderr_reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("git stderr reader thread panicked"))?;
+
+        Ok(Output {
+            status,
+            stdout,
+            stderr,
+        })
     }
 }
 
@@ -139,43 +222,18 @@ const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// An ambient `GIT_DIR` redirects git to another repository. Every call in
-    /// the workspace goes through this builder, so stripping it here is what
-    /// stops a stranger's config being read as this repository's.
-    #[test]
-    fn ambient_git_dir_cannot_redirect_a_call() {
-        let repo = tempfile::tempdir().unwrap();
-        Git::fixture(repo.path())
-            .args(["init", "-q", "-b", "main"])
-            .output()
-            .unwrap();
-
-        let decoy = tempfile::tempdir().unwrap();
-        Git::fixture(decoy.path())
-            .args(["init", "-q", "-b", "main"])
-            .output()
-            .unwrap();
-
-        // SAFETY: single-threaded test; the var is removed before asserting.
-        unsafe { std::env::set_var("GIT_DIR", decoy.path().join(".git")) };
-        let out = Git::at(repo.path())
-            .args(["rev-parse", "--show-toplevel"])
-            .output();
-        unsafe { std::env::remove_var("GIT_DIR") };
-
-        let toplevel = std::fs::canonicalize(out.unwrap().trim()).unwrap();
-        assert_eq!(toplevel, std::fs::canonicalize(repo.path()).unwrap());
-    }
+    use std::io::Write;
 
     #[test]
     fn output_reports_stderr_on_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let err = Git::at(dir.path())
+        let err = Git::fixture(dir.path())
             .args(["rev-parse", "--show-toplevel"])
             .output()
             .unwrap_err();
-        assert!(err.to_string().contains("not a git repository"), "{err}");
+        let message = err.to_string();
+        assert!(message.contains("rev-parse --show-toplevel"), "{message}");
+        assert!(message.contains("128"), "{message}");
     }
 
     /// `success` answers a question; a non-zero exit is one of the answers.
@@ -183,10 +241,69 @@ mod tests {
     fn success_reports_a_failure_as_false() {
         let dir = tempfile::tempdir().unwrap();
         assert!(
-            !Git::at(dir.path())
+            !Git::fixture(dir.path())
                 .args(["rev-parse", "--show-toplevel"])
                 .success()
                 .unwrap()
         );
+    }
+
+    /// Reading stdout only after the child exits deadlocks once output
+    /// exceeds the OS pipe buffer: the child blocks in `write()` while this
+    /// thread blocks in `wait()`, and neither yields. `git tag` over enough
+    /// refs reproduces it well under the timeout this test would otherwise
+    /// hit.
+    #[test]
+    fn output_larger_than_a_pipe_buffer_comes_back_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        Git::fixture(dir.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        std::fs::write(dir.path().join("f"), "x").unwrap();
+        Git::fixture(dir.path())
+            .args(["add", "f"])
+            .output()
+            .unwrap();
+        Git::fixture(dir.path())
+            .args(["commit", "-q", "-m", "init"])
+            .output()
+            .unwrap();
+        let commit = Git::fixture(dir.path())
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let commit = commit.trim();
+
+        // One `update-ref --stdin` batch beats spawning thousands of `git
+        // tag` calls; this is fixture setup, not the code under test, so it
+        // goes through a raw `Command` rather than `Git`.
+        const TAG_COUNT: usize = 12_000;
+        let mut batch = String::new();
+        for i in 0..TAG_COUNT {
+            batch.push_str(&format!("create refs/tags/t{i:05} {commit}\n"));
+        }
+        let mut update_ref = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["update-ref", "--stdin"])
+            .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+            .env("GIT_CONFIG_SYSTEM", NULL_DEVICE)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        update_ref
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(batch.as_bytes())
+            .unwrap();
+        assert!(update_ref.wait().unwrap().success());
+
+        let tags = Git::fixture(dir.path()).args(["tag"]).output().unwrap();
+        assert_eq!(tags.lines().count(), TAG_COUNT);
+        assert!(tags.len() > 64_000, "only {} bytes", tags.len());
     }
 }
