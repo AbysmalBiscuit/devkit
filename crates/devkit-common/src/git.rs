@@ -11,7 +11,7 @@
 use anyhow::{Context, Result, bail};
 use std::ffi::OsStr;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -230,6 +230,107 @@ impl Git {
 #[cfg(any(test, feature = "test-support"))]
 const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Worktree {
+    pub path: PathBuf,
+    /// `DETACHED` when the worktree has no branch checked out.
+    pub branch: String,
+    /// A bare repository has no working tree, so it holds no config.
+    pub bare: bool,
+}
+
+/// Parse `git worktree list --porcelain`. Git lists the main worktree first,
+/// which is what `main_checkout` relies on.
+pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
+    let mut all = Vec::new();
+    let mut path: Option<String> = None;
+    let mut branch: Option<String> = None;
+    let mut bare = false;
+
+    fn flush(
+        p: &mut Option<String>,
+        b: &mut Option<String>,
+        bare: &mut bool,
+        v: &mut Vec<Worktree>,
+    ) {
+        if let Some(pp) = p.take() {
+            v.push(Worktree {
+                path: PathBuf::from(pp),
+                branch: b.take().unwrap_or_else(|| "DETACHED".into()),
+                bare: std::mem::take(bare),
+            });
+        }
+    }
+
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            flush(&mut path, &mut branch, &mut bare, &mut all);
+            path = Some(p.to_string());
+        } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
+            branch = Some(b.to_string());
+        } else if line.trim() == "bare" {
+            bare = true;
+        }
+    }
+    flush(&mut path, &mut branch, &mut bare, &mut all);
+    all
+}
+
+/// The checkout containing `start`. Errors when `start` is not in a
+/// repository; a caller wanting a fallback declares one.
+pub fn checkout_root(start: &Path) -> Result<PathBuf> {
+    Ok(PathBuf::from(
+        Git::at(start)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()?
+            .trim(),
+    ))
+}
+
+/// Every worktree of `start`'s repository, main first.
+pub fn worktrees(start: &Path) -> Result<Vec<Worktree>> {
+    Ok(parse_porcelain(
+        &Git::at(start)
+            .args(["worktree", "list", "--porcelain"])
+            .output()?,
+    ))
+}
+
+/// `start`'s repository's main checkout, or `None` when `start` is already in
+/// it and when the main worktree is bare. Git names the main worktree itself,
+/// so no path is derived from the git directory's location: the parent of the
+/// common directory cannot tell a real main worktree from a bare repository at
+/// `/x/.git` or a `--separate-git-dir=/x/.git` clone.
+pub fn main_checkout(start: &Path) -> Result<Option<PathBuf>> {
+    let all = worktrees(start)?;
+    let Some(main) = all.first() else {
+        return Ok(None);
+    };
+    if main.bare {
+        return Ok(None);
+    }
+    let here = checkout_root(start)?;
+    Ok((!same_path(&main.path, &here)).then(|| main.path.clone()))
+}
+
+/// The branch checked out at `start`.
+pub fn branch(start: &Path) -> Result<String> {
+    Ok(Git::at(start)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()?
+        .trim()
+        .to_string())
+}
+
+/// Compare two paths by identity where the filesystem can answer, falling back
+/// to a lexical comparison when either does not exist.
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +447,94 @@ mod tests {
         let git = Git::at(cwd);
         let args: Vec<&OsStr> = git.command.get_args().collect();
         assert_eq!(args, [OsStr::new("-C"), OsStr::from_bytes(raw)]);
+    }
+
+    fn run(args: &[&str], cwd: &Path) -> Result<String> {
+        Git::fixture(cwd).args(args.iter().copied()).output()
+    }
+
+    /// Builds a repo with one commit; returns the guard so the caller keeps the
+    /// directory alive for as long as it uses the path.
+    fn repo_with_commit() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        Git::fixture(dir.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        Git::fixture(dir.path())
+            .args(["config", "user.email", "t@example.com"])
+            .output()
+            .unwrap();
+        Git::fixture(dir.path())
+            .args(["config", "user.name", "Test"])
+            .output()
+            .unwrap();
+        std::fs::write(dir.path().join("f.txt"), "x").unwrap();
+        Git::fixture(dir.path())
+            .args(["add", "."])
+            .output()
+            .unwrap();
+        Git::fixture(dir.path())
+            .args(["commit", "-qm", "init"])
+            .output()
+            .unwrap();
+        dir
+    }
+
+    #[test]
+    fn main_checkout_is_none_in_the_main_checkout() {
+        let repo = repo_with_commit();
+        assert_eq!(main_checkout(repo.path()).unwrap(), None);
+    }
+
+    #[test]
+    fn linked_worktree_resolves_its_main_checkout() {
+        let repo = repo_with_commit();
+        let holder = tempfile::tempdir().unwrap();
+        let linked = holder.path().join("wt");
+        run(
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "side",
+            ],
+            repo.path(),
+        )
+        .unwrap();
+
+        let found = main_checkout(&linked).unwrap().expect("a main checkout");
+        assert_eq!(
+            std::fs::canonicalize(found).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+    }
+
+    /// A bare repository has no main working tree, so there is no checkout to
+    /// inherit config from.
+    #[test]
+    fn bare_main_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("b.git");
+        Git::fixture(dir.path())
+            .args(["init", "-q", "--bare", bare.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(main_checkout(&bare).unwrap(), None);
+    }
+
+    #[test]
+    fn checkout_root_errors_outside_a_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(checkout_root(dir.path()).is_err());
+    }
+
+    #[test]
+    fn parse_porcelain_marks_a_bare_first_entry() {
+        let parsed = parse_porcelain("worktree /x/b.git\nbare\n");
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed[0].bare);
     }
 }

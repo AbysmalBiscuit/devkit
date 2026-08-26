@@ -1,37 +1,8 @@
-use crate::cmd::git;
+use crate::git;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Worktree {
-    pub path: PathBuf,
-    pub branch: String, // "DETACHED" if none
-}
-
-/// Parse `git worktree list --porcelain` output. First entry is the main repo.
-pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
-    let mut all = Vec::new();
-    let mut path: Option<String> = None;
-    let mut branch: Option<String> = None;
-    let flush = |p: &mut Option<String>, b: &mut Option<String>, v: &mut Vec<Worktree>| {
-        if let Some(pp) = p.take() {
-            v.push(Worktree {
-                path: PathBuf::from(pp),
-                branch: b.take().unwrap_or_else(|| "DETACHED".into()),
-            });
-        }
-    };
-    for line in out.lines() {
-        if let Some(p) = line.strip_prefix("worktree ") {
-            flush(&mut path, &mut branch, &mut all);
-            path = Some(p.to_string());
-        } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
-            branch = Some(b.to_string());
-        }
-    }
-    flush(&mut path, &mut branch, &mut all);
-    all
-}
+pub use crate::git::{Worktree, parse_porcelain};
 
 /// This worktree's issue id. The setup record is authoritative because it holds
 /// whatever the tracker actually calls the issue; the branch and directory scan
@@ -90,8 +61,7 @@ pub fn find_id(s: &str) -> Option<String> {
 
 /// (main_repo_path, other_worktrees) from a path inside any worktree.
 pub fn discover(start: &str) -> Result<(PathBuf, Vec<Worktree>)> {
-    let out = git(&["worktree", "list", "--porcelain"], start)?;
-    let mut all = parse_porcelain(&out);
+    let mut all = git::worktrees(Path::new(start))?;
     anyhow::ensure!(!all.is_empty(), "not inside a git repo: {start}");
     let main = all.remove(0);
     Ok((main.path, all))
