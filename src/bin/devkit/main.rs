@@ -145,15 +145,14 @@ fn emit_completions(shell: Shell, subcommand: &str, shim_name: &'static str) {
 }
 
 fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
-    let matches = shim_command(s.subcommand, s.name).get_matches_from(args);
-    match s.subcommand {
-        "ports" => ports::run(ports::PortsCli::from_arg_matches(&matches)?),
-        "locks" => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
-        "docs" => docs::run(docs::DocsCli::from_arg_matches(&matches)?),
-        "run" => run::run(run::RunCli::from_arg_matches(&matches)?),
-        "issue" => issue::run(issue::IssueCli::from_arg_matches(&matches)?),
-        "mcp" => mcp::run(mcp::McpCli::from_arg_matches(&matches)?),
-        other => unreachable!("shim `{}` selects unknown subcommand `{other}`", s.name),
+    let matches = shim_command(s.sub.name(), s.name).get_matches_from(args);
+    match s.sub {
+        shim::Sub::Ports => ports::run(ports::PortsCli::from_arg_matches(&matches)?),
+        shim::Sub::Locks => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
+        shim::Sub::Docs => docs::run(docs::DocsCli::from_arg_matches(&matches)?),
+        shim::Sub::Run => run::run(run::RunCli::from_arg_matches(&matches)?),
+        shim::Sub::Issue => issue::run(issue::IssueCli::from_arg_matches(&matches)?),
+        shim::Sub::Mcp => mcp::run(mcp::McpCli::from_arg_matches(&matches)?),
     }
 }
 
@@ -197,18 +196,20 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
-    /// `dispatch_shim` matches on a `&str` with `unreachable!` as the
-    /// fallback, so a `SHIMS` entry with no dispatch arm is a runtime panic
-    /// rather than a build error. This is the compile-time-adjacent guard for
-    /// that: every shim's subcommand must actually exist on `Cli`.
+    /// `dispatch_shim` matches on `shim::Sub` exhaustively (no catch-all
+    /// arm), so a `SHIMS` entry naming a `Sub` variant with no dispatch arm
+    /// is a compile error, not a runtime panic — that guarantee needs no
+    /// test. What still wants checking is the other half: that each
+    /// variant's `name()` actually names a subcommand `Cli` registers, so a
+    /// shim never resolves to a subcommand that does not exist.
     #[test]
-    fn every_shim_selects_a_real_subcommand() {
+    fn every_shim_names_a_real_subcommand() {
         for s in shim::SHIMS {
             assert!(
-                Cli::command().find_subcommand(s.subcommand).is_some(),
+                Cli::command().find_subcommand(s.sub.name()).is_some(),
                 "shim `{}` selects unknown subcommand `{}`",
                 s.name,
-                s.subcommand
+                s.sub.name()
             );
         }
     }
