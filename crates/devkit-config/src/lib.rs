@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+mod layers;
+pub use layers::{Layer, LayerKind, project_layers};
+
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Config {
     /// Project-wide paths and branch conventions. Required of any config that
@@ -685,7 +688,7 @@ pub struct LayerMarker {
 }
 
 /// Whether a parsed layer declares `[config] root = true` (stop walking upward).
-fn is_root_layer(t: &toml::Table) -> bool {
+pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
     t.get("config")
         .and_then(|c| c.as_table())
         .and_then(|c| c.get("root"))
@@ -693,17 +696,9 @@ fn is_root_layer(t: &toml::Table) -> bool {
         .unwrap_or(false)
 }
 
-/// Tracked, committed config: the project's own settings.
-const CONFIG_FILE: &str = "devkit.toml";
-/// Untracked overrides beside it, for what one machine or checkout needs and
-/// the repository should not carry.
-const LOCAL_CONFIG_FILE: &str = "devkit.local.toml";
-
 /// Build the ordered layer list (lowest→highest precedence): the home config (unless
-/// a `root = true` marker cuts it off), then each directory's `devkit.toml` and
-/// `devkit.local.toml` from the filesystem root down to `start`. Within one
-/// directory the local file wins; a deeper directory wins over both. An explicit
-/// path or `$DEVKIT_CONFIG` is the sole layer.
+/// a `root = true` marker cuts it off), then the project layers `project_layers`
+/// finds for `start`. An explicit path or `$DEVKIT_CONFIG` is the sole layer.
 fn discover(
     explicit: Option<&Path>,
     start: &Path,
@@ -716,30 +711,7 @@ fn discover(
         return Ok(vec![read_layer(&PathBuf::from(p))?]);
     }
 
-    // Walk upward collecting config files (deepest first); stop at a root marker.
-    let mut stack: Vec<(PathBuf, toml::Table)> = Vec::new();
-    let mut rooted = false;
-    let mut dir = Some(start);
-    while let Some(d) = dir {
-        let mut here: Vec<(PathBuf, toml::Table)> = Vec::new();
-        for name in [CONFIG_FILE, LOCAL_CONFIG_FILE] {
-            let c = d.join(name);
-            if c.is_file() {
-                here.push(read_layer(&c)?);
-            }
-        }
-        let is_root = here.iter().any(|(_, t)| is_root_layer(t));
-        // The whole stack is built deepest-first and reversed at the end, so a
-        // directory's own files go in reversed too — that is what leaves the
-        // untracked local layer above the tracked one beside it.
-        here.reverse();
-        stack.extend(here);
-        if is_root {
-            rooted = true;
-            break;
-        }
-        dir = d.parent();
-    }
+    let (project, rooted) = layers::project_layers_rooted(start, None)?;
 
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
     if !rooted
@@ -748,8 +720,9 @@ fn discover(
     {
         layers.push(read_layer(h)?);
     }
-    stack.reverse(); // deepest-first → shallowest-first (lowest precedence first)
-    layers.extend(stack);
+    for layer in &project {
+        layers.push(read_layer(&layer.path)?);
+    }
 
     if layers.is_empty() {
         return Err(anyhow::Error::new(NoConfig));
