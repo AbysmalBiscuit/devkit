@@ -42,9 +42,9 @@ fn redirecting_vars_cannot_change_resolution() {
     });
 
     // GIT_COMMON_DIR redirects the shared repository state (refs, objects,
-    // config) that a linked worktree reads. It has no visible effect on the
-    // main checkout, whose common dir is always its own `.git` — a linked
-    // worktree is what exposes it.
+    // config) that every worktree of a repository reads. A linked worktree is
+    // where devkit resolves a project's config from, so that is the setting
+    // this checks it in.
     let linked = tempfile::tempdir().unwrap();
     let linked = linked.path().join("wt");
     Git::fixture(repo.path())
