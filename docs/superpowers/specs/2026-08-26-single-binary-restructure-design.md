@@ -108,6 +108,20 @@ section 6.
 The command prints what it created, what it replaced, and what it skipped, and
 exits non-zero if any link failed.
 
+Linking also happens on its own. Before dispatch, `devkit` compares a stamp file
+under `$XDG_STATE_HOME/devkit` against the running version. A match returns
+immediately, which is one small read on the hot path that
+`lockm hook pretooluse` takes on every edit. A mismatch takes an exclusive lock
+on a sibling lock file, links, and writes the stamp. Any failure warns once to
+stderr and the real command proceeds; linking never blocks the work the user
+asked for.
+
+The automatic path only claims names that are free or already devkit's, per
+section 4. A name held by something else is skipped and left for
+`devkit doctor` to report. Taking over such a name needs
+`devkit install-links --force`, which is an explicit decision by a person,
+matching the repo's convention that `--force` overrides a safety gate.
+
 ### 4. Replacing an existing multi-binary install
 
 Upgrading from 0.13.x leaves real 0.13.x executables at every shim name in
@@ -124,17 +138,22 @@ is not a devkit binary is left alone and reported as skipped, so a foreign
 Replacement is remove-then-link, not link-over, because the destination may be a
 running executable on Windows.
 
+A name whose existing file is already a hardlink to the running executable needs
+no work: same inode, nothing to replace. Detecting that by file index skips the
+name the current process was invoked under, which is what keeps the automatic
+path from trying to delete a running `issue.exe` on Windows.
+
 ### 5. Bootstrap hook
 
 `hooks/bootstrap-binaries` changes its presence check from
-`devkit lockm devkit-mcp` to `devkit`, and runs `devkit install-links` after a
-successful install and after any run where a shim name is missing from PATH.
-Failure to link warns and exits 0, matching the hook's existing rule that a
-session must start even when everything else fails.
+`devkit lockm devkit-mcp` to `devkit`. It does not link: the first `devkit brief`
+of the session does that on its own via the stamp check above. The hook keeps
+its existing rule that every failure path exits 0.
 
-Source builds (`cargo install --path .`) get no hook. `README.md` documents
-`devkit install-links` as the second step, and `devkit doctor` grows a row
-reporting which shims are present.
+Source builds (`cargo install --path .`) get no hook, but the stamp check runs
+on the first `devkit` invocation regardless of entry point, so they self-link
+too. `devkit doctor` grows a row reporting which shims are present, which
+version each resolves to, and which names were skipped as foreign.
 
 ### 6. `devkitd` stays a separate binary
 
@@ -243,11 +262,11 @@ needs nothing from this spec beyond arriving as another subcommand under
 `devkit issue`, which the nested-`Cli` approach in section 2 handles without
 per-subcommand work. This branch rebases onto it.
 
-## Open questions
+## Resolved decisions
 
-1. Should `devkit-mcp` keep a shim, or should `.mcp.json` move to
-   `devkit mcp`? Keeping the shim is zero churn for anyone with an existing MCP
-   config. Moving is one fewer link and one fewer name.
-2. Should `install-links` run automatically on first use of a shim that is
-   missing, or stay explicit? Automatic is friendlier and writes to
-   `CARGO_HOME/bin` as a side effect of an unrelated command.
+- **`devkit-mcp` keeps its shim.** `.mcp.json` stays as it is, so no existing
+  MCP configuration has to change.
+- **Linking is automatic, bounded by section 4.** A version-stamp check before
+  dispatch claims free and devkit-owned names without being asked. It never
+  takes a name held by something else; that needs
+  `devkit install-links --force`.
