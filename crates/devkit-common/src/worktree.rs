@@ -152,6 +152,124 @@ pub fn copy_includes(source: &Path, dest: &Path, patterns: &[String]) -> (usize,
     (copied, warnings)
 }
 
+/// The result of walking `patterns` without copying anything: every matched
+/// file sorted by whether `dest` already has it, so a caller can prompt before
+/// clobbering. Paths are relative to `dest`.
+pub struct IncludePlan {
+    pub missing: Vec<PathBuf>,
+    pub existing: Vec<PathBuf>,
+    pub warnings: Vec<String>,
+}
+
+/// Walk `patterns` the way `copy_includes` does, but classify matches instead
+/// of copying them: each matched file lands in `missing` or `existing`
+/// depending on whether `dest` already has it. A directory match contributes
+/// its files recursively, never the directory entry itself. Fail-open, like
+/// `copy_includes`: a bad glob, an unreadable directory, or a non-UTF-8
+/// pattern becomes a warning string.
+pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> IncludePlan {
+    let opts = glob::MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: false,
+        require_literal_leading_dot: false,
+    };
+    let mut missing = Vec::new();
+    let mut existing = Vec::new();
+    let mut warnings = Vec::new();
+
+    for pattern in patterns {
+        let trimmed = pattern.trim_end_matches('/');
+        let joined = source.join(trimmed);
+        let Some(pat_str) = joined.to_str() else {
+            warnings.push(format!("include pattern is not valid UTF-8: {pattern}"));
+            continue;
+        };
+        let entries = match glob::glob_with(pat_str, opts) {
+            Ok(paths) => paths,
+            Err(e) => {
+                warnings.push(format!("bad include pattern `{pattern}`: {e}"));
+                continue;
+            }
+        };
+        for entry in entries {
+            let matched = match entry {
+                Ok(p) => p,
+                Err(e) => {
+                    warnings.push(format!("reading match for `{pattern}`: {e}"));
+                    continue;
+                }
+            };
+            let Ok(rel) = matched.strip_prefix(source) else {
+                warnings.push(format!("match outside source: {}", matched.display()));
+                continue;
+            };
+            let target = dest.join(rel);
+            if matched.is_dir() {
+                plan_dir(
+                    &matched,
+                    rel,
+                    dest,
+                    &mut missing,
+                    &mut existing,
+                    &mut warnings,
+                );
+            } else {
+                classify_file(&target, rel, &mut missing, &mut existing);
+            }
+        }
+    }
+    IncludePlan {
+        missing,
+        existing,
+        warnings,
+    }
+}
+
+fn classify_file(dst: &Path, rel: &Path, missing: &mut Vec<PathBuf>, existing: &mut Vec<PathBuf>) {
+    if dst.exists() {
+        existing.push(rel.to_path_buf());
+    } else {
+        missing.push(rel.to_path_buf());
+    }
+}
+
+/// Recursively classify a directory's files, mirroring `copy_dir`'s traversal
+/// without writing anything. `rel` tracks the path relative to `dest` in
+/// lockstep with `src` so classified paths stay dest-relative.
+fn plan_dir(
+    src: &Path,
+    rel: &Path,
+    dest: &Path,
+    missing: &mut Vec<PathBuf>,
+    existing: &mut Vec<PathBuf>,
+    warnings: &mut Vec<String>,
+) {
+    let entries = match std::fs::read_dir(src) {
+        Ok(e) => e,
+        Err(e) => {
+            warnings.push(format!("reading dir {}: {e}", src.display()));
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                warnings.push(format!("reading entry in {}: {e}", src.display()));
+                continue;
+            }
+        };
+        let child = src.join(entry.file_name());
+        let child_rel = rel.join(entry.file_name());
+        let target = dest.join(&child_rel);
+        if child.is_dir() {
+            plan_dir(&child, &child_rel, dest, missing, existing, warnings);
+        } else {
+            classify_file(&target, &child_rel, missing, existing);
+        }
+    }
+}
+
 /// Copy a single file, skipping if the destination already exists. Errors are
 /// pushed as warnings.
 fn copy_file(src: &Path, dst: &Path, copied: &mut usize, warnings: &mut Vec<String>) {
@@ -391,6 +509,82 @@ mod tests {
             fs::read_to_string(dst.join(".tool-versions")).unwrap(),
             "KEEP ME"
         );
+    }
+
+    #[test]
+    fn plan_includes_puts_a_new_match_in_missing() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".env.local"), "SECRET=1");
+
+        let plan = plan_includes(&src, &dst, &[".env.local".to_string()]);
+
+        assert_eq!(plan.missing, vec![PathBuf::from(".env.local")]);
+        assert!(plan.existing.is_empty());
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn plan_includes_puts_an_already_present_match_in_existing() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+        write(&dst.join(".tool-versions"), "KEEP ME");
+
+        let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
+
+        assert_eq!(plan.existing, vec![PathBuf::from(".tool-versions")]);
+        assert!(plan.missing.is_empty());
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn plan_includes_directory_pattern_enumerates_files_not_the_directory() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".claude/hooks/pre.sh"), "echo pre");
+        write(&src.join(".claude/hooks/sub/post.sh"), "echo post");
+        write(&dst.join(".claude/hooks/pre.sh"), "echo old");
+
+        let plan = plan_includes(&src, &dst, &[".claude/hooks/".to_string()]);
+
+        assert_eq!(plan.existing, vec![PathBuf::from(".claude/hooks/pre.sh")]);
+        assert_eq!(
+            plan.missing,
+            vec![PathBuf::from(".claude/hooks/sub/post.sh")]
+        );
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn plan_includes_pattern_matching_nothing_yields_empty_plan() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        fs::create_dir_all(&src).unwrap();
+
+        let plan = plan_includes(&src, &dst, &["does/not/exist".to_string()]);
+
+        assert!(plan.missing.is_empty());
+        assert!(plan.existing.is_empty());
+        assert!(plan.warnings.is_empty());
+    }
+
+    #[test]
+    fn plan_includes_bad_glob_warns_without_panicking() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        fs::create_dir_all(&src).unwrap();
+
+        let plan = plan_includes(&src, &dst, &["[".to_string()]);
+
+        assert!(plan.missing.is_empty());
+        assert!(plan.existing.is_empty());
+        assert_eq!(plan.warnings.len(), 1);
     }
 
     #[test]
