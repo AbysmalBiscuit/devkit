@@ -12,6 +12,7 @@ pub fn ensure_fresh(main_repo: &str, path: &str, git_ref: &str) -> Result<()> {
         gitfetch::fetch(remote, main_repo)?;
         Git::at(Path::new(main_repo))
             .args(["worktree", "add", "--detach", path, git_ref])
+            .timeout(devkit_common::git::SLOW_TIMEOUT)
             .output()?;
         return Ok(());
     }
@@ -31,6 +32,7 @@ pub fn ensure_fresh(main_repo: &str, path: &str, git_ref: &str) -> Result<()> {
     }
     Git::at(Path::new(path))
         .args(["reset", "--hard", git_ref])
+        .timeout(devkit_common::git::SLOW_TIMEOUT)
         .output()?;
     Ok(())
 }

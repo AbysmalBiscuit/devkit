@@ -300,6 +300,7 @@ fn with_cleanup<T>(worktree: &Path, monorepo: &str, f: impl FnOnce() -> Result<T
                     "--force",
                     worktree.to_str().unwrap_or_default(),
                 ])
+                .timeout(devkit_common::git::SLOW_TIMEOUT)
                 .output();
             Err(e)
         }
@@ -370,6 +371,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
                 worktree_s,
                 &cfg.defaults.baseline_ref,
             ])
+            .timeout(devkit_common::git::SLOW_TIMEOUT)
             .output()
     })?;
 

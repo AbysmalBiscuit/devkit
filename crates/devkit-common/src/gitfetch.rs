@@ -97,7 +97,7 @@ pub fn fetch(remote: &str, cwd: &str) -> Result<()> {
     fetch_gated(&marker, ttl_secs(), now_secs(), || {
         Git::at(Path::new(cwd))
             .args(["fetch", remote])
-            .timeout(crate::git::NETWORK_TIMEOUT)
+            .timeout(crate::git::SLOW_TIMEOUT)
             .output()
             .map(|_| ())
     })?;

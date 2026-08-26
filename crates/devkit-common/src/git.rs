@@ -21,10 +21,14 @@ use std::time::{Duration, Instant};
 /// write through the PreToolUse hook. Override with `.timeout()`.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Timeout for calls that reach the network — `clone` and `fetch`. A blobless
-/// clone or a fetch against a real repository routinely takes longer than
-/// `TIMEOUT`.
-pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(600);
+/// Timeout for a git call that is slow by nature rather than by accident:
+/// anything that reaches the network (`clone`, `fetch`, `push`), and anything
+/// that writes a working tree at monorepo scale (`worktree add`/`remove`,
+/// `checkout`). The two overlap — `worktree add` against a
+/// `--filter=blob:none` clone fetches every blob the new working tree needs
+/// at that commit, so it is a network call as well as a bulk one, and belongs
+/// in this tier for both reasons.
+pub const SLOW_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Variables that repoint git at a different repository or inject config into
 /// every invocation. Left in place, any of them silently changes which
@@ -124,9 +128,11 @@ impl Git {
         self
     }
 
-    /// Override the default timeout. Pass `NETWORK_TIMEOUT` for `clone` and
-    /// `fetch`, the calls that reach the network; every other call keeps the
-    /// default.
+    /// Override the default timeout. Pass `SLOW_TIMEOUT` for a call that
+    /// reaches the network or writes a working tree at monorepo scale; every
+    /// quick query (`rev-parse`, `status`, `config`, and the like) keeps the
+    /// default — it is what protects the PreToolUse hook path from a wedged
+    /// git, and widening it there defeats that.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self

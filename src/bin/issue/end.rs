@@ -126,7 +126,10 @@ fn cleanup(
         rm.push("--force");
     }
     rm.push(wt_s.as_str());
-    devkit_common::git::Git::at(&main).args(rm).output()?;
+    devkit_common::git::Git::at(&main)
+        .args(rm)
+        .timeout(devkit_common::git::SLOW_TIMEOUT)
+        .output()?;
 
     if let Some(path) = summary {
         let _ = std::fs::remove_file(path);

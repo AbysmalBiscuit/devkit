@@ -271,6 +271,7 @@ pub fn run(args: Args) -> Result<()> {
             .during_result("Pushing branch…", || {
                 Git::at(std::path::Path::new(&start))
                     .args(["push", "-u", "origin", &branch])
+                    .timeout(devkit_common::git::SLOW_TIMEOUT)
                     .output()
             })
             .context("git push failed (refusing to force-push)")?;

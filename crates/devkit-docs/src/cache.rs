@@ -6,7 +6,7 @@ use crate::locks;
 use crate::refs::RefStore;
 use crate::tags::TagPattern;
 use anyhow::{Context, Result, bail};
-use devkit_common::git::{Git, NETWORK_TIMEOUT};
+use devkit_common::git::{Git, SLOW_TIMEOUT};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -216,7 +216,7 @@ impl LibCache {
         let dest = self.bare_str();
         let filtered = Git::bare()
             .args(["clone", "--bare", "--filter=blob:none", repo, dest.as_str()])
-            .timeout(NETWORK_TIMEOUT)
+            .timeout(SLOW_TIMEOUT)
             .success()
             .context("failed to spawn `git` for filtered bare clone")?;
         if !filtered {
@@ -230,7 +230,7 @@ impl LibCache {
             }
             Git::bare()
                 .args(["clone", "--bare", repo, dest.as_str()])
-                .timeout(NETWORK_TIMEOUT)
+                .timeout(SLOW_TIMEOUT)
                 .output()
                 .with_context(|| format!("cloning {repo}"))?;
         }
@@ -257,7 +257,7 @@ impl LibCache {
                 "--prune-tags",
                 "origin",
             ])
-            .timeout(NETWORK_TIMEOUT)
+            .timeout(SLOW_TIMEOUT)
             .output()
             .map(|_| ())
     }
@@ -356,11 +356,13 @@ impl LibCache {
             let path_string = path.to_string_lossy().into_owned();
             Git::at(&self.bare())
                 .args(["worktree", "add", "--detach", path_string.as_str(), commit])
+                .timeout(SLOW_TIMEOUT)
                 .output()
                 .with_context(|| format!("materializing {dirname} at {commit}"))?;
             if let Err(exact_error) = assert_dir_exact(&self.dir, dirname) {
                 Git::at(&self.bare())
                     .args(["worktree", "remove", "--force", path_string.as_str()])
+                    .timeout(SLOW_TIMEOUT)
                     .output()
                     .with_context(|| {
                         format!("cleaning up inexact worktree {dirname} after: {exact_error}")
@@ -387,6 +389,7 @@ impl LibCache {
         }
         Git::at(&path)
             .args(["checkout", "--detach", commit])
+            .timeout(SLOW_TIMEOUT)
             .output()
             .with_context(|| format!("re-pointing {dirname} from {head} to {commit}"))?;
         Ok((path, true))
@@ -429,6 +432,7 @@ impl LibCache {
         let p = self.worktree_path(dirname).to_string_lossy().into_owned();
         Git::at(&self.bare())
             .args(["worktree", "remove", "--force", p.as_str()])
+            .timeout(SLOW_TIMEOUT)
             .output()
             .with_context(|| format!("removing worktree {dirname}"))?;
         Ok(())

@@ -9,7 +9,7 @@
 
 use crate::{cache, locks, names};
 use anyhow::{Context, Result, bail};
-use devkit_common::git::Git;
+use devkit_common::git::{Git, SLOW_TIMEOUT};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -375,6 +375,7 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
         let path_str = path.to_string_lossy().into_owned();
         if Git::at(&bare)
             .args(["worktree", "remove", "--force", path_str.as_str()])
+            .timeout(SLOW_TIMEOUT)
             .output()
             .is_err()
         {
@@ -405,6 +406,7 @@ fn heal(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
         let path_str = lib_dir.join(checkout).to_string_lossy().into_owned();
         Git::at(&bare)
             .args(["worktree", "add", "--detach", path_str.as_str(), commit])
+            .timeout(SLOW_TIMEOUT)
             .output()
             .with_context(|| {
                 format!(

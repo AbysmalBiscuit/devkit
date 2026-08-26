@@ -393,6 +393,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
                 worktree.to_str().unwrap(),
                 &cfg.defaults.baseline_ref,
             ])
+            .timeout(devkit_common::git::SLOW_TIMEOUT)
             .output()
     })?;
 
