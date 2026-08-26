@@ -44,10 +44,26 @@ fn run(exe: &std::path::Path, args: &[&str]) -> Output {
     })
 }
 
-/// Run `install-links` against a throwaway directory holding a copy of the
-/// built binary, so the test never touches the real CARGO_HOME.
+/// A throwaway directory holding a copy of the built binary, so a linking pass
+/// never touches the real CARGO_HOME. Bind the guard for as long as the path is
+/// used, or the directory is gone before the test runs anything.
+///
+/// Staged beside the `devkit` binary, like `shimtest::linked`: a hardlink
+/// cannot cross a filesystem boundary, and the system temp dir and the build
+/// output are not guaranteed to share one (GitHub's Windows runners check the
+/// workspace out on `D:` while `%TEMP%` resolves under `C:`). The binary is
+/// *copied* rather than hardlinked, though — several tests here replace or
+/// delete the staged executable, which through a hardlink would clobber the
+/// build output itself.
 fn staged() -> (tempfile::TempDir, std::path::PathBuf) {
-    let dir = tempfile::tempdir().expect("temp dir");
+    let dir = tempfile::Builder::new()
+        .prefix("links")
+        .tempdir_in(
+            std::path::Path::new(env!("CARGO_BIN_EXE_devkit"))
+                .parent()
+                .expect("binary has a parent dir"),
+        )
+        .expect("temp dir");
     let exe = dir.path().join(if cfg!(windows) {
         "devkit.exe"
     } else {
@@ -114,11 +130,11 @@ fn replaces_an_existing_devkit_binary() {
     );
 }
 
-/// The upgrade path must work at every shim name, not just `portm`. This is
-/// the test that would have caught `lockm`'s hidden-subcommand breakage:
-/// `replaces_an_existing_devkit_binary` alone never touched `lockm`, whose
-/// `hook` subcommand is `#[command(hide = true)]` and so never appears in
-/// its own `--help` output.
+/// The upgrade path must work at every shim name, not just `portm`: each name
+/// is judged by running the binary that holds it *under that name*, so a
+/// difference between two shims — what they report for `--version`, what they
+/// print for `--help`, whether they read stdin at startup — could make one of
+/// them unlinkable while the rest are fine.
 #[test]
 fn replaces_a_real_devkit_binary_at_every_shim_name() {
     let (dir, exe) = staged();
@@ -883,17 +899,19 @@ fn install_links_falls_open_on_an_unusable_state_dir() {
     );
 }
 
-/// Run `devkit doctor` against the staged directory and return its report.
+/// Run `devkit doctor` against the staged `exe` and return its report.
 ///
-/// The cwd is the staged directory rather than the test process's own: doctor
-/// reads whatever `devkit.toml` sits at its cwd, and a config layer there
-/// would put rows in this report that have nothing to do with shim names.
-fn doctor_report(exe: &std::path::Path, dir: &std::path::Path) -> Output {
+/// The cwd is an empty directory outside any checkout: config discovery walks
+/// up from the cwd, so running doctor anywhere inside this repo (the staged
+/// directory included — it lives beside the build output) fills the report
+/// with config rows that have nothing to do with shim names.
+fn doctor_report(exe: &std::path::Path) -> Output {
     let state = tempfile::tempdir().expect("state dir");
+    let cwd = tempfile::tempdir().expect("cwd outside any project");
     retry_on_busy(|| {
         Command::new(exe)
             .arg("doctor")
-            .current_dir(dir)
+            .current_dir(cwd.path())
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
             .env("DEVKIT_SKIP_AUTOLINK", "1")
@@ -930,7 +948,7 @@ fn doctor_reports_the_version_a_shim_name_resolves_to() {
         std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o755))
             .expect("make it executable");
     }
-    let out = doctor_report(&exe, dir.path());
+    let out = doctor_report(&exe);
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let row = doctor_row(&text, "issue");
     assert!(
@@ -948,7 +966,7 @@ fn doctor_prescribes_force_only_for_a_foreign_name() {
     let (dir, exe) = staged();
     let other = shim_path(dir.path(), "issue");
     std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &other).expect("stage a second devkit copy");
-    let out = doctor_report(&exe, dir.path());
+    let out = doctor_report(&exe);
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let row = doctor_row(&text, "issue");
     assert!(
@@ -974,7 +992,7 @@ fn doctor_reports_a_dangling_symlink_as_occupied() {
     let (dir, exe) = staged();
     std::os::unix::fs::symlink(dir.path().join("nowhere"), shim_path(dir.path(), "issue"))
         .expect("dangle a symlink at the issue name");
-    let out = doctor_report(&exe, dir.path());
+    let out = doctor_report(&exe);
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let row = doctor_row(&text, "issue");
     assert!(
@@ -988,7 +1006,7 @@ fn doctor_reports_a_foreign_shim_name() {
     let (dir, exe) = staged();
     let foreign = shim_path(dir.path(), "issue");
     std::fs::write(&foreign, b"#!/bin/sh\necho not devkit\n").expect("write foreign issue");
-    let out = doctor_report(&exe, dir.path());
+    let out = doctor_report(&exe);
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
