@@ -17,12 +17,24 @@ mod run;
 mod schema;
 mod shim;
 
+const SHIM_HELP: &str = "\
+Also installed under their own names:
+  issue       = devkit issue
+  devrun      = devkit run
+  portm       = devkit ports
+  lockm       = devkit locks
+  docm        = devkit docs
+  devkit-mcp  = devkit mcp
+
+Run `devkit install-links` if any of them are missing.";
+
 #[derive(Parser)]
 #[command(
     name = "devkit",
     version,
     about = "Configure and diagnose the devkit toolkit",
-    propagate_version = true
+    propagate_version = true,
+    after_help = SHIM_HELP
 )]
 struct Cli {
     #[command(subcommand)]
@@ -252,6 +264,17 @@ mod tests {
                 "shim `{}` selects unknown subcommand `{}`",
                 s.name,
                 s.sub.name()
+            );
+        }
+    }
+
+    #[test]
+    fn shim_help_names_every_shim() {
+        for s in crate::shim::SHIMS {
+            assert!(
+                SHIM_HELP.contains(s.name),
+                "SHIM_HELP never names the `{}` shim",
+                s.name
             );
         }
     }

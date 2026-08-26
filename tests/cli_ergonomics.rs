@@ -225,3 +225,31 @@ fn issue_setup_rejects_both_positional_and_flag() {
         "conflicting issue ids are a usage error"
     );
 }
+
+/// `devkit` is the one name an agent can guess from a `devkit.toml`. Its help
+/// has to name the shim spellings, because a subcommand list alone never says
+/// that `issue status` also works as a bare command. Asserting on the whole
+/// mapping line, not the bare name, is what keeps this from passing on the
+/// subcommand list alone — `issue`, `docs`, and `ports` already appear there.
+#[test]
+fn devkit_help_names_every_shim() {
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .arg("--help")
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .output()
+        .expect("spawn devkit --help");
+    let text = String::from_utf8(out.stdout).expect("utf-8 help");
+    for line in [
+        "issue       = devkit issue",
+        "devrun      = devkit run",
+        "portm       = devkit ports",
+        "lockm       = devkit locks",
+        "docm        = devkit docs",
+        "devkit-mcp  = devkit mcp",
+    ] {
+        assert!(
+            text.contains(line),
+            "`devkit --help` never maps the shim: {line}\n{text}"
+        );
+    }
+}
