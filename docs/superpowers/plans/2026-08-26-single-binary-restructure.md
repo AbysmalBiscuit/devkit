@@ -1293,7 +1293,7 @@ git commit -m "feat(devkit): add install-links to create the shim hardlinks"
 - Modify: `tests/install_links.rs`
 
 **Interfaces:**
-- Consumes: `links::link_all`, `links::install_dir`, `devkit_common::paths::state_dir`.
+- Consumes: `links::link_all`, `devkit_common::paths::state_dir`.
 - Produces: `links::ensure_current(exe: &Path) -> ()`.
 
 Every invocation of every shim takes this path, including `lockm hook pretooluse` on every editor write. The stamp comparison must be one small read when nothing has changed.
@@ -1384,7 +1384,7 @@ pub fn ensure_current(exe: &Path) {
     if std::fs::read_to_string(&stamp).is_ok_and(|s| s.trim() == env!("CARGO_PKG_VERSION")) {
         return;
     }
-    let Ok(dir) = install_dir() else { return };
+    let Some(dir) = exe.parent() else { return };
     if std::fs::create_dir_all(&state).is_err() {
         return;
     }
@@ -1401,11 +1401,11 @@ pub fn ensure_current(exe: &Path) {
         // Another process is linking right now; it will write the stamp.
         return;
     };
-    for (name, outcome) in link_all(exe, &dir, false) {
+    for (name, outcome) in link_all(exe, dir, false) {
         match outcome {
             Outcome::Failed(e) => eprintln!("devkit: could not link {name}: {e}"),
-            Outcome::SkippedForeign => {
-                eprintln!("devkit: {name} on PATH is not a devkit binary; left alone");
+            Outcome::SkippedForeign(why) => {
+                eprintln!("devkit: {name} on PATH is not a devkit binary ({why}); left alone");
             }
             Outcome::Created | Outcome::Replaced | Outcome::AlreadyLinked => {}
         }
@@ -1473,7 +1473,7 @@ git commit -m "feat(devkit): link shim names automatically on a version change"
 - Create test in: `tests/install_links.rs`
 
 **Interfaces:**
-- Consumes: `shim::SHIMS`, `links::same_file`, `links::install_dir`.
+- Consumes: `shim::SHIMS`, `links::same_file`.
 - Produces: a `Row` per shim in doctor's existing table.
 
 `doctor.rs` already has `enum Check { Ok, Warn, Invalid, Unreachable, Unset }` and `struct Row { key, source, check }`. A skipped foreign name is the one case a person must see, since the automatic path stays quiet about it after the first run.
@@ -1521,10 +1521,10 @@ Add to `src/bin/devkit/doctor.rs`, and call it where the other row builders are 
 /// automatic linker warns once and then stays quiet, so this is where a name it
 /// could not claim stays visible.
 fn shim_rows() -> Vec<Row> {
-    let Ok(dir) = crate::links::install_dir() else {
+    let Ok(exe) = std::env::current_exe() else {
         return Vec::new();
     };
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(dir) = exe.parent() else {
         return Vec::new();
     };
     crate::shim::SHIMS
