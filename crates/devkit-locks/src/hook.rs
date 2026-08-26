@@ -147,7 +147,8 @@ fn harness_flag_in(body: &str) -> bool {
 /// leaves the flag unset or false. Resolving by precedence instead would let a
 /// closer, silent layer mask an explicit opt-in further out.
 fn harness_enabled(cwd: &Path) -> bool {
-    let Ok(layers) = devkit_config::project_layers(cwd, None) else {
+    let main = devkit_common::git::main_checkout(cwd).ok().flatten();
+    let Ok(layers) = devkit_config::project_layers(cwd, main.as_deref()) else {
         return false;
     };
     layers.iter().any(|layer| {
@@ -448,6 +449,52 @@ mod tests {
 
         assert!(harness_enabled(&nested));
         assert!(!harness_enabled(repo.path()));
+    }
+
+    /// A linked worktree inherits its main checkout's `[harness]` declaration:
+    /// `harness_enabled` must see it even though the worktree itself carries
+    /// no `devkit.toml` of its own. The config is written into the main
+    /// checkout only after the worktree exists, and is never committed, so
+    /// nothing about `git worktree add` could have copied it into the
+    /// worktree — a pass here can only come from inheritance.
+    #[test]
+    fn harness_is_inherited_from_the_main_checkout() {
+        let main = tempfile::tempdir().unwrap();
+        devkit_common::git::Git::fixture(main.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        std::fs::write(main.path().join("f.txt"), "x\n").unwrap();
+        devkit_common::git::Git::fixture(main.path())
+            .args(["add", "."])
+            .output()
+            .unwrap();
+        devkit_common::git::Git::fixture(main.path())
+            .args(["commit", "-qm", "init"])
+            .output()
+            .unwrap();
+
+        let holder = tempfile::tempdir().unwrap();
+        let linked = holder.path().join("wt");
+        devkit_common::git::Git::fixture(main.path())
+            .args([
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "side",
+            ])
+            .output()
+            .unwrap();
+
+        std::fs::write(
+            main.path().join("devkit.toml"),
+            "[harness]\nenforce_writes = true\n",
+        )
+        .unwrap();
+
+        assert!(harness_enabled(&linked));
     }
 
     #[test]

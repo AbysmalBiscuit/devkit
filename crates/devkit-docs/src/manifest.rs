@@ -165,8 +165,9 @@ pub fn discover(start: &Path, global: Option<&Path>) -> Result<Discovered> {
     };
     stamp(&mut manifest, &global_path);
 
+    let main = devkit_common::git::main_checkout(start).ok().flatten();
     let mut nearest: Option<PathBuf> = None;
-    for layer in devkit_config::project_layers(start, None)? {
+    for layer in devkit_config::project_layers(start, main.as_deref())? {
         if layer.kind != devkit_config::LayerKind::MainCheckout
             && layer.path.file_name() == Some(std::ffi::OsStr::new(devkit_config::CONFIG_FILE))
         {
@@ -483,6 +484,55 @@ mod tests {
         assert_eq!(tokio.r#ref.as_deref(), Some("pin")); // project layer wins
         assert_eq!(tokio.repo.as_deref(), Some("u")); // global inherited
         assert_eq!(d.project_devkit_toml, Some(proj.join("devkit.toml"))); // nearest
+    }
+
+    /// A linked worktree inherits its main checkout's `[docs]` entries, but
+    /// `--project` writes must never target the inherited file: a worktree
+    /// that ran `docm add --project` should get its own `devkit.toml`, not
+    /// an edit to the checkout every other worktree shares. The main
+    /// checkout's config is written only after the worktree exists, and is
+    /// never committed, so nothing about `git worktree add` could have
+    /// copied it in — a pass here can only come from inheritance.
+    #[test]
+    fn project_devkit_toml_never_resolves_to_the_main_checkout() {
+        let main = tempfile::tempdir().unwrap();
+        devkit_common::git::Git::fixture(main.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        std::fs::write(main.path().join("f.txt"), "x\n").unwrap();
+        devkit_common::git::Git::fixture(main.path())
+            .args(["add", "."])
+            .output()
+            .unwrap();
+        devkit_common::git::Git::fixture(main.path())
+            .args(["commit", "-qm", "init"])
+            .output()
+            .unwrap();
+
+        let holder = tempfile::tempdir().unwrap();
+        let linked = holder.path().join("wt");
+        devkit_common::git::Git::fixture(main.path())
+            .args([
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "side",
+            ])
+            .output()
+            .unwrap();
+
+        std::fs::write(
+            main.path().join("devkit.toml"),
+            "[[docs.libs]]\nname='tokio'\n",
+        )
+        .unwrap();
+
+        let d = discover(&linked, Some(&holder.path().join("missing.toml"))).unwrap();
+        assert!(d.manifest.libs.iter().any(|l| l.name == "tokio"));
+        assert_eq!(d.project_devkit_toml, None);
     }
 
     #[test]
