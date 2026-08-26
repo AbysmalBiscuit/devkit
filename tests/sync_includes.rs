@@ -5,10 +5,14 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// Git ignores the developer's real global/system config, so a fixture commit
+/// can't inherit ambient settings like `commit.gpgsign`.
 fn git(args: &[&str], cwd: &Path) {
     let out = Command::new("git")
         .args(args)
         .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@t")
         .env("GIT_COMMITTER_NAME", "t")
@@ -28,7 +32,6 @@ fn project(include: &str) -> tempfile::TempDir {
     let main = t.path().join("main");
     std::fs::create_dir_all(&main).unwrap();
     git(&["init", "-q", "-b", "main"], &main);
-    git(&["config", "commit.gpgsign", "false"], &main);
     std::fs::write(main.join("f.txt"), "x\n").unwrap();
     std::fs::write(
         main.join("devkit.toml"),

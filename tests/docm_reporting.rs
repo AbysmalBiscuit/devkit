@@ -2,10 +2,14 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// Git ignores the developer's real global/system config, so a fixture commit
+/// or tag can't inherit ambient settings like `commit.gpgsign`.
 fn git(cwd: &Path, args: &[&str]) {
     let output = Command::new("git")
         .args(args)
         .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .output()
         .unwrap();
     assert!(
@@ -20,8 +24,6 @@ fn fixture_repo(dir: &Path) {
     git(dir, &["init", "-b", "main"]);
     git(dir, &["config", "user.email", "t@t"]);
     git(dir, &["config", "user.name", "t"]);
-    git(dir, &["config", "commit.gpgsign", "false"]);
-    git(dir, &["config", "tag.gpgsign", "false"]);
     std::fs::write(dir.join("src/lib.rs"), "// v1").unwrap();
     git(dir, &["add", "."]);
     git(dir, &["commit", "-m", "v1"]);

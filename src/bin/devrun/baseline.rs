@@ -46,11 +46,31 @@ fn head_at(path: &str, git_ref: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
+
+    /// Git ignores the developer's real global/system config, so a fixture
+    /// commit can't inherit ambient settings like `commit.gpgsign`.
+    fn git_test(args: &[&str], cwd: &str) -> Result<String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .context("failed to spawn `git`")?;
+        anyhow::ensure!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
     #[test]
     fn refuses_dirty_baseline() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().to_str().unwrap();
-        git(&["init", "-q"], p).unwrap();
+        git_test(&["init", "-q"], p).unwrap();
         std::fs::write(tmp.path().join("f"), "x").unwrap();
         // dirty (untracked) tree → guard trips
         let err = ensure_fresh(p, p, "origin/staging").unwrap_err();
@@ -61,21 +81,20 @@ mod tests {
     fn head_at_true_only_when_head_equals_ref() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().to_str().unwrap();
-        git(&["init", "-q"], p).unwrap();
-        git(&["config", "user.email", "t@t"], p).unwrap();
-        git(&["config", "user.name", "t"], p).unwrap();
-        git(&["config", "commit.gpgsign", "false"], p).unwrap();
+        git_test(&["init", "-q"], p).unwrap();
+        git_test(&["config", "user.email", "t@t"], p).unwrap();
+        git_test(&["config", "user.name", "t"], p).unwrap();
         std::fs::write(tmp.path().join("f"), "a").unwrap();
-        git(&["add", "-A"], p).unwrap();
-        git(&["commit", "-qm", "init"], p).unwrap();
-        git(&["branch", "target"], p).unwrap();
+        git_test(&["add", "-A"], p).unwrap();
+        git_test(&["commit", "-qm", "init"], p).unwrap();
+        git_test(&["branch", "target"], p).unwrap();
 
         // HEAD and `target` point at the same commit.
         assert!(head_at(p, "target"));
 
         // Move HEAD forward; `target` stays behind.
         std::fs::write(tmp.path().join("f"), "b").unwrap();
-        git(&["commit", "-aqm", "second"], p).unwrap();
+        git_test(&["commit", "-aqm", "second"], p).unwrap();
         assert!(!head_at(p, "target"));
     }
 }

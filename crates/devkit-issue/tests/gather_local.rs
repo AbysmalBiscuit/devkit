@@ -3,10 +3,14 @@ use devkit_common::tracker::{Resolved, TrackerKind};
 use std::path::Path;
 use std::process::Command;
 
+/// Git ignores the developer's real global/system config, so a fixture commit
+/// can't inherit ambient settings like `commit.gpgsign`.
 fn git(args: &[&str], cwd: &Path) {
     let ok = Command::new("git")
         .args(args)
         .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .status()
         .expect("git runs")
         .success();

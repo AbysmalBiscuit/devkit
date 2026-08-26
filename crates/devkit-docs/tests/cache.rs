@@ -3,6 +3,23 @@ mod common;
 use common::fixture_repo;
 use devkit_docs::cache::{self, LibCache, Meta, WorktreeMeta};
 use devkit_docs::tags::TagPattern;
+use std::path::Path;
+
+/// A follow-up git operation against an already-built `fixture_repo`. Git
+/// ignores the developer's real global/system config, so it can't inherit
+/// ambient settings like `commit.gpgsign`; the repo's identity is already set
+/// locally by `fixture_repo`.
+fn git(args: &[&str], dir: &Path) {
+    let ok = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git {args:?} failed");
+}
 
 #[test]
 fn a_directory_the_host_folds_into_an_existing_one_is_refused() {
@@ -83,13 +100,8 @@ fn a_branch_checkout_follows_new_commits_after_fetch() {
     );
 
     std::fs::write(upstream.join("src/lib.rs"), "// v3").unwrap();
-    devkit_common::cmd::capture("git", &["add", "."], Some(upstream.to_str().unwrap())).unwrap();
-    devkit_common::cmd::capture(
-        "git",
-        &["commit", "-m", "v3"],
-        Some(upstream.to_str().unwrap()),
-    )
-    .unwrap();
+    git(&["add", "."], &upstream);
+    git(&["commit", "-m", "v3"], &upstream);
     lib.fetch().unwrap();
     let (_, next_commit) = lib.resolve_ref("main").unwrap();
     let (main, repaired) = lib.ensure_at("main", &next_commit).unwrap();
@@ -122,7 +134,7 @@ fn a_forty_hex_pin_is_only_an_object_name() {
     let upstream = tmp.join("upstream");
     let repo = fixture_repo(&upstream);
     let hex = "0000000000000000000000000000000000000000";
-    devkit_common::cmd::capture("git", &["tag", hex, "v1.0.0"], Some(&repo)).unwrap();
+    git(&["tag", hex, "v1.0.0"], &upstream);
     let lib = LibCache::new(&tmp.join("cacheroot"), "mylib").unwrap();
     let mut meta = Meta::default();
     lib.ensure_clone(&repo, &mut meta).unwrap();

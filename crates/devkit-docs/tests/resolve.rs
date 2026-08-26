@@ -5,6 +5,27 @@ use devkit_docs::manifest::{Ecosystem, LibEntry};
 use devkit_docs::refs::RefStore;
 use devkit_docs::resolve::{Options, resolve};
 
+/// A follow-up git operation against an already-built `fixture_repo`. Git
+/// ignores the developer's real global/system config, so a tag created here
+/// can't be coerced into an annotated, signed one by an ambient
+/// `tag.gpgsign`; the repo's identity is already set locally by
+/// `fixture_repo`.
+fn git(args: &[&str], cwd: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 #[test]
 fn lockfile_version_resolves_to_tag_worktree_and_records_ref() {
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -418,7 +439,7 @@ fn a_tag_moved_upstream_is_seen_after_fetch_not_on_a_plain_resolve() {
     )
     .unwrap();
 
-    devkit_common::cmd::capture("git", &["tag", "-f", "v1.0.0", "v1.1.0"], Some(&repo)).unwrap();
+    git(&["tag", "-f", "v1.0.0", "v1.1.0"], &repo);
 
     let second = devkit_docs::resolve::resolve(
         &entry,
@@ -491,7 +512,7 @@ fn a_failed_moved_tag_repair_does_not_report_success() {
         &devkit_docs::resolve::Options::default(),
     )
     .unwrap();
-    devkit_common::cmd::capture("git", &["tag", "-f", "v1.0.0", "v1.1.0"], Some(&repo)).unwrap();
+    git(&["tag", "-f", "v1.0.0", "v1.1.0"], &repo);
     let lib = devkit_docs::cache::LibCache::new(&cache, "up").unwrap();
     lib.fetch().unwrap();
     std::fs::write(first.path.join("src/lib.rs"), "// local change").unwrap();
@@ -517,7 +538,7 @@ fn a_tag_deleted_upstream_is_a_hard_error_after_prune_tags() {
     let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
-    devkit_common::cmd::capture("git", &["tag", "v2.0.0", "v1.1.0"], Some(&repo)).unwrap();
+    git(&["tag", "v2.0.0", "v1.1.0"], &repo);
     let entry = devkit_docs::manifest::LibEntry {
         name: "up".into(),
         ecosystem: Some(devkit_docs::manifest::Ecosystem::Git),
@@ -533,7 +554,7 @@ fn a_tag_deleted_upstream_is_a_hard_error_after_prune_tags() {
     )
     .unwrap();
 
-    devkit_common::cmd::capture("git", &["tag", "-d", "v2.0.0"], Some(&repo)).unwrap();
+    git(&["tag", "-d", "v2.0.0"], &repo);
     let lib = devkit_docs::cache::LibCache::new(&cache, "up").unwrap();
     lib.fetch().unwrap();
     assert!(
@@ -566,7 +587,7 @@ fn a_pin_that_changes_from_a_tag_to_a_branch_is_refused() {
     let base = base_dir.path();
     let repo = common::fixture_repo(&base.join("src"));
     let cache = base.join("cache");
-    devkit_common::cmd::capture("git", &["tag", "release", "v1.0.0"], Some(&repo)).unwrap();
+    git(&["tag", "release", "v1.0.0"], &repo);
     let entry = devkit_docs::manifest::LibEntry {
         name: "up".into(),
         ecosystem: Some(devkit_docs::manifest::Ecosystem::Git),
@@ -582,8 +603,8 @@ fn a_pin_that_changes_from_a_tag_to_a_branch_is_refused() {
     )
     .unwrap();
 
-    devkit_common::cmd::capture("git", &["tag", "-d", "release"], Some(&repo)).unwrap();
-    devkit_common::cmd::capture("git", &["branch", "release", "v1.1.0"], Some(&repo)).unwrap();
+    git(&["tag", "-d", "release"], &repo);
+    git(&["branch", "release", "v1.1.0"], &repo);
     let lib = devkit_docs::cache::LibCache::new(&cache, "up").unwrap();
     lib.fetch().unwrap();
 
@@ -622,7 +643,7 @@ fn a_ref_published_after_the_last_fetch_resolves_without_a_manual_sync() {
     )
     .unwrap();
 
-    devkit_common::cmd::capture("git", &["tag", "v3.0.0", "v1.1.0"], Some(&repo)).unwrap();
+    git(&["tag", "v3.0.0", "v1.1.0"], &repo);
 
     entry.r#ref = Some("v3.0.0".into());
     let r = devkit_docs::resolve::resolve(

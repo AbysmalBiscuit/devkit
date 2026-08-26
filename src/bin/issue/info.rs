@@ -331,11 +331,15 @@ mod tests {
     fn local_row_reads_branch_id_and_dirty() {
         use std::process::Command;
         let base = tempfile::tempdir().unwrap();
+        // Git ignores the developer's real global/system config, so this
+        // fixture commit can't inherit ambient settings like `commit.gpgsign`.
         let run = |args: &[&str]| {
             assert!(
                 Command::new("git")
                     .args(args)
                     .current_dir(&base)
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_CONFIG_SYSTEM", "/dev/null")
                     .status()
                     .unwrap()
                     .success()
