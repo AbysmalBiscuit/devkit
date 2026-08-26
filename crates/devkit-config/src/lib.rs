@@ -702,6 +702,7 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
 fn discover(
     explicit: Option<&Path>,
     start: &Path,
+    main_checkout: Option<&Path>,
     home: Option<&Path>,
 ) -> Result<Vec<(PathBuf, toml::Table)>> {
     if let Some(p) = explicit {
@@ -711,7 +712,7 @@ fn discover(
         return Ok(vec![read_layer(&PathBuf::from(p))?]);
     }
 
-    let (project, rooted) = layers::project_layers_rooted(start, None)?;
+    let (project, rooted) = layers::project_layers_rooted(start, main_checkout)?;
 
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
     if !rooted
@@ -763,12 +764,19 @@ pub enum Health {
 }
 
 /// Classify the config reachable from `start` without ever failing.
-pub fn health(start: &Path) -> Health {
-    health_with_home(start, home_config_path().as_deref())
+/// `main_checkout` is this repository's main checkout when `start` is a
+/// linked worktree of one — resolved by the caller, because `devkit-config`
+/// asks git nothing.
+pub fn health(start: &Path, main_checkout: Option<&Path>) -> Health {
+    health_with_home(start, main_checkout, home_config_path().as_deref())
 }
 
-pub(crate) fn health_with_home(start: &Path, home: Option<&Path>) -> Health {
-    match resolve_with_home(None, start, home) {
+pub(crate) fn health_with_home(
+    start: &Path,
+    main_checkout: Option<&Path>,
+    home: Option<&Path>,
+) -> Health {
+    match resolve_with_home(None, start, main_checkout, home) {
         Ok(_) => Health::Ok,
         Err(e) if e.downcast_ref::<NoConfig>().is_some() => Health::Absent,
         Err(e) => Health::Broken(
@@ -787,9 +795,21 @@ pub(crate) fn health_with_home(start: &Path, home: Option<&Path>) -> Health {
 /// these resolves without a `[defaults]` table; anything else demands one.
 const STANDALONE_SECTIONS: [&str; 4] = ["config", "harness", "docs", "brief"];
 
-/// Resolve the effective config by layering and deep-merging all applicable files.
-pub fn resolve(explicit: Option<&Path>, start: &Path) -> Result<(Config, Provenance)> {
-    resolve_with_home(explicit, start, home_config_path().as_deref())
+/// Resolve the effective config by layering and deep-merging all applicable
+/// files. `main_checkout` is this repository's main checkout when `start` is
+/// a linked worktree of one — resolved by the caller, because
+/// `devkit-config` asks git nothing.
+pub fn resolve(
+    explicit: Option<&Path>,
+    start: &Path,
+    main_checkout: Option<&Path>,
+) -> Result<(Config, Provenance)> {
+    resolve_with_home(
+        explicit,
+        start,
+        main_checkout,
+        home_config_path().as_deref(),
+    )
 }
 
 /// `resolve` with an injectable home-config path (tests pass a controlled path or
@@ -797,6 +817,7 @@ pub fn resolve(explicit: Option<&Path>, start: &Path) -> Result<(Config, Provena
 pub(crate) fn resolve_with_home(
     explicit: Option<&Path>,
     start: &Path,
+    main_checkout: Option<&Path>,
     home: Option<&Path>,
 ) -> Result<(Config, Provenance)> {
     // Every discovered layer path, and every `[defaults]` path resolved against
@@ -805,7 +826,7 @@ pub(crate) fn resolve_with_home(
     // passing `.`) must not leak into that value.
     let start_buf = absolutize(start)?;
     let start = start_buf.as_path();
-    let layers = discover(explicit, start, home)?;
+    let layers = discover(explicit, start, main_checkout, home)?;
     let order: Vec<PathBuf> = layers.iter().map(|(p, _)| p.clone()).collect();
     let (merged, origin) = merge_layers(&layers);
     if !merged.contains_key("defaults")
@@ -1302,7 +1323,7 @@ content = \"key = 1\\n\"\n"
             "[defaults]\nbranch_prefix='y/'\n[apps.api]\nbase_port=2\n",
         )
         .unwrap();
-        let (cfg, prov) = resolve_with_home(None, &child, None).unwrap();
+        let (cfg, prov) = resolve_with_home(None, &child, None, None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "y/"); // child overrides
         assert_eq!(cfg.defaults.worktree_root, ABS_W); // inherited from parent
         assert_eq!(cfg.apps["api"].base_port, 2); // child overrides
@@ -1312,6 +1333,25 @@ content = \"key = 1\\n\"\n"
             prov.origin["defaults.branch_prefix"],
             child.join("devkit.toml")
         );
+    }
+
+    /// A linked worktree is a sibling of its main checkout, not a descendant,
+    /// so the upward walk from the worktree never reaches the main
+    /// checkout's own devkit.toml. Passing `main_checkout` is what lets a
+    /// value declared only there survive into the merged config.
+    #[test]
+    fn resolve_layers_in_the_main_checkouts_config() {
+        let main = tempfile::tempdir().unwrap();
+        std::fs::write(
+            main.path().join("devkit.toml"),
+            format!("[defaults]\n{FULL_DEFAULTS}"),
+        )
+        .unwrap();
+
+        let worktree = tempfile::tempdir().unwrap();
+
+        let (cfg, _) = resolve_with_home(None, worktree.path(), Some(main.path()), None).unwrap();
+        assert_eq!(cfg.defaults.worktree_root, ABS_W);
     }
 
     #[test]
@@ -1331,7 +1371,7 @@ content = \"key = 1\\n\"\n"
             format!("[config]\nroot=true\n[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=2\nlaunch=['a']\n"),
         )
         .unwrap();
-        let (cfg, prov) = resolve_with_home(None, &child, Some(&home)).unwrap();
+        let (cfg, prov) = resolve_with_home(None, &child, None, Some(&home)).unwrap();
         assert_eq!(cfg.defaults.worktree_root, ABS_W); // parent's /PARENT dropped
         assert_eq!(cfg.defaults.branch_prefix, "x/"); // home's HOME/ dropped
         assert_eq!(prov.layers, vec![child.join("devkit.toml")]);
@@ -1353,7 +1393,7 @@ content = \"key = 1\\n\"\n"
             format!("[defaults]\n{FULL_DEFAULTS}[apps.api]\nbase_port=2\nlaunch=['a']\n"),
         )
         .unwrap();
-        let (cfg, prov) = resolve_with_home(None, &repo, Some(&home)).unwrap();
+        let (cfg, prov) = resolve_with_home(None, &repo, None, Some(&home)).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "x/"); // repo wins over home
         assert_eq!(
             prov.origin["defaults.branch_prefix"],
@@ -1376,7 +1416,7 @@ content = \"key = 1\\n\"\n"
             "[defaults]\nbranch_prefix='local/'\n",
         )
         .unwrap();
-        let (cfg, prov) = resolve_with_home(None, repo.path(), None).unwrap();
+        let (cfg, prov) = resolve_with_home(None, repo.path(), None, None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "local/");
         assert_eq!(cfg.defaults.worktree_root, ABS_W); // tracked layer still merges
         assert_eq!(
@@ -1405,7 +1445,7 @@ content = \"key = 1\\n\"\n"
             "[defaults]\nbranch_prefix='deep/'\n",
         )
         .unwrap();
-        let (cfg, _) = resolve_with_home(None, &child, None).unwrap();
+        let (cfg, _) = resolve_with_home(None, &child, None, None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "deep/");
     }
 
@@ -1417,7 +1457,7 @@ content = \"key = 1\\n\"\n"
             format!("[defaults]\n{FULL_DEFAULTS}"),
         )
         .unwrap();
-        let (cfg, prov) = resolve_with_home(None, repo.path(), None).unwrap();
+        let (cfg, prov) = resolve_with_home(None, repo.path(), None, None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, ABS_W);
         assert_eq!(prov.layers, vec![repo.path().join("devkit.local.toml")]);
     }
@@ -1440,7 +1480,7 @@ content = \"key = 1\\n\"\n"
         )
         .unwrap();
         std::fs::write(child.join("devkit.local.toml"), "[config]\nroot=true\n").unwrap();
-        let (cfg, prov) = resolve_with_home(None, &child, Some(&home)).unwrap();
+        let (cfg, prov) = resolve_with_home(None, &child, None, Some(&home)).unwrap();
         assert_eq!(cfg.defaults.worktree_root, ABS_W); // parent's /PARENT dropped
         assert_eq!(cfg.defaults.branch_prefix, "x/"); // home's HOME/ dropped
         assert_eq!(
@@ -1465,7 +1505,7 @@ content = \"key = 1\\n\"\n"
             "[defaults]\nbranch_prefix='IGNORED/'\n",
         )
         .unwrap();
-        let (cfg, prov) = resolve_with_home(Some(&explicit), &child, None).unwrap();
+        let (cfg, prov) = resolve_with_home(Some(&explicit), &child, None, None).unwrap();
         assert_eq!(cfg.apps["api"].base_port, 7);
         assert_eq!(cfg.defaults.branch_prefix, "x/"); // child file not consulted
         assert_eq!(prov.layers, vec![explicit]);
@@ -1474,7 +1514,7 @@ content = \"key = 1\\n\"\n"
     #[test]
     fn resolve_errors_when_no_config_found() {
         let root = tempfile::tempdir().unwrap();
-        let err = resolve_with_home(None, root.path(), None).unwrap_err();
+        let err = resolve_with_home(None, root.path(), None, None).unwrap_err();
         assert!(err.to_string().contains("no devkit.toml"));
     }
 
@@ -1654,7 +1694,7 @@ steps = [
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("devkit.toml"), "[brief]\npins = false\n").unwrap();
 
-        let (cfg, _) = resolve_with_home(None, &project, Some(&home)).unwrap();
+        let (cfg, _) = resolve_with_home(None, &project, None, Some(&home)).unwrap();
         assert!(cfg.brief.enabled, "enabled defaults on");
         assert!(!cfg.brief.pins, "the project layer wins");
 
@@ -1666,7 +1706,7 @@ steps = [
             format!("[defaults]\n{FULL_DEFAULTS}"),
         )
         .unwrap();
-        let (cfg, _) = resolve_with_home(None, &bare, None).unwrap();
+        let (cfg, _) = resolve_with_home(None, &bare, None, None).unwrap();
         assert!(cfg.brief.enabled);
         assert!(cfg.brief.pins);
         assert!(cfg.brief.locks);
@@ -1689,12 +1729,12 @@ steps = [
         )
         .unwrap();
 
-        let (cfg, _) = resolve_with_home(None, &project, None).unwrap();
+        let (cfg, _) = resolve_with_home(None, &project, None, None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, "");
         assert_eq!(cfg.defaults.apps_dir, "apps");
         assert_eq!(cfg.defaults.pr_base, "staging");
         assert_eq!(cfg.defaults.stray_scan_width, 64);
-        assert_eq!(health_with_home(&project, None), Health::Ok);
+        assert_eq!(health_with_home(&project, None, None), Health::Ok);
     }
 
     #[test]
@@ -1711,7 +1751,7 @@ steps = [
         )
         .unwrap();
 
-        match health_with_home(&project, None) {
+        match health_with_home(&project, None, None) {
             Health::Broken(why) => assert!(why.contains("defaults"), "{why}"),
             other => panic!("expected Broken, got {other:?}"),
         }
@@ -1723,7 +1763,7 @@ steps = [
 
         let empty = tmp.path().join("empty");
         std::fs::create_dir_all(&empty).unwrap();
-        assert_eq!(health_with_home(&empty, None), Health::Absent);
+        assert_eq!(health_with_home(&empty, None, None), Health::Absent);
 
         let good = tmp.path().join("good");
         std::fs::create_dir_all(&good).unwrap();
@@ -1732,7 +1772,7 @@ steps = [
             format!("[config]\nroot = true\n[defaults]\n{FULL_DEFAULTS}"),
         )
         .unwrap();
-        assert_eq!(health_with_home(&good, None), Health::Ok);
+        assert_eq!(health_with_home(&good, None, None), Health::Ok);
 
         // A required app key left out: the exact fault a user hits by adding
         // an app entry by hand.
@@ -1743,7 +1783,7 @@ steps = [
             format!("[config]\nroot = true\n[defaults]\n{FULL_DEFAULTS}[apps.foobar]\nlaunch = ['echo']\n"),
         )
         .unwrap();
-        let Health::Broken(msg) = health_with_home(&missing_key, None) else {
+        let Health::Broken(msg) = health_with_home(&missing_key, None, None) else {
             panic!("a config that does not deserialize is Broken");
         };
         assert!(msg.contains("base_port"), "{msg}");
@@ -1752,7 +1792,7 @@ steps = [
         let unparseable = tmp.path().join("unparseable");
         std::fs::create_dir_all(&unparseable).unwrap();
         std::fs::write(unparseable.join("devkit.toml"), "this is not toml [[[").unwrap();
-        let Health::Broken(msg) = health_with_home(&unparseable, None) else {
+        let Health::Broken(msg) = health_with_home(&unparseable, None, None) else {
             panic!("a config that does not parse is Broken");
         };
         assert!(msg.contains("parsing config layer"), "{msg}");
@@ -1771,7 +1811,7 @@ steps = [
         )
         .unwrap();
 
-        let (cfg, _) = resolve_with_home(None, &project, None).unwrap();
+        let (cfg, _) = resolve_with_home(None, &project, None, None).unwrap();
         assert!(!cfg.brief.locks);
         assert!(!cfg.brief.apps);
         assert!(!cfg.brief.tasks);
@@ -1795,7 +1835,7 @@ steps = [
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("devkit.toml"), "[brief]\npins = false\n").unwrap();
 
-        let (cfg, _) = resolve_with_home(None, &project, Some(&home)).unwrap();
+        let (cfg, _) = resolve_with_home(None, &project, None, Some(&home)).unwrap();
         assert!(!cfg.brief.enabled, "the home-layer key survives");
         assert!(!cfg.brief.pins, "the project-layer key overrides");
     }
@@ -1915,7 +1955,7 @@ steps = [
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"../proj-worktrees/_baseline\"\n",
         );
-        let (cfg, _) = resolve_with_home(None, &proj, None).unwrap();
+        let (cfg, _) = resolve_with_home(None, &proj, None, None).unwrap();
         assert_eq!(
             cfg.defaults.worktree_root,
             tmp.path().join("proj-worktrees").to_string_lossy()
@@ -1943,8 +1983,8 @@ steps = [
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"\"\n",
         );
-        let (from_root, _) = resolve_with_home(None, &proj, None).unwrap();
-        let (from_nested, _) = resolve_with_home(None, &nested, None).unwrap();
+        let (from_root, _) = resolve_with_home(None, &proj, None, None).unwrap();
+        let (from_nested, _) = resolve_with_home(None, &nested, None, None).unwrap();
         assert_eq!(
             from_root.defaults.worktree_root,
             from_nested.defaults.worktree_root
@@ -1964,7 +2004,7 @@ steps = [
              baseline_path = \"~/wt/_baseline\"\n"
             ),
         );
-        let (cfg, _) = resolve_with_home(None, tmp.path(), None).unwrap();
+        let (cfg, _) = resolve_with_home(None, tmp.path(), None, None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, ABS_W);
         let home = home_dir().expect("a home directory to expand `~` against");
         assert_eq!(
@@ -1984,7 +2024,7 @@ steps = [
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"\"\n",
         );
-        let (cfg, _) = resolve_with_home(None, tmp.path(), None).unwrap();
+        let (cfg, _) = resolve_with_home(None, tmp.path(), None, None).unwrap();
         assert_eq!(
             cfg.defaults.baseline_path, "",
             "an unset path must not become the layer dir"
@@ -2003,7 +2043,7 @@ steps = [
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"\"\n",
         );
-        let (cfg, _) = resolve_with_home(None, tmp.path(), None).unwrap();
+        let (cfg, _) = resolve_with_home(None, tmp.path(), None, None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "lev/");
     }
 
@@ -2018,8 +2058,8 @@ steps = [
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"\"\n",
         );
-        let err =
-            resolve_with_home(None, tmp.path(), None).expect_err("unset var must fail the load");
+        let err = resolve_with_home(None, tmp.path(), None, None)
+            .expect_err("unset var must fail the load");
         assert!(
             err.to_string().contains("DEVKIT_TEST_MISSING_ROOT"),
             "{err}"
@@ -2042,7 +2082,7 @@ steps = [
              baseline_ref = \"origin/main\"\n\
              baseline_path = \"${DEVKIT_TEST_EMPTY}\"\n",
         );
-        let (cfg, _) = resolve_with_home(None, tmp.path(), None).unwrap();
+        let (cfg, _) = resolve_with_home(None, tmp.path(), None, None).unwrap();
         assert_eq!(
             cfg.defaults.baseline_path, "",
             "a set-but-empty variable must not become the layer dir"
@@ -2075,7 +2115,7 @@ steps = [
         // to `tmp`: macOS resolves a `/var/folders/...` temp dir through the
         // `/var` -> `/private/var` symlink, so the two spellings differ.
         let here = std::env::current_dir().unwrap();
-        let result = resolve_with_home(None, Path::new("."), None);
+        let result = resolve_with_home(None, Path::new("."), None, None);
         std::env::set_current_dir(&cwd).unwrap();
         let (cfg, _) = result.unwrap();
         let root = Path::new(&cfg.defaults.worktree_root);

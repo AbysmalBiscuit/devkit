@@ -461,7 +461,8 @@ fn snapshot(cwd: &Path, settings: &BriefConfig) -> Option<BriefSnapshot> {
 /// catalog, which is what fails on a docs-only project. An unreadable config
 /// falls open to the defaults.
 fn brief_config(cwd: &Path) -> BriefConfig {
-    config::resolve(None, cwd)
+    let main_checkout = devkit_common::git::main_checkout(cwd).ok().flatten();
+    config::resolve(None, cwd, main_checkout.as_deref())
         .map(|(cfg, _)| cfg.brief)
         .unwrap_or_default()
 }
@@ -470,7 +471,8 @@ fn brief_config(cwd: &Path) -> BriefConfig {
 /// does not exist. An absent config is how every non-devkit repository looks,
 /// so only a config that exists and fails is worth a word.
 fn config_fault(cwd: &Path) -> Option<String> {
-    match config::health(cwd) {
+    let main_checkout = devkit_common::git::main_checkout(cwd).ok().flatten();
+    match config::health(cwd, main_checkout.as_deref()) {
         config::Health::Broken(why) => Some(why),
         config::Health::Ok | config::Health::Absent => None,
     }
