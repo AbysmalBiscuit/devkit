@@ -162,14 +162,18 @@ fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
 
 fn main() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().collect();
-    // The identity probe `links::is_devkit_binary` uses: answered before any
-    // clap parsing, any panic-hook/state-migration/linking setup, and —
+    // The marker probe `links::answers_probe_marker` uses: answered before
+    // any clap parsing, any panic-hook/state-migration/linking setup, and —
     // critically — before `devkit-mcp`'s normal path would start blocking on
     // stdin. Every shim is this same binary, so this one intercept covers all
-    // six names. It must stay the very first thing `main` does: a probed
-    // child that reached `links::ensure_current` before this check would
-    // itself probe every shim name to judge them, recursing without bound the
-    // moment a devkit-family binary sits at one.
+    // six names.
+    //
+    // This does NOT bound `is_devkit_binary`'s other two probes: `--version`
+    // and `--help` are ordinary subcommand-shaped args, so a probed child
+    // spawned with either one falls straight through to `ensure_current`
+    // below, same as any real invocation. What stops that from cascading is
+    // the `try_write` gate inside `ensure_current` itself — see the comment
+    // there.
     if args.get(1).map(OsString::as_os_str) == Some(std::ffi::OsStr::new(shim::PROBE_FLAG)) {
         println!("{}", shim::PROBE_MARKER);
         return Ok(());

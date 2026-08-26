@@ -320,19 +320,71 @@ fn link_one(exe: &Path, shim: &Shim, dest: &Path, force: bool) -> Outcome {
     }
 }
 
-/// Link the shim names when the stamp does not match this version.
+/// Env var whose mere presence (any value) skips the automatic linking pass
+/// entirely, before even reading the stamp. Two reasons to reach for it: a
+/// test exercising anything other than this feature, which must not touch
+/// the real build's `exe.parent()` directory with real hardlinks (`link_all`
+/// always targets it, regardless of an isolated state dir) or write a real
+/// stamp; and a user or distro packager who wants no automatic linking at
+/// all, who otherwise has no way to opt out.
+pub const SKIP_AUTOLINK_ENV: &str = "DEVKIT_SKIP_AUTOLINK";
+
+/// How long the automatic linking pass may run before abandoning whatever
+/// shims it has not yet reached. Six shims x three probes x `PROBE_TIMEOUT`
+/// is a 90s worst case, and this pass runs on the first invocation of *every*
+/// shim after a version bump — including `lockm hook pretooluse` under an
+/// editor's own hook timeout. A touch over one shim's own worst case (15s)
+/// caps the damage from one hung foreign binary at roughly its own cost,
+/// without adding a second, finer-grained cancellation path into `probe`.
+const AUTOLINK_DEADLINE: Duration = Duration::from_secs(20);
+
+/// The stamp line for `exe`: its version, the directory it links into, and
+/// its own mtime (nanoseconds since the epoch — a portable, stable integer;
+/// `file_index`/inode identity isn't available here for the same reason
+/// Task 8 couldn't use it). Comparing the whole line, not the version alone,
+/// is what makes two cases relink instead of being silently skipped forever
+/// because the version string didn't move: a same-version reinstall (a fresh
+/// build replacing the file the old hardlinks still point at — an ordinary
+/// pre-release loop) changes the mtime, and a second install at another
+/// prefix changes the directory. `None` if the executable's own metadata or
+/// mtime can't be read; that is simply never a match, not an error.
+fn stamp_line(exe: &Path, dir: &Path) -> Option<String> {
+    let modified = std::fs::metadata(exe).ok()?.modified().ok()?;
+    let nanos = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(format!(
+        "{}\t{}\t{nanos}",
+        env!("CARGO_PKG_VERSION"),
+        dir.display()
+    ))
+}
+
+/// Link the shim names when the stamp does not match this build (see
+/// `stamp_line`).
 ///
-/// Runs before dispatch on every invocation, so the match case must stay one
-/// small read: `lockm hook pretooluse` takes this path on every editor write.
-/// Every failure is a warning; linking never blocks the command the user asked
-/// for.
+/// Runs before dispatch on every invocation, so the match case must stay
+/// cheap: `lockm hook pretooluse` takes this path on every editor write.
+/// `DEVKIT_SKIP_AUTOLINK` (any value) skips the whole pass ahead of even
+/// that — see its own doc comment.
+///
+/// Every failure is a warning; linking never blocks the command the user
+/// asked for, and a whole-pass deadline (`AUTOLINK_DEADLINE`) bounds how long
+/// one hung foreign binary at a shim name can hold up the rest.
 pub fn ensure_current(exe: &Path) {
-    let state = devkit_common::paths::state_dir();
-    let stamp = state.join("links-version");
-    if std::fs::read_to_string(&stamp).is_ok_and(|s| s.trim() == env!("CARGO_PKG_VERSION")) {
+    if std::env::var_os(SKIP_AUTOLINK_ENV).is_some() {
         return;
     }
     let Some(dir) = exe.parent() else { return };
+    let Some(current) = stamp_line(exe, dir) else {
+        return;
+    };
+    let state = devkit_common::paths::state_dir();
+    let stamp = state.join("links-version");
+    if std::fs::read_to_string(&stamp).is_ok_and(|s| s.trim() == current) {
+        return;
+    }
     if std::fs::create_dir_all(&state).is_err() {
         return;
     }
@@ -345,20 +397,40 @@ pub fn ensure_current(exe: &Path) {
         return;
     };
     let mut gate = fd_lock::RwLock::new(gate);
+    // This is also the reentrancy guard against `is_devkit_binary`'s own
+    // `--version` and `--help` probes: both fall straight through the
+    // probe-flag intercept in `main` (only the marker flag is intercepted)
+    // and re-enter `ensure_current` in the spawned child. A `try_write` —
+    // never a blocking `write` — is what keeps that bounded: the child finds
+    // the gate already held by its own ancestor and returns immediately
+    // instead of relinking (and probing) all over again.
     let Ok(_held) = gate.try_write() else {
-        // Another process is linking right now; it will write the stamp.
+        // Another process — an ancestor probe, or a genuinely concurrent
+        // devkit invocation — is linking right now; it will write the stamp.
         return;
     };
-    for (name, outcome) in link_all(exe, dir, false) {
-        match outcome {
-            Outcome::Failed(e) => eprintln!("devkit: could not link {name}: {e}"),
-            Outcome::SkippedForeign(why) => {
-                eprintln!("devkit: {name} on PATH is not a devkit binary ({why}); left alone");
-            }
+    let deadline = Instant::now() + AUTOLINK_DEADLINE;
+    let mut truncated = false;
+    for s in SHIMS {
+        if Instant::now() >= deadline {
+            truncated = true;
+            break;
+        }
+        match link_one(exe, s, &dir.join(shim_file_name(s.name)), false) {
+            Outcome::Failed(e) => eprintln!("devkit: could not link {}: {e}", s.name),
+            Outcome::SkippedForeign(why) => eprintln!(
+                "devkit: {} on PATH is not a devkit binary ({why}); left alone",
+                s.name
+            ),
             Outcome::Created | Outcome::Replaced | Outcome::AlreadyLinked => {}
         }
     }
-    let _ = std::fs::write(&stamp, format!("{}\n", env!("CARGO_PKG_VERSION")));
+    if truncated {
+        eprintln!(
+            "devkit: automatic linking ran out of time; run `devkit install-links` to finish"
+        );
+    }
+    let _ = std::fs::write(&stamp, format!("{current}\n"));
 }
 
 pub fn run(args: InstallLinksArgs) -> Result<()> {

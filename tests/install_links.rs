@@ -382,6 +382,7 @@ fn first_run_links_automatically() {
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
+            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     let _ = out;
@@ -403,6 +404,7 @@ fn automatic_linking_never_claims_a_foreign_name() {
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
+            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     assert_eq!(
@@ -412,9 +414,11 @@ fn automatic_linking_never_claims_a_foreign_name() {
     );
 }
 
-/// The second run does no filesystem work: the stamp already matches.
+/// The stamp's version field names this build, across repeated runs. This
+/// checks the stamp's *content*, not that a second run skips relinking —
+/// `stamped_run_skips_relinking_work` is the test that proves that.
 #[test]
-fn second_run_leaves_the_stamp_alone() {
+fn second_run_writes_this_versions_stamp() {
     let (_dir, exe) = staged();
     let state = tempfile::tempdir().expect("state dir");
     for _ in 0..2 {
@@ -423,23 +427,33 @@ fn second_run_leaves_the_stamp_alone() {
                 .arg("doctor")
                 .env("HOME", state.path())
                 .env("XDG_STATE_HOME", state.path())
+                .env_remove("DEVKIT_SKIP_AUTOLINK")
                 .output()
         });
     }
     let stamp = state.path().join("devkit/links-version");
-    assert_eq!(
-        std::fs::read_to_string(&stamp)
-            .expect("stamp written")
-            .trim(),
-        env!("CARGO_PKG_VERSION")
-    );
+    let content = std::fs::read_to_string(&stamp).expect("stamp written");
+    let version = content
+        .trim()
+        .split('\t')
+        .next()
+        .expect("stamp has a version field");
+    assert_eq!(version, env!("CARGO_PKG_VERSION"));
 }
 
 /// A stamped run must skip the actual linking work, not merely leave the
 /// stamp's own content alone. Removing one shim after the first run and
 /// invoking `devkit` a second time proves it: a real second linking pass
 /// would recreate `portm`, so it staying gone is what shows `ensure_current`
-/// returned before ever calling `link_all` again.
+/// returned before ever reaching the per-shim loop again.
+///
+/// Also removes `links.lock` after the first run, not just `portm`: the fast
+/// path must return before the gate is ever opened, so if a regression
+/// hoisted `create_dir_all`/the lock `open` above the stamp check, the lock
+/// file would reappear even though nothing needed relinking. (A hoisted
+/// `create_dir_all` alone is not observable this way — `state` already
+/// exists by the second run regardless of ordering — so this closes the gate
+/// half of that gap, not the directory-creation half.)
 #[test]
 fn stamped_run_skips_relinking_work() {
     let (dir, exe) = staged();
@@ -449,33 +463,45 @@ fn stamped_run_skips_relinking_work() {
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
+            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     let portm = shim_path(dir.path(), "portm");
     assert!(portm.exists(), "first run should have linked portm");
     std::fs::remove_file(&portm).expect("remove portm to detect a relink");
+    let lock = state.path().join("devkit/links.lock");
+    assert!(lock.exists(), "first run should have opened the gate");
+    std::fs::remove_file(&lock).expect("remove links.lock to detect a reopen");
 
     retry_on_busy(|| {
         Command::new(&exe)
             .arg("doctor")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
+            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     assert!(
         !portm.exists(),
-        "a stamped run must not redo link_all: portm was removed and must stay gone"
+        "a stamped run must not redo the linking pass: portm was removed and must stay gone"
+    );
+    assert!(
+        !lock.exists(),
+        "a stamped run must not reopen the gate: links.lock was removed and must stay gone"
     );
 }
 
-/// The probe intercept must answer before `ensure_current` ever runs — this
-/// is what stops a probe subprocess from itself doing a full linking pass
-/// (and, in turn, probing further subprocesses without bound). Invoking the
-/// staged binary with the probe flag directly, against a completely fresh
-/// state directory, must produce neither a stamp file nor any shim link: if
-/// `ensure_current` ran ahead of the intercept, this exact call — with no
-/// prior stamp and no gate contention — would run `link_all` to completion
-/// and leave both behind.
+/// The marker-probe intercept in `main` must answer before `ensure_current`
+/// ever runs. This covers only the marker flag itself: `is_devkit_binary`'s
+/// other two probes (`--version`, `--help`) are ordinary args that fall
+/// straight through to `ensure_current` in a real invocation too, and what
+/// bounds *those* is the `try_write` gate inside `ensure_current`, not this
+/// intercept (see the comment there). Invoking the staged binary with the
+/// marker flag directly, against a completely fresh state directory, must
+/// produce neither a stamp file nor any shim link: if `ensure_current` ran
+/// ahead of the intercept, this exact call — with no prior stamp and no gate
+/// contention — would relink every shim and write the stamp before ever
+/// answering the marker.
 #[test]
 fn probe_flag_never_triggers_linking() {
     let (dir, exe) = staged();
@@ -485,6 +511,7 @@ fn probe_flag_never_triggers_linking() {
             .arg("--devkit-shim-probe")
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
+            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     assert!(out.status.success(), "the probe flag call must succeed");
@@ -527,6 +554,7 @@ fn a_contended_gate_is_skipped_without_blocking() {
             .args(["doctor", "--json"])
             .env("HOME", state.path())
             .env("XDG_STATE_HOME", state.path())
+            .env_remove("DEVKIT_SKIP_AUTOLINK")
             .output()
     });
     assert!(
@@ -540,5 +568,95 @@ fn a_contended_gate_is_skipped_without_blocking() {
     assert!(
         !shim_path(dir.path(), "portm").exists(),
         "linking must not happen while another process holds the gate"
+    );
+}
+
+/// A same-version reinstall — a fresh build replacing the file at `exe`
+/// while the old hardlinks keep pointing at the old inode, the ordinary
+/// pre-release loop of `cargo install --path .` — must relink even though
+/// `CARGO_PKG_VERSION` didn't change. The stamp's mtime field is what
+/// catches this: a version-only stamp from the first run would already
+/// match and every shim would keep running the stale binary until the next
+/// version bump.
+#[test]
+fn same_version_reinstall_relinks() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("doctor")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .env_remove("DEVKIT_SKIP_AUTOLINK")
+            .output()
+    });
+    let portm = shim_path(dir.path(), "portm");
+    assert!(portm.exists(), "first run should have linked portm");
+    let first_stamp = std::fs::read_to_string(state.path().join("devkit/links-version"))
+        .expect("first stamp written");
+
+    // Reinstall at the same version: replace the file at `exe` (the old
+    // hardlinks, `portm` included, keep pointing at the old inode) and force
+    // a distinct mtime — a fresh copy's own mtime can otherwise land in the
+    // same filesystem timestamp tick as the original, which would make this
+    // test flaky rather than wrong.
+    std::fs::remove_file(&exe).expect("remove for reinstall");
+    std::fs::copy(env!("CARGO_BIN_EXE_devkit"), &exe).expect("reinstall devkit");
+    let bumped = std::fs::metadata(&exe)
+        .expect("exe metadata")
+        .modified()
+        .expect("exe mtime")
+        + Duration::from_secs(120);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&exe)
+        .expect("open exe to bump mtime")
+        .set_modified(bumped)
+        .expect("bump mtime");
+
+    retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("doctor")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .env_remove("DEVKIT_SKIP_AUTOLINK")
+            .output()
+    });
+
+    let second_stamp = std::fs::read_to_string(state.path().join("devkit/links-version"))
+        .expect("second stamp written");
+    assert_ne!(
+        first_stamp, second_stamp,
+        "a same-version reinstall must produce a different stamp (the mtime moved)"
+    );
+    assert!(
+        shimtest::same_inode(&exe, &portm),
+        "portm must be relinked to the reinstalled binary, not left pointing at the old one"
+    );
+}
+
+/// `DEVKIT_SKIP_AUTOLINK` must prevent the linking work itself, not merely
+/// let the surrounding command exit 0 regardless of whether it ran. Checked
+/// on what would otherwise be a completely fresh first run: no shim gets
+/// created and no stamp gets written.
+#[test]
+fn skip_autolink_env_prevents_linking() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("doctor")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .output()
+    });
+    assert!(
+        !shim_path(dir.path(), "portm").exists(),
+        "DEVKIT_SKIP_AUTOLINK must prevent linking, not just let the command exit 0"
+    );
+    assert!(
+        !state.path().join("devkit/links-version").exists(),
+        "DEVKIT_SKIP_AUTOLINK must prevent writing the stamp"
     );
 }
