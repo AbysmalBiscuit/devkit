@@ -235,6 +235,33 @@ mod tests {
         assert_eq!(layers[0].path.parent().unwrap(), child);
     }
 
+    /// The barrier applies to a `MainCheckout` layer exactly as it does to
+    /// any other: a repository that declares `root = true` in its own
+    /// `devkit.toml` cuts off the ancestors above a linked worktree that
+    /// inherits it, rather than letting them re-merge with the main
+    /// checkout's config.
+    #[test]
+    fn root_marker_in_main_checkout_cuts_off_ancestors_above_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let outer = dir.path().join("outer");
+        let start = outer.join("linked");
+        let main = dir.path().join("main");
+        write(&outer, "devkit.toml", "");
+        write(&start, "devkit.toml", "");
+        write(&main, "devkit.toml", "[config]\nroot = true\n");
+
+        let layers = project_layers(&start, Some(&main)).unwrap();
+
+        assert_eq!(
+            layers
+                .iter()
+                .map(|l| l.path.parent().unwrap().to_path_buf())
+                .collect::<Vec<_>>(),
+            vec![main.clone(), start.clone()],
+            "the ancestor above the main checkout's barrier is dropped"
+        );
+    }
+
     /// A directory holding only the tracked file, nested beneath one
     /// holding both, still finds its own directory as the nearest
     /// config-bearing one — `root` selection cannot require both files
