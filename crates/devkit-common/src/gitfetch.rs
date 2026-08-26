@@ -11,7 +11,7 @@
 //! `DEVKIT_FETCH_TTL_SECS` overrides the window; `0` disables the gate (always
 //! fetch). A fetch failure never stamps the marker, so the next call retries.
 
-use crate::cmd::git;
+use crate::git::Git;
 use crate::paths;
 use anyhow::Result;
 use std::hash::{Hash, Hasher};
@@ -95,7 +95,11 @@ fn fetch_gated(
 pub fn fetch(remote: &str, cwd: &str) -> Result<()> {
     let marker = marker_path(cwd, remote);
     fetch_gated(&marker, ttl_secs(), now_secs(), || {
-        git(&["fetch", remote], cwd).map(|_| ())
+        Git::at(Path::new(cwd))
+            .args(["fetch", remote])
+            .timeout(crate::git::NETWORK_TIMEOUT)
+            .output()
+            .map(|_| ())
     })?;
     Ok(())
 }

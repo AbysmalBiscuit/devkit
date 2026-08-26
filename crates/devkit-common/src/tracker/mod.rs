@@ -284,9 +284,14 @@ mod tests {
     /// `detect` against a scratch repository whose `origin` is `url`.
     fn detect_with_remote(url: &str, linear_key: Option<&str>) -> TrackerKind {
         let dir = tempfile::tempdir().unwrap();
-        let at = dir.path().to_str().unwrap();
-        crate::cmd::git(&["init", "-q"], at).unwrap();
-        crate::cmd::git(&["remote", "add", "origin", url], at).unwrap();
+        crate::git::Git::fixture(dir.path())
+            .args(["init", "-q"])
+            .output()
+            .unwrap();
+        crate::git::Git::fixture(dir.path())
+            .args(["remote", "add", "origin", url])
+            .output()
+            .unwrap();
         detect(dir.path(), linear_key)
     }
 
@@ -386,18 +391,19 @@ mod tests {
     #[test]
     fn a_detected_github_origin_resolves_the_adapter_undeclared() {
         let dir = tempfile::tempdir().unwrap();
-        let at = dir.path().to_str().unwrap();
-        crate::cmd::git(&["init", "-q"], at).unwrap();
-        crate::cmd::git(
-            &[
+        crate::git::Git::fixture(dir.path())
+            .args(["init", "-q"])
+            .output()
+            .unwrap();
+        crate::git::Git::fixture(dir.path())
+            .args([
                 "remote",
                 "add",
                 "origin",
                 "https://github.com/acme/widget.git",
-            ],
-            at,
-        )
-        .unwrap();
+            ])
+            .output()
+            .unwrap();
 
         let r = resolve_with_key(None, dir.path(), &repos_with("acme/widget"), None);
         assert_eq!(r.tracker.kind(), TrackerKind::Github);

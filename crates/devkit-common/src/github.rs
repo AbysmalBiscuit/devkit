@@ -12,6 +12,7 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -255,7 +256,9 @@ pub fn is_github_remote(url: &str) -> bool {
 /// check cannot be skipped by a caller that declared its tracker and therefore
 /// never ran detection.
 pub fn github_origin_slug(cwd: &str) -> Result<String> {
-    let url = crate::cmd::git(&["remote", "get-url", "origin"], cwd)
+    let url = crate::git::Git::at(Path::new(cwd))
+        .args(["remote", "get-url", "origin"])
+        .output()
         .context("reading the `origin` remote")?;
     anyhow::ensure!(
         is_github_remote(&url),
