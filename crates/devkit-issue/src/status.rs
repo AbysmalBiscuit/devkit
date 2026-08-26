@@ -256,14 +256,18 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
     Ok(Discovered { rows, issue_ids })
 }
 
-/// True when a worktree has uncommitted changes.
+/// True when a worktree has uncommitted changes. A `git status` that fails to
+/// run — a timeout, or a path git cannot read as a repository — is reported
+/// dirty rather than clean, since a wrong "clean" here would let a caller
+/// discard real work.
 pub fn dirty_of(path: &str) -> bool {
-    !Git::at(Path::new(path))
+    match Git::at(Path::new(path))
         .args(["status", "--porcelain"])
         .output()
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
+    {
+        Ok(status) => !status.trim().is_empty(),
+        Err(_) => true,
+    }
 }
 
 /// `dirty_of` for many worktrees, run on a bounded thread pool with order
@@ -1284,9 +1288,9 @@ mod tests {
     }
 
     // dirty_stream must report each index exactly once with the same result
-    // dirty_many computes. Plain (non-git) dirs make dirty_of return false;
-    // one dir is a git repo with an untracked file, so exactly one index is
-    // true and the value comparison catches wrong-value or wrong-index bugs.
+    // dirty_many computes. Every dir is a clean git repo except one, which
+    // carries an untracked file, so exactly one index is true and the value
+    // comparison catches wrong-value or wrong-index bugs.
     #[test]
     fn dirty_stream_reports_every_index_once() {
         use std::sync::Mutex;
@@ -1295,14 +1299,14 @@ mod tests {
             .map(|i| {
                 let p = base.path().join(format!("d{i}"));
                 std::fs::create_dir_all(&p).unwrap();
+                Git::fixture(&p)
+                    .args(["init", "-q", "-b", "main"])
+                    .output()
+                    .unwrap();
                 p.to_string_lossy().into_owned()
             })
             .collect();
         // A repo with an untracked file: `git status --porcelain` is non-empty.
-        Git::fixture(Path::new(&paths[3]))
-            .args(["init", "-q", "-b", "main"])
-            .output()
-            .unwrap();
         std::fs::write(std::path::Path::new(&paths[3]).join("f"), "x").unwrap();
 
         let got: Mutex<Vec<Option<bool>>> = Mutex::new(vec![None; paths.len()]);
@@ -1324,5 +1328,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             want
         );
+    }
+
+    /// `dirty_of` cannot distinguish a wedged git from a clean worktree — both
+    /// surface as `Err` from `git status --porcelain` — so a path git cannot
+    /// read is reported dirty rather than clean: `issue end` uses this to
+    /// decide whether removing a worktree is safe, and a wrong "clean" would
+    /// discard real work, while a wrong "dirty" only asks for `--force`.
+    #[test]
+    fn dirty_of_reports_dirty_when_git_cannot_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        // Not a git repository: `git status --porcelain` fails to run here.
+        assert!(dirty_of(dir.path().to_str().unwrap()));
     }
 }
