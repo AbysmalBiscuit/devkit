@@ -4,8 +4,6 @@
 //! subsets. The allow below is the standard idiom for shared test modules.
 #![allow(dead_code)]
 
-pub mod shimtest;
-
 use devkit_locks::daemon::proto::{Request as LockRequest, Response as LockResponse};
 use devkit_ports::daemon::proto::{self, Request, Response};
 use devkit_ports::daemon::transport;

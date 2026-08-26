@@ -2,9 +2,8 @@
 //! to a release matching its own version, so a user (or the hook) needs a way
 //! to see which version is actually on PATH.
 
-mod common;
-
-use common::shimtest;
+#[path = "common/shimtest.rs"]
+mod shimtest;
 use std::process::Command;
 
 fn version_output(exe: &str) -> (bool, String) {
@@ -34,6 +33,30 @@ fn assert_reports_version(name: &str, exe: &str) {
 fn portm_reports_version() {
     let (_dir, link) = shimtest::linked("portm");
     assert_reports_version("portm", link.to_str().expect("utf-8 link path"));
+}
+
+/// Parity requirement: a `portm` user must see the same behavior through
+/// `devkit ports`, version output included.
+#[test]
+fn devkit_ports_reports_the_package_version() {
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .args(["ports", "--version"])
+        .output()
+        .expect("spawn devkit ports --version");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "`devkit ports --version` should exit 0, got: {text}"
+    );
+    assert!(
+        text.contains(env!("CARGO_PKG_VERSION")),
+        "`devkit ports --version` should print {}, got: {text}",
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 #[test]

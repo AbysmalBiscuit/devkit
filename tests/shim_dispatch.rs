@@ -1,6 +1,5 @@
-mod common;
-
-use common::shimtest;
+#[path = "common/shimtest.rs"]
+mod shimtest;
 use std::process::Command;
 
 #[test]

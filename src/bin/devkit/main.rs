@@ -15,7 +15,8 @@ mod shim;
 #[command(
     name = "devkit",
     version,
-    about = "Configure and diagnose the devkit toolkit"
+    about = "Configure and diagnose the devkit toolkit",
+    propagate_version = true
 )]
 struct Cli {
     #[command(subcommand)]
@@ -76,7 +77,7 @@ enum Cmd {
         /// Shell to emit the script for.
         shell: Shell,
     },
-    /// Port registry for local dev servers (also installed as `portm`).
+    /// Port registry for local dev servers.
     Ports(ports::PortsCli),
 }
 
@@ -121,8 +122,8 @@ fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::Command {
         .version(env!("CARGO_PKG_VERSION"))
 }
 
-/// Emit a completion script for a tool under the name it is invoked as: the
-/// shim name when installed as one, `devkit <sub>` otherwise.
+/// Emit a completion script registered under the tool's shim name (e.g.
+/// `portm`), so an installed hardlink of that name completes correctly.
 fn emit_completions(shell: Shell, subcommand: &str, shim_name: &'static str) {
     let mut cmd = shim_command(subcommand, shim_name);
     clap_complete::generate(shell, &mut cmd, shim_name, &mut std::io::stdout());

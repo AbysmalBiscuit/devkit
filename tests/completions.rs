@@ -1,8 +1,7 @@
 //! Each user-facing CLI emits a shell-completion script via `<bin> completions <shell>`.
 
-mod common;
-
-use common::shimtest;
+#[path = "common/shimtest.rs"]
+mod shimtest;
 use std::process::Command;
 
 fn completions_contain_name(bin: &str, exe: &str, shell: &str) {

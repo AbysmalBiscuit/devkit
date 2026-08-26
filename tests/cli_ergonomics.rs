@@ -2,9 +2,8 @@
 //! command): subcommand aliases, a defaulted `--holder`, positional app/issue
 //! arguments. Each test isolates state via a private HOME/XDG_STATE_HOME.
 
-mod common;
-
-use common::shimtest;
+#[path = "common/shimtest.rs"]
+mod shimtest;
 use std::path::Path;
 use std::process::{Command, Output};
 

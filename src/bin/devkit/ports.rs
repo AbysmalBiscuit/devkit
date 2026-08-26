@@ -4,9 +4,8 @@ use devkit::completions::Shell;
 use devkit_ports::registry::{self, Data, Role};
 
 #[derive(clap::Args)]
-#[command(about = "Port registry for local dev servers")]
 pub struct PortsCli {
-    /// Run as if portm had started in DIR instead of the current directory.
+    /// Run as if started in DIR instead of the current directory.
     #[arg(short = 'C', long = "dir")]
     pub dir: Option<String>,
     #[command(subcommand)]
