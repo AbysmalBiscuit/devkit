@@ -28,9 +28,11 @@ pub(crate) struct Target {
     pub github: Option<String>,
 }
 
-/// Branches we must never open a review against.
+/// Branches we must never open a review against. `branch` is the value
+/// `git::branch` returns, which reports a detached checkout as `"DETACHED"`
+/// rather than git's own `"HEAD"`.
 pub(crate) fn guard_branch(branch: &str) -> Result<()> {
-    if branch == "staging" || branch == "main" || branch == "HEAD" {
+    if branch == "staging" || branch == "main" || branch == "DETACHED" {
         bail!("refusing to review from base branch `{branch}` — switch to a feature branch");
     }
     Ok(())
@@ -243,6 +245,11 @@ mod tests {
         assert!(guard_branch("staging").is_err());
         assert!(guard_branch("main").is_err());
         assert!(guard_branch("lev/eng-1-fix").is_ok());
+    }
+
+    #[test]
+    fn guard_rejects_a_detached_checkout() {
+        assert!(guard_branch("DETACHED").is_err());
     }
 
     #[test]

@@ -258,11 +258,7 @@ pub fn run(args: Args) -> Result<()> {
     let mut vars = tmpls.variables.clone();
     vars.extend(parse_args(&args.args, &tmpls.variables)?);
 
-    let branch = Git::at(std::path::Path::new(&start))
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()?
-        .trim()
-        .to_string();
+    let branch = devkit_common::git::branch(std::path::Path::new(&start))?;
     guard_branch(&branch)?;
 
     let steps = Steps::persistent();
