@@ -221,4 +221,52 @@ mod tests {
             "both files in the barrier directory survive; the layer above is dropped"
         );
     }
+
+    /// Two directories on the path to `start` can each declare `root = true`.
+    /// The barrier is the one nearest `start` — the outer marker is moot
+    /// because the walk it once broke never reached that far.
+    #[test]
+    fn nested_root_markers_use_the_one_nearest_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let mid = dir.path().join("mid");
+        write(dir.path(), "devkit.toml", "[config]\nroot = true\n");
+        write(&mid, "devkit.toml", "[config]\nroot = true\n");
+        let layers = project_layers(&mid, None).unwrap();
+        assert_eq!(
+            layers.len(),
+            1,
+            "only the inner marker's directory survives"
+        );
+        assert_eq!(layers[0].path.parent().unwrap(), mid);
+    }
+
+    /// `main_checkout` can name a directory the ancestor walk also visits,
+    /// producing two `Layer`s for the same file. Dedupe keeps the
+    /// higher-precedence one — here the `MainCheckout` layer, inserted after
+    /// the ancestor walk — without replacing its path with the canonical
+    /// form.
+    #[test]
+    fn dedupe_keeps_the_higher_precedence_spelling_and_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let outer = dir.path().join("outer");
+        let mid = outer.join("mid");
+        write(&outer, "devkit.toml", "");
+        write(&mid, "devkit.toml", "");
+        // Names the same file the ancestor walk already found under `outer`,
+        // spelled differently so a survived-verbatim path is distinguishable
+        // from one silently replaced by its canonical form.
+        let main_checkout = outer.join(".");
+
+        let layers = project_layers(&mid, Some(&main_checkout)).unwrap();
+
+        assert_eq!(
+            layers.len(),
+            2,
+            "the ancestor duplicate of `outer` is dropped"
+        );
+        assert_eq!(layers[0].kind, LayerKind::MainCheckout);
+        assert_eq!(layers[0].path, main_checkout.join(CONFIG_FILE));
+        assert_eq!(layers[1].kind, LayerKind::Checkout);
+        assert_eq!(layers[1].path.parent().unwrap(), mid);
+    }
 }
