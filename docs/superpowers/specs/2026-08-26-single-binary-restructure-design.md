@@ -232,11 +232,14 @@ Ordered so the tree builds and tests pass at every step.
   `tests/cli_version.rs`.
 - Help: `devkit --help` names every shim in the set.
 
-`tests/cli_version.rs`, `tests/completions.rs`, `tests/cli_ergonomics.rs`, and
-`tests/parity.rs` all resolve binaries via `env!("CARGO_BIN_EXE_<name>")`. Those
-variables stop existing for removed targets, so each file moves to a helper that
-resolves `CARGO_BIN_EXE_devkit` and invokes it through a link in a `tempfile`
-directory.
+`tests/cli_version.rs`, `tests/completions.rs`, and `tests/cli_ergonomics.rs`
+resolve binaries via `env!("CARGO_BIN_EXE_<name>")`. Those variables stop
+existing for removed targets, so each file moves to a helper that resolves
+`CARGO_BIN_EXE_devkit` and invokes it through a link in a `tempfile` directory.
+
+`tests/parity.rs` needs no change. It reaches a binary only through
+`common::daemon_bin()`, which resolves `CARGO_BIN_EXE_devkitd`, and `devkitd`
+keeps its target.
 
 ## Risks
 

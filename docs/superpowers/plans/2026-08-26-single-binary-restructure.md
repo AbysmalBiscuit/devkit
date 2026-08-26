@@ -1547,15 +1547,15 @@ fn shim_rows() -> Vec<Row> {
             };
             Row {
                 key: s.name,
-                source: Source::default(),
+                // Doctor's non-credential rows already use `Unset`; a shim has
+                // no env or secrets.toml origin to report.
+                source: Source::Unset,
                 check,
             }
         })
         .collect()
 }
 ```
-
-If `Source` has no `Default`, use whichever variant the existing rows use for a value that came from neither env nor `secrets.toml`, and add a one-line comment saying which and why.
 
 - [ ] **Step 4: Run test to verify it passes**
 
