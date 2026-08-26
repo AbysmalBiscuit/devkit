@@ -320,6 +320,47 @@ fn link_one(exe: &Path, shim: &Shim, dest: &Path, force: bool) -> Outcome {
     }
 }
 
+/// Link the shim names when the stamp does not match this version.
+///
+/// Runs before dispatch on every invocation, so the match case must stay one
+/// small read: `lockm hook pretooluse` takes this path on every editor write.
+/// Every failure is a warning; linking never blocks the command the user asked
+/// for.
+pub fn ensure_current(exe: &Path) {
+    let state = devkit_common::paths::state_dir();
+    let stamp = state.join("links-version");
+    if std::fs::read_to_string(&stamp).is_ok_and(|s| s.trim() == env!("CARGO_PKG_VERSION")) {
+        return;
+    }
+    let Some(dir) = exe.parent() else { return };
+    if std::fs::create_dir_all(&state).is_err() {
+        return;
+    }
+    let Ok(gate) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(state.join("links.lock"))
+    else {
+        return;
+    };
+    let mut gate = fd_lock::RwLock::new(gate);
+    let Ok(_held) = gate.try_write() else {
+        // Another process is linking right now; it will write the stamp.
+        return;
+    };
+    for (name, outcome) in link_all(exe, dir, false) {
+        match outcome {
+            Outcome::Failed(e) => eprintln!("devkit: could not link {name}: {e}"),
+            Outcome::SkippedForeign(why) => {
+                eprintln!("devkit: {name} on PATH is not a devkit binary ({why}); left alone");
+            }
+            Outcome::Created | Outcome::Replaced | Outcome::AlreadyLinked => {}
+        }
+    }
+    let _ = std::fs::write(&stamp, format!("{}\n", env!("CARGO_PKG_VERSION")));
+}
+
 pub fn run(args: InstallLinksArgs) -> Result<()> {
     let exe = std::env::current_exe().context("resolving the running executable")?;
     let dir = exe

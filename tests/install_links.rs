@@ -371,3 +371,174 @@ fn probes_never_consume_the_callers_stdin() {
         String::from_utf8_lossy(&captured)
     );
 }
+
+/// A first run links without being asked.
+#[test]
+fn first_run_links_automatically() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("doctor")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+    let _ = out;
+    assert!(
+        shim_path(dir.path(), "portm").exists(),
+        "a first run should have created the shims"
+    );
+}
+
+/// A foreign name is not claimed by the automatic path, whatever the stamp says.
+#[test]
+fn automatic_linking_never_claims_a_foreign_name() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let foreign = shim_path(dir.path(), "issue");
+    std::fs::write(&foreign, b"#!/bin/sh\necho not devkit\n").expect("write foreign issue");
+    retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("doctor")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+    assert_eq!(
+        std::fs::read(&foreign).expect("foreign still readable"),
+        b"#!/bin/sh\necho not devkit\n",
+        "the automatic path must never claim a foreign name"
+    );
+}
+
+/// The second run does no filesystem work: the stamp already matches.
+#[test]
+fn second_run_leaves_the_stamp_alone() {
+    let (_dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    for _ in 0..2 {
+        retry_on_busy(|| {
+            Command::new(&exe)
+                .arg("doctor")
+                .env("HOME", state.path())
+                .env("XDG_STATE_HOME", state.path())
+                .output()
+        });
+    }
+    let stamp = state.path().join("devkit/links-version");
+    assert_eq!(
+        std::fs::read_to_string(&stamp)
+            .expect("stamp written")
+            .trim(),
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+/// A stamped run must skip the actual linking work, not merely leave the
+/// stamp's own content alone. Removing one shim after the first run and
+/// invoking `devkit` a second time proves it: a real second linking pass
+/// would recreate `portm`, so it staying gone is what shows `ensure_current`
+/// returned before ever calling `link_all` again.
+#[test]
+fn stamped_run_skips_relinking_work() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("doctor")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+    let portm = shim_path(dir.path(), "portm");
+    assert!(portm.exists(), "first run should have linked portm");
+    std::fs::remove_file(&portm).expect("remove portm to detect a relink");
+
+    retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("doctor")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+    assert!(
+        !portm.exists(),
+        "a stamped run must not redo link_all: portm was removed and must stay gone"
+    );
+}
+
+/// The probe intercept must answer before `ensure_current` ever runs — this
+/// is what stops a probe subprocess from itself doing a full linking pass
+/// (and, in turn, probing further subprocesses without bound). Invoking the
+/// staged binary with the probe flag directly, against a completely fresh
+/// state directory, must produce neither a stamp file nor any shim link: if
+/// `ensure_current` ran ahead of the intercept, this exact call — with no
+/// prior stamp and no gate contention — would run `link_all` to completion
+/// and leave both behind.
+#[test]
+fn probe_flag_never_triggers_linking() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("--devkit-shim-probe")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+    assert!(out.status.success(), "the probe flag call must succeed");
+    assert!(
+        !shim_path(dir.path(), "portm").exists(),
+        "a probe call must never link shims"
+    );
+    assert!(
+        !state.path().join("devkit/links-version").exists(),
+        "a probe call must never write the links stamp"
+    );
+}
+
+/// The gate is a `try_write`, not a blocking wait: a `devkit` invocation that
+/// finds `links.lock` already held must skip linking and still let the real
+/// command run, rather than hang or error out. This only demonstrates that a
+/// losing acquirer backs off cleanly — it says nothing about two genuine
+/// concurrent writers never corrupting each other's output, which no
+/// single-process test can observe.
+#[test]
+fn a_contended_gate_is_skipped_without_blocking() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let state_devkit = state.path().join("devkit");
+    std::fs::create_dir_all(&state_devkit).expect("create state dir");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(state_devkit.join("links.lock"))
+        .expect("open links.lock");
+    let mut gate = fd_lock::RwLock::new(lock_file);
+    let _held = gate.try_write().expect("hold the gate for the test");
+
+    // `--json` so the check is on doctor's own report reaching stdout, not on
+    // its exit code — a real config problem in the ambient cwd can make
+    // `doctor` exit non-zero on its own merits, which is irrelevant here.
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .args(["doctor", "--json"])
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .output()
+    });
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .trim_start()
+            .starts_with('['),
+        "doctor must still run its report when the linking gate is contended: stdout {:?} stderr {:?}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !shim_path(dir.path(), "portm").exists(),
+        "linking must not happen while another process holds the gate"
+    );
+}

@@ -163,45 +163,58 @@ fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().collect();
     // The identity probe `links::is_devkit_binary` uses: answered before any
-    // clap parsing, any panic-hook/state-migration setup, and — critically —
-    // before `devkit-mcp`'s normal path would start blocking on stdin. Every
-    // shim is this same binary, so this one intercept covers all six names.
+    // clap parsing, any panic-hook/state-migration/linking setup, and —
+    // critically — before `devkit-mcp`'s normal path would start blocking on
+    // stdin. Every shim is this same binary, so this one intercept covers all
+    // six names. It must stay the very first thing `main` does: a probed
+    // child that reached `links::ensure_current` before this check would
+    // itself probe every shim name to judge them, recursing without bound the
+    // moment a devkit-family binary sits at one.
     if args.get(1).map(OsString::as_os_str) == Some(std::ffi::OsStr::new(shim::PROBE_FLAG)) {
         println!("{}", shim::PROBE_MARKER);
         return Ok(());
     }
     let argv0 = args.first().map(|a| a.to_string_lossy().into_owned());
-    if let Some(s) = argv0.as_deref().and_then(shim::resolve) {
-        devkit_common::report::install_panic_hook(s.name);
-        devkit_common::paths::migrate_legacy_state();
-        return dispatch_shim(s, args);
-    }
-    devkit_common::report::install_panic_hook("devkit");
+    let shim = argv0.as_deref().and_then(shim::resolve);
+    devkit_common::report::install_panic_hook(shim.map_or("devkit", |s| s.name));
     devkit_common::paths::migrate_legacy_state();
-    let cli = Cli::parse();
-    match cli.cmd {
-        Cmd::Auth { provider, token } => auth::run(provider, token),
-        Cmd::Brief {
-            pins_only,
-            if_changed,
-            additional_context,
-        } => brief::run(pins_only, if_changed, additional_context),
-        Cmd::Schema { cmd } => match cmd {
-            None => schema::run(),
-            Some(SchemaCmd::Init { path }) => schema::init(&path),
-        },
-        Cmd::Doctor { json } => doctor::run(json),
-        Cmd::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "devkit", &mut std::io::stdout());
-            Ok(())
+    if let Ok(exe) = std::env::current_exe() {
+        links::ensure_current(&exe);
+    }
+    match shim {
+        Some(s) => dispatch_shim(s, args),
+        None => {
+            let cli = Cli::parse();
+            match cli.cmd {
+                Cmd::Auth { provider, token } => auth::run(provider, token),
+                Cmd::Brief {
+                    pins_only,
+                    if_changed,
+                    additional_context,
+                } => brief::run(pins_only, if_changed, additional_context),
+                Cmd::Schema { cmd } => match cmd {
+                    None => schema::run(),
+                    Some(SchemaCmd::Init { path }) => schema::init(&path),
+                },
+                Cmd::Doctor { json } => doctor::run(json),
+                Cmd::Completions { shell } => {
+                    clap_complete::generate(
+                        shell,
+                        &mut Cli::command(),
+                        "devkit",
+                        &mut std::io::stdout(),
+                    );
+                    Ok(())
+                }
+                Cmd::Ports(c) => ports::run(c),
+                Cmd::Locks(c) => locks::run(c),
+                Cmd::Docs(c) => docs::run(c),
+                Cmd::Run(c) => run::run(c),
+                Cmd::Issue(c) => issue::run(c),
+                Cmd::Mcp(c) => mcp::run(c),
+                Cmd::InstallLinks(a) => links::run(a),
+            }
         }
-        Cmd::Ports(c) => ports::run(c),
-        Cmd::Locks(c) => locks::run(c),
-        Cmd::Docs(c) => docs::run(c),
-        Cmd::Run(c) => run::run(c),
-        Cmd::Issue(c) => issue::run(c),
-        Cmd::Mcp(c) => mcp::run(c),
-        Cmd::InstallLinks(a) => links::run(a),
     }
 }
 
