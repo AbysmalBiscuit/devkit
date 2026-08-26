@@ -1197,19 +1197,12 @@ fn link_one(exe: &Path, dest: &Path, force: bool) -> Outcome {
     }
 }
 
-/// The directory holding the running executable, which is where an installer
-/// put it and where PATH will find its links.
-pub fn install_dir() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("resolving the running executable")?;
-    exe.parent()
-        .map(Path::to_path_buf)
-        .context("the running executable has no parent directory")
-}
-
 pub fn run(args: InstallLinksArgs) -> Result<()> {
     let exe = std::env::current_exe().context("resolving the running executable")?;
-    let dir = install_dir()?;
-    let results = link_all(&exe, &dir, args.force);
+    let dir = exe
+        .parent()
+        .context("the running executable has no parent directory")?;
+    let results = link_all(&exe, dir, args.force);
     let mut failed = 0;
     for (name, outcome) in &results {
         match outcome {
