@@ -236,6 +236,29 @@ mod tests {
         assert_eq!(layers[0].path.parent().unwrap(), child);
     }
 
+    /// A directory holding only the tracked file, nested beneath one
+    /// holding both, still finds its own directory as the nearest
+    /// config-bearing one — `root` selection cannot require both files
+    /// to be present, only either.
+    #[test]
+    fn a_directory_with_only_the_tracked_file_beneath_one_with_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let outer = dir.path().join("outer");
+        let nested = outer.join("nested");
+        write(&outer, "devkit.toml", "");
+        write(&outer, "devkit.local.toml", "");
+        write(&nested, "devkit.toml", "");
+        let layers = project_layers(&nested, None).unwrap();
+        assert_eq!(
+            layers.iter().map(|l| l.path.clone()).collect::<Vec<_>>(),
+            vec![
+                outer.join("devkit.toml"),
+                outer.join("devkit.local.toml"),
+                nested.join("devkit.toml"),
+            ]
+        );
+    }
+
     /// Two directories on the path to `start` can each declare `root = true`.
     /// The barrier is the one nearest `start` — the outer marker is moot
     /// because the walk it once broke never reached that far.
