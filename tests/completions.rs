@@ -2,38 +2,55 @@
 
 use std::process::Command;
 
-fn completions_contain_name(bin: &str, exe: &str) {
+fn completions_contain_name(bin: &str, exe: &str, shell: &str) {
     let out = Command::new(exe)
-        .args(["completions", "bash"])
+        .args(["completions", shell])
         .output()
         .expect("spawn completions");
     assert!(
         out.status.success(),
-        "{bin} completions bash exited non-zero"
+        "{bin} completions {shell} exited non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
     let script = String::from_utf8(out.stdout).expect("utf8 completion script");
     assert!(
         script.contains(bin),
-        "{bin} completion script should mention the command name"
+        "{bin} {shell} completion script should mention the command name"
     );
+}
+
+fn emits_every_shell(bin: &str, exe: &str) {
+    for shell in ["bash", "elvish", "fish", "nushell", "powershell", "zsh"] {
+        completions_contain_name(bin, exe, shell);
+    }
 }
 
 #[test]
 fn portm_emits_completions() {
-    completions_contain_name("portm", env!("CARGO_BIN_EXE_portm"));
+    emits_every_shell("portm", env!("CARGO_BIN_EXE_portm"));
 }
 
 #[test]
 fn devrun_emits_completions() {
-    completions_contain_name("devrun", env!("CARGO_BIN_EXE_devrun"));
+    emits_every_shell("devrun", env!("CARGO_BIN_EXE_devrun"));
 }
 
 #[test]
 fn issue_emits_completions() {
-    completions_contain_name("issue", env!("CARGO_BIN_EXE_issue"));
+    emits_every_shell("issue", env!("CARGO_BIN_EXE_issue"));
 }
 
 #[test]
 fn lockm_emits_completions() {
-    completions_contain_name("lockm", env!("CARGO_BIN_EXE_lockm"));
+    emits_every_shell("lockm", env!("CARGO_BIN_EXE_lockm"));
+}
+
+#[test]
+fn devkit_emits_completions() {
+    emits_every_shell("devkit", env!("CARGO_BIN_EXE_devkit"));
+}
+
+#[test]
+fn docm_emits_completions() {
+    emits_every_shell("docm", env!("CARGO_BIN_EXE_docm"));
 }

@@ -591,7 +591,7 @@ cargo build --release
 ## Shell completions
 
 The CLIs generate their own completion scripts via a `completions <shell>`
-subcommand (bash, zsh, fish, elvish, powershell). For example:
+subcommand (bash, zsh, fish, elvish, nushell, powershell). For example:
 
 ```sh
 issue completions zsh   > ~/.zfunc/_issue
@@ -600,6 +600,16 @@ portm completions zsh   > ~/.zfunc/_portm
 lockm completions zsh   > ~/.zfunc/_lockm
 # bash:
 issue completions bash > ~/.local/share/bash-completion/completions/issue
+```
+
+A nushell script defines a module and re-exports it, so save it to a file and
+`source` that file from `config.nu` rather than piping it in:
+
+```nu
+mkdir ($nu.default-config-dir | path join completions)
+issue completions nushell | save -f ($nu.default-config-dir | path join completions issue.nu)
+# then in config.nu:
+source ($nu.default-config-dir | path join completions issue.nu)
 ```
 
 ## State & Cache Locations

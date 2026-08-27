@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use clap_complete::Shell;
+use devkit::completions::Shell;
 use std::path::PathBuf;
 
 mod auth;

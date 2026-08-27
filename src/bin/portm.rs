@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::Shell;
+use devkit::completions::Shell;
 use devkit_ports::registry::{self, Data, Role};
 
 #[derive(Parser)]

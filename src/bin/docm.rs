@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::Shell;
+use devkit::completions::Shell;
 use devkit_docs::manifest::{self, Discovered, Ecosystem, LibEntry};
 use devkit_docs::{ManifestTarget, cache, lookup, refs, resolve, upgrade};
 use std::collections::BTreeSet;

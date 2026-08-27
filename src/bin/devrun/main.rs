@@ -3,7 +3,7 @@ mod config;
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use clap_complete::Shell;
+use devkit::completions::Shell;
 use devkit_common::progress::Steps;
 use devkit_common::supervise;
 use devkit_common::{cmd::git, ui};

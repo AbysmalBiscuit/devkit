@@ -21,8 +21,9 @@ verifies) using the stable toolchain CI uses, so formatting matches.
 
 ## Layout
 
-The workspace root is the `devkit` binary package; its CLIs live in `src/bin/` and
-install together via `cargo install --path .`. The library crates are members.
+The workspace root is the `devkit` package; its CLIs live in `src/bin/` and install
+together via `cargo install --path .`, over a thin `src/lib.rs` holding what more
+than one of them needs. The library crates are members.
 
 | Unit | Role |
 |---|---|
@@ -43,7 +44,12 @@ install together via `cargo install --path .`. The library crates are members.
 | `src/bin/devkitd` | supervisor daemon serving both the port registry (`ports.sock`) and the lock registry (`locks.sock`), authoritative in memory, write-through to the files, gated by `devkitd.lock`; bin gated by the `daemon` feature (on by default) |
 
 The six user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`, `devkit`, `docm`) each
-expose a `completions <shell>` subcommand via `clap_complete`.
+expose a `completions <shell>` subcommand. The shell argument is
+`devkit::completions::Shell`, not `clap_complete::Shell`: the latter is closed and
+has no nushell variant, so the shared enum adds one and forwards each variant to
+whichever crate owns that generator (`clap_complete` for five, the first-party
+`clap_complete_nushell` for nushell). Its value strings match `clap_complete::Shell`'s,
+so adding a shell must not rename an existing one.
 
 ## Invariants (do not break)
 

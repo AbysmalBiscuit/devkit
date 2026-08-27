@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::Shell;
+use devkit::completions::Shell;
 use devkit_locks::hook::{self, HookEvent};
 use devkit_locks::model::{Conflict, LockEntry, WriteDecision};
 
