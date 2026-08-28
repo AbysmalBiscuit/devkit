@@ -185,22 +185,88 @@ pub fn pr_number_from_url(url: &str) -> Option<u64> {
 
 // --- slug ------------------------------------------------------------------
 
-/// Parse `owner/repo` from a GitHub remote URL (ssh, `ssh://`, or https),
+/// The host a git remote URL names, before any `~/.ssh/config` alias is
+/// resolved: scp-like `[user@]host:path`, `scheme://[user@]host/path`, or
+/// `None` for a URL that carries no host at all — a bare local path.
+///
+/// A one-character host is a Windows drive letter (`C:/src/repo`), which is
+/// scp-like by shape because the colon precedes every slash. Git makes the
+/// same exception, and reads it as a path.
+pub fn remote_host(url: &str) -> Option<&str> {
+    let u = url.trim();
+    if let Some((_, rest)) = u.split_once("://") {
+        let after_user = rest.rsplit('@').next().unwrap_or(rest);
+        let host = after_user.split(['/', ':']).next().unwrap_or("");
+        return (!host.is_empty()).then_some(host);
+    }
+    let (before_colon, _) = u.split_once(':')?;
+    if before_colon.contains('/') {
+        return None;
+    }
+    let host = before_colon.rsplit('@').next().unwrap_or(before_colon);
+    (host.chars().count() > 1).then_some(host)
+}
+
+/// Whether a remote is carried over ssh, and so takes its host from
+/// `~/.ssh/config`. Scp-like syntax is ssh by definition; a URL with a scheme
+/// is ssh only when it says so.
+fn is_ssh_form(url: &str) -> bool {
+    match url.trim().split_once("://") {
+        Some((scheme, _)) => scheme.eq_ignore_ascii_case("ssh"),
+        None => true,
+    }
+}
+
+/// Parse `ssh -G <host>`'s effective configuration for the hostname it would
+/// actually connect to. Keywords come back lowercased, one per line.
+fn ssh_hostname_from_dump(dump: &str) -> Option<String> {
+    dump.lines()
+        .find_map(|l| l.strip_prefix("hostname "))
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+}
+
+/// The hostname behind an ssh `Host` alias, per the user's own ssh config.
+/// `None` when ssh is absent or the alias resolves to nothing usable.
+///
+/// Bounded because `ssh -G` is not a plain config read: a `Match exec` block
+/// runs its command while the config is parsed, and this sits on the session
+/// hook path where a wedged child would wedge the hook.
+fn ssh_hostname(alias: &str) -> Option<String> {
+    let dump = crate::cmd::capture_bounded("ssh", &["-G", alias], SSH_CONFIG_TIMEOUT)?;
+    ssh_hostname_from_dump(&dump)
+}
+
+/// Long enough for an `ssh -G` that shells out through `Match exec`, short
+/// enough that a wedged one fails instead of hanging the caller.
+const SSH_CONFIG_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Whether a remote reaches github.com, with `resolve` mapping an ssh alias to
+/// the hostname ssh would connect to. Split from `ssh_hostname` so the host
+/// rules are testable without an ssh config.
+fn reaches_github(url: &str, resolve: &dyn Fn(&str) -> Option<String>) -> bool {
+    let Some(host) = remote_host(url) else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("github.com") {
+        return true;
+    }
+    // An https host is literal. Resolving one through ssh config would let an
+    // unrelated `Host` block decide where an https remote points.
+    is_ssh_form(url) && resolve(host).is_some_and(|h| h.eq_ignore_ascii_case("github.com"))
+}
+
+/// Parse `owner/repo` from a GitHub remote URL (scp-like, `ssh://`, or https),
 /// stripping a trailing `.git`. Pure → unit-tested.
 pub fn slug_from_remote_url(url: &str) -> Option<String> {
     let u = url.trim();
-    let rest = if let Some(r) = u.strip_prefix("git@") {
-        // git@github.com:owner/repo(.git)
-        r.split_once(':').map(|(_, p)| p)?
-    } else if let Some(r) = u.strip_prefix("ssh://") {
-        // ssh://git@github.com/owner/repo(.git)
+    let rest = if let Some((_, r)) = u.split_once("://") {
+        // ssh://git@github.com/owner/repo(.git), https://github.com/owner/repo
         r.split_once('/').map(|(_, p)| p)?
     } else {
-        // https://github.com/owner/repo(.git)
-        let r = u
-            .strip_prefix("https://")
-            .or_else(|| u.strip_prefix("http://"))?;
-        r.split_once('/').map(|(_, p)| p)?
+        // [user@]host:owner/repo(.git), where `host` may be an ssh alias
+        remote_host(u)?;
+        u.split_once(':').map(|(_, p)| p)?
     };
     let rest = rest.strip_suffix('/').unwrap_or(rest);
     let rest = rest.strip_suffix(".git").unwrap_or(rest);
@@ -234,21 +300,23 @@ pub fn validate_slug(s: &str) -> Result<()> {
     Ok(())
 }
 
-/// Whether a git remote URL points at github.com. `slug_from_remote_url` parses
-/// any `host/owner/repo` shape without checking the host, so a GitLab origin
-/// yields a slug and every downstream caller would query github.com for a
-/// repository that is not the project's.
+/// Whether a git remote URL names github.com literally.
+/// `slug_from_remote_url` parses any `host/owner/repo` shape without checking
+/// the host, so a GitLab origin yields a slug and every downstream caller
+/// would query github.com for a repository that is not the project's.
+///
+/// An ssh alias spells no host at all, so this says no for one; the callers
+/// that can afford to ask ssh use `remote_reaches_github`.
 pub fn is_github_remote(url: &str) -> bool {
-    let u = url.trim();
-    let host = if let Some(rest) = u.strip_prefix("git@") {
-        rest.split(':').next().unwrap_or("")
-    } else if let Some(rest) = u.split("://").nth(1) {
-        let after_user = rest.rsplit('@').next().unwrap_or(rest);
-        after_user.split(['/', ':']).next().unwrap_or("")
-    } else {
-        ""
-    };
-    host.eq_ignore_ascii_case("github.com")
+    reaches_github(url, &|_| None)
+}
+
+/// Whether a git remote reaches github.com once `~/.ssh/config` has its say.
+/// A `Host` alias substitutes the hostname wholesale — `gh:owner/repo.git` is
+/// a github.com remote when ssh config maps `gh` to it — so the literal spelling
+/// of an ssh remote cannot settle the question on its own.
+pub fn remote_reaches_github(url: &str) -> bool {
+    reaches_github(url, &|alias| ssh_hostname(alias))
 }
 
 /// The `origin` slug, only when origin is a github.com remote. This is the
@@ -261,12 +329,27 @@ pub fn github_origin_slug(cwd: &str) -> Result<String> {
         .output()
         .context("reading the `origin` remote")?;
     anyhow::ensure!(
-        is_github_remote(&url),
-        "`origin` is not a github.com remote ({}); set [github] issues_repo / pr_repo explicitly",
-        url.trim()
+        remote_reaches_github(&url),
+        "`origin` is not a github.com remote ({}); {}",
+        url.trim(),
+        unreachable_hint(&url)
     );
     slug_from_remote_url(&url)
         .with_context(|| format!("no owner/repo in the origin URL `{}`", url.trim()))
+}
+
+/// What to try when `origin` does not reach github.com. An ssh alias that
+/// resolves elsewhere is the case worth naming: the remote looks nothing like
+/// a hostname, so "not a github.com remote" reads as a bug rather than as an
+/// ssh config that maps the alias somewhere else.
+fn unreachable_hint(url: &str) -> String {
+    match remote_host(url) {
+        Some(host) if is_ssh_form(url) && !host.eq_ignore_ascii_case("github.com") => format!(
+            "ssh config resolves `{host}` to {}, so set [github] issues_repo / pr_repo explicitly",
+            ssh_hostname(host).unwrap_or_else(|| "nothing".to_string())
+        ),
+        _ => "set [github] issues_repo / pr_repo explicitly".to_string(),
+    }
 }
 
 /// One resolved repository.
@@ -941,6 +1024,73 @@ mod tests {
         assert_eq!(slug_from_remote_url("not-a-url"), None);
         assert_eq!(slug_from_remote_url("https://github.com/onlyowner"), None);
         assert_eq!(slug_from_remote_url(""), None);
+    }
+
+    /// A `~/.ssh/config` `Host` alias replaces the hostname outright, so the
+    /// remote carries no user and no recognizable host: `gh:owner/repo.git`.
+    #[test]
+    fn slug_parses_an_ssh_alias_host() {
+        for (url, want) in [
+            ("gh:acme/monorepo.git", "acme/monorepo"),
+            ("gh:acme/monorepo", "acme/monorepo"),
+            ("ssh://gh/acme/monorepo.git", "acme/monorepo"),
+            ("me@gh:acme/monorepo.git", "acme/monorepo"),
+        ] {
+            assert_eq!(slug_from_remote_url(url).as_deref(), Some(want), "{url}");
+        }
+    }
+
+    /// `C:/src/repo` is scp-like by shape — the colon precedes every slash —
+    /// but a one-letter host is a Windows drive, and git reads it as a path.
+    #[test]
+    fn slug_rejects_a_windows_drive_path() {
+        assert_eq!(slug_from_remote_url("C:/src/repo"), None);
+        assert_eq!(remote_host("C:/src/repo"), None);
+    }
+
+    #[test]
+    fn remote_host_reads_every_url_shape() {
+        for (url, want) in [
+            ("gh:acme/repo.git", Some("gh")),
+            ("git@github.com:acme/repo.git", Some("github.com")),
+            ("ssh://git@github.com/acme/repo", Some("github.com")),
+            ("https://github.com/acme/repo", Some("github.com")),
+            ("/srv/git/repo.git", None),
+            ("", None),
+        ] {
+            assert_eq!(remote_host(url), want, "{url}");
+        }
+    }
+
+    /// The alias is only a github.com remote once ssh config says so, and the
+    /// answer follows the resolver rather than the spelling of the alias.
+    #[test]
+    fn an_ssh_alias_reaches_github_only_when_the_config_says_so() {
+        let to_github = |_: &str| Some("github.com".to_string());
+        let to_gitlab = |_: &str| Some("gitlab.com".to_string());
+        let unresolved = |_: &str| None;
+
+        assert!(reaches_github("gh:acme/repo.git", &to_github));
+        assert!(reaches_github("ssh://gh/acme/repo.git", &to_github));
+        assert!(!reaches_github("gh:acme/repo.git", &to_gitlab));
+        assert!(!reaches_github("gh:acme/repo.git", &unresolved));
+    }
+
+    /// Only ssh consults `~/.ssh/config`; an https host is literal. Resolving
+    /// one through ssh would let an unrelated `Host` block decide that an
+    /// https remote points at github.com.
+    #[test]
+    fn an_https_host_ignores_ssh_config() {
+        let to_github = |_: &str| Some("github.com".to_string());
+        assert!(!reaches_github("https://gh/acme/repo.git", &to_github));
+        assert!(!reaches_github("git://gh/acme/repo.git", &to_github));
+    }
+
+    #[test]
+    fn hostname_is_read_from_the_ssh_config_dump() {
+        let dump = "user git\nhostname github.com\nport 22\nhostkeyalias gh\n";
+        assert_eq!(ssh_hostname_from_dump(dump).as_deref(), Some("github.com"));
+        assert_eq!(ssh_hostname_from_dump("user git\nport 22\n"), None);
     }
 
     #[test]

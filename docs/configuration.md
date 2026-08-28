@@ -517,14 +517,20 @@ project that only reads PRs never has to supply an `issues_repo`, and a project
 that supplies neither pays nothing until a GitHub operation asks for one. When
 the key an operation needs cannot be resolved, the error names that key.
 
-**Defaulting from `origin` needs a github.com `origin`.** There is no
-`gh repo view` fallback and no second remote is consulted: if `origin` is
-absent, or is not a github.com URL, the key that would have defaulted from it
-fails and the error says to set `[github] issues_repo` / `pr_repo`. The error is
-the instruction. An SSH-alias remote is the case that surprises people — a
-remote spelled `gh:owner/repo.git`, pointing at a `~/.ssh/config` `Host gh`
-entry, contains no `github.com`, so nothing can be read from it. devkit's own
-repository is set up that way and names both keys outright as a result.
+**Defaulting from `origin` needs an `origin` that reaches github.com.** There
+is no `gh repo view` fallback and no second remote is consulted: if `origin` is
+absent, or reaches a host other than github.com, the key that would have
+defaulted from it fails and the error says to set `[github] issues_repo` /
+`pr_repo`. The error is the instruction.
+
+An SSH-alias remote counts. A remote spelled `gh:owner/repo.git` names a
+`~/.ssh/config` `Host gh` entry rather than a hostname, so devkit asks ssh what
+that alias resolves to (`ssh -G gh`) and defaults from `origin` when the answer
+is github.com. Git itself never performs this substitution — it hands the alias
+to ssh — so no git command reports the real host. Resolution needs OpenSSH's
+`ssh -G`; where that is unavailable or the alias resolves elsewhere, the keys
+have to be named outright, and the error names the alias and what it resolved
+to.
 
 **Unknown keys in this table are rejected, unlike every other table in this
 file.** A misspelled `issue_repo` silently ignored would leave the project
