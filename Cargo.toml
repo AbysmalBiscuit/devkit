@@ -110,6 +110,9 @@ toml_edit = { version = "0.22", features = ["serde"] }
 devkit-docs = { path = "crates/devkit-docs" }
 tempfile = "3"
 
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 opt-level = 3        # tools do little compute; keep the registry/diff hot paths fast
 lto = "thin"         # cross-crate inlining across the workspace libs
