@@ -659,6 +659,29 @@ issue completions nushell | save -f ($nu.default-config-dir | path join completi
 source ($nu.default-config-dir | path join completions issue.nu)
 ```
 
+### One file for every name
+
+`devkit completions --all <shell>` writes all of the above concatenated,
+`devkit` first and then each old name, so a dotfile manager regenerates every
+completion in one command:
+
+```sh
+devkit completions --all fish > ~/.config/fish/completions/devkit.fish
+```
+
+```nu
+devkit completions --all nushell | save -f ($nu.default-config-dir | path join completions devkit.nu)
+```
+
+Each script registers itself under its own name, so concatenation works in every
+shell listed above. In zsh, `source` the file rather than autoloading it from
+`fpath`. Autoloading honors only the first `#compdef` line, while the `compdef`
+call each script ends with registers all of them.
+
+Which names `--all` covers is read off the command tree, not a list, so it
+follows whatever has a `completions` subcommand. `devkit-mcp` is absent because
+`devkit mcp` takes no subcommands.
+
 ## State & Cache Locations
 
 | Data | Path |

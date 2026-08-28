@@ -474,10 +474,7 @@ pub fn run(cli: RunCli) -> Result<()> {
             ConfigCmd::Apps { json } => config::apps(&cli, &cwd, *json),
             ConfigCmd::Tasks { json } => config::tasks(&cli, &cwd, *json),
         },
-        Cmd::Completions { shell } => {
-            crate::emit_completions(*shell, "run", "devrun");
-            Ok(())
-        }
+        Cmd::Completions { shell } => crate::emit_completions(*shell, "run", "devrun"),
         Cmd::Task {
             name,
             env,

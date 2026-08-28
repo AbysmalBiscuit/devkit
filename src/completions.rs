@@ -53,3 +53,28 @@ impl Generator for Shell {
         self.generator().try_generate(cmd, buf)
     }
 }
+
+/// Write each `(command, bin_name)` completion script for `shell` to stdout,
+/// in order, under one lock so a multi-script run cannot interleave.
+///
+/// `clap_complete::generate` panics when the write fails, which turns a reader
+/// that closes the pipe early (`… | head`, `… | grep -q`) into a crash. This
+/// runs the same sequence against the fallible generator and treats a broken
+/// pipe as the reader being done, not as a failure.
+pub fn emit(
+    shell: Shell,
+    scripts: impl IntoIterator<Item = (Command, &'static str)>,
+) -> Result<(), Error> {
+    let mut out = std::io::stdout().lock();
+    for (mut cmd, bin_name) in scripts {
+        cmd.set_bin_name(bin_name);
+        cmd.build();
+        if let Err(e) = shell.try_generate(&cmd, &mut out) {
+            return match e.kind() {
+                std::io::ErrorKind::BrokenPipe => Ok(()),
+                _ => Err(e),
+            };
+        }
+    }
+    Ok(())
+}

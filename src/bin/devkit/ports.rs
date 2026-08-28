@@ -63,9 +63,7 @@ fn resolve_holder(explicit: Option<String>, cwd: &str) -> Result<String> {
 pub fn run(cli: PortsCli) -> Result<()> {
     let cwd = cli.dir.clone().unwrap_or_else(|| ".".into());
     match cli.cmd.unwrap_or(Cmd::Status) {
-        Cmd::Completions { shell } => {
-            crate::emit_completions(shell, "ports", "portm");
-        }
+        Cmd::Completions { shell } => crate::emit_completions(shell, "ports", "portm")?,
         Cmd::Status => status()?,
         Cmd::Prune => {
             let freed = registry::prune()?;

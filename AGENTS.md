@@ -45,6 +45,14 @@ whichever crate owns that generator (`clap_complete` for five, the first-party
 `clap_complete_nushell` for nushell). Its value strings match `clap_complete::Shell`'s,
 so adding a shell must not rename an existing one.
 
+Every completion script goes out through `completions::emit`, which runs
+`Generator::try_generate` rather than `clap_complete::generate`. The latter
+panics when the write fails, so a reader that closes the pipe early (`… | head`)
+crashes the writer; `emit` treats a broken pipe as the reader being done.
+`devkit completions --all` emits one script per name through the same call, and
+reads the set of names off the command tree (any `SHIMS` entry whose subcommand
+has a `completions` of its own) rather than from a second list.
+
 ## Invariants (do not break)
 
 - **Reserve before bind.** `registry::alloc_one` writes a pid-less reservation row *before*

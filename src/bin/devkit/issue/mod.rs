@@ -434,10 +434,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
                 config: cli.config,
             }),
         },
-        Some(Cmd::Completions { shell }) => {
-            crate::emit_completions(shell, "issue", "issue");
-            Ok(())
-        }
+        Some(Cmd::Completions { shell }) => crate::emit_completions(shell, "issue", "issue"),
         None => status::run(&start(&cli.dir), &[], cli.config.as_deref()),
     }
 }

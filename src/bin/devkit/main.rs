@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
-use devkit::completions::Shell;
+use devkit::completions::{self, Shell};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -94,6 +94,10 @@ enum Cmd {
     Completions {
         /// Shell to emit the script for.
         shell: Shell,
+        /// Emit one script per command name — `devkit` and every old name —
+        /// concatenated, for installing them all from a single file.
+        #[arg(long)]
+        all: bool,
     },
     /// Port registry for local dev servers.
     #[command(display_name = "devkit ports")]
@@ -164,9 +168,26 @@ pub(crate) fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::C
 
 /// Emit a completion script registered under the tool's shim name (e.g.
 /// `portm`), so an installed hardlink of that name completes correctly.
-fn emit_completions(shell: Shell, subcommand: &str, shim_name: &'static str) {
-    let mut cmd = shim_command(subcommand, shim_name);
-    clap_complete::generate(shell, &mut cmd, shim_name, &mut std::io::stdout());
+fn emit_completions(shell: Shell, subcommand: &str, shim_name: &'static str) -> Result<()> {
+    let cmd = shim_command(subcommand, shim_name);
+    Ok(completions::emit(shell, [(cmd, shim_name)])?)
+}
+
+/// Every command name that has a `completions` subcommand of its own, paired
+/// with the script to emit for it: `devkit` first, then the old names in the
+/// order `install-links` creates them.
+///
+/// Read off the command tree rather than listed, so a name whose subcommand
+/// gains or loses `completions` is picked up without a second list to update.
+/// `devkit-mcp` is absent today because `devkit mcp` takes no subcommands.
+fn every_completion_script() -> Vec<(clap::Command, &'static str)> {
+    let mut scripts = vec![(Cli::command(), "devkit")];
+    scripts.extend(shim::SHIMS.iter().filter_map(|s| {
+        let cmd = shim_command(s.sub.name(), s.name);
+        cmd.find_subcommand("completions")?;
+        Some((cmd, s.name))
+    }));
+    scripts
 }
 
 fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
@@ -233,14 +254,13 @@ fn main() -> Result<()> {
                     Some(SchemaCmd::Init { path }) => schema::init(&path),
                 },
                 Cmd::Doctor { json } => doctor::run(json),
-                Cmd::Completions { shell } => {
-                    clap_complete::generate(
-                        shell,
-                        &mut Cli::command(),
-                        "devkit",
-                        &mut std::io::stdout(),
-                    );
-                    Ok(())
+                Cmd::Completions { shell, all } => {
+                    let scripts = if all {
+                        every_completion_script()
+                    } else {
+                        vec![(Cli::command(), "devkit")]
+                    };
+                    Ok(completions::emit(shell, scripts)?)
                 }
                 Cmd::Ports(c) => ports::run(c),
                 Cmd::Locks(c) => locks::run(c),

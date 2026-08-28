@@ -286,10 +286,7 @@ pub fn run(cli: LocksCli) -> Result<()> {
             println!("pruned {n} lock(s)");
             Ok(())
         }
-        Cmd::Completions { shell } => {
-            crate::emit_completions(shell, "locks", "lockm");
-            Ok(())
-        }
+        Cmd::Completions { shell } => crate::emit_completions(shell, "locks", "lockm"),
         Cmd::Hook { event } => {
             run_hook(&event);
             Ok(())

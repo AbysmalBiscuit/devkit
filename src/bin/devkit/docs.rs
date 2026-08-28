@@ -143,10 +143,7 @@ pub fn run(cli: DocsCli) -> Result<()> {
         Cmd::Info { name, json } => cmd_info(&name, json, cli.allow_default_branch),
         Cmd::Forget { names } => cmd_forget(&names),
         Cmd::Prune { yes } => cmd_prune(yes),
-        Cmd::Completions { shell } => {
-            crate::emit_completions(shell, "docs", "docm");
-            Ok(())
-        }
+        Cmd::Completions { shell } => crate::emit_completions(shell, "docs", "docm"),
     }
 }
 
