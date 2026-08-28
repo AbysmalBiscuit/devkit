@@ -144,7 +144,7 @@ fn same_holder_reacquire_is_ok() {
 /// global-config read (`$HOME/.config/devkit/config.toml`) finds nothing, and
 /// `DEVKIT_ENFORCE_WRITES` stripped so an inherited override cannot decide
 /// the result instead of the layer stack.
-fn run_hook(cwd: &Path, state: &Path, holder: &str, target: &Path) -> Output {
+fn run_hook(exe: &Path, cwd: &Path, state: &Path, holder: &str, target: &Path) -> Output {
     use std::io::Write;
     let payload = serde_json::json!({
         "session_id": holder,
@@ -152,10 +152,11 @@ fn run_hook(cwd: &Path, state: &Path, holder: &str, target: &Path) -> Output {
         "tool_name": "Write",
         "tool_input": { "file_path": target.to_string_lossy() },
     });
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lockm"))
+    let mut child = Command::new(exe)
         .args(["hook", "pretooluse"])
         .env("XDG_STATE_HOME", state)
         .env("HOME", state)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove("DEVKIT_ENFORCE_WRITES")
         .env_remove("DEVKIT_CONFIG")
         .env_remove("DEVKIT_SESSION")
@@ -198,6 +199,7 @@ fn is_deny(label: &str, out: &Output) -> bool {
 /// the root and the write is part of the answer.
 #[test]
 fn hook_honors_a_harness_declaration_in_a_nested_directory() {
+    let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     std::fs::write(proj.path().join("devkit.toml"), "").unwrap();
     let nested = proj.path().join("packages/thing");
@@ -212,12 +214,12 @@ fn hook_honors_a_harness_declaration_in_a_nested_directory() {
     // Enforcement is on at the nested directory: the first write claims the
     // file, the second is denied.
     let target = nested.join("a.rs");
-    let first = run_hook(&nested, state.path(), "alice", &target);
+    let first = run_hook(&link, &nested, state.path(), "alice", &target);
     assert!(
         !is_deny("first write (nested)", &first),
         "first write should be allowed: {first:?}"
     );
-    let second = run_hook(&nested, state.path(), "bob", &target);
+    let second = run_hook(&link, &nested, state.path(), "bob", &target);
     assert!(
         is_deny("second write (nested)", &second),
         "second write should be denied: {second:?}"
@@ -225,12 +227,12 @@ fn hook_honors_a_harness_declaration_in_a_nested_directory() {
 
     // Enforcement is off at the checkout root: neither write is denied.
     let other = proj.path().join("b.rs");
-    let third = run_hook(proj.path(), state.path(), "carol", &other);
+    let third = run_hook(&link, proj.path(), state.path(), "carol", &other);
     assert!(
         !is_deny("first write (root)", &third),
         "root has no opt-in: {third:?}"
     );
-    let fourth = run_hook(proj.path(), state.path(), "dave", &other);
+    let fourth = run_hook(&link, proj.path(), state.path(), "dave", &other);
     assert!(
         !is_deny("second write (root)", &fourth),
         "root has no opt-in: {fourth:?}"

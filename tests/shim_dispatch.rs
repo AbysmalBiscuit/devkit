@@ -156,13 +156,10 @@ fn devrun_shim_still_refuses_reap_without_a_terminal() {
     let port = listener.local_addr().expect("listener addr").port();
 
     let project = tempfile::tempdir().expect("project dir");
-    let ok = Command::new("git")
+    devkit_common::git::Git::fixture(project.path())
         .args(["init", "-q"])
-        .current_dir(project.path())
-        .status()
-        .expect("git init")
-        .success();
-    assert!(ok, "git init failed");
+        .output()
+        .expect("git init");
     std::fs::write(
         project.path().join("devkit.toml"),
         format!(
@@ -210,13 +207,10 @@ launch = ["git", "version"]
 /// bare-`issue` test that skipped the repo would never reach `status::run`.
 fn empty_repo() -> tempfile::TempDir {
     let project = tempfile::tempdir().expect("project dir");
-    let ok = Command::new("git")
+    devkit_common::git::Git::fixture(project.path())
         .args(["init", "-q"])
-        .current_dir(project.path())
-        .status()
-        .expect("git init")
-        .success();
-    assert!(ok, "git init failed");
+        .output()
+        .expect("git init");
     project
 }
 

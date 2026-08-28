@@ -59,11 +59,6 @@ fn devkit_emits_completions() {
 
 #[test]
 fn docm_emits_completions() {
-    emits_every_shell("docm", env!("CARGO_BIN_EXE_docm"));
-}
-
-#[test]
-fn docm_emits_completions() {
     let (_dir, link) = shimtest::linked("docm");
-    completions_contain_name("docm", link.to_str().expect("utf-8 link path"));
+    emits_every_shell("docm", link.to_str().expect("utf-8 link path"));
 }

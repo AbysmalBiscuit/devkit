@@ -4,6 +4,7 @@ mod config;
 use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
 use devkit::completions::Shell;
+use devkit_common::git::Git;
 use devkit_common::progress::Steps;
 use devkit_common::supervise;
 use devkit_common::ui;
