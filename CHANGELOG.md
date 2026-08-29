@@ -1,5 +1,81 @@
 # Changelog
 
+## [0.13.5](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.4...v0.13.5) (2026-08-29)
+
+
+### Features
+
+* **common:** add read-only worktree include planner ([476b5aa](https://github.com/AbysmalBiscuit/devkit/commit/476b5aa2003494b4533c6786b01731c49e519764))
+* **common:** add the single git builder ([9831987](https://github.com/AbysmalBiscuit/devkit/commit/98319873ed3bd2881ca388dc2f978b7a58514273))
+* **common:** answer checkout questions through the git module ([7a2a1bb](https://github.com/AbysmalBiscuit/devkit/commit/7a2a1bb104933928905cdec38824e0daa0885ae4))
+* **completions:** add nushell ([1ab800e](https://github.com/AbysmalBiscuit/devkit/commit/1ab800ebc6a914093b6a94c064d829b25d3af226))
+* **completions:** emit every name from one command ([f41aeaa](https://github.com/AbysmalBiscuit/devkit/commit/f41aeaa08deba4da63eb0428f6f2efad6c5ea3a2))
+* **config:** add project_layers as the one layer discovery ([078b4ad](https://github.com/AbysmalBiscuit/devkit/commit/078b4adc3d9a9e42f95e3b2735caaec531647a01))
+* **config:** anchor doppler_yaml to the reading checkout ([3969be6](https://github.com/AbysmalBiscuit/devkit/commit/3969be6ba5998aca11f3082c3fd4d3bbe2f77d03))
+* **config:** layer the main checkout's config into a worktree ([f16e399](https://github.com/AbysmalBiscuit/devkit/commit/f16e3994ebd07b67ee8e27a1f0d8b2afe3c7300f))
+* **devkit:** add install-links to create the shim hardlinks ([09ba730](https://github.com/AbysmalBiscuit/devkit/commit/09ba730cd3799d80a8ef02fba37e209570bd9831))
+* **devkit:** add the shim name table and argv0 resolution ([7c6f66e](https://github.com/AbysmalBiscuit/devkit/commit/7c6f66e254aaa80ad89310cda41e8ca532f58e7b))
+* **devkit:** link shim names automatically on a version change ([98d908f](https://github.com/AbysmalBiscuit/devkit/commit/98d908f263a0e44231f2549fc3d26fc8d0752d82))
+* **devkit:** merge devkit-mcp into devkit mcp ([10a5bf0](https://github.com/AbysmalBiscuit/devkit/commit/10a5bf021d3f7bc667c3c9eb915c3050d5e3f65c))
+* **devkit:** merge devrun into devkit run ([41327ce](https://github.com/AbysmalBiscuit/devkit/commit/41327ce29efc7b5ee6006a2a47e7395497ca1c86))
+* **devkit:** merge docm into devkit docs ([32da173](https://github.com/AbysmalBiscuit/devkit/commit/32da1738e3bf1e3cf73bace29243f0d048fd862d))
+* **devkit:** merge issue into devkit issue ([cab4eb5](https://github.com/AbysmalBiscuit/devkit/commit/cab4eb56e734ba68d13a687fc9a7cbb6f1ae126d))
+* **devkit:** merge lockm into devkit locks ([f427014](https://github.com/AbysmalBiscuit/devkit/commit/f427014223d1a33a1622326146094f0dfac014a6))
+* **devkit:** merge portm into devkit ports behind an argv0 shim ([a8fcd83](https://github.com/AbysmalBiscuit/devkit/commit/a8fcd83640d7e69610a373de61a52b3cfcc455e9))
+* **devkit:** name the shim spellings in devkit --help ([b9eb629](https://github.com/AbysmalBiscuit/devkit/commit/b9eb6299b526eff56f1553dfae82b3c5efd1923e))
+* **devkit:** report shim link state in doctor ([76b86be](https://github.com/AbysmalBiscuit/devkit/commit/76b86be4049abaf62964f32baef9a6c9521edfbf))
+* **issue:** add sync-includes ([6e728c7](https://github.com/AbysmalBiscuit/devkit/commit/6e728c7d41848205bce02db603ddde60d06afc47))
+* **issue:** exempt a dry run from the overwrite gate ([656fe8e](https://github.com/AbysmalBiscuit/devkit/commit/656fe8e3c95a8b6041fb2b64d09e29ce69e47945))
+* **issue:** scope-gate sync-includes --overwrite ([503a901](https://github.com/AbysmalBiscuit/devkit/commit/503a901577d04a2ab13c02ae294fd17ccab08af7))
+* **locks,docs:** inherit the main checkout's layers ([828b7fc](https://github.com/AbysmalBiscuit/devkit/commit/828b7fcffd160636c7dc37318f9eaacb4b593331))
+
+
+### Bug Fixes
+
+* **cli:** name the command a subcommand's version line reports ([f0fc77b](https://github.com/AbysmalBiscuit/devkit/commit/f0fc77b78720f84fa7cd39d580beb3d89f16d45b))
+* **common:** align git::branch with the DETACHED sentinel ([3be48bf](https://github.com/AbysmalBiscuit/devkit/commit/3be48bfed10acbbdaeceaa28094d077f7f2106db))
+* **common:** drain git output on threads and widen its timeouts ([6fc027c](https://github.com/AbysmalBiscuit/devkit/commit/6fc027c1fa7a978d82ee56e9924a4127c4b2fee1))
+* **common:** preserve non-UTF-8 cwd bytes on Git::at ([701ce70](https://github.com/AbysmalBiscuit/devkit/commit/701ce703f8ff00fe635f3ad600faa1cc87b3ac26))
+* **common:** re-check the destination at write time ([f48de33](https://github.com/AbysmalBiscuit/devkit/commit/f48de332357cb418ec06cdc6c8098b2393d8472d))
+* **common:** sort the include plan's vectors ([79578c7](https://github.com/AbysmalBiscuit/devkit/commit/79578c733134f454e254eb41d9edc267c2376f48))
+* **common:** stop touching disk in the non-UTF-8 cwd test ([7a05dd1](https://github.com/AbysmalBiscuit/devkit/commit/7a05dd1a711b8d8784e2871bc6402fec76847fbb))
+* **completions:** hoist the powershell using statements ([f81171f](https://github.com/AbysmalBiscuit/devkit/commit/f81171f99f7524a97aa01decc8108b2828daf4a1))
+* **completions:** keep clap help text ascii ([9d10628](https://github.com/AbysmalBiscuit/devkit/commit/9d10628a0c8f5c2f6bd22de4981f2bc559dca6c4))
+* **config,issue:** pin baseline_path, doc the dev-dep, fix monorepo_dir ([89419bf](https://github.com/AbysmalBiscuit/devkit/commit/89419bfc644f4f3047e1bcbe1f18745ea873ffeb))
+* **config:** stop parsing config above the root barrier ([9c38959](https://github.com/AbysmalBiscuit/devkit/commit/9c3895902fab250450e12149377e4208cdc300a6))
+* **devkit:** close the zero-subcommand exploit and the Windows build break ([99ed3cb](https://github.com/AbysmalBiscuit/devkit/commit/99ed3cb7e332de5db76fa20f5f627f38e919a901))
+* **devkit:** fix ports version parity, shim hardlink, and doc drift ([0b8af8f](https://github.com/AbysmalBiscuit/devkit/commit/0b8af8f0fe479b16f043705fb17d1e46fb7d7816))
+* **devkit:** fix reap-gate test, output/README parity, and test naming ([79eb41e](https://github.com/AbysmalBiscuit/devkit/commit/79eb41e1091124b1704a8fb8610a7414e080275a))
+* **devkit:** isolate probe stdin and cover the hide-filter directly ([9564921](https://github.com/AbysmalBiscuit/devkit/commit/9564921107a3890fb3b942eb77005d0131c918c2))
+* **devkit:** key the links stamp on exe identity, not version alone ([be444cd](https://github.com/AbysmalBiscuit/devkit/commit/be444cdc48fc0566afc0d2387c99c2c8fed6a15d))
+* **devkit:** make install-links foreign-binary detection actually safe ([fd864e4](https://github.com/AbysmalBiscuit/devkit/commit/fd864e446749b2e25167cdb26be23bb92da6aebb))
+* **devkit:** make shim dispatch exhaustive at compile time ([e07d752](https://github.com/AbysmalBiscuit/devkit/commit/e07d7527d1a6ccfc15fb7a1b66a5c32941d0ce69))
+* **devkit:** stop install-links racing its own automatic pass ([ad9ae81](https://github.com/AbysmalBiscuit/devkit/commit/ad9ae81d8562325162ce4a8ec3d690e6b235dc7e))
+* **docs:** resolve the manifest over the shared layer stack ([62fc884](https://github.com/AbysmalBiscuit/devkit/commit/62fc8843f2cdb05966678cbbe58ca1408e8bd411))
+* **doctor:** report the version each shim name resolves to ([e00b83d](https://github.com/AbysmalBiscuit/devkit/commit/e00b83d2245c0b76e8e09ef6693e81826a0c8f0c))
+* **github:** resolve ssh aliases in the origin URL ([eebf0a7](https://github.com/AbysmalBiscuit/devkit/commit/eebf0a7e18046999c61f9ce4a980cdee6eb9b698))
+* **hooks:** restore the missing-shim recovery path ([d751e44](https://github.com/AbysmalBiscuit/devkit/commit/d751e446e53030a563344a8b5470fa0c06bc7dea))
+* **issue:** copy missing files when overwrite is declined ([7248d91](https://github.com/AbysmalBiscuit/devkit/commit/7248d91418a02177b3300031ec89722acd66220c))
+* **issue:** report a worktree dirty when git cannot answer ([42c4470](https://github.com/AbysmalBiscuit/devkit/commit/42c4470c15d0d28f01c89202314959b02c1c7d9d))
+* **issue:** resolve the primary checkout through git ([d598d0d](https://github.com/AbysmalBiscuit/devkit/commit/d598d0d6b85e7f7a81250d1678476b18192b4622))
+* **issue:** unify review's detached-HEAD vocabulary on git::branch ([645e031](https://github.com/AbysmalBiscuit/devkit/commit/645e03118300a4602be3dc75f16cdcc3454e2d70))
+* **links:** fall open when the state dir is unusable ([8ef2bc3](https://github.com/AbysmalBiscuit/devkit/commit/8ef2bc39817fc95488560dd7a02d6b89845564cc))
+* **links:** keep a probed binary from linking anything ([061a536](https://github.com/AbysmalBiscuit/devkit/commit/061a536c54ee64eeef216f11d9594b3339e95e3d))
+* **links:** record whether a linking pass finished ([4ecf9fb](https://github.com/AbysmalBiscuit/devkit/commit/4ecf9fbc2bfe43f4312087bdc01746c72e69aafb))
+* **links:** settle shim identity on the marker probe alone ([b7b5b4b](https://github.com/AbysmalBiscuit/devkit/commit/b7b5b4bfbb4ed78dfe4a835ef455bd5a9b87d060))
+* **locks:** accept a path reaching the repo by link ([f9d5910](https://github.com/AbysmalBiscuit/devkit/commit/f9d5910c24b8de6c0402f5233a094d4378bc80bf))
+* **locks:** resolve the harness over the full layer stack ([43fcf81](https://github.com/AbysmalBiscuit/devkit/commit/43fcf817396c1f8c1c8e4a91d31c9f273554d6f5))
+* **locks:** scope a lock for a not-yet-created path ([33cda82](https://github.com/AbysmalBiscuit/devkit/commit/33cda82eecec24acfca07d144dab64ee606f350f))
+* **locks:** short-circuit enforcement on an explicit override ([1811ead](https://github.com/AbysmalBiscuit/devkit/commit/1811eadcb279f89a142b86784a8b4a8da7d839ff))
+* **locks:** stop treating a broken git as no repository ([3d2212a](https://github.com/AbysmalBiscuit/devkit/commit/3d2212abcfbc1325cc50769e04369834ac4f2080))
+* reconcile the shim move with main ([f2b5b24](https://github.com/AbysmalBiscuit/devkit/commit/f2b5b240dc870cf1b14b901f8b81827bb41a9a80))
+* **tests:** gate the Stdio import on unix ([2acb25c](https://github.com/AbysmalBiscuit/devkit/commit/2acb25cf38667fab92240a87aa56f1ad0538f8a4))
+
+
+### Performance Improvements
+
+* **locks:** resolve one checkout root per hook directory ([fbed30b](https://github.com/AbysmalBiscuit/devkit/commit/fbed30b8ec7e37cd60cd7ae1b6f294f782a0be87))
+
 ## [0.13.4](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.3...v0.13.4) (2026-08-25)
 
 
