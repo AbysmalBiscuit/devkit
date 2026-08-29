@@ -68,7 +68,9 @@ A positional selector substring-matches across `HOLDER`/`APP`/`PORT`/`ROLE`/`PID
 
 ## `issue`: issue lifecycle
 
-One command covering the whole issue lifecycle. Global `-C/--dir` and `--config` flags sit on `issue` itself, before the subcommand (e.g. `issue -C ~/Git/acme/monorepo status`).
+One command covering the whole issue lifecycle. Global `-C/--dir` and `--config` flags sit on `issue` itself, before the subcommand (e.g. `issue -C ~/Git/acme/api status`).
+
+Every subcommand works from the primary checkout, which it resolves through git: the main worktree when you are standing in a linked one, otherwise the checkout root of where you are. The directory's name does not matter. Run `issue` from inside the repository, or point it at one with `-C`.
 
 ```
 issue setup <ID|URL> [--slug <slug>] [--apps <a,b>] [--summary|--no-summary] [--no-gitignore] [--dry-run]  # id also accepted as --issue <ID>
