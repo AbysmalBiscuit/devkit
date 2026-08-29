@@ -1,7 +1,9 @@
 #[path = "common/shimtest.rs"]
 mod shimtest;
 
-use std::process::{Command, Output, Stdio};
+#[cfg(unix)]
+use std::process::Stdio;
+use std::process::{Command, Output};
 use std::time::Duration;
 
 /// Retry `attempt` briefly on a transient `ExecutableFileBusy`. `staged()`
