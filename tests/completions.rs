@@ -101,6 +101,36 @@ fn all_emits_a_registration_per_name_for_fish() {
     }
 }
 
+/// PowerShell rejects a `using` statement that follows any other statement in
+/// the file, and its generator repeats the same two at the head of every script
+/// it writes. Plain concatenation therefore fails to parse from the second
+/// script on, so the shared writer lifts them to the top and emits them once.
+#[test]
+fn all_hoists_the_powershell_using_statements() {
+    let script = all_shells_script("powershell");
+    let using: Vec<usize> = script
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("using namespace "))
+        .map(|(i, _)| i)
+        .collect();
+    let first_statement = script
+        .lines()
+        .position(|line| line.starts_with("Register-ArgumentCompleter"))
+        .expect("powershell script registers a completer");
+    assert_eq!(
+        using.len(),
+        2,
+        "each namespace belongs in the file once, got {} using lines",
+        using.len()
+    );
+    assert!(
+        using.iter().all(|&i| i < first_statement),
+        "every using statement must precede the first completer registration \
+         at line {first_statement}, got {using:?}"
+    );
+}
+
 /// `devkit-mcp` takes no subcommands, so it has no `completions` of its own and
 /// `--all` has nothing to emit for it. Derived from the command tree rather than
 /// listed, so a future `devkit mcp` subcommand surface would be picked up.

@@ -51,7 +51,15 @@ panics when the write fails, so a reader that closes the pipe early (`… | head
 crashes the writer; `emit` treats a broken pipe as the reader being done.
 `devkit completions --all` emits one script per name through the same call, and
 reads the set of names off the command tree (any `SHIMS` entry whose subcommand
-has a `completions` of its own) rather than from a second list.
+has a `completions` of its own) rather than from a second list. `--all` is a
+concatenation, so a shell whose script carries a file-level prologue needs that
+prologue lifted out and emitted once: PowerShell rejects a `using` statement
+that follows any other statement, and its generator repeats the same two at the
+head of every script. `Shell::prologue_prefix` names the lines to hoist, and no
+other generator has any. Help text reaches these scripts verbatim, so it stays
+ASCII. Windows PowerShell 5.1 reads a BOM-less UTF-8 `.ps1` as cp1252, where the
+trailing byte of an em dash, ellipsis or arrow becomes a curly quote that
+PowerShell accepts as a string delimiter, closing a help string early.
 
 ## Invariants (do not break)
 

@@ -38,6 +38,36 @@ impl Shell {
             Self::Zsh => &clap_complete::Shell::Zsh,
         }
     }
+
+    /// Lines this shell only accepts at the top of a file, which its generator
+    /// repeats at the head of every script it writes. Concatenating scripts
+    /// has to lift these out and emit them once.
+    ///
+    /// PowerShell rejects a `using` statement that follows any other statement,
+    /// so without this a combined file fails to parse from the second script
+    /// on. No other generator writes a file-level prologue.
+    fn prologue_prefix(self) -> Option<&'static [u8]> {
+        match self {
+            Self::PowerShell => Some(b"using namespace "),
+            Self::Bash | Self::Elvish | Self::Fish | Self::Nushell | Self::Zsh => None,
+        }
+    }
+}
+
+/// Move every `prefix` line out of `script` into `prologue`, keeping the first
+/// occurrence of each and returning what remains.
+fn take_prologue(script: Vec<u8>, prefix: &[u8], prologue: &mut Vec<Vec<u8>>) -> Vec<u8> {
+    let mut body = Vec::with_capacity(script.len());
+    for line in script.split_inclusive(|b| *b == b'\n') {
+        if line.starts_with(prefix) {
+            if !prologue.iter().any(|held| held == line) {
+                prologue.push(line.to_vec());
+            }
+        } else {
+            body.extend_from_slice(line);
+        }
+    }
+    body
 }
 
 impl Generator for Shell {
@@ -55,26 +85,37 @@ impl Generator for Shell {
 }
 
 /// Write each `(command, bin_name)` completion script for `shell` to stdout,
-/// in order, under one lock so a multi-script run cannot interleave.
+/// in order, under one lock so a multi-script run cannot interleave. Any
+/// file-level prologue `shell` demands is emitted once, ahead of every body.
 ///
 /// `clap_complete::generate` panics when the write fails, which turns a reader
-/// that closes the pipe early (`… | head`, `… | grep -q`) into a crash. This
-/// runs the same sequence against the fallible generator and treats a broken
-/// pipe as the reader being done, not as a failure.
+/// that closes the pipe early (`... | head`, `... | grep -q`) into a crash.
+/// This runs the same sequence against the fallible generator and treats a
+/// broken pipe as the reader being done, not as a failure.
 pub fn emit(
     shell: Shell,
     scripts: impl IntoIterator<Item = (Command, &'static str)>,
 ) -> Result<(), Error> {
-    let mut out = std::io::stdout().lock();
+    let prefix = shell.prologue_prefix();
+    let mut prologue = Vec::new();
+    let mut bodies = Vec::new();
     for (mut cmd, bin_name) in scripts {
         cmd.set_bin_name(bin_name);
         cmd.build();
-        if let Err(e) = shell.try_generate(&cmd, &mut out) {
-            return match e.kind() {
-                std::io::ErrorKind::BrokenPipe => Ok(()),
-                _ => Err(e),
-            };
-        }
+        let mut script = Vec::new();
+        shell.try_generate(&cmd, &mut script)?;
+        bodies.push(match prefix {
+            Some(prefix) => take_prologue(script, prefix, &mut prologue),
+            None => script,
+        });
     }
-    Ok(())
+    let mut out = std::io::stdout().lock();
+    match prologue
+        .iter()
+        .chain(bodies.iter())
+        .try_for_each(|chunk| out.write_all(chunk))
+    {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
 }
