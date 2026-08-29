@@ -80,11 +80,11 @@ mod tests {
     // dependency builds without its own test cfg) — inline the same sample.
     const SAMPLE: &str = r#"
 [defaults]
-worktree_root = "~/Git/example"
+worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/Git/example/_baseline"
-doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
+baseline_path = "~/git/example/_baseline"
+doppler_yaml = "~/git/example/app/doppler.yaml"
 [apps.api]
 base_port = 9100
 launch = ["doppler", "run", "-c", "dev_local", "--", "nitro", "dev", "--port", "{{ port }}"]

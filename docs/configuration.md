@@ -59,7 +59,7 @@ To do it by hand, the directive is a taplo **header**: first line, preceded only
 #:schema https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json
 
 [defaults]
-worktree_root = "~/Git/example-worktrees"
+worktree_root = "~/git/example-worktrees"
 ```
 
 A filesystem path works too, which is how to validate against an unreleased schema — including devkit's own checkout, where the release URL does not yet resolve:
@@ -421,11 +421,11 @@ Review base context for `review_request`: `branch`, `issue`/`slug`/`apps` from t
 
 ```toml
 [defaults]
-worktree_root  = "~/Git/acme"
+worktree_root  = "~/git/acme"
 branch_prefix  = "you/"
 baseline_ref   = "origin/staging"
-baseline_path  = "~/Git/acme/_baseline"
-doppler_yaml   = "~/Git/acme/monorepo/doppler.yaml"
+baseline_path  = "~/git/acme/_baseline"
+doppler_yaml   = "~/git/acme/app/doppler.yaml"
 pr_base        = "staging"
 
 [apps.api]

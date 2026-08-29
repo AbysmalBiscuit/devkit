@@ -99,10 +99,10 @@ const STARTER: &str = r#"
 # reports that rather than staying quiet.
 
 # [defaults]
-# worktree_root = "~/Git/<project>-worktrees"
+# worktree_root = "~/git/<project>-worktrees"
 # branch_prefix = "<you>/"
 # baseline_ref = "origin/main"
-# baseline_path = "~/Git/<project>-worktrees/_baseline"
+# baseline_path = "~/git/<project>-worktrees/_baseline"
 
 # An app needs base_port and launch to parse at all, and path to resolve
 # without a doppler.yaml to infer it from.

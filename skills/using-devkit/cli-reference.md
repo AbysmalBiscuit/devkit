@@ -4,7 +4,7 @@ Full command/flag reference for the devkit binaries. `SKILL.md` covers the coord
 
 `lockm` lives in `SKILL.md` (Lock command reference) — it is the collaboration tool, not a lookup. `docm`, the version-correct library-docs cache, belongs to the separate `docs` skill; go there rather than duplicating its flags here.
 
-Global flags go **before** the subcommand (e.g. `issue -C ~/Git/acme/monorepo status`):
+Global flags go **before** the subcommand (e.g. `issue -C ~/git/acme/app status`):
 
 | Flag | Where |
 |---|---|

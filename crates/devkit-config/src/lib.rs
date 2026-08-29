@@ -1033,11 +1033,11 @@ mod tests {
     use std::io::Write as _;
     pub(crate) const SAMPLE: &str = r#"
 [defaults]
-worktree_root = "~/Git/example"
+worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/Git/example/_baseline"
-doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
+baseline_path = "~/git/example/_baseline"
+doppler_yaml = "~/git/example/app/doppler.yaml"
 [apps.api]
 base_port = 9100
 launch = ["doppler", "run", "-c", "dev_local", "--", "nitro", "dev", "--port", "{{ port }}"]
@@ -1140,11 +1140,11 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
     fn stray_scan_width_parses_override() {
         let src = r#"
 [defaults]
-worktree_root = "~/Git/example"
+worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/Git/example/_baseline"
-doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
+baseline_path = "~/git/example/_baseline"
+doppler_yaml = "~/git/example/app/doppler.yaml"
 stray_scan_width = 128
 [apps.api]
 base_port = 9100
@@ -1157,11 +1157,11 @@ launch = ["nitro", "dev", "--port", "{{ port }}"]
     fn parses_people_and_pr_base() {
         let src = r#"
 [defaults]
-worktree_root = "~/Git/example"
+worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/Git/example/_baseline"
-doppler_yaml = "~/Git/example/monorepo/doppler.yaml"
+baseline_path = "~/git/example/_baseline"
+doppler_yaml = "~/git/example/app/doppler.yaml"
 pr_base = "staging"
 [apps.api]
 base_port = 9100
@@ -1187,10 +1187,10 @@ github = "exampleuser"
         );
         let src = r#"
 [defaults]
-worktree_root = "~/Git/example"
+worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/Git/example/_baseline"
+baseline_path = "~/git/example/_baseline"
 ignored_checks = ["vercel*", "*Preview*"]
 [apps.api]
 base_port = 9100
@@ -1204,10 +1204,10 @@ launch = ["nitro", "dev", "--port", "{{ port }}"]
         assert!(!Config::parse(SAMPLE).unwrap().defaults.require_pr_reviewer);
         let src = r#"
 [defaults]
-worktree_root = "~/Git/example"
+worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/Git/example/_baseline"
+baseline_path = "~/git/example/_baseline"
 require_pr_reviewer = true
 [apps.api]
 base_port = 9100
@@ -1947,8 +1947,8 @@ steps = [
 
     #[test]
     fn expand_vars_leaves_a_plain_value_alone() {
-        let got = expand_vars("~/Git/example", "defaults.worktree_root").unwrap();
-        assert_eq!(got, "~/Git/example");
+        let got = expand_vars("~/git/example", "defaults.worktree_root").unwrap();
+        assert_eq!(got, "~/git/example");
     }
 
     /// Write `body` to `<dir>/devkit.toml` and return the file's path.
