@@ -209,12 +209,12 @@ pub(crate) fn run_after_worktree_create(
 /// Copy the configured `worktree_include` globs from the primary checkout into
 /// a freshly created worktree, printing each fail-open warning to stderr. A
 /// no-op when the include list is empty.
-pub fn backfill_includes(monorepo: &str, worktree: &std::path::Path, patterns: &[String]) {
+pub fn backfill_includes(primary: &str, worktree: &std::path::Path, patterns: &[String]) {
     if patterns.is_empty() {
         return;
     }
     let (_copied, warnings) =
-        devkit_common::worktree::copy_includes(std::path::Path::new(monorepo), worktree, patterns);
+        devkit_common::worktree::copy_includes(std::path::Path::new(primary), worktree, patterns);
     for w in warnings {
         eprintln!("warning: {w}");
     }
@@ -346,7 +346,6 @@ pub fn run(args: SetupArgs) -> Result<()> {
         .trim()
         .to_string();
     let worktree = wt_root.join(&wt_name);
-    let monorepo = wt_root.join("monorepo");
     let holder = worktree.to_string_lossy().into_owned();
 
     let summary_path = details
@@ -373,20 +372,23 @@ pub fn run(args: SetupArgs) -> Result<()> {
         "worktree path already exists: {}",
         worktree.display()
     );
-    let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
+    let primary = devkit_common::git::primary_checkout(Path::new(&start))?;
+    let primary_s = primary
+        .to_str()
+        .context("primary checkout path not UTF-8")?;
     let total = 2 + usize::from(!args.apps.is_empty()) + cfg.hooks.after_worktree_create.len();
     let steps = Steps::persistent_with_total(total);
     steps.during_result("Fetching from origin…", || {
-        gitfetch::fetch("origin", monorepo_s)
+        gitfetch::fetch("origin", primary_s)
     })?;
-    if Git::at(Path::new(monorepo_s))
+    if Git::at(Path::new(primary_s))
         .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
         .success()?
     {
         anyhow::bail!("branch {branch} already exists — let /issue-setup decide how to proceed");
     }
     steps.during_result("Creating worktree…", || {
-        Git::at(Path::new(monorepo_s))
+        Git::at(Path::new(primary_s))
             .args([
                 "worktree",
                 "add",
@@ -431,7 +433,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         eprintln!("warning: could not update global gitignore: {e:#}");
     }
 
-    backfill_includes(monorepo_s, &worktree, &cfg.defaults.worktree_include);
+    backfill_includes(primary_s, &worktree, &cfg.defaults.worktree_include);
 
     // Per-app bootstrap: write the app's configured prep files, then run its
     // setup commands in its directory. Everything project-specific — filenames,

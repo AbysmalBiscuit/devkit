@@ -69,19 +69,15 @@ impl std::fmt::Display for Dirty {
 
 impl std::error::Error for Dirty {}
 
-/// The main repo's root path, derived once so a single post-removal
+/// The primary checkout as a string, resolved once so a single post-removal
 /// `git worktree prune` can run after all removals join. `start` is the base
-/// dir (`.` by default); from inside a worktree or the primary clone,
-/// `--git-common-dir` resolves to the main repo's `.git`, whose parent is the
-/// root.
+/// dir (`.` by default), and works from inside a worktree or from the primary
+/// checkout itself.
 fn main_repo(start: &str) -> Result<String> {
-    let start = Path::new(start);
-    let main = devkit_common::git::main_checkout(start)?
-        .map(Ok)
-        .unwrap_or_else(|| devkit_common::git::checkout_root(start))?;
-    main.to_str()
+    devkit_common::git::primary_checkout(Path::new(start))?
+        .to_str()
         .map(str::to_string)
-        .context("main path not UTF-8")
+        .context("primary checkout path not UTF-8")
 }
 
 /// Remove a finished worktree, delete its branch, and remove its summary file —
@@ -115,9 +111,7 @@ fn cleanup(
     }
     let summary = recorded_summary(&wt);
 
-    let main = devkit_common::git::main_checkout(&wt)?
-        .map(Ok)
-        .unwrap_or_else(|| devkit_common::git::checkout_root(&wt))?;
+    let main = devkit_common::git::primary_checkout(&wt)?;
     let parent = main.parent().context("main repo has no parent")?;
     let branch = devkit_common::git::branch(&wt)?;
 

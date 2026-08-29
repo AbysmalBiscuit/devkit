@@ -334,6 +334,23 @@ pub fn main_checkout(start: &Path) -> Result<Option<PathBuf>> {
     Ok((!same_path(&main.path, &here)).then(|| main.path.clone()))
 }
 
+/// The repository's primary checkout as seen from `start`: its main worktree
+/// when `start` is a linked worktree, else `start`'s own checkout root. This
+/// is the directory `worktree add`/`remove`, `fetch`, and the include backfill
+/// act on, so every caller that needs "the checkout the worktrees hang off"
+/// asks for it here rather than deriving it from a configured path or a
+/// directory name.
+///
+/// Errors when `start` is not inside a repository, inheriting
+/// `checkout_root`'s message. A bare main worktree has no working tree to
+/// return, so `start`'s own checkout answers.
+pub fn primary_checkout(start: &Path) -> Result<PathBuf> {
+    match main_checkout(start)? {
+        Some(main) => Ok(main),
+        None => checkout_root(start),
+    }
+}
+
 /// The branch checked out at `start`, or `DETACHED` when `start` has no
 /// branch checked out.
 pub fn branch(start: &Path) -> Result<String> {
@@ -537,6 +554,47 @@ mod tests {
             std::fs::canonicalize(found).unwrap(),
             std::fs::canonicalize(repo.path()).unwrap()
         );
+    }
+
+    #[test]
+    fn primary_checkout_of_the_main_checkout_is_itself() {
+        let repo = repo_with_commit();
+        assert_eq!(
+            std::fs::canonicalize(primary_checkout(repo.path()).unwrap()).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+    }
+
+    /// The directory name carries no meaning: a linked worktree resolves to
+    /// whatever git names as the main worktree.
+    #[test]
+    fn primary_checkout_of_a_linked_worktree_is_the_main_one() {
+        let repo = repo_with_commit();
+        let holder = tempfile::tempdir().unwrap();
+        let linked = holder.path().join("wt");
+        run(
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "side",
+            ],
+            repo.path(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::canonicalize(primary_checkout(&linked).unwrap()).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+    }
+
+    #[test]
+    fn primary_checkout_errors_outside_a_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(primary_checkout(dir.path()).is_err());
     }
 
     /// A bare repository has no main working tree, so there is no checkout to

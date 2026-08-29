@@ -284,16 +284,16 @@ fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
 }
 
 /// Run `f`; on error, remove the just-created worktree at `worktree` (in
-/// `monorepo`) before propagating, so a failed checkout or record write never
+/// `primary`) before propagating, so a failed checkout or record write never
 /// leaves an orphan worktree with no `.devkit/issue.toml`. Without the record,
 /// the worktree is invisible to `issue status`/`issue end` yet blocks a re-run
 /// at the path-exists guard. A failure of the removal itself is ignored — the
 /// original error is what propagates.
-fn with_cleanup<T>(worktree: &Path, monorepo: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+fn with_cleanup<T>(worktree: &Path, primary: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
     match f() {
         Ok(v) => Ok(v),
         Err(e) => {
-            let _ = Git::at(Path::new(monorepo))
+            let _ = Git::at(Path::new(primary))
                 .args([
                     "worktree",
                     "remove",
@@ -317,19 +317,21 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     }
 
     let wt_root = expand_tilde(&cfg.defaults.worktree_root);
-    let monorepo = wt_root.join("monorepo");
-    let monorepo_s = monorepo.to_str().context("monorepo path not UTF-8")?;
+    let primary = devkit_common::git::primary_checkout(Path::new(&start))?;
+    let primary_s = primary
+        .to_str()
+        .context("primary checkout path not UTF-8")?;
 
-    let repos = github::Repos::resolve(&cfg.github, monorepo_s, None);
+    let repos = github::Repos::resolve(&cfg.github, primary_s, None);
     let tracker =
-        devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(monorepo_s), &repos).tracker;
+        devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(primary_s), &repos).tracker;
     let steps = Steps::persistent();
-    let resolved = resolve(&args.target, monorepo_s, &repos, tracker.as_ref(), &steps)?;
+    let resolved = resolve(&args.target, primary_s, &repos, tracker.as_ref(), &steps)?;
     let pr_repo = resolved.loc.resolve(&repos)?;
 
     let meta: PrMeta = steps
         .during_result(&format!("Fetching PR #{}…", resolved.loc.number), || {
-            fetch_pr_meta(resolved.loc.number, monorepo_s, &pr_repo)
+            fetch_pr_meta(resolved.loc.number, primary_s, &pr_repo)
         })
         .with_context(|| format!("fetching PR #{}", resolved.loc.number))?;
 
@@ -360,10 +362,10 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let worktree_s = worktree.to_str().context("worktree path not UTF-8")?;
 
     steps.during_result("Fetching from origin…", || {
-        gitfetch::fetch("origin", monorepo_s)
+        gitfetch::fetch("origin", primary_s)
     })?;
     steps.during_result("Creating worktree…", || {
-        Git::at(Path::new(monorepo_s))
+        Git::at(Path::new(primary_s))
             .args([
                 "worktree",
                 "add",
@@ -379,7 +381,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     // orphan with no record — invisible to status/end, and blocked from
     // re-creation. Clean it up atomically so the user ends up with a recorded
     // worktree or with nothing.
-    let issue = with_cleanup(&worktree, monorepo_s, || {
+    let issue = with_cleanup(&worktree, primary_s, || {
         steps
             .during_result(&format!("Checking out PR #{}…", meta.number), || {
                 gh_capture(
@@ -425,7 +427,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         Ok(issue)
     })?;
 
-    crate::issue::setup::backfill_includes(monorepo_s, &worktree, &cfg.defaults.worktree_include);
+    crate::issue::setup::backfill_includes(primary_s, &worktree, &cfg.defaults.worktree_include);
 
     if args.setup {
         let setup_ctx = serde_json::json!({
