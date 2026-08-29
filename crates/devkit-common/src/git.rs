@@ -434,12 +434,14 @@ mod tests {
 
         // One `update-ref --stdin` batch beats spawning one `git tag` call
         // per ref; this is fixture setup, not the code under test, so it
-        // goes through a raw `Command` rather than `Git`. Each name is padded
-        // to 195 bytes: a loose ref is a file named after it, git locks it
-        // through a sibling `<name>.lock`, and the combined length has to
-        // clear ext4/NTFS's 255-byte filename limit with room to spare.
-        const TAG_COUNT: usize = 750;
-        const NAME_LEN: usize = 195;
+        // goes through a raw `Command` rather than `Git`. Count times padding
+        // has to push `git tag`'s output past a pipe buffer while each ref's
+        // whole path stays inside Windows' 260-character ceiling: git writes a
+        // loose ref as a file named after it and locks it through a sibling
+        // `<name>.lock`, so the repository's own path counts against that
+        // ceiling too, and a longer name buys nothing a larger count does not.
+        const TAG_COUNT: usize = 900;
+        const NAME_LEN: usize = 80;
         let mut batch = String::new();
         for i in 0..TAG_COUNT {
             let name = format!("{i:0>NAME_LEN$}");
