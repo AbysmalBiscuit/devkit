@@ -4,11 +4,11 @@
 
 ```sh
 devkit completions zsh  > ~/.zfunc/_devkit
-issue completions zsh   > ~/.zfunc/_issue
 devrun completions zsh  > ~/.zfunc/_devrun
-portm completions zsh   > ~/.zfunc/_portm
-lockm completions zsh   > ~/.zfunc/_lockm
 docm completions zsh    > ~/.zfunc/_docm
+issue completions zsh   > ~/.zfunc/_issue
+lockm completions zsh   > ~/.zfunc/_lockm
+portm completions zsh   > ~/.zfunc/_portm
 # bash:
 issue completions bash > ~/.local/share/bash-completion/completions/issue
 ```
