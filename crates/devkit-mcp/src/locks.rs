@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
-use devkit_locks::normalize_under_root;
+use devkit_locks::rel_under_root;
 use devkit_locks::{
     acquire_resolved, check_resolved, release_all_resolved, release_resolved, status_resolved,
 };
@@ -63,9 +63,7 @@ fn normalize(root: &str, paths: &[String]) -> Result<Vec<String>> {
         } else {
             root_path.join(pp)
         };
-        out.push(
-            normalize_under_root(&abs, root_path).with_context(|| format!("normalizing {p}"))?,
-        );
+        out.push(rel_under_root(&abs, root_path).with_context(|| format!("normalizing {p}"))?);
     }
     Ok(out)
 }

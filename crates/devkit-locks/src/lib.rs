@@ -88,6 +88,29 @@ pub fn normalize_under_root(abs: &Path, root: &Path) -> Result<String> {
     })
 }
 
+/// Express `abs` relative to `root`, falling back to the filesystem's own
+/// spelling of both when the caller's does not line up. git reports the
+/// checkout root with links resolved, so a path reaching the repository
+/// through a symlink or a junction shares no lexical prefix with it. Resolving
+/// the directory rather than the path itself keeps this working for a file
+/// that does not exist yet, which is every first write to a new file; when
+/// either side refuses to resolve, the lexical answer stands so the error
+/// stays the one the caller would have seen.
+pub fn rel_under_root(abs: &Path, root: &Path) -> Result<String> {
+    let lexical = normalize_under_root(abs, root);
+    if lexical.is_ok() {
+        return lexical;
+    }
+    let resolved = |p: &Path| std::fs::canonicalize(p).ok();
+    match (abs.parent(), abs.file_name()) {
+        (Some(dir), Some(name)) => match (resolved(dir), resolved(root)) {
+            (Some(dir), Some(root)) => normalize_under_root(&dir.join(name), &root),
+            _ => lexical,
+        },
+        _ => lexical,
+    }
+}
+
 /// Resolve a CLI path argument (absolute or cwd-relative) to a root-relative key.
 fn normalize_arg(arg: &str, cwd: &Path, root: &Path) -> Result<String> {
     let p = Path::new(arg);
@@ -96,7 +119,7 @@ fn normalize_arg(arg: &str, cwd: &Path, root: &Path) -> Result<String> {
     } else {
         cwd.join(p)
     };
-    normalize_under_root(&abs, root)
+    rel_under_root(&abs, root)
 }
 
 struct Ctx {
@@ -377,7 +400,7 @@ impl WriteResolver {
         };
         let start = abs.parent().unwrap_or(abs.as_path());
         let root = self.root_for(start);
-        let rel = normalize_under_root(&abs, &root)?;
+        let rel = rel_under_root(&abs, &root)?;
         Ok((root.to_string_lossy().into_owned(), rel))
     }
 
@@ -524,6 +547,45 @@ mod tests {
     #[test]
     fn normalize_rejects_outside_root() {
         assert!(normalize_under_root(Path::new("/elsewhere/x"), Path::new("/repo")).is_err());
+    }
+
+    /// Point `link` at the directory `target`. Returns false where the platform
+    /// refuses to make one, which on Windows means the process lacks the
+    /// privilege for a symlink and `mklink /J` was unavailable too.
+    fn link_dir(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+    }
+
+    /// git reports the checkout root with links resolved, so a path reaching the
+    /// repository through one spells its root differently than a path that does
+    /// not. Both must land on the same lock key: two sessions naming one file by
+    /// different spellings have to collide, not sit on separate keys.
+    #[test]
+    fn write_ctx_agrees_on_a_path_reaching_the_repo_through_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        init_repo(&repo);
+        let link = tmp.path().join("link");
+        if !link_dir(&repo, &link) {
+            return;
+        }
+        let direct = write_ctx(repo.join("src/a.rs").to_str().unwrap()).unwrap();
+        let linked = write_ctx(link.join("src/a.rs").to_str().unwrap()).unwrap();
+        assert_eq!(direct, linked);
     }
 
     #[test]
