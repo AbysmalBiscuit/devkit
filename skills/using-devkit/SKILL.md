@@ -8,7 +8,7 @@ allowed-tools: Bash(portm --help), Bash(lockm --help), Bash(devrun --help)
 
 ## Overview
 
-devkit is a suite of CLIs that coordinate local development for a monorepo. The engine is project-agnostic; project-specific details live in `devkit.toml`.
+devkit is a suite of CLIs that coordinate many concurrent local dev sessions, human and agent, on one machine. The engine is project-agnostic; project-specific details live in `devkit.toml`.
 
 The part that matters when **several agents work in the same checkout at once** is `lockm`: advisory file locks that let parallel sessions claim files before editing, so two agents never overwrite each other's in-flight work. Locks are **advisory** — they coordinate cooperating sessions; they do not enforce at the filesystem level. Respect them.
 

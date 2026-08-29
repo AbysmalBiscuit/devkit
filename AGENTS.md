@@ -1,6 +1,6 @@
 # devkit
 
-A Rust workspace (edition 2024): a root `devkit` binary package whose subcommands cover the CLI surface, plus the separate `devkitd` daemon and the library crates, coordinating local development for a monorepo. The engine is project-agnostic; every project-specific detail lives in `devkit.toml`. See `README.md` for user-facing CLI docs.
+A Rust workspace (edition 2024): a root `devkit` binary package whose subcommands cover the CLI surface, plus the separate `devkitd` daemon and the library crates, coordinating many concurrent local dev sessions, human and agent, on one machine. The engine is project-agnostic; every project-specific detail lives in `devkit.toml`. `README.md` orients; the user-facing reference is `docs/commands.md` (every subcommand's resolution rules and gates), `docs/configuration.md` (the `devkit.toml` shape), `docs/install.md`, `docs/agents.md`, and `docs/completions.md`.
 
 ## Commands
 

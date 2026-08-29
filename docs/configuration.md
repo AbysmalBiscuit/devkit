@@ -15,6 +15,17 @@ The recommended setup is to keep your real config at `~/.config/devkit/config.to
 
 `devkit.local.toml` is the untracked twin of `devkit.toml`: same shape, same schema, and it overrides the `devkit.toml` beside it. Settings one machine or one checkout needs go there, so the repository's `devkit.toml` carries only what the project shares. It stands alone too — a directory holding only a `devkit.local.toml` is a devkit project. Ignoring it is the repository's job; devkit does not write a `.gitignore` entry for you.
 
+## Layering
+
+Every `devkit.toml` from the filesystem root down to the cwd is merged, with `~/.config/devkit/config.toml` as the lowest-precedence base layer beneath them all. Deeper files override shallower ones per value: tables merge key-by-key, while scalars and arrays replace wholesale. `devrun config show` prints the merged result; `--origin` traces each value to the file it came from.
+
+Two escapes bypass the walk:
+
+- `[config] root = true` in a `devkit.toml` or `devkit.local.toml` stops the upward walk at that directory and drops every shallower layer, the home config included. Full isolation.
+- `--config <path>` or `$DEVKIT_CONFIG` selects a single file verbatim, with no layering and no home base.
+
+App `path` is normally inferred from the repo's `doppler.yaml`; individual `[apps.<name>]` sections may override it with an explicit `path`. `launch` is run verbatim, so a Doppler wrapper lives in each app's `launch`. devkit refuses to start a Doppler launch whose config resolves to `prd`, so it cannot run against production secrets.
+
 ## Secrets
 
 Credentials are **not** stored in `config.toml`. They resolve env-first, then from a separate `~/.config/devkit/secrets.toml` written `0600`:
@@ -108,7 +119,7 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 | `require_pr_reviewer` | no (default `false`) | Refuse `issue review request` when it would open a new PR without a `--to` reviewer. Left unset, the PR opens with no reviewer and nobody is Slacked. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
 | `issue_summary` | no (default `false`) | Write the issue summary file on every `issue setup`, as though `--summary` were passed. `--summary` / `--no-summary` still decide a single run. The file's path and body come from `templates.issue_summary_path` and `templates.issue_summary`. |
-| `worktree_include` | no | Glob patterns (relative to the monorepo root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. `issue sync-includes` re-runs the same copy against worktrees that already exist, from this one pattern list. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten by default; copy failures warn and are skipped (fail-open). `issue sync-includes --overwrite` is the opt-in way to replace files a worktree already has, and it needs a scope — one or more selectors, or `--all`. Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
+| `worktree_include` | no | Glob patterns (relative to the primary checkout's root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. `issue sync-includes` re-runs the same copy against worktrees that already exist, from this one pattern list. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten by default; copy failures warn and are skipped (fail-open). `issue sync-includes --overwrite` is the opt-in way to replace files a worktree already has, and it needs a scope — one or more selectors, or `--all`. Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
 
 ### Path values
 
@@ -144,7 +155,7 @@ One table per runnable app. `<name>` is the app id passed to `issue setup --apps
 | `path` | no | App subdirectory (relative to the repo) when it differs from `<name>`. |
 | `url` | no | Address the app serves on, defaulting to `http://localhost:{{ port }}`. Rendered as a minijinja template over the same variables as `launch` — `{{ port }}`, `ports['<app>']`, and `[templates.variables]` — so it can carry any scheme, host, or path (`https://app.localhost:{{ port }}/admin`). It is what `devrun up` prints in its URL column and, for the `provides_url` app, what is wired into consumers' `url_env`. Devkit never terminates TLS on an app's behalf, and readiness stays a TCP probe against the allocated port. |
 | `url_env` | no | Env var that receives the app's URL. |
-| `provides_url` | no | `true` marks the one app whose URL other apps consume. Exactly one app should set this. |
+| `provides_url` | no | `true` marks the one app whose URL other apps consume. Exactly one app should set this. `devrun` wires the provider's local port into each consumer's `url_env`, and auto-includes the provider when a consumer is run. |
 | `static_env` | no | Inline env vars always set for this app. |
 | `prep_files` | no | Files written into the app's directory during `issue setup`, before `setup` commands run. Each entry is `{ path, content, overwrite }` — `path` is relative to the app dir (parent dirs created), `content` is rendered as a minijinja template with the issue context (`prefix`, `issue`, `slug`, `apps`, `app`, `branch`, `worktree`) plus `[templates.variables]`, and `overwrite` (default `false`) keeps an existing file unless set to `true`. Emit a literal `{{` with `{% raw %}…{% endraw %}`. As an array, a deeper `devkit.toml` replaces the whole list rather than appending. |
 | `setup` | no | Commands run in the app's directory during `issue setup`, in order. Each entry is one argv array (program + args), e.g. `[["doppler", "run", "-c", "local_config", "--", "bun", "install"]]`. Use this for installs and any doppler wiring; nothing project-specific is hardcoded in the tool. |
@@ -372,6 +383,39 @@ Teammate handle aliases used by `issue review` (`--to <alias>`). The alias maps 
 |---|---|---|
 | `slack` | yes | Slack user (or channel) id, e.g. `U0XXXXXXXXX`. |
 | `github` | no | GitHub login used as the default PR reviewer for this person. |
+
+### `[templates]`
+
+`issue setup` and `issue review` render seven strings from optional minijinja templates. Each unset key falls back to a default that matches the historical hardcoded output.
+
+```toml
+[templates]
+branch          = "{{ prefix }}{{ issue }}-{{ slug }}"
+worktree_dir    = "{{ slug }}"
+pr_title        = "{{ issue }}: {{ input }}"
+pr_body         = "Closes {{ issue }}.\n\n{{ input }}"
+review_request  = "{{ input }} {{ pr_url }}"
+review_finish   = "{{ input }} {{ pr_url }}"
+issue_summary_path = "{{ worktree }}/.devkit/issue.md"   # or "notes/{{ issue }}.md", from worktree_root
+
+[templates.variables]            # constants; a context field of the same name wins
+team = "platform"
+```
+
+| Key | Default | Context |
+|---|---|---|
+| `branch`, `worktree_dir` | `{{ prefix }}{{ slug }}`, `{{ slug }}` | `prefix`, `issue`, `slug`, `apps` |
+| `checkout_worktree_dir` | `{{ pr_number }}-{{ pr_title }}` (or `{{ pr_number }}-{{ pr_title }}_[{{ linear_id }}]` when reached through an issue) | `pr_number`, `pr_title`, `linear_id`, `linear_title` (the last two carry whichever tracker answered) |
+| `pr_title` | `{{ input }}` | review base + `input` = `--pr-title` |
+| `pr_body` | `{{ input }}` | review base + `input` = `--pr-body`, `pr_title` |
+| `review_request` | `{{ input }} {{ pr_url }}` | review base + `input` = body arg, `pr_title`, `pr_url`, `name`, `slack_id` |
+| `review_finish` | `{{ input }} {{ pr_url }}` | `pr_url`, `pr_title`, `author`, `input`, `name`, `slack_id` |
+| `issue_summary_path` | `ISSUE_SUMMARY_{{ issue }}.md`, taken from `worktree_root` when relative | summary base |
+| `issue_summary` | a facts header, `## Description`, then empty `## Summary` / `## Pointers` | summary base |
+
+Summary base context for `issue_summary_path` and `issue_summary`: `issue` (the tracker's own spelling), `title`, `url`, `description`, `state`, `assignee`, `priority`, `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`, `prefix`, `apps`. Anything the tracker left empty renders as the empty string, so `{% if parent %}` drops the line rather than printing a blank one. Render `{{ worktree }}` into `issue_summary_path` to keep the file inside the worktree instead.
+
+Review base context for `review_request`: `branch`, `issue`/`slug`/`apps` from the `.devkit/issue.toml` record `issue setup` writes in the worktree, plus `pr_url`, `pr_title`, and per-recipient `name`/`slack_id`. `issue setup` also adds `.devkit/` to your global gitignore (`--no-gitignore` skips it). An undefined variable is an error (strict mode), so typos surface immediately.
 
 ## Example
 

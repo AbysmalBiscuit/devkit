@@ -1,725 +1,89 @@
 # devkit
 
-A Rust workspace built around a single `devkit` binary (plus the separate `devkitd` daemon) that coordinates local development for a monorepo. Devkit provides flock'd port and file-lock registries (both served from memory by an optional `devkitd` supervisor daemon), a supervised dev-app runner with baseline A/B comparison, and an `issue` subcommand covering the whole issue lifecycle (setup, triage, cleanup, PR status, dashboard, review). All project-specific details live in `devkit.toml`; the engine itself is project-agnostic.
+Coordination for running many local dev sessions at once, human and agent, as one `devkit` binary plus an optional `devkitd` daemon.
 
-## Binaries
+Three things that lean on each other:
 
-`devkit` bundles every command below as a subcommand (`devkit ports`, `devkit run`, `devkit issue`, `devkit locks`, `devkit docs`, `devkit mcp`). Each is also reachable under the name in its heading, through a hardlink `devkit` creates beside itself — see [Install](#install) for how that link is made and kept current. The examples below use the old names; `devkit <subcommand> …` runs the identical command.
+- Registries for what parallel sessions contend for. Allocated ports, advisory file locks over a shared checkout, running dev servers, and version-correct library checkouts, each one visible to every other session on the machine.
+- `issue`, an issue-to-PR workflow over git worktrees. Tracker-agnostic, from setup through review request to cleanup.
+- Agent wiring: an MCP server, a session-brief hook, and a skill, so coding agents drive the same registries you do.
 
-### `portm`: Port Registry
-
-Maintains a shared port registry so concurrent callers never collide on port allocation. State lives in `~/.local/state/devkit/ports.json`, guarded by an advisory file lock. Reservation rows are written before any process binds, which prevents the allocation race across concurrent callers.
-
-```
-portm status                                     # table of reserved/live ports
-portm alloc <apps…> [--holder <path>] [--role issue|baseline]    # alias: reserve
-portm release [apps…] [--holder <path>] [--role …]
-portm prune                                      # remove stale reservations
-```
-
-`--holder` defaults to the current worktree's root (`git rev-parse --show-toplevel`). `release` with app names frees only those apps' reservations; it never signals processes (`devrun down` is stop-and-release).
-
-### `devrun`: Supervised Dev Servers
-
-Launches and supervises dev servers for one or more apps. Apps not explicitly named are auto-detected by diffing `git diff <baseline_ref>...HEAD`. When any webapp is selected, `api` is added automatically and `FOUNDRY_API_BASE_URL` is wired to the local api port. Each app's `launch` command is run verbatim with `{{ port }}` substituted; wrap it in `doppler run` in the config if the app needs Doppler-injected secrets. `--role both` runs the issue branch and a fresh `origin/staging` baseline side-by-side on separate ports for direct A/B comparison.
-
-```
-devrun up [apps…] [--role issue|baseline|both] [--env K=V] [--env-file F] [--dry-run]
-devrun down [--role …] [--all | --others | --holder <path>] [--app …] [--older-than …] [--batch] [selector]
-devrun status [--all]
-devrun reap [--all]
-devrun logs <app> [-f]
-devrun config show [--origin] [--json]
-devrun config apps [--json]
-devrun config tasks [--json]
-devrun task [<name>] [--env K=V] [--env-file F] [--dry-run]
-```
-
-- **`config show`**: prints the effective merged config as TOML. `--origin` annotates each value with the file it was resolved from (or `# (default)` for serde defaults); `--json` emits JSON instead of TOML. `--origin --json` emits `{ "config": …, "origins": { "dotted.path": "file" } }`.
-- **`config apps`**: lists the configured apps from the merged config (columns: name, port, path, url, provides_url, url_env, launch). `--json` emits a structured array. A pure config readout with no live readiness — for running state use `devrun status`.
-- **`config tasks`**: lists the configured `[tasks]` from the merged config (columns: name, kind, app, description) — the same listing as a bare `devrun task`. `--json` emits a structured array.
-- **`down`**: stops servers and releases their ports. By default stops every server in the current worktree. Reaching another worktree requires an explicit scope flag and a confirmation read from a terminal:
-
-  | Command | Effect |
-  |---|---|
-  | `devrun down` | stop all servers in this worktree |
-  | `devrun down --role baseline` | this worktree, baseline only |
-  | `devrun down api` | this worktree, fuzzy-match `api` across columns |
-  | `devrun down --all` | every server, every worktree (one batch prompt) |
-  | `devrun down --others` | every server in every *other* worktree |
-  | `devrun down --others api` | `api` in other worktrees (per-worktree prompts) |
-  | `devrun down --holder ../wt/feat-x` | one specific worktree |
-  | `devrun down --all --app api --older-than 1h` | precise filter, all worktrees |
-
-  A positional selector substring-matches across `HOLDER`/`APP`/`PORT`/`ROLE`/`PID` and is mutually exclusive with the column filters (`--app`, `--port`, `--role`, `--pid`, `--listening`/`--not-listening`, `--older-than`). `--older-than` accepts `90s`, `30m`, `2h`, `1d` (bare number = seconds). Any selection that reaches outside the current worktree prints a preview and prompts; with no interactive terminal it is refused. `--all`/`--batch` collapse the per-worktree prompts into one.
-- **`status`**: lists tracked servers for this worktree (`--all` for every worktree). Below the tracked table it shows an **untracked (outside the registry)** section: dev servers detected listening on a configured app's port band, or matching a configured app's launch signature, that the registry doesn't own — i.e. started outside `devrun up`. Read-only; reaping is a separate command.
-- **`reap`**: kills dev servers found running outside devrun (this worktree by default; `--all` reaches every worktree). It prints the matched process trees, then **requires an interactive terminal** and a confirmation before sending SIGTERM (escalating to SIGKILL). There is no `--yes`/`--force` bypass — with no terminal it refuses and kills nothing, so an agent (no PTY) can never reap. Detection is also available read-only to agents via the `ports.strays` MCP action; killing is not.
-- **`task`**: run a canned `[tasks]` oneshot or sequence (no name lists them).
-
-### `issue`: Issue Lifecycle
-
-One command covering the whole issue lifecycle. Global `-C/--dir` and `--config` flags sit on `issue` itself, before the subcommand (e.g. `issue -C ~/Git/acme/monorepo status`).
-
-```
-issue setup <ID|URL> [--slug <slug>] [--apps <a,b>] [--summary|--no-summary] [--dry-run] # id also accepted as --issue <ID>
-issue checkout-pr <PR_ISSUE_URL> [WORKTREE_PATH] [--setup [--apps a,b]]
-issue status [ids…]                           # read-only triage table (also the bare `issue`)
-issue info [selector] [--json] [--cache-only] # one worktree's PR number + issue id (defaults to current)
-issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
-issue sync-includes [selectors…] [--overwrite [--all]] [-y] [--dry-run]
-issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size <N>] [--retries <N>]
-issue dashboard [--bucket auto|day|week|month] [--chart bar|line] [--mode absolute|proportional] [--all-roles] [--author <email>] [--no-plots] [--no-cache]
-issue review request [<body>] [--to <alias|#channel>] [--pr <URL|number>] [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push] [--no-notify] [--arg k=v]
-issue review finish  [<body>] [--pr <number>] [--to <alias|#channel>] [--arg k=v]
-```
-
-- **`setup`**: mechanical start of an issue. Creates a worktree off the baseline ref, symlinks env files, runs `bun install`, and prints the issue, worktree, and branch — as a labelled table when stdout is a terminal, so the path can be double-clicked out of the line, and as JSON otherwise for a script or an agent to parse. The issue is whatever this project's tracker recognises: a Linear id (`ENG-1234`) or Linear URL, a GitHub issue number or a GitHub issue URL in the project's issues repository. Without `--slug`, a Linear URL supplies the slug from its own `…/issue/<ID>/<title-slug>` path and no lookup happens; otherwise the tracker is asked for the issue's title and that is slugified, which needs the tracker's credential. Either way a leading copy of the issue id is stripped so the branch template does not repeat it, and the derived slug is shortened on a word boundary so the branch fits the 46-character width `issue status` prints; the budget is measured by rendering your own `branch` template, so a longer `branch_prefix` or issue id takes from the slug rather than overflowing. A slug passed to `--slug` is used verbatim. `--summary` additionally writes a markdown file holding the issue's tracker facts and description, followed by empty `## Summary` and `## Pointers` headings for whoever works the issue to fill in. Its path and body come from `templates.issue_summary_path` and `templates.issue_summary`; the default path is `ISSUE_SUMMARY_<ID>.md` under `worktree_root`, beside the worktree rather than inside it, so the notes outlive `git worktree remove`. An existing file is never overwritten — by the second setup it holds investigation the scaffold cannot reproduce — and its path is reported either way. `issue end` removes the file the worktree's record names as it cleans the worktree up, so the notes live exactly as long as the issue does. Set `defaults.issue_summary = true` to make this the default and `--no-summary` to skip it for one run. The tracker fetch happens before anything is created, so a missing credential or an unknown issue fails with no worktree left behind, and it reuses the same round trip the slug lookup already needed. It does not reserve ports — `devrun up` allocates them dynamically when the worktree's servers start.
-- **`checkout-pr`**: checks out an existing PR branch into a new worktree (unlike `setup`, which creates a new branch). The target may be a GitHub PR number (`#3340`), a bare number (`3340` — probed against the PRs and against this project's tracker, prompting on a real collision in a TTY and erroring if ambiguous without one; on a GitHub project a bare number is always a PR, since issues and PRs share one numbering), an issue id the tracker recognises (`ENG-3340`, whose attached PR is used — an issue with no attached PR is an error), a GitHub PR URL, or an issue URL the tracker recognises. The worktree directory is named by the `templates.checkout_worktree_dir` template (variables: `pr_number`, `pr_title`, `linear_id`, `linear_title`; titles are slugified; `linear_*` are empty on the PR-only path and otherwise carry whichever tracker's id and title resolved, the names being historical); the default renders e.g. `3340-fix-login`, or `3340-fix-login_[ENG-42]` when reached through an issue. Pass `[WORKTREE_PATH]` to override the placement. The PR's own branch name is kept; the template governs only the directory. Add `--setup [--apps a,b]` to also run the per-app prep pipeline, exactly as `issue setup` does. The worktree gets a `.devkit/issue.toml` record so `issue status`/`issue end` recognise it. Its result prints as a table on a terminal and as JSON otherwise, exactly as `setup` does.
-- **`status`** (the default when you run bare `issue`): triage table of every issue worktree. A worktree is FINISHED when its PR is MERGED, its working tree is clean, and its issue has reached a completed state in the tracker. A project with no tracker has no state to wait for, so the merged PR and the clean tree decide it alone; a tracker that has no state for the issue — an id it does not know, or an API it could not reach — holds the verdict open rather than promoting the worktree.
-- **`info`**: shows one worktree's PR number and issue id. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single machine-readable object (the `IssueWorktree` struct, with `pr_number`/`issue_id` for scripts). `--cache-only` skips the network — the PR number comes from the per-worktree cache at `<worktree>/.devkit/pr.json`, and the STATE and VERDICT columns render as `—`. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
-- **`end`**: removes FINISHED worktrees. `--pr-only` ignores the tracker-state and issue-id gates (finished = PR merged + clean), so a worktree carrying no issue id still qualifies; `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation.
-- **`sync-includes`**: re-copies the `defaults.worktree_include` files from the monorepo into worktrees that already exist, the same list `setup` and `checkout-pr` backfill at creation time. Use it when a file is added to that list after a worktree already exists. `selectors` match by issue id, branch, worktree basename, or path, same as `info`; omit them to sync every worktree. It deliberately does not resolve a PR number the way `end` and `info` do, since that needs a network call this command has no reason to make. By default it copies files the worktree is missing and warns about, but leaves alone, any file the worktree already has. `--overwrite` opts into replacing those, prompting once per worktree with the list of files it would clobber; declining that prompt falls back to the default behaviour for that worktree, so the files it is missing are still copied. Because the files being replaced are untracked ones git cannot restore, `--overwrite` needs a scope: one or more selectors, or `--all` for every worktree in the repository, other sessions' included. `-y` answers the prompt without asking and does nothing on its own. `--dry-run` reports what would happen and writes nothing.
-- **`prs`**: GitHub PR triage of your open PRs and PRs awaiting your review, with a per-repo diff cache that renders `old → new` for anything changed since the last run. The three searches (authored, review-requested, reviewed-by) run concurrently, each paged at `--batch-size` (default 25) and followed to exhaustion, so the table is complete however many PRs are open. Lower the batch size if GitHub answers a page with HTTP 504 — the per-PR check and review selections are what make a page expensive. `--retries <N>` (default 0) re-attempts a failed page with backoff.
-- **`dashboard`**: the triage + PR tables, plus terminal timelines of the issues assigned to you by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). The issue timeline comes from whichever tracker this project uses. The timeline fetches (tracker + GitHub) are cached under `~/.cache/devkit/dashboard` for a few minutes so reruns are fast; the live triage/PR panel is never cached. `--no-plots` shows only the tables; `--no-cache` forces a fresh fetch.
-- **`review`**: two subcommands — `review request` (push, open/reuse PR, add GitHub reviewers, Slack them) and `review finish` (Slack the PR author when you are done reviewing). See below.
-
-On a TTY, `issue` and `issue info` draw the triage table immediately and fill in each cell with an animated braille spinner as git, GitHub, and tracker data land. `issue prs` shows the previous run's tables dimmed with a fetch spinner below noting they are as of the last run (stale-while-revalidate), then swaps the fresh tables in place — the two renders are line-for-line parallel, so the screen does not shift. The step-driven commands (`checkout-pr`, `setup`, `end`, `review`) keep every completed step on screen as a numbered `✓` log line with its elapsed time. All of this live rendering goes to stderr and is TTY-gated — stdout, piped output, and redirected output are unaffected.
-
-### `issue review request`
-
-Push the branch, open or reuse the PR, request review on GitHub, and Slack the reviewers.
-
-```sh
-issue review request "ready for a look" --to igor
-issue review request --to igor --to '#eng' --arg team=infra   # body optional; channel + people
-issue review request                                          # re-ping the PR's existing reviewers
-issue review request --no-notify                              # push + open/reuse the PR, tell nobody
-```
-
-- `--to <alias|#channel>` (repeatable). People are added as GitHub reviewers (those with a `github` handle) and Slacked; `#channels` are Slack-only. Omit `--to` to re-request and Slack the PR's current human reviewers.
-- Opening a new PR without `--to` creates it unreviewed and notifies nobody. Set `defaults.require_pr_reviewer = true` in `devkit.toml` to make `--to` mandatory on that path.
-- `--no-notify` sends no Slack and never falls back to the PR's current reviewers, so the branch can be pushed and the PR opened or reused silently. It prints the PR URL instead. Combined with `--to` it still adds those GitHub reviewers, just without the Slack. It does not bypass `require_pr_reviewer`.
-- `--pr <URL|number>` acts on that PR for this run: a pasted GitHub PR URL keeps its own repository, a bare number means `pr_repo`. Since the command records whichever PR it acted on, this is also how a worktree bound to the wrong PR is rebound — the recovery for a superseded PR, where two PRs share a head branch and the branch lookup is ambiguous. Otherwise the PR comes from the worktree's record, and failing that from its branch.
-- `--base`, `--pr-title`, `--pr-body`, `--no-push` as before.
-- `--arg key=value` (repeatable) overrides a variable declared in `[templates.variables]`.
-
-Whichever way the PR is resolved, its head commit must be this worktree's `HEAD`
-or the command refuses it: a branch name is shared across forks and does not
-prove the PR carries this work, and a wrongly bound PR that later merges would
-let `issue end` delete a branch whose commits never landed. A squash- or
-rebase-merged PR still matches, since the comparison is against the branch head
-the PR carries rather than the commit that landed on the base.
-
-### `issue review finish`
-
-Announce over Slack that you finished reviewing. Posts nothing to GitHub.
-
-```sh
-issue review finish "LGTM, merging after CI"          # inside the PR's worktree → notifies the author
-issue review finish --pr 1234 --to lev                # from anywhere, explicit PR + recipient
-```
-
-- Resolves the PR from `--pr <number>`, else the worktree's record, else the current branch. `--pr` applies to that run only and never rewrites the record.
-- No head-commit check here, unlike `issue review request`: this is the reviewer's command, run in a worktree `issue checkout-pr` built, where `HEAD` falls behind the moment the author pushes again.
-- Defaults to notifying the PR author; `--to` overrides (repeatable, people or `#channels`).
-- `--arg key=value` as above.
-
-Templates: `review_request` and `review_finish` under `[templates]`. Per-recipient render fields: `name` (alias or channel), `slack_id` (user id, empty for channels), plus `pr_url`, `pr_title`, `input` (and `author` for finish).
-
-### Timing (`--timing`)
-
-`issue` and `devrun` accept a global `--timing` flag that prints a per-operation
-breakdown of subprocess and network IO to stderr on exit:
-
-- `--timing` (or `--timing=summary`) — a table of ops (`git fetch`, `github REST`,
-  `linear graphql`, …) with count / total / max / p50, plus a headline showing
-  wall time, IO-busy time, serial sum, and the concurrency factor the parallel
-  fan-outs achieve.
-- `--timing=trace` — additionally lists every op with its start offset, thread,
-  and full command line.
-- `--timing-log <FILE>` — streams one JSON record per op (`op`, `detail`,
-  `start_ms`, `dur_ms`, `thread`) for comparing runs.
-
-`DEVKIT_TIMING=summary|trace` enables the summary/trace form without the flag.
-stdout (tables, `--json`) is never affected. Example:
-
-    issue status --timing
-
-### `lockm`: File Locks
-
-Advisory locks on paths so parallel sessions sharing one checkout (where per-session
-worktrees are too expensive) don't edit the same files at once. A flock-guarded
-registry of claims keyed by path, the file-level twin of `portm`. Locks are
-exclusive and overlap by path component, so locking a directory conflicts with
-locking a file inside it.
-
-```
-lockm acquire <paths…> [--as <id>] [--note <msg>] [--ttl <secs>] [--json]
-lockm release <paths…> [--as <id>]        # or: release --all
-lockm check   <paths…> [--json]           # read-only: would acquire succeed?
-lockm status  [--all] [--json]            # alias: list
-lockm prune
-```
-
-Sessions identify themselves by (in priority order) `--as <id>`, `$DEVKIT_SESSION`,
-`$TMUX_PANE` (zero-config and unique per tmux pane), the controlling tty, or the
-parent pid. Conflicts fail fast: `acquire`/`check` exit `1` and report who holds the
-path. Locks expire after their TTL (default 30 min, `--ttl 0` disables) or when a
-recorded anchor pid dies; `release` frees them explicitly. For non-interactive agent
-sessions, pass a stable `--as`/`$DEVKIT_SESSION` so acquire and release agree.
-
-### `devkit`: Setup & Diagnostics
-
-Configures and diagnoses the toolkit itself. `auth` validates a Linear or Slack
-credential against the live API and stores it in `~/.config/devkit/secrets.toml`
-(`0600`); `doctor` reports where each credential resolves from and whether it is
-valid. Tokens always resolve env-first, so a shell export or Doppler-injected var
-still wins.
-
-~~~
-devkit auth <linear|slack> [--token <value>]   # validate + store; prompts (no echo) by default
-devkit auth github                              # report the GitHub identity devkit would use
-devkit doctor [--json]                          # check configured credentials
-devkit brief [--pins-only] [--if-changed] [--additional-context]   # compact project brief (apps, tasks, servers, versions)
-devkit schema                                   # JSON Schema for devkit.toml, for editor validation
-devkit schema init [PATH]                       # point a devkit.toml at that schema (starter if absent)
-devkit completions <shell>
-devkit install-links [--force]                  # (re)create the old-name hardlinks — see "Old-name links" below
-~~~
-
-- **`auth`**: prompts for the token without echo (or reads `--token`/piped stdin),
-  validates it, and saves it. For Linear it also stores the workspace slug derived
-  from the API, so issue links work without setting `LINEAR_WORKSPACE`.
-- **`auth github`**: reports, and stores nothing. devkit keeps no GitHub
-  credential of its own because `gh auth login`, `GH_TOKEN` and `GITHUB_TOKEN`
-  already cover it. It prints the identity behind the token devkit would send
-  and which of the three supplied it, then lists `gh`'s own accounts separately
-  below — those can differ from the token's identity, and the token's is the one
-  devkit uses. A `--token` passed here is refused rather than quietly discarded,
-  since accepting one would suggest devkit had stored it.
-- **`doctor`**: one row per credential — source (`env`/`file`/`unset`) and live
-  validity. Exits non-zero when a credential that *is* set fails validation, or
-  when a `devkit.toml` exists that does not load — the `config` row carries the
-  cause, since a config that fails to deserialize makes every other devkit
-  command fail the same way. Having no `devkit.toml` at all is reported without
-  complaint. Also warns when the installed binaries are older than the newest
-  devkit plugin checkout in `~/.claude/plugins/cache` (skewed binaries make
-  agents follow docs for features the binaries lack), when servers run outside
-  devrun, when the docs cache holds unreferenced checkouts, and — one row per
-  old name — when a shim is missing or a name is held by something other than
-  devkit; a shim problem is always a warning and never changes `doctor`'s exit
-  code. The `tracker` row names the tracker `issue` talks to here and how devkit arrived at it —
-  `[tracker] kind` or detection — and warns when devkit fell back to no tracker,
-  which holds every issue-state gate closed.
-- **`brief`**: prints a compact orientation for the current checkout — configured
-  apps, the `[tasks]` table, this worktree's live servers, and the versions this
-  checkout's lockfiles pin for each registered library. The two halves are
-  independent: a checkout with no devrun setup still gets the library table, and a
-  checkout that evidences no registered library still gets the rest. Prints nothing
-  when neither applies, so a hook can call it from any repository — but a
-  `devkit.toml` that exists and does not load is a fault, not an absence, and is
-  reported with the cause instead. Every section
-  earns its place: a project with no apps is not told about `devrun up` or
-  `portm`, and one with no tasks is not told about `devrun task`. `[brief]`
-  suppresses a section the checkout does have — `apps`, `tasks`, `locks` — see
-  [Configuration](docs/configuration.md#brief).
-  The library table answers for the directory it runs in. At a workspace root —
-  a monorepo container that declares nothing of its own — it rolls up the
-  members its lockfile names, one row per version they resolve, so a session
-  started there sees `kysely 0.28.17 — bun.lock (apps/api, packages/db-types,
-  +5)` and, where members disagree, both versions with the workspaces holding
-  them. A library the reference registry records a checkout for under this
-  project shows too, even with no lockfile evidence, and is flagged when the
-  checkout's version is not the one the lockfile names — that gap is where an
-  agent reads one version while the project builds another. Roll-up covers the
-  JS lockfiles, which name their members; cargo and uv keep theirs in a
-  manifest, so those resolve per workspace as before.
-  `--pins-only` emits just the library table; `--if-changed` prints nothing when
-  this session already received the same brief, keyed on the `session_id` in the
-  hook's stdin JSON. A full brief records itself against that key, so the first
-  `--if-changed` after one stays silent. `--pins-only` does not record: it carries
-  only the library table, and a full brief is still owed. The plugin runs all
-  three: `SessionStart` (full), `PostCompact` (`--pins-only`), and `CwdChanged`
-  (`--if-changed`). `--additional-context` wraps whichever of those a run emits
-  in the JSON envelope Codex and Cursor read a hook's context from; Claude Code
-  injects plain stdout and takes the brief without it.
-
-### `docm`: Library Docs
-
-Version-correct local library checkouts backing the `devkit:docs` skill.
-Register a library once; every lookup resolves the version the requesting
-workspace's own manifest and lockfile pin and materializes a checkout for it
-under `~/.local/share/devkit/docs/`, named for the exact ref it holds rather
-than a bare version (`h3/v1.15.11`, `openapi-ts/@hey-api~client-fetch@0.13.1`
-— `/` encodes as `~`). `docm info`'s `commit` field is the proof of what a
-checkout actually has, not the printed `version` string.
-
-```sh
-docm add tokio                    # registry lookup (crates.io/npm/PyPI)
-docm add https://github.com/godotengine/godot --ref 4.3-stable
-docm add react --project          # write to this repo's devkit.toml [docs]
-docm list                         # merged catalog: name, ecosystem, ref, origin
-docm list --project               # only what this checkout evidences; --json emits {pins, dropped}
-docm info tokio                   # path + version + layout map + notes
-docm path tokio                   # just the checkout path
-docm sync                         # fetch, re-resolve, re-materialize, verify
-docm rm tokio                     # drop from the manifest (aliases: remove, delete)
-docm forget tokio                 # release this project's reference to it
-docm prune                        # drop checkouts no live project references
-```
-
-Global manifest: `~/.config/devkit/docs.toml`. Per-project overlay:
-`[[docs.libs]]` entries in `devkit.toml` (same fields; partial entries
-override the global entry field-by-field). Resolution: manual `ref` pin →
-the requesting workspace's own dependency graph (`Cargo.lock`,
-`pnpm-lock.yaml`, `package-lock.json`, `bun.lock`, `uv.lock`) matched against
-the repo's git tags. Only a registry install resolves this way: a version
-number identifies upstream's code just when the lockfile says it came from the
-registry the repo publishes to, so a git, path, workspace, link or archive
-dependency is refused by name and needs `--ref`. A remote tarball is judged by
-the spec that declares it rather than by the row it installed, because npm
-records the same `resolved` URL for a tarball fetched from the registry host as
-for an ordinary version range. When nothing pins
-a version — no tag matches the lockfile's version, no importer manifest is
-found, the ecosystem is ambiguous, or a lockfile's own state conflicts with
-itself — `docm` fails with the specific cause and the fix rather than silently
-checking out the default branch. Pass `--allow-default-branch` (a global flag,
-valid on `add`, `sync`, `path`, and `info`) to opt into that checkout for one
-run instead.
-
-Resolving a library from a project records a *reference*: the project root, the
-library, and the checkout it received. A reference holds that checkout against
-`docm prune`, and puts the library in the project's `docm list --project` table
-even when nothing here declares it — which is how a `--ref` pin, or a library
-since dropped from the manifest, keeps appearing for a checkout that never used
-it. `docm forget <lib>` releases this project's reference and leaves the
-checkout for `prune` to reclaim once nothing references it.
-
-A library or ref name cannot collide with the cache's own control files:
-`registry` (and anything starting `registry.`) is reserved at the cache
-root for the reference registry, `manifest` is reserved for the lock the
-cache takes while editing a manifest, and `repo.git`/`meta.toml` are
-reserved inside each library's own directory. Register a package whose
-name is reserved under a different one with
-`docm add <other-name> --package <package>`. A library already registered
-under a reserved name cannot be removed with `docm rm`, which fails the same
-check: delete its entry from the manifest holding it and delete its cache
-directory by hand.
-
-A cache built by devkit 0.12.x has its layout migrated the first time any
-`docm` command runs against it: nested scoped library directories
-(`@scope/pkg/`) are renamed to the new encoding and their worktrees
-repaired, and legacy entries keep protecting their existing checkout until
-the library re-resolves under the new layout. `docm prune` then reclaims
-what the migration leaves behind, including retired `default` checkouts
-once nothing references them any longer.
-
-A 0.12.x `meta.toml` is not migrated. Three of the five tag patterns 0.12.x
-could record — `name-dash`, `name-dash-v` and `name-at` — no longer parse,
-and guessing which of the current patterns they meant would resolve a wrong
-git tag and serve wrong docs. Every `docm` command against such a cache
-fails instead, naming each `meta.toml` it cannot read in one run: delete
-those files and run `docm` again. The origin, layouts, tag pattern and
-commit records they hold are all re-derived.
-
-## devkit-mcp (MCP server)
-
-`devkit-mcp` (equivalently, `devkit mcp`) exposes devkit's port and file-lock
-coordination to MCP-capable coding agents over stdio. It presents two tools:
-
-- `devkit_describe`: list the available actions, or fetch one action's argument
-  schema (`{"action": "locks.acquire"}`).
-- `devkit_call`: invoke an action, e.g.
-  `{"action": "locks.acquire", "args": {"root": "/path/to/repo", "paths": ["src/a.rs"]}}`.
-
-v1 actions: `ports.{status,alloc,release,prune}` and
-`locks.{acquire,check,release,status,prune}`. Pass `root` (the project path) on
-every lock call and on `ports.alloc`/`ports.release`. For locks, `holder` is a
-session identity minted from `$DEVKIT_SESSION` (or a per-process id). For ports,
-`holder` defaults to `root` (the worktree path the registry uses to track liveness).
-Either can be overridden per call.
-
-Phase-2 `devrun` actions: `devrun.status` (tracked servers for a worktree, or
-`all`), `devrun.up` (start servers, **non-blocking**: returns each server
-`starting`; poll `devrun.status` for readiness), `devrun.down` (stop + release
-a worktree's servers), and `devrun.logs` (tail a tracked app's log). All take
-`root` (the worktree); `up` is `issue`-role only and starts servers under a
-running `devkitd` when present, else detached.
-
-The MCP server also exposes two read-only `issue` actions: `issue.status` lists
-the issue worktrees for a directory (`root`, default `.`; optional `ids` filter)
-with each one's PR state, tracker state, and a finished/not-finished verdict;
-`issue.prs` triages your GitHub PRs (`mine`, `reviews`, neither set means both;
-optional `repo`). Both return structured JSON with the verdicts and next-action
-labels pre-computed. They never mutate; `issue review`/`issue end` stay CLI-only.
-
-See [Installing for coding agents](#installing-for-coding-agents) below for how
-to register it — either bundled in the devkit plugin or as a standalone MCP
-server, per host.
-
-## Installing for coding agents
-
-devkit ships two things for agents:
-
-- a **plugin** — the `using-devkit` skill, session-start hooks, and the
-  `devkit-mcp` server, bundled together; and
-- the **`devkit-mcp` server on its own**, for hosts without a plugin system.
-
-Either way the binaries must be on your `PATH` — the plugin's MCP entry and
-every config below invoke `devkit-mcp` by name (see [Install](#install) for
-feature flags).
-
-The **plugin bootstraps `devkit` for you**. Claude Code, Codex, and Cursor have
-no install-time hook, so a session-start hook checks for `devkit` and, when it
-is missing, runs the [dist](#prebuilt-binaries-no-rust-toolchain) installer for
-the GitHub release matching the plugin's own version — so the binary stays in
-lockstep with the hooks and MCP server that drive them. The `devkit brief` hook
-that runs right after creates the `lockm`, `devkit-mcp`, and other old-name
-links automatically (see [Install](#install)), so the plugin's other hooks and
-its MCP entry find them on `PATH` without a separate install step. It re-runs
-on plugin update, when the version moves.
-
-Two cases where it stays out of the way:
-
-- **Binaries already on `PATH` that the hook did not install** (`cargo install`,
-  a distro package, a source build) are never overwritten — the hook records
-  them as externally managed and leaves upgrades to you.
-- **`DEVKIT_NO_BOOTSTRAP=1`** disables it outright.
-
-A failed install (offline, say) never blocks the session; it warns and does not
-retry until you resolve it or delete
-`${XDG_STATE_HOME:-~/.local/state}/devkit/bootstrap-failed`.
-
-On Windows the hook runs under Git Bash when it is present and under PowerShell
-otherwise, so it does not depend on a bash being installed. Both paths resolve
-the same state directory, so gaining Git Bash later does not reinstall.
-
-To install the binaries yourself instead, see [Install](#install):
-
-```sh
-cargo install --path .
-```
-
-### Claude Code
-
-Installing the plugin registers the skill, the hooks, and the MCP server in one
-step — the plugin manifest points at `.mcp.json`, so enabling the plugin starts
-the server automatically.
-
-From the terminal:
-
-```sh
-claude plugin marketplace add AbysmalBiscuit/devkit   # or a local path to this repo
-claude plugin install devkit@devkit
-```
-
-Or in a session, same arguments (`/plugin` alone opens the interactive browser):
-
-```
-/plugin marketplace add AbysmalBiscuit/devkit
-/plugin install devkit@devkit
-```
-
-Restart Claude Code so the hooks load, then run `/mcp` to confirm the `devkit`
-server is active and `devkit_describe`/`devkit_call` are listed.
-
-**MCP server only** (no skill/hooks): the repo ships `.mcp.json` at the root, so
-opening this repo in Claude Code registers the `devkit` server project-scoped.
-
-### Codex
-
-From the terminal:
-
-```sh
-codex plugin marketplace add AbysmalBiscuit/devkit    # or a local path / git URL
-codex plugin add devkit@devkit
-```
-
-Codex registers the `using-devkit` skill natively from the plugin manifest, so
-it is announced in every fresh session, and starts the bundled `devkit` MCP
-server. Confirm with `codex plugin list` and `codex mcp list`.
-
-**MCP server only** (no skill/hooks): the repo ships `.codex/config.toml` with
-`[mcp_servers.devkit]`, registering it project-scoped. Project MCP servers load
-only in trusted projects, so trust this repo when Codex prompts.
-
-### Cursor
-
-Cursor has no git-repo plugin install from the CLI. Install the plugin from the
-**Customize** panel in the sidebar, or, for a team, from Dashboard → Plugins →
-Team Marketplaces → Add Marketplace → **Import from Repo**
-(`AbysmalBiscuit/devkit`). For local development, symlink the checkout:
-
-```sh
-ln -s "$(pwd)" ~/.cursor/plugins/local/devkit
-```
-
-**MCP server only** (no skill/hooks): the repo ships `.cursor/mcp.json` (same
-`mcpServers` shape as Claude Code's), registering it project-scoped.
-
-### Other agents (Zed, generic MCP clients)
-
-No plugin manifest exists for these. Register `devkit-mcp` as a stdio MCP server
-in the host's own config — the command is just `devkit-mcp` (on `PATH` once
-`devkit` has run once, or after `devkit install-links`; see [Install](#install))
-— and point the agent at `AGENTS.md` for context. Zed reads `AGENTS.md`
-directly.
-
-After wiring up any host, confirm `devkit_describe` and `devkit_call` appear.
-
-## Configuration
-
-Config is layered. Every `devkit.toml` from the filesystem root down to the cwd is merged, with `~/.config/devkit/config.toml` as the lowest-precedence base layer beneath them all. Deeper files override shallower ones per value: tables merge key-by-key, while scalars and arrays replace wholesale. `devrun config show` prints the merged result; `--origin` traces each value to the file it came from.
-
-Each directory may also carry a `devkit.local.toml` — the untracked twin of its `devkit.toml`, same shape and schema, overriding the tracked file beside it. Settings one machine or one checkout needs go there; a deeper directory still wins over both. Ignoring it is the repository's job.
-
-Two escapes bypass the walk:
-
-- `[config] root = true` in a `devkit.toml` or `devkit.local.toml` stops the upward walk at that directory and drops every shallower layer, including the home config — full isolation.
-- `--config <path>` or `$DEVKIT_CONFIG` selects a single file verbatim, with no layering or home base.
-
-App `path` is normally inferred from the monorepo's `doppler.yaml`; individual `[apps.<name>]` sections may override it with an explicit `path`. `launch` is run verbatim, so a Doppler wrapper lives in each app's `launch`; devkit refuses to start a Doppler launch whose config resolves to `prd`, so it can't run against production secrets.
-
-App conventions are config-driven, not hardcoded:
-
-- `provides_url = true` marks the app that serves the URL other apps consume (the API). Consumer apps name that variable in their own `url_env`; `devrun` wires it to the provider's local port and auto-includes the provider when a consumer is run.
-- `url` is the address an app serves on, defaulting to `http://localhost:{{ port }}`. It is a template over the same variables as `launch`, so an app that terminates TLS itself, lives on a custom host, or serves under a path prefix declares it verbatim — `url = "https://app.localhost:{{ port }}/admin"`. `devrun up` prints the rendered value, and for the `provides_url` app it is what consumers receive in their `url_env`.
-- `prep_files` declares files written into an app's directory during `issue setup` (before its `setup` commands). Each is `{ path, content, overwrite }`; `content` is rendered as a minijinja template with the issue context (`prefix`, `issue`, `slug`, `apps`, `app`, `branch`, `worktree`), and existing files are kept unless `overwrite = true`.
-- `defaults.apps_dir` (default `apps`) is the repo-relative directory apps live under; it drives path inference and diff-based app detection.
-
-### Setting up your config
-
-The config is personal (worktree paths, app catalog, teammate handles, local
-secrets) and is **not** distributed; keep it out of version control. See
-[`docs/configuration.md`](docs/configuration.md) for the full config reference
-and a sanitized example. Copy that example to your config location and edit it:
-
-```sh
-mkdir -p ~/.config/devkit
-$EDITOR ~/.config/devkit/config.toml   # paste & adapt the example from docs/configuration.md
-```
-
-### Templates
-
-`issue setup` and `issue review` render seven strings from optional minijinja
-templates under `[templates]`. Each unset key falls back to a default that
-matches the historical hardcoded output.
-
-```toml
-[templates]
-branch          = "{{ prefix }}{{ issue }}-{{ slug }}"
-worktree_dir    = "{{ slug }}"
-pr_title        = "{{ issue }}: {{ input }}"
-pr_body         = "Closes {{ issue }}.\n\n{{ input }}"
-review_request  = "{{ input }} {{ pr_url }}"
-review_finish   = "{{ input }} {{ pr_url }}"
-issue_summary_path = "{{ worktree }}/.devkit/issue.md"   # or "notes/{{ issue }}.md", from worktree_root
-
-[templates.variables]            # constants; a context field of the same name wins
-team = "platform"
-```
-
-| Key | Default | Context |
-|---|---|---|
-| `branch`, `worktree_dir` | `{{ prefix }}{{ slug }}`, `{{ slug }}` | `prefix`, `issue`, `slug`, `apps` |
-| `checkout_worktree_dir` | `{{ pr_number }}-{{ pr_title }}` (or `{{ pr_number }}-{{ pr_title }}_[{{ linear_id }}]` when reached through an issue) | `pr_number`, `pr_title`, `linear_id`, `linear_title` (the last two carry whichever tracker answered) |
-| `pr_title` | `{{ input }}` | review base + `input` = `--pr-title` |
-| `pr_body` | `{{ input }}` | review base + `input` = `--pr-body`, `pr_title` |
-| `review_request` | `{{ input }} {{ pr_url }}` | review base + `input` = body arg, `pr_title`, `pr_url`, `name`, `slack_id` |
-| `review_finish` | `{{ input }} {{ pr_url }}` | `pr_url`, `pr_title`, `author`, `input`, `name`, `slack_id` |
-| `issue_summary_path` | `ISSUE_SUMMARY_{{ issue }}.md`, taken from `worktree_root` when relative | summary base |
-| `issue_summary` | a facts header, `## Description`, then empty `## Summary` / `## Pointers` | summary base |
-
-Summary base context for `issue_summary_path` and `issue_summary`: `issue`
-(the tracker's own spelling), `title`, `url`, `description`, `state`,
-`assignee`, `priority`, `estimate`, `labels`, `parent`, `project`, `worktree`,
-`branch`, `slug`, `prefix`, `apps`. Anything the tracker left empty renders as
-the empty string, so `{% if parent %}` drops the line rather than printing a
-blank one. Render `{{ worktree }}` into `issue_summary_path` to keep the file inside
-the worktree instead.
-
-Review base context for `review_request`: `branch`, `issue`/`slug`/`apps` from
-the `.devkit/issue.toml` record `issue setup` writes in the worktree, plus
-`pr_url`, `pr_title`, and per-recipient `name`/`slack_id`. `issue setup` also
-adds `.devkit/` to your global gitignore (`--no-gitignore` skips it).
-An undefined variable is an error (strict mode), so typos surface immediately.
+The engine is project-agnostic. Every project-specific detail lives in `devkit.toml`.
 
 ## Install
 
-### Prebuilt binaries (no Rust toolchain)
-
-The quickest path — the [dist](https://opensource.axo.dev/cargo-dist/)-generated
-installer downloads the matching binaries from the latest GitHub release,
-verifies checksums, and puts them on your `PATH`:
-
 ```sh
-# Linux / macOS / WSL
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-installer.sh | sh
 ```
 
 ```powershell
-# Windows (PowerShell)
 irm https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-installer.ps1 | iex
 ```
 
-Pin a specific release by swapping `latest/download` for `download/v0.8.0`.
-Prebuilt targets are Linux x86_64 (gnu + musl) and arm64, macOS x86_64 and
-arm64, and Windows x86_64 and arm64. Upgrade in place later with `devkit-update`.
+From a clone instead: `cargo install --path .`
 
-The installer places only the binaries. To use devkit inside a coding agent,
-register the plugin afterward — see
-[Installing for coding agents](#installing-for-coding-agents).
+Running `devkit` once installs the old command names (`portm`, `devrun`, `issue`, `lockm`, `docm`, `devkit-mcp`) as hardlinks beside it, so `docm list` and `devkit docs list` are the same command. See [docs/install.md](docs/install.md) for prebuilt targets, feature flags, the hardlink rules, and where state lives.
 
-### From source
+## Commands
 
-Install `devkit` and `devkitd` into `~/.cargo/bin` with one command — from a clone:
+| Command | What it does |
+|---|---|
+| `devkit ports` / `portm` | Shared port registry. Reserves before anything binds, so concurrent callers never collide. |
+| `devkit run` / `devrun` | Starts and supervises dev servers, with `--role both` for an issue-vs-baseline A/B. Also runs canned `[tasks]`. |
+| `devkit issue` / `issue` | Issue lifecycle: worktree setup, PR checkout, triage, cleanup, review requests, dashboard. |
+| `devkit locks` / `lockm` | Advisory file locks, so parallel sessions in one checkout don't edit the same files. |
+| `devkit docs` / `docm` | Version-correct local library checkouts, resolved from your own lockfiles. |
+| `devkit mcp` / `devkit-mcp` | The MCP server exposing ports, locks, devrun, and issue triage to coding agents. |
+| `devkit auth` / `devkit doctor` | Store a Linear or Slack credential; report where every credential resolves from. |
+| `devkit brief` | Compact project orientation for a session-start hook. |
 
-```sh
-cargo install --path .
-```
+Each command's `--help` is the authoritative flag list. [docs/commands.md](docs/commands.md) carries what `--help` cannot: resolution rules, the TTY gates, and the reasoning behind them.
 
-or straight from GitHub without cloning:
+## Coding agents
 
-```sh
-cargo install --git https://github.com/AbysmalBiscuit/devkit --force
-```
-
-This builds with default features, which include the `devkitd` supervisor daemon.
-`devkitd` serves both the port registry (`ports.sock`) and the lock registry
-(`locks.sock`) from memory, writing through to the files, and is used by
-`devrun up --supervise`. To skip the daemon, build a lean set with
-`--no-default-features` (omits `devkitd` and `devrun`'s `--supervise` support).
-
-Or just build into `target/release` without installing:
+devkit ships a plugin (the `using-devkit` skill, session hooks, and the MCP server) and the `devkit-mcp` server on its own for hosts without plugins. The plugin installs the binary for you on first session.
 
 ```sh
-cargo build --release
+claude plugin marketplace add AbysmalBiscuit/devkit
+claude plugin install devkit@devkit
 ```
 
-#### Old-name links
+See [docs/agents.md](docs/agents.md) for the MCP action list and the setup for Claude Code, Codex, Cursor, and Zed.
 
-`devkit` bundles the whole CLI surface as subcommands, and installs the old
-names (`portm`, `devrun`, `issue`, `lockm`, `docm`, `devkit-mcp`) beside itself
-as hardlinks — so `docm list` and `devkit docs list` are the same command.
-`devkit --help` ends with a block mapping every old name to its subcommand.
+## Configuration
 
-- Running `devkit` at all is enough: every invocation links the old names
-  beside the executable it ran from. A `target/release` after a source build,
-  or the directory a release archive was unpacked into, gains all six names on
-  the first command you run there — including `devkit --help`.
-- `devkit install-links` does the same pass explicitly, next to whichever
-  `devkit` executable you run it from.
-- A name already occupied by something devkit cannot identify as itself is
-  reported as skipped and left alone. `--force` claims such a name anyway,
-  deleting whatever holds it — an unrelated tool of the same name included.
-  That is what the flag is for, and the reason it is not the default.
-- Upgrading from 0.13.x: the separate `portm`, `devrun`, `issue`, `lockm`,
-  `docm` and `devkit-mcp` binaries predate the identity probe devkit
-  recognizes itself by, so they are reported skipped too. `devkit
-  install-links --force` claims them; each name is then a hardlink carrying
-  the probe, and later upgrades need no flag.
-- The links refresh on their own: any `devkit` invocation relinks when the
-  binary's version, directory, or modification time stops matching the
-  recorded stamp, so an upgrade or a move needs no manual step. A pass that
-  could not finish — a name it failed to create, or probes slow enough to
-  reach the pass's own deadline — is retried by a later invocation instead of
-  being recorded as done.
-- `devkit doctor` reports a row per name: which are linked to the running
-  binary, what version each of the others resolves to, and which command
-  claims it.
-- Set `DEVKIT_SKIP_AUTOLINK` (to any value) to turn that automatic pass off —
-  the opt-out for a packager who manages the links itself, or for anything
-  that must not write the state directory.
+Config is layered. Every `devkit.toml` from the filesystem root down to the cwd is merged, with `~/.config/devkit/config.toml` as the base layer beneath them all. Deeper files win per value. Each directory may also carry an untracked `devkit.local.toml` that overrides the `devkit.toml` beside it.
+
+The config is personal: worktree paths, your app catalog, teammate handles. Keep it out of version control.
+
+```sh
+mkdir -p ~/.config/devkit
+$EDITOR ~/.config/devkit/config.toml
+```
+
+[docs/configuration.md](docs/configuration.md) is the full reference, with a sanitized example to copy. `devkit schema init` points a config at the JSON Schema so your editor validates it.
 
 ## Shell completions
-
-`devkit` and every old name except `devkit-mcp`, which takes no subcommands at
-all, generate their own completion script via a `completions <shell>` subcommand
-(bash, zsh, fish, elvish, nushell, powershell), each completing its own
-subcommands:
-
-```sh
-devkit completions zsh  > ~/.zfunc/_devkit
-issue completions zsh   > ~/.zfunc/_issue
-devrun completions zsh  > ~/.zfunc/_devrun
-portm completions zsh   > ~/.zfunc/_portm
-lockm completions zsh   > ~/.zfunc/_lockm
-docm completions zsh    > ~/.zfunc/_docm
-# bash:
-issue completions bash > ~/.local/share/bash-completion/completions/issue
-```
-
-A nushell script defines a module and re-exports it, so save it to a file and
-`source` that file from `config.nu` rather than piping it in:
-
-```nu
-mkdir ($nu.default-config-dir | path join completions)
-issue completions nushell | save -f ($nu.default-config-dir | path join completions issue.nu)
-# then in config.nu:
-source ($nu.default-config-dir | path join completions issue.nu)
-```
-
-### One file for every name
-
-`devkit completions --all <shell>` writes all of the above concatenated,
-`devkit` first and then each old name, so a dotfile manager regenerates every
-completion in one command:
 
 ```sh
 devkit completions --all fish > ~/.config/fish/completions/devkit.fish
 ```
 
-```nu
-devkit completions --all nushell | save -f ($nu.default-config-dir | path join completions devkit.nu)
-```
-
-Each script registers itself under its own name, so concatenation works in every
-shell listed above. In zsh, `source` the file rather than autoloading it from
-`fpath`. Autoloading honors only the first `#compdef` line, while the `compdef`
-call each script ends with registers all of them.
-
-Which names `--all` covers is read off the command tree, not a list, so it
-follows whatever has a `completions` subcommand. `devkit-mcp` is absent because
-`devkit mcp` takes no subcommands.
-
-## State & Cache Locations
-
-| Data | Path |
-|---|---|
-| Port registry | `~/.local/state/devkit/ports.json` |
-| Server logs | `~/.local/state/devkit/logs/` |
-| File-lock registry | `~/.local/state/devkit/locks.json` |
-| PR diff cache (`issue prs`) | `$XDG_CACHE_HOME/devkit/pr-status/` (or `~/.cache/devkit/pr-status/`) |
-| Docs library manifest | `~/.config/devkit/docs.toml` |
-| Docs library checkouts | `$XDG_DATA_HOME/devkit/docs/` (or `~/.local/share/devkit/docs/`) |
-
-The state home honors `$XDG_STATE_HOME` (default `~/.local/state`). A legacy
-`~/.claude/state/devkit` home is migrated automatically on first run.
+bash, zsh, fish, elvish, nushell, and powershell. `--all` emits one file covering every command name. Per-shell details are in [docs/completions.md](docs/completions.md).
 
 ## Requirements
 
-**Required:**
+`git` and an authenticated `gh` are required. Everything else is optional:
 
-- `git`
-- `gh` (GitHub CLI, authenticated)
+- `doppler`, only if an app's `launch` wraps its command in `doppler run`
+- `$LINEAR_API_KEY` authenticates every Linear lookup: issue titles and summaries, the dashboard's issue timeline, and the issue state `issue status`/`issue end` gate on. It also makes Linear the tracker of any project that does not name one, so a project on GitHub should set `[tracker] kind` rather than rely on detection
+- `$LINEAR_WORKSPACE` enables clickable Linear issue links in `issue status`
+- `$SLACK_TOKEN` lets `issue review` post the reviewer message directly; without it the command emits a `SlackIntent` JSON object
 
-**Optional:**
+Each of these resolves env-first, then from `~/.config/devkit/secrets.toml`. Run `devkit auth <linear|slack>` to store them, or `devkit doctor` to check them.
 
-- `doppler`: only if an app's `launch` wraps its command in `doppler run` (see [docs/configuration.md](docs/configuration.md))
-- `$LINEAR_API_KEY`: authenticates every Linear lookup — issue titles and summaries, the dashboard's issue timeline, and the issue state `issue status`/`issue end` gate on. It also makes Linear the tracker of any project that does not name one, so a project on GitHub should set `[tracker] kind` rather than rely on detection
-- `$LINEAR_WORKSPACE`: enables clickable Linear issue links in `issue status`
-- `$SLACK_TOKEN`: lets `issue review` post the reviewer message directly (otherwise it emits a `SlackIntent` JSON object)
-
-Each of these resolves env-first, then from `~/.config/devkit/secrets.toml`. Run
-`devkit auth <linear|slack>` to store them, or `devkit doctor` to check them.
-
-GitHub is authenticated separately and stored nowhere by devkit: `$GH_TOKEN`,
-then `$GITHUB_TOKEN`, then `gh auth token` — so `gh auth login` alone is enough.
-`devkit auth github` reports which of the three is in effect and whose account
-it belongs to. The GitHub tracker uses the same chain.
+GitHub authenticates separately and devkit stores nothing: `$GH_TOKEN`, then `$GITHUB_TOKEN`, then `gh auth token`, so `gh auth login` alone is enough. `devkit auth github` reports which of the three is in effect and whose account it belongs to. The GitHub tracker uses the same chain.
 
 ## Troubleshooting
 
-Recoverable failures print the full error context chain. On a panic, the binary
-prints a bug report with the location and a backtrace. For a backtrace on either,
-set `RUST_BACKTRACE=1`.
+Recoverable failures print the full error context chain. On a panic, the binary prints a bug report with the location and a backtrace. For a backtrace on either, set `RUST_BACKTRACE=1`.
