@@ -41,7 +41,7 @@ pub(crate) enum Cmd {
     },
     /// Drop stale reservations (dead pids, vanished holders).
     Prune,
-    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    /// Print a shell-completion script (bash, zsh, fish, ...) to stdout.
     Completions {
         /// Shell to emit the script for.
         shell: Shell,

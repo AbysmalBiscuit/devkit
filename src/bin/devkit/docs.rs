@@ -22,7 +22,7 @@ pub(crate) enum Cmd {
     Add {
         /// Package name to look up, or a git URL to clone directly.
         target: String,
-        /// Ecosystem; omitted → probe crates.io, npm, PyPI in order.
+        /// Ecosystem. Omitted probes crates.io, npm, PyPI in order.
         #[arg(long)]
         eco: Option<Ecosystem>,
         /// Registry package name when it differs from the lib name (e.g. @types/node).
@@ -97,7 +97,7 @@ pub(crate) enum Cmd {
         #[arg(long)]
         yes: bool,
     },
-    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    /// Print a shell-completion script (bash, zsh, fish, ...) to stdout.
     Completions {
         /// Shell to emit the script for.
         shell: Shell,

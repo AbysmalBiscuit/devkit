@@ -140,3 +140,24 @@ fn a_closed_pipe_does_not_panic() {
         out.status
     );
 }
+
+/// Help text reaches the generated scripts verbatim. Windows PowerShell 5.1
+/// reads a BOM-less UTF-8 `.ps1` as cp1252, where the trailing byte of a UTF-8
+/// em dash, ellipsis or arrow decodes to a curly quote, which PowerShell
+/// accepts as a string delimiter, closing a `CompletionResult` string early and
+/// failing the whole file to parse. Keeping every help string ASCII avoids it.
+#[test]
+fn completion_scripts_are_ascii_only() {
+    for shell in ["bash", "elvish", "fish", "nushell", "powershell", "zsh"] {
+        let script = all_shells_script(shell);
+        let offender = script
+            .lines()
+            .find(|line| !line.is_ascii())
+            .map(str::to_owned);
+        assert!(
+            offender.is_none(),
+            "{shell} completion script has a non-ASCII help string: {}",
+            offender.unwrap_or_default()
+        );
+    }
+}

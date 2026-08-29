@@ -44,8 +44,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Validate and store a Linear or Slack credential, or report the GitHub
-    /// identity devkit would use (GitHub stores nothing — `gh auth login` or
-    /// `GH_TOKEN`/`GITHUB_TOKEN` already cover that credential).
+    /// identity devkit would use (GitHub stores nothing, since `gh auth login`
+    /// or `GH_TOKEN`/`GITHUB_TOKEN` already cover that credential).
     Auth {
         /// Credential to validate and store, or `github` to report identity.
         provider: Provider,
@@ -58,9 +58,9 @@ enum Cmd {
     /// versions) for the current checkout; silent outside a devkit-managed
     /// project. Intended for coding-agent session hooks.
     Brief {
-        /// Emit only the library-versions section — what a post-compaction
-        /// re-injection wants, without respending the context compaction
-        /// just reclaimed.
+        /// Emit only the library-versions section, which is what a
+        /// post-compaction re-injection wants, without respending the context
+        /// compaction just reclaimed.
         #[arg(long)]
         pins_only: bool,
         /// Print nothing when this session already received the same brief.
@@ -90,11 +90,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<SchemaCmd>,
     },
-    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    /// Print a shell-completion script (bash, zsh, fish, ...) to stdout.
     Completions {
         /// Shell to emit the script for.
         shell: Shell,
-        /// Emit one script per command name — `devkit` and every old name —
+        /// Emit one script for `devkit` and one for every old name,
         /// concatenated, for installing them all from a single file.
         #[arg(long)]
         all: bool,
@@ -118,7 +118,7 @@ enum Cmd {
     /// Serve the devkit MCP tools over stdio.
     #[command(display_name = "devkit mcp")]
     Mcp(mcp::McpCli),
-    /// Install the old command names (`issue`, `devrun`, …) as hardlinks
+    /// Install the old command names (`issue`, `devrun`, ...) as hardlinks
     /// beside this executable.
     InstallLinks(links::InstallLinksArgs),
 }

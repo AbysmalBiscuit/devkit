@@ -78,7 +78,7 @@ pub(crate) enum Cmd {
         /// commands. Omit for a worktree with no per-app setup.
         #[arg(long, value_delimiter = ',')]
         apps: Vec<String>,
-        /// Also write an issue summary file — the Linear facts and
+        /// Also write an issue summary file, the Linear facts and
         /// description as a markdown scaffold, at the path
         /// `templates.issue_summary_path` names. Needs a Linear key, and never
         /// overwrites a summary that is already there. Set
@@ -225,7 +225,7 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         cmd: ReviewCmd,
     },
-    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    /// Print a shell-completion script (bash, zsh, fish, ...) to stdout.
     Completions {
         /// Shell to emit the script for.
         shell: Shell,

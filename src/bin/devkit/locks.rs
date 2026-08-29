@@ -18,7 +18,7 @@ pub(crate) enum Cmd {
         paths: Vec<String>,
         /// Session identity to hold the claim under. Defaults to
         /// $DEVKIT_SESSION, then $TMUX_PANE, then the controlling tty, then the
-        /// parent pid — pass the same value to acquire and release.
+        /// parent pid. Pass the same value to acquire and release.
         #[arg(long = "as")]
         holder: Option<String>,
         /// Why you hold these paths; shown to whoever the claim blocks.
@@ -37,7 +37,7 @@ pub(crate) enum Cmd {
         paths: Vec<String>,
         /// Session identity to hold the claim under. Defaults to
         /// $DEVKIT_SESSION, then $TMUX_PANE, then the controlling tty, then the
-        /// parent pid — pass the same value to acquire and release.
+        /// parent pid. Pass the same value to acquire and release.
         #[arg(long = "as")]
         holder: Option<String>,
         /// Emit the result as JSON instead of a human-readable line.
@@ -50,7 +50,7 @@ pub(crate) enum Cmd {
         paths: Vec<String>,
         /// Session identity to hold the claim under. Defaults to
         /// $DEVKIT_SESSION, then $TMUX_PANE, then the controlling tty, then the
-        /// parent pid — pass the same value to acquire and release.
+        /// parent pid. Pass the same value to acquire and release.
         #[arg(long = "as")]
         holder: Option<String>,
         /// Release every path this holder claims.
@@ -69,13 +69,13 @@ pub(crate) enum Cmd {
         /// Emit the rows as JSON instead of a table.
         #[arg(long)]
         json: bool,
-        /// Not accepted — `status` lists everything; `check <paths…>` tests paths.
+        /// Not accepted. `status` lists everything; `check <paths...>` tests paths.
         #[arg(hide = true)]
         paths: Vec<String>,
     },
     /// Drop expired/dead locks.
     Prune,
-    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    /// Print a shell-completion script (bash, zsh, fish, ...) to stdout.
     Completions {
         /// Shell to emit the script for.
         shell: Shell,

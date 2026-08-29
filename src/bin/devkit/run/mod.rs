@@ -147,7 +147,7 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         cmd: ConfigCmd,
     },
-    /// Print a shell-completion script (bash, zsh, fish, …) to stdout.
+    /// Print a shell-completion script (bash, zsh, fish, ...) to stdout.
     Completions {
         /// Shell to emit the script for.
         shell: Shell,
