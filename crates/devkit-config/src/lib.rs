@@ -266,12 +266,12 @@ pub struct Defaults {
     /// ports `[base_port, base_port + stray_scan_width)`. Default 64.
     #[serde(default = "default_stray_scan_width")]
     pub stray_scan_width: u16,
-    /// Glob patterns (relative to the monorepo root) for untracked local files to
-    /// copy into a newly created worktree. Each match is copied to the same
-    /// relative path; a match that is a directory (or a pattern ending in `/`) is
-    /// copied recursively. Existing destinations are left alone, and only
-    /// `issue sync-includes --overwrite` replaces them. Empty by default — the
-    /// backfill is opt-in.
+    /// Glob patterns (relative to the primary checkout's root) for untracked
+    /// local files to copy into a newly created worktree. Each match is copied
+    /// to the same relative path; a match that is a directory (or a pattern
+    /// ending in `/`) is copied recursively. Existing destinations are left
+    /// alone, and only `issue sync-includes --overwrite` replaces them. Empty
+    /// by default — the backfill is opt-in.
     #[serde(default)]
     pub worktree_include: Vec<String>,
     /// Write the issue summary file on every `issue setup`, as though

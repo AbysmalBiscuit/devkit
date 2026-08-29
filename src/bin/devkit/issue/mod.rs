@@ -150,8 +150,8 @@ pub(crate) enum Cmd {
         #[arg(long = "clean-worktree")]
         clean_worktree: bool,
     },
-    /// Re-copy the `defaults.worktree_include` files from the monorepo into
-    /// worktrees that already exist.
+    /// Re-copy the `defaults.worktree_include` files from the primary checkout
+    /// into worktrees that already exist.
     SyncIncludes {
         /// Issue ids, branches, worktree basenames, or paths to sync; omit for
         /// every worktree.

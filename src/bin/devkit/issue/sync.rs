@@ -70,8 +70,9 @@ fn report_dry(plan: &IncludePlan, overwrite: bool) {
     }
 }
 
-/// Copy every `defaults.worktree_include` match from the monorepo into each
-/// selected worktree. Files already present are left alone unless `overwrite`,
+/// Copy every `defaults.worktree_include` match from the primary checkout
+/// into each selected worktree. Files already present are left alone unless
+/// `overwrite`,
 /// which prompts once per worktree with the list it would clobber; declining
 /// that prompt falls back to the default behaviour for that worktree.
 /// `overwrite` replaces untracked files git cannot restore, so it needs a scope:

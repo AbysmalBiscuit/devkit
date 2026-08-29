@@ -248,7 +248,7 @@
         },
         "worktree_include": {
           "default": [],
-          "description": "Glob patterns (relative to the monorepo root) for untracked local files to\ncopy into a newly created worktree. Each match is copied to the same\nrelative path; a match that is a directory (or a pattern ending in `/`) is\ncopied recursively. Existing destinations are left alone, and only\n`issue sync-includes --overwrite` replaces them. Empty by default — the\nbackfill is opt-in.",
+          "description": "Glob patterns (relative to the primary checkout's root) for untracked\nlocal files to copy into a newly created worktree. Each match is copied\nto the same relative path; a match that is a directory (or a pattern\nending in `/`) is copied recursively. Existing destinations are left\nalone, and only `issue sync-includes --overwrite` replaces them. Empty\nby default — the backfill is opt-in.",
           "items": {
             "type": "string"
           },

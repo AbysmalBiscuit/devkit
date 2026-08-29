@@ -206,9 +206,9 @@ pub(crate) fn run_after_worktree_create(
     }
 }
 
-/// Copy the configured `worktree_include` globs from the monorepo into a freshly
-/// created worktree, printing each fail-open warning to stderr. A no-op when the
-/// include list is empty.
+/// Copy the configured `worktree_include` globs from the primary checkout into
+/// a freshly created worktree, printing each fail-open warning to stderr. A
+/// no-op when the include list is empty.
 pub fn backfill_includes(monorepo: &str, worktree: &std::path::Path, patterns: &[String]) {
     if patterns.is_empty() {
         return;

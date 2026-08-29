@@ -282,7 +282,7 @@ fn capture_email(start: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The monorepo root where commits land: `start`'s main checkout, or `start`
+/// The repository root where commits land: `start`'s main checkout, or `start`
 /// itself when it already is the main checkout.
 fn monorepo_dir(start: &str) -> anyhow::Result<String> {
     let start = std::path::Path::new(start);

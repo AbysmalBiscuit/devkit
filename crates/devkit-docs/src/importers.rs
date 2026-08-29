@@ -467,9 +467,9 @@ impl JsContext {
     /// success or failure — is memoized, so a malformed lockfile yields the
     /// same error to every package that asks for it.
     ///
-    /// Borrowed rather than cloned: a monorepo lockfile parses into tens of
-    /// megabytes of `Value` tree, and handing out a copy per query would make
-    /// resolving a whole catalog cost one deep clone per library.
+    /// Borrowed rather than cloned: a large workspace lockfile parses into
+    /// tens of megabytes of `Value` tree, and handing out a copy per query
+    /// would make resolving a whole catalog cost one deep clone per library.
     fn parsed(&self, manager: &str) -> Result<Ref<'_, ParsedLock>> {
         let index = self
             .present

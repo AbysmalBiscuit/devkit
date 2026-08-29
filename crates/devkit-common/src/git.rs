@@ -23,8 +23,8 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Timeout for a git call that is slow by nature rather than by accident:
 /// anything that reaches the network (`clone`, `fetch`, `push`), and anything
-/// that writes a working tree at monorepo scale (`worktree add`/`remove`,
-/// `checkout`). The two overlap — `worktree add` against a
+/// that writes a whole working tree (`worktree add`/`remove`, `checkout`).
+/// The two overlap — `worktree add` against a
 /// `--filter=blob:none` clone fetches every blob the new working tree needs
 /// at that commit, so it is a network call as well as a bulk one, and belongs
 /// in this tier for both reasons.
@@ -129,10 +129,10 @@ impl Git {
     }
 
     /// Override the default timeout. Pass `SLOW_TIMEOUT` for a call that
-    /// reaches the network or writes a working tree at monorepo scale; every
-    /// quick query (`rev-parse`, `status`, `config`, and the like) keeps the
-    /// default — it is what protects the PreToolUse hook path from a wedged
-    /// git, and widening it there defeats that.
+    /// reaches the network or writes a whole working tree; every quick query
+    /// (`rev-parse`, `status`, `config`, and the like) keeps the default — it
+    /// is what protects the PreToolUse hook path from a wedged git, and
+    /// widening it there defeats that.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
