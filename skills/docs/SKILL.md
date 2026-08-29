@@ -36,6 +36,7 @@ Genuinely absent: `docm add <package>` (registry lookup) or `docm add <git-url>`
 
 ## Rules
 
+- When a `docm` error offers `--allow-default-branch`, stop and ask. It answers from the default branch instead of the version this project pins, which is the one thing this skill exists to prevent.
 - Re-run `docm info` every time. Versions differ per project, so a checkout path carried over from an earlier session points at the wrong one.
 - `docm path <lib>` prints just the path when that is all you need.
 - Read another version's file straight out of the bare clone: `git -C <checkout> show <other-tag>:<path>`. Every tag is already there, so a version comparison is a lookup, not a recollection, and it needs no second checkout.
