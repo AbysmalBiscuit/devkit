@@ -88,12 +88,47 @@ pub fn normalize_under_root(abs: &Path, root: &Path) -> Result<String> {
     })
 }
 
+/// The deepest ancestor of `start` that is a directory. git cannot report a
+/// checkout root from a directory that does not exist, and a write to a new
+/// file in a new directory names one that does not, so the root would fall
+/// back to that path and scope the lock outside the repository.
+fn existing_ancestor(start: &Path) -> PathBuf {
+    let mut cur = start;
+    loop {
+        if cur.is_dir() {
+            return cur.to_path_buf();
+        }
+        match cur.parent() {
+            Some(p) => cur = p,
+            None => return start.to_path_buf(),
+        }
+    }
+}
+
+/// The deepest ancestor of `p` that exists, in the filesystem's own spelling,
+/// with the components below it rejoined. A path devkit is asked to lock need
+/// not exist yet, and neither need the directory holding it: a claim is staked
+/// before the file is written.
+fn resolve_existing(p: &Path) -> Option<PathBuf> {
+    let mut trailing: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = p.to_path_buf();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(&cur) {
+            let mut out = real;
+            for c in trailing.iter().rev() {
+                out.push(c);
+            }
+            return Some(out);
+        }
+        trailing.push(cur.file_name()?.to_os_string());
+        cur = cur.parent()?.to_path_buf();
+    }
+}
+
 /// Express `abs` relative to `root`, falling back to the filesystem's own
 /// spelling of both when the caller's does not line up. git reports the
 /// checkout root with links resolved, so a path reaching the repository
-/// through a symlink or a junction shares no lexical prefix with it. Resolving
-/// the directory rather than the path itself keeps this working for a file
-/// that does not exist yet, which is every first write to a new file; when
+/// through a symlink or a junction shares no lexical prefix with it. Where
 /// either side refuses to resolve, the lexical answer stands so the error
 /// stays the one the caller would have seen.
 pub fn rel_under_root(abs: &Path, root: &Path) -> Result<String> {
@@ -101,12 +136,8 @@ pub fn rel_under_root(abs: &Path, root: &Path) -> Result<String> {
     if lexical.is_ok() {
         return lexical;
     }
-    let resolved = |p: &Path| std::fs::canonicalize(p).ok();
-    match (abs.parent(), abs.file_name()) {
-        (Some(dir), Some(name)) => match (resolved(dir), resolved(root)) {
-            (Some(dir), Some(root)) => normalize_under_root(&dir.join(name), &root),
-            _ => lexical,
-        },
+    match (resolve_existing(abs), std::fs::canonicalize(root).ok()) {
+        (Some(abs), Some(root)) => normalize_under_root(&abs, &root),
         _ => lexical,
     }
 }
@@ -398,8 +429,8 @@ impl WriteResolver {
                 .context("getting current dir")?
                 .join(p)
         };
-        let start = abs.parent().unwrap_or(abs.as_path());
-        let root = self.root_for(start);
+        let start = existing_ancestor(abs.parent().unwrap_or(abs.as_path()));
+        let root = self.root_for(&start);
         let rel = rel_under_root(&abs, &root)?;
         Ok((root.to_string_lossy().into_owned(), rel))
     }
@@ -436,7 +467,7 @@ pub fn release_prefix(holder_prefix: &str) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     #[test]
     fn facade_without_daemon_uses_flock_path() {
@@ -586,6 +617,12 @@ mod tests {
         let direct = write_ctx(repo.join("src/a.rs").to_str().unwrap()).unwrap();
         let linked = write_ctx(link.join("src/a.rs").to_str().unwrap()).unwrap();
         assert_eq!(direct, linked);
+
+        // A claim is staked before the file is written, so neither the file nor
+        // the directory holding it has to exist yet.
+        let direct = write_ctx(repo.join("scenes/x.tscn").to_str().unwrap()).unwrap();
+        let linked = write_ctx(link.join("scenes/x.tscn").to_str().unwrap()).unwrap();
+        assert_eq!(direct, linked);
     }
 
     #[test]
@@ -598,7 +635,10 @@ mod tests {
         std::fs::create_dir_all(root.path().join("src")).unwrap();
         let file = root.path().join("src/a.rs");
         let (r, rel) = write_ctx(file.to_str().unwrap()).unwrap();
-        assert_eq!(PathBuf::from(&r), root.path());
+        assert_eq!(
+            std::fs::canonicalize(&r).unwrap(),
+            std::fs::canonicalize(root.path()).unwrap()
+        );
         assert_eq!(rel, "src/a.rs");
         let _ = std::fs::remove_dir_all(&root);
     }
