@@ -937,12 +937,15 @@ fn expand_vars(raw: &str, key: &str) -> Result<String> {
 }
 
 /// Resolve `.` and `..` without touching the filesystem, so one directory has
-/// one spelling. `fs::canonicalize` is not available for these paths: a
+/// one spelling. `fs::canonicalize` cannot stand in: a
 /// `worktree_root`, or a `[preserve]` destination, is routinely a directory that
 /// does not exist yet, and on Windows canonicalizing yields a verbatim `\\?\`
 /// prefix that compares unequal to every other spelling of the same path.
-/// Symlinks are therefore not followed — the result names the path the
-/// components spell, not the one the filesystem would resolve.
+/// Symlinks are therefore not followed, and neither is case folded — the
+/// result names the path the components spell, not the one the filesystem
+/// would resolve. A caller that needs those resolved canonicalizes the deepest
+/// ancestor that exists and compares that, keeping this for the paths where
+/// canonicalization fails.
 ///
 /// Every caller comparing two paths needs this first. The ports registry
 /// compares holder paths as strings, and `Path::starts_with` is a

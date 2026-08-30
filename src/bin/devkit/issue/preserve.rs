@@ -57,6 +57,30 @@ pub(crate) fn context(
     ctx
 }
 
+/// The deepest ancestor of `p` that exists, canonicalized. `to` names a
+/// directory that has not been created yet, so `p` itself rarely resolves —
+/// but a destination inside a removal root has its whole existing prefix
+/// inside that root too, since the root is a worktree that exists. Comparing
+/// the prefix therefore answers the same question as comparing `p` would.
+fn existing_ancestor(p: &Path) -> Option<PathBuf> {
+    p.ancestors().find_map(|a| std::fs::canonicalize(a).ok())
+}
+
+/// Whether `dest` is `root` or sits beneath it. The filesystem answers rather
+/// than a string compare: NTFS is case-insensitive, so a destination differing
+/// only in case names the same directory, and a symlink into `root` names it
+/// too. Both sides canonicalize, so Windows' verbatim `\?\` prefix is either
+/// on both or on neither and never makes a pair compare unequal. Paths that
+/// cannot be canonicalized — a permissions error, or a root already gone —
+/// fall back to the lexical compare, which both arguments arrive normalized
+/// for.
+fn is_within(dest: &Path, root: &Path) -> bool {
+    match (existing_ancestor(dest), std::fs::canonicalize(root)) {
+        (Some(d), Ok(r)) => d.starts_with(r),
+        _ => dest.starts_with(root),
+    }
+}
+
 /// What the context is missing, as a clause to append to a render failure.
 /// minijinja reports a strict-undefined failure as `undefined value` without
 /// naming the name, so an entry using `{{ primary }}` in a project whose
@@ -104,10 +128,10 @@ pub(crate) fn resolve_entry(
     if to.is_empty() {
         return Err(skip("`to` rendered empty".into()));
     }
-    // `starts_with` compares whole components, so both sides are normalized
-    // first: an unresolved `..` walks past a component-prefix test, and `to`
-    // renders from the worktree's own record, which anything working in that
-    // worktree can write.
+    // Normalized before the containment check so the lexical fallback inside
+    // `is_within` still resolves `..`, which would otherwise walk past a
+    // component-prefix test. `to` renders from the worktree's own record,
+    // which anything working in that worktree can write.
     let dest = devkit_config::normalize_lexically(Path::new(to));
     if !dest.is_absolute() {
         return Err(skip(format!("`to` must be an absolute path, got `{to}`")));
@@ -115,7 +139,7 @@ pub(crate) fn resolve_entry(
     if let Some(root) = removal_roots
         .iter()
         .map(|r| devkit_config::normalize_lexically(r))
-        .find(|r| dest.starts_with(r))
+        .find(|r| is_within(&dest, r))
     {
         return Err(skip(format!(
             "`to` is inside {}, which this run removes",
@@ -354,6 +378,85 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.reason.contains("removes"), "{}", err.reason);
+    }
+
+    /// NTFS is case-insensitive, so a destination differing from the removal
+    /// root only in case names a directory this run deletes. Windows-only: on
+    /// ext4 the two really are different directories and the entry is fine.
+    /// (macOS is case-insensitive by default too, but a case-sensitive volume
+    /// is a supported configuration there, so the assertion would not hold.)
+    #[test]
+    #[cfg(windows)]
+    fn a_destination_differing_from_a_removal_root_only_in_case_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt-eng-1");
+        std::fs::create_dir_all(&wt).unwrap();
+
+        let mixed = dir.path().join("WT-ENG-1").join("archive");
+        let err = resolve_entry(
+            "notes",
+            &cfg(&["a.md"], mixed.to_str().unwrap(), false),
+            &ctx_for("ENG-1"),
+            &novars(),
+            &[wt],
+        )
+        .unwrap_err();
+        assert!(err.reason.contains("removes"), "{}", err.reason);
+    }
+
+    /// The containment check resolves symlinks, so a destination that reaches a
+    /// removal root through one is refused as well. A lexical compare sees two
+    /// unrelated paths and lets the archive land in the tree being deleted.
+    #[test]
+    #[cfg(unix)]
+    fn a_destination_reaching_a_removal_root_through_a_symlink_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt-eng-1");
+        std::fs::create_dir_all(&wt).unwrap();
+        let link = dir.path().join("shortcut");
+        std::os::unix::fs::symlink(&wt, &link).unwrap();
+
+        let dest = link.join("archive");
+        let err = resolve_entry(
+            "notes",
+            &cfg(&["a.md"], dest.to_str().unwrap(), false),
+            &ctx_for("ENG-1"),
+            &novars(),
+            &[wt],
+        )
+        .unwrap_err();
+        assert!(err.reason.contains("removes"), "{}", err.reason);
+    }
+
+    /// A destination whose parents do not exist yet is the normal case — the
+    /// archive directory is created when the first file lands. Resolving the
+    /// deepest ancestor that does exist still places it.
+    #[test]
+    fn a_destination_that_does_not_exist_yet_is_still_placed() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt-eng-1");
+        std::fs::create_dir_all(&wt).unwrap();
+
+        let inside = wt.join("deep/archive/ENG-1");
+        let err = resolve_entry(
+            "notes",
+            &cfg(&["a.md"], inside.to_str().unwrap(), false),
+            &ctx_for("ENG-1"),
+            &novars(),
+            std::slice::from_ref(&wt),
+        )
+        .unwrap_err();
+        assert!(err.reason.contains("removes"), "{}", err.reason);
+
+        let outside = dir.path().join("archive/ENG-1");
+        resolve_entry(
+            "notes",
+            &cfg(&["a.md"], outside.to_str().unwrap(), false),
+            &ctx_for("ENG-1"),
+            &novars(),
+            std::slice::from_ref(&wt),
+        )
+        .expect("a sibling of the removal root is not inside it");
     }
 
     /// A pattern that renders empty drops out rather than reaching `copy_out`,

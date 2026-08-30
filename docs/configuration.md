@@ -424,9 +424,11 @@ one that matches nothing is not a failure, which is the normal case for a
 worktree that produced no scratch.
 
 A destination that resolves inside any worktree the same run is removing is
-skipped: the copy would be deleted seconds after it was written. An existing
-destination file is replaced, since the worktree's copy is the one about to be
-lost.
+skipped: the copy would be deleted seconds after it was written. The check asks
+the filesystem rather than comparing spellings, so a destination that reaches a
+worktree through a symlink, through `..`, or — on a case-insensitive filesystem
+— through different casing is caught as well. An existing destination file is
+replaced, since the worktree's copy is the one about to be lost.
 
 Failures are **fail-open**, like `[hooks]`: an entry that cannot render, is
 rejected, or fails to copy prints a `warning:` line naming the entry, and the
