@@ -419,6 +419,12 @@ pub struct TaskConfig {
 /// and the width the `issue status` branch column renders before eliding. One
 /// number so a branch devkit created is never the one the table has to cut.
 pub const DEFAULT_BRANCH_MAX: usize = 46;
+/// Longest worktree directory name `issue setup` renders. Shorter than the
+/// branch limit because a directory name is charged against a filesystem path
+/// limit and a branch name is not.
+pub const DEFAULT_WORKTREE_DIR_MAX: usize = 24;
+/// Longest worktree directory name `issue checkout-pr` renders.
+pub const DEFAULT_CHECKOUT_WORKTREE_DIR_MAX: usize = 46;
 
 pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
 pub const DEFAULT_WORKTREE_DIR: &str = "{{ slug }}";
@@ -461,16 +467,32 @@ pub struct Templates {
     /// Branch name created by `issue setup`. Context: `prefix`, `issue`,
     /// `slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.
     pub branch: Option<String>,
+    /// Longest branch `issue setup` will render. A derived slug is shortened on
+    /// a word boundary to fit. A template whose fixed text already fills this
+    /// yields the shortest slug still worth reading rather than an error, since
+    /// a git ref has no hard length limit. Defaults to 46.
+    pub branch_max: Option<usize>,
     /// Worktree directory name created by `issue setup`, relative to
     /// `defaults.worktree_root`. Same context as `branch`; defaults to
     /// `{{ slug }}`.
     pub worktree_dir: Option<String>,
+    /// Longest worktree directory name `issue setup` will render from
+    /// `{{ short_slug }}`. A template whose fixed text already fills this is an
+    /// error: a limit on a filesystem path that does not hold is worse than a
+    /// setup that stops. Has no effect on a `worktree_dir` that does not render
+    /// `{{ short_slug }}`. Defaults to 24.
+    pub worktree_dir_max: Option<usize>,
     /// Worktree directory name created by `issue checkout-pr`. Context:
     /// `pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are
     /// slugified, and the `linear_*` names are historical: they carry
     /// whichever tracker's id and title resolved, and are empty on the
     /// PR-only path.
     pub checkout_worktree_dir: Option<String>,
+    /// Longest worktree directory name `issue checkout-pr` will render.
+    /// `pr_title` and `linear_title` are shortened to fit, splitting the budget
+    /// when a template renders both. A template whose fixed text already fills
+    /// this is an error. Defaults to 46.
+    pub checkout_worktree_dir_max: Option<usize>,
     /// Title of a PR opened by `issue review request`. `{{ input }}` is the
     /// `--pr-title` argument.
     pub pr_title: Option<String>,
@@ -504,13 +526,23 @@ impl Templates {
     pub fn branch(&self) -> &str {
         self.branch.as_deref().unwrap_or(DEFAULT_BRANCH)
     }
+    pub fn branch_max(&self) -> usize {
+        self.branch_max.unwrap_or(DEFAULT_BRANCH_MAX)
+    }
     pub fn worktree_dir(&self) -> &str {
         self.worktree_dir.as_deref().unwrap_or(DEFAULT_WORKTREE_DIR)
+    }
+    pub fn worktree_dir_max(&self) -> usize {
+        self.worktree_dir_max.unwrap_or(DEFAULT_WORKTREE_DIR_MAX)
     }
     pub fn checkout_worktree_dir(&self) -> &str {
         self.checkout_worktree_dir
             .as_deref()
             .unwrap_or(DEFAULT_CHECKOUT_WORKTREE_DIR)
+    }
+    pub fn checkout_worktree_dir_max(&self) -> usize {
+        self.checkout_worktree_dir_max
+            .unwrap_or(DEFAULT_CHECKOUT_WORKTREE_DIR_MAX)
     }
     pub fn pr_title(&self) -> &str {
         self.pr_title.as_deref().unwrap_or(DEFAULT_PR_TITLE)
@@ -1713,6 +1745,25 @@ overwrite = true
         assert_eq!(t.checkout_worktree_dir(), DEFAULT_CHECKOUT_WORKTREE_DIR);
         assert!(t.checkout_worktree_dir().contains("pr_number"));
         assert!(t.checkout_worktree_dir().contains("linear_id"));
+    }
+
+    #[test]
+    fn default_length_limits() {
+        let t: Templates = toml::from_str("").unwrap();
+        assert_eq!(t.branch_max(), 46);
+        assert_eq!(t.worktree_dir_max(), 24);
+        assert_eq!(t.checkout_worktree_dir_max(), 46);
+    }
+
+    #[test]
+    fn length_limit_overrides_win() {
+        let t: Templates = toml::from_str(
+            "branch_max = 60\nworktree_dir_max = 18\ncheckout_worktree_dir_max = 30\n",
+        )
+        .unwrap();
+        assert_eq!(t.branch_max(), 60);
+        assert_eq!(t.worktree_dir_max(), 18);
+        assert_eq!(t.checkout_worktree_dir_max(), 30);
     }
 
     #[test]

@@ -604,10 +604,28 @@
             "null"
           ]
         },
+        "branch_max": {
+          "description": "Longest branch `issue setup` will render. A derived slug is shortened on\na word boundary to fit. A template whose fixed text already fills this\nyields the shortest slug still worth reading rather than an error, since\na git ref has no hard length limit. Defaults to 46.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "checkout_worktree_dir": {
           "description": "Worktree directory name created by `issue checkout-pr`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are\nslugified, and the `linear_*` names are historical: they carry\nwhichever tracker's id and title resolved, and are empty on the\nPR-only path.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "checkout_worktree_dir_max": {
+          "description": "Longest worktree directory name `issue checkout-pr` will render.\n`pr_title` and `linear_title` are shortened to fit, splitting the budget\nwhen a template renders both. A template whose fixed text already fills\nthis is an error. Defaults to 46.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -665,6 +683,15 @@
           "description": "Worktree directory name created by `issue setup`, relative to\n`defaults.worktree_root`. Same context as `branch`; defaults to\n`{{ slug }}`.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "worktree_dir_max": {
+          "description": "Longest worktree directory name `issue setup` will render from\n`{{ short_slug }}`. A template whose fixed text already fills this is an\nerror: a limit on a filesystem path that does not hold is worse than a\nsetup that stops. Has no effect on a `worktree_dir` that does not render\n`{{ short_slug }}`. Defaults to 24.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
             "null"
           ]
         }
@@ -825,7 +852,9 @@
       "$ref": "#/$defs/Templates",
       "default": {
         "branch": null,
+        "branch_max": null,
         "checkout_worktree_dir": null,
+        "checkout_worktree_dir_max": null,
         "issue_summary": null,
         "issue_summary_path": null,
         "pr_body": null,
@@ -833,7 +862,8 @@
         "review_finish": null,
         "review_request": null,
         "variables": {},
-        "worktree_dir": null
+        "worktree_dir": null,
+        "worktree_dir_max": null
       },
       "description": "Minijinja templates for the strings `issue setup` and `issue review`\ngenerate — branch names, worktree directories, PR fields, Slack bodies."
     },

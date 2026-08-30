@@ -461,6 +461,8 @@ Teammate handle aliases used by `issue review` (`--to <alias>`). The alias maps 
 
 `issue setup` and `issue review` render seven strings from optional minijinja templates. Each unset key falls back to a default that matches the historical hardcoded output.
 
+Three further keys cap how long the rendered result may be: `branch_max` (default 46), `worktree_dir_max` (default 24), and `checkout_worktree_dir_max` (default 46). A branch that cannot fit falls back to the shortest slug still worth reading; a worktree directory name that cannot fit is an error, because a limit on a filesystem path that silently does not hold is the reason these keys exist.
+
 ```toml
 [templates]
 branch          = "{{ prefix }}{{ issue }}-{{ slug }}"
@@ -479,6 +481,9 @@ team = "platform"
 |---|---|---|
 | `branch`, `worktree_dir` | `{{ prefix }}{{ slug }}`, `{{ slug }}` | `prefix`, `issue`, `slug`, `apps` |
 | `checkout_worktree_dir` | `{{ pr_number }}-{{ pr_title }}` (or `{{ pr_number }}-{{ pr_title }}_[{{ linear_id }}]` when reached through an issue) | `pr_number`, `pr_title`, `linear_id`, `linear_title` (the last two carry whichever tracker answered) |
+| `branch_max` | `46` | characters; the derived slug is shortened on a word boundary to fit |
+| `worktree_dir_max` | `24` | characters; caps `{{ short_slug }}`, and does nothing to a template without it |
+| `checkout_worktree_dir_max` | `46` | characters; caps `pr_title` and `linear_title`, splitting the budget when both are rendered |
 | `pr_title` | `{{ input }}` | review base + `input` = `--pr-title` |
 | `pr_body` | `{{ input }}` | review base + `input` = `--pr-body`, `pr_title` |
 | `review_request` | `{{ input }} {{ pr_url }}` | review base + `input` = body arg, `pr_title`, `pr_url`, `name`, `slack_id` |
