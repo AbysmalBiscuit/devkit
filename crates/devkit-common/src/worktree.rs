@@ -737,7 +737,7 @@ mod tests {
         );
     }
 
-    /// The flattening views replace what the old flat vectors held.
+    /// missing() and existing() flatten every pattern's matches into one ordered sequence.
     #[test]
     fn the_flattening_views_yield_every_match() {
         let base = tempfile::tempdir().unwrap();
