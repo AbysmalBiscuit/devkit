@@ -72,6 +72,29 @@ fn list<P: AsRef<Path>>(paths: impl IntoIterator<Item = P>, verbose: bool) -> St
     lines.join("\n")
 }
 
+/// Render `links` as an indented block, one `path -> target` per line, capped
+/// at `LIST_MAX` the way `list` caps a directory. `verbose` names every link.
+/// The block carries no trailing newline, and is empty when `links` yields
+/// nothing.
+fn link_list<'a>(links: impl IntoIterator<Item = (&'a Path, &'a Path)>, verbose: bool) -> String {
+    let rendered: Vec<String> = links
+        .into_iter()
+        .map(|(rel, target)| format!("    {} -> {}", rel.display(), target.display()))
+        .collect();
+    let shown = if verbose {
+        rendered.len()
+    } else {
+        rendered.len().min(LIST_MAX)
+    };
+    let mut lines: Vec<String> = rendered[..shown].to_vec();
+    let rest = rendered.len() - shown;
+    if rest > 0 {
+        lines.push(format!("    ...and {rest} more"));
+        lines.push("    (rerun with --verbose to name every link)".to_string());
+    }
+    lines.join("\n")
+}
+
 /// The (worktree, issue id) pairs `selectors` names, in selector order and
 /// deduplicated; every pair when `selectors` is empty. A selector that names
 /// nothing is reported and skipped rather than failing the run.
@@ -119,7 +142,7 @@ pub(crate) fn counts(copied: usize, linked: usize) -> Vec<String> {
     out
 }
 
-fn report_dry(plan: &IncludePlan, overwrite: bool, verbose: bool) {
+fn report_dry(plan: &IncludePlan, dest: &Path, overwrite: bool, verbose: bool) {
     if plan.missing_len() > 0 {
         println!("  would copy:\n{}", list(plan.missing(), verbose));
     }
@@ -133,7 +156,25 @@ fn report_dry(plan: &IncludePlan, overwrite: bool, verbose: bool) {
             );
         }
     }
-    if plan.missing_len() == 0 && plan.existing_len() == 0 {
+    if plan.links_len() > 0 {
+        // Whether a link is created is decided against the live destination,
+        // so the preview makes the same check the copy will.
+        let (fresh, occupied): (Vec<_>, Vec<_>) = plan
+            .links()
+            .partition(|(rel, _)| std::fs::symlink_metadata(dest.join(rel)).is_err());
+        if !fresh.is_empty() {
+            println!("  would link:\n{}", link_list(fresh, verbose));
+        }
+        if !occupied.is_empty() {
+            let heading = if overwrite {
+                "  would replace with a link:"
+            } else {
+                "  would leave alone (rerun with --overwrite to replace with a link):"
+            };
+            println!("{heading}\n{}", link_list(occupied, verbose));
+        }
+    }
+    if plan.missing_len() == 0 && plan.existing_len() == 0 && plan.links_len() == 0 {
         println!("  nothing to copy");
     }
 }
@@ -198,7 +239,7 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
             eprintln!("warning: {w}");
         }
         if dry_run {
-            report_dry(&plan, overwrite, verbose);
+            report_dry(&plan, &wt.path, overwrite, verbose);
             continue;
         }
 
@@ -343,6 +384,31 @@ mod tests {
     #[test]
     fn an_empty_list_is_empty() {
         assert_eq!(list(Vec::<PathBuf>::new(), false), "");
+    }
+
+    #[test]
+    fn link_list_names_each_target_and_caps_a_directory() {
+        let pairs: Vec<(PathBuf, PathBuf)> = (0..7)
+            .map(|i| {
+                (
+                    PathBuf::from("inc").join(format!("l{i}")),
+                    PathBuf::from("..").join(format!("t{i}")),
+                )
+            })
+            .collect();
+        let borrowed = || pairs.iter().map(|(a, b)| (a.as_path(), b.as_path()));
+
+        let capped = link_list(borrowed(), false);
+        assert!(capped.contains("l0 -> "), "names the target: {capped}");
+        assert!(
+            capped.contains("...and 2 more"),
+            "caps at LIST_MAX: {capped}"
+        );
+        assert!(capped.contains("--verbose"), "says how to see them all");
+
+        let full = link_list(borrowed(), true);
+        assert!(full.contains("l6 -> "), "verbose names every link: {full}");
+        assert!(!full.contains("more"), "nothing elided: {full}");
     }
 
     #[test]
