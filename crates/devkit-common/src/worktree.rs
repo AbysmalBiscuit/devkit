@@ -90,6 +90,9 @@ fn escapes(pattern: &str) -> bool {
 /// outbound counterpart to `copy_includes`, fail-open the same way: returns
 /// (files_copied, warnings). A pattern that would leave either root is skipped
 /// with a warning, because the caller deletes `source` immediately afterward.
+/// Symlinks are followed and archived as their target's content — the outbound
+/// direction deliberately differs from the inbound one, which reproduces the
+/// link.
 pub fn copy_out(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<String>) {
     let mut warnings = Vec::new();
     let mut inside = Vec::new();
@@ -102,7 +105,7 @@ pub fn copy_out(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<
             inside.push(pattern.clone());
         }
     }
-    let plan = plan_includes(source, dest, &inside);
+    let plan = plan_with_mode(source, dest, &inside, &|_| {}, LinkMode::Follow);
     let (copied, apply_warnings) = apply_includes(source, dest, &plan, true);
     warnings.extend(plan.warnings);
     warnings.extend(apply_warnings);
@@ -217,12 +220,17 @@ pub enum IncludeEvent<'a> {
 }
 
 /// Every file one `worktree_include` pattern matched, split by whether `dest`
-/// already has it. Both vectors come back sorted, so rendering does not vary
-/// with filesystem iteration order.
+/// already has it, plus every symlink it matched paired with the target that
+/// link holds. Both vectors come back sorted, so rendering does not vary with
+/// filesystem iteration order.
 pub struct PatternPlan {
     pub pattern: String,
     pub missing: Vec<PathBuf>,
     pub existing: Vec<PathBuf>,
+    /// (path relative to `dest`, target exactly as the source link holds it).
+    /// A link's own contents are never planned, so a symlinked directory
+    /// contributes one entry here and nothing to `missing`.
+    pub links: Vec<(PathBuf, PathBuf)>,
 }
 
 /// The result of walking `patterns` without copying anything, kept grouped by
@@ -260,6 +268,40 @@ impl IncludePlan {
     pub fn existing_len(&self) -> usize {
         self.patterns.iter().map(|p| p.existing.len()).sum()
     }
+
+    /// Every matched symlink and the target it holds, ordered as
+    /// [`IncludePlan::missing`] is.
+    pub fn links(&self) -> impl Iterator<Item = (&Path, &Path)> {
+        self.patterns
+            .iter()
+            .flat_map(|p| p.links.iter().map(|(rel, t)| (rel.as_path(), t.as_path())))
+    }
+
+    /// Total count of matched symlinks, across every pattern.
+    pub fn links_len(&self) -> usize {
+        self.patterns.iter().map(|p| p.links.len()).sum()
+    }
+}
+
+/// How a walk treats a matched symlink.
+///
+/// The inbound and outbound directions genuinely differ. An include lands in a
+/// live worktree that still sits beside the primary checkout, so a reproduced
+/// link resolves. `copy_out` archives out of a worktree that is about to be
+/// deleted, into a location that may outlive the target, so a link there could
+/// archive a path that stops resolving the moment the worktree goes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkMode {
+    /// Plan the link itself and do not descend through it.
+    Preserve,
+    /// Follow the link and plan whatever it resolves to.
+    Follow,
+}
+
+/// Whether `path` is a symlink, judged without following it. A Windows
+/// junction reports true here and is reproduced as a symlink.
+fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
 }
 
 /// The callback and running match count a plan walk carries through its
@@ -270,6 +312,7 @@ struct Walk<'a> {
     dest: &'a Path,
     on: &'a (dyn Fn(IncludeEvent) + Sync),
     found: std::cell::Cell<usize>,
+    mode: LinkMode,
 }
 
 impl Walk<'_> {
@@ -278,6 +321,32 @@ impl Walk<'_> {
             out.existing.push(rel.to_path_buf());
         } else {
             out.missing.push(rel.to_path_buf());
+        }
+        self.found.set(self.found.get() + 1);
+        (self.on)(IncludeEvent::Found {
+            files: self.found.get(),
+        });
+    }
+
+    /// Record a source symlink and the target it holds, and count it as a
+    /// match. Every matched link lands here whatever the destination holds:
+    /// routing an occupied one into `existing` would hand it to `copy_file`
+    /// under `overwrite`, which writes the target's contents instead of
+    /// reproducing the link. `make_link` decides per link whether to skip or
+    /// replace.
+    fn classify_link(
+        &self,
+        rel: &Path,
+        src: &Path,
+        out: &mut PatternPlan,
+        warnings: &mut Vec<String>,
+    ) {
+        match std::fs::read_link(src) {
+            Ok(target) => out.links.push((rel.to_path_buf(), target)),
+            Err(e) => {
+                warnings.push(format!("reading link {}: {e}", src.display()));
+                return;
+            }
         }
         self.found.set(self.found.get() + 1);
         (self.on)(IncludeEvent::Found {
@@ -306,7 +375,9 @@ impl Walk<'_> {
             };
             let child = src.join(entry.file_name());
             let child_rel = rel.join(entry.file_name());
-            if child.is_dir() {
+            if self.mode == LinkMode::Preserve && is_symlink(&child) {
+                self.classify_link(&child_rel, &child, out, warnings);
+            } else if child.is_dir() {
                 self.plan_dir(&child, &child_rel, out, warnings);
             } else {
                 self.classify_file(&child_rel, out);
@@ -355,7 +426,11 @@ impl Walk<'_> {
                 warnings.push(format!("match outside source: {}", matched.display()));
                 continue;
             };
-            if matched.is_dir() {
+            // A link is classified before any is_dir test, which follows it and
+            // would send a symlinked directory into the recursion.
+            if self.mode == LinkMode::Preserve && is_symlink(&matched) {
+                self.classify_link(rel, &matched, out, warnings);
+            } else if matched.is_dir() {
                 self.plan_dir(&matched, rel, out, warnings);
             } else {
                 self.classify_file(rel, out);
@@ -385,6 +460,16 @@ pub fn plan_includes_with(
     patterns: &[String],
     on: &(dyn Fn(IncludeEvent) + Sync),
 ) -> IncludePlan {
+    plan_with_mode(source, dest, patterns, on, LinkMode::Preserve)
+}
+
+fn plan_with_mode(
+    source: &Path,
+    dest: &Path,
+    patterns: &[String],
+    on: &(dyn Fn(IncludeEvent) + Sync),
+    mode: LinkMode,
+) -> IncludePlan {
     let opts = glob::MatchOptions {
         case_sensitive: true,
         require_literal_separator: false,
@@ -394,6 +479,7 @@ pub fn plan_includes_with(
         dest,
         on,
         found: std::cell::Cell::new(0),
+        mode,
     };
     let mut warnings = Vec::new();
     let mut plans = Vec::with_capacity(patterns.len());
@@ -405,12 +491,15 @@ pub fn plan_includes_with(
             pattern: pattern.clone(),
             missing: Vec::new(),
             existing: Vec::new(),
+            links: Vec::new(),
         };
         walk.plan_one(source, pattern, opts, &mut out, &mut warnings);
         out.missing.sort();
         out.missing.dedup();
         out.existing.sort();
         out.existing.dedup();
+        out.links.sort();
+        out.links.dedup_by(|a, b| a.0 == b.0);
         plans.push(out);
     }
     claim_once(&mut plans);
@@ -428,12 +517,14 @@ pub fn plan_includes_with(
 /// naming a file and another naming its parent directory both match it, and
 /// copying it twice would double the reported count, so the earlier pattern in
 /// configuration order keeps it. Each entry's own counts still sum to the
-/// plan's total, which is what a per-entry display reports against.
+/// plan's total, which is what a per-entry display reports against. Links are
+/// claimed on the same rule, so one is created once.
 fn claim_once(plans: &mut [PatternPlan]) {
     let mut claimed: HashSet<PathBuf> = HashSet::new();
     for plan in plans {
         plan.missing.retain(|rel| claimed.insert(rel.clone()));
         plan.existing.retain(|rel| claimed.insert(rel.clone()));
+        plan.links.retain(|(rel, _)| claimed.insert(rel.clone()));
     }
 }
 
@@ -1383,5 +1474,157 @@ mod tests {
             "apps/web/.env.local".to_string()
         ]));
         assert!(!needs_discovery(&[]));
+    }
+
+    /// Creating a symlink is refused on Windows without Developer Mode. Where it
+    /// is refused the test cannot build its fixture, so it reports and stops.
+    fn link_or_skip(target: &Path, link: &Path, target_is_dir: bool) -> bool {
+        match crate::sys::symlink(target, link, target_is_dir) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("skipping: this platform refuses symlink creation ({e})");
+                false
+            }
+        }
+    }
+
+    #[test]
+    fn a_symlinked_file_is_planned_as_a_link_not_a_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(source.join("real.txt"), "content").unwrap();
+        if !link_or_skip(
+            Path::new("../real.txt"),
+            &source.join("inc/link.txt"),
+            false,
+        ) {
+            return;
+        }
+
+        let plan = plan_includes(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(plan.missing_len(), 0, "no files planned");
+        assert_eq!(plan.existing_len(), 0);
+        let links: Vec<_> = plan.links().collect();
+        assert_eq!(links.len(), 1, "one link planned: {links:?}");
+        assert_eq!(links[0].0, Path::new("inc").join("link.txt"));
+        assert_eq!(links[0].1, Path::new("..").join("real.txt"));
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+    }
+
+    #[test]
+    fn a_symlinked_dir_contributes_one_entry_and_is_not_walked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(source.join("real_dir")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(source.join("real_dir/inner.txt"), "inner").unwrap();
+        if !link_or_skip(Path::new("../real_dir"), &source.join("inc/link_dir"), true) {
+            return;
+        }
+
+        let plan = plan_includes(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(
+            plan.missing_len(),
+            0,
+            "the link's contents are not planned: {:?}",
+            plan.missing().collect::<Vec<_>>()
+        );
+        let links: Vec<_> = plan.links().collect();
+        assert_eq!(links.len(), 1, "one link planned: {links:?}");
+        assert_eq!(links[0].0, Path::new("inc").join("link_dir"));
+    }
+
+    #[test]
+    fn a_pattern_naming_a_link_directly_plans_it_as_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("real_dir")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(source.join("real_dir/inner.txt"), "inner").unwrap();
+        if !link_or_skip(Path::new("real_dir"), &source.join("link_dir"), true) {
+            return;
+        }
+
+        let plan = plan_includes(&source, &dest, &["link_dir".to_string()]);
+
+        assert_eq!(plan.missing_len(), 0);
+        let links: Vec<_> = plan.links().collect();
+        assert_eq!(links.len(), 1, "{links:?}");
+        assert_eq!(links[0].0, Path::new("link_dir"));
+    }
+
+    /// An occupied destination keeps the entry in `links`, never in `existing`:
+    /// `existing` is copied with `copy_file` under `--overwrite`, which would write
+    /// the target's contents. Task 3 decides skip-or-replace per link.
+    #[test]
+    fn an_occupied_link_destination_stays_a_link_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(dest.join("inc")).unwrap();
+        std::fs::write(source.join("real.txt"), "content").unwrap();
+        std::fs::write(dest.join("inc/link.txt"), "already here").unwrap();
+        if !link_or_skip(
+            Path::new("../real.txt"),
+            &source.join("inc/link.txt"),
+            false,
+        ) {
+            return;
+        }
+
+        let plan = plan_includes(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(plan.links().count(), 1, "still a link entry");
+        assert_eq!(
+            plan.existing_len(),
+            0,
+            "never routed to the copy path: {:?}",
+            plan.existing().collect::<Vec<_>>()
+        );
+    }
+
+    /// `copy_out` archives out of a worktree that is about to be deleted, so it
+    /// keeps following links and copying what they resolve to.
+    #[test]
+    fn copy_out_still_archives_a_links_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("wt");
+        let dest = tmp.path().join("archive");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(source.join("real.txt"), "content").unwrap();
+        // Windows only resolves a relative reparse-point target when it uses the
+        // native separator, so the target is built with `join` rather than a
+        // literal `../real.txt`, which `read_link` would return unresolved but
+        // `copy_out`, which opens through the link, cannot.
+        let target = Path::new("..").join("real.txt");
+        if !link_or_skip(&target, &source.join("inc/link.txt"), false) {
+            return;
+        }
+
+        let (copied, warnings) = copy_out(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(
+            copied, 1,
+            "the target's contents were archived: {warnings:?}"
+        );
+        let landed = dest.join("inc/link.txt");
+        assert!(
+            !std::fs::symlink_metadata(&landed)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "archived as a real file, not a link"
+        );
+        assert_eq!(std::fs::read_to_string(&landed).unwrap(), "content");
     }
 }
