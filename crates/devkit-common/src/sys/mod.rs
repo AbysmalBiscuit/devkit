@@ -112,6 +112,17 @@ pub fn controlling_tty() -> Option<String> {
     imp::controlling_tty()
 }
 
+/// Create a symlink at `link` pointing at `target`, where `target` is written
+/// verbatim rather than resolved. Windows needs to know at creation time
+/// whether the target is a directory and has no way to infer it from the path,
+/// so `target_is_dir` is supplied by the caller; Unix ignores it.
+///
+/// Windows refuses this without Developer Mode or administrator rights. The
+/// error is returned rather than handled, so a caller can degrade.
+pub fn symlink(target: &Path, link: &Path, target_is_dir: bool) -> std::io::Result<()> {
+    imp::symlink(target, link, target_is_dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +155,76 @@ mod tests {
         assert_eq!(fmt_pid(12345, &mut buf), b"12345");
         // pid_t max on Linux is 2^22, but format the full i32 range to be safe.
         assert_eq!(fmt_pid(2147483647, &mut buf), b"2147483647");
+    }
+
+    /// Windows refuses symlink creation without Developer Mode or admin, and
+    /// CI runners may not have either. A refusal is not a failure of the code
+    /// under test, so the test reports the skip and stops.
+    fn can_symlink(dir: &Path) -> bool {
+        let probe = dir.join("probe_link");
+        match symlink(Path::new("probe_target"), &probe, false) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&probe);
+                true
+            }
+            Err(e) => {
+                eprintln!("skipping: this platform refuses symlink creation ({e})");
+                false
+            }
+        }
+    }
+
+    #[test]
+    fn symlink_to_a_file_is_a_link_holding_its_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        if !can_symlink(tmp.path()) {
+            return;
+        }
+        std::fs::write(tmp.path().join("real.txt"), "content").unwrap();
+        let link = tmp.path().join("link.txt");
+
+        symlink(Path::new("real.txt"), &link, false).unwrap();
+
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(meta.file_type().is_symlink(), "destination is a link");
+        assert_eq!(std::fs::read_link(&link).unwrap(), Path::new("real.txt"));
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "content");
+    }
+
+    #[test]
+    fn symlink_to_a_directory_resolves_through_to_its_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        if !can_symlink(tmp.path()) {
+            return;
+        }
+        std::fs::create_dir(tmp.path().join("real_dir")).unwrap();
+        std::fs::write(tmp.path().join("real_dir/inner.txt"), "inner").unwrap();
+        let link = tmp.path().join("link_dir");
+
+        symlink(Path::new("real_dir"), &link, true).unwrap();
+
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(meta.file_type().is_symlink(), "destination is a link");
+        assert_eq!(
+            std::fs::read_to_string(link.join("inner.txt")).unwrap(),
+            "inner"
+        );
+    }
+
+    /// A source link whose target is gone is reproduced as a link whose target
+    /// is gone, not reported as an error.
+    #[test]
+    fn symlink_to_a_missing_target_still_creates_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        if !can_symlink(tmp.path()) {
+            return;
+        }
+        let link = tmp.path().join("dangling");
+
+        symlink(Path::new("nothing_here"), &link, false).unwrap();
+
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(meta.file_type().is_symlink());
+        assert!(!link.exists(), "target does not resolve");
     }
 }

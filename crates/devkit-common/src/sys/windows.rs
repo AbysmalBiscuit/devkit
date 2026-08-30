@@ -171,3 +171,15 @@ pub(super) fn cgroup_list_leaves(_base: &std::path::Path) -> Vec<String> {
     Vec::new()
 }
 pub(super) fn join_cgroup(_cmd: &mut std::process::Command, _leaf: &std::path::Path) {}
+
+pub(super) fn symlink(
+    target: &std::path::Path,
+    link: &std::path::Path,
+    target_is_dir: bool,
+) -> std::io::Result<()> {
+    if target_is_dir {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}

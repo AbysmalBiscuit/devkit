@@ -333,3 +333,11 @@ fn resident_pages(pid: u32) -> u64 {
         })
         .unwrap_or(0)
 }
+
+pub(super) fn symlink(
+    target: &std::path::Path,
+    link: &std::path::Path,
+    _target_is_dir: bool,
+) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
