@@ -206,15 +206,128 @@ pub(crate) fn run_after_worktree_create(
     }
 }
 
+/// How many files may pass before the transient line is redrawn. A large
+/// include list fires one event per file, and every redraw allocates a message.
+const INCLUDE_REDRAW_EVERY: usize = 64;
+
+/// Draws an include backfill's events as sub-steps of one `Step`. Sub-step
+/// numbers are a display concern, so the offset the discovery sub-step
+/// introduces is applied here rather than in the event stream.
+///
+/// The counters are atomic and every method takes `&self`, because the copy
+/// may report from more than one thread.
+struct IncludeRender<'a> {
+    step: &'a devkit_common::progress::Step<'a>,
+    discovery: bool,
+    subs: usize,
+    entry: std::sync::atomic::AtomicUsize,
+    drawn: std::sync::atomic::AtomicUsize,
+}
+
+impl IncludeRender<'_> {
+    fn on(&self, event: devkit_common::worktree::IncludeEvent<'_>) {
+        use devkit_common::worktree::IncludeEvent as E;
+        use std::sync::atomic::Ordering::Relaxed;
+        match event {
+            E::Found { files } => {
+                if self.discovery && self.due(files) {
+                    self.step.activity(&format!(
+                        "[1/{}] discovering files\u{2026} ({files} found)",
+                        self.subs
+                    ));
+                }
+            }
+            E::ScanDone { files } => {
+                if self.discovery {
+                    self.step.substep(&format!(
+                        "1/{} discovering files ({files} found)",
+                        self.subs
+                    ));
+                }
+            }
+            E::EntryStart {
+                pattern,
+                index,
+                files,
+                ..
+            } => {
+                self.entry.store(self.number(index), Relaxed);
+                self.drawn.store(0, Relaxed);
+                self.step.activity(&format!(
+                    "[{}/{}] {pattern} 0/{files}",
+                    self.number(index),
+                    self.subs
+                ));
+            }
+            E::FileDone { pattern, done, of } => {
+                if self.due(done) || done == of {
+                    self.step.activity(&format!(
+                        "[{}/{}] {pattern} {done}/{of}",
+                        self.entry.load(Relaxed),
+                        self.subs
+                    ));
+                }
+            }
+            E::EntryDone { pattern, index, .. } => {
+                self.step
+                    .substep(&format!("{}/{} {pattern}", self.number(index), self.subs));
+            }
+        }
+    }
+
+    /// Whether `count` has moved far enough since the last redraw to be worth
+    /// another one.
+    fn due(&self, count: usize) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        if count.saturating_sub(self.drawn.load(Relaxed)) < INCLUDE_REDRAW_EVERY {
+            return false;
+        }
+        self.drawn.store(count, Relaxed);
+        true
+    }
+
+    /// A pattern's display number, offset past the discovery sub-step when
+    /// there is one.
+    fn number(&self, index: usize) -> usize {
+        index + 1 + usize::from(self.discovery)
+    }
+}
+
 /// Copy the configured `worktree_include` globs from the primary checkout into
-/// a freshly created worktree, printing each fail-open warning to stderr. A
-/// no-op when the include list is empty.
-pub fn backfill_includes(primary: &str, worktree: &std::path::Path, patterns: &[String]) {
+/// a freshly created worktree under a step of its own, one sub-step per include
+/// entry. Fail-open warnings print to stderr after the step settles, so a live
+/// bar cannot tear them. A no-op that draws nothing when the include list is
+/// empty.
+pub fn backfill_includes(
+    primary: &str,
+    worktree: &std::path::Path,
+    patterns: &[String],
+    steps: &Steps,
+) {
     if patterns.is_empty() {
         return;
     }
-    let (_copied, warnings) =
-        devkit_common::worktree::copy_includes(std::path::Path::new(primary), worktree, patterns);
+    let discovery = devkit_common::worktree::needs_discovery(patterns);
+    let subs = patterns.len() + usize::from(discovery);
+
+    let warnings = steps.during_step("Copying worktree includes\u{2026}", |step| {
+        let render = IncludeRender {
+            step,
+            discovery,
+            subs,
+            entry: std::sync::atomic::AtomicUsize::new(0),
+            drawn: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let (copied, warnings) = devkit_common::worktree::copy_includes_with(
+            std::path::Path::new(primary),
+            worktree,
+            patterns,
+            &|e| render.on(e),
+        );
+        step.detail(&format!("{copied} files"));
+        warnings
+    });
+
     for w in warnings {
         eprintln!("warning: {w}");
     }
@@ -376,7 +489,10 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let primary_s = primary
         .to_str()
         .context("primary checkout path not UTF-8")?;
-    let total = 2 + usize::from(!args.apps.is_empty()) + cfg.hooks.after_worktree_create.len();
+    let total = 2
+        + usize::from(!args.apps.is_empty())
+        + cfg.hooks.after_worktree_create.len()
+        + usize::from(!cfg.defaults.worktree_include.is_empty());
     let steps = Steps::persistent_with_total(total);
     steps.during_result("Fetching from origin…", || {
         gitfetch::fetch("origin", primary_s)
@@ -433,7 +549,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         eprintln!("warning: could not update global gitignore: {e:#}");
     }
 
-    backfill_includes(primary_s, &worktree, &cfg.defaults.worktree_include);
+    backfill_includes(primary_s, &worktree, &cfg.defaults.worktree_include, &steps);
 
     // Per-app bootstrap: write the app's configured prep files, then run its
     // setup commands in its directory. Everything project-specific — filenames,
@@ -647,6 +763,40 @@ mod tests {
             "an unrenderable hook must still consume its step"
         );
         assert!(dir.path().join("after").exists(), "the next hook still ran");
+    }
+
+    /// The backfill is a step of the run like any other, so a caller's `[i/N]`
+    /// numbering has to account for it.
+    #[test]
+    fn the_backfill_consumes_one_step() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join(".tool-versions"), "node 20").unwrap();
+
+        let steps = Steps::persistent_with_total(1);
+        backfill_includes(
+            src.to_str().unwrap(),
+            &dst,
+            &[".tool-versions".to_string()],
+            &steps,
+        );
+
+        assert_eq!(steps.started(), 1);
+        assert!(dst.join(".tool-versions").exists(), "the file was copied");
+    }
+
+    /// An empty include list is not work, so it must not draw a step or the run
+    /// ends one short of its total.
+    #[test]
+    fn an_empty_include_list_consumes_no_step() {
+        let base = tempfile::tempdir().unwrap();
+        let steps = Steps::persistent_with_total(0);
+
+        backfill_includes(base.path().to_str().unwrap(), base.path(), &[], &steps);
+
+        assert_eq!(steps.started(), 0);
     }
 
     #[test]

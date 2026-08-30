@@ -427,7 +427,12 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         Ok(issue)
     })?;
 
-    crate::issue::setup::backfill_includes(primary_s, &worktree, &cfg.defaults.worktree_include);
+    crate::issue::setup::backfill_includes(
+        primary_s,
+        &worktree,
+        &cfg.defaults.worktree_include,
+        &steps,
+    );
 
     if args.setup {
         let setup_ctx = serde_json::json!({
