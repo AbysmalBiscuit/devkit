@@ -256,26 +256,23 @@ in whatever shape that branch lands.
 `parallel-includes` adds rayon to the copy and is independent: it parallelises
 copying files and does not care that some entries are links.
 
-## Open questions
+## Decisions
 
-1. A junction source becomes a symlink that a machine without Developer Mode
-   cannot create, which is the exact situation your team's `setup-project.ps1`
-   avoids by using junctions. Is a warning enough, or should a Windows failure
-   fall back to today's copy-the-contents behaviour rather than leaving the
-   worktree without the link?
+**A failed link creation warns and moves on.** There is no fallback to copying
+the contents. A worktree that could not get its link is a worktree missing that
+link, reported, and the warning is what tells a user their machine needs
+Developer Mode. Falling back to duplication would reintroduce the behaviour
+this change exists to remove, on exactly the machines least able to notice.
 
-2. Should the link count appear in `sync-includes` output as its own line
-   (`linked 3`) or be folded into the existing per-worktree summary?
+**Links are counted and reported on their own line.** `linked 3` sits beside
+`copied 12 file(s)`, never folded into it. A link is not a copied file and the
+counts do not mix.
 
-3. `copy_out`, used by `issue end --preserve`, dereferences the same way, and
-   `docs/configuration.md` documents the two directions as matching. Changing
-   only the inbound one breaks that pairing deliberately. Is that right?
-
-   There is a real argument that it is. An include copies into a live worktree
-   that still has the primary checkout beside it, so a link keeps working.
-   `preserve` archives out of a worktree that is about to be deleted, into a
-   location that may outlive the link's target entirely, so a link there could
-   be archiving a path that stops resolving the moment the worktree goes. If
-   that reasoning holds, the directions should differ and the doc should say
-   why. If it does not, `copy_out` wants the same change and this spec should
-   grow to cover it.
+**`copy_out` is unchanged.** `issue end --preserve` keeps following links and
+archiving their contents. The two directions genuinely differ: an include lands
+in a live worktree that still sits beside the primary checkout, so a link there
+resolves. `preserve` archives out of a worktree that is about to be deleted,
+into a location that may outlive the target, so a link there could be archiving
+a path that stops resolving the moment the worktree goes. The
+`docs/configuration.md` sentence pairing the two directions is rewritten to
+describe each on its own and to say why they differ.
