@@ -99,9 +99,12 @@ For issue #142, "Group sync-includes file lists in the output", with
 `branch_prefix = "lev/"`:
 
 ```
-branch: lev/group-sync-includes-file-lists-in
-dir:    group-sync-includes
+branch: lev/group-sync-includes-file-lists-in-the
+dir:    group-sync-includes-file
 ```
+
+The branch slug gets 42 characters (46 less the four `lev/` costs) and the
+directory gets 24, and `cap` drops whole words to land under each.
 
 Two variables are warranted here because one title slug feeds two names with
 unrelated limits. A git ref has no length problem; a directory does.
