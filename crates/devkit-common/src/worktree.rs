@@ -234,8 +234,9 @@ impl IncludePlan {
 }
 
 /// The callback and running match count a plan walk carries through its
-/// recursion. `Cell` is enough because a walk is single threaded; the callback
-/// is `Sync` for the copy side, which is not.
+/// recursion. `Cell` suffices because a walk runs on one thread. The `Sync`
+/// bound on the callback is wider than this walk needs, so one renderer can
+/// serve both the walk and a threaded copy.
 struct Walk<'a> {
     dest: &'a Path,
     on: &'a (dyn Fn(IncludeEvent) + Sync),
