@@ -99,6 +99,26 @@ fn select<'a>(rows: &'a [(Worktree, String)], selectors: &[String]) -> Vec<&'a (
     chosen
 }
 
+/// One line per non-empty count, pluralised. Links are never folded into the
+/// file count: a link is not a copied file. An empty vector means nothing was
+/// written at all, which the caller reports in its own words.
+pub(crate) fn counts(copied: usize, linked: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    if copied > 0 {
+        out.push(format!(
+            "copied {copied} {}",
+            if copied == 1 { "file" } else { "files" }
+        ));
+    }
+    if linked > 0 {
+        out.push(format!(
+            "linked {linked} {}",
+            if linked == 1 { "symlink" } else { "symlinks" }
+        ));
+    }
+    out
+}
+
 fn report_dry(plan: &IncludePlan, overwrite: bool, verbose: bool) {
     if plan.missing_len() > 0 {
         println!("  would copy:\n{}", list(plan.missing(), verbose));
@@ -202,7 +222,7 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
             }
         }
 
-        let (copied, _linked, warnings) =
+        let (copied, linked, warnings) =
             worktree::apply_includes(&source, &wt.path, &plan, clobber);
         for w in &warnings {
             eprintln!("warning: {w}");
@@ -213,15 +233,27 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
                 list(plan.existing(), verbose)
             );
         }
-        if copied == 0 {
+        let left_alone_links = plan.links_len() - linked;
+        if !overwrite && left_alone_links > 0 {
+            eprintln!(
+                "warning: {left_alone_links} symlink(s) already in {label}, left alone (rerun with --overwrite to replace)"
+            );
+        }
+        let summary = counts(copied, linked);
+        if summary.is_empty() {
             println!("  copied nothing");
         } else {
-            let names = if clobber {
-                list(plan.missing().chain(plan.existing()), verbose)
-            } else {
-                list(plan.missing(), verbose)
-            };
-            println!("  copied {copied} file(s):\n{names}");
+            if copied > 0 {
+                let names = if clobber {
+                    list(plan.missing().chain(plan.existing()), verbose)
+                } else {
+                    list(plan.missing(), verbose)
+                };
+                println!("  copied {copied} file(s):\n{names}");
+            }
+            if linked > 0 {
+                println!("  {}", summary.last().expect("linked > 0 pushed a line"));
+            }
         }
     }
     Ok(())
@@ -311,5 +343,15 @@ mod tests {
     #[test]
     fn an_empty_list_is_empty() {
         assert_eq!(list(Vec::<PathBuf>::new(), false), "");
+    }
+
+    #[test]
+    fn counts_name_each_kind_separately() {
+        assert_eq!(counts(0, 0), Vec::<String>::new());
+        assert_eq!(counts(1, 0), vec!["copied 1 file"]);
+        assert_eq!(counts(3, 0), vec!["copied 3 files"]);
+        assert_eq!(counts(0, 1), vec!["linked 1 symlink"]);
+        assert_eq!(counts(0, 2), vec!["linked 2 symlinks"]);
+        assert_eq!(counts(2, 1), vec!["copied 2 files", "linked 1 symlink"]);
     }
 }

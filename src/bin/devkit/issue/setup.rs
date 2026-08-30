@@ -324,16 +324,18 @@ pub fn backfill_includes(
         if discovery {
             step.activity(&format!("[1/{subs}] discovering files… (0 found)"));
         }
-        let (copied, _linked, warnings) = devkit_common::worktree::copy_includes_with(
+        let (copied, linked, warnings) = devkit_common::worktree::copy_includes_with(
             std::path::Path::new(primary),
             worktree,
             patterns,
             &|e| render.on(e),
         );
-        step.detail(&format!(
-            "{copied} {}",
-            if copied == 1 { "file" } else { "files" }
-        ));
+        let summary = super::sync::counts(copied, linked);
+        step.detail(&if summary.is_empty() {
+            "0 files".to_string()
+        } else {
+            summary.join(", ")
+        });
         warnings
     });
 

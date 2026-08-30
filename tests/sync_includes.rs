@@ -127,6 +127,40 @@ fn an_existing_file_is_left_alone_and_named_in_a_warning() {
     );
 }
 
+/// A symlink whose destination is already occupied is never counted as
+/// created and never routed through the file-listing warning (the planning
+/// walk keeps a matched symlink out of `existing`), so it needs a report of
+/// its own.
+#[test]
+fn an_existing_symlink_destination_is_left_alone_and_reported() {
+    let t = project("\"inc/\"");
+    let main = t.path().join("main");
+    std::fs::create_dir_all(main.join("inc")).unwrap();
+    std::fs::write(main.join("real.txt"), "content").unwrap();
+    let target = Path::new("..").join("real.txt");
+    if let Err(e) = devkit_common::sys::symlink(&target, &main.join("inc/link.txt"), false) {
+        eprintln!("skipping: this platform refuses symlink creation ({e})");
+        return;
+    }
+    let wt1_inc = t.path().join("wt-eng-1").join("inc");
+    std::fs::create_dir_all(&wt1_inc).unwrap();
+    std::fs::write(wt1_inc.join("link.txt"), "already here").unwrap();
+
+    let state = tempfile::tempdir().unwrap();
+    let out = run(t.path(), state.path(), &["sync-includes"]);
+    ok(&out);
+    assert_eq!(
+        std::fs::read_to_string(wt1_inc.join("link.txt")).unwrap(),
+        "already here",
+        "the occupied destination was not replaced"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("symlink") && err.contains("--overwrite"),
+        "the untouched symlink is reported, with the way to replace it: {err}"
+    );
+}
+
 #[test]
 fn dry_run_writes_nothing() {
     let t = project("\".env.local\"");
