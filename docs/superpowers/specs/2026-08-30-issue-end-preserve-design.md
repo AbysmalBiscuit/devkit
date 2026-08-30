@@ -14,9 +14,10 @@ directory.
 
 ## Scope
 
-**In:** a `[preserve.<name>]` config table, a fail-open copy step in `issue end`
-before the worktree is removed, a `--no-preserve` escape hatch, and the docs and
-JSON schema that follow from a new config table.
+**In:** a `[preserve.<name>]` config table, a serial preservation phase in
+`issue end` that runs before any worktree is removed, a `--no-preserve` escape
+hatch, a progress step per entry, and the docs and JSON schema that follow from a
+new config table.
 
 ### Non-goals
 
@@ -25,39 +26,45 @@ JSON schema that follow from a new config table.
   templates cover without a shell and without a portable `cp`. A hook stays
   available as a later addition for actions a copy cannot express, such as
   posting notes to the tracker.
-- Reaching files outside the worktree. Patterns are worktree-relative, because
-  `plan_includes` warns `match outside source` on anything else. The recorded
-  summary file therefore cannot be preserved at its default location; a project
-  that wants it kept sets `templates.issue_summary_path` to
-  `{{ worktree }}/.devkit/issue.md`, which `docs/configuration.md` already
-  documents, and then names it in a pattern like any other file.
+- Reaching files outside the worktree. Patterns that are absolute or contain a
+  `..` component are rejected. The recorded summary file therefore cannot be
+  preserved at its default location; a project that wants it kept sets
+  `templates.issue_summary_path` to `{{ worktree }}/.devkit/issue.md`, which
+  `docs/configuration.md` already documents, and then names it in a pattern like
+  any other file.
+- A symlink policy. `plan_dir` and `std::fs::copy` follow links, so a symlink
+  inside the worktree is archived as its target's content, and a directory
+  symlink cycle recurses. This is what `worktree_include` already does on the
+  inbound path; preservation inherits it rather than growing a second traversal.
+  Documented, not fixed here.
+- Atomic replacement of an existing destination file. `std::fs::copy` truncates
+  before it writes, so a copy that fails partway leaves a short file. The serial
+  phase below is what keeps this from costing data: a failure is known before any
+  worktree is removed, and `required = true` stops the removal.
 - Preserving anything on a removal devkit did not perform. A bare
   `git worktree remove` is outside devkit and stays that way.
 - Any MCP surface change. `issue` actions on MCP are read-only, and `issue end`
   is not among them.
-- Compression, deduplication, or a retention policy on the destination. Files
-  are copied as files.
 
 ## Background
 
-Two existing pieces carry almost all of this.
+Two existing pieces carry most of this.
 
 `defaults.worktree_include` copies globs from the primary checkout *into* a new
 worktree through `plan_includes` / `apply_includes` in
 `crates/devkit-common/src/worktree.rs`. Preservation is the same walk pointed the
 other way: same `glob::MatchOptions`, same recursive directory handling, same
 `create_dir_all` on the destination parent inside `copy_file`, same fail-open
-`Vec<String>` warnings. The one behavioral difference is that preservation
+`Vec<String>` warnings. The behavioral difference is that preservation
 overwrites, which `apply_includes` already exposes as its `overwrite` parameter.
 
 `[hooks] after_worktree_create` in `crates/devkit-config/src/lib.rs` sets the
-lifecycle-extension precedent and the fail-open contract: a hook that cannot
-render, spawn, or exit zero warns on stderr and the command carries on.
+lifecycle-extension precedent, the fail-open contract, and the progress pattern:
+`issue setup` sizes its `Steps` total to include the hook count and draws one
+labelled step per hook, so a slow hook never looks like a hung terminal.
 
 `issue end`'s `cleanup` in `src/bin/devkit/issue/end.rs` is the single function
-every removal path goes through, `--clean-worktree` and `--force` included. It
-already reads `.devkit/issue.toml` before removing anything, which is where the
-render context comes from.
+every removal path goes through, `--clean-worktree` and `--force` included.
 
 ## Config
 
@@ -81,23 +88,31 @@ to   = "{{ primary }}/.devkit/archive/{{ issue }}"
 /// Files copied out of a worktree before `issue end` removes it. Each entry
 /// names its own destination, so different files can be archived to different
 /// places in one run.
+#[serde(deny_unknown_fields)]
 pub struct PreserveConfig {
     /// Glob patterns for the files to copy, relative to the worktree root and
     /// rendered as minijinja. A pattern that renders empty is skipped; a
     /// pattern that matches nothing is not a failure.
     pub from: Vec<String>,
-    /// Destination directory, rendered as minijinja. Created if absent.
+    /// Destination directory, rendered as minijinja. Must render to a non-empty
+    /// absolute path. Created if absent.
     pub to: String,
     /// Abort this worktree's removal when the entry warns, instead of removing
     /// it anyway. Off by default.
+    #[serde(default)]
     pub required: bool,
 }
 ```
 
 `Config` gains `preserve: HashMap<String, PreserveConfig>`, matching its sibling
 tables. Entries are copied in sorted key order, the way `brief.rs` sorts the app
-and task names it collects from those same maps, so a warning naming an entry
-reads the same across runs.
+and task names it collects from those same maps.
+
+`deny_unknown_fields` is the second table to carry it, after `[github]`. The
+reason is the same shape as that one: serde consumes an unknown field as
+`IgnoredAny`, so `requred = true` would leave the entry fail-open with no
+diagnostic, and the user would believe files were protected that were not. Update
+the sentence in `AGENTS.md` that calls `[github]` the only such table.
 
 ### Render context
 
@@ -112,146 +127,224 @@ needs in order to address a place outside the worktree:
 
 `issue`, `slug`, and `apps` come from `.devkit/issue.toml` rather than being
 re-derived, so a `worktree_dir` or `branch` template edited since setup cannot
-misname the destination. A worktree with no record still gets `branch` and
-`worktree`; the rest render empty, which makes a `{{ issue }}` in a destination
-path an empty path segment rather than a failure. An entry that needs an issue id
-should be written so an empty one still produces a usable path.
+misname the destination. `record::read` returns `None` for a malformed record as
+well as an absent one, so both cases take the same typed defaults: `issue` and
+`slug` render as the empty string, `apps` as the empty list.
+
+An empty `issue` is a harmless path segment only inside an otherwise absolute
+template, and it collapses two worktrees onto one destination. Both are covered
+by the destination rules below rather than by special-casing the record.
 
 ### Path resolution
 
-Whatever `plan_includes` already does, which is:
+Patterns, after rendering:
 
-- A pattern resolves against the worktree root, and each match lands at
-  `<to>/<path relative to the worktree>`.
-- A match that is a directory is copied recursively, keeping its structure.
-- A match resolving outside the worktree warns and is skipped.
-- Destination directories are created as needed.
+- A pattern that renders empty is skipped.
+- A pattern that is absolute, or contains a `..` component, warns and is skipped.
+  Without this, `source.join("../x")` strips lexically to `../x` and the copy
+  escapes both the worktree and the destination.
+- Everything else resolves against the worktree root, and each match lands at
+  `<to>/<path relative to the worktree>`. A directory match is copied
+  recursively, keeping its structure.
+- An existing destination file is overwritten (`apply_includes` with
+  `overwrite: true`). The worktree's copy is the one about to be lost, so it
+  wins; skipping would silently keep stale content from an earlier run.
 
-Plus one rule preservation sets: an existing destination file is overwritten
-(`apply_includes` with `overwrite: true`). The worktree's copy is the one about
-to be lost, so it wins; skipping would silently keep stale content from an
-earlier run of the same destination template.
+Destinations, after rendering:
+
+- A `to` that renders empty or relative warns and the entry is skipped. An empty
+  path resolves against the process cwd, which would write the archive into
+  whatever directory the user happened to run from.
+- A `to` that resolves inside any worktree in this run's removal set warns and
+  the entry is skipped. Preserving into a tree that is about to be deleted
+  destroys the copy; preserving into another selected worktree races its removal.
+
+Globbing uses one consistent, non-canonicalized spelling of the worktree path.
+`cleanup` canonicalizes its target, and on Windows that yields a verbatim path;
+`glob 0.3.3` accepts a `\\?\C:\` prefix but silently matches nothing behind
+`\\?\UNC\`, so a repo on a network share would preserve nothing without a
+warning.
 
 ## Where it runs
 
-Inside `cleanup`, in this order:
+`run` becomes three phases instead of a confirm-and-spawn loop.
 
-1. Canonicalize the worktree, refuse if the cwd is inside it.
-2. Dirty check, unless `--force`.
-3. Read `.devkit/issue.toml`.
-4. **Preserve.** Render each entry and copy.
-5. `git worktree remove`.
-6. Remove the recorded summary file.
-7. Delete the branch, sweep legacy `ISSUE_*.md`.
+1. **Confirm.** Prompt for every selected worktree, collecting the approved ones.
+   Every prompt now precedes every action, rather than interleaving with removals
+   already running in background threads.
+2. **Preserve.** Serially, in worktree order and then sorted entry order: read
+   `.devkit/issue.toml`, render, validate, copy. One progress step per entry.
+   A worktree whose `required` entry fails is dropped from the removal set with
+   its error reported; every other worktree continues.
+3. **Remove.** The existing parallel `cleanup` threads, then the single
+   post-join `git worktree prune`.
 
-Step 4 sits after the record read because the context comes from it, and before
-the removal because that is the point.
+Preservation is serial and complete before the first removal, which is what makes
+the guarantees above hold: a destination collision resolves in a defined order
+rather than between racing threads, a `required` failure is known while every
+file still exists, and no cleanup thread has to write warning lines through the
+live progress renderer.
+
+`cleanup` itself is unchanged. It takes no preserve settings and keeps its
+current signature and order.
 
 Preservation runs on every removal path, `--clean-worktree` and `--force`
-included. Those are the runs most likely to be discarding work.
-
-`--no-preserve` skips the step entirely, for a worktree whose scratch is not
-worth archiving.
+included. Those are the runs most likely to be discarding work. `--no-preserve`
+skips phase 2 entirely.
 
 ## Failure policy
 
 Fail-open, like `[hooks]` and like `copy_includes`. A pattern that cannot render,
-a bad glob, an unreadable source, or a copy that fails prints a `warning:` line
-naming the entry, and the worktree is removed anyway. Most worktrees carry
-nothing worth preserving, and holding a cleanup command hostage to an archive
-that was never going to have contents is the wrong default.
+a rejected pattern or destination, a bad glob, an unreadable source, or a copy
+that fails prints a `warning:` line naming the entry, and the worktree is removed
+anyway. Most worktrees carry nothing worth preserving, and holding a cleanup
+command hostage to an archive that was never going to have contents is the wrong
+default.
 
 Two things do not even warn: an entry whose patterns match nothing, and a pattern
 that renders to the empty string. An empty `graphify-out/` is the normal case.
 
-`required = true` flips one entry to fail-closed. Its warnings become an error
-that aborts that worktree's removal, leaving the worktree, its branch, and its
-summary intact so a rerun after fixing the config still finds the files.
-`cleanup` already returns `Result` and `run` already reports a per-worktree
-failure without stopping the others, since removals run one thread per worktree.
+`required = true` flips one entry to fail-closed. Its warnings become an error,
+that worktree is dropped from the removal set, and its worktree, branch, and
+summary stay intact so a rerun after fixing the config still finds the files.
 `required` governs errors only, never emptiness, so an entry marked required on a
 worktree that produced no reflections still removes cleanly.
 
+`run` currently returns `Ok(())` whatever happens. It gains a failure tally and
+returns an error after the removals join and the prune runs, so a `required`
+failure is visible to a script through the exit code rather than only in the
+printed output.
+
+A config that fails to load is fatal to `issue end` unless `--no-preserve` is
+passed. `tracker::select` turns every load error into `None`, which for a
+read-only command degrades gracefully but here would silently produce an empty
+preserve table and remove the worktree having preserved nothing. `devkit-config`
+already distinguishes the cases through `Health::{Absent, Broken}`: absent is
+fine and means no preservation is configured, broken stops the command.
+
+## Progress output
+
+`issue end` today draws a spinner for the status fetch and one per removal.
+Preservation adds one labelled step per entry per worktree, drawn from the main
+thread during phase 2, matching how `issue setup` draws one step per hook:
+
+```
+  Preserving graphify for ENG-1234…
+  Preserving notes for ENG-1234…
+  Removing ENG-1234…
+```
+
+The final line reports what was archived alongside what was removed, so a run
+that preserved nothing says so rather than looking identical to one that did:
+
+```
+Preserved 14 file(s) across 2 entries. Removed 3 of 3.
+```
+
+`Steps` keeps its current untotaled `Steps::persistent()` construction. A total is
+computable now that confirmations precede the work, but `persistent_with_total`
+would need the fetch step counted before the confirm phase knows the total, and a
+labelled step per entry already answers the "is this hung?" question that the
+counter would.
+
 ## Code
 
-**`crates/devkit-common/src/worktree.rs`.** A `copy_out` beside `copy_includes`,
-built from the same two helpers:
+**`crates/devkit-common/src/worktree.rs`.** Two changes.
+
+`plan_includes` skips a pattern that is empty after its `trim_end_matches('/')`.
+This is a latent bug on the existing inbound path too: `source.join("")` is the
+source directory, glob matches it, `strip_prefix` yields `""`, and `plan_dir`
+then plans every file under the root. Guarding the shared function fixes
+`worktree_include` and preservation in one place. (Escaping patterns are *not*
+guarded here — that policy is preservation's and lives in `copy_out`, because the
+inbound path has a different risk profile and is out of scope.)
+
+A `copy_out` beside `copy_includes`:
 
 ```rust
 /// Copy files matching `patterns` (globs relative to `source`) out of a worktree
 /// into `dest`, at the same relative path, overwriting what is already there.
 /// The outbound counterpart to `copy_includes`, and fail-open the same way:
-/// returns (files_copied, warnings).
-pub fn copy_out(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<String>) {
-    let plan = plan_includes(source, dest, patterns);
-    let (copied, apply_warnings) = apply_includes(source, dest, &plan, true);
-    let mut warnings = plan.warnings;
-    warnings.extend(apply_warnings);
-    (copied, warnings)
-}
+/// returns (files_copied, warnings). Patterns that are absolute or contain a
+/// `..` component are rejected, so a copy cannot escape either root.
+pub fn copy_out(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<String>);
 ```
 
-It differs from `copy_includes` in one argument, but the two names carry
-different policies at their call sites (a backfill never clobbers; an archive
-always does), and putting the policy in the name is what keeps a future edit from
+It differs from `copy_includes` in the overwrite flag and the pattern guard, but
+the two names carry different policies at their call sites (a backfill never
+clobbers and stays inside by convention; an archive always clobbers and enforces
+containment), and putting the policy in the name is what keeps a future edit from
 applying the wrong one.
 
 **`crates/devkit-config/src/lib.rs`.** `PreserveConfig` with `JsonSchema`,
-`Deserialize`, `Serialize` derives, and the `Config.preserve` field. No
-`deny_unknown_fields`: `[github]` is the one table that carries it, because a
-typo there silently targets a different repository, whereas a typo here surfaces
-as a warning on a run the user is watching.
+`Deserialize`, `Serialize`, and `deny_unknown_fields` derives, plus the
+`Config.preserve` field.
 
-**`src/bin/devkit/issue/end.rs`.** A `PreserveSettings` struct built once in `run`
-(the entries in sorted key order, `templates.variables`, `worktree_root`,
-`branch_prefix`), threaded into `cleanup` beside the existing `branch_lock`.
-Rendering happens per worktree inside `cleanup`, since the context is per
-worktree.
+**`src/bin/devkit/issue/end.rs`.** `run` restructured into the three phases. A
+`preserve` module function owns phase 2: it takes the approved rows, the preserve
+entries in sorted key order, `templates.variables`, `worktree_root`,
+`branch_prefix`, and the removal set (for the destination containment check), and
+returns per-worktree outcomes plus the archived-file tally the summary line
+prints.
 
 **`src/bin/devkit/issue/tracker.rs`.** `select` loads the config and drops
-everything but `tracker.kind` and `github`. It gains a sibling that returns the
-loaded `Config` alongside, and `select` is rewritten in terms of it, so the three
-other callers are unchanged and `end.rs` does not load the config twice.
+everything but `tracker.kind` and `github`. It gains a sibling returning the load
+outcome — the `Config` plus which `Health` it came from — and `select` is
+rewritten in terms of it, so the three other callers keep their current
+degrade-to-detection behavior while `end` can refuse on `Broken`.
 
 ## Docs and schema
 
 - `docs/configuration.md`: a `[preserve.<name>]` section covering the three keys,
-  the render context table, the worktree-relative constraint with the
-  `issue_summary_path` workaround, and the fail-open contract with `required` as
-  the opt-out.
-- `docs/commands.md`: the `issue end` entry gains the preserve step and
-  `--no-preserve`.
+  the render context table, the pattern and destination rules, the fail-open
+  contract with `required` as the opt-out, and the symlink and non-atomic-copy
+  caveats.
+- `docs/commands.md`: the `issue end` entry gains the preservation phase,
+  `--no-preserve`, and the broken-config refusal.
+- `AGENTS.md`: correct the sentence naming `[github]` as the only table with
+  `deny_unknown_fields`.
 - `schema/devkit-config.json`: regenerated with `DEVKIT_UPDATE_SCHEMA=1 cargo test`
   and committed, which the `tests/config_schema.rs` drift test enforces.
-- `AGENTS.md`: no new invariant.
 
 ## Testing
 
-In `crates/devkit-common/src/worktree.rs`, beside the existing include tests:
+In `crates/devkit-common/src/worktree.rs`:
 
+- An empty pattern plans nothing, asserted through `plan_includes` so it covers
+  the inbound path, and again through `copy_out`. This is the catastrophic case:
+  without the guard it copies the whole tree.
+- A slash-only pattern is likewise skipped.
 - `copy_out` lands a match at `<dest>/<relative path>` and copies a directory
   match recursively.
-- `copy_out` overwrites an existing destination file, where `copy_includes`
-  leaves it alone. The two assertions belong in one test so the policy
-  difference is visible.
+- `copy_out` overwrites an existing destination file where `copy_includes` leaves
+  it alone. Both assertions in one test, so the policy difference is visible.
+- `copy_out` rejects an absolute pattern and a `..` pattern, warning on each and
+  writing nothing outside `dest`.
 - A pattern matching nothing yields zero files and no warnings.
 
 In `src/bin/devkit/issue/end.rs`, over the git fixture the existing `cleanup`
 tests already build:
 
-- `cleanup` copies a matching file to the templated destination and then removes
-  the worktree.
+- Phase 2 copies a matching file to the templated destination, and the worktree
+  is then removed.
 - A failing entry that is not required warns and the worktree is still removed.
 - A failing entry that *is* required leaves the worktree, its branch, and its
-  summary intact and returns an error naming the entry.
+  summary intact, drops only that worktree from the removal set, and makes `run`
+  return an error.
 - A required entry whose patterns match nothing removes the worktree cleanly.
-- An empty `preserve` table removes the worktree exactly as it does today.
+- A `to` that renders empty is skipped, and nothing is written to the process
+  cwd.
+- A `to` resolving inside a worktree in the removal set is skipped.
+- Two worktrees whose destinations collide resolve in worktree order, and the
+  result is the same across repeated runs.
+- An empty `preserve` table removes worktrees exactly as it does today.
 - `--no-preserve` skips a configured entry.
-- Template rendering resolves `worktree_root` and `primary`, and a missing
+- A broken config makes `issue end` refuse, and `--no-preserve` lets it through.
+- Template rendering resolves `worktree_root` and `primary`, and a malformed
   record renders `issue` empty without failing.
 
 `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
-and `cargo fmt --all --check` all stay green.
+and `cargo fmt --all --check` all stay green on ubuntu, macos, and windows.
 
 ## Open questions
 
@@ -259,5 +352,5 @@ None outstanding. One decision was made rather than deferred:
 
 - **`to` is always a directory.** Naming an exact destination filename, and so
   renaming a file on the way out, is not supported. Two worktrees archiving the
-  same filename to the same `to` collide, and the second wins; templating
+  same filename to the same `to` collide, and worktree order decides; templating
   `{{ issue }}` into `to` is how a project avoids that.
