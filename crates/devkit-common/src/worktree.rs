@@ -129,8 +129,9 @@ pub fn apply_includes(
 /// and [`IncludeEvent::EntryDone`] and reporting [`IncludeEvent::FileDone`] as
 /// each file in that pattern's worklist is handled.
 ///
-/// The counter is atomic and the callback is `Sync` so a parallel copy can
-/// drive the same events from worker threads.
+/// The counter is atomic and the callback is `Sync` so one worklist can be
+/// driven from several threads, and so `copy_includes_with` can hand the same
+/// `on` reference to both the walk and the copy.
 pub fn apply_includes_with(
     source: &Path,
     dest: &Path,
@@ -1273,5 +1274,66 @@ mod tests {
 
         assert_eq!(copied, 1);
         assert_eq!(*files.lock().unwrap(), vec![(1, 1)]);
+    }
+
+    /// A pattern that matches nothing still occupies its slot between two that
+    /// do, so `index` stays gap-free and `of` stays the configured pattern
+    /// count rather than the matched count. This is what Task 6 numbers its
+    /// progress sub-steps off.
+    #[test]
+    fn an_empty_pattern_between_two_matching_ones_still_brackets() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+        write(&src.join("hooks/a.sh"), "x");
+
+        let patterns = [
+            ".tool-versions".to_string(),
+            "does/not/exist".to_string(),
+            "hooks/".to_string(),
+        ];
+        let plan = plan_includes(&src, &dst, &patterns);
+
+        let starts = std::sync::Mutex::new(Vec::new());
+        let dones = std::sync::Mutex::new(Vec::new());
+        apply_includes_with(&src, &dst, &plan, false, &|e| match e {
+            IncludeEvent::EntryStart {
+                pattern,
+                index,
+                of,
+                files,
+            } => starts
+                .lock()
+                .unwrap()
+                .push((pattern.to_string(), index, of, files)),
+            IncludeEvent::EntryDone {
+                pattern,
+                index,
+                of,
+                copied,
+            } => dones
+                .lock()
+                .unwrap()
+                .push((pattern.to_string(), index, of, copied)),
+            _ => {}
+        });
+
+        assert_eq!(
+            *starts.lock().unwrap(),
+            vec![
+                (".tool-versions".to_string(), 0, 3, 1),
+                ("does/not/exist".to_string(), 1, 3, 0),
+                ("hooks/".to_string(), 2, 3, 1),
+            ]
+        );
+        assert_eq!(
+            *dones.lock().unwrap(),
+            vec![
+                (".tool-versions".to_string(), 0, 3, 1),
+                ("does/not/exist".to_string(), 1, 3, 0),
+                ("hooks/".to_string(), 2, 3, 1),
+            ]
+        );
     }
 }
