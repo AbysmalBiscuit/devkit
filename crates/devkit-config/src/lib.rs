@@ -2275,11 +2275,11 @@ steps = [
     #[test]
     fn a_preserve_entry_parses_with_required_defaulting_off() {
         let cfg: Config = toml::from_str(
-            "[preserve.graphify]\nfrom = [\"graphify-out/\"]\nto = \"/archive/{{ issue }}\"\n",
+            "[preserve.notes]\nfrom = [\"scratch/\"]\nto = \"/archive/{{ issue }}\"\n",
         )
         .unwrap();
-        let entry = &cfg.preserve["graphify"];
-        assert_eq!(entry.from, vec!["graphify-out/".to_string()]);
+        let entry = &cfg.preserve["notes"];
+        assert_eq!(entry.from, vec!["scratch/".to_string()]);
         assert_eq!(entry.to, "/archive/{{ issue }}");
         assert!(!entry.required);
     }

@@ -388,9 +388,9 @@ destination, so one run can archive different files to different places.
 | `required` | no (default `false`) | Keep the worktree instead of removing it when this entry warns. |
 
 ```toml
-[preserve.graphify]
-from     = ["graphify-out/"]
-to       = "{{ worktree_root }}/archive/{{ issue }}/graphify"
+[preserve.scratch]
+from     = [".scratch/"]
+to       = "{{ worktree_root }}/archive/{{ issue }}/scratch"
 required = true
 
 [preserve.notes]
@@ -401,12 +401,14 @@ to   = "{{ primary }}/.devkit/archive/{{ issue }}"
 Render context: `worktree`, `branch`, `issue`, `slug`, `apps`, `prefix`,
 `worktree_root` (the resolved `defaults.worktree_root`), `primary` (the primary
 checkout's root), and `[templates.variables]`. The issue fields come from the
-worktree's `.devkit/issue.toml`, so a `worktree_dir` or `branch` template edited
-since setup cannot misname the destination; a worktree without a readable record
-renders them empty.
+worktree's `.devkit/issue.toml`, so changing how worktrees or branches are named
+after setup cannot misname the destination; a worktree without a readable record
+renders them empty. `primary` is absent when the primary checkout cannot be
+resolved, and an entry that uses it then fails naming it rather than falling
+back to another path.
 
 To archive a whole directory and everything beneath it, name the directory
-itself, with or without a trailing slash: `from = ["graphify-out/"]`. A
+itself, with or without a trailing slash: `from = [".scratch/"]`. A
 trailing `**` is not the same thing — it matches the subdirectories under the
 named directory but not the files sitting directly inside it, so it archives
 part of the tree and the rest is lost with the worktree once removal runs.
