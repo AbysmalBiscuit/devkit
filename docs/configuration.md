@@ -119,7 +119,7 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 | `require_pr_reviewer` | no (default `false`) | Refuse `issue review request` when it would open a new PR without a `--to` reviewer. Left unset, the PR opens with no reviewer and nobody is Slacked. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
 | `issue_summary` | no (default `false`) | Write the issue summary file on every `issue setup`, as though `--summary` were passed. `--summary` / `--no-summary` still decide a single run. The file's path and body come from `templates.issue_summary_path` and `templates.issue_summary`. |
-| `worktree_include` | no | Glob patterns (relative to the primary checkout's root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. `issue sync-includes` re-runs the same copy against worktrees that already exist, from this one pattern list. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten by default; copy failures warn and are skipped (fail-open). `issue sync-includes --overwrite` is the opt-in way to replace files a worktree already has, and it needs a scope — one or more selectors, or `--all`. Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
+| `worktree_include` | no | Glob patterns (relative to the primary checkout's root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. `issue sync-includes` re-runs the same copy against worktrees that already exist, from this one pattern list. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten by default; copy failures warn and are skipped (fail-open). `issue sync-includes --overwrite` is the opt-in way to replace files a worktree already has, and it needs a scope — one or more selectors, or `--all`. A match that is a symlink is reproduced as a symlink holding the same target, and its contents are not copied, so a symlinked directory becomes one link rather than a duplicated tree. Creating a symlink on Windows needs Developer Mode or administrator rights; where it is refused, the link is skipped with a warning and the rest of the run continues. Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
 
 ### Path values
 
@@ -441,9 +441,13 @@ name order, with one progress step per worktree. Two worktrees archiving the
 same filename into the same `to` collide, and worktree order decides; template
 `{{ issue }}` into `to` to keep them apart.
 
-Two limits worth knowing. Symlinks are followed, so a link inside the worktree is
-archived as its target's content, matching what `defaults.worktree_include` does
-in the inbound direction. And a copy is not atomic: `std::fs::copy` truncates
+Two limits worth knowing. Symlinks are followed on the way out, so a link inside
+the worktree is archived as its target's content. This is deliberately the
+opposite of `defaults.worktree_include`, which reproduces a link rather than its
+contents: an include lands in a live worktree that still sits beside the primary
+checkout, where a relative link resolves, while preservation archives out of a
+worktree about to be deleted into a location that may outlive the link's target
+entirely. And a copy is not atomic: `std::fs::copy` truncates
 before writing, so a copy interrupted over an existing archive leaves a short
 file. Preservation finishing before any removal is what keeps that from costing
 data — nothing is deleted until every entry has run.
