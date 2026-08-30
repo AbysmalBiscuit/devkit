@@ -2,6 +2,7 @@ use crate::git::{self, Worktree};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// This worktree's issue id. The setup record is authoritative because it holds
 /// whatever the tracker actually calls the issue; the branch and directory scan
@@ -72,11 +73,7 @@ pub fn discover(start: &str) -> Result<(PathBuf, Vec<Worktree>)> {
 /// error is collected as a warning string rather than propagated, so backfill
 /// never aborts worktree creation. Returns (files_copied, warnings).
 pub fn copy_includes(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<String>) {
-    let plan = plan_includes(source, dest, patterns);
-    let (copied, apply_warnings) = apply_includes(source, dest, &plan, false);
-    let mut warnings = plan.warnings;
-    warnings.extend(apply_warnings);
-    (copied, warnings)
+    copy_includes_with(source, dest, patterns, &|_| {})
 }
 
 /// Whether a pattern could read or write outside its roots. `plan_includes`
@@ -125,11 +122,42 @@ pub fn apply_includes(
     plan: &IncludePlan,
     overwrite: bool,
 ) -> (usize, Vec<String>) {
+    apply_includes_with(source, dest, plan, overwrite, &|_| {})
+}
+
+/// [`apply_includes`], bracketing each pattern with [`IncludeEvent::EntryStart`]
+/// and [`IncludeEvent::EntryDone`] and reporting [`IncludeEvent::FileDone`] as
+/// each file in that pattern's worklist is handled.
+///
+/// The counter is atomic and the callback is `Sync` so a parallel copy can
+/// drive the same events from worker threads.
+pub fn apply_includes_with(
+    source: &Path,
+    dest: &Path,
+    plan: &IncludePlan,
+    overwrite: bool,
+    on: &(dyn Fn(IncludeEvent) + Sync),
+) -> (usize, Vec<String>) {
     let mut copied = 0usize;
     let mut warnings = Vec::new();
+    let of = plan.patterns.len();
 
-    for entry in &plan.patterns {
-        for rel in &entry.missing {
+    for (index, entry) in plan.patterns.iter().enumerate() {
+        let worklist: Vec<&PathBuf> = if overwrite {
+            entry.missing.iter().chain(entry.existing.iter()).collect()
+        } else {
+            entry.missing.iter().collect()
+        };
+        on(IncludeEvent::EntryStart {
+            pattern: &entry.pattern,
+            index,
+            of,
+            files: worklist.len(),
+        });
+
+        let before = copied;
+        let done = AtomicUsize::new(0);
+        for rel in &worklist {
             copy_file(
                 &source.join(rel),
                 &dest.join(rel),
@@ -137,18 +165,19 @@ pub fn apply_includes(
                 &mut copied,
                 &mut warnings,
             );
+            on(IncludeEvent::FileDone {
+                pattern: &entry.pattern,
+                done: done.fetch_add(1, Ordering::Relaxed) + 1,
+                of: worklist.len(),
+            });
         }
-        if overwrite {
-            for rel in &entry.existing {
-                copy_file(
-                    &source.join(rel),
-                    &dest.join(rel),
-                    true,
-                    &mut copied,
-                    &mut warnings,
-                );
-            }
-        }
+
+        on(IncludeEvent::EntryDone {
+            pattern: &entry.pattern,
+            index,
+            of,
+            copied: copied - before,
+        });
     }
 
     (copied, warnings)
@@ -406,6 +435,22 @@ fn claim_once(plans: &mut [PatternPlan]) {
         plan.missing.retain(|rel| claimed.insert(rel.clone()));
         plan.existing.retain(|rel| claimed.insert(rel.clone()));
     }
+}
+
+/// [`copy_includes`], reporting the walk's and the copy's progress through
+/// `on`. The plan is built first, so every [`IncludeEvent::Found`] arrives
+/// before the first [`IncludeEvent::EntryStart`].
+pub fn copy_includes_with(
+    source: &Path,
+    dest: &Path,
+    patterns: &[String],
+    on: &(dyn Fn(IncludeEvent) + Sync),
+) -> (usize, Vec<String>) {
+    let plan = plan_includes_with(source, dest, patterns, on);
+    let (copied, apply_warnings) = apply_includes_with(source, dest, &plan, false, on);
+    let mut warnings = plan.warnings;
+    warnings.extend(apply_warnings);
+    (copied, warnings)
 }
 
 /// Copy a single file, creating its destination's parent directories as
@@ -1116,5 +1161,117 @@ mod tests {
         );
 
         assert_eq!(*done.lock().unwrap(), vec![2]);
+    }
+
+    /// The copy display draws one sub-step per include entry, so the copy has to
+    /// bracket each pattern and count within it.
+    #[test]
+    fn the_copy_brackets_each_pattern_and_counts_within_it() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+        write(&src.join("hooks/a.sh"), "x");
+        write(&src.join("hooks/b.sh"), "x");
+
+        let patterns = [".tool-versions".to_string(), "hooks/".to_string()];
+        let plan = plan_includes(&src, &dst, &patterns);
+
+        let log = std::sync::Mutex::new(Vec::new());
+        let (copied, warnings) = apply_includes_with(&src, &dst, &plan, false, &|e| match e {
+            IncludeEvent::EntryStart {
+                pattern,
+                index,
+                of,
+                files,
+            } => log
+                .lock()
+                .unwrap()
+                .push(format!("start {pattern} {index}/{of} {files}")),
+            IncludeEvent::FileDone { pattern, done, of } => log
+                .lock()
+                .unwrap()
+                .push(format!("file {pattern} {done}/{of}")),
+            IncludeEvent::EntryDone {
+                pattern,
+                index,
+                of,
+                copied,
+            } => log
+                .lock()
+                .unwrap()
+                .push(format!("done {pattern} {index}/{of} {copied}")),
+            _ => {}
+        });
+
+        assert_eq!(copied, 3);
+        assert!(warnings.is_empty());
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                "start .tool-versions 0/2 1",
+                "file .tool-versions 1/1",
+                "done .tool-versions 0/2 1",
+                "start hooks/ 1/2 2",
+                "file hooks/ 1/2",
+                "file hooks/ 2/2",
+                "done hooks/ 1/2 2",
+            ]
+        );
+    }
+
+    /// A plan is a snapshot, and the copy re-checks each destination. A file whose
+    /// destination appeared in the gap is skipped but still advances the display,
+    /// so a run that ends up writing nothing does not look stuck.
+    #[test]
+    fn a_file_skipped_since_the_plan_still_advances_the_count() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+
+        let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
+        assert_eq!(
+            plan.missing_len(),
+            1,
+            "planned before the destination existed"
+        );
+        write(&dst.join(".tool-versions"), "APPEARED SINCE");
+
+        let files = std::sync::Mutex::new(Vec::new());
+        let (copied, warnings) = apply_includes_with(&src, &dst, &plan, false, &|e| {
+            if let IncludeEvent::FileDone { done, of, .. } = e {
+                files.lock().unwrap().push((done, of));
+            }
+        });
+
+        assert_eq!(copied, 0, "the file that appeared was not clobbered");
+        assert!(warnings.is_empty());
+        assert_eq!(*files.lock().unwrap(), vec![(1, 1)], "it still counted");
+        assert_eq!(
+            fs::read_to_string(dst.join(".tool-versions")).unwrap(),
+            "APPEARED SINCE"
+        );
+    }
+
+    /// An overwrite run puts the existing files in the worklist, so they count.
+    #[test]
+    fn an_overwrite_run_counts_the_files_it_replaces() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+        write(&dst.join(".tool-versions"), "OLD");
+
+        let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
+        let files = std::sync::Mutex::new(Vec::new());
+        let (copied, _) = apply_includes_with(&src, &dst, &plan, true, &|e| {
+            if let IncludeEvent::FileDone { done, of, .. } = e {
+                files.lock().unwrap().push((done, of));
+            }
+        });
+
+        assert_eq!(copied, 1);
+        assert_eq!(*files.lock().unwrap(), vec![(1, 1)]);
     }
 }
