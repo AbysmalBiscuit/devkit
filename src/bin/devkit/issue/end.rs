@@ -367,9 +367,10 @@ pub fn run(
             .args(["worktree", "prune"])
             .output();
     }
+    println!();
     if archived > 0 {
         println!(
-            "\nPreserved {files} file(s) across {archived} entr{}.",
+            "Preserved {files} file(s) across {archived} entr{}.",
             if archived == 1 { "y" } else { "ies" }
         );
     }
@@ -530,8 +531,9 @@ mod tests {
         assert!(recorded_summary(dir.path()).is_none());
     }
 
-    /// Phase 2 runs before any removal, so a required failure leaves the
-    /// worktree, its branch, and its summary exactly as they were.
+    /// `run_for` never deletes: a required entry that fails reports the reason
+    /// and leaves the worktree, its branch, and its summary untouched, which is
+    /// what lets the caller keep a blocked worktree out of the removal phase.
     #[test]
     fn a_blocked_worktree_keeps_its_branch_and_summary() {
         let dir = tempfile::tempdir().unwrap();

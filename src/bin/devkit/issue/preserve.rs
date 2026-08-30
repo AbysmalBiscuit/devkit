@@ -387,7 +387,7 @@ mod tests {
         let archive = dir.path().join("archive");
         std::fs::create_dir_all(&wt).unwrap();
 
-        let entry = cfg(&["graphify-out/**"], archive.to_str().unwrap(), true);
+        let entry = cfg(&["graphify-out/"], archive.to_str().unwrap(), true);
         let out = run_for(
             &wt,
             &[("graphify".to_string(), &entry)],
@@ -401,8 +401,10 @@ mod tests {
         assert_eq!(out.files, 0);
     }
 
-    /// A trailing `**` is glob 0.3's "directories under here" and matches no
-    /// files, so the pattern that actually archives a tree is `**/*`.
+    /// A directory pattern is the spelling that archives a whole tree: the
+    /// match is the directory itself, which `plan_includes` walks recursively.
+    /// A trailing `**` matches only the subdirectories under it, so it would
+    /// archive nested files and silently drop the ones at the top.
     #[test]
     fn a_matching_entry_reports_what_it_archived() {
         let dir = tempfile::tempdir().unwrap();
@@ -411,7 +413,7 @@ mod tests {
         std::fs::create_dir_all(wt.join("graphify-out")).unwrap();
         std::fs::write(wt.join("graphify-out/a.md"), "a").unwrap();
 
-        let entry = cfg(&["graphify-out/**/*"], archive.to_str().unwrap(), false);
+        let entry = cfg(&["graphify-out/"], archive.to_str().unwrap(), false);
         let out = run_for(
             &wt,
             &[("graphify".to_string(), &entry)],
