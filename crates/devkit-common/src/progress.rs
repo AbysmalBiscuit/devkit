@@ -86,7 +86,10 @@ pub struct Step<'a> {
 impl Step<'_> {
     /// Rewrite the transient line beneath this step, creating it on first call.
     pub fn activity(&self, msg: &str) {
-        let mut slot = self.activity.lock().expect("step activity bar");
+        let mut slot = self
+            .activity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match slot.as_ref() {
             Some(pb) => pb.set_message(format!("  {msg}")),
             None => *slot = Some(add_spinner(&self.steps.mp, &format!("  {msg}"))),
@@ -109,7 +112,10 @@ impl Step<'_> {
 
     /// Text folded into the settled line's parens, ahead of the elapsed time.
     pub fn detail(&self, d: &str) {
-        *self.detail.lock().expect("step detail") = Some(d.to_string());
+        *self
+            .detail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(d.to_string());
     }
 
     /// Clear the transient line, leaving no trace of it. A finished step calls
@@ -117,7 +123,12 @@ impl Step<'_> {
     /// is done can clear it early to keep an activity line from lingering
     /// beneath later output.
     pub fn clear_activity(&self) {
-        if let Some(pb) = self.activity.lock().expect("step activity bar").take() {
+        if let Some(pb) = self
+            .activity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
             pb.finish_and_clear();
         }
     }
@@ -219,7 +230,7 @@ impl Steps {
     }
 
     /// [`Steps::during`] for fallible steps: in persistent mode the settled
-    /// line is marked failed when the closure errors, so the failed step stays
+    /// line is `✗` when the closure errors, so the failed step stays
     /// identifiable in the log.
     pub fn during_result<T>(
         &self,
@@ -261,7 +272,11 @@ impl Steps {
         };
         let (out, ok) = f(&step);
         step.clear_activity();
-        let detail = step.detail.lock().expect("step detail").take();
+        let detail = step
+            .detail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         let line = self
             .persist
             .then(|| finish_line(ok, &label, pb.elapsed(), detail.as_deref()));
@@ -383,6 +398,10 @@ mod tests {
         assert_eq!(
             finish_line(false, "2. bar", d, None),
             format!("{} 2. bar (312ms)", paint.red("✗"))
+        );
+        assert_eq!(
+            finish_line(true, "1. foo", d, Some("2 things")),
+            format!("{} 1. foo (2 things, 312ms)", paint.green("✓"))
         );
     }
 
