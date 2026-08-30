@@ -389,34 +389,73 @@ fn fetch_details(t: &dyn Tracker, issue: &str) -> Result<IssueDetails> {
 /// enough to eat the whole budget overflows the column instead.
 const MIN_SLUG: usize = 12;
 
-/// How many characters a derived slug may use before the rendered branch
-/// outgrows `ui::BRANCH_DISPLAY_MAX`.
-///
-/// Measured, not assumed: the branch template renders once with a
-/// one-character slug, and whatever else it produced is the fixed cost. A longer
-/// `branch_prefix`, a longer issue id, or a template that spells out more comes
-/// out of the slug rather than overflowing the column.
-fn slug_budget(
+/// Render context both templates are measured against. The two slug values are
+/// the ones being measured, so a caller passes whichever it already knows and
+/// the empty string for the other.
+fn probe_ctx(
+    cfg: &devkit_config::Config,
+    issue: &str,
+    apps: &[String],
+    slug: &str,
+    short_slug: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "prefix": cfg.defaults.branch_prefix,
+        "issue": issue,
+        "slug": slug,
+        "short_slug": short_slug,
+        "apps": apps,
+    })
+}
+
+/// Characters the `branch` template leaves for the slug it renders. A template
+/// whose fixed text fills `branch_max` falls back to `MIN_SLUG` rather than
+/// failing, since an over-long branch is elided by the status table and
+/// nothing worse.
+fn branch_budget(
     cfg: &devkit_config::Config,
     vars: &BTreeMap<String, String>,
     issue: &str,
     apps: &[String],
 ) -> Result<usize> {
-    let probe = serde_json::json!({
-        "prefix": cfg.defaults.branch_prefix,
-        "issue": issue,
-        "slug": "x",
-        "apps": apps,
-    });
-    let fixed = devkit_common::template::render(cfg.templates.branch(), &probe, vars)
-        .context("rendering `branch` template")?
-        .trim()
-        .chars()
-        .count()
-        .saturating_sub(1);
-    Ok(devkit_common::ui::BRANCH_DISPLAY_MAX
-        .saturating_sub(fixed)
-        .max(MIN_SLUG))
+    crate::issue::slug::budget(
+        cfg.templates.branch(),
+        &probe_ctx(cfg, issue, apps, "", ""),
+        vars,
+        &["slug"],
+        cfg.templates.branch_max(),
+        Some(MIN_SLUG),
+    )
+    .context("measuring the `branch` template")
+}
+
+/// `slug` shortened again to whatever the `worktree_dir` template leaves for
+/// `{{ short_slug }}`, and `slug` unchanged when that template does not render
+/// it, which is the shipped default. Unlike the branch, this one fails rather
+/// than overrunning: the directory name is charged against a filesystem path
+/// limit.
+fn short_slug(
+    cfg: &devkit_config::Config,
+    vars: &BTreeMap<String, String>,
+    issue: &str,
+    apps: &[String],
+    slug: &str,
+) -> Result<String> {
+    let budget = crate::issue::slug::budget(
+        cfg.templates.worktree_dir(),
+        &probe_ctx(cfg, issue, apps, slug, ""),
+        vars,
+        &["short_slug"],
+        cfg.templates.worktree_dir_max(),
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "measuring the `worktree_dir` template against templates.worktree_dir_max = {}",
+            cfg.templates.worktree_dir_max()
+        )
+    })?;
+    Ok(crate::issue::slug::cap(slug, budget))
 }
 
 /// A declared tracker owns parsing completely. An undeclared one keeps
@@ -446,17 +485,19 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let issue_ref = parse_input(&resolved, &args.issue)?;
     let issue = issue_ref.id.clone();
     let vars = &cfg.templates.variables;
-    let budget = slug_budget(cfg, vars, &issue, &args.apps)?;
+    let budget = branch_budget(cfg, vars, &issue, &args.apps)?;
     let details = want_summary(&args, cfg)
         .then(|| fetch_details(t, &issue))
         .transpose()?;
     let slug = resolve_slug(t, &issue_ref, args.slug.clone(), budget, details.as_ref())?;
+    let dir_slug = short_slug(cfg, vars, &issue, &args.apps, &slug)?;
 
     let wt_root = expand_tilde(&cfg.defaults.worktree_root);
     let ctx = serde_json::json!({
         "prefix": cfg.defaults.branch_prefix,
         "issue": issue,
         "slug": slug,
+        "short_slug": dir_slug,
         "apps": args.apps,
     });
     let branch = devkit_common::template::render(cfg.templates.branch(), &ctx, vars)
@@ -658,6 +699,76 @@ mod tests {
 
     fn novars() -> BTreeMap<String, String> {
         BTreeMap::new()
+    }
+
+    fn cfg_with(prefix: &str, templates: Templates) -> devkit_config::Config {
+        let mut cfg = devkit_config::Config::default();
+        cfg.defaults.branch_prefix = prefix.into();
+        cfg.templates = templates;
+        cfg
+    }
+
+    /// One title, two limits: the branch keeps a slug worth reading while the
+    /// worktree directory gets a shorter one.
+    #[test]
+    fn short_slug_is_shorter_than_the_branch_slug() {
+        let cfg = cfg_with(
+            "lev/",
+            Templates {
+                worktree_dir: Some("{{ short_slug }}".into()),
+                ..Templates::default()
+            },
+        );
+        let budget = branch_budget(&cfg, &novars(), "142", &[]).unwrap();
+        let slug = crate::issue::slug::cap("group-sync-includes-file-lists-in-the-output", budget);
+        assert_eq!(slug, "group-sync-includes-file-lists-in-the");
+        assert_eq!(
+            short_slug(&cfg, &novars(), "142", &[], &slug).unwrap(),
+            "group-sync-includes-file"
+        );
+    }
+
+    /// The shipped `worktree_dir` renders `{{ slug }}`, so the directory limit
+    /// finds nothing to constrain and the directory keeps matching the branch.
+    #[test]
+    fn the_default_worktree_dir_ignores_its_limit() {
+        let cfg = cfg_with("lev/", Templates::default());
+        let slug = "group-sync-includes-file-lists-in-the";
+        assert_eq!(short_slug(&cfg, &novars(), "142", &[], slug).unwrap(), slug);
+    }
+
+    /// A directory limit its own template's fixed text already fills is an
+    /// error rather than a silently longer directory. The limit exists because
+    /// a path that overruns cannot be removed by every tool that meets it.
+    #[test]
+    fn a_worktree_dir_limit_the_template_cannot_meet_is_an_error() {
+        let cfg = cfg_with(
+            "lev/",
+            Templates {
+                worktree_dir: Some("worktree-for-issue-{{ issue }}-{{ short_slug }}".into()),
+                worktree_dir_max: Some(16),
+                ..Templates::default()
+            },
+        );
+        let err = short_slug(&cfg, &novars(), "142", &[], "fix-the-export")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("worktree_dir_max = 16"), "{err}");
+    }
+
+    /// A `branch_prefix` long enough to eat the budget yields the shortest slug
+    /// still worth reading, not an error: a git ref has no hard length limit.
+    #[test]
+    fn a_branch_limit_the_prefix_fills_falls_back_to_the_floor() {
+        // 39 characters of prefix against a limit of 46 leaves 7, below the floor.
+        let cfg = cfg_with(
+            "an-extremely-long-branch-prefix-indeed/",
+            Templates::default(),
+        );
+        assert_eq!(
+            branch_budget(&cfg, &novars(), "142", &[]).unwrap(),
+            MIN_SLUG
+        );
     }
 
     fn ctx() -> serde_json::Value {

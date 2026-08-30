@@ -104,7 +104,6 @@ pub(crate) fn cap(slug: &str, budget: usize) -> String {
 /// `n` and cannot fail, which suits a limit on a display width. `None` fails,
 /// which suits a limit on a filesystem path, where a cap that silently does not
 /// hold is the whole problem.
-#[allow(dead_code)]
 pub(crate) fn budget(
     template: &str,
     ctx: &serde_json::Value,

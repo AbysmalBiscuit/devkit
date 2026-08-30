@@ -479,7 +479,7 @@ team = "platform"
 
 | Key | Default | Context |
 |---|---|---|
-| `branch`, `worktree_dir` | `{{ prefix }}{{ slug }}`, `{{ slug }}` | `prefix`, `issue`, `slug`, `apps` |
+| `branch`, `worktree_dir` | `{{ prefix }}{{ slug }}`, `{{ slug }}` | `prefix`, `issue`, `slug`, `short_slug`, `apps` |
 | `checkout_worktree_dir` | `{{ pr_number }}-{{ pr_title }}` (or `{{ pr_number }}-{{ pr_title }}_[{{ linear_id }}]` when reached through an issue) | `pr_number`, `pr_title`, `linear_id`, `linear_title` (the last two carry whichever tracker answered) |
 | `branch_max` | `46` | characters; the derived slug is shortened on a word boundary to fit |
 | `worktree_dir_max` | `24` | characters; caps `{{ short_slug }}`, and does nothing to a template without it |
