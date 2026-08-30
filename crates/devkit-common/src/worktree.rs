@@ -163,8 +163,9 @@ pub struct IncludePlan {
 
 /// Walk `patterns` the way `copy_includes` does, but classify matches instead
 /// of copying them: each matched file lands in `missing` or `existing`
-/// depending on whether `dest` already has it. Both vectors come back sorted,
-/// so a caller's rendering does not vary with filesystem iteration order. A
+/// depending on whether `dest` already has it. Both vectors come back sorted
+/// and deduplicated, so a caller's rendering does not vary with filesystem
+/// iteration order and two patterns that overlap plan each file once. A
 /// directory match contributes its files recursively, never the directory
 /// entry itself. Fail-open, like
 /// `copy_includes`: a bad glob, an unreadable directory, or a non-UTF-8
@@ -226,8 +227,12 @@ pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> Include
             }
         }
     }
+    // One pattern naming a file and another naming its parent directory both
+    // plan that file; copying it twice would also double the reported count.
     missing.sort();
+    missing.dedup();
     existing.sort();
+    existing.dedup();
     IncludePlan {
         missing,
         existing,
@@ -778,32 +783,61 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wt = dir.path().join("wt");
         let dst = dir.path().join("archive");
-        write(&wt.join("graphify-out/a.md"), "a");
-        write(&wt.join("graphify-out/deep/b.md"), "b");
+        write(&wt.join("scratch/a.md"), "a");
+        write(&wt.join("scratch/deep/b.md"), "b");
 
-        let (copied, warnings) = copy_out(&wt, &dst, &["graphify-out/".to_string()]);
+        let (copied, warnings) = copy_out(&wt, &dst, &["scratch/".to_string()]);
 
         assert_eq!(copied, 2, "{warnings:?}");
         assert_eq!(
-            std::fs::read_to_string(dst.join("graphify-out/deep/b.md")).unwrap(),
+            std::fs::read_to_string(dst.join("scratch/deep/b.md")).unwrap(),
             "b"
         );
     }
 
-    /// A pattern that matches nothing is the normal case for a worktree that
-    /// produced no scratch, and must not warn. The directory exists and is
-    /// empty, so the pattern matches it and finds nothing to copy — the case a
-    /// pattern naming a directory that does not exist would not distinguish.
+    /// An empty directory is the normal case for a worktree that produced no
+    /// scratch: the pattern matches the directory and finds no files, which
+    /// must not warn. A pattern naming a directory that is absent entirely
+    /// matches nothing and is equally quiet.
     #[test]
-    fn copy_out_is_quiet_when_a_pattern_matches_nothing() {
+    fn copy_out_is_quiet_when_a_directory_pattern_holds_no_files() {
         let dir = tempfile::tempdir().unwrap();
         let wt = dir.path().join("wt");
-        std::fs::create_dir_all(wt.join("graphify-out")).unwrap();
+        std::fs::create_dir_all(wt.join("scratch")).unwrap();
         let dst = dir.path().join("archive");
 
-        let (copied, warnings) = copy_out(&wt, &dst, &["graphify-out/".to_string()]);
-
+        let (copied, warnings) = copy_out(&wt, &dst, &["scratch/".to_string()]);
         assert_eq!(copied, 0);
         assert!(warnings.is_empty(), "{warnings:?}");
+
+        let (copied, warnings) = copy_out(&wt, &dst, &["absent/".to_string()]);
+        assert_eq!(copied, 0);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// A file named both directly and through its parent directory is one
+    /// file: planning it twice would copy it twice and double the count the
+    /// caller reports.
+    #[test]
+    fn overlapping_patterns_plan_each_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        write(&src.join("scratch/a.md"), "a");
+
+        let plan = plan_includes(
+            &src,
+            &dst,
+            &["scratch/".to_string(), "scratch/a.md".to_string()],
+        );
+        assert_eq!(plan.missing, vec![PathBuf::from("scratch").join("a.md")]);
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+
+        let (copied, warnings) = copy_out(
+            &src,
+            &dst,
+            &["scratch/".to_string(), "scratch/a.md".to_string()],
+        );
+        assert_eq!(copied, 1, "{warnings:?}");
     }
 }
