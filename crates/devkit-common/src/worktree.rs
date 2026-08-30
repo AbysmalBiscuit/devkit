@@ -154,6 +154,41 @@ pub fn apply_includes(
     (copied, warnings)
 }
 
+/// What an include walk or copy reports as it runs, so a caller can draw
+/// progress without the walk knowing anything about how it is displayed.
+///
+/// `index` and `of` are a pattern's position in the configured include list,
+/// not a display number. A caller that draws extra sub-steps of its own numbers
+/// them itself.
+pub enum IncludeEvent<'a> {
+    /// Files matched so far across the whole walk. Fires once per match.
+    Found { files: usize },
+    /// The walk finished, having matched `files` in total.
+    ScanDone { files: usize },
+    /// The copy started for `pattern`, with `files` in its worklist.
+    EntryStart {
+        pattern: &'a str,
+        index: usize,
+        of: usize,
+        files: usize,
+    },
+    /// One file of `pattern`'s worklist is handled: copied, skipped because the
+    /// destination already existed, or failed. `done` and `of` count within
+    /// that pattern and may arrive out of order.
+    FileDone {
+        pattern: &'a str,
+        done: usize,
+        of: usize,
+    },
+    /// The copy finished for `pattern`, having written `copied` files.
+    EntryDone {
+        pattern: &'a str,
+        index: usize,
+        of: usize,
+        copied: usize,
+    },
+}
+
 /// Every file one `worktree_include` pattern matched, split by whether `dest`
 /// already has it. Both vectors come back sorted, so rendering does not vary
 /// with filesystem iteration order.
@@ -198,6 +233,107 @@ impl IncludePlan {
     }
 }
 
+/// The callback and running match count a plan walk carries through its
+/// recursion. `Cell` is enough because a walk is single threaded; the callback
+/// is `Sync` for the copy side, which is not.
+struct Walk<'a> {
+    dest: &'a Path,
+    on: &'a (dyn Fn(IncludeEvent) + Sync),
+    found: std::cell::Cell<usize>,
+}
+
+impl Walk<'_> {
+    fn classify_file(&self, rel: &Path, out: &mut PatternPlan) {
+        if self.dest.join(rel).exists() {
+            out.existing.push(rel.to_path_buf());
+        } else {
+            out.missing.push(rel.to_path_buf());
+        }
+        self.found.set(self.found.get() + 1);
+        (self.on)(IncludeEvent::Found {
+            files: self.found.get(),
+        });
+    }
+
+    /// Recursively classify a directory's files without writing anything. `rel`
+    /// tracks the path relative to `dest` in lockstep with `src` so classified
+    /// paths stay dest-relative.
+    fn plan_dir(&self, src: &Path, rel: &Path, out: &mut PatternPlan, warnings: &mut Vec<String>) {
+        let entries = match std::fs::read_dir(src) {
+            Ok(e) => e,
+            Err(e) => {
+                warnings.push(format!("reading dir {}: {e}", src.display()));
+                return;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    warnings.push(format!("reading entry in {}: {e}", src.display()));
+                    continue;
+                }
+            };
+            let child = src.join(entry.file_name());
+            let child_rel = rel.join(entry.file_name());
+            if child.is_dir() {
+                self.plan_dir(&child, &child_rel, out, warnings);
+            } else {
+                self.classify_file(&child_rel, out);
+            }
+        }
+    }
+
+    /// Walk one pattern into `out`. Every failure is a warning, never a return
+    /// value, so one bad pattern cannot stop the rest of the list.
+    fn plan_one(
+        &self,
+        source: &Path,
+        pattern: &str,
+        opts: glob::MatchOptions,
+        out: &mut PatternPlan,
+        warnings: &mut Vec<String>,
+    ) {
+        let trimmed = pattern.trim_end_matches('/');
+        // An empty pattern joins to `source` itself, which globs to the source
+        // directory and strips to an empty relative path, planning every file
+        // under the root. Drop it before the join rather than after.
+        if trimmed.is_empty() {
+            return;
+        }
+        let joined = source.join(trimmed);
+        let Some(pat_str) = joined.to_str() else {
+            warnings.push(format!("include pattern is not valid UTF-8: {pattern}"));
+            return;
+        };
+        let entries = match glob::glob_with(pat_str, opts) {
+            Ok(paths) => paths,
+            Err(e) => {
+                warnings.push(format!("bad include pattern `{pattern}`: {e}"));
+                return;
+            }
+        };
+        for entry in entries {
+            let matched = match entry {
+                Ok(p) => p,
+                Err(e) => {
+                    warnings.push(format!("reading match for `{pattern}`: {e}"));
+                    continue;
+                }
+            };
+            let Ok(rel) = matched.strip_prefix(source) else {
+                warnings.push(format!("match outside source: {}", matched.display()));
+                continue;
+            };
+            if matched.is_dir() {
+                self.plan_dir(&matched, rel, out, warnings);
+            } else {
+                self.classify_file(rel, out);
+            }
+        }
+    }
+}
+
 /// Walk `patterns` the way `copy_includes` does, but classify matches instead
 /// of copying them: each matched file lands in its pattern's `missing` or
 /// `existing` depending on whether `dest` already has it. A directory match
@@ -208,10 +344,26 @@ impl IncludePlan {
 /// `copy_includes`: a bad glob, an unreadable directory, or a non-UTF-8
 /// pattern becomes a warning string.
 pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> IncludePlan {
+    plan_includes_with(source, dest, patterns, &|_| {})
+}
+
+/// [`plan_includes`], reporting [`IncludeEvent::Found`] as each match is
+/// classified and [`IncludeEvent::ScanDone`] when the walk ends.
+pub fn plan_includes_with(
+    source: &Path,
+    dest: &Path,
+    patterns: &[String],
+    on: &(dyn Fn(IncludeEvent) + Sync),
+) -> IncludePlan {
     let opts = glob::MatchOptions {
         case_sensitive: true,
         require_literal_separator: false,
         require_literal_leading_dot: false,
+    };
+    let walk = Walk {
+        dest,
+        on,
+        found: std::cell::Cell::new(0),
     };
     let mut warnings = Vec::new();
     let mut plans = Vec::with_capacity(patterns.len());
@@ -224,7 +376,7 @@ pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> Include
             missing: Vec::new(),
             existing: Vec::new(),
         };
-        plan_one(source, dest, pattern, opts, &mut out, &mut warnings);
+        walk.plan_one(source, pattern, opts, &mut out, &mut warnings);
         out.missing.sort();
         out.missing.dedup();
         out.existing.sort();
@@ -233,6 +385,9 @@ pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> Include
     }
     claim_once(&mut plans);
 
+    on(IncludeEvent::ScanDone {
+        files: walk.found.get(),
+    });
     IncludePlan {
         patterns: plans,
         warnings,
@@ -249,107 +404,6 @@ fn claim_once(plans: &mut [PatternPlan]) {
     for plan in plans {
         plan.missing.retain(|rel| claimed.insert(rel.clone()));
         plan.existing.retain(|rel| claimed.insert(rel.clone()));
-    }
-}
-
-/// Walk one pattern into `out`. Every failure is a warning, never a return
-/// value, so one bad pattern cannot stop the rest of the list.
-fn plan_one(
-    source: &Path,
-    dest: &Path,
-    pattern: &str,
-    opts: glob::MatchOptions,
-    out: &mut PatternPlan,
-    warnings: &mut Vec<String>,
-) {
-    let trimmed = pattern.trim_end_matches('/');
-    // An empty pattern joins to `source` itself, which globs to the source
-    // directory and strips to an empty relative path, planning every file under
-    // the root. Drop it before the join rather than after.
-    if trimmed.is_empty() {
-        return;
-    }
-    let joined = source.join(trimmed);
-    let Some(pat_str) = joined.to_str() else {
-        warnings.push(format!("include pattern is not valid UTF-8: {pattern}"));
-        return;
-    };
-    let entries = match glob::glob_with(pat_str, opts) {
-        Ok(paths) => paths,
-        Err(e) => {
-            warnings.push(format!("bad include pattern `{pattern}`: {e}"));
-            return;
-        }
-    };
-    for entry in entries {
-        let matched = match entry {
-            Ok(p) => p,
-            Err(e) => {
-                warnings.push(format!("reading match for `{pattern}`: {e}"));
-                continue;
-            }
-        };
-        let Ok(rel) = matched.strip_prefix(source) else {
-            warnings.push(format!("match outside source: {}", matched.display()));
-            continue;
-        };
-        if matched.is_dir() {
-            plan_dir(
-                &matched,
-                rel,
-                dest,
-                &mut out.missing,
-                &mut out.existing,
-                warnings,
-            );
-        } else {
-            classify_file(&dest.join(rel), rel, &mut out.missing, &mut out.existing);
-        }
-    }
-}
-
-fn classify_file(dst: &Path, rel: &Path, missing: &mut Vec<PathBuf>, existing: &mut Vec<PathBuf>) {
-    if dst.exists() {
-        existing.push(rel.to_path_buf());
-    } else {
-        missing.push(rel.to_path_buf());
-    }
-}
-
-/// Recursively classify a directory's files without writing anything. `rel`
-/// tracks the path relative to `dest` in lockstep with `src` so classified
-/// paths stay dest-relative.
-fn plan_dir(
-    src: &Path,
-    rel: &Path,
-    dest: &Path,
-    missing: &mut Vec<PathBuf>,
-    existing: &mut Vec<PathBuf>,
-    warnings: &mut Vec<String>,
-) {
-    let entries = match std::fs::read_dir(src) {
-        Ok(e) => e,
-        Err(e) => {
-            warnings.push(format!("reading dir {}: {e}", src.display()));
-            return;
-        }
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                warnings.push(format!("reading entry in {}: {e}", src.display()));
-                continue;
-            }
-        };
-        let child = src.join(entry.file_name());
-        let child_rel = rel.join(entry.file_name());
-        let target = dest.join(&child_rel);
-        if child.is_dir() {
-            plan_dir(&child, &child_rel, dest, missing, existing, warnings);
-        } else {
-            classify_file(&target, &child_rel, missing, existing);
-        }
     }
 }
 
@@ -1012,5 +1066,54 @@ mod tests {
             &["scratch/".to_string(), "scratch/a.md".to_string()],
         );
         assert_eq!(copied, 1, "{warnings:?}");
+    }
+
+    /// The plan walk is the first of the two silences the display has to fill, so
+    /// it has to report matches as it finds them, not only at the end.
+    #[test]
+    fn the_plan_walk_reports_a_running_count_and_a_total() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        for name in ["a.sh", "b.sh", "c.sh"] {
+            write(&src.join("hooks").join(name), "x");
+        }
+
+        let found = std::sync::Mutex::new(Vec::new());
+        let done = std::sync::Mutex::new(Vec::new());
+        let plan = plan_includes_with(&src, &dst, &["hooks/".to_string()], &|e| match e {
+            IncludeEvent::Found { files } => found.lock().unwrap().push(files),
+            IncludeEvent::ScanDone { files } => done.lock().unwrap().push(files),
+            _ => {}
+        });
+
+        assert_eq!(plan.missing_len(), 3);
+        assert_eq!(*found.lock().unwrap(), vec![1, 2, 3]);
+        assert_eq!(*done.lock().unwrap(), vec![3]);
+    }
+
+    /// The count spans the whole list, not one pattern, because the discovery
+    /// sub-step covers the entire walk.
+    #[test]
+    fn the_plan_walk_count_spans_every_pattern() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+        write(&src.join("hooks/a.sh"), "x");
+
+        let done = std::sync::Mutex::new(Vec::new());
+        plan_includes_with(
+            &src,
+            &dst,
+            &[".tool-versions".to_string(), "hooks/".to_string()],
+            &|e| {
+                if let IncludeEvent::ScanDone { files } = e {
+                    done.lock().unwrap().push(files);
+                }
+            },
+        );
+
+        assert_eq!(*done.lock().unwrap(), vec![2]);
     }
 }
