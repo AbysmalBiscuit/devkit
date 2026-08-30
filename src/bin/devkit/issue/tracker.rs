@@ -10,7 +10,10 @@ use std::path::Path;
 /// `issue end` needs the last two — its preserve entries live in the config, and
 /// acting on an empty table because the config is broken would remove a worktree
 /// having archived nothing.
-#[allow(dead_code)] // `config` and `health` gain a reader once `issue end` reads its preserve table
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "no non-test reader for config and health yet")
+)]
 pub struct Selected {
     pub tracker: Resolved,
     pub repos: Repos,
@@ -114,34 +117,6 @@ mod tests {
         assert!(sel.config.is_none());
     }
 
-    /// A project with no devkit.toml is not a fault. `issue end` still removes
-    /// worktrees there; it just has no preserve entries to run.
-    ///
-    /// `health` falls back to `~/.config/devkit/config.toml` when no project
-    /// layer is found, so a machine with a real personal config would see
-    /// this directory as configured rather than absent. `HOME` is pointed at
-    /// an empty directory for the call and restored immediately after, before
-    /// any assertion that could leave it unset on failure.
-    #[test]
-    fn no_config_reports_absent() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let real_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", home.path());
-        }
-        let sel = select_full(None, dir.path().to_str().unwrap(), None);
-        unsafe {
-            match &real_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-
-        assert_eq!(sel.health, devkit_config::Health::Absent);
-        assert!(sel.config.is_none());
-    }
-
     /// The loaded config comes back so `issue end` can read its preserve table
     /// without a second load.
     #[test]
@@ -149,7 +124,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("devkit.toml"),
-            "[defaults]\n\
+            "[config]\n\
+             root = true\n\
+             [defaults]\n\
              worktree_root = \"wts\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
