@@ -5,6 +5,44 @@ use devkit_common::tracker::Resolved;
 use devkit_ports::load;
 use std::path::Path;
 
+/// Everything one config load yields for an `issue` command: the tracker and
+/// repositories `select` returns, plus the config itself and how its load went.
+/// `issue end` needs the last two — its preserve entries live in the config, and
+/// acting on an empty table because the config is broken would remove a worktree
+/// having archived nothing.
+#[allow(dead_code)] // `config` and `health` gain a reader once `issue end` reads its preserve table
+pub struct Selected {
+    pub tracker: Resolved,
+    pub repos: Repos,
+    pub config: Option<devkit_config::Config>,
+    pub health: devkit_config::Health,
+}
+
+/// `select` with the config load's result attached. `health` is classified
+/// separately from `load`, because `load` also builds the doppler map and app
+/// catalog: a broken `doppler.yaml` is not a broken config, and must not make
+/// `issue end` refuse.
+pub fn select_full(config: Option<&str>, start: &str, pr_override: Option<&str>) -> Selected {
+    let dir = Path::new(start);
+    let main = devkit_common::git::main_checkout(dir).ok().flatten();
+    let health = devkit_config::health(dir, main.as_deref());
+    let cfg = load::load(config.map(Path::new), dir)
+        .ok()
+        .map(|l| l.config);
+    let (kind, github) = match &cfg {
+        Some(c) => (c.tracker.kind, c.github.clone()),
+        None => (None, devkit_config::GithubConfig::default()),
+    };
+    let repos = Repos::resolve(&github, start, pr_override);
+    let tracker = devkit_common::tracker::resolve(kind, dir, &repos);
+    Selected {
+        tracker,
+        repos,
+        config: cfg,
+        health,
+    }
+}
+
 /// The tracker this project talks to and the GitHub repositories its commands
 /// work against, resolved from `config` (or the layers discovered from `start`)
 /// plus the `origin` remote. The two come back together because they come from
@@ -16,16 +54,8 @@ use std::path::Path;
 /// tracker choice must never be what fails a command that would otherwise work.
 /// `pr_override` is `issue prs --repo`.
 pub fn select(config: Option<&str>, start: &str, pr_override: Option<&str>) -> (Resolved, Repos) {
-    let dir = Path::new(start);
-    let cfg = load::load(config.map(Path::new), dir)
-        .ok()
-        .map(|l| l.config);
-    let (kind, github) = match cfg {
-        Some(c) => (c.tracker.kind, c.github),
-        None => (None, devkit_config::GithubConfig::default()),
-    };
-    let repos = Repos::resolve(&github, start, pr_override);
-    (devkit_common::tracker::resolve(kind, dir, &repos), repos)
+    let sel = select_full(config, start, pr_override);
+    (sel.tracker, sel.repos)
 }
 
 #[cfg(test)]
@@ -69,5 +99,72 @@ mod tests {
                 "config naming {named}"
             );
         }
+    }
+
+    /// A config that does not parse must be distinguishable from no config at all:
+    /// `issue end` refuses on the first and proceeds on the second.
+    #[test]
+    fn a_broken_config_reports_broken_and_yields_no_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("devkit.toml"), "[defaults\n").unwrap();
+
+        let sel = select_full(None, dir.path().to_str().unwrap(), None);
+
+        assert!(matches!(sel.health, devkit_config::Health::Broken(_)));
+        assert!(sel.config.is_none());
+    }
+
+    /// A project with no devkit.toml is not a fault. `issue end` still removes
+    /// worktrees there; it just has no preserve entries to run.
+    ///
+    /// `health` falls back to `~/.config/devkit/config.toml` when no project
+    /// layer is found, so a machine with a real personal config would see
+    /// this directory as configured rather than absent. `HOME` is pointed at
+    /// an empty directory for the call and restored immediately after, before
+    /// any assertion that could leave it unset on failure.
+    #[test]
+    fn no_config_reports_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let real_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+        let sel = select_full(None, dir.path().to_str().unwrap(), None);
+        unsafe {
+            match &real_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        assert_eq!(sel.health, devkit_config::Health::Absent);
+        assert!(sel.config.is_none());
+    }
+
+    /// The loaded config comes back so `issue end` can read its preserve table
+    /// without a second load.
+    #[test]
+    fn a_valid_config_comes_back_with_its_preserve_table() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[defaults]\n\
+             worktree_root = \"wts\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"base\"\n\
+             doppler_yaml = \"doppler.yaml\"\n\
+             \n\
+             [preserve.notes]\n\
+             from = [\"notes/*.md\"]\n\
+             to = \"/archive\"\n",
+        )
+        .unwrap();
+
+        let sel = select_full(None, dir.path().to_str().unwrap(), None);
+
+        let cfg = sel.config.expect("config loaded");
+        assert_eq!(cfg.preserve["notes"].to, "/archive");
     }
 }
