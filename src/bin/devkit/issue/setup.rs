@@ -412,13 +412,18 @@ fn probe_ctx(
 /// whose fixed text fills `branch_max` falls back to `MIN_SLUG` rather than
 /// failing, since an over-long branch is elided by the status table and
 /// nothing worse.
+///
+/// A `branch` template that does not render `{{ slug }}` at all measures as
+/// unconstrained, so the result is clamped to `branch_max`: `slug` also feeds
+/// the worktree directory, the issue record, `prep_apps`, and
+/// `after_worktree_create`, and none of those get a bound from this template.
 fn branch_budget(
     cfg: &devkit_config::Config,
     vars: &BTreeMap<String, String>,
     issue: &str,
     apps: &[String],
 ) -> Result<usize> {
-    crate::issue::slug::budget(
+    let budget = crate::issue::slug::budget(
         cfg.templates.branch(),
         &probe_ctx(cfg, issue, apps, "", ""),
         vars,
@@ -426,7 +431,8 @@ fn branch_budget(
         cfg.templates.branch_max(),
         Some(MIN_SLUG),
     )
-    .context("measuring the `branch` template")
+    .context("measuring the `branch` template")?;
+    Ok(budget.min(cfg.templates.branch_max()))
 }
 
 /// `slug` shortened again to whatever the `worktree_dir` template leaves for
@@ -709,7 +715,9 @@ mod tests {
     }
 
     /// One title, two limits: the branch keeps a slug worth reading while the
-    /// worktree directory gets a shorter one.
+    /// worktree directory gets a shorter one, and rendering the real
+    /// `worktree_dir` template with the derived `short_slug` confirms the
+    /// directory name that reaches the filesystem actually fits the limit.
     #[test]
     fn short_slug_is_shorter_than_the_branch_slug() {
         let cfg = cfg_with(
@@ -722,10 +730,20 @@ mod tests {
         let budget = branch_budget(&cfg, &novars(), "142", &[]).unwrap();
         let slug = crate::issue::slug::cap("group-sync-includes-file-lists-in-the-output", budget);
         assert_eq!(slug, "group-sync-includes-file-lists-in-the");
-        assert_eq!(
-            short_slug(&cfg, &novars(), "142", &[], &slug).unwrap(),
-            "group-sync-includes-file"
-        );
+        let dir_slug = short_slug(&cfg, &novars(), "142", &[], &slug).unwrap();
+        assert_eq!(dir_slug, "group-sync-includes-file");
+
+        let ctx = json!({
+            "prefix": "lev/",
+            "issue": "142",
+            "slug": slug,
+            "short_slug": dir_slug,
+            "apps": Vec::<String>::new(),
+        });
+        let name =
+            devkit_common::template::render(cfg.templates.worktree_dir(), &ctx, &novars()).unwrap();
+        assert_eq!(name, dir_slug);
+        assert!(name.chars().count() <= cfg.templates.worktree_dir_max());
     }
 
     /// The shipped `worktree_dir` renders `{{ slug }}`, so the directory limit
@@ -754,6 +772,26 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("worktree_dir_max = 16"), "{err}");
+    }
+
+    /// A `branch` template that does not render `{{ slug }}` must still bound
+    /// it: `slug` also names the worktree directory under the shipped
+    /// `worktree_dir` template, and a `short_slug` that renders nothing does
+    /// not save it. An unbounded budget here would put an unbounded name on a
+    /// filesystem path.
+    #[test]
+    fn a_branch_template_without_slug_still_bounds_the_budget() {
+        let cfg = cfg_with(
+            "lev/",
+            Templates {
+                branch: Some("{{ prefix }}{{ issue }}".into()),
+                ..Templates::default()
+            },
+        );
+        assert_eq!(
+            branch_budget(&cfg, &novars(), "142", &[]).unwrap(),
+            cfg.templates.branch_max()
+        );
     }
 
     /// A `branch_prefix` long enough to eat the budget yields the shortest slug
