@@ -241,7 +241,10 @@ pub enum IncludeEvent<'a> {
         done: usize,
         of: usize,
     },
-    /// The copy finished for `pattern`, having written `copied` files.
+    /// The copy finished for `pattern`. `copied` counts only the files this
+    /// pattern wrote, excluding any links it reproduced, so it is not the
+    /// pattern's total unit count; that total is the `files` this pattern's
+    /// `EntryStart` reported.
     EntryDone {
         pattern: &'a str,
         index: usize,
@@ -266,7 +269,8 @@ pub struct PatternPlan {
 
 /// The result of walking `patterns` without copying anything, kept grouped by
 /// the pattern each match came from. Paths are relative to `dest`. Use
-/// [`IncludePlan::missing`] and [`IncludePlan::existing`] for a flat view.
+/// [`IncludePlan::missing`], [`IncludePlan::existing`], and
+/// [`IncludePlan::links`] for a flat view.
 pub struct IncludePlan {
     /// One entry per configured pattern, in configuration order, including a
     /// pattern that matched nothing or only produced a warning.
@@ -472,13 +476,15 @@ impl Walk<'_> {
 
 /// Walk `patterns` the way `copy_includes` does, but classify matches instead
 /// of copying them: each matched file lands in its pattern's `missing` or
-/// `existing` depending on whether `dest` already has it. A directory match
-/// contributes its files recursively, never the directory entry itself. Every
-/// configured pattern keeps an entry, and a file matched by two patterns is
-/// planned once, under the first of them in configuration order, so a caller's
-/// rendering does not vary with filesystem iteration order. Fail-open, like
-/// `copy_includes`: a bad glob, an unreadable directory, or a non-UTF-8
-/// pattern becomes a warning string.
+/// `existing` depending on whether `dest` already has it, and each matched
+/// symlink lands in its pattern's `links` instead, paired with the target it
+/// holds. A directory match contributes its files recursively, except a
+/// symlinked directory, which contributes exactly the directory entry itself,
+/// as a link. Every configured pattern keeps an entry, and a file matched by
+/// two patterns is planned once, under the first of them in configuration
+/// order, so a caller's rendering does not vary with filesystem iteration
+/// order. Fail-open, like `copy_includes`: a bad glob, an unreadable
+/// directory, or a non-UTF-8 pattern becomes a warning string.
 pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> IncludePlan {
     plan_includes_with(source, dest, patterns, &|_| {})
 }
@@ -1685,7 +1691,7 @@ mod tests {
 
     /// An occupied destination keeps the entry in `links`, never in `existing`:
     /// `existing` is copied with `copy_file` under `--overwrite`, which would write
-    /// the target's contents. Task 3 decides skip-or-replace per link.
+    /// the target's contents. `make_link` decides skip-or-replace per link.
     #[test]
     fn an_occupied_link_destination_stays_a_link_entry() {
         let tmp = tempfile::tempdir().unwrap();
