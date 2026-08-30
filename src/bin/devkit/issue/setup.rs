@@ -321,6 +321,9 @@ pub fn backfill_includes(
             entry: std::sync::atomic::AtomicUsize::new(0),
             drawn: std::sync::atomic::AtomicUsize::new(0),
         };
+        if discovery {
+            step.activity(&format!("[1/{subs}] discovering files… (0 found)"));
+        }
         let (copied, warnings) = devkit_common::worktree::copy_includes_with(
             std::path::Path::new(primary),
             worktree,

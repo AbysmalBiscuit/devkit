@@ -27,7 +27,7 @@ const LIST_MAX: usize = 5;
 /// `LIST_MAX` of its files before the tail collapses to a count; a path with no
 /// directory component was named by an include on its own and is always shown.
 /// `verbose` names every path. The block carries no trailing newline, and is
-/// empty for an empty slice.
+/// empty when `paths` yields nothing.
 fn list<P: AsRef<Path>>(paths: impl IntoIterator<Item = P>, verbose: bool) -> String {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     let mut bare: Vec<String> = Vec::new();

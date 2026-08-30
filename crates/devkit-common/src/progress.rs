@@ -85,14 +85,19 @@ pub struct Step<'a> {
 
 impl Step<'_> {
     /// Rewrite the transient line beneath this step, creating it on first call.
+    ///
+    /// The five-space prefix lines up the message with where `substep`'s text
+    /// lands: `{spinner} ` from the bar template plus these five spaces put
+    /// the message at the same column as `substep`'s five spaces, mark, and
+    /// space.
     pub fn activity(&self, msg: &str) {
         let mut slot = self
             .activity
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match slot.as_ref() {
-            Some(pb) => pb.set_message(format!("  {msg}")),
-            None => *slot = Some(add_spinner(&self.steps.mp, &format!("  {msg}"))),
+            Some(pb) => pb.set_message(format!("     {msg}")),
+            None => *slot = Some(add_spinner(&self.steps.mp, &format!("     {msg}"))),
         }
     }
 
@@ -100,8 +105,13 @@ impl Step<'_> {
     /// transient line, so the next sub-step starts from an empty slot.
     ///
     /// `MultiProgress` prints above its live bars and this step's bar is still
-    /// live, so sub-steps land above the step's own settled line.
+    /// live, so sub-steps land above the step's own settled line. A transient
+    /// group never persists sub-steps: this returns without drawing anything
+    /// when the group is not [`Steps::persistent`] / [`Steps::persistent_with_total`].
     pub fn substep(&self, msg: &str) {
+        if !self.steps.persist {
+            return;
+        }
         self.clear_activity();
         let paint = crate::ui::Paint::on(crate::ui::Stream::Stderr);
         let _ = self
@@ -242,7 +252,8 @@ impl Steps {
 
     /// [`Steps::during`] for a step that draws its own sub-progress. The
     /// closure gets a [`Step`] handle for a transient line, persisted
-    /// sub-steps, and a detail folded into the settled line.
+    /// sub-steps, and a detail folded into the settled line. Sub-steps and
+    /// details only render in persistent mode.
     pub fn during_step<T>(&self, msg: &str, f: impl FnOnce(&Step<'_>) -> T) -> T {
         self.run_step(msg, |step| (f(step), true))
     }

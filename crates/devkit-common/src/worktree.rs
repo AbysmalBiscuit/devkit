@@ -2,7 +2,6 @@ use crate::git::{self, Worktree};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// This worktree's issue id. The setup record is authoritative because it holds
 /// whatever the tracker actually calls the issue; the branch and directory scan
@@ -129,9 +128,8 @@ pub fn apply_includes(
 /// and [`IncludeEvent::EntryDone`] and reporting [`IncludeEvent::FileDone`] as
 /// each file in that pattern's worklist is handled.
 ///
-/// The counter is atomic and the callback is `Sync` so one worklist can be
-/// driven from several threads, and so `copy_includes_with` can hand the same
-/// `on` reference to both the walk and the copy.
+/// The callback is `Sync` because `copy_includes_with` hands the same `on`
+/// reference to both the walk and the copy.
 pub fn apply_includes_with(
     source: &Path,
     dest: &Path,
@@ -157,8 +155,7 @@ pub fn apply_includes_with(
         });
 
         let before = copied;
-        let done = AtomicUsize::new(0);
-        for rel in &worklist {
+        for (i, rel) in worklist.iter().enumerate() {
             copy_file(
                 &source.join(rel),
                 &dest.join(rel),
@@ -168,7 +165,7 @@ pub fn apply_includes_with(
             );
             on(IncludeEvent::FileDone {
                 pattern: &entry.pattern,
-                done: done.fetch_add(1, Ordering::Relaxed) + 1,
+                done: i + 1,
                 of: worklist.len(),
             });
         }
@@ -254,10 +251,12 @@ impl IncludePlan {
             .flat_map(|p| p.existing.iter().map(PathBuf::as_path))
     }
 
+    /// Total count of matches `dest` does not have, across every pattern.
     pub fn missing_len(&self) -> usize {
         self.patterns.iter().map(|p| p.missing.len()).sum()
     }
 
+    /// Total count of matches `dest` already has, across every pattern.
     pub fn existing_len(&self) -> usize {
         self.patterns.iter().map(|p| p.existing.len()).sum()
     }
@@ -749,7 +748,10 @@ mod tests {
     }
 
     /// `read_dir` order is the filesystem's, so an unsorted plan would print a
-    /// different `copied N file(s)` list on every run and platform.
+    /// different `copied N file(s)` list on every run and platform. Two
+    /// patterns pin both properties at once: patterns appear in configuration
+    /// order (`hooks/` before `configs/`, though `configs` sorts first
+    /// alphabetically), and matches are sorted within each pattern.
     #[test]
     fn plan_vectors_come_back_sorted() {
         let base = tempfile::tempdir().unwrap();
@@ -758,14 +760,23 @@ mod tests {
         for name in ["d.sh", "b.sh", "a.sh", "c.sh"] {
             write(&src.join("hooks").join(name), "x");
         }
+        for name in ["z.txt", "x.txt", "y.txt"] {
+            write(&src.join("configs").join(name), "x");
+        }
         write(&dst.join("hooks/c.sh"), "old");
         write(&dst.join("hooks/a.sh"), "old");
 
-        let plan = plan_includes(&src, &dst, &["hooks/".to_string()]);
+        let plan = plan_includes(&src, &dst, &["hooks/".to_string(), "configs/".to_string()]);
 
         assert_eq!(
             plan.missing().collect::<Vec<_>>(),
-            [Path::new("hooks/b.sh"), Path::new("hooks/d.sh")]
+            [
+                Path::new("hooks/b.sh"),
+                Path::new("hooks/d.sh"),
+                Path::new("configs/x.txt"),
+                Path::new("configs/y.txt"),
+                Path::new("configs/z.txt"),
+            ]
         );
         assert_eq!(
             plan.existing().collect::<Vec<_>>(),
