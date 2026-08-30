@@ -499,7 +499,7 @@
           "type": "boolean"
         },
         "to": {
-          "description": "Destination directory, rendered as minijinja. Must render to a non-empty\nabsolute path, and is created if absent.",
+          "description": "Destination directory, rendered as minijinja. Must render to a non-empty\nabsolute path. It is created when the first file lands in it, so an entry\nthat matches nothing leaves no directory behind.",
           "type": "string"
         }
       },

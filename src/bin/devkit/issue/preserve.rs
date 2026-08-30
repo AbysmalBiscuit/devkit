@@ -78,11 +78,19 @@ pub(crate) fn resolve_entry(
     if to.is_empty() {
         return Err(skip("`to` rendered empty".into()));
     }
-    let dest = PathBuf::from(to);
+    // `starts_with` compares whole components, so both sides are normalized
+    // first: an unresolved `..` walks past a component-prefix test, and `to`
+    // renders from the worktree's own record, which anything working in that
+    // worktree can write.
+    let dest = devkit_config::normalize_lexically(Path::new(to));
     if !dest.is_absolute() {
         return Err(skip(format!("`to` must be an absolute path, got `{to}`")));
     }
-    if let Some(root) = removal_roots.iter().find(|r| dest.starts_with(r)) {
+    if let Some(root) = removal_roots
+        .iter()
+        .map(|r| devkit_config::normalize_lexically(r))
+        .find(|r| dest.starts_with(r))
+    {
         return Err(skip(format!(
             "`to` is inside {}, which this run removes",
             root.display()
@@ -159,6 +167,13 @@ pub(crate) fn run_for(
             Ok(resolved) => {
                 let (files, warnings) =
                     devkit_common::worktree::copy_out(worktree, &resolved.dest, &resolved.patterns);
+                // Tallied before the `required` check: a copy that already
+                // happened counts even when a later pattern in the same entry
+                // warns and stops the worktree.
+                out.files += files;
+                if files > 0 {
+                    out.entries += 1;
+                }
                 if !warnings.is_empty() && cfg.required {
                     out.required_failure = Some(format!(
                         "preserve `{}`: {}",
@@ -172,10 +187,6 @@ pub(crate) fn run_for(
                         .into_iter()
                         .map(|w| format!("preserve `{}`: {w}", resolved.name)),
                 );
-                out.files += files;
-                if files > 0 {
-                    out.entries += 1;
-                }
             }
         }
     }
@@ -280,6 +291,42 @@ mod tests {
         assert_eq!(resolved.dest, PathBuf::from(sibling));
     }
 
+    /// The containment check compares normalized paths, so a `to` that walks
+    /// back into a removal root through `..` is still refused. `issue` and
+    /// `slug` come from the worktree's own record, so the `..` need not be
+    /// author-written to reach the template.
+    #[test]
+    fn a_destination_reaching_a_removal_root_through_dotdot_is_refused() {
+        let roots = vec![PathBuf::from(abs("/wts/fix"))];
+        let dest = abs("/wts/other/../../wts/fix/archive");
+        let err = resolve_entry(
+            "notes",
+            &cfg(&["a.md"], &dest, false),
+            &ctx_for("ENG-1"),
+            &novars(),
+            &roots,
+        )
+        .unwrap_err();
+        assert!(err.reason.contains("removes"), "{}", err.reason);
+    }
+
+    /// A removal root spelled with `..` names the same directory as its
+    /// normalized form, and must gate the same destinations.
+    #[test]
+    fn a_removal_root_spelled_with_dotdot_still_gates() {
+        let roots = vec![PathBuf::from(abs("/wts/other/../fix"))];
+        let dest = abs("/wts/fix/archive");
+        let err = resolve_entry(
+            "notes",
+            &cfg(&["a.md"], &dest, false),
+            &ctx_for("ENG-1"),
+            &novars(),
+            &roots,
+        )
+        .unwrap_err();
+        assert!(err.reason.contains("removes"), "{}", err.reason);
+    }
+
     /// A pattern that renders empty drops out rather than reaching `copy_out`,
     /// where an empty glob would otherwise have to be caught again.
     #[test]
@@ -376,6 +423,35 @@ mod tests {
 
         let err = out.required_failure.expect("required entry blocks");
         assert!(err.contains("notes"), "{err}");
+    }
+
+    /// The files a blocked entry already copied are on disk, so the summary
+    /// counts them: only the worktree is kept, nothing is undone.
+    #[test]
+    fn a_blocked_required_entry_still_reports_what_it_copied() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        let archive = dir.path().join("archive");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("keep.md"), "keep").unwrap();
+
+        let entry = cfg(
+            &["keep.md", "../outside.md"],
+            archive.to_str().unwrap(),
+            true,
+        );
+        let out = run_for(
+            &wt,
+            &[("notes".to_string(), &entry)],
+            &ctx_for("ENG-1"),
+            &novars(),
+            &[],
+        );
+
+        assert!(out.required_failure.is_some(), "the escaping pattern warns");
+        assert_eq!(out.files, 1);
+        assert_eq!(out.entries, 1);
+        assert!(archive.join("keep.md").exists());
     }
 
     /// `required` governs errors, never emptiness. A worktree that produced no

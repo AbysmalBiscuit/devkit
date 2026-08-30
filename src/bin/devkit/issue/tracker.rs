@@ -2,7 +2,6 @@
 
 use devkit_common::github::Repos;
 use devkit_common::tracker::Resolved;
-use devkit_ports::load;
 use std::path::Path;
 
 /// Everything one config load yields for an `issue` command: the tracker and
@@ -17,17 +16,25 @@ pub struct Selected {
     pub health: devkit_config::Health,
 }
 
-/// `select` with the config load's result attached. `health` is classified
-/// separately from `load`, because `load` also builds the doppler map and app
-/// catalog: a broken `doppler.yaml` is not a broken config, and must not make
-/// `issue end` refuse.
+/// `select` with the config itself and a health verdict attached. Both come
+/// from one `devkit_config::resolve`, so `Health::Ok` alongside a missing config
+/// cannot happen — `issue end` reads its preserve table from the same result its
+/// gate approved. Resolving the config directly rather than through
+/// `devkit_ports::load` is what keeps a `doppler.yaml` devkit cannot parse from
+/// reading as a broken config: the tracker and repositories need neither the
+/// doppler map nor the app catalog.
 pub fn select_full(config: Option<&str>, start: &str, pr_override: Option<&str>) -> Selected {
     let dir = Path::new(start);
     let main = devkit_common::git::main_checkout(dir).ok().flatten();
-    let health = devkit_config::health(dir, main.as_deref());
-    let cfg = load::load(config.map(Path::new), dir)
-        .ok()
-        .map(|l| l.config);
+    let checkout_root = devkit_common::git::checkout_root(dir).ok();
+    let resolved = devkit_config::resolve(
+        config.map(Path::new),
+        dir,
+        main.as_deref(),
+        checkout_root.as_deref(),
+    );
+    let health = devkit_config::Health::of(&resolved);
+    let cfg = resolved.ok().map(|(c, _)| c);
     let (kind, github) = match &cfg {
         Some(c) => (c.tracker.kind, c.github.clone()),
         None => (None, devkit_config::GithubConfig::default()),
@@ -113,6 +120,37 @@ mod tests {
         assert!(sel.config.is_none());
     }
 
+    /// An explicit `--config` that does not parse is a fault, not a project
+    /// without a config: the health verdict has to describe the very config the
+    /// command will read, not whatever else happens to be discoverable from the
+    /// same directory.
+    #[test]
+    fn a_broken_explicit_config_reports_broken_even_beside_a_valid_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\n\
+             root = true\n\
+             [defaults]\n\
+             worktree_root = \"wts\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"base\"\n",
+        )
+        .unwrap();
+        let explicit = dir.path().join("explicit.toml");
+        std::fs::write(&explicit, "[defaults\n").unwrap();
+
+        let sel = select_full(explicit.to_str(), dir.path().to_str().unwrap(), None);
+
+        assert!(
+            matches!(sel.health, devkit_config::Health::Broken(_)),
+            "{:?}",
+            sel.health
+        );
+        assert!(sel.config.is_none());
+    }
+
     /// The loaded config comes back so `issue end` can read its preserve table
     /// without a second load.
     #[test]
@@ -137,6 +175,41 @@ mod tests {
 
         let sel = select_full(None, dir.path().to_str().unwrap(), None);
 
+        let cfg = sel.config.expect("config loaded");
+        assert_eq!(cfg.preserve["notes"].to, "/archive");
+    }
+
+    /// A `doppler.yaml` devkit cannot parse says nothing about the config, and
+    /// must not cost `issue end` its preserve table. Doppler's single-project
+    /// form writes `setup` as a mapping where the app catalog expects a list.
+    #[test]
+    fn an_unparseable_doppler_yaml_leaves_the_config_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\n\
+             root = true\n\
+             [defaults]\n\
+             worktree_root = \"wts\"\n\
+             branch_prefix = \"lev/\"\n\
+             baseline_ref = \"origin/main\"\n\
+             baseline_path = \"base\"\n\
+             doppler_yaml = \"doppler.yaml\"\n\
+             \n\
+             [preserve.notes]\n\
+             from = [\"notes/*.md\"]\n\
+             to = \"/archive\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("doppler.yaml"),
+            "setup:\n  project: api\n  config: dev\n  path: apps/api\n",
+        )
+        .unwrap();
+
+        let sel = select_full(None, dir.path().to_str().unwrap(), None);
+
+        assert_eq!(sel.health, devkit_config::Health::Ok);
         let cfg = sel.config.expect("config loaded");
         assert_eq!(cfg.preserve["notes"].to, "/archive");
     }

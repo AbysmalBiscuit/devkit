@@ -177,7 +177,8 @@ pub struct PreserveConfig {
     /// matches nothing is not a failure.
     pub from: Vec<String>,
     /// Destination directory, rendered as minijinja. Must render to a non-empty
-    /// absolute path, and is created if absent.
+    /// absolute path. It is created when the first file lands in it, so an entry
+    /// that matches nothing leaves no directory behind.
     pub to: String,
     /// Keep the worktree instead of removing it when this entry warns.
     #[serde(default)]
@@ -800,6 +801,25 @@ pub enum Health {
     Broken(String),
 }
 
+impl Health {
+    /// Classify what a `resolve` produced. Callers that need the config itself
+    /// as well as the verdict classify their own `resolve` through this, so the
+    /// two can never describe different loads — a caller that resolved an
+    /// explicit `--config` must not be told a discovered one is fine.
+    pub fn of(resolved: &Result<(Config, Provenance)>) -> Health {
+        match resolved {
+            Ok(_) => Health::Ok,
+            Err(e) if e.downcast_ref::<NoConfig>().is_some() => Health::Absent,
+            Err(e) => Health::Broken(
+                e.chain()
+                    .map(|c| c.to_string())
+                    .collect::<Vec<_>>()
+                    .join(": "),
+            ),
+        }
+    }
+}
+
 /// Classify the config reachable from `start` without ever failing.
 /// `main_checkout` is this repository's main checkout when `start` is a
 /// linked worktree of one — resolved by the caller, because `devkit-config`
@@ -813,16 +833,7 @@ pub(crate) fn health_with_home(
     main_checkout: Option<&Path>,
     home: Option<&Path>,
 ) -> Health {
-    match resolve_with_home(None, start, main_checkout, None, home) {
-        Ok(_) => Health::Ok,
-        Err(e) if e.downcast_ref::<NoConfig>().is_some() => Health::Absent,
-        Err(e) => Health::Broken(
-            e.chain()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join(": "),
-        ),
-    }
+    Health::of(&resolve_with_home(None, start, main_checkout, None, home))
 }
 
 /// Tables a devkit.toml may carry on its own, with no project configured around
@@ -925,10 +936,19 @@ fn expand_vars(raw: &str, key: &str) -> Result<String> {
     Ok(out)
 }
 
-/// Resolve `.` and `..` without touching the filesystem. `worktree_root` is
-/// routinely a directory that does not exist yet, so `fs::canonicalize` is not
-/// available; and the ports registry compares holder paths as strings, so a
-/// surviving `..` would let one directory have two spellings.
+/// Resolve `.` and `..` without touching the filesystem, so one directory has
+/// one spelling. `fs::canonicalize` is not available for these paths: a
+/// `worktree_root`, or a `[preserve]` destination, is routinely a directory that
+/// does not exist yet, and on Windows canonicalizing yields a verbatim `\\?\`
+/// prefix that compares unequal to every other spelling of the same path.
+/// Symlinks are therefore not followed — the result names the path the
+/// components spell, not the one the filesystem would resolve.
+///
+/// Every caller comparing two paths needs this first. The ports registry
+/// compares holder paths as strings, and `Path::starts_with` is a
+/// component-prefix test that an unresolved `..` walks straight past — so a
+/// containment gate applied to raw paths accepts a path that reaches back
+/// inside the tree it was meant to exclude.
 ///
 /// `PathBuf::pop`'s boolean return can't drive this: it pops a trailing `..`
 /// just as readily as a real component (`Path::new("..").parent()` is
@@ -936,7 +956,7 @@ fn expand_vars(raw: &str, key: &str) -> Result<String> {
 /// of accumulating. Components are tracked explicitly instead: a `ParentDir`
 /// pops only when the top of the stack is a real named component; otherwise it
 /// is either appended (relative, nothing to pop) or dropped (already at root).
-fn normalize_lexically(p: &Path) -> PathBuf {
+pub fn normalize_lexically(p: &Path) -> PathBuf {
     use std::path::Component;
     let mut stack: Vec<Component> = Vec::new();
     let mut has_root = false;
@@ -2255,11 +2275,11 @@ steps = [
     #[test]
     fn a_preserve_entry_parses_with_required_defaulting_off() {
         let cfg: Config = toml::from_str(
-            "[preserve.graphify]\nfrom = [\"graphify-out/**\"]\nto = \"/archive/{{ issue }}\"\n",
+            "[preserve.graphify]\nfrom = [\"graphify-out/\"]\nto = \"/archive/{{ issue }}\"\n",
         )
         .unwrap();
         let entry = &cfg.preserve["graphify"];
-        assert_eq!(entry.from, vec!["graphify-out/**".to_string()]);
+        assert_eq!(entry.from, vec!["graphify-out/".to_string()]);
         assert_eq!(entry.to, "/archive/{{ issue }}");
         assert!(!entry.required);
     }

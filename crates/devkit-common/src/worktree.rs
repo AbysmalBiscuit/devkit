@@ -703,7 +703,9 @@ mod tests {
     /// `plan_includes` strips `source` lexically, so `source.join("../x")` still
     /// carries the prefix and yields `../x` as the "relative" path — escaping the
     /// destination as well as the source. Absolute patterns replace the base
-    /// outright. Neither may reach the glob.
+    /// outright, and so does a root-relative one: `/etc/x` is not absolute on
+    /// Windows, but `Path::join` discards the base for it just the same. None
+    /// may reach the glob.
     #[test]
     fn copy_out_refuses_a_pattern_that_escapes_the_worktree() {
         let dir = tempfile::tempdir().unwrap();
@@ -715,11 +717,19 @@ mod tests {
         let (copied, warnings) = copy_out(
             &wt,
             &dst,
-            &["../outside.md".to_string(), "keep.md".to_string()],
+            &[
+                "../outside.md".to_string(),
+                "/etc/passwd".to_string(),
+                "keep.md".to_string(),
+            ],
         );
 
         assert_eq!(copied, 1, "only the in-tree file is copied");
-        assert!(dst.join("keep.md").exists());
+        let archived: Vec<String> = std::fs::read_dir(&dst)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(archived, vec!["keep.md".to_string()]);
         assert_eq!(
             std::fs::read_to_string(dir.path().join("outside.md")).unwrap(),
             "secret",
@@ -727,10 +737,11 @@ mod tests {
         );
         assert_eq!(
             warnings.len(),
-            1,
-            "one warning names the pattern: {warnings:?}"
+            2,
+            "one warning per rejected pattern: {warnings:?}"
         );
         assert!(warnings[0].contains("../outside.md"), "{warnings:?}");
+        assert!(warnings[1].contains("/etc/passwd"), "{warnings:?}");
     }
 
     /// The policy difference between the two directions, asserted together so a
@@ -780,15 +791,17 @@ mod tests {
     }
 
     /// A pattern that matches nothing is the normal case for a worktree that
-    /// produced no scratch, and must not warn.
+    /// produced no scratch, and must not warn. The directory exists and is
+    /// empty, so the pattern matches it and finds nothing to copy — the case a
+    /// pattern naming a directory that does not exist would not distinguish.
     #[test]
     fn copy_out_is_quiet_when_a_pattern_matches_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let wt = dir.path().join("wt");
-        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::create_dir_all(wt.join("graphify-out")).unwrap();
         let dst = dir.path().join("archive");
 
-        let (copied, warnings) = copy_out(&wt, &dst, &["graphify-out/**".to_string()]);
+        let (copied, warnings) = copy_out(&wt, &dst, &["graphify-out/".to_string()]);
 
         assert_eq!(copied, 0);
         assert!(warnings.is_empty(), "{warnings:?}");

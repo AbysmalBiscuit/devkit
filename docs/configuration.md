@@ -384,7 +384,7 @@ destination, so one run can archive different files to different places.
 | Key | Required | Meaning |
 |---|---|---|
 | `from` | yes | Glob patterns for the files to copy, relative to the worktree root. Each is rendered as a minijinja template. |
-| `to` | yes | Destination directory, rendered as a minijinja template. Must render to a non-empty absolute path; created if absent. |
+| `to` | yes | Destination directory, rendered as a minijinja template. Must render to a non-empty absolute path. It is created when the first file lands in it, so an entry that matches nothing leaves no directory behind. |
 | `required` | no (default `false`) | Keep the worktree instead of removing it when this entry warns. |
 
 ```toml
