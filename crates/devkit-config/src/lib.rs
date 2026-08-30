@@ -415,6 +415,11 @@ pub struct TaskConfig {
     pub require_live: Vec<String>,
 }
 
+/// Longest branch `issue setup` renders before it shortens the slug to fit,
+/// and the width the `issue status` branch column renders before eliding. One
+/// number so a branch devkit created is never the one the table has to cut.
+pub const DEFAULT_BRANCH_MAX: usize = 46;
+
 pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
 pub const DEFAULT_WORKTREE_DIR: &str = "{{ slug }}";
 pub const DEFAULT_PR_TITLE: &str = "{{ input }}";
