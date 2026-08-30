@@ -1277,9 +1277,8 @@ mod tests {
     }
 
     /// A pattern that matches nothing still occupies its slot between two that
-    /// do, so `index` stays gap-free and `of` stays the configured pattern
-    /// count rather than the matched count. This is what Task 6 numbers its
-    /// progress sub-steps off.
+    /// do, so `index` stays gap-free and `of` stays the configured pattern count
+    /// rather than the matched count. Callers number a display off these.
     #[test]
     fn an_empty_pattern_between_two_matching_ones_still_brackets() {
         let base = tempfile::tempdir().unwrap();
