@@ -88,8 +88,9 @@ Rewriting link targets. A target is reproduced exactly as the source holds it.
 Creating junctions. The standard library cannot create one. A junction source
 is reproduced as a symlink. See Limitations.
 
-Symlinks anywhere other than `worktree_include`. `copy_out`, the `preserve`
-paths, and the docs cache are out of scope.
+Symlinks anywhere other than `worktree_include`. The `preserve` paths and the
+docs cache are out of scope. `copy_out` shares the walk, so it is touched only
+to hold its current behaviour still.
 
 ## Behaviour
 
@@ -268,11 +269,17 @@ this change exists to remove, on exactly the machines least able to notice.
 `copied 12 file(s)`, never folded into it. A link is not a copied file and the
 counts do not mix.
 
-**`copy_out` is unchanged.** `issue end --preserve` keeps following links and
-archiving their contents. The two directions genuinely differ: an include lands
-in a live worktree that still sits beside the primary checkout, so a link there
-resolves. `preserve` archives out of a worktree that is about to be deleted,
-into a location that may outlive the target, so a link there could be archiving
-a path that stops resolving the moment the worktree goes. The
+**`copy_out` keeps following links.** `issue end --preserve` goes on archiving
+their contents. The two directions genuinely differ: an include lands in a live
+worktree that still sits beside the primary checkout, so a link there resolves.
+`preserve` archives out of a worktree that is about to be deleted, into a
+location that may outlive the target, so a link there could be archiving a path
+that stops resolving the moment the worktree goes. The
 `docs/configuration.md` sentence pairing the two directions is rewritten to
 describe each on its own and to say why they differ.
+
+Keeping that behaviour is not the same as leaving the code alone. `copy_out`
+builds its plan with the same walk `worktree_include` uses, so the walk gains a
+private mode and `copy_out` is its one `Follow` caller. The public planning
+functions keep their signatures, and a test pins the outbound behaviour so a
+later change to the walk cannot quietly take it.
