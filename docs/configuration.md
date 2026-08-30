@@ -375,6 +375,75 @@ As an array, a deeper `devkit.toml` replaces the whole list rather than appendin
 after_worktree_create = [["zoxide", "add", "{{ worktree }}"]]
 ```
 
+### `[preserve.<name>]`
+
+Files copied out of an issue worktree before `issue end` removes it, so an
+agent's scratch output outlives the worktree. Each entry names its own
+destination, so one run can archive different files to different places.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `from` | yes | Glob patterns for the files to copy, relative to the worktree root. Each is rendered as a minijinja template. |
+| `to` | yes | Destination directory, rendered as a minijinja template. Must render to a non-empty absolute path; created if absent. |
+| `required` | no (default `false`) | Keep the worktree instead of removing it when this entry warns. |
+
+```toml
+[preserve.graphify]
+from     = ["graphify-out/"]
+to       = "{{ worktree_root }}/archive/{{ issue }}/graphify"
+required = true
+
+[preserve.notes]
+from = ["docs/notes/*.md"]
+to   = "{{ primary }}/.devkit/archive/{{ issue }}"
+```
+
+Render context: `worktree`, `branch`, `issue`, `slug`, `apps`, `prefix`,
+`worktree_root` (the resolved `defaults.worktree_root`), `primary` (the primary
+checkout's root), and `[templates.variables]`. The issue fields come from the
+worktree's `.devkit/issue.toml`, so a `worktree_dir` or `branch` template edited
+since setup cannot misname the destination; a worktree without a readable record
+renders them empty.
+
+To archive a whole directory and everything beneath it, name the directory
+itself, with or without a trailing slash: `from = ["graphify-out/"]`. A
+trailing `**` is not the same thing — it matches the subdirectories under the
+named directory but not the files sitting directly inside it, so it archives
+part of the tree and the rest is lost with the worktree once removal runs.
+`dir/*` matches only the direct children, one level deep.
+
+Patterns are worktree-relative. One that is absolute, or that contains a `..`
+component, is skipped with a warning — the archive cannot reach outside the tree
+it is saving. The recorded summary file therefore cannot be preserved at its
+default location beside the worktrees directory; set
+`issue_summary_path = "{{ worktree }}/.devkit/issue.md"` to keep it inside the
+worktree, where a pattern can name it. A pattern that renders empty is skipped;
+one that matches nothing is not a failure, which is the normal case for a
+worktree that produced no scratch.
+
+A destination that resolves inside any worktree the same run is removing is
+skipped: the copy would be deleted seconds after it was written. An existing
+destination file is replaced, since the worktree's copy is the one about to be
+lost.
+
+Failures are **fail-open**, like `[hooks]`: an entry that cannot render, is
+rejected, or fails to copy prints a `warning:` line naming the entry, and the
+worktree is removed anyway. `required = true` flips one entry to fail-closed —
+its warnings keep that worktree, its branch, and its summary intact, and
+`issue end` exits non-zero. `required` governs errors only, never emptiness.
+
+Preservation runs before any worktree is removed, serially and in sorted entry
+name order, with one progress step per worktree. Two worktrees archiving the
+same filename into the same `to` collide, and worktree order decides; template
+`{{ issue }}` into `to` to keep them apart.
+
+Two limits worth knowing. Symlinks are followed, so a link inside the worktree is
+archived as its target's content, matching what `defaults.worktree_include` does
+in the inbound direction. And a copy is not atomic: `std::fs::copy` truncates
+before writing, so a copy interrupted over an existing archive leaves a short
+file. Preservation finishing before any removal is what keeps that from costing
+data — nothing is deleted until every entry has run.
+
 ### `[people.<alias>]`
 
 Teammate handle aliases used by `issue review` (`--to <alias>`). The alias maps to delivery handles; **no tokens live here** — `SLACK_TOKEN` and `LINEAR_API_KEY` come from the environment / Doppler.

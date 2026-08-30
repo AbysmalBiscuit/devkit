@@ -75,7 +75,7 @@ replacing the whole list the way an array key such as
 
 ```toml
 [preserve.graphify]
-from     = ["graphify-out/**"]
+from     = ["graphify-out/"]
 to       = "{{ worktree_root }}/archive/{{ issue }}/graphify"
 required = true
 
