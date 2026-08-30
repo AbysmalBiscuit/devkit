@@ -324,7 +324,7 @@ pub fn backfill_includes(
         if discovery {
             step.activity(&format!("[1/{subs}] discovering files… (0 found)"));
         }
-        let (copied, warnings) = devkit_common::worktree::copy_includes_with(
+        let (copied, _linked, warnings) = devkit_common::worktree::copy_includes_with(
             std::path::Path::new(primary),
             worktree,
             patterns,

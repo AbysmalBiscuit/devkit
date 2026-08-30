@@ -202,7 +202,8 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
             }
         }
 
-        let (copied, warnings) = worktree::apply_includes(&source, &wt.path, &plan, clobber);
+        let (copied, _linked, warnings) =
+            worktree::apply_includes(&source, &wt.path, &plan, clobber);
         for w in &warnings {
             eprintln!("warning: {w}");
         }

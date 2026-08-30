@@ -70,8 +70,14 @@ pub fn discover(start: &str) -> Result<(PathBuf, Vec<Worktree>)> {
 /// Patterns that match nothing are silently skipped; a destination file that
 /// already exists is left untouched (never clobbered). Fail-open: a glob or copy
 /// error is collected as a warning string rather than propagated, so backfill
-/// never aborts worktree creation. Returns (files_copied, warnings).
-pub fn copy_includes(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<String>) {
+/// never aborts worktree creation. A match that is a symlink is reproduced as a
+/// symlink pointing at the same target; its contents are not copied. Returns
+/// (files_copied, links_created, warnings).
+pub fn copy_includes(
+    source: &Path,
+    dest: &Path,
+    patterns: &[String],
+) -> (usize, usize, Vec<String>) {
     copy_includes_with(source, dest, patterns, &|_| {})
 }
 
@@ -106,7 +112,8 @@ pub fn copy_out(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<
         }
     }
     let plan = plan_with_mode(source, dest, &inside, &|_| {}, LinkMode::Follow);
-    let (copied, apply_warnings) = apply_includes(source, dest, &plan, true);
+    // A Follow-mode plan holds no links, so the count is always zero.
+    let (copied, _, apply_warnings) = apply_includes(source, dest, &plan, true);
     warnings.extend(plan.warnings);
     warnings.extend(apply_warnings);
     (copied, warnings)
@@ -117,13 +124,14 @@ pub fn copy_out(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<
 /// applied in configuration order. A plan is a snapshot, so unless `overwrite`
 /// is set each copy re-checks the destination and skips a file that appeared
 /// since. Fail-open, like `plan_includes`: a copy error is collected as a
-/// warning string rather than propagated. Returns (files_copied, warnings).
+/// warning string rather than propagated. Returns (files_copied, links_created,
+/// warnings).
 pub fn apply_includes(
     source: &Path,
     dest: &Path,
     plan: &IncludePlan,
     overwrite: bool,
-) -> (usize, Vec<String>) {
+) -> (usize, usize, Vec<String>) {
     apply_includes_with(source, dest, plan, overwrite, &|_| {})
 }
 
@@ -139,8 +147,9 @@ pub fn apply_includes_with(
     plan: &IncludePlan,
     overwrite: bool,
     on: &(dyn Fn(IncludeEvent) + Sync),
-) -> (usize, Vec<String>) {
+) -> (usize, usize, Vec<String>) {
     let mut copied = 0usize;
+    let mut linked = 0usize;
     let mut warnings = Vec::new();
     let of = plan.patterns.len();
 
@@ -150,15 +159,19 @@ pub fn apply_includes_with(
         } else {
             entry.missing.iter().collect()
         };
+        // A link is a unit of this pattern's work, so the denominator the
+        // display draws against covers both lists.
+        let total = worklist.len() + entry.links.len();
         on(IncludeEvent::EntryStart {
             pattern: &entry.pattern,
             index,
             of,
-            files: worklist.len(),
+            files: total,
         });
 
         let before = copied;
-        for (i, rel) in worklist.iter().enumerate() {
+        let mut done = 0usize;
+        for rel in &worklist {
             copy_file(
                 &source.join(rel),
                 &dest.join(rel),
@@ -166,10 +179,27 @@ pub fn apply_includes_with(
                 &mut copied,
                 &mut warnings,
             );
+            done += 1;
             on(IncludeEvent::FileDone {
                 pattern: &entry.pattern,
-                done: i + 1,
-                of: worklist.len(),
+                done,
+                of: total,
+            });
+        }
+        for (rel, target) in &entry.links {
+            make_link(
+                &source.join(rel),
+                &dest.join(rel),
+                target,
+                overwrite,
+                &mut linked,
+                &mut warnings,
+            );
+            done += 1;
+            on(IncludeEvent::FileDone {
+                pattern: &entry.pattern,
+                done,
+                of: total,
             });
         }
 
@@ -181,7 +211,7 @@ pub fn apply_includes_with(
         });
     }
 
-    (copied, warnings)
+    (copied, linked, warnings)
 }
 
 /// What an include walk or copy reports as it runs, so a caller can draw
@@ -530,18 +560,20 @@ fn claim_once(plans: &mut [PatternPlan]) {
 
 /// [`copy_includes`], reporting the walk's and the copy's progress through
 /// `on`. The plan is built first, so every [`IncludeEvent::Found`] arrives
-/// before the first [`IncludeEvent::EntryStart`].
+/// before the first [`IncludeEvent::EntryStart`]. A match that is a symlink is
+/// reproduced as a symlink pointing at the same target; its contents are not
+/// copied.
 pub fn copy_includes_with(
     source: &Path,
     dest: &Path,
     patterns: &[String],
     on: &(dyn Fn(IncludeEvent) + Sync),
-) -> (usize, Vec<String>) {
+) -> (usize, usize, Vec<String>) {
     let plan = plan_includes_with(source, dest, patterns, on);
-    let (copied, apply_warnings) = apply_includes_with(source, dest, &plan, false, on);
+    let (copied, linked, apply_warnings) = apply_includes_with(source, dest, &plan, false, on);
     let mut warnings = plan.warnings;
     warnings.extend(apply_warnings);
-    (copied, warnings)
+    (copied, linked, warnings)
 }
 
 /// Copy a single file, creating its destination's parent directories as
@@ -569,6 +601,60 @@ fn copy_file(
             "copying {} -> {}: {e}",
             src.display(),
             dst.display()
+        )),
+    }
+}
+
+/// Reproduce a source symlink at `dst`, writing `target` verbatim. Creates the
+/// destination's parent directories the way `copy_file` does. Whether the
+/// target is a directory is decided by resolving the *source* link, since the
+/// target string alone cannot say and Windows needs to know; a source link that
+/// does not resolve takes the file form and reproduces a broken link.
+///
+/// Windows refuses symlink creation without Developer Mode, so a failure here
+/// is a warning and the run continues without the link, per the fail-open rule
+/// the rest of this module follows.
+fn make_link(
+    src: &Path,
+    dst: &Path,
+    target: &Path,
+    overwrite: bool,
+    linked: &mut usize,
+    warnings: &mut Vec<String>,
+) {
+    match std::fs::symlink_metadata(dst) {
+        Ok(meta) => {
+            if !overwrite {
+                return;
+            }
+            // remove_dir_all through a link would delete the target's contents.
+            let removed = if meta.file_type().is_symlink() {
+                std::fs::remove_file(dst).or_else(|_| std::fs::remove_dir(dst))
+            } else if meta.is_dir() {
+                std::fs::remove_dir_all(dst)
+            } else {
+                std::fs::remove_file(dst)
+            };
+            if let Err(e) = removed {
+                warnings.push(format!("replacing {}: {e}", dst.display()));
+                return;
+            }
+        }
+        Err(_) => {
+            if let Some(parent) = dst.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                warnings.push(format!("creating {}: {e}", parent.display()));
+                return;
+            }
+        }
+    }
+    match crate::sys::symlink(target, dst, src.is_dir()) {
+        Ok(()) => *linked += 1,
+        Err(e) => warnings.push(format!(
+            "linking {} -> {}: {e}",
+            dst.display(),
+            target.display()
         )),
     }
 }
@@ -705,7 +791,7 @@ mod tests {
         let dst = base.path().join("dst");
         write(&src.join("apps/web/.env.local"), "SECRET=1");
 
-        let (n, warnings) = copy_includes(&src, &dst, &["apps/*/.env.local".to_string()]);
+        let (n, _, warnings) = copy_includes(&src, &dst, &["apps/*/.env.local".to_string()]);
 
         assert_eq!(n, 1);
         assert!(warnings.is_empty());
@@ -722,7 +808,7 @@ mod tests {
         let dst = base.path().join("dst");
         write(&src.join("a/b/c/.env.local"), "X=1");
 
-        let (n, _) = copy_includes(&src, &dst, &["**/.env.local".to_string()]);
+        let (n, _, _) = copy_includes(&src, &dst, &["**/.env.local".to_string()]);
 
         assert_eq!(n, 1);
         assert!(dst.join("a/b/c/.env.local").exists());
@@ -737,7 +823,7 @@ mod tests {
         write(&src.join(".claude/hooks/sub/post.sh"), "echo post");
 
         // Trailing slash must behave like the bare directory.
-        let (n, warnings) = copy_includes(&src, &dst, &[".claude/hooks/".to_string()]);
+        let (n, _, warnings) = copy_includes(&src, &dst, &[".claude/hooks/".to_string()]);
 
         assert_eq!(n, 2);
         assert!(warnings.is_empty());
@@ -758,7 +844,7 @@ mod tests {
         let dst = base.path().join("dst");
         fs::create_dir_all(&src).unwrap();
 
-        let (n, warnings) = copy_includes(&src, &dst, &["does/not/exist".to_string()]);
+        let (n, _, warnings) = copy_includes(&src, &dst, &["does/not/exist".to_string()]);
 
         assert_eq!(n, 0);
         assert!(warnings.is_empty());
@@ -772,7 +858,7 @@ mod tests {
         write(&src.join(".tool-versions"), "node 20");
         write(&dst.join(".tool-versions"), "KEEP ME");
 
-        let (n, _) = copy_includes(&src, &dst, &[".tool-versions".to_string()]);
+        let (n, _, _) = copy_includes(&src, &dst, &[".tool-versions".to_string()]);
 
         assert_eq!(n, 0);
         assert_eq!(
@@ -992,7 +1078,7 @@ mod tests {
         write(&dst.join(".tool-versions"), "KEEP ME");
 
         let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
-        let (n, warnings) = apply_includes(&src, &dst, &plan, false);
+        let (n, _, warnings) = apply_includes(&src, &dst, &plan, false);
 
         assert_eq!(n, 0);
         assert!(warnings.is_empty());
@@ -1018,7 +1104,7 @@ mod tests {
         );
         write(&dst.join(".tool-versions"), "KEEP ME");
 
-        let (n, warnings) = apply_includes(&src, &dst, &plan, false);
+        let (n, _, warnings) = apply_includes(&src, &dst, &plan, false);
 
         assert_eq!(n, 0);
         assert!(warnings.is_empty());
@@ -1037,7 +1123,7 @@ mod tests {
         write(&dst.join(".tool-versions"), "KEEP ME");
 
         let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
-        let (n, warnings) = apply_includes(&src, &dst, &plan, true);
+        let (n, _, warnings) = apply_includes(&src, &dst, &plan, true);
 
         assert_eq!(n, 1);
         assert!(warnings.is_empty());
@@ -1054,7 +1140,7 @@ mod tests {
         let dst = base.path().join("dst");
         fs::create_dir_all(&src).unwrap();
 
-        let (n, warnings) = copy_includes(&src, &dst, &[]);
+        let (n, _, warnings) = copy_includes(&src, &dst, &[]);
 
         assert_eq!(n, 0);
         assert!(warnings.is_empty());
@@ -1148,7 +1234,7 @@ mod tests {
         write(&src.join("notes.md"), "new");
         write(&dst.join("notes.md"), "old");
 
-        let (copied, warnings) = copy_includes(&src, &dst, &["notes.md".to_string()]);
+        let (copied, _, warnings) = copy_includes(&src, &dst, &["notes.md".to_string()]);
         assert_eq!(copied, 0, "backfill skips an existing file");
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(
@@ -1296,7 +1382,7 @@ mod tests {
         let plan = plan_includes(&src, &dst, &patterns);
 
         let log = std::sync::Mutex::new(Vec::new());
-        let (copied, warnings) = apply_includes_with(&src, &dst, &plan, false, &|e| match e {
+        let (copied, _, warnings) = apply_includes_with(&src, &dst, &plan, false, &|e| match e {
             IncludeEvent::EntryStart {
                 pattern,
                 index,
@@ -1357,7 +1443,7 @@ mod tests {
         write(&dst.join(".tool-versions"), "APPEARED SINCE");
 
         let files = std::sync::Mutex::new(Vec::new());
-        let (copied, warnings) = apply_includes_with(&src, &dst, &plan, false, &|e| {
+        let (copied, _, warnings) = apply_includes_with(&src, &dst, &plan, false, &|e| {
             if let IncludeEvent::FileDone { done, of, .. } = e {
                 files.lock().unwrap().push((done, of));
             }
@@ -1383,7 +1469,7 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
         let files = std::sync::Mutex::new(Vec::new());
-        let (copied, _) = apply_includes_with(&src, &dst, &plan, true, &|e| {
+        let (copied, _, _) = apply_includes_with(&src, &dst, &plan, true, &|e| {
             if let IncludeEvent::FileDone { done, of, .. } = e {
                 files.lock().unwrap().push((done, of));
             }
@@ -1626,5 +1712,211 @@ mod tests {
             "archived as a real file, not a link"
         );
         assert_eq!(std::fs::read_to_string(&landed).unwrap(), "content");
+    }
+
+    #[test]
+    fn a_symlinked_file_is_reproduced_as_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(source.join("real.txt"), "content").unwrap();
+        if !link_or_skip(
+            Path::new("../real.txt"),
+            &source.join("inc/link.txt"),
+            false,
+        ) {
+            return;
+        }
+
+        let (copied, linked, warnings) = copy_includes(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(copied, 0, "no bytes copied");
+        assert_eq!(linked, 1);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let landed = dest.join("inc/link.txt");
+        let meta = std::fs::symlink_metadata(&landed).unwrap();
+        assert!(meta.file_type().is_symlink(), "destination is a link");
+        assert_eq!(
+            std::fs::read_link(&landed).unwrap(),
+            Path::new("..").join("real.txt")
+        );
+    }
+
+    /// A relative target reproduced verbatim resolves inside the destination,
+    /// because the destination has the same shape as the source.
+    ///
+    /// Windows only resolves a relative reparse-point target when it uses the
+    /// native separator, so the target is built with `join` rather than a
+    /// literal `../real.txt`, which `read_link` would return unresolved but
+    /// reading through the link here cannot.
+    #[test]
+    fn a_relative_target_resolves_inside_the_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(source.join("real.txt"), "content").unwrap();
+        std::fs::write(dest.join("real.txt"), "the worktree's own copy").unwrap();
+        let target = Path::new("..").join("real.txt");
+        if !link_or_skip(&target, &source.join("inc/link.txt"), false) {
+            return;
+        }
+
+        let (_, linked, warnings) = copy_includes(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(linked, 1, "{warnings:?}");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("inc/link.txt")).unwrap(),
+            "the worktree's own copy",
+            "the link resolves inside the destination, not back at the source"
+        );
+    }
+
+    #[test]
+    fn an_absolute_target_is_reproduced_verbatim() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        let real = source.join("real.txt");
+        std::fs::write(&real, "content").unwrap();
+        if !link_or_skip(&real, &source.join("inc/link.txt"), false) {
+            return;
+        }
+
+        let (_, linked, warnings) = copy_includes(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(linked, 1, "{warnings:?}");
+        assert_eq!(std::fs::read_link(dest.join("inc/link.txt")).unwrap(), real);
+    }
+
+    #[test]
+    fn a_broken_link_is_reproduced_broken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        if !link_or_skip(
+            Path::new("nowhere.txt"),
+            &source.join("inc/link.txt"),
+            false,
+        ) {
+            return;
+        }
+
+        let (_, linked, warnings) = copy_includes(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(linked, 1, "{warnings:?}");
+        let landed = dest.join("inc/link.txt");
+        assert!(
+            std::fs::symlink_metadata(&landed)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!landed.exists(), "still broken, as the source is");
+        assert_eq!(
+            std::fs::read_link(&landed).unwrap(),
+            Path::new("nowhere.txt")
+        );
+    }
+
+    #[test]
+    fn an_existing_destination_is_left_alone_without_overwrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(dest.join("inc")).unwrap();
+        std::fs::write(source.join("real.txt"), "content").unwrap();
+        std::fs::write(dest.join("inc/link.txt"), "already here").unwrap();
+        if !link_or_skip(
+            Path::new("../real.txt"),
+            &source.join("inc/link.txt"),
+            false,
+        ) {
+            return;
+        }
+
+        let (_, linked, warnings) = copy_includes(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(linked, 0, "nothing replaced: {warnings:?}");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("inc/link.txt")).unwrap(),
+            "already here"
+        );
+    }
+
+    #[test]
+    fn overwrite_replaces_an_existing_destination_with_the_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(dest.join("inc")).unwrap();
+        std::fs::write(source.join("real.txt"), "content").unwrap();
+        std::fs::write(dest.join("inc/link.txt"), "already here").unwrap();
+        if !link_or_skip(
+            Path::new("../real.txt"),
+            &source.join("inc/link.txt"),
+            false,
+        ) {
+            return;
+        }
+
+        let plan = plan_includes(&source, &dest, &["inc/".to_string()]);
+        let (_, linked, warnings) = apply_includes(&source, &dest, &plan, true);
+
+        assert_eq!(linked, 1, "{warnings:?}");
+        let landed = dest.join("inc/link.txt");
+        assert!(
+            std::fs::symlink_metadata(&landed)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the real file was replaced by a link"
+        );
+    }
+
+    /// Replacing a link to a directory must remove the link, never recurse through
+    /// it: `remove_dir_all` on a symlinked directory deletes the target's contents.
+    #[test]
+    fn replacing_a_directory_link_does_not_delete_through_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(source.join("real_dir")).unwrap();
+        std::fs::create_dir_all(dest.join("inc")).unwrap();
+        let keep = tmp.path().join("other_dir");
+        std::fs::create_dir_all(&keep).unwrap();
+        std::fs::write(keep.join("keep.txt"), "do not delete").unwrap();
+        std::fs::write(source.join("real_dir/inner.txt"), "inner").unwrap();
+        if !link_or_skip(Path::new("../real_dir"), &source.join("inc/link_dir"), true) {
+            return;
+        }
+        // The destination already holds a link, pointed somewhere else entirely.
+        if !link_or_skip(&keep, &dest.join("inc/link_dir"), true) {
+            return;
+        }
+
+        let plan = plan_includes(&source, &dest, &["inc/".to_string()]);
+        let (_, linked, warnings) = apply_includes(&source, &dest, &plan, true);
+
+        assert_eq!(linked, 1, "{warnings:?}");
+        assert_eq!(
+            std::fs::read_to_string(keep.join("keep.txt")).unwrap(),
+            "do not delete",
+            "the old link's target was not deleted through it"
+        );
+        assert_eq!(
+            std::fs::read_link(dest.join("inc/link_dir")).unwrap(),
+            Path::new("..").join("real_dir")
+        );
     }
 }
