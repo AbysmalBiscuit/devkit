@@ -8,6 +8,7 @@ mod dashboard;
 mod end;
 mod info;
 mod info_cache;
+mod preserve;
 mod prs;
 mod review;
 mod select;
