@@ -1,6 +1,6 @@
 use crate::git::{self, Worktree};
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// This worktree's issue id. The setup record is authoritative because it holds
 /// whatever the tracker actually calls the issue; the branch and directory scan
@@ -74,6 +74,40 @@ pub fn copy_includes(source: &Path, dest: &Path, patterns: &[String]) -> (usize,
     let plan = plan_includes(source, dest, patterns);
     let (copied, apply_warnings) = apply_includes(source, dest, &plan, false);
     let mut warnings = plan.warnings;
+    warnings.extend(apply_warnings);
+    (copied, warnings)
+}
+
+/// Whether a pattern could read or write outside its roots. `plan_includes`
+/// strips `source` lexically, so a `..` component survives into the path joined
+/// onto the destination and escapes both; an absolute or root-relative pattern
+/// replaces the base in `Path::join` outright. `has_root` catches `/etc/x` on
+/// Windows, where `is_absolute` is false but `join` still discards the base.
+fn escapes(pattern: &str) -> bool {
+    let p = Path::new(pattern);
+    p.is_absolute() || p.has_root() || p.components().any(|c| matches!(c, Component::ParentDir))
+}
+
+/// Copy files matching `patterns` (globs relative to `source`) out of a worktree
+/// into `dest`, at the same relative path, replacing what is already there. The
+/// outbound counterpart to `copy_includes`, fail-open the same way: returns
+/// (files_copied, warnings). A pattern that would leave either root is skipped
+/// with a warning, because the caller deletes `source` immediately afterward.
+pub fn copy_out(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut inside = Vec::new();
+    for pattern in patterns {
+        if escapes(pattern) {
+            warnings.push(format!(
+                "pattern reaches outside the worktree, skipped: {pattern}"
+            ));
+        } else {
+            inside.push(pattern.clone());
+        }
+    }
+    let plan = plan_includes(source, dest, &inside);
+    let (copied, apply_warnings) = apply_includes(source, dest, &plan, true);
+    warnings.extend(plan.warnings);
     warnings.extend(apply_warnings);
     (copied, warnings)
 }
@@ -664,5 +698,99 @@ mod tests {
         assert!(plan.missing.is_empty(), "planned {:?}", plan.missing);
         assert!(plan.existing.is_empty(), "planned {:?}", plan.existing);
         assert!(plan.warnings.is_empty(), "warned {:?}", plan.warnings);
+    }
+
+    /// `plan_includes` strips `source` lexically, so `source.join("../x")` still
+    /// carries the prefix and yields `../x` as the "relative" path — escaping the
+    /// destination as well as the source. Absolute patterns replace the base
+    /// outright. Neither may reach the glob.
+    #[test]
+    fn copy_out_refuses_a_pattern_that_escapes_the_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        let dst = dir.path().join("archive");
+        write(&dir.path().join("outside.md"), "secret");
+        write(&wt.join("keep.md"), "keep");
+
+        let (copied, warnings) = copy_out(
+            &wt,
+            &dst,
+            &["../outside.md".to_string(), "keep.md".to_string()],
+        );
+
+        assert_eq!(copied, 1, "only the in-tree file is copied");
+        assert!(dst.join("keep.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("outside.md")).unwrap(),
+            "secret",
+            "the file outside the worktree is untouched"
+        );
+        assert_eq!(
+            warnings.len(),
+            1,
+            "one warning names the pattern: {warnings:?}"
+        );
+        assert!(warnings[0].contains("../outside.md"), "{warnings:?}");
+    }
+
+    /// The policy difference between the two directions, asserted together so a
+    /// future edit cannot flip one without the other failing: a backfill never
+    /// clobbers, an archive always does.
+    #[test]
+    fn copy_out_overwrites_where_copy_includes_leaves_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        write(&src.join("notes.md"), "new");
+        write(&dst.join("notes.md"), "old");
+
+        let (copied, warnings) = copy_includes(&src, &dst, &["notes.md".to_string()]);
+        assert_eq!(copied, 0, "backfill skips an existing file");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            std::fs::read_to_string(dst.join("notes.md")).unwrap(),
+            "old"
+        );
+
+        let (copied, warnings) = copy_out(&src, &dst, &["notes.md".to_string()]);
+        assert_eq!(copied, 1, "archive replaces it");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            std::fs::read_to_string(dst.join("notes.md")).unwrap(),
+            "new"
+        );
+    }
+
+    /// A directory pattern archives recursively, at the same relative path.
+    #[test]
+    fn copy_out_copies_a_directory_match_recursively() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        let dst = dir.path().join("archive");
+        write(&wt.join("graphify-out/a.md"), "a");
+        write(&wt.join("graphify-out/deep/b.md"), "b");
+
+        let (copied, warnings) = copy_out(&wt, &dst, &["graphify-out/".to_string()]);
+
+        assert_eq!(copied, 2, "{warnings:?}");
+        assert_eq!(
+            std::fs::read_to_string(dst.join("graphify-out/deep/b.md")).unwrap(),
+            "b"
+        );
+    }
+
+    /// A pattern that matches nothing is the normal case for a worktree that
+    /// produced no scratch, and must not warn.
+    #[test]
+    fn copy_out_is_quiet_when_a_pattern_matches_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let dst = dir.path().join("archive");
+
+        let (copied, warnings) = copy_out(&wt, &dst, &["graphify-out/**".to_string()]);
+
+        assert_eq!(copied, 0);
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 }
