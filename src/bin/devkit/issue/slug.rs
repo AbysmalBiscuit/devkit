@@ -1,7 +1,8 @@
 //! Branch/worktree slug derivation, shared by `setup` and `checkout-pr`.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use devkit_common::tracker::IssueRef;
+use std::collections::BTreeMap;
 
 pub(crate) use devkit_common::slug::slugify;
 
@@ -90,9 +91,168 @@ pub(crate) fn cap(slug: &str, budget: usize) -> String {
     out
 }
 
+/// Characters each name in `names` may spend before `template` renders longer
+/// than `max`.
+///
+/// The fixed cost is measured rather than assumed. The template renders twice
+/// against the real context, once with every name one character long and once
+/// with two, so the difference in length counts how many times those names are
+/// rendered in total. A template that renders none of them constrains nothing.
+///
+/// `floor` carries the overflow policy, because the two kinds of limit want
+/// opposite answers when the fixed text leaves no room. `Some(n)` clamps up to
+/// `n` and cannot fail, which suits a limit on a display width. `None` fails,
+/// which suits a limit on a filesystem path, where a cap that silently does not
+/// hold is the whole problem.
+#[allow(dead_code)]
+pub(crate) fn budget(
+    template: &str,
+    ctx: &serde_json::Value,
+    vars: &BTreeMap<String, String>,
+    names: &[&str],
+    max: usize,
+    floor: Option<usize>,
+) -> Result<usize> {
+    let probe = |len: usize| -> Result<usize> {
+        let mut probe_ctx = ctx.clone();
+        let obj = probe_ctx
+            .as_object_mut()
+            .context("template probe context is not an object")?;
+        for name in names {
+            obj.insert(
+                (*name).to_string(),
+                serde_json::Value::String("x".repeat(len)),
+            );
+        }
+        Ok(devkit_common::template::render(template, &probe_ctx, vars)?
+            .trim()
+            .chars()
+            .count())
+    };
+    let one = probe(1)?;
+    let occurrences = probe(2)?.saturating_sub(one);
+    if occurrences == 0 {
+        return Ok(usize::MAX);
+    }
+    let fixed = one.saturating_sub(occurrences);
+    let per_name = max.saturating_sub(fixed) / occurrences;
+    match floor {
+        Some(n) => Ok(per_name.max(n)),
+        None if per_name == 0 => anyhow::bail!(
+            "`{template}` renders {fixed} characters of fixed text, \
+             which leaves no room within a limit of {max}"
+        ),
+        None => Ok(per_name),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn novars() -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
+    #[test]
+    fn budget_subtracts_measured_fixed_text() {
+        let ctx = json!({"prefix": "lev/", "slug": ""});
+        // "lev/" is four characters the slug does not get.
+        let b = budget(
+            "{{ prefix }}{{ slug }}",
+            &ctx,
+            &novars(),
+            &["slug"],
+            46,
+            Some(12),
+        )
+        .unwrap();
+        assert_eq!(b, 42);
+    }
+
+    #[test]
+    fn budget_is_unconstrained_when_the_template_omits_the_name() {
+        let ctx = json!({"issue": "142", "slug": ""});
+        let b = budget("{{ issue }}", &ctx, &novars(), &["slug"], 46, None).unwrap();
+        assert_eq!(b, usize::MAX);
+    }
+
+    #[test]
+    fn budget_halves_for_a_name_rendered_twice() {
+        let ctx = json!({"slug": ""});
+        let b = budget("{{ slug }}{{ slug }}", &ctx, &novars(), &["slug"], 40, None).unwrap();
+        assert_eq!(b, 20);
+    }
+
+    #[test]
+    fn budget_splits_between_two_names() {
+        let ctx = json!({"pr_title": "", "linear_title": ""});
+        // One dash of fixed text, 40 characters left, two names.
+        let b = budget(
+            "{{ pr_title }}-{{ linear_title }}",
+            &ctx,
+            &novars(),
+            &["pr_title", "linear_title"],
+            41,
+            None,
+        )
+        .unwrap();
+        assert_eq!(b, 20);
+    }
+
+    /// The default `checkout_worktree_dir` wraps a conditional around the
+    /// tracker id, so the fixed cost depends on whether one resolved. Probing
+    /// against the real context is what makes that measurable.
+    #[test]
+    fn budget_measures_a_conditional_block_against_the_real_context() {
+        let tmpl = "{{ pr_number }}-{{ pr_title }}{% if linear_id %}_[{{ linear_id }}]{% endif %}";
+        let with = json!({"pr_number": 142, "pr_title": "", "linear_id": "ENG-1234"});
+        let without = json!({"pr_number": 142, "pr_title": "", "linear_id": ""});
+        // "142-" is 4; "_[ENG-1234]" adds 11 more.
+        assert_eq!(
+            budget(tmpl, &with, &novars(), &["pr_title"], 46, None).unwrap(),
+            31
+        );
+        assert_eq!(
+            budget(tmpl, &without, &novars(), &["pr_title"], 46, None).unwrap(),
+            42
+        );
+    }
+
+    #[test]
+    fn budget_clamps_up_to_a_floor() {
+        let ctx = json!({"prefix": "a-very-long-branch-prefix-indeed/", "slug": ""});
+        // 33 characters of prefix against a limit of 36 leaves 3, below the floor.
+        let b = budget(
+            "{{ prefix }}{{ slug }}",
+            &ctx,
+            &novars(),
+            &["slug"],
+            36,
+            Some(12),
+        )
+        .unwrap();
+        assert_eq!(b, 12);
+    }
+
+    #[test]
+    fn budget_without_a_floor_errors_when_fixed_text_fills_the_limit() {
+        let ctx = json!({"pr_number": 142, "pr_title": ""});
+        let err = budget(
+            "worktree-for-pr-{{ pr_number }}-{{ pr_title }}",
+            &ctx,
+            &novars(),
+            &["pr_title"],
+            16,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("20"), "{err}");
+        assert!(err.contains("16"), "{err}");
+    }
 
     #[test]
     fn from_title_slugifies() {
