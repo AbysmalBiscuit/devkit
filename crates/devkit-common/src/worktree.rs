@@ -147,6 +147,12 @@ pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> Include
 
     for pattern in patterns {
         let trimmed = pattern.trim_end_matches('/');
+        // An empty pattern joins to `source` itself, which globs to the source
+        // directory and strips to an empty relative path — planning every file
+        // under the root. Drop it before the join rather than after.
+        if trimmed.is_empty() {
+            continue;
+        }
         let joined = source.join(trimmed);
         let Some(pat_str) = joined.to_str() else {
             warnings.push(format!("include pattern is not valid UTF-8: {pattern}"));
@@ -636,5 +642,27 @@ mod tests {
         assert_eq!(n, 0);
         assert!(warnings.is_empty());
         assert!(!dst.exists());
+    }
+
+    /// `source.join("")` is the source directory, which globs to itself and then
+    /// strips to an empty relative path — planning the entire tree. A pattern that
+    /// is empty, or only separators, has to drop out before the join.
+    #[test]
+    fn an_empty_pattern_plans_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        write(&src.join("a.txt"), "a");
+        write(&src.join("nested/b.txt"), "b");
+
+        let plan = plan_includes(
+            &src,
+            &dst,
+            &["".to_string(), "/".to_string(), "//".to_string()],
+        );
+
+        assert!(plan.missing.is_empty(), "planned {:?}", plan.missing);
+        assert!(plan.existing.is_empty(), "planned {:?}", plan.existing);
+        assert!(plan.warnings.is_empty(), "warned {:?}", plan.warnings);
     }
 }
