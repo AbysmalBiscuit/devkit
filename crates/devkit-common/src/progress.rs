@@ -153,13 +153,26 @@ impl Steps {
     ///
     /// Every completion counts as success here — the persistent log line is
     /// always `✓`, regardless of what `f` returned. A closure returning
-    /// `anyhow::Result` belongs in [`Steps::during_result`], which marks the
-    /// step `✗` on error instead of logging a failure as succeeded.
+    /// `anyhow::Result` belongs in [`Steps::during_result`], and one that
+    /// reports failure some other way in [`Steps::during_ok`]; both mark the
+    /// step `✗` instead of logging a failure as succeeded.
     pub fn during<T>(&self, msg: &str, f: impl FnOnce() -> T) -> T {
         let label = self.label(msg);
         let pb = self.spinner(&label);
         let out = f();
         self.settle(&pb, &label, true);
+        out
+    }
+
+    /// [`Steps::during`] for a step that judges its own success without
+    /// returning a `Result`: the closure hands back its value paired with
+    /// whether the step succeeded, and the settled line is `✗` when that
+    /// reads false.
+    pub fn during_ok<T>(&self, msg: &str, f: impl FnOnce() -> (T, bool)) -> T {
+        let label = self.label(msg);
+        let pb = self.spinner(&label);
+        let (out, ok) = f();
+        self.settle(&pb, &label, ok);
         out
     }
 
