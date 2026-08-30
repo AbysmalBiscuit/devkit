@@ -429,6 +429,7 @@ fn branch_budget(
         vars,
         &["slug"],
         cfg.templates.branch_max(),
+        "branch_max",
         Some(MIN_SLUG),
     )
     .context("measuring the `branch` template")?;
@@ -453,14 +454,10 @@ fn short_slug(
         vars,
         &["short_slug"],
         cfg.templates.worktree_dir_max(),
+        "worktree_dir_max",
         None,
     )
-    .with_context(|| {
-        format!(
-            "measuring the `worktree_dir` template against templates.worktree_dir_max = {}",
-            cfg.templates.worktree_dir_max()
-        )
-    })?;
+    .context("measuring the `worktree_dir` template")?;
     Ok(crate::issue::slug::cap(slug, budget))
 }
 
@@ -768,9 +765,8 @@ mod tests {
                 ..Templates::default()
             },
         );
-        let err = short_slug(&cfg, &novars(), "142", &[], "fix-the-export")
-            .unwrap_err()
-            .to_string();
+        let err = short_slug(&cfg, &novars(), "142", &[], "fix-the-export").unwrap_err();
+        let err = format!("{err:?}");
         assert!(err.contains("worktree_dir_max = 16"), "{err}");
     }
 

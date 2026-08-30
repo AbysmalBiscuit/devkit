@@ -99,6 +99,10 @@ pub(crate) fn cap(slug: &str, budget: usize) -> String {
 /// with two, so the difference in length counts how many times those names are
 /// rendered in total. A template that renders none of them constrains nothing.
 ///
+/// `limit` is the config key `max` came from (e.g. `"branch_max"`), named
+/// here rather than by the caller so a bail message can name it without the
+/// caller's wrapping mis-attributing an unrelated render error to the limit.
+///
 /// `floor` carries the overflow policy, because the two kinds of limit want
 /// opposite answers when the fixed text leaves no room. `Some(n)` clamps up to
 /// `n` and cannot fail, which suits a limit on a display width. `None` fails,
@@ -110,6 +114,7 @@ pub(crate) fn budget(
     vars: &BTreeMap<String, String>,
     names: &[&str],
     max: usize,
+    limit: &str,
     floor: Option<usize>,
 ) -> Result<usize> {
     let probe = |len: usize| -> Result<usize> {
@@ -137,10 +142,13 @@ pub(crate) fn budget(
     let per_name = max.saturating_sub(fixed) / occurrences;
     match floor {
         Some(n) => Ok(per_name.max(n)),
-        None if per_name == 0 => anyhow::bail!(
-            "`{template}` renders {fixed} characters of fixed text, \
-             which leaves no room within a limit of {max}"
-        ),
+        None if per_name == 0 => {
+            let slots = if occurrences == 1 { "slot" } else { "slots" };
+            anyhow::bail!(
+                "`{template}` renders {fixed} characters of fixed text across \
+                 {occurrences} {slots}, leaving too little room within {limit} = {max}"
+            )
+        }
         None => Ok(per_name),
     }
 }
@@ -165,6 +173,7 @@ mod tests {
             &novars(),
             &["slug"],
             46,
+            "worktree_dir_max",
             Some(12),
         )
         .unwrap();
@@ -174,14 +183,32 @@ mod tests {
     #[test]
     fn budget_is_unconstrained_when_the_template_omits_the_name() {
         let ctx = json!({"issue": "142", "slug": ""});
-        let b = budget("{{ issue }}", &ctx, &novars(), &["slug"], 46, None).unwrap();
+        let b = budget(
+            "{{ issue }}",
+            &ctx,
+            &novars(),
+            &["slug"],
+            46,
+            "worktree_dir_max",
+            None,
+        )
+        .unwrap();
         assert_eq!(b, usize::MAX);
     }
 
     #[test]
     fn budget_halves_for_a_name_rendered_twice() {
         let ctx = json!({"slug": ""});
-        let b = budget("{{ slug }}{{ slug }}", &ctx, &novars(), &["slug"], 40, None).unwrap();
+        let b = budget(
+            "{{ slug }}{{ slug }}",
+            &ctx,
+            &novars(),
+            &["slug"],
+            40,
+            "worktree_dir_max",
+            None,
+        )
+        .unwrap();
         assert_eq!(b, 20);
     }
 
@@ -195,6 +222,7 @@ mod tests {
             &novars(),
             &["pr_title", "linear_title"],
             41,
+            "checkout_worktree_dir_max",
             None,
         )
         .unwrap();
@@ -211,11 +239,29 @@ mod tests {
         let without = json!({"pr_number": 142, "pr_title": "", "linear_id": ""});
         // "142-" is 4; "_[ENG-1234]" adds 11 more.
         assert_eq!(
-            budget(tmpl, &with, &novars(), &["pr_title"], 46, None).unwrap(),
+            budget(
+                tmpl,
+                &with,
+                &novars(),
+                &["pr_title"],
+                46,
+                "checkout_worktree_dir_max",
+                None
+            )
+            .unwrap(),
             31
         );
         assert_eq!(
-            budget(tmpl, &without, &novars(), &["pr_title"], 46, None).unwrap(),
+            budget(
+                tmpl,
+                &without,
+                &novars(),
+                &["pr_title"],
+                46,
+                "checkout_worktree_dir_max",
+                None
+            )
+            .unwrap(),
             42
         );
     }
@@ -230,6 +276,7 @@ mod tests {
             &novars(),
             &["slug"],
             36,
+            "branch_max",
             Some(12),
         )
         .unwrap();
@@ -245,12 +292,36 @@ mod tests {
             &novars(),
             &["pr_title"],
             16,
+            "checkout_worktree_dir_max",
             None,
         )
         .unwrap_err()
         .to_string();
         assert!(err.contains("20"), "{err}");
         assert!(err.contains("16"), "{err}");
+        assert!(err.contains("checkout_worktree_dir_max = 16"), "{err}");
+    }
+
+    /// Fixed text that leaves some room, but not enough to divide evenly
+    /// across every slot, used to be reported as "no room" even though two
+    /// characters remained. The message now names the slot count instead.
+    #[test]
+    fn budget_without_a_floor_errors_when_the_room_does_not_divide_evenly() {
+        let ctx = json!({"a": ""});
+        let err = budget(
+            "1234567890{{ a }}{{ a }}{{ a }}",
+            &ctx,
+            &novars(),
+            &["a"],
+            12,
+            "a_max",
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("10"), "{err}");
+        assert!(err.contains("3 slots"), "{err}");
+        assert!(err.contains("a_max = 12"), "{err}");
     }
 
     #[test]

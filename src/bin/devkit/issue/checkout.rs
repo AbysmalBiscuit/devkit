@@ -322,6 +322,10 @@ fn dir_ctx(
     linear_title: Option<&str>,
 ) -> Result<serde_json::Value> {
     let max = templates.checkout_worktree_dir_max();
+    let mut names = vec!["pr_title"];
+    if linear_title.is_some() {
+        names.push("linear_title");
+    }
     let room = budget(
         templates.checkout_worktree_dir(),
         &serde_json::json!({
@@ -331,16 +335,12 @@ fn dir_ctx(
             "linear_title": "",
         }),
         &templates.variables,
-        &["pr_title", "linear_title"],
+        &names,
         max,
+        "checkout_worktree_dir_max",
         None,
     )
-    .with_context(|| {
-        format!(
-            "measuring the `checkout_worktree_dir` template against \
-             templates.checkout_worktree_dir_max = {max}"
-        )
-    })?;
+    .context("measuring the `checkout_worktree_dir` template")?;
     Ok(serde_json::json!({
         "pr_number": number,
         "pr_title": cap(&slugify(title), room),
@@ -380,24 +380,26 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         .with_context(|| format!("fetching PR #{}", resolved.loc.number))?;
 
     let linear_id = resolved.linear_id.clone().unwrap_or_default();
-    let ctx = dir_ctx(
-        &cfg.templates,
-        meta.number,
-        &meta.title,
-        &linear_id,
-        resolved.linear_title.as_deref(),
-    )?;
-    let wt_name = devkit_common::template::render(
-        cfg.templates.checkout_worktree_dir(),
-        &ctx,
-        &cfg.templates.variables,
-    )
-    .context("rendering `checkout_worktree_dir` template")?
-    .trim()
-    .to_string();
     let worktree = match &args.worktree_path {
         Some(p) => expand_tilde(p),
-        None => wt_root.join(&wt_name),
+        None => {
+            let ctx = dir_ctx(
+                &cfg.templates,
+                meta.number,
+                &meta.title,
+                &linear_id,
+                resolved.linear_title.as_deref(),
+            )?;
+            let wt_name = devkit_common::template::render(
+                cfg.templates.checkout_worktree_dir(),
+                &ctx,
+                &cfg.templates.variables,
+            )
+            .context("rendering `checkout_worktree_dir` template")?
+            .trim()
+            .to_string();
+            wt_root.join(&wt_name)
+        }
     };
 
     anyhow::ensure!(
@@ -877,6 +879,31 @@ mod tests {
         assert_eq!(ctx["linear_title"], "fix-the-export-crash");
     }
 
+    /// `linear_title` must probe falsy when the caller resolved none, or a
+    /// template that conditions on it steals half the budget for a variable
+    /// that will not render at all.
+    #[test]
+    fn a_missing_linear_title_gives_pr_title_the_full_budget() {
+        let t = devkit_config::Templates {
+            checkout_worktree_dir: Some(
+                "{{ pr_number }}-{{ pr_title }}{% if linear_title %}_{{ linear_title }}{% endif %}"
+                    .into(),
+            ),
+            checkout_worktree_dir_max: Some(41),
+            ..devkit_config::Templates::default()
+        };
+        let title = "Group sync-includes file lists in the output";
+
+        let with = dir_ctx(&t, 142, title, "", Some("Fix the export crash on save")).unwrap();
+        // 41 less "142-" and "_x" of fixed text, split two ways, is 18 each.
+        assert_eq!(with["pr_title"], "group-sync");
+
+        let without = dir_ctx(&t, 142, title, "", None).unwrap();
+        // With `linear_title` absent, `pr_title` alone gets the room the
+        // conditional block would otherwise have shared with it.
+        assert_eq!(without["pr_title"], "group-sync-includes-file-lists-in-the");
+    }
+
     /// A limit its own template's fixed text already fills is an error rather
     /// than a silently longer directory.
     #[test]
@@ -886,9 +913,8 @@ mod tests {
             checkout_worktree_dir_max: Some(16),
             ..devkit_config::Templates::default()
         };
-        let err = dir_ctx(&t, 142, "Group sync-includes file lists", "", None)
-            .unwrap_err()
-            .to_string();
+        let err = dir_ctx(&t, 142, "Group sync-includes file lists", "", None).unwrap_err();
+        let err = format!("{err:?}");
         assert!(err.contains("checkout_worktree_dir_max = 16"), "{err}");
     }
 
