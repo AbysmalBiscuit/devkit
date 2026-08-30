@@ -16,12 +16,59 @@ fn confirm(label: &str) -> bool {
     matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-fn list(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
+/// How many files each top-level directory names before the rest are elided.
+/// An include reaching a build or asset cache matches hundreds of files under
+/// one directory; capping per directory keeps that flood from crowding out
+/// what the other includes contributed.
+const LIST_MAX: usize = 5;
+
+/// Render `paths` as an indented block, grouped by the top-level directory
+/// each one sits under and named relative to it. A directory names at most
+/// `LIST_MAX` of its files before the tail collapses to a count; a path with no
+/// directory component was named by an include on its own and is always shown.
+/// `verbose` names every path. The block carries no trailing newline, and is
+/// empty for an empty slice.
+fn list(paths: &[PathBuf], verbose: bool) -> String {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    let mut bare: Vec<String> = Vec::new();
+    for path in paths {
+        let mut components = path.components();
+        let Some(first) = components.next() else {
+            continue;
+        };
+        let rest = components.as_path();
+        if rest.as_os_str().is_empty() {
+            bare.push(path.display().to_string());
+            continue;
+        }
+        let dir = first.as_os_str().to_string_lossy().into_owned();
+        let file = rest.display().to_string();
+        match groups.iter_mut().find(|(name, _)| *name == dir) {
+            Some((_, files)) => files.push(file),
+            None => groups.push((dir, vec![file])),
+        }
+    }
+
+    let mut lines = Vec::new();
+    let mut elided = false;
+    for (dir, files) in &groups {
+        let shown = if verbose {
+            files.len()
+        } else {
+            files.len().min(LIST_MAX)
+        };
+        lines.push(format!("    {dir}/: {}", files[..shown].join(",\n      ")));
+        let rest = files.len() - shown;
+        if rest > 0 {
+            lines.push(format!("      ...and {rest} more"));
+            elided = true;
+        }
+    }
+    lines.extend(bare.iter().map(|file| format!("    {file}")));
+    if elided {
+        lines.push("    (rerun with --verbose to name every file)".to_string());
+    }
+    lines.join("\n")
 }
 
 /// The (worktree, issue id) pairs `selectors` names, in selector order and
@@ -51,23 +98,33 @@ fn select<'a>(rows: &'a [(Worktree, String)], selectors: &[String]) -> Vec<&'a (
     chosen
 }
 
-fn report_dry(plan: &IncludePlan, overwrite: bool) {
+fn report_dry(plan: &IncludePlan, overwrite: bool, verbose: bool) {
     if !plan.missing.is_empty() {
-        println!("  would copy: {}", list(&plan.missing));
+        println!("  would copy:\n{}", list(&plan.missing, verbose));
     }
     if !plan.existing.is_empty() {
         if overwrite {
-            println!("  would overwrite: {}", list(&plan.existing));
+            println!("  would overwrite:\n{}", list(&plan.existing, verbose));
         } else {
             println!(
-                "  would leave alone: {} (rerun with --overwrite to replace)",
-                list(&plan.existing)
+                "  would leave alone (rerun with --overwrite to replace):\n{}",
+                list(&plan.existing, verbose)
             );
         }
     }
     if plan.missing.is_empty() && plan.existing.is_empty() {
         println!("  nothing to copy");
     }
+}
+
+/// The boolean switches `issue sync-includes` accepts, passed as one value
+/// so the call site names each of them.
+pub struct Flags {
+    pub overwrite: bool,
+    pub all: bool,
+    pub yes: bool,
+    pub dry_run: bool,
+    pub verbose: bool,
 }
 
 /// Copy every `defaults.worktree_include` match from the primary checkout
@@ -77,15 +134,14 @@ fn report_dry(plan: &IncludePlan, overwrite: bool) {
 /// that prompt falls back to the default behaviour for that worktree.
 /// `overwrite` replaces untracked files git cannot restore, so it needs a scope:
 /// `selectors`, or `all` for every worktree.
-pub fn run(
-    start: &str,
-    selectors: &[String],
-    overwrite: bool,
-    all: bool,
-    yes: bool,
-    dry_run: bool,
-    config: Option<&str>,
-) -> Result<()> {
+pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>) -> Result<()> {
+    let Flags {
+        overwrite,
+        all,
+        yes,
+        dry_run,
+        verbose,
+    } = flags;
     anyhow::ensure!(
         !overwrite || dry_run || all || !selectors.is_empty(),
         "--overwrite needs one or more selectors (issue id, branch, or worktree path), or --all for every worktree"
@@ -121,13 +177,13 @@ pub fn run(
             eprintln!("warning: {w}");
         }
         if dry_run {
-            report_dry(&plan, overwrite);
+            report_dry(&plan, overwrite, verbose);
             continue;
         }
 
         let mut clobber = overwrite;
         if overwrite && !plan.existing.is_empty() {
-            println!("  will overwrite: {}", list(&plan.existing));
+            println!("  will overwrite:\n{}", list(&plan.existing, verbose));
             if !yes {
                 if confirm(label) {
                     // A confirmation is human-scale, so disk may have moved
@@ -149,13 +205,11 @@ pub fn run(
         for w in &warnings {
             eprintln!("warning: {w}");
         }
-        if !overwrite {
-            for rel in &plan.existing {
-                eprintln!(
-                    "warning: {} already exists in {label}, left alone (rerun with --overwrite to replace it)",
-                    rel.display()
-                );
-            }
+        if !overwrite && !plan.existing.is_empty() {
+            eprintln!(
+                "warning: already in {label}, left alone (rerun with --overwrite to replace):\n{}",
+                list(&plan.existing, verbose)
+            );
         }
         if copied == 0 {
             println!("  copied nothing");
@@ -163,12 +217,98 @@ pub fn run(
             let names = if clobber {
                 let mut all = plan.missing.clone();
                 all.extend(plan.existing.iter().cloned());
-                list(&all)
+                list(&all, verbose)
             } else {
-                list(&plan.missing)
+                list(&plan.missing, verbose)
             };
-            println!("  copied {copied} file(s): {names}");
+            println!("  copied {copied} file(s):\n{names}");
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn under(dir: &str, n: usize) -> Vec<PathBuf> {
+        (0..n)
+            .map(|i| PathBuf::from(format!("{dir}/f{i:03}.txt")))
+            .collect()
+    }
+
+    #[test]
+    fn a_directory_at_the_cap_names_every_file() {
+        let out = list(&under("cache", LIST_MAX), false);
+        assert!(!out.contains("more"), "nothing elided: {out}");
+        assert!(out.contains("cache/: f000.txt"), "{out}");
+        assert!(out.contains(&format!("f{:03}.txt", LIST_MAX - 1)), "{out}");
+    }
+
+    /// An include reaching an asset cache matches hundreds of files under one
+    /// directory. The head is enough to recognize what is being copied; the
+    /// count carries the rest.
+    #[test]
+    fn a_long_directory_elides_its_tail_and_counts_it() {
+        let out = list(&under("cache", LIST_MAX + 300), false);
+        assert!(out.contains("cache/: f000.txt"), "{out}");
+        assert!(
+            !out.contains(&format!("f{:03}.txt", LIST_MAX)),
+            "tail elided: {out}"
+        );
+        assert!(out.contains("...and 300 more"), "{out}");
+        assert!(out.contains("--verbose"), "{out}");
+    }
+
+    /// The cap is per top-level directory, so a flood under one include cannot
+    /// crowd out what another include contributed.
+    #[test]
+    fn each_top_level_directory_gets_its_own_cap() {
+        let mut all = under("cache", LIST_MAX + 300);
+        all.extend(under("assets", 2));
+        all.sort();
+        let out = list(&all, false);
+        assert!(out.contains("assets/: f000.txt"), "{out}");
+        assert!(out.contains("cache/: f000.txt"), "{out}");
+        assert!(out.contains("...and 300 more"), "{out}");
+    }
+
+    /// Nesting does not split a directory into more groups: everything under
+    /// one top-level component shares a single cap.
+    #[test]
+    fn nested_paths_group_under_their_top_level_component() {
+        let mut all = under("cache/imported", 4);
+        all.extend(under("cache/editor", 4));
+        all.sort();
+        let out = list(&all, false);
+        assert_eq!(out.matches("cache/").count(), 1, "one group header: {out}");
+        assert!(out.contains("...and 3 more"), "{out}");
+    }
+
+    /// A file an include named on its own is what a cache flood would
+    /// otherwise bury, so it is never elided.
+    #[test]
+    fn bare_files_are_always_named() {
+        let mut all = under("cache", LIST_MAX + 300);
+        all.push(PathBuf::from("devkit.local.toml"));
+        all.push(PathBuf::from(".env.local"));
+        let out = list(&all, false);
+        assert!(out.contains("devkit.local.toml"), "{out}");
+        assert!(out.contains(".env.local"), "{out}");
+    }
+
+    #[test]
+    fn verbose_names_every_path() {
+        let out = list(&under("cache", LIST_MAX + 300), true);
+        assert!(
+            out.contains(&format!("f{:03}.txt", LIST_MAX + 299)),
+            "last path present: {out}"
+        );
+        assert!(!out.contains("more"), "{out}");
+    }
+
+    #[test]
+    fn an_empty_list_is_empty() {
+        assert_eq!(list(&[], false), "");
+    }
 }

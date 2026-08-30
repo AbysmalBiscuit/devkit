@@ -172,6 +172,10 @@ pub(crate) enum Cmd {
         /// Report what would be copied without writing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Name every file in the copied, overwritten, and left-alone lists
+        /// instead of the first few from each top-level directory.
+        #[arg(short = 'v', long)]
+        verbose: bool,
     },
     /// At-a-glance triage of your GitHub PRs via gh.
     Prs {
@@ -355,13 +359,17 @@ pub fn run(cli: IssueCli) -> Result<()> {
             all,
             yes,
             dry_run,
+            verbose,
         }) => sync::run(
             &start(&cli.dir),
             &selectors,
-            overwrite,
-            all,
-            yes,
-            dry_run,
+            sync::Flags {
+                overwrite,
+                all,
+                yes,
+                dry_run,
+                verbose,
+            },
             cli.config.as_deref(),
         ),
         Some(Cmd::Prs {
