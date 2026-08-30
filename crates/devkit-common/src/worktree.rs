@@ -1,5 +1,6 @@
 use crate::git::{self, Worktree};
 use anyhow::Result;
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 /// This worktree's issue id. The setup record is authoritative because it holds
@@ -112,13 +113,12 @@ pub fn copy_out(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<
     (copied, warnings)
 }
 
-/// Copy the files an `IncludePlan` found: every path in `missing`, and every
-/// path in `existing` only when `overwrite` is true. Both vectors hold paths
-/// relative to `dest`, as `plan_includes` returns them. A plan is a snapshot,
-/// so unless `overwrite` is set each copy re-checks the destination and skips a
-/// file that appeared since. Fail-open, like `plan_includes`: a copy error is
-/// collected as a warning string rather than propagated. Returns
-/// (files_copied, warnings).
+/// Copy the files an `IncludePlan` found: every path in a pattern's `missing`,
+/// and every path in its `existing` only when `overwrite` is true. Patterns are
+/// applied in configuration order. A plan is a snapshot, so unless `overwrite`
+/// is set each copy re-checks the destination and skips a file that appeared
+/// since. Fail-open, like `plan_includes`: a copy error is collected as a
+/// warning string rather than propagated. Returns (files_copied, warnings).
 pub fn apply_includes(
     source: &Path,
     dest: &Path,
@@ -128,46 +128,83 @@ pub fn apply_includes(
     let mut copied = 0usize;
     let mut warnings = Vec::new();
 
-    for rel in &plan.missing {
-        copy_file(
-            &source.join(rel),
-            &dest.join(rel),
-            overwrite,
-            &mut copied,
-            &mut warnings,
-        );
-    }
-    if overwrite {
-        for rel in &plan.existing {
+    for entry in &plan.patterns {
+        for rel in &entry.missing {
             copy_file(
                 &source.join(rel),
                 &dest.join(rel),
-                true,
+                overwrite,
                 &mut copied,
                 &mut warnings,
             );
+        }
+        if overwrite {
+            for rel in &entry.existing {
+                copy_file(
+                    &source.join(rel),
+                    &dest.join(rel),
+                    true,
+                    &mut copied,
+                    &mut warnings,
+                );
+            }
         }
     }
 
     (copied, warnings)
 }
 
-/// The result of walking `patterns` without copying anything: every matched
-/// file sorted by whether `dest` already has it, so a caller can prompt before
-/// clobbering. Paths are relative to `dest`.
-pub struct IncludePlan {
+/// Every file one `worktree_include` pattern matched, split by whether `dest`
+/// already has it. Both vectors come back sorted, so rendering does not vary
+/// with filesystem iteration order.
+pub struct PatternPlan {
+    pub pattern: String,
     pub missing: Vec<PathBuf>,
     pub existing: Vec<PathBuf>,
+}
+
+/// The result of walking `patterns` without copying anything, kept grouped by
+/// the pattern each match came from. Paths are relative to `dest`. Use
+/// [`IncludePlan::missing`] and [`IncludePlan::existing`] for a flat view.
+pub struct IncludePlan {
+    /// One entry per configured pattern, in configuration order, including a
+    /// pattern that matched nothing or only produced a warning.
+    pub patterns: Vec<PatternPlan>,
     pub warnings: Vec<String>,
 }
 
+impl IncludePlan {
+    /// Every match `dest` does not have, in pattern order then sorted within a
+    /// pattern.
+    pub fn missing(&self) -> impl Iterator<Item = &Path> {
+        self.patterns
+            .iter()
+            .flat_map(|p| p.missing.iter().map(PathBuf::as_path))
+    }
+
+    /// Every match `dest` already has, ordered as [`IncludePlan::missing`] is.
+    pub fn existing(&self) -> impl Iterator<Item = &Path> {
+        self.patterns
+            .iter()
+            .flat_map(|p| p.existing.iter().map(PathBuf::as_path))
+    }
+
+    pub fn missing_len(&self) -> usize {
+        self.patterns.iter().map(|p| p.missing.len()).sum()
+    }
+
+    pub fn existing_len(&self) -> usize {
+        self.patterns.iter().map(|p| p.existing.len()).sum()
+    }
+}
+
 /// Walk `patterns` the way `copy_includes` does, but classify matches instead
-/// of copying them: each matched file lands in `missing` or `existing`
-/// depending on whether `dest` already has it. Both vectors come back sorted
-/// and deduplicated, so a caller's rendering does not vary with filesystem
-/// iteration order and two patterns that overlap plan each file once. A
-/// directory match contributes its files recursively, never the directory
-/// entry itself. Fail-open, like
+/// of copying them: each matched file lands in its pattern's `missing` or
+/// `existing` depending on whether `dest` already has it. A directory match
+/// contributes its files recursively, never the directory entry itself. Every
+/// configured pattern keeps an entry, and a file matched by two patterns is
+/// planned once, under the first of them in configuration order, so a caller's
+/// rendering does not vary with filesystem iteration order. Fail-open, like
 /// `copy_includes`: a bad glob, an unreadable directory, or a non-UTF-8
 /// pattern becomes a warning string.
 pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> IncludePlan {
@@ -176,67 +213,98 @@ pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> Include
         require_literal_separator: false,
         require_literal_leading_dot: false,
     };
-    let mut missing = Vec::new();
-    let mut existing = Vec::new();
     let mut warnings = Vec::new();
+    let mut plans = Vec::with_capacity(patterns.len());
 
     for pattern in patterns {
-        let trimmed = pattern.trim_end_matches('/');
-        // An empty pattern joins to `source` itself, which globs to the source
-        // directory and strips to an empty relative path — planning every file
-        // under the root. Drop it before the join rather than after.
-        if trimmed.is_empty() {
-            continue;
-        }
-        let joined = source.join(trimmed);
-        let Some(pat_str) = joined.to_str() else {
-            warnings.push(format!("include pattern is not valid UTF-8: {pattern}"));
-            continue;
+        // Every configured pattern gets an entry, warnings included, so a
+        // plan's entries line up one-to-one with the include list.
+        let mut out = PatternPlan {
+            pattern: pattern.clone(),
+            missing: Vec::new(),
+            existing: Vec::new(),
         };
-        let entries = match glob::glob_with(pat_str, opts) {
-            Ok(paths) => paths,
-            Err(e) => {
-                warnings.push(format!("bad include pattern `{pattern}`: {e}"));
-                continue;
-            }
-        };
-        for entry in entries {
-            let matched = match entry {
-                Ok(p) => p,
-                Err(e) => {
-                    warnings.push(format!("reading match for `{pattern}`: {e}"));
-                    continue;
-                }
-            };
-            let Ok(rel) = matched.strip_prefix(source) else {
-                warnings.push(format!("match outside source: {}", matched.display()));
-                continue;
-            };
-            let target = dest.join(rel);
-            if matched.is_dir() {
-                plan_dir(
-                    &matched,
-                    rel,
-                    dest,
-                    &mut missing,
-                    &mut existing,
-                    &mut warnings,
-                );
-            } else {
-                classify_file(&target, rel, &mut missing, &mut existing);
-            }
-        }
+        plan_one(source, dest, pattern, opts, &mut out, &mut warnings);
+        out.missing.sort();
+        out.missing.dedup();
+        out.existing.sort();
+        out.existing.dedup();
+        plans.push(out);
     }
-    // One pattern naming a file and another naming its parent directory both
-    // plan that file; copying it twice would also double the reported count.
-    missing.sort();
-    missing.dedup();
-    existing.sort();
-    existing.dedup();
+    claim_once(&mut plans);
+
     IncludePlan {
-        missing,
-        existing,
+        patterns: plans,
         warnings,
+    }
+}
+
+/// Leave every planned path in the first entry that matched it. A pattern
+/// naming a file and another naming its parent directory both match it, and
+/// copying it twice would double the reported count, so the earlier pattern in
+/// configuration order keeps it. Each entry's own counts still sum to the
+/// plan's total, which is what a per-entry display reports against.
+fn claim_once(plans: &mut [PatternPlan]) {
+    let mut claimed: HashSet<PathBuf> = HashSet::new();
+    for plan in plans {
+        plan.missing.retain(|rel| claimed.insert(rel.clone()));
+        plan.existing.retain(|rel| claimed.insert(rel.clone()));
+    }
+}
+
+/// Walk one pattern into `out`. Every failure is a warning, never a return
+/// value, so one bad pattern cannot stop the rest of the list.
+fn plan_one(
+    source: &Path,
+    dest: &Path,
+    pattern: &str,
+    opts: glob::MatchOptions,
+    out: &mut PatternPlan,
+    warnings: &mut Vec<String>,
+) {
+    let trimmed = pattern.trim_end_matches('/');
+    // An empty pattern joins to `source` itself, which globs to the source
+    // directory and strips to an empty relative path, planning every file under
+    // the root. Drop it before the join rather than after.
+    if trimmed.is_empty() {
+        return;
+    }
+    let joined = source.join(trimmed);
+    let Some(pat_str) = joined.to_str() else {
+        warnings.push(format!("include pattern is not valid UTF-8: {pattern}"));
+        return;
+    };
+    let entries = match glob::glob_with(pat_str, opts) {
+        Ok(paths) => paths,
+        Err(e) => {
+            warnings.push(format!("bad include pattern `{pattern}`: {e}"));
+            return;
+        }
+    };
+    for entry in entries {
+        let matched = match entry {
+            Ok(p) => p,
+            Err(e) => {
+                warnings.push(format!("reading match for `{pattern}`: {e}"));
+                continue;
+            }
+        };
+        let Ok(rel) = matched.strip_prefix(source) else {
+            warnings.push(format!("match outside source: {}", matched.display()));
+            continue;
+        };
+        if matched.is_dir() {
+            plan_dir(
+                &matched,
+                rel,
+                dest,
+                &mut out.missing,
+                &mut out.existing,
+                warnings,
+            );
+        } else {
+            classify_file(&dest.join(rel), rel, &mut out.missing, &mut out.existing);
+        }
     }
 }
 
@@ -516,8 +584,11 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &[".env.local".to_string()]);
 
-        assert_eq!(plan.missing, vec![PathBuf::from(".env.local")]);
-        assert!(plan.existing.is_empty());
+        assert_eq!(
+            plan.missing().collect::<Vec<_>>(),
+            [Path::new(".env.local")]
+        );
+        assert_eq!(plan.existing_len(), 0);
         assert!(plan.warnings.is_empty());
     }
 
@@ -531,8 +602,11 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
 
-        assert_eq!(plan.existing, vec![PathBuf::from(".tool-versions")]);
-        assert!(plan.missing.is_empty());
+        assert_eq!(
+            plan.existing().collect::<Vec<_>>(),
+            [Path::new(".tool-versions")]
+        );
+        assert_eq!(plan.missing_len(), 0);
         assert!(plan.warnings.is_empty());
     }
 
@@ -547,10 +621,13 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &[".claude/hooks/".to_string()]);
 
-        assert_eq!(plan.existing, vec![PathBuf::from(".claude/hooks/pre.sh")]);
         assert_eq!(
-            plan.missing,
-            vec![PathBuf::from(".claude/hooks/sub/post.sh")]
+            plan.existing().collect::<Vec<_>>(),
+            [Path::new(".claude/hooks/pre.sh")]
+        );
+        assert_eq!(
+            plan.missing().collect::<Vec<_>>(),
+            [Path::new(".claude/hooks/sub/post.sh")]
         );
         assert!(plan.warnings.is_empty());
     }
@@ -571,12 +648,12 @@ mod tests {
         let plan = plan_includes(&src, &dst, &["hooks/".to_string()]);
 
         assert_eq!(
-            plan.missing,
-            vec![PathBuf::from("hooks/b.sh"), PathBuf::from("hooks/d.sh")]
+            plan.missing().collect::<Vec<_>>(),
+            [Path::new("hooks/b.sh"), Path::new("hooks/d.sh")]
         );
         assert_eq!(
-            plan.existing,
-            vec![PathBuf::from("hooks/a.sh"), PathBuf::from("hooks/c.sh")]
+            plan.existing().collect::<Vec<_>>(),
+            [Path::new("hooks/a.sh"), Path::new("hooks/c.sh")]
         );
     }
 
@@ -589,8 +666,8 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &["does/not/exist".to_string()]);
 
-        assert!(plan.missing.is_empty());
-        assert!(plan.existing.is_empty());
+        assert_eq!(plan.missing_len(), 0);
+        assert_eq!(plan.existing_len(), 0);
         assert!(plan.warnings.is_empty());
     }
 
@@ -603,9 +680,89 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &["[".to_string()]);
 
-        assert!(plan.missing.is_empty());
-        assert!(plan.existing.is_empty());
+        assert_eq!(plan.missing_len(), 0);
+        assert_eq!(plan.existing_len(), 0);
         assert_eq!(plan.warnings.len(), 1);
+    }
+
+    /// The copy display counts per include entry, so the plan has to remember
+    /// which pattern produced each match instead of pouring them into one list.
+    #[test]
+    fn plan_groups_matches_by_the_pattern_that_found_them() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+        write(&src.join("hooks/a.sh"), "x");
+        write(&src.join("hooks/b.sh"), "x");
+
+        let plan = plan_includes(
+            &src,
+            &dst,
+            &[".tool-versions".to_string(), "hooks/".to_string()],
+        );
+
+        assert_eq!(plan.patterns.len(), 2);
+        assert_eq!(plan.patterns[0].pattern, ".tool-versions");
+        assert_eq!(
+            plan.patterns[0].missing,
+            vec![PathBuf::from(".tool-versions")]
+        );
+        assert_eq!(plan.patterns[1].pattern, "hooks/");
+        assert_eq!(
+            plan.patterns[1].missing,
+            vec![PathBuf::from("hooks/a.sh"), PathBuf::from("hooks/b.sh")]
+        );
+    }
+
+    /// Sub-step numbering is one-to-one with the configured include list, so a
+    /// pattern that only produced a warning still occupies its slot.
+    #[test]
+    fn a_pattern_that_warns_still_gets_its_own_entry() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+
+        let plan = plan_includes(&src, &dst, &["[".to_string(), ".tool-versions".to_string()]);
+
+        assert_eq!(plan.patterns.len(), 2);
+        assert_eq!(plan.patterns[0].pattern, "[");
+        assert!(plan.patterns[0].missing.is_empty());
+        assert!(plan.patterns[0].existing.is_empty());
+        assert_eq!(plan.warnings.len(), 1);
+        assert_eq!(
+            plan.patterns[1].missing,
+            vec![PathBuf::from(".tool-versions")]
+        );
+    }
+
+    /// The flattening views replace what the old flat vectors held.
+    #[test]
+    fn the_flattening_views_yield_every_match() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".tool-versions"), "node 20");
+        write(&dst.join(".tool-versions"), "KEEP ME");
+        write(&src.join("hooks/a.sh"), "x");
+
+        let plan = plan_includes(
+            &src,
+            &dst,
+            &[".tool-versions".to_string(), "hooks/".to_string()],
+        );
+
+        assert_eq!(
+            plan.missing().collect::<Vec<_>>(),
+            [Path::new("hooks/a.sh")]
+        );
+        assert_eq!(
+            plan.existing().collect::<Vec<_>>(),
+            [Path::new(".tool-versions")]
+        );
+        assert_eq!(plan.missing_len(), 1);
+        assert_eq!(plan.existing_len(), 1);
     }
 
     #[test]
@@ -637,7 +794,10 @@ mod tests {
         write(&src.join(".tool-versions"), "node 20");
 
         let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
-        assert_eq!(plan.missing, vec![PathBuf::from(".tool-versions")]);
+        assert_eq!(
+            plan.missing().collect::<Vec<_>>(),
+            [Path::new(".tool-versions")]
+        );
         write(&dst.join(".tool-versions"), "KEEP ME");
 
         let (n, warnings) = apply_includes(&src, &dst, &plan, false);
@@ -700,8 +860,18 @@ mod tests {
             &["".to_string(), "/".to_string(), "//".to_string()],
         );
 
-        assert!(plan.missing.is_empty(), "planned {:?}", plan.missing);
-        assert!(plan.existing.is_empty(), "planned {:?}", plan.existing);
+        assert_eq!(
+            plan.missing_len(),
+            0,
+            "planned {:?}",
+            plan.missing().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            plan.existing_len(),
+            0,
+            "planned {:?}",
+            plan.existing().collect::<Vec<_>>()
+        );
         assert!(plan.warnings.is_empty(), "warned {:?}", plan.warnings);
     }
 
@@ -830,7 +1000,10 @@ mod tests {
             &dst,
             &["scratch/".to_string(), "scratch/a.md".to_string()],
         );
-        assert_eq!(plan.missing, vec![PathBuf::from("scratch").join("a.md")]);
+        assert_eq!(
+            plan.missing().collect::<Vec<_>>(),
+            [PathBuf::from("scratch").join("a.md").as_path()]
+        );
         assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
 
         let (copied, warnings) = copy_out(

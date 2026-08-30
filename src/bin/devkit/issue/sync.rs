@@ -4,7 +4,7 @@ use devkit_common::git::Worktree;
 use devkit_common::worktree::{self, IncludePlan};
 use devkit_ports::load;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn confirm(label: &str) -> bool {
     print!("  Overwrite in {label}? [y/N] ");
@@ -28,10 +28,11 @@ const LIST_MAX: usize = 5;
 /// directory component was named by an include on its own and is always shown.
 /// `verbose` names every path. The block carries no trailing newline, and is
 /// empty for an empty slice.
-fn list(paths: &[PathBuf], verbose: bool) -> String {
+fn list<P: AsRef<Path>>(paths: impl IntoIterator<Item = P>, verbose: bool) -> String {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     let mut bare: Vec<String> = Vec::new();
     for path in paths {
+        let path = path.as_ref();
         let mut components = path.components();
         let Some(first) = components.next() else {
             continue;
@@ -99,20 +100,20 @@ fn select<'a>(rows: &'a [(Worktree, String)], selectors: &[String]) -> Vec<&'a (
 }
 
 fn report_dry(plan: &IncludePlan, overwrite: bool, verbose: bool) {
-    if !plan.missing.is_empty() {
-        println!("  would copy:\n{}", list(&plan.missing, verbose));
+    if plan.missing_len() > 0 {
+        println!("  would copy:\n{}", list(plan.missing(), verbose));
     }
-    if !plan.existing.is_empty() {
+    if plan.existing_len() > 0 {
         if overwrite {
-            println!("  would overwrite:\n{}", list(&plan.existing, verbose));
+            println!("  would overwrite:\n{}", list(plan.existing(), verbose));
         } else {
             println!(
                 "  would leave alone (rerun with --overwrite to replace):\n{}",
-                list(&plan.existing, verbose)
+                list(plan.existing(), verbose)
             );
         }
     }
-    if plan.missing.is_empty() && plan.existing.is_empty() {
+    if plan.missing_len() == 0 && plan.existing_len() == 0 {
         println!("  nothing to copy");
     }
 }
@@ -182,8 +183,8 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
         }
 
         let mut clobber = overwrite;
-        if overwrite && !plan.existing.is_empty() {
-            println!("  will overwrite:\n{}", list(&plan.existing, verbose));
+        if overwrite && plan.existing_len() > 0 {
+            println!("  will overwrite:\n{}", list(plan.existing(), verbose));
             if !yes {
                 if confirm(label) {
                     // A confirmation is human-scale, so disk may have moved
@@ -205,21 +206,19 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
         for w in &warnings {
             eprintln!("warning: {w}");
         }
-        if !overwrite && !plan.existing.is_empty() {
+        if !overwrite && plan.existing_len() > 0 {
             eprintln!(
                 "warning: already in {label}, left alone (rerun with --overwrite to replace):\n{}",
-                list(&plan.existing, verbose)
+                list(plan.existing(), verbose)
             );
         }
         if copied == 0 {
             println!("  copied nothing");
         } else {
             let names = if clobber {
-                let mut all = plan.missing.clone();
-                all.extend(plan.existing.iter().cloned());
-                list(&all, verbose)
+                list(plan.missing().chain(plan.existing()), verbose)
             } else {
-                list(&plan.missing, verbose)
+                list(plan.missing(), verbose)
             };
             println!("  copied {copied} file(s):\n{names}");
         }
@@ -230,6 +229,7 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn under(dir: &str, n: usize) -> Vec<PathBuf> {
         (0..n)
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn a_directory_at_the_cap_names_every_file() {
-        let out = list(&under("cache", LIST_MAX), false);
+        let out = list(under("cache", LIST_MAX), false);
         assert!(!out.contains("more"), "nothing elided: {out}");
         assert!(out.contains("cache/: f000.txt"), "{out}");
         assert!(out.contains(&format!("f{:03}.txt", LIST_MAX - 1)), "{out}");
@@ -250,7 +250,7 @@ mod tests {
     /// count carries the rest.
     #[test]
     fn a_long_directory_elides_its_tail_and_counts_it() {
-        let out = list(&under("cache", LIST_MAX + 300), false);
+        let out = list(under("cache", LIST_MAX + 300), false);
         assert!(out.contains("cache/: f000.txt"), "{out}");
         assert!(
             !out.contains(&format!("f{:03}.txt", LIST_MAX)),
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn verbose_names_every_path() {
-        let out = list(&under("cache", LIST_MAX + 300), true);
+        let out = list(under("cache", LIST_MAX + 300), true);
         assert!(
             out.contains(&format!("f{:03}.txt", LIST_MAX + 299)),
             "last path present: {out}"
@@ -309,6 +309,6 @@ mod tests {
 
     #[test]
     fn an_empty_list_is_empty() {
-        assert_eq!(list(&[], false), "");
+        assert_eq!(list(Vec::<PathBuf>::new(), false), "");
     }
 }
