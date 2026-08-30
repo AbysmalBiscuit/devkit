@@ -137,7 +137,7 @@ pub fn apply_includes(
 
 /// [`apply_includes`], bracketing each pattern with [`IncludeEvent::EntryStart`]
 /// and [`IncludeEvent::EntryDone`] and reporting [`IncludeEvent::FileDone`] as
-/// each file in that pattern's worklist is handled.
+/// each file and link belonging to that pattern is handled.
 ///
 /// The callback is `Sync` because `copy_includes_with` hands the same `on`
 /// reference to both the walk and the copy.
@@ -225,16 +225,17 @@ pub enum IncludeEvent<'a> {
     Found { files: usize },
     /// The walk finished, having matched `files` in total.
     ScanDone { files: usize },
-    /// The copy started for `pattern`, with `files` in its worklist.
+    /// The copy started for `pattern`, with `files` counting every file and
+    /// link it will handle.
     EntryStart {
         pattern: &'a str,
         index: usize,
         of: usize,
         files: usize,
     },
-    /// One file of `pattern`'s worklist is handled: copied, skipped because the
-    /// destination already existed, or failed. `done` and `of` count within
-    /// that pattern and may arrive out of order.
+    /// One file or link of `pattern` is handled: copied or linked, skipped
+    /// because the destination already existed, or failed. `done` and `of`
+    /// count within that pattern and may arrive out of order.
     FileDone {
         pattern: &'a str,
         done: usize,
@@ -1477,6 +1478,41 @@ mod tests {
 
         assert_eq!(copied, 1);
         assert_eq!(*files.lock().unwrap(), vec![(1, 1)]);
+    }
+
+    /// A link is a unit of a pattern's work exactly like a file, so
+    /// `EntryStart`'s denominator and the `FileDone` count that ticks toward it
+    /// both include it.
+    #[test]
+    fn the_entry_denominator_counts_a_link_alongside_a_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("src");
+        let dest = tmp.path().join("dst");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(source.join("inc/plain.txt"), "content").unwrap();
+        std::fs::write(source.join("real.txt"), "content").unwrap();
+        if !link_or_skip(
+            Path::new("../real.txt"),
+            &source.join("inc/link.txt"),
+            false,
+        ) {
+            return;
+        }
+
+        let plan = plan_includes(&source, &dest, &["inc/".to_string()]);
+        let start_files = std::sync::Mutex::new(Vec::new());
+        let done = std::sync::Mutex::new(Vec::new());
+        let (_, linked, warnings) =
+            apply_includes_with(&source, &dest, &plan, false, &|e| match e {
+                IncludeEvent::EntryStart { files, .. } => start_files.lock().unwrap().push(files),
+                IncludeEvent::FileDone { done: d, of, .. } => done.lock().unwrap().push((d, of)),
+                _ => {}
+            });
+
+        assert_eq!(linked, 1, "{warnings:?}");
+        assert_eq!(*start_files.lock().unwrap(), vec![2]);
+        assert_eq!(*done.lock().unwrap(), vec![(1, 2), (2, 2)]);
     }
 
     /// A pattern that matches nothing still occupies its slot between two that
