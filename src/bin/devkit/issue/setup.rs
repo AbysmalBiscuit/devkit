@@ -214,8 +214,9 @@ const INCLUDE_REDRAW_EVERY: usize = 64;
 /// numbers are a display concern, so the offset the discovery sub-step
 /// introduces is applied here rather than in the event stream.
 ///
-/// The counters are atomic and every method takes `&self`, because the copy
-/// may report from more than one thread.
+/// The event callback type is `Sync` and every method takes `&self`, so the
+/// counters are atomic to match, whether or not a given caller drives them
+/// from more than one thread.
 struct IncludeRender<'a> {
     step: &'a devkit_common::progress::Step<'a>,
     discovery: bool,
@@ -232,7 +233,7 @@ impl IncludeRender<'_> {
             E::Found { files } => {
                 if self.discovery && self.due(files) {
                     self.step.activity(&format!(
-                        "[1/{}] discovering files\u{2026} ({files} found)",
+                        "[1/{}] discovering files… ({files} found)",
                         self.subs
                     ));
                 }
@@ -276,7 +277,9 @@ impl IncludeRender<'_> {
     }
 
     /// Whether `count` has moved far enough since the last redraw to be worth
-    /// another one.
+    /// another one. A `true` result records `count` as the new redraw cursor.
+    /// A caller may still draw on a `false` result, e.g. the last file of a
+    /// pattern, and such a draw does not move the cursor.
     fn due(&self, count: usize) -> bool {
         use std::sync::atomic::Ordering::Relaxed;
         if count.saturating_sub(self.drawn.load(Relaxed)) < INCLUDE_REDRAW_EVERY {
@@ -310,7 +313,7 @@ pub fn backfill_includes(
     let discovery = devkit_common::worktree::needs_discovery(patterns);
     let subs = patterns.len() + usize::from(discovery);
 
-    let warnings = steps.during_step("Copying worktree includes\u{2026}", |step| {
+    let warnings = steps.during_step("Copying worktree includes…", |step| {
         let render = IncludeRender {
             step,
             discovery,
@@ -324,7 +327,10 @@ pub fn backfill_includes(
             patterns,
             &|e| render.on(e),
         );
-        step.detail(&format!("{copied} files"));
+        step.detail(&format!(
+            "{copied} {}",
+            if copied == 1 { "file" } else { "files" }
+        ));
         warnings
     });
 
@@ -797,6 +803,70 @@ mod tests {
         backfill_includes(base.path().to_str().unwrap(), base.path(), &[], &steps);
 
         assert_eq!(steps.started(), 0);
+    }
+
+    /// Without a discovery sub-step, a pattern's display number is its index
+    /// in the configured list, one-based.
+    #[test]
+    fn number_without_discovery_starts_at_one() {
+        let steps = Steps::persistent();
+        steps.during_step("test", |step| {
+            let render = IncludeRender {
+                step,
+                discovery: false,
+                subs: 3,
+                entry: std::sync::atomic::AtomicUsize::new(0),
+                drawn: std::sync::atomic::AtomicUsize::new(0),
+            };
+            assert_eq!(render.subs, 3, "no discovery sub-step to add");
+            assert_eq!(render.number(0), 1);
+            assert_eq!(render.number(2), 3);
+        });
+    }
+
+    /// A discovery sub-step takes slot 1, so every pattern's number and the
+    /// sub-step total both shift by one.
+    #[test]
+    fn number_with_discovery_reserves_the_first_slot() {
+        let steps = Steps::persistent();
+        steps.during_step("test", |step| {
+            let render = IncludeRender {
+                step,
+                discovery: true,
+                subs: 4,
+                entry: std::sync::atomic::AtomicUsize::new(0),
+                drawn: std::sync::atomic::AtomicUsize::new(0),
+            };
+            assert_eq!(render.subs, 4, "discovery adds one sub-step");
+            assert_eq!(render.number(0), 2, "the first pattern follows discovery");
+            assert_eq!(render.number(2), 4);
+        });
+    }
+
+    /// `due` throttles redraws to every `INCLUDE_REDRAW_EVERY` files, and a
+    /// `true` result moves the recorded cursor to that count.
+    #[test]
+    fn due_throttles_and_records_the_redraw_cursor() {
+        let steps = Steps::persistent();
+        steps.during_step("test", |step| {
+            let render = IncludeRender {
+                step,
+                discovery: false,
+                subs: 1,
+                entry: std::sync::atomic::AtomicUsize::new(0),
+                drawn: std::sync::atomic::AtomicUsize::new(0),
+            };
+            assert!(!render.due(10), "under the threshold from a zero cursor");
+            assert!(render.due(INCLUDE_REDRAW_EVERY), "reaches the threshold");
+            assert!(
+                !render.due(INCLUDE_REDRAW_EVERY + 10),
+                "not far enough past the cursor `due` just recorded"
+            );
+            assert!(
+                render.due(INCLUDE_REDRAW_EVERY * 2),
+                "far enough past the recorded cursor"
+            );
+        });
     }
 
     #[test]
