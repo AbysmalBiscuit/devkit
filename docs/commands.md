@@ -110,6 +110,8 @@ Checks out an existing PR branch into a new worktree, unlike `setup`, which crea
 
 The worktree directory is named by the `templates.checkout_worktree_dir` template (variables: `pr_number`, `pr_title`, `linear_id`, `linear_title`; titles are slugified; `linear_*` are empty on the PR-only path and otherwise carry whichever tracker's id and title resolved, the names being historical); the default renders e.g. `3340-fix-login`, or `3340-fix-login_[ENG-42]` when reached through an issue. Pass `[WORKTREE_PATH]` to override the placement. The PR's own branch name is kept; the template governs only the directory.
 
+The worktree directory name comes from `templates.checkout_worktree_dir`, whose `pr_title` and `linear_title` are shortened on a word boundary to fit `templates.checkout_worktree_dir_max` (default 46); a template rendering both splits the budget between them. The branch is not devkit's to shorten — `gh pr checkout` takes it from the remote.
+
 Add `--setup [--apps a,b]` to also run the per-app prep pipeline, exactly as `issue setup` does. The worktree gets a `.devkit/issue.toml` record so `issue status`/`issue end` recognise it. Its result prints as a table on a terminal and as JSON otherwise, exactly as `setup` does.
 
 ### `status`, `info`, `end`, `sync-includes`

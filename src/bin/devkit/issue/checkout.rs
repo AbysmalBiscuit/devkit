@@ -1,4 +1,4 @@
-use crate::issue::slug::slugify;
+use crate::issue::slug::{budget, cap, slugify};
 use anyhow::{Context, Result};
 use devkit_common::cmd::{gh_capture, gh_json_in};
 use devkit_common::git::Git;
@@ -307,6 +307,50 @@ fn with_cleanup<T>(worktree: &Path, primary: &str, f: impl FnOnce() -> Result<T>
     }
 }
 
+/// Render context for `checkout_worktree_dir`, with both title slugs shortened
+/// to whatever the template leaves inside `checkout_worktree_dir_max`. A
+/// template rendering both splits that room between them.
+///
+/// Nothing here reaches the branch: `gh pr checkout` takes that from the
+/// remote. This context names a directory, so a limit it cannot meet is an
+/// error rather than an overrun.
+fn dir_ctx(
+    templates: &devkit_config::Templates,
+    number: u64,
+    title: &str,
+    linear_id: &str,
+    linear_title: Option<&str>,
+) -> Result<serde_json::Value> {
+    let max = templates.checkout_worktree_dir_max();
+    let room = budget(
+        templates.checkout_worktree_dir(),
+        &serde_json::json!({
+            "pr_number": number,
+            "pr_title": "",
+            "linear_id": linear_id,
+            "linear_title": "",
+        }),
+        &templates.variables,
+        &["pr_title", "linear_title"],
+        max,
+        None,
+    )
+    .with_context(|| {
+        format!(
+            "measuring the `checkout_worktree_dir` template against \
+             templates.checkout_worktree_dir_max = {max}"
+        )
+    })?;
+    Ok(serde_json::json!({
+        "pr_number": number,
+        "pr_title": cap(&slugify(title), room),
+        "linear_id": linear_id,
+        "linear_title": linear_title
+            .map(|t| cap(&slugify(t), room))
+            .unwrap_or_default(),
+    }))
+}
+
 pub fn run(args: CheckoutArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
@@ -335,12 +379,14 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         })
         .with_context(|| format!("fetching PR #{}", resolved.loc.number))?;
 
-    let ctx = serde_json::json!({
-        "pr_number": meta.number,
-        "pr_title": slugify(&meta.title),
-        "linear_id": resolved.linear_id.clone().unwrap_or_default(),
-        "linear_title": resolved.linear_title.as_deref().map(slugify).unwrap_or_default(),
-    });
+    let linear_id = resolved.linear_id.clone().unwrap_or_default();
+    let ctx = dir_ctx(
+        &cfg.templates,
+        meta.number,
+        &meta.title,
+        &linear_id,
+        resolved.linear_title.as_deref(),
+    )?;
     let wt_name = devkit_common::template::render(
         cfg.templates.checkout_worktree_dir(),
         &ctx,
@@ -770,6 +816,80 @@ mod tests {
         assert_eq!(record_issue_id(Some("ENG-42"), "lev/eng-9-x"), "ENG-42");
         assert_eq!(record_issue_id(None, "lev/eng-9-fix"), "ENG-9");
         assert_eq!(record_issue_id(None, "no-id-here"), "UNKNOWN");
+    }
+
+    /// The shipped template against its default limit: a long PR title is
+    /// shortened on a word boundary rather than growing the directory name.
+    #[test]
+    fn the_default_template_shortens_a_long_pr_title() {
+        let t = devkit_config::Templates::default();
+        let ctx = dir_ctx(
+            &t,
+            142,
+            "Group sync-includes file lists in the output",
+            "ENG-1234",
+            None,
+        )
+        .unwrap();
+        let name =
+            devkit_common::template::render(t.checkout_worktree_dir(), &ctx, &t.variables).unwrap();
+        assert_eq!(name, "142-group-sync-includes-file-lists_[ENG-1234]");
+        assert!(name.chars().count() <= t.checkout_worktree_dir_max());
+    }
+
+    /// Without a tracker id the conditional block drops out, so the same limit
+    /// leaves eleven more characters for the title.
+    #[test]
+    fn a_pr_without_a_tracker_id_gets_the_conditional_block_back() {
+        let t = devkit_config::Templates::default();
+        let ctx = dir_ctx(
+            &t,
+            142,
+            "Group sync-includes file lists in the output",
+            "",
+            None,
+        )
+        .unwrap();
+        let name =
+            devkit_common::template::render(t.checkout_worktree_dir(), &ctx, &t.variables).unwrap();
+        assert_eq!(name, "142-group-sync-includes-file-lists-in-the");
+        assert_eq!(ctx["linear_title"], "");
+    }
+
+    /// A template rendering both titles splits the budget between them.
+    #[test]
+    fn two_titles_split_the_budget() {
+        let t = devkit_config::Templates {
+            checkout_worktree_dir: Some("{{ pr_title }}-{{ linear_title }}".into()),
+            checkout_worktree_dir_max: Some(41),
+            ..devkit_config::Templates::default()
+        };
+        let ctx = dir_ctx(
+            &t,
+            142,
+            "Group sync-includes file lists in the output",
+            "ENG-1234",
+            Some("Fix the export crash on save"),
+        )
+        .unwrap();
+        // 41 less one dash of fixed text, split two ways, is 20 each.
+        assert_eq!(ctx["pr_title"], "group-sync-includes");
+        assert_eq!(ctx["linear_title"], "fix-the-export-crash");
+    }
+
+    /// A limit its own template's fixed text already fills is an error rather
+    /// than a silently longer directory.
+    #[test]
+    fn a_checkout_limit_the_template_cannot_meet_is_an_error() {
+        let t = devkit_config::Templates {
+            checkout_worktree_dir: Some("worktree-for-pr-{{ pr_number }}-{{ pr_title }}".into()),
+            checkout_worktree_dir_max: Some(16),
+            ..devkit_config::Templates::default()
+        };
+        let err = dir_ctx(&t, 142, "Group sync-includes file lists", "", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("checkout_worktree_dir_max = 16"), "{err}");
     }
 
     #[test]
