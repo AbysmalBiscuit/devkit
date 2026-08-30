@@ -482,6 +482,33 @@
       ],
       "type": "object"
     },
+    "PreserveConfig": {
+      "additionalProperties": false,
+      "description": "Files copied out of a worktree before `issue end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. Rendering, path rules, and the fail-open contract are in\n`docs/configuration.md`.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.",
+      "properties": {
+        "from": {
+          "description": "Glob patterns for the files to copy, relative to the worktree root and\nrendered as minijinja. A pattern that renders empty is skipped; one that\nmatches nothing is not a failure.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "required": {
+          "default": false,
+          "description": "Keep the worktree instead of removing it when this entry warns.",
+          "type": "boolean"
+        },
+        "to": {
+          "description": "Destination directory, rendered as minijinja. Must render to a non-empty\nabsolute path, and is created if absent.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
     "Step": {
       "description": "One step of a sequence task: run a sibling command task, or bring an app up.",
       "oneOf": [
@@ -776,6 +803,14 @@
       },
       "default": {},
       "description": "Reviewer/recipient aliases, keyed by the short name passed to\n`issue review --to`.",
+      "type": "object"
+    },
+    "preserve": {
+      "additionalProperties": {
+        "$ref": "#/$defs/PreserveConfig"
+      },
+      "default": {},
+      "description": "Files copied out of an issue worktree before `issue end` removes it,\nkeyed by the name that labels the entry's progress step and its\nwarnings.",
       "type": "object"
     },
     "tasks": {

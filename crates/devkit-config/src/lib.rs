@@ -49,6 +49,11 @@ pub struct Config {
     /// `{before,after}_<event>`.
     #[serde(default)]
     pub hooks: HooksConfig,
+    /// Files copied out of an issue worktree before `issue end` removes it,
+    /// keyed by the name that labels the entry's progress step and its
+    /// warnings.
+    #[serde(default)]
+    pub preserve: HashMap<String, PreserveConfig>,
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the
@@ -156,6 +161,29 @@ pub struct HooksConfig {
     pub after_worktree_create: Vec<Vec<String>>,
 }
 
+/// Files copied out of a worktree before `issue end` removes it. Each entry
+/// names its own destination, so one run can archive different files to
+/// different places. Rendering, path rules, and the fail-open contract are in
+/// `docs/configuration.md`.
+///
+/// `deny_unknown_fields` because a misspelled `required` would otherwise be
+/// consumed silently, leaving the entry fail-open while the user believes the
+/// files are protected.
+#[derive(Debug, JsonSchema, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreserveConfig {
+    /// Glob patterns for the files to copy, relative to the worktree root and
+    /// rendered as minijinja. A pattern that renders empty is skipped; one that
+    /// matches nothing is not a failure.
+    pub from: Vec<String>,
+    /// Destination directory, rendered as minijinja. Must render to a non-empty
+    /// absolute path, and is created if absent.
+    pub to: String,
+    /// Keep the worktree instead of removing it when this entry warns.
+    #[serde(default)]
+    pub required: bool,
+}
+
 /// Linear lookups that cost an extra API round trip, so each is opt-in.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
@@ -172,7 +200,7 @@ pub struct LinearConfig {
 ///
 /// This table is not under `[tracker]`: a project on Linear with a fork
 /// workflow needs `pr_repo` just as much as a GitHub one does.
-#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GithubConfig {
     /// Repository holding the issues, e.g. `org/planning`.
@@ -2209,5 +2237,30 @@ steps = [
         )
         .unwrap();
         assert_eq!(c.tracker.kind, None, "absent means detect, not linear");
+    }
+
+    /// A typo in `required` is the one config mistake that produces no signal
+    /// without `deny_unknown_fields`: serde consumes the unknown key as
+    /// `IgnoredAny`, the entry stays fail-open, and files the user believed were
+    /// protected are removed with the worktree.
+    #[test]
+    fn a_misspelled_preserve_key_is_rejected() {
+        let err = toml::from_str::<Config>(
+            "[preserve.notes]\nfrom = [\"a.md\"]\nto = \"/archive\"\nrequred = true\n",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("requred"), "{err}");
+    }
+
+    #[test]
+    fn a_preserve_entry_parses_with_required_defaulting_off() {
+        let cfg: Config = toml::from_str(
+            "[preserve.graphify]\nfrom = [\"graphify-out/**\"]\nto = \"/archive/{{ issue }}\"\n",
+        )
+        .unwrap();
+        let entry = &cfg.preserve["graphify"];
+        assert_eq!(entry.from, vec!["graphify-out/**".to_string()]);
+        assert_eq!(entry.to, "/archive/{{ issue }}");
+        assert!(!entry.required);
     }
 }
