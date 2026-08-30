@@ -483,6 +483,21 @@ fn copy_file(
     }
 }
 
+/// Whether walking `patterns` is expensive enough to deserve its own reported
+/// phase. Decided from the pattern text alone, because a caller drawing a fixed
+/// number of sub-steps has to know the count before the walk starts.
+///
+/// A wildcard makes `glob` walk directories to expand it, and a pattern ending
+/// in `/` is a directory include, which walks recursively. A literal file path
+/// costs one stat.
+pub fn needs_discovery(patterns: &[String]) -> bool {
+    patterns.iter().any(|p| p.ends_with('/') || is_glob(p))
+}
+
+fn is_glob(pattern: &str) -> bool {
+    pattern.contains(['*', '?', '['])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1334,5 +1349,28 @@ mod tests {
                 ("hooks/".to_string(), 2, 3, 1),
             ]
         );
+    }
+
+    #[test]
+    fn a_wildcard_or_directory_include_wants_a_discovery_step() {
+        assert!(needs_discovery(&["apps/*/.env.local".to_string()]));
+        assert!(needs_discovery(&[".claude/hooks/".to_string()]));
+        assert!(needs_discovery(&["conf.?".to_string()]));
+        assert!(needs_discovery(&["[abc].txt".to_string()]));
+        assert!(needs_discovery(&[
+            ".tool-versions".to_string(),
+            "hooks/".to_string()
+        ]));
+    }
+
+    /// A list of literal file paths costs one stat each, which is not worth a
+    /// sub-step of its own.
+    #[test]
+    fn a_literal_include_list_wants_no_discovery_step() {
+        assert!(!needs_discovery(&[
+            ".tool-versions".to_string(),
+            "apps/web/.env.local".to_string()
+        ]));
+        assert!(!needs_discovery(&[]));
     }
 }
