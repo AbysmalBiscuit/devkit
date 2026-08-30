@@ -10,10 +10,6 @@ use std::path::Path;
 /// `issue end` needs the last two — its preserve entries live in the config, and
 /// acting on an empty table because the config is broken would remove a worktree
 /// having archived nothing.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no non-test reader for config and health yet")
-)]
 pub struct Selected {
     pub tracker: Resolved,
     pub repos: Repos,

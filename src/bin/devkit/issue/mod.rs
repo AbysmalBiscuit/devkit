@@ -150,6 +150,9 @@ pub(crate) enum Cmd {
         /// Requires at least one selector.
         #[arg(long = "clean-worktree")]
         clean_worktree: bool,
+        /// Remove without copying out the `[preserve]` entries first.
+        #[arg(long = "no-preserve")]
+        no_preserve: bool,
     },
     /// Re-copy the `defaults.worktree_include` files from the primary checkout
     /// into worktrees that already exist.
@@ -345,6 +348,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
             force,
             pr_only,
             clean_worktree,
+            no_preserve,
         }) => end::run(
             &start(&cli.dir),
             &ids,
@@ -352,6 +356,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
             force,
             pr_only,
             clean_worktree,
+            no_preserve,
             cli.config.as_deref(),
         ),
         Some(Cmd::SyncIncludes {

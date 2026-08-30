@@ -161,6 +161,17 @@ fn cleanup(
     Ok(())
 }
 
+/// How a worktree is named in prompts, steps, and errors: its issue id when the
+/// record has one, else its branch.
+fn row_label(row: &IssueWorktree) -> String {
+    if row.issue_id != "UNKNOWN" {
+        row.issue_id.clone()
+    } else {
+        row.branch.clone()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     start: &str,
     ids: &[String],
@@ -168,10 +179,20 @@ pub fn run(
     force: bool,
     pr_only: bool,
     clean_worktree: bool,
+    no_preserve: bool,
     config: Option<&str>,
 ) -> Result<()> {
     let steps = Steps::persistent();
-    let (tracker, repos) = crate::issue::tracker::select(config, start, None);
+    let sel = crate::issue::tracker::select_full(config, start, None);
+    // A config that does not load reads as an empty [preserve] table, which
+    // would remove a worktree having archived nothing it was asked to keep.
+    if !no_preserve && let devkit_config::Health::Broken(why) = &sel.health {
+        anyhow::bail!(
+            "devkit.toml does not load, so [preserve] entries cannot be read: {why}\n\
+             rerun with --no-preserve to remove without preserving anything"
+        );
+    }
+    let (tracker, repos) = (sel.tracker, sel.repos);
     let targets: Vec<IssueWorktree> = if clean_worktree {
         anyhow::ensure!(
             !ids.is_empty(),
@@ -216,31 +237,106 @@ pub fn run(
         t
     };
 
-    let total = targets.len();
-    let removed = AtomicUsize::new(0);
-    let branch_lock = Mutex::new(());
-    // Resolved before the scope so the single post-join prune has a path even if
-    // every removal fails; a resolution error just skips the prune.
+    // Phase 1: every prompt precedes every action, so nothing is being removed
+    // while the next question is on screen.
+    let mut approved: Vec<IssueWorktree> = Vec::new();
+    for row in &targets {
+        let label = row_label(row);
+        // The interactive decision is the only step that blocks the main
+        // thread, and it blocks on nothing but a keystroke. Bars pause during
+        // the prompt so a redraw never tears the stdout line.
+        let go = steps.suspend(|| {
+            println!("\n{label}  {}", row.worktree);
+            yes || confirm(&label)
+        });
+        if go {
+            approved.push(row.clone());
+        } else {
+            steps.suspend(|| println!("    skipped"));
+        }
+    }
+    if approved.is_empty() {
+        println!("\nNothing to remove.");
+        return Ok(());
+    }
+
+    // Resolved before any removal so the single post-join prune has a path even
+    // if every removal fails; a resolution error just skips the prune. Phase 2
+    // renders its context against it too.
     let main = main_repo(start).ok();
 
-    std::thread::scope(|s| {
-        for row in &targets {
-            let label = if row.issue_id != "UNKNOWN" {
-                row.issue_id.clone()
-            } else {
-                row.branch.clone()
-            };
-            // The interactive decision is the only step that blocks the main
-            // thread, and it blocks on nothing but a keystroke. Bars pause during
-            // the prompt so a redraw never tears the stdout line.
-            let go = steps.suspend(|| {
-                println!("\n{label}  {}", row.worktree);
-                yes || confirm(&label)
+    // Phase 2: serial, and complete before the first removal. That ordering is
+    // what makes a destination collision resolve in worktree order and a
+    // `required` failure surface while every file still exists.
+    let entries = crate::issue::preserve::preserve_entries(sel.config.as_ref(), no_preserve);
+    // The status report's spelling of each worktree path, never a canonicalized
+    // one. Canonicalizing on Windows yields a verbatim `\\?\` prefix, which
+    // compares unequal to the drive prefix a destination carries, so the
+    // containment check would stop rejecting anything.
+    let removal_roots: Vec<std::path::PathBuf> = approved
+        .iter()
+        .map(|r| std::path::PathBuf::from(&r.worktree))
+        .collect();
+    let vars = sel
+        .config
+        .as_ref()
+        .map(|c| c.templates.variables.clone())
+        .unwrap_or_default();
+    let (wt_root, prefix) = sel
+        .config
+        .as_ref()
+        .map(|c| {
+            (
+                devkit_config::expand_tilde(&c.defaults.worktree_root),
+                c.defaults.branch_prefix.clone(),
+            )
+        })
+        .unwrap_or_default();
+
+    let mut blocked: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut files = 0usize;
+    let mut archived = 0usize;
+    let mut required_failures = 0usize;
+    if !entries.is_empty() {
+        let primary = main.as_deref().map(Path::new);
+        for row in &approved {
+            let label = row_label(row);
+            // The report's spelling again: `glob` matches nothing behind a
+            // verbatim UNC prefix, so a canonicalized path would silently
+            // preserve nothing from a repository on a network share.
+            let wt = Path::new(&row.worktree);
+            let record = devkit_common::record::read(wt);
+            let ctx = crate::issue::preserve::context(
+                wt,
+                &row.branch,
+                record.as_ref(),
+                &prefix,
+                &wt_root,
+                primary.unwrap_or(wt),
+            );
+            let out = steps.during(&format!("Preserving {label}…"), || {
+                crate::issue::preserve::run_for(wt, &entries, &ctx, &vars, &removal_roots)
             });
-            if !go {
-                steps.suspend(|| println!("    skipped"));
-                continue;
+            files += out.files;
+            archived += out.entries;
+            for w in &out.warnings {
+                steps.suspend(|| eprintln!("warning: {w}"));
             }
+            if let Some(err) = out.required_failure {
+                steps.suspend(|| eprintln!("    {label} kept: {err}"));
+                blocked.insert(row.worktree.clone());
+                required_failures += 1;
+            }
+        }
+    }
+
+    // Phase 3: the removals, in parallel.
+    let total = approved.len() - blocked.len();
+    let removed = AtomicUsize::new(0);
+    let branch_lock = Mutex::new(());
+    std::thread::scope(|s| {
+        for row in approved.iter().filter(|r| !blocked.contains(&r.worktree)) {
+            let label = row_label(row);
             let steps = &steps;
             let branch_lock = &branch_lock;
             let removed = &removed;
@@ -271,10 +367,16 @@ pub fn run(
             .args(["worktree", "prune"])
             .output();
     }
-    println!(
-        "\nRemoved {} of {}.",
-        removed.load(Ordering::Relaxed),
-        total
+    if archived > 0 {
+        println!(
+            "\nPreserved {files} file(s) across {archived} entr{}.",
+            if archived == 1 { "y" } else { "ies" }
+        );
+    }
+    println!("Removed {} of {}.", removed.load(Ordering::Relaxed), total);
+    anyhow::ensure!(
+        required_failures == 0,
+        "{required_failures} worktree(s) kept: a required preserve entry failed"
     );
     Ok(())
 }
@@ -426,5 +528,54 @@ mod tests {
     fn a_worktree_with_no_record_has_nothing_to_remove() {
         let dir = tempfile::tempdir().unwrap();
         assert!(recorded_summary(dir.path()).is_none());
+    }
+
+    /// Phase 2 runs before any removal, so a required failure leaves the
+    /// worktree, its branch, and its summary exactly as they were.
+    #[test]
+    fn a_blocked_worktree_keeps_its_branch_and_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let g = |args: &[&str], cwd: &std::path::Path| {
+            devkit_common::git::Git::fixture(cwd)
+                .args(args.iter().copied())
+                .output()
+                .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
+        };
+        g(&["init", "-q", "-b", "main"], &main);
+        std::fs::write(main.join("f.txt"), "x\n").unwrap();
+        g(&["add", "-A"], &main);
+        g(&["commit", "-qm", "init"], &main);
+        let wt = dir.path().join("wt-eng-3");
+        g(
+            &["worktree", "add", "-q", "-b", "eng-3", wt.to_str().unwrap()],
+            &main,
+        );
+        let summary = dir.path().join("ISSUE_SUMMARY_ENG-3.md");
+        std::fs::write(&summary, "notes\n").unwrap();
+
+        // A required entry that cannot resolve: `to` is relative.
+        let entry = devkit_config::PreserveConfig {
+            from: vec!["a.md".into()],
+            to: "relative/path".into(),
+            required: true,
+        };
+        let out = crate::issue::preserve::run_for(
+            &wt,
+            &[("notes".to_string(), &entry)],
+            &crate::issue::preserve::context(&wt, "eng-3", None, "", dir.path(), &main),
+            &std::collections::BTreeMap::new(),
+            &[],
+        );
+
+        assert!(out.required_failure.is_some());
+        assert!(wt.exists(), "worktree untouched");
+        assert!(summary.exists(), "summary untouched");
+        let branches = devkit_common::git::Git::fixture(&main)
+            .args(["branch", "--list", "eng-3"])
+            .output()
+            .unwrap();
+        assert!(!branches.trim().is_empty(), "branch untouched");
     }
 }
