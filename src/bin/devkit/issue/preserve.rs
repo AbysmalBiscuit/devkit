@@ -3,7 +3,7 @@
 
 use devkit_common::record::IssueRecord;
 use devkit_config::PreserveConfig;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// One entry resolved against one worktree: the patterns to glob and the
@@ -28,15 +28,21 @@ pub(crate) struct Skipped {
 /// template edited since setup cannot misname the destination; `record::read`
 /// returns `None` for a malformed record as well as an absent one, and both take
 /// the same empty defaults.
+///
+/// `primary` is `None` when the primary checkout could not be resolved, and the
+/// key is then left out of the context entirely. Rendering is strict about
+/// undefined names, so an entry that uses `{{ primary }}` fails with that name
+/// in the message instead of quietly building a destination from a stand-in
+/// path.
 pub(crate) fn context(
     worktree: &Path,
     branch: &str,
     record: Option<&IssueRecord>,
     prefix: &str,
     worktree_root: &Path,
-    primary: &Path,
+    primary: Option<&Path>,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut ctx = serde_json::json!({
         "worktree": worktree.display().to_string(),
         "branch": branch,
         "issue": record.map(|r| r.issue.as_str()).unwrap_or_default(),
@@ -44,8 +50,23 @@ pub(crate) fn context(
         "apps": record.map(|r| r.apps.clone()).unwrap_or_default(),
         "prefix": prefix,
         "worktree_root": worktree_root.display().to_string(),
-        "primary": primary.display().to_string(),
-    })
+    });
+    if let Some(primary) = primary {
+        ctx["primary"] = serde_json::Value::String(primary.display().to_string());
+    }
+    ctx
+}
+
+/// What the context is missing, as a clause to append to a render failure.
+/// minijinja reports a strict-undefined failure as `undefined value` without
+/// naming the name, so an entry using `{{ primary }}` in a project whose
+/// primary checkout would not resolve gets the reason rather than a riddle.
+fn absent_note(ctx: &serde_json::Value) -> &'static str {
+    if ctx.get("primary").is_none() {
+        " (the primary checkout could not be resolved, so `primary` is unset)"
+    } else {
+        ""
+    }
 }
 
 /// Render and validate one entry. `removal_roots` are the worktrees this run
@@ -68,12 +89,17 @@ pub(crate) fn resolve_entry(
         match devkit_common::template::render(p, ctx, vars) {
             Ok(r) if r.trim().is_empty() => {}
             Ok(r) => patterns.push(r.trim().to_string()),
-            Err(e) => return Err(skip(format!("rendering `from` entry `{p}`: {e:#}"))),
+            Err(e) => {
+                return Err(skip(format!(
+                    "rendering `from` entry `{p}`: {e:#}{}",
+                    absent_note(ctx)
+                )));
+            }
         }
     }
 
     let rendered = devkit_common::template::render(&cfg.to, ctx, vars)
-        .map_err(|e| skip(format!("rendering `to`: {e:#}")))?;
+        .map_err(|e| skip(format!("rendering `to`: {e:#}{}", absent_note(ctx))))?;
     let to = rendered.trim();
     if to.is_empty() {
         return Err(skip("`to` rendered empty".into()));
@@ -109,7 +135,10 @@ pub(crate) fn resolve_entry(
 /// worktree.
 pub(crate) struct Outcome {
     pub files: usize,
-    pub entries: usize,
+    /// The entries that copied at least one file, by name. A caller
+    /// summarising several worktrees unions these, so one entry that ran for
+    /// three worktrees is still one entry.
+    pub archived: BTreeSet<String>,
     pub warnings: Vec<String>,
     pub required_failure: Option<String>,
 }
@@ -149,7 +178,7 @@ pub(crate) fn run_for(
 ) -> Outcome {
     let mut out = Outcome {
         files: 0,
-        entries: 0,
+        archived: BTreeSet::new(),
         warnings: Vec::new(),
         required_failure: None,
     };
@@ -172,7 +201,7 @@ pub(crate) fn run_for(
                 // warns and stops the worktree.
                 out.files += files;
                 if files > 0 {
-                    out.entries += 1;
+                    out.archived.insert(resolved.name.clone());
                 }
                 if !warnings.is_empty() && cfg.required {
                     out.required_failure = Some(format!(
@@ -346,7 +375,7 @@ mod tests {
     #[test]
     fn a_resolved_entry_renders_both_fields() {
         let resolved = resolve_entry(
-            "graphify",
+            "notes",
             &cfg(
                 &["out/{{ slug }}/**"],
                 "{{ worktree_root }}/archive/{{ issue }}",
@@ -357,7 +386,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        assert_eq!(resolved.name, "graphify");
+        assert_eq!(resolved.name, "notes");
         assert_eq!(resolved.patterns, vec!["out/fix/**".to_string()]);
         assert_eq!(
             resolved.dest,
@@ -375,12 +404,44 @@ mod tests {
             None,
             "lev/",
             Path::new("/wts"),
-            Path::new("/repo"),
+            Some(Path::new("/repo")),
         );
         assert_eq!(ctx["issue"], "");
         assert_eq!(ctx["slug"], "");
         assert_eq!(ctx["apps"], serde_json::json!([]));
         assert_eq!(ctx["branch"], "lev/fix");
+    }
+
+    /// An unresolvable primary checkout leaves `primary` out of the context, so
+    /// an entry that uses it fails naming that variable. Substituting the
+    /// worktree instead would archive into the directory being removed and
+    /// blame the destination for it.
+    #[test]
+    fn an_unresolvable_primary_fails_the_entry_that_uses_it() {
+        let ctx = context(
+            Path::new("/wt"),
+            "lev/fix",
+            None,
+            "lev/",
+            Path::new("/wts"),
+            None,
+        );
+        assert!(ctx.get("primary").is_none());
+
+        let err = resolve_entry(
+            "notes",
+            &cfg(&["a.md"], "{{ primary }}/../archive", false),
+            &ctx,
+            &novars(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(err.reason.contains("primary"), "{}", err.reason);
+
+        // Entries that never mention it are unaffected.
+        let dest = abs("/archive");
+        resolve_entry("notes", &cfg(&["a.md"], &dest, false), &ctx, &novars(), &[])
+            .expect("an entry that does not use `primary` still resolves");
     }
 
     /// Fail-open is the default: a bad entry warns and the caller still removes
@@ -450,7 +511,7 @@ mod tests {
 
         assert!(out.required_failure.is_some(), "the escaping pattern warns");
         assert_eq!(out.files, 1);
-        assert_eq!(out.entries, 1);
+        assert_eq!(out.archived, ["notes".to_string()].into());
         assert!(archive.join("keep.md").exists());
     }
 
@@ -463,10 +524,10 @@ mod tests {
         let archive = dir.path().join("archive");
         std::fs::create_dir_all(&wt).unwrap();
 
-        let entry = cfg(&["graphify-out/"], archive.to_str().unwrap(), true);
+        let entry = cfg(&["scratch/"], archive.to_str().unwrap(), true);
         let out = run_for(
             &wt,
-            &[("graphify".to_string(), &entry)],
+            &[("notes".to_string(), &entry)],
             &ctx_for("ENG-1"),
             &novars(),
             &[],
@@ -486,21 +547,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wt = dir.path().join("wt");
         let archive = dir.path().join("archive");
-        std::fs::create_dir_all(wt.join("graphify-out")).unwrap();
-        std::fs::write(wt.join("graphify-out/a.md"), "a").unwrap();
+        std::fs::create_dir_all(wt.join("scratch")).unwrap();
+        std::fs::write(wt.join("scratch/a.md"), "a").unwrap();
 
-        let entry = cfg(&["graphify-out/"], archive.to_str().unwrap(), false);
+        let entry = cfg(&["scratch/"], archive.to_str().unwrap(), false);
         let out = run_for(
             &wt,
-            &[("graphify".to_string(), &entry)],
+            &[("notes".to_string(), &entry)],
             &ctx_for("ENG-1"),
             &novars(),
             &[],
         );
 
         assert_eq!(out.files, 1, "{:?}", out.warnings);
-        assert_eq!(out.entries, 1);
-        assert!(archive.join("graphify-out/a.md").exists());
+        assert_eq!(out.archived, ["notes".to_string()].into());
+        assert!(archive.join("scratch/a.md").exists());
     }
 
     fn config_with(entries: &[(&str, PreserveConfig)]) -> devkit_config::Config {

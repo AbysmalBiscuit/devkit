@@ -352,11 +352,13 @@ pub fn run(cli: IssueCli) -> Result<()> {
         }) => end::run(
             &start(&cli.dir),
             &ids,
-            yes,
-            force,
-            pr_only,
-            clean_worktree,
-            no_preserve,
+            end::EndFlags {
+                yes,
+                force,
+                pr_only,
+                clean_worktree,
+                no_preserve,
+            },
             cli.config.as_deref(),
         ),
         Some(Cmd::SyncIncludes {

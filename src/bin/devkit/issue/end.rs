@@ -80,9 +80,11 @@ fn main_repo(start: &str) -> Result<String> {
         .context("primary checkout path not UTF-8")
 }
 
-/// Remove a finished worktree, delete its branch, and remove its summary file —
-/// the one the record names, plus any ISSUE_*<id>*.md left in the parent of the
-/// main repo. Refuses if cwd is inside the worktree,
+/// Remove a finished worktree, delete its branch, and remove its summary file.
+/// The record names that file exactly; only a record that names none falls back
+/// to sweeping the parent of the main repo for an `ISSUE_*<id>*.md` belonging to
+/// this issue, so a run that knows its summary path touches nothing else in a
+/// directory it does not own. Refuses if cwd is inside the worktree,
 /// or (without `force`) if the tree is dirty. Serializes `git branch -D` behind
 /// `branch_lock` so concurrent removals never contend on `packed-refs.lock`; the
 /// worktree removal and file unlinks touch per-worktree state and run in
@@ -125,10 +127,6 @@ fn cleanup(
         .timeout(devkit_common::git::SLOW_TIMEOUT)
         .output()?;
 
-    if let Some(path) = summary {
-        let _ = std::fs::remove_file(path);
-    }
-
     // Ref deletion can rewrite packed-refs, so concurrent branch deletes contend
     // on packed-refs.lock. Serialize just this step; a thread that can't take the
     // lock queues on it. (A poisoned lock still yields the guard — the critical
@@ -150,11 +148,22 @@ fn cleanup(
         }
     }
 
-    if let Ok(read) = std::fs::read_dir(parent) {
-        for ent in read.flatten() {
-            let name = ent.file_name().to_string_lossy().into_owned();
-            if is_legacy_summary(&name, issue_id) {
-                let _ = std::fs::remove_file(ent.path());
+    match summary {
+        Some(path) => {
+            let _ = std::fs::remove_file(path);
+        }
+        // Records written before they carried a summary path give no way to
+        // name the file, so the parent of the primary checkout — where the
+        // default template puts it — is scanned for one belonging to this
+        // issue.
+        None => {
+            if let Ok(read) = std::fs::read_dir(parent) {
+                for ent in read.flatten() {
+                    let name = ent.file_name().to_string_lossy().into_owned();
+                    if is_legacy_summary(&name, issue_id) {
+                        let _ = std::fs::remove_file(ent.path());
+                    }
+                }
             }
         }
     }
@@ -171,17 +180,29 @@ fn row_label(row: &IssueWorktree) -> String {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    start: &str,
-    ids: &[String],
-    yes: bool,
-    force: bool,
-    pr_only: bool,
-    clean_worktree: bool,
-    no_preserve: bool,
-    config: Option<&str>,
-) -> Result<()> {
+/// The gates and waivers `issue end` was invoked with. Grouped because five
+/// bare `bool` parameters in a row transpose silently at the call site.
+pub struct EndFlags {
+    /// Remove without prompting per worktree.
+    pub yes: bool,
+    /// Remove a worktree with uncommitted changes, discarding them.
+    pub force: bool,
+    /// Judge finished on the PR alone, skipping the issue-state and id gates.
+    pub pr_only: bool,
+    /// Remove the named worktrees whether or not they look finished.
+    pub clean_worktree: bool,
+    /// Remove without copying anything out first.
+    pub no_preserve: bool,
+}
+
+pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -> Result<()> {
+    let EndFlags {
+        yes,
+        force,
+        pr_only,
+        clean_worktree,
+        no_preserve,
+    } = flags;
     let steps = Steps::persistent();
     let sel = crate::issue::tracker::select_full(config, start, None);
     // A config that does not load reads as an empty [preserve] table, which
@@ -295,7 +316,9 @@ pub fn run(
 
     let mut blocked: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut files = 0usize;
-    let mut archived = 0usize;
+    // Entry names rather than a count of runs: one entry that archived for
+    // three worktrees is one entry, not three.
+    let mut archived: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut required_failures = 0usize;
     if !entries.is_empty() {
         let primary = main.as_deref().map(Path::new);
@@ -312,13 +335,16 @@ pub fn run(
                 record.as_ref(),
                 &prefix,
                 &wt_root,
-                primary.unwrap_or(wt),
+                primary,
             );
-            let out = steps.during(&format!("Preserving {label}…"), || {
-                crate::issue::preserve::run_for(wt, &entries, &ctx, &vars, &removal_roots)
+            let out = steps.during_ok(&format!("Preserving {label}…"), || {
+                let out =
+                    crate::issue::preserve::run_for(wt, &entries, &ctx, &vars, &removal_roots);
+                let ok = out.required_failure.is_none();
+                (out, ok)
             });
             files += out.files;
-            archived += out.entries;
+            archived.extend(out.archived);
             for w in &out.warnings {
                 steps.suspend(|| eprintln!("warning: {w}"));
             }
@@ -368,10 +394,11 @@ pub fn run(
             .output();
     }
     println!();
-    if archived > 0 {
+    if !archived.is_empty() {
         println!(
-            "Preserved {files} file(s) across {archived} entr{}.",
-            if archived == 1 { "y" } else { "ies" }
+            "Preserved {files} file(s) across {} entr{}.",
+            archived.len(),
+            if archived.len() == 1 { "y" } else { "ies" }
         );
     }
     println!("Removed {} of {}.", removed.load(Ordering::Relaxed), total);
@@ -525,6 +552,56 @@ mod tests {
         assert!(other.exists(), "another issue's summary is untouched");
     }
 
+    /// The sweep is the fallback for a record that names no summary. Once the
+    /// record names one, that file is the whole target: an `ISSUE_*` file for
+    /// the same issue sitting beside the primary checkout is somebody else's,
+    /// including an archive a `[preserve]` entry just wrote there.
+    #[test]
+    fn cleanup_does_not_sweep_when_the_record_names_a_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let g = |args: &[&str], cwd: &std::path::Path| {
+            devkit_common::git::Git::fixture(cwd)
+                .args(args.iter().copied())
+                .output()
+                .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
+        };
+        g(&["init", "-q", "-b", "main"], &main);
+        std::fs::write(main.join("f.txt"), "x\n").unwrap();
+        g(&["add", "-A"], &main);
+        g(&["commit", "-qm", "init"], &main);
+        let wt = dir.path().join("wt-eng-4");
+        g(
+            &["worktree", "add", "-q", "-b", "eng-4", wt.to_str().unwrap()],
+            &main,
+        );
+
+        let recorded = dir.path().join("ISSUE_SUMMARY_ENG-4.md");
+        std::fs::write(&recorded, "the summary\n").unwrap();
+        let archived = dir.path().join("ISSUE_NOTES_ENG-4.md");
+        std::fs::write(&archived, "preserved\n").unwrap();
+        devkit_common::record::write(
+            &wt,
+            &devkit_common::record::IssueRecord {
+                issue: "ENG-4".into(),
+                slug: "fix".into(),
+                apps: vec![],
+                summary: Some(recorded.display().to_string()),
+                pr: None,
+            },
+        )
+        .unwrap();
+
+        cleanup(wt.to_str().unwrap(), "ENG-4", true, &Mutex::new(())).unwrap();
+
+        assert!(!recorded.exists(), "the recorded summary is removed");
+        assert!(
+            archived.exists(),
+            "a same-issue file the record did not name survives"
+        );
+    }
+
     #[test]
     fn a_worktree_with_no_record_has_nothing_to_remove() {
         let dir = tempfile::tempdir().unwrap();
@@ -566,7 +643,7 @@ mod tests {
         let out = crate::issue::preserve::run_for(
             &wt,
             &[("notes".to_string(), &entry)],
-            &crate::issue::preserve::context(&wt, "eng-3", None, "", dir.path(), &main),
+            &crate::issue::preserve::context(&wt, "eng-3", None, "", dir.path(), Some(&main)),
             &std::collections::BTreeMap::new(),
             &[],
         );
