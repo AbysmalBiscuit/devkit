@@ -225,12 +225,12 @@ fine and means no preservation is configured, broken stops the command.
 ## Progress output
 
 `issue end` today draws a spinner for the status fetch and one per removal.
-Preservation adds one labelled step per entry per worktree, drawn from the main
-thread during phase 2, matching how `issue setup` draws one step per hook:
+Preservation adds one labelled step per worktree, drawn from the main thread
+during phase 2 and running every entry inside it, matching how `issue setup`
+draws one step per hook — a slow phase must not look like a hung terminal:
 
 ```
-  Preserving graphify for ENG-1234…
-  Preserving notes for ENG-1234…
+  Preserving ENG-1234…
   Removing ENG-1234…
 ```
 
@@ -244,7 +244,7 @@ Preserved 14 file(s) across 2 entries. Removed 3 of 3.
 `Steps` keeps its current untotaled `Steps::persistent()` construction. A total is
 computable now that confirmations precede the work, but `persistent_with_total`
 would need the fetch step counted before the confirm phase knows the total, and a
-labelled step per entry already answers the "is this hung?" question that the
+labelled step per worktree already answers the "is this hung?" question that the
 counter would.
 
 ## Code

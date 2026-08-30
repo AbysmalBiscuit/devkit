@@ -327,7 +327,7 @@ The table is deliberately not under `[tracker]`: a Linear project with a fork wo
 
 An SSH-alias remote counts. A remote spelled `gh:owner/repo.git` names a `~/.ssh/config` `Host gh` entry rather than a hostname, so devkit asks ssh what that alias resolves to (`ssh -G gh`) and defaults from `origin` when the answer is github.com. Git itself never performs this substitution — it hands the alias to ssh — so no git command reports the real host. Resolution needs OpenSSH's `ssh -G`; where that is unavailable or the alias resolves elsewhere, the keys have to be named outright, and the error names the alias and what it resolved to.
 
-**Unknown keys in this table are rejected, unlike every other table in this file.** A misspelled `issue_repo` silently ignored would leave the project resolving a *different* repository than it declared — devkit would default from `origin` and query someone else's issues while the config appeared to say otherwise. Failing the config load is the smaller harm, so this one table refuses what it does not recognise.
+**Unknown keys in this table are rejected — `[github]` and `[preserve.<name>]` are the only two tables in this file that do.** A misspelled `issue_repo` silently ignored would leave the project resolving a *different* repository than it declared — devkit would default from `origin` and query someone else's issues while the config appeared to say otherwise. Failing the config load is the smaller harm, so this table refuses what it does not recognise.
 
 ```toml
 [github]
