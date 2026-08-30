@@ -491,6 +491,8 @@ team = "platform"
 | `issue_summary_path` | `ISSUE_SUMMARY_{{ issue }}.md`, taken from `worktree_root` when relative | summary base |
 | `issue_summary` | a facts header, `## Description`, then empty `## Summary` / `## Pointers` | summary base |
 
+`short_slug` is derived from the `branch` template's own slug, so a `branch` template that renders it is unmeasured by `branch_max` and may land a few characters past that limit.
+
 Summary base context for `issue_summary_path` and `issue_summary`: `issue` (the tracker's own spelling), `title`, `url`, `description`, `state`, `assignee`, `priority`, `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`, `prefix`, `apps`. Anything the tracker left empty renders as the empty string, so `{% if parent %}` drops the line rather than printing a blank one. Render `{{ worktree }}` into `issue_summary_path` to keep the file inside the worktree instead.
 
 Review base context for `review_request`: `branch`, `issue`/`slug`/`apps` from the `.devkit/issue.toml` record `issue setup` writes in the worktree, plus `pr_url`, `pr_title`, and per-recipient `name`/`slack_id`. `issue setup` also adds `.devkit/` to your global gitignore (`--no-gitignore` skips it). An undefined variable is an error (strict mode), so typos surface immediately.
