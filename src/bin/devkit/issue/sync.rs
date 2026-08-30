@@ -4,7 +4,7 @@ use devkit_common::git::Worktree;
 use devkit_common::worktree::{self, IncludePlan};
 use devkit_ports::load;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn confirm(label: &str) -> bool {
     print!("  Overwrite in {label}? [y/N] ");
@@ -263,6 +263,18 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
             }
         }
 
+        // Occupied links are read from the live destination before it can be
+        // touched, so a link `apply_includes` fails to create is never counted
+        // as one that was already there.
+        let occupied_links: Vec<(PathBuf, PathBuf)> = if overwrite {
+            Vec::new()
+        } else {
+            plan.links()
+                .filter(|(rel, _)| std::fs::symlink_metadata(wt.path.join(rel)).is_ok())
+                .map(|(rel, target)| (rel.to_path_buf(), target.to_path_buf()))
+                .collect()
+        };
+
         let (copied, linked, warnings) =
             worktree::apply_includes(&source, &wt.path, &plan, clobber);
         for w in &warnings {
@@ -274,14 +286,18 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
                 list(plan.existing(), verbose)
             );
         }
-        let left_alone_links = plan.links_len() - linked;
-        if !overwrite && left_alone_links > 0 {
+        if !overwrite && !occupied_links.is_empty() {
             eprintln!(
-                "warning: {left_alone_links} symlink(s) already in {label}, left alone (rerun with --overwrite to replace)"
+                "warning: symlink(s) already in {label}, left alone (rerun with --overwrite to replace):\n{}",
+                link_list(
+                    occupied_links
+                        .iter()
+                        .map(|(rel, t)| (rel.as_path(), t.as_path())),
+                    verbose
+                )
             );
         }
-        let summary = counts(copied, linked);
-        if summary.is_empty() {
+        if copied == 0 && linked == 0 {
             println!("  copied nothing");
         } else {
             if copied > 0 {
@@ -293,7 +309,10 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
                 println!("  copied {copied} file(s):\n{names}");
             }
             if linked > 0 {
-                println!("  {}", summary.last().expect("linked > 0 pushed a line"));
+                println!(
+                    "  linked {linked} {}",
+                    if linked == 1 { "symlink" } else { "symlinks" }
+                );
             }
         }
     }
@@ -303,7 +322,6 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn under(dir: &str, n: usize) -> Vec<PathBuf> {
         (0..n)

@@ -155,9 +155,15 @@ fn an_existing_symlink_destination_is_left_alone_and_reported() {
         "the occupied destination was not replaced"
     );
     let err = String::from_utf8_lossy(&out.stderr);
+    let rel = Path::new("inc").join("link.txt").display().to_string();
+    let target_str = target.display().to_string();
     assert!(
-        err.contains("symlink") && err.contains("--overwrite"),
-        "the untouched symlink is reported, with the way to replace it: {err}"
+        err.contains("already in") && err.contains(&rel) && err.contains(&target_str),
+        "the skip names the link and its target: {err}"
+    );
+    assert!(
+        !err.contains("warning: linking"),
+        "a skip is not reported as a failed link creation: {err}"
     );
 }
 
@@ -173,6 +179,58 @@ fn dry_run_writes_nothing() {
     assert!(
         stdout.contains(".env.local"),
         "the dry run names what it would copy: {stdout}"
+    );
+}
+
+/// A dry run partitions matched links by whether their destination is
+/// already occupied, the same test `sync-includes` makes for real. Inverting
+/// that predicate would silently swap which links land under "would link"
+/// and which under the leave-alone block, and nothing else in the suite
+/// notices.
+#[test]
+fn dry_run_partitions_links_by_occupied_destination() {
+    let t = project("\"inc/\"");
+    let main = t.path().join("main");
+    std::fs::create_dir_all(main.join("inc")).unwrap();
+    std::fs::write(main.join("real.txt"), "content").unwrap();
+    let target = Path::new("..").join("real.txt");
+    if devkit_common::sys::symlink(&target, &main.join("inc/free.txt"), false).is_err()
+        || devkit_common::sys::symlink(&target, &main.join("inc/occupied.txt"), false).is_err()
+    {
+        eprintln!("skipping: this platform refuses symlink creation");
+        return;
+    }
+    let wt1_inc = t.path().join("wt-eng-1").join("inc");
+    std::fs::create_dir_all(&wt1_inc).unwrap();
+    std::fs::write(wt1_inc.join("occupied.txt"), "already here").unwrap();
+
+    let state = tempfile::tempdir().unwrap();
+    let out = run(
+        t.path(),
+        state.path(),
+        &["sync-includes", "--dry-run", "eng-1"],
+    );
+    ok(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let split = stdout
+        .find("would leave alone")
+        .expect("leave-alone block present");
+    let (would_link, leave_alone) = stdout.split_at(split);
+    assert!(
+        would_link.contains("free.txt"),
+        "a free destination is listed under would link: {stdout}"
+    );
+    assert!(
+        !would_link.contains("occupied.txt"),
+        "an occupied destination is not listed under would link: {stdout}"
+    );
+    assert!(
+        leave_alone.contains("occupied.txt"),
+        "an occupied destination is listed under the leave-alone block: {stdout}"
+    );
+    assert!(
+        !leave_alone.contains("free.txt"),
+        "a free destination is not listed under the leave-alone block: {stdout}"
     );
 }
 
