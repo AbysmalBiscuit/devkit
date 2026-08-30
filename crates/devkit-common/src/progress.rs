@@ -1,5 +1,6 @@
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::IsTerminal;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -72,6 +73,55 @@ const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Steps>();
 };
+
+/// A running step that draws sub-progress. Its transient line is rewritten in
+/// place and never persists; finished sub-steps persist as their own indented
+/// lines. Every method takes `&self` so a shared callback can drive them.
+pub struct Step<'a> {
+    steps: &'a Steps,
+    activity: Mutex<Option<ProgressBar>>,
+    detail: Mutex<Option<String>>,
+}
+
+impl Step<'_> {
+    /// Rewrite the transient line beneath this step, creating it on first call.
+    pub fn activity(&self, msg: &str) {
+        let mut slot = self.activity.lock().expect("step activity bar");
+        match slot.as_ref() {
+            Some(pb) => pb.set_message(format!("  {msg}")),
+            None => *slot = Some(add_spinner(&self.steps.mp, &format!("  {msg}"))),
+        }
+    }
+
+    /// Persist a finished sub-step line beneath this step and clear the
+    /// transient line, so the next sub-step starts from an empty slot.
+    ///
+    /// `MultiProgress` prints above its live bars and this step's bar is still
+    /// live, so sub-steps land above the step's own settled line.
+    pub fn substep(&self, msg: &str) {
+        self.clear_activity();
+        let paint = crate::ui::Paint::on(crate::ui::Stream::Stderr);
+        let _ = self
+            .steps
+            .mp
+            .println(format!("     {} {msg}", paint.green("✓")));
+    }
+
+    /// Text folded into the settled line's parens, ahead of the elapsed time.
+    pub fn detail(&self, d: &str) {
+        *self.detail.lock().expect("step detail") = Some(d.to_string());
+    }
+
+    /// Clear the transient line, leaving no trace of it. A finished step calls
+    /// this itself before settling; a caller that already knows sub-progress
+    /// is done can clear it early to keep an activity line from lingering
+    /// beneath later output.
+    pub fn clear_activity(&self) {
+        if let Some(pb) = self.activity.lock().expect("step activity bar").take() {
+            pb.finish_and_clear();
+        }
+    }
+}
 
 impl Steps {
     pub fn new() -> Steps {
@@ -146,22 +196,18 @@ impl Steps {
     }
 
     /// Run `f` under a spinner (auto-numbered in numbered mode). Transient
-    /// mode clears the bar before returning — so the spinner never stays live
+    /// mode clears the bar before returning, so the spinner never stays live
     /// across a `?`, a stdin prompt, or stdout output. Persistent mode prints
-    /// the settled `✓` line into scrollback instead; the bar itself is still
+    /// the settled line into scrollback instead; the bar itself is still
     /// cleared, so no bar is ever active across a prompt in either mode.
     ///
-    /// Every completion counts as success here — the persistent log line is
+    /// Every completion counts as success here: the persistent log line is
     /// always `✓`, regardless of what `f` returned. A closure returning
     /// `anyhow::Result` belongs in [`Steps::during_result`], and one that
     /// reports failure some other way in [`Steps::during_ok`]; both mark the
     /// step `✗` instead of logging a failure as succeeded.
     pub fn during<T>(&self, msg: &str, f: impl FnOnce() -> T) -> T {
-        let label = self.label(msg);
-        let pb = self.spinner(&label);
-        let out = f();
-        self.settle(&pb, &label, true);
-        out
+        self.during_step(msg, |_| f())
     }
 
     /// [`Steps::during`] for a step that judges its own success without
@@ -169,37 +215,61 @@ impl Steps {
     /// whether the step succeeded, and the settled line is `✗` when that
     /// reads false.
     pub fn during_ok<T>(&self, msg: &str, f: impl FnOnce() -> (T, bool)) -> T {
-        let label = self.label(msg);
-        let pb = self.spinner(&label);
-        let (out, ok) = f();
-        self.settle(&pb, &label, ok);
-        out
+        self.run_step(msg, |_| f())
     }
 
     /// [`Steps::during`] for fallible steps: in persistent mode the settled
-    /// line is `✗` when the closure errors, so the failed step stays
+    /// line is marked failed when the closure errors, so the failed step stays
     /// identifiable in the log.
     pub fn during_result<T>(
         &self,
         msg: &str,
         f: impl FnOnce() -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
-        let label = self.label(msg);
-        let pb = self.spinner(&label);
-        let out = f();
-        self.settle(&pb, &label, out.is_ok());
-        out
+        self.during_step_result(msg, |_| f())
     }
 
-    /// End a step's bar: persistent mode leaves a `✓/✗` line in scrollback
-    /// (via the group's println, discarded when hidden), transient mode just
-    /// clears. The bar is always cleared so prompts and stdout stay clean.
-    fn settle(&self, pb: &ProgressBar, label: &str, ok: bool) {
-        let line = self.persist.then(|| finish_line(ok, label, pb.elapsed()));
+    /// [`Steps::during`] for a step that draws its own sub-progress. The
+    /// closure gets a [`Step`] handle for a transient line, persisted
+    /// sub-steps, and a detail folded into the settled line.
+    pub fn during_step<T>(&self, msg: &str, f: impl FnOnce(&Step<'_>) -> T) -> T {
+        self.run_step(msg, |step| (f(step), true))
+    }
+
+    /// [`Steps::during_step`] for fallible steps.
+    pub fn during_step_result<T>(
+        &self,
+        msg: &str,
+        f: impl FnOnce(&Step<'_>) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        self.run_step(msg, |step| {
+            let out = f(step);
+            let ok = out.is_ok();
+            (out, ok)
+        })
+    }
+
+    /// Mint the ordinal, draw the step's spinner, run `f`, then settle. `f`
+    /// returns its value and whether the step succeeded.
+    fn run_step<T>(&self, msg: &str, f: impl FnOnce(&Step<'_>) -> (T, bool)) -> T {
+        let label = self.label(msg);
+        let pb = self.spinner(&label);
+        let step = Step {
+            steps: self,
+            activity: Mutex::new(None),
+            detail: Mutex::new(None),
+        };
+        let (out, ok) = f(&step);
+        step.clear_activity();
+        let detail = step.detail.lock().expect("step detail").take();
+        let line = self
+            .persist
+            .then(|| finish_line(ok, &label, pb.elapsed(), detail.as_deref()));
         pb.finish_and_clear();
         if let Some(line) = line {
             let _ = self.mp.println(line);
         }
+        out
     }
 
     /// Clear every bar in the group (call once all work is done).
@@ -234,15 +304,19 @@ fn fmt_elapsed(d: Duration) -> String {
 }
 
 /// The persistent line a settled step leaves behind. It prints on stderr, so
-/// the mark's colour keys off that stream, not stdout.
-fn finish_line(ok: bool, label: &str, elapsed: Duration) -> String {
+/// the mark's colour keys off that stream, not stdout. `detail` rides inside
+/// the same parens as the elapsed time rather than adding a separator.
+fn finish_line(ok: bool, label: &str, elapsed: Duration, detail: Option<&str>) -> String {
     let paint = crate::ui::Paint::on(crate::ui::Stream::Stderr);
     let mark = if ok {
         paint.green("✓")
     } else {
         paint.red("✗")
     };
-    format!("{mark} {label} ({})", fmt_elapsed(elapsed))
+    match detail {
+        Some(d) => format!("{mark} {label} ({d}, {})", fmt_elapsed(elapsed)),
+        None => format!("{mark} {label} ({})", fmt_elapsed(elapsed)),
+    }
 }
 
 impl Default for Steps {
@@ -303,11 +377,11 @@ mod tests {
         let paint = crate::ui::Paint::on(crate::ui::Stream::Stderr);
         let d = Duration::from_millis(312);
         assert_eq!(
-            finish_line(true, "1. foo", d),
+            finish_line(true, "1. foo", d, None),
             format!("{} 1. foo (312ms)", paint.green("✓"))
         );
         assert_eq!(
-            finish_line(false, "2. bar", d),
+            finish_line(false, "2. bar", d, None),
             format!("{} 2. bar (312ms)", paint.red("✗"))
         );
     }
@@ -381,5 +455,34 @@ mod tests {
         steps.during_result("second", || anyhow::Ok(())).unwrap();
         assert_eq!(steps.started(), 2);
         steps.clear();
+    }
+
+    /// A step that draws sub-progress still consumes exactly one ordinal, so a
+    /// numbered run does not end short of its total.
+    #[test]
+    fn a_step_with_sub_progress_consumes_one_ordinal() {
+        let steps = Steps::persistent_with_total(2);
+        steps.during_step("first", |step| {
+            step.activity("working");
+            step.substep("1/2 one");
+            step.substep("2/2 two");
+            step.detail("2 things");
+        });
+        steps.during("second", || {});
+        assert_eq!(steps.started(), 2);
+    }
+
+    /// The handle's methods take &self so a Fn callback can drive them, which is
+    /// what a parallel producer needs.
+    #[test]
+    fn a_step_handle_is_usable_from_a_shared_reference() {
+        fn assert_sync<T: Sync>(_: &T) {}
+        let steps = Steps::persistent();
+        steps.during_step("first", |step| {
+            assert_sync(step);
+            let emit: &(dyn Fn(&str) + Sync) = &|m| step.activity(m);
+            emit("from a shared reference");
+        });
+        assert_eq!(steps.started(), 1);
     }
 }
