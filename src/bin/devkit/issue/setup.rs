@@ -766,6 +766,8 @@ mod tests {
             },
         );
         let err = short_slug(&cfg, &novars(), "142", &[], "fix-the-export").unwrap_err();
+        // `Debug` prints the whole cause chain; the limit is named in
+        // `budget`'s own bail, below the context this call site adds.
         let err = format!("{err:?}");
         assert!(err.contains("worktree_dir_max = 16"), "{err}");
     }

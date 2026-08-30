@@ -914,6 +914,8 @@ mod tests {
             ..devkit_config::Templates::default()
         };
         let err = dir_ctx(&t, 142, "Group sync-includes file lists", "", None).unwrap_err();
+        // `Debug` prints the whole cause chain; the limit is named in
+        // `budget`'s own bail, below the context this call site adds.
         let err = format!("{err:?}");
         assert!(err.contains("checkout_worktree_dir_max = 16"), "{err}");
     }

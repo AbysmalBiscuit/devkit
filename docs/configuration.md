@@ -491,7 +491,7 @@ team = "platform"
 | `issue_summary_path` | `ISSUE_SUMMARY_{{ issue }}.md`, taken from `worktree_root` when relative | summary base |
 | `issue_summary` | a facts header, `## Description`, then empty `## Summary` / `## Pointers` | summary base |
 
-`short_slug` is derived from the `branch` template's own slug, so a `branch` template that renders it is unmeasured by `branch_max` and may land a few characters past that limit.
+`short_slug` is derived from the `branch` template's own slug, so a `branch` template that renders it is unmeasured by `branch_max` and may exceed that limit by however long `short_slug` itself renders.
 
 Summary base context for `issue_summary_path` and `issue_summary`: `issue` (the tracker's own spelling), `title`, `url`, `description`, `state`, `assignee`, `priority`, `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`, `prefix`, `apps`. Anything the tracker left empty renders as the empty string, so `{% if parent %}` drops the line rather than printing a blank one. Render `{{ worktree }}` into `issue_summary_path` to keep the file inside the worktree instead.
 
