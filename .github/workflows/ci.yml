@@ -53,6 +53,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test workspace
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
       - name: Build without default features
         run: cargo build --workspace --no-default-features
