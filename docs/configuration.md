@@ -119,7 +119,7 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 | `require_pr_reviewer` | no (default `false`) | Refuse `issue review request` when it would open a new PR without a `--to` reviewer. Left unset, the PR opens with no reviewer and nobody is Slacked. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
 | `issue_summary` | no (default `false`) | Write the issue summary file on every `issue setup`, as though `--summary` were passed. `--summary` / `--no-summary` still decide a single run. The file's path and body come from `templates.issue_summary_path` and `templates.issue_summary`. |
-| `worktree_include` | no | Glob patterns (relative to the primary checkout's root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. `issue sync-includes` re-runs the same copy against worktrees that already exist, from this one pattern list. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten by default; copy failures warn and are skipped (fail-open). `issue sync-includes --overwrite` is the opt-in way to replace files a worktree already has, and it needs a scope — one or more selectors, or `--all`. A match that is a symlink is reproduced as a symlink holding the same target, and its contents are not copied, so a symlinked directory becomes one link rather than a duplicated tree. Creating a symlink on Windows needs Developer Mode or administrator rights; where it is refused, the link is skipped with a warning and the rest of the run continues. A directory match reads its whole subtree into memory before copying any of it, so peak memory during a sync scales with the largest single include's subtree rather than staying flat. Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
+| `worktree_include` | no | Glob patterns (relative to the primary checkout's root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. `issue sync-includes` re-runs the same copy against worktrees that already exist, from this one pattern list. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten by default; copy failures warn and are skipped (fail-open). `issue sync-includes --overwrite` is the opt-in way to replace files a worktree already has, and it needs a scope — one or more selectors, or `--all`. A match that is a symlink is reproduced as a symlink holding the same target, and its contents are not copied, so a symlinked directory becomes one link rather than a duplicated tree. Creating a symlink on Windows needs Developer Mode or administrator rights; where it is refused, the link is skipped with a warning and the rest of the run continues. A directory match reads its whole subtree into memory before copying any of it, so peak memory during a sync scales with the largest single include's subtree rather than staying flat. A trailing `**` matches every path below its anchor, its direct children included: `a/**` covers `a/f.txt` as well as `a/b/f.txt`, and a bare `**` covers a file sitting at the checkout root. A `.` component or a repeated separator names the same path it would in any other glob — `a/./b/*` and `a//b/*` both mean `a/b/*`. Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
 
 ### Path values
 
@@ -429,15 +429,15 @@ resolved, and an entry that uses it then fails naming it rather than falling
 back to another path.
 
 To archive a whole directory and everything beneath it, name the directory
-itself, with or without a trailing slash: `from = [".scratch/"]`. A
-trailing `**` is not the same thing — it matches the subdirectories under the
-named directory but not the files sitting directly inside it, so it archives
-part of the tree and the rest is lost with the worktree once removal runs.
-`dir/*` matches only the direct children, one level deep.
+itself, with or without a trailing slash: `from = [".scratch/"]`. A trailing
+`**` reaches the same set — it matches every path below the named directory,
+the files sitting directly inside it included. `dir/*` matches only those
+direct children, one level deep.
 
-Patterns are worktree-relative. One that is absolute, or that contains a `..`
-component, is skipped with a warning — the archive cannot reach outside the tree
-it is saving. The recorded summary file therefore cannot be preserved at its
+Patterns are worktree-relative. One that could reach outside the worktree —
+absolute, rooted, holding a `..` component, or drive-relative on Windows
+(`C:scratch`) — is skipped with a warning: the archive cannot reach outside the
+tree it is saving. The recorded summary file therefore cannot be preserved at its
 default location beside the worktrees directory; set
 `issue_summary_path = "{{ worktree }}/.devkit/issue.md"` to keep it inside the
 worktree, where a pattern can name it. A pattern that renders empty is skipped;
