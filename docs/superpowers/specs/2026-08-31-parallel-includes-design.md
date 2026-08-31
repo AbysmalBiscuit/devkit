@@ -41,7 +41,9 @@ for the copy was four threads.
 ## Non-goals
 
 - Changing what any existing `worktree_include` pattern matches. The pattern
-  dialect and its `MatchOptions` are preserved exactly.
+  dialect is preserved. The *effective* match options are preserved, which is
+  not the same as copying the `MatchOptions` value the code builds today. See
+  [Match options](#match-options).
 - Parallelising `issue sync-includes` across worktrees. The re-entry guard below
   makes that safe to attempt later, but it is a separate design.
 - Parallelising `devkit-docs`. It reuses `devkit_common::pool` under its own
@@ -55,10 +57,10 @@ for the copy was four threads.
 is a matcher that answers `matches_path_with(&Path, MatchOptions)` and never
 touches the filesystem.
 
-Only the walker is slow. Keeping `Pattern` is what makes this change invisible
-to every `worktree_include` value already in use: same syntax, same
-`MatchOptions`, same `PatternError` behind the existing "bad include pattern"
-warning.
+Only the walker is slow. Keeping `Pattern` is what leaves every
+`worktree_include` value already in use meaning what it means today: the same
+syntax, and the same `PatternError` behind the existing "bad include pattern"
+warning. The match options need one correction to stay equivalent, below.
 
 So both of today's walkers go, and jwalk replaces them:
 
@@ -70,6 +72,27 @@ The narrower alternative, keeping `glob_with` and swapping only `plan_dir`'s
 recursion for jwalk, was rejected. It speeds up directory includes and leaves
 `**` and `apps/*/` patterns exactly as slow as they are now, because `glob_with`
 finds those files itself.
+
+### Match options
+
+`plan_with_mode` builds `require_literal_separator: false` and hands it to
+`glob_with`, which throws it away. glob's own documentation is explicit
+(`glob-0.3.3/src/lib.rs:176`): the options reach `matches_with` unchanged "with
+the exception that `require_literal_separator` is always set to `true`
+regardless of the value passed to this function". The walker also matches one
+path component at a time, so a single `*` cannot span a `/` today no matter what
+the caller asks for.
+
+That `false` is therefore dead code, and copying it into `matches_path_with`,
+which does honour the flag, would silently widen every pattern. `apps/*/.env.local`
+would start matching `apps/a/b/.env.local`; `*.local` would match at any depth
+instead of the root. A worktree would receive files nobody asked for, and no
+existing fixture is deep enough to notice.
+
+Relative matching therefore uses `require_literal_separator: true`. `**` still
+recurses, through `AnyRecursiveSequence`, which is exactly the configuration
+`glob_with` runs. `case_sensitive: true` and `require_literal_leading_dot: false`
+carry over unchanged.
 
 ## The shared pool
 
@@ -140,17 +163,25 @@ leaves files unprotected. A typo here leaves the default of 4 in place, which is
 a performance difference, and diluting the convention would make it mean less
 where it matters.
 
-`parallelism` joins `STANDALONE_SECTIONS` (`crates/devkit-config/src/lib.rs:881`),
-which lists the tables a config may carry without `[defaults]`. Without that, a
-personal `~/.config/devkit/config.toml` holding only `[parallelism]` fails to
-resolve. The three doc comments enumerating that list (lines 14, 250 and 878) and
-`a_config_of_standalone_sections_needs_no_defaults` all name the new table.
+`parallelism` joins the `STANDALONE_SECTIONS` const in
+`crates/devkit-config/src/lib.rs`, which lists the tables a config may carry
+without `[defaults]`. Without that, a personal `~/.config/devkit/config.toml`
+holding only `[parallelism]` fails to resolve. Every doc comment enumerating that
+list, and `a_config_of_standalone_sections_needs_no_defaults`, name the new table
+too.
 
-Config reaches the pool through `pool::configure(n)`, which each binary calls
-once after loading its config. `worktree.rs` reads no config today, and
-threading one into `copy_includes` would push a machine setting through five
-call sites that have no other use for it. `configure` must run before the first
-pool use or it is ignored, which the binaries satisfy by calling it in `main`.
+An unparseable or zero `DEVKIT_THREADS` is ignored, falling through to config and
+then to 4. `NonZeroUsize` guards only the config path.
+
+Config reaches the pool through `pool::configure(n)`. `worktree.rs` reads no
+config today, and threading one into `copy_includes` would push a machine setting
+through five call sites with no other use for it.
+
+The call site is wherever a subcommand's config first resolves, immediately after
+`load::load`. Not `main`: `main` parses argv and dispatches, and config loads
+inside each subcommand with its own `--config` and start directory, so calling
+`configure` from `main` would mean a second, wrongly-anchored config load.
+`configure` must run before the first pool use, which that placement satisfies.
 
 ## The walk
 
@@ -160,10 +191,16 @@ Per pattern:
 1. Trim a trailing `/`; drop an empty pattern. Unchanged.
 2. Build a `glob::Pattern`. A `PatternError` becomes the existing "bad include
    pattern" warning.
-3. A pattern with no wildcard needs no walk. One `symlink_metadata` call
-   classifies it: a link as a link, a file as a file, a directory as the root of
-   a jwalk whose every entry is included.
-4. A pattern with a wildcard starts a jwalk at the pattern's literal prefix, and
+3. Reject a pattern that escapes the source tree, through the existing
+   `escapes()`. See [Confining patterns to the source
+   tree](#confining-patterns-to-the-source-tree).
+4. A pattern with no wildcard needs no walk. One `symlink_metadata` call
+   classifies it, and the classification is mode-aware. `Preserve` records a
+   link as a link. `Follow` resolves through it with `metadata`, so a link to a
+   file is a file and a link to a directory is a walk root. `copy_out`'s comment
+   that "a Follow-mode plan holds no links" depends on this, and no existing test
+   covers a `copy_out` pattern naming a link directly.
+5. A pattern with a wildcard starts a jwalk at the pattern's literal prefix, and
    each walked path is tested with `matches_path_with`.
 
 ### The walk root
@@ -200,10 +237,43 @@ contained something that did, which is what
 
 Patterns are matched against paths relative to `source`, not against
 `source.join(pattern)` as today. This is what lets one walk serve a pattern
-without rejoining the source prefix onto every path it yields.
+without rejoining the source prefix onto every path it yields. Windows is
+unaffected: glob's `chars_eq` treats `/` and `\\` as equivalent separators.
 
-It carries a behaviour change, taken deliberately. See [Behaviour
-changes](#behaviour-changes).
+### Where each phase runs
+
+The walk and the classification are two passes, not one.
+
+jwalk's `process_read_dir` and its spawn closures are `'static`, while the event
+callback is a borrowed `&(dyn Fn + Sync)` and `dest` is a borrowed `&Path`, so
+classification cannot run inside jwalk's own workers without wrapping everything
+in `Arc`.
+
+Draining through `par_bridge` instead is worse: the classification consumers
+would occupy the same four threads jwalk's readers need, starving the walk.
+
+So the calling thread drains the jwalk iterator into a `Vec`, which costs no
+syscalls because `file_type` is cached from the directory read. Matching, the
+ancestor test, and the `dest.join(rel).exists()` check then run in one
+`par_iter` over that batch on the shared pool. That existence check is a syscall
+per candidate, roughly 75µs on a `/mnt/c` mount, so leaving it serial would cost
+about 22 seconds on a 300k-file tree and undo the walk's gain.
+
+This is why `found` is an `AtomicUsize` and the walk's warnings are a
+`Mutex<Vec<String>>`. Draining and classifying serially instead would keep both
+as plain values, and would be the wrong trade.
+
+### Walk errors
+
+jwalk yields `Err` for an unreadable root and for entries mid-walk, and the
+mapping is not obvious in one direction.
+
+`NotFound` at the walk root is silence. A wildcard pattern whose literal prefix
+does not exist is silent today, because glob's scope check simply yields nothing,
+and `apps/*/.env.local` in a repository with no `apps/` is a common benign
+configuration. Warning on it would put a warning on every `issue setup`.
+
+Every other walk error becomes a warning in the existing "reading dir" shape.
 
 ## The copy
 
@@ -234,11 +304,10 @@ formality.
 
 `claim_once` runs over sorted vectors in configuration order. Untouched.
 
-Warnings currently emerge in walk order and will not. The walk's warnings and
-the copy's warnings are each sorted within their own group before returning.
-`copy_out`'s escaped-pattern warnings are produced before any walk and stay
-first, so `copy_out_refuses_a_pattern_that_escapes_the_worktree` keeps passing on
-index.
+Warnings currently emerge in walk order and will not. Warnings are sorted within
+each pattern; patterns keep configuration order; `copy_out`'s escaped-pattern
+warnings precede all of them, so
+`copy_out_refuses_a_pattern_that_escapes_the_worktree` keeps passing on index.
 
 ## Symlinks
 
@@ -247,16 +316,21 @@ being a hand-rolled branch and becomes a walker setting. `Preserve` sets
 `follow_links(false)`; `Follow`, used by `copy_out`, sets it true.
 
 `DirEntry::file_type` returns the target's type when following and the link's own
-type when not, and makes no syscall either way because jwalk caches it from the
-directory read. The `is_symlink` helper's `symlink_metadata` call disappears for
-every walked entry.
+type when not. Under `follow_links(false)` it costs no syscall, because jwalk
+caches it from the directory read, and the `is_symlink` helper's
+`symlink_metadata` call disappears for every walked entry. Under
+`follow_links(true)` jwalk does call `metadata`, plus `read_link` for
+directories, so the saving applies to `Preserve` only.
 
 This settles a question the progress design left open. That design listed
 swapping `plan_dir`'s `child.is_dir()` for `entry.file_type()` as out of scope,
-because `file_type` does not traverse links while `Path::is_dir` does, so the
-swap would stop recursion into a symlinked directory. Setting `follow_links` per
-mode removes the tension: `Preserve` classifies the link before descending, and
-`Follow` descends through it. Both match today's behaviour.
+because `file_type` does not traverse links while `Path::is_dir` does. Setting
+`follow_links` per mode removes the tension for entries that match a pattern or
+sit under a matched directory.
+
+It does not remove it for a symlink in the *middle* of a pattern, which is a
+behaviour change. See [Intermediate symlinked
+directories](#intermediate-symlinked-directories).
 
 ### Two jwalk defaults must be overridden
 
@@ -270,44 +344,111 @@ to avoid. It comes from `pool::jwalk_parallelism()`.
 
 ## Behaviour changes
 
-Two, both deliberate, each with its own test and its own commit.
+Each gets its own test and its own commit.
 
-**An absolute include pattern now matches nothing.** Today the pattern is built
-from `source.join(trimmed)`, so `/etc/passwd` replaces the base and glob walks
-outside the source tree. `copy_out` filters these through `escapes()`;
-`copy_includes` does not. Matching relative paths confines includes to the source
-tree.
+### Confining patterns to the source tree
 
-**A symlink cycle under `copy_out` warns instead of hanging.** `plan_dir`
-recurses on `is_dir()`, which follows links, so a cyclic symlink loops forever
-today. jwalk detects the cycle and reports it, which the fail-open warning path
-already knows how to handle.
+Today `copy_includes` will read outside its source tree. The pattern is built
+from `source.join(trimmed)`, and `Path::join` discards the base for a rooted
+pattern, on Windows as well as Unix, so `/etc/passwd` walks `/etc`. `copy_out`
+filters these through `escapes()` because it deletes its source immediately
+afterwards; `copy_includes` never has.
+
+Relative matching does not fix this on its own. A pattern with no wildcard never
+reaches `matches_path_with` at all, so `/etc/passwd` and `../outside` would still
+be classified by the one `symlink_metadata` call in the no-wildcard path. The
+confinement has to be an explicit rejection, applied to both paths, which is why
+`escapes()` moves up into step 3 of the walk.
+
+`escapes()` already covers `..` as well as rooted paths, so a `..` pattern is
+rejected by the same gate. A rejected pattern produces the warning `copy_out`
+already emits and keeps its entry in the plan, so entries still line up
+one-to-one with the configured include list.
+
+### Symlink cycles under `copy_out`
+
+`plan_dir` recurses on `is_dir()`, which follows links, so a cyclic symlink loops
+forever today.
+
+jwalk detects a cycle by comparing the raw `read_link` output against its
+ancestor list of absolute paths (`jwalk-0.9.0/src/core/dir_entry.rs:214`). That
+catches an absolute-target cycle and reports it as a `Loop` error, which the
+fail-open warning path already handles.
+
+It does not catch a relative-target cycle. `ln -s .. loop` never equals an
+absolute ancestor, so the walk keeps descending until the path length hits the OS
+limit, planning a deeply duplicated subtree along the way. That is not worse than
+today's infinite loop, but it is not fixed either, and the spec should not claim
+otherwise.
+
+An own canonicalising ancestor check would close it. Whether to build one is
+[unresolved](#unresolved-questions).
+
+### Intermediate symlinked directories
+
+Today `glob_with` descends through a symlinked directory while expanding a
+pattern's components, because its `is_directory` test follows links. With
+`apps/web` a symlink to `../shared/web`, the pattern `apps/*/.env.local` plans
+`apps/web/.env.local`.
+
+Under `follow_links(false)`, jwalk gives a symlink entry no children
+(`jwalk-0.9.0/src/lib.rs:365`), and `apps/web` does not itself match the pattern,
+so that file silently disappears from the plan.
+
+Silent disappearance is the worst available failure, so this needs a decision
+rather than a default. It is [unresolved](#unresolved-questions).
 
 ## Testing
 
-The existing `worktree.rs` suite is the regression gate and passes unchanged,
-with one exception. `the_plan_walk_reports_each_match_and_a_final_count` asserts
+Two existing tests assert an order that parallelism removes. Both relax; neither
+is protected by serialising the work it covers.
+
+`the_plan_walk_reports_a_running_count_and_a_total` (worktree.rs:1331) asserts
 `found == vec![1, 2, 3]`. An atomic counter still hands out exactly 1 through 3
 with no gaps or repeats, but the thread holding 2 can push before the thread
-holding 1. The assertion's intent is the counter, not arrival order, so it sorts
-before comparing. Serialising the walk to protect an ordering the test never
-meant to assert would be the wrong fix.
+holding 1. The assertion's intent is the counter, so it sorts before comparing.
+
+`the_copy_brackets_each_pattern_and_counts_within_it` (worktree.rs:1380) asserts
+an exact event log including `"file hooks/ 1/2"` then `"file hooks/ 2/2"`. Those
+two can now arrive swapped. `FileDone` events sort within their entry;
+`EntryStart` and `EntryDone` keep strict order, because the per-entry bracketing
+is the thing the test exists to pin.
+
+Every other test in the module passes untouched.
 
 New tests, in order of what they protect:
 
-1. A `**` pattern plans the same file set as before. This is the
-   dialect-preservation gate and the whole justification for keeping
-   `glob::Pattern`.
-2. Planning the same tree twice yields an identical plan. Guards the sorting
+1. **A single `*` does not cross a directory separator.** Source holds
+   `apps/a/.env.local` and `apps/a/b/.env.local`; pattern `apps/*/.env.local`
+   plans the first and not the second. This is the regression that the dead
+   `require_literal_separator: false` would introduce, and it is the single most
+   important test here. A `**`-only test cannot detect it.
+2. **`**` still matches at zero directories.** Source holds `.env.local` at the
+   root and `apps/a/.env.local`; pattern `**/.env.local` plans both.
+3. **Planning the same tree twice yields an identical plan.** Guards the sorting
    against a later refactor quietly reintroducing walk-order output.
-3. Walk-root extraction, as unit cases: a directory include, a mid-pattern
-   wildcard, a leading `**`, and a literal path.
-4. An absolute include pattern matches nothing.
-5. A symlink cycle under `copy_out` warns and finishes.
-6. An include copy invoked from inside pool work completes rather than blocking.
+4. **Walk-root extraction**, as unit cases: `.godot/` gives `.godot`,
+   `apps/*/.env.local` gives `apps`, `**/.env.local` gives the source root,
+   `.tool-versions` gives none.
+5. **An escaping pattern is rejected in both paths.** `/etc/passwd` (no wildcard,
+   so the literal path) and `../*/x` (the wildcard path) each warn and plan
+   nothing, through `copy_includes`, not only `copy_out`.
+6. **A `copy_out` pattern naming a symlink directly archives its target's
+   contents**, rather than planning a link. Nothing covers this today, and the
+   mode-aware step 4 is what makes it pass.
+7. **An absolute-target symlink cycle under `copy_out` warns and finishes.**
+   `ln -s /abs/path/to/dir cycle`, not `ln -s ..`, because jwalk detects only the
+   absolute form.
+8. **An include copy invoked from inside pool work completes.** It hangs rather
+   than fails when the re-entry guard regresses, so it carries a timeout.
 
 Verification of the performance claim is a one-off `hyperfine` run against a real
 tree during implementation, recorded in this document. It does not land in CI.
+
+Windows is where this change is most likely to break and least likely to be
+noticed locally: symlink creation needs Developer Mode, path separators differ,
+and the CI runner is the slowest of the three. Every test above runs on all three
+platforms rather than being gated to Unix.
 
 ## Documentation
 
@@ -322,10 +463,13 @@ tree during implementation, recorded in this document. It does not land in CI.
 
 ## Amending the backfill spec
 
-`2026-06-30-worktree-include-backfill-design.md` rejects this work at lines 99
-and 149. That rejection is left in place as history and corrected rather than
-rewritten: the paragraph states that its workload assumption proved wrong, names
-what was wrong about it, and points here.
+`2026-06-30-worktree-include-backfill-design.md` rejected this work. That
+rejection is corrected in place rather than deleted: the paragraph now states
+that its workload assumption proved wrong, names what was wrong about it, and
+points here. Its out-of-scope entry for parallel directory walking points here
+too.
+
+Both edits landed with this design's own commit. Nothing remains to do.
 
 The two later specs need no correction.
 `2026-08-30-worktree-include-progress-design.md` cut its callback as `Sync` for
@@ -351,17 +495,44 @@ parallelism would break the per-entry progress grouping and make `claim_once`'s
 configuration-order rule race. The measured win is within a pattern anyway, since
 a single directory include is the slow case.
 
+**Walking and classifying are two passes.** Classifying inside jwalk's workers
+means `Arc`-ing past its `'static` bounds; classifying through `par_bridge` means
+consumers competing with readers for four threads. Draining first costs a `Vec`
+of entries and buys a clean split.
+
+**Confinement is an explicit rejection, not a consequence.** Relative matching
+alone leaves the no-wildcard path free to stat anything `Path::join` resolves to,
+so `escapes()` gates both paths. Getting this by accident is how the current
+escape survived.
+
 ## Unresolved questions
 
-1. The performance claims come from a separate benchmarking session, not from
-   this branch. The implementation records its own `hyperfine` numbers against a
-   real tree in this document, and if the copy does not improve, the rayon half
-   of the change is worth reconsidering on its own.
-2. Whether every binary calls `pool::configure`, or only those that can copy.
-   Calling it everywhere is one line each and cannot be forgotten later; calling
-   it selectively means a future parallel feature in a binary that skipped it
-   silently ignores the config. Leaning toward everywhere.
-3. `busy_timeout` for `RayonExistingPool`. With the re-entry guard the pool
-   always has a free thread when a walk starts, which is the condition jwalk
-   documents `None` as safe for. Settling this needs the guard written, so the
-   plan decides it rather than the design.
+**1. An intermediate symlinked directory silently drops its files.** See
+[Intermediate symlinked directories](#intermediate-symlinked-directories). Three
+ways out:
+
+- Traverse them, matching today. Set `follow_links(true)` in `Preserve` too, and
+  use `path_is_symlink()`, which is unaffected by the setting, to classify a
+  matched link. A matched symlinked directory must then have its children
+  cleared in `process_read_dir`, or jwalk descends into it before the plan can
+  refuse. Exact, and the most code.
+- Keep `follow_links(false)` and warn when the walk stops at a symlinked
+  directory that did not match. The files are still lost, but not silently.
+  Cheap and honest.
+- Classify a blocking link as a planned link. The user gets the files through the
+  reproduced link, but the worktree also gets everything else under it, which the
+  pattern never asked for.
+
+I lean toward warning. It is small, it makes the loss visible, and traversal can
+follow if anyone hits it.
+
+**2. Whether to close the relative-target symlink cycle.** jwalk catches only
+absolute-target cycles. A canonicalising ancestor check would close the rest, at
+one `canonicalize` per directory entered. `copy_out` is the only Follow-mode
+caller and it runs on a worktree about to be deleted, so the exposure is narrow.
+I lean toward leaving it, documented, since today's behaviour is an infinite loop
+and this is already better.
+
+**3. The performance claims come from a separate benchmarking session, not this
+branch.** The implementation records its own `hyperfine` numbers here. If the
+copy does not improve, the rayon half is worth reconsidering on its own.
