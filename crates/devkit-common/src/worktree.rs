@@ -1785,6 +1785,36 @@ mod tests {
         assert_eq!(links[0].0, Path::new("inc").join("link_dir"));
     }
 
+    /// A directory include walks its whole subtree, and a symlink inside it is
+    /// reproduced as a link rather than descended into. jwalk with
+    /// `follow_links(true)` reads through a symlinked directory unless the walk
+    /// clears its children, so this pins the clearing.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_include_keeps_a_nested_symlink_as_a_link() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("inc/a.txt"), "x");
+        write(&src.join("inc/deep/b.txt"), "y");
+        write(&src.join("target/c.txt"), "z");
+        std::os::unix::fs::symlink("../target", src.join("inc/linked")).unwrap();
+
+        let plan = plan_includes(&src, &dst, &["inc/".to_string()]);
+
+        let mut missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        missing.sort();
+        assert_eq!(
+            missing,
+            vec![PathBuf::from("inc/a.txt"), PathBuf::from("inc/deep/b.txt")],
+            "the link's contents are not planned as files"
+        );
+        assert_eq!(plan.patterns[0].links.len(), 1);
+        assert_eq!(plan.patterns[0].links[0].0, PathBuf::from("inc/linked"));
+        assert_eq!(plan.patterns[0].links[0].1, PathBuf::from("../target"));
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+    }
+
     #[test]
     fn a_pattern_naming_a_link_directly_plans_it_as_a_link() {
         let tmp = tempfile::tempdir().unwrap();
