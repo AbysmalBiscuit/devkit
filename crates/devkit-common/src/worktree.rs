@@ -715,6 +715,33 @@ fn is_glob(pattern: &str) -> bool {
     pattern.contains(['*', '?', '['])
 }
 
+/// The literal directory prefix of a pattern: its components up to the first
+/// one holding a wildcard. Scopes a walk so `apps/*/.env.local` reads `apps/`
+/// rather than the whole source tree.
+///
+/// `None` means the pattern holds no wildcard at all and costs one stat instead
+/// of a walk. `Some` of an empty path means the walk starts at the source root,
+/// which is what a leading `**` asks for.
+///
+/// The pattern must already be trimmed of a trailing `/` and checked with
+/// [`escapes`]: this reads `Component::Normal` only, so a `..` or a root would
+/// silently vanish from the prefix rather than being refused.
+#[allow(dead_code)]
+fn walk_root(pattern: &str) -> Option<PathBuf> {
+    if !is_glob(pattern) {
+        return None;
+    }
+    let mut root = PathBuf::new();
+    for part in Path::new(pattern).components() {
+        let Component::Normal(name) = part else { break };
+        match name.to_str() {
+            Some(literal) if !is_glob(literal) => root.push(literal),
+            _ => break,
+        }
+    }
+    Some(root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2106,5 +2133,30 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(60))
             .expect("a nested copy exhausted the pool instead of running serially");
         assert_eq!(copied, 20);
+    }
+
+    #[test]
+    fn walk_root_stops_at_the_first_wildcard() {
+        assert_eq!(walk_root("apps/*/.env.local"), Some(PathBuf::from("apps")));
+        assert_eq!(
+            walk_root("apps/web/config/*.json"),
+            Some(PathBuf::from("apps/web/config"))
+        );
+        assert_eq!(walk_root("src/[abc]/x"), Some(PathBuf::from("src")));
+        assert_eq!(walk_root("logs/?.txt"), Some(PathBuf::from("logs")));
+    }
+
+    /// A leading `**` scopes to nothing, so the walk starts at the source root.
+    /// That is what `glob_with` does today, not a widening.
+    #[test]
+    fn walk_root_of_a_leading_recursive_wildcard_is_the_source_root() {
+        assert_eq!(walk_root("**/.env.local"), Some(PathBuf::new()));
+    }
+
+    /// A pattern with no wildcard costs one stat, not a walk.
+    #[test]
+    fn walk_root_is_none_without_a_wildcard() {
+        assert_eq!(walk_root(".tool-versions"), None);
+        assert_eq!(walk_root(".claude/hooks"), None);
     }
 }
