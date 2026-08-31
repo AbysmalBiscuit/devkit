@@ -119,7 +119,7 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 | `require_pr_reviewer` | no (default `false`) | Refuse `issue review request` when it would open a new PR without a `--to` reviewer. Left unset, the PR opens with no reviewer and nobody is Slacked. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
 | `issue_summary` | no (default `false`) | Write the issue summary file on every `issue setup`, as though `--summary` were passed. `--summary` / `--no-summary` still decide a single run. The file's path and body come from `templates.issue_summary_path` and `templates.issue_summary`. |
-| `worktree_include` | no | Glob patterns (relative to the primary checkout's root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. `issue sync-includes` re-runs the same copy against worktrees that already exist, from this one pattern list. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten by default; copy failures warn and are skipped (fail-open). `issue sync-includes --overwrite` is the opt-in way to replace files a worktree already has, and it needs a scope — one or more selectors, or `--all`. A match that is a symlink is reproduced as a symlink holding the same target, and its contents are not copied, so a symlinked directory becomes one link rather than a duplicated tree. Creating a symlink on Windows needs Developer Mode or administrator rights; where it is refused, the link is skipped with a warning and the rest of the run continues. Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
+| `worktree_include` | no | Glob patterns (relative to the primary checkout's root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. `issue sync-includes` re-runs the same copy against worktrees that already exist, from this one pattern list. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten by default; copy failures warn and are skipped (fail-open). `issue sync-includes --overwrite` is the opt-in way to replace files a worktree already has, and it needs a scope — one or more selectors, or `--all`. A match that is a symlink is reproduced as a symlink holding the same target, and its contents are not copied, so a symlinked directory becomes one link rather than a duplicated tree. Creating a symlink on Windows needs Developer Mode or administrator rights; where it is refused, the link is skipped with a warning and the rest of the run continues. A directory match reads its whole subtree into memory before copying any of it, so peak memory during a sync scales with the largest single include's subtree rather than staying flat. Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
 
 ### Path values
 
@@ -234,6 +234,27 @@ Two layers of memory control are available; they compose without conflict:
 Cap setup is **fail-open**: any cgroup error logs once and proceeds uncapped rather than blocking or killing a server. A broken cgroup configuration degrades to today's soft behavior.
 
 **macOS / Windows**: `memory_max_mb` is documented but has no effect. The daemon stays silent (no warning) — the soft `memory_action` path remains available on all platforms.
+
+### `[parallelism]`
+
+Width of the worker pool devkit shares across its parallel work: the
+`worktree_include` walk and copy today, and whatever else adopts
+`devkit_common::pool` later.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `threads` | integer ≥ 1 | 4 | Threads in the shared pool. |
+
+`DEVKIT_THREADS` overrides it, and an unparseable or zero value there is
+ignored rather than obeyed.
+
+A thread count describes the machine rather than the project, so it belongs in
+the personal layer at `~/.config/devkit/config.toml`. A config may carry
+`[parallelism]` alone, with no `[defaults]` table around it.
+
+Four is the measured throughput knee for file copying. Raising it helps most on
+a filesystem where a stat is slow and concurrency hides the latency, such as a
+Windows drive mounted under WSL.
 
 ### `[harness]`
 

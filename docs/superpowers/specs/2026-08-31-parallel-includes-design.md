@@ -34,9 +34,16 @@ One walk implementation, running on a bounded thread pool shared across the
 workspace, feeding a copy that runs on the same pool. Every pattern shape
 benefits, not only directory includes.
 
-Reported from a separate benchmarking session on a real tree: rayon roughly
-halves copy time, and jwalk cuts walk time to about a third. The throughput knee
-for the copy was four threads.
+Measured with the throwaway `bench_includes` example against
+`~/.cargo/registry/src` (one directory-match include, 63,641 files, 1.1G):
+`DEVKIT_THREADS=1` averaged 3.21s and `DEVKIT_THREADS=4` averaged 1.54s, a 2.1x
+speedup end to end — `copy_includes` runs the walk and the copy in sequence and
+this measures the whole call, not either phase alone. Eight threads averaged
+1.46s, only 6% faster than four. The same comparison against a byte-heavy tree
+(this checkout's own `target/debug/`, 20,156 files, 5.7G) showed the same
+shape: 1 thread 5.28s, 4 threads 2.53s (2.1x), 8 threads 2.26s (12% faster than
+four). Four threads captures most of the available speedup on both a
+file-count-heavy and a byte-heavy tree; doubling to eight buys little more.
 
 ## Non-goals
 
@@ -177,11 +184,11 @@ Config reaches the pool through `pool::configure(n)`. `worktree.rs` reads no
 config today, and threading one into `copy_includes` would push a machine setting
 through five call sites with no other use for it.
 
-The call site is wherever a subcommand's config first resolves, immediately after
-`load::load`. Not `main`: `main` parses argv and dispatches, and config loads
-inside each subcommand with its own `--config` and start directory, so calling
-`configure` from `main` would mean a second, wrongly-anchored config load.
-`configure` must run before the first pool use, which that placement satisfies.
+The call site is `devkit_ports::load::load`, immediately after `config::resolve`.
+Every subcommand's config resolution passes through it, so one call covers all
+of them and none can forget it. Not `main`: `main` parses argv and dispatches,
+and config loads inside each subcommand with its own `--config` and start
+directory.
 
 ## The walk
 
@@ -264,9 +271,11 @@ then run in one `par_iter` over that batch on the shared pool. The existence
 check is a syscall per candidate, roughly 75µs on a `/mnt/c` mount, so leaving it
 serial would cost about 22 seconds on a 300k-file tree and undo the walk's gain.
 
-This is why `found` is an `AtomicUsize` and the walk's warnings are a
-`Mutex<Vec<String>>`. Draining and classifying serially instead would keep both
-as plain values, and would be the wrong trade.
+Classification runs on the pool, but recording its verdicts does not: the
+calling thread walks the collected results in order and calls `record_file` /
+`record_link` for each, so `found` is a plain `Cell<usize>` and `Found` events
+still arrive in one order. The walk's warnings, collected alongside the
+verdicts, need no synchronisation for the same reason.
 
 ### Walk errors
 
@@ -435,19 +444,21 @@ the pattern never named.
 
 ## Testing
 
-Two existing tests assert an order that parallelism removes. Both relax; neither
-is protected by serialising the work it covers.
+Of two existing tests that look order-sensitive, only one actually needs
+relaxing.
 
-`the_plan_walk_reports_a_running_count_and_a_total` (worktree.rs:1331) asserts
-`found == vec![1, 2, 3]`. An atomic counter still hands out exactly 1 through 3
-with no gaps or repeats, but the thread holding 2 can push before the thread
-holding 1. The assertion's intent is the counter, so it sorts before comparing.
+`the_plan_walk_reports_a_running_count_and_a_total` (worktree.rs:1331) still
+asserts `found == vec![1, 2, 3]` unchanged. The walk's classification runs in
+parallel, but recording each verdict — and so incrementing `found` and emitting
+`Found` — happens serially on the calling thread over the classified results in
+their original order, so the counter still hands out exactly 1, 2, 3 in that
+order with nothing to sort.
 
-`the_copy_brackets_each_pattern_and_counts_within_it` (worktree.rs:1380) asserts
-an exact event log including `"file hooks/ 1/2"` then `"file hooks/ 2/2"`. Those
-two can now arrive swapped. `FileDone` events sort within their entry;
-`EntryStart` and `EntryDone` keep strict order, because the per-entry bracketing
-is the thing the test exists to pin.
+`the_copy_brackets_each_pattern_and_counts_within_it` (worktree.rs:1380) relaxes:
+it asserts an exact event log including `"file hooks/ 1/2"` then
+`"file hooks/ 2/2"`. Those two can now arrive swapped. `FileDone` events sort
+within their entry; `EntryStart` and `EntryDone` keep strict order, because the
+per-entry bracketing is the thing the test exists to pin.
 
 Every other test in the module passes untouched.
 

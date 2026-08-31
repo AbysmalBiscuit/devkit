@@ -21,7 +21,7 @@ The workspace root is the `devkit` binary package; it and `devkitd` install toge
 | Unit | Role |
 |---|---|
 | `crates/devkit-config` | lib: the `devkit.toml` shape — layer discovery and merge, `${VAR}` expansion and layer-relative path resolution, per-leaf provenance, and the `JsonSchema` derives `devkit schema` renders. A leaf crate with no internal *library* dependencies (its dev-dependencies pull in `devkit-common` for git fixtures in tests only), so `devkit-common` and `devkit-ports` both depend on it |
-| `crates/devkit-common` | shared lib: `git`, the single door every git invocation in the workspace goes through, scrubbing the environment variables that could redirect a call at another repository or inject config into it; `paths`, `secrets`, `cmd` (a generic subprocess-capture helper, plus `gh` wrappers) with `github` and `gitfetch`, `worktree` plus the `record` it reads (`.devkit/issue.toml`) and `gitignore`, `slug`, `template`, `ui` (tables/links) with `livetable` and `progress` (TTY-only spinners), `tracker` (the `Tracker` seam and its `linear`, `github` and `none` implementations), `slack`, `store` (flock'd JSON documents), `supervise`, `sys` (the platform boundary), `timing`, `report`, and a `daemon` client behind the `daemon` feature |
+| `crates/devkit-common` | shared lib: `git`, the single door every git invocation in the workspace goes through, scrubbing the environment variables that could redirect a call at another repository or inject config into it; `paths`, `secrets`, `pool` (the shared rayon pool), `cmd` (a generic subprocess-capture helper, plus `gh` wrappers) with `github` and `gitfetch`, `worktree` plus the `record` it reads (`.devkit/issue.toml`) and `gitignore`, `slug`, `template`, `ui` (tables/links) with `livetable` and `progress` (TTY-only spinners), `tracker` (the `Tracker` seam and its `linear`, `github` and `none` implementations), `slack`, `store` (flock'd JSON documents), `supervise`, `sys` (the platform boundary), `timing`, `report`, and a `daemon` client behind the `daemon` feature |
 | `crates/devkit-ports` | lib: `doppler` (yaml), `apps` (catalog), `load` (config + catalog), `registry` (flock'd port store), `run` (server lifecycle), `strays` (servers outside the registry), `daemon`, `task` (canned oneshot resolution/exec) |
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
 | `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + tracker state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
@@ -50,6 +50,18 @@ Every completion script goes out through `completions::emit`, which runs `Genera
 - **A `prd` doppler launch is rejected.** `launch` is run verbatim, so devkit guards at launch time: for a launch whose program is `doppler`, it resolves the config from `-c`/`--config`, else `DOPPLER_CONFIG`, else `doppler configure get config --scope <app dir>`, and refuses to start a server when that resolves to `prd` or cannot be resolved. The guard lives in `run::assert_not_prd`, called from `run::launch`, so it covers `devrun`, the MCP `devrun.up`, and both the daemon and direct spawn paths. `run::assert_not_prd` is also called during task resolution (`task::resolve_command`), so a `devrun task` command step gets the same guard.
 - **`up` is idempotent for a live server.** Both `run::launch` (direct path) and the daemon's `Supervise` handler skip the spawn when the (holder, app, role) row already has a live pid, reporting the existing server instead. A duplicate spawn would fail to bind, and on the daemon path would repoint the supervision table at the doomed pid. Sequence-task `up` steps rely on this.
 - **Sequence steps re-resolve at execution time; the upfront pass never gates.** `task::resolve` validates every step before anything spawns, but its rendered plans are for validation and `--dry-run` display only — execution calls `task::resolve_step` per command step (fresh allocation + render, `require_live` enforced) immediately before spawning it. Don't execute the upfront plans: a build step longer than `RESERVATION_GRACE_SECS` would let a t=0 reservation expire and desync later steps. And don't enforce `require_live` in the upfront pass — a gated app may be brought up by an earlier `up` step of the same sequence. A CLI-path `require_live` gate failure can leave behind a grace-bounded pid-less reservation from the upfront validation pass; this is the reserve-before-bind row the error's suggested `devrun up <app>` reuses, not a leak.
+- **Parallel work goes through `devkit_common::pool`.** One bounded
+  `rayon::ThreadPool` serves the whole workspace, sized by `DEVKIT_THREADS`,
+  then `[parallelism] threads`, then 4. Reaching for `par_iter` or jwalk's
+  default parallelism directly gets rayon's *global* pool instead, with its own
+  width and no coordination with this one — several agent sessions run devkit at
+  once on a machine. `pool::install` and `pool::jwalk_parallelism` both degrade
+  to serial when already inside the pool, because a bounded pool re-entered from
+  its own worker can leave a nested walk waiting on a thread that never frees.
+  Evaluate `pool::jwalk_parallelism` on the thread that builds and drains the
+  walk, not from inside `pool::install`: called from inside the pool it sees
+  itself as already nested and returns `Serial`, silently making the whole walk
+  single-threaded.
 
 ## Conventions
 
