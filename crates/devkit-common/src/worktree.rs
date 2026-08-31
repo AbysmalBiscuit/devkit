@@ -700,8 +700,8 @@ impl Walk<'_> {
 /// as a link. Every configured pattern keeps an entry, and a file matched by
 /// two patterns is planned once, under the first of them in configuration
 /// order, so a caller's rendering does not vary with filesystem iteration
-/// order. Fail-open, like `copy_includes`: a bad glob, an unreadable
-/// directory, or a non-UTF-8 pattern becomes a warning string.
+/// order. Fail-open, like `copy_includes`: a bad glob or an unreadable
+/// directory becomes a warning string.
 pub fn plan_includes(source: &Path, dest: &Path, patterns: &[String]) -> IncludePlan {
     plan_includes_with(source, dest, patterns, &|_| {})
 }
@@ -1041,8 +1041,8 @@ impl Prune {
 /// actually did: `glob_with` forced it true whatever it was handed
 /// (`glob-0.3.3/src/lib.rs:176`) and matched one path component at a time, so a
 /// single `*` has never crossed a `/` here. `matches_path_with` honours the
-/// flag, so carrying across the `false` this module used to build would widen
-/// every pattern and pull unrequested files into a worktree. `**` still
+/// flag, so building these with `false` would widen every pattern and pull
+/// unrequested files into a worktree. `**` still
 /// recurses; it is a different token.
 fn match_options() -> glob::MatchOptions {
     glob::MatchOptions {
@@ -2516,8 +2516,8 @@ mod tests {
         assert_eq!(walk_root("apps/web-*"), Some(PathBuf::from("apps")));
     }
 
-    /// A leading `**` scopes to nothing, so the walk starts at the source root.
-    /// That is what `glob_with` does today, not a widening.
+    /// A leading `**` scopes to nothing, so the walk starts at the source
+    /// root. That matches a leading `**`'s meaning, not a widening.
     #[test]
     fn walk_root_of_a_leading_recursive_wildcard_is_the_source_root() {
         assert_eq!(walk_root("**/.env.local"), Some(PathBuf::new()));
@@ -2530,12 +2530,10 @@ mod tests {
         assert_eq!(walk_root(".claude/hooks"), None);
     }
 
-    /// `glob_with` forces `require_literal_separator` to true and ignores the
-    /// value it is handed, so the `false` this module builds has never had an
-    /// effect. Matching a full relative path honours the flag, so carrying that
-    /// `false` across would widen every pattern: `apps/*/.env.local` would
-    /// start matching two directories down and pull unrequested files into a
-    /// worktree.
+    /// `require_literal_separator: true` is what keeps a single `*` from
+    /// crossing a directory separator. Getting this wrong would widen every
+    /// pattern: `apps/*/.env.local` would start matching two directories down
+    /// and pull unrequested files into a worktree.
     #[test]
     fn a_single_wildcard_does_not_cross_a_directory_separator() {
         let base = tempfile::tempdir().unwrap();
@@ -2592,9 +2590,9 @@ mod tests {
         );
     }
 
-    /// A symlinked directory in the middle of a pattern is read through, as
-    /// `glob_with` reads through it today. jwalk's default would give it no
-    /// children and drop the file underneath with no warning at all.
+    /// A symlinked directory in the middle of a pattern is read through.
+    /// jwalk's default would give it no children and drop the file underneath
+    /// with no warning at all.
     #[cfg(unix)]
     #[test]
     fn a_symlinked_directory_mid_pattern_is_traversed() {
