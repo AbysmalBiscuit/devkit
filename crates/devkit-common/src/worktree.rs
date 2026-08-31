@@ -586,60 +586,78 @@ impl Walk<'_> {
         warnings: &mut Vec<String>,
     ) {
         let trimmed = pattern.trim_end_matches('/');
-        // An empty pattern joins to `source` itself, which globs to the source
-        // directory and strips to an empty relative path, planning every file
-        // under the root. Drop it before the join rather than after.
+        // An empty pattern would match the source directory itself and plan
+        // every file under the root.
         if trimmed.is_empty() {
             return;
         }
         // `source.join` discards the base for a rooted pattern and keeps a `..`
-        // component, so a pattern that leaves the tree has to be refused before
-        // the join rather than detected after it.
+        // component, so a pattern that leaves the tree is refused before any
+        // path is built from it.
         if escapes(trimmed) {
             warnings.push(format!(
                 "include pattern reaches outside the source tree, skipped: {pattern}"
             ));
             return;
         }
-        let joined = source.join(trimmed);
-        let Some(pat_str) = joined.to_str() else {
-            warnings.push(format!("include pattern is not valid UTF-8: {pattern}"));
+        let Some(root) = walk_root(trimmed) else {
+            self.plan_literal(source, Path::new(trimmed), out, warnings);
             return;
         };
-        let entries = match glob::glob_with(pat_str, opts) {
-            Ok(paths) => paths,
+        let matcher = match glob::Pattern::new(trimmed) {
+            Ok(p) => p,
             Err(e) => {
                 warnings.push(format!("bad include pattern `{pattern}`: {e}"));
                 return;
             }
         };
-        for entry in entries {
-            let matched = match entry {
-                Ok(p) => p,
-                Err(e) => {
-                    warnings.push(format!("reading match for `{pattern}`: {e}"));
-                    continue;
-                }
-            };
-            let Ok(rel) = matched.strip_prefix(source) else {
-                warnings.push(format!("match outside source: {}", matched.display()));
-                continue;
-            };
-            // A link is classified before any is_dir test, which follows it and
-            // would send a symlinked directory into the recursion.
-            if self.mode == LinkMode::Preserve && is_symlink(&matched) {
-                match std::fs::read_link(&matched) {
+        let start = source.join(&root);
+        self.walk_and_classify(source, &start, Some(&matcher), opts, out, warnings);
+    }
+
+    /// A pattern with no wildcard names exactly one path, so it costs one stat
+    /// rather than a walk. Mode decides what a link means: `Preserve` records
+    /// the link, `Follow` resolves through it, which is why `copy_out` can
+    /// promise that a Follow-mode plan holds none.
+    fn plan_literal(
+        &self,
+        source: &Path,
+        rel: &Path,
+        out: &mut PatternPlan,
+        warnings: &mut Vec<String>,
+    ) {
+        let full = source.join(rel);
+        // A glob over a missing path yields nothing rather than an error, and
+        // a literal pattern matching nothing behaves the same way.
+        let Ok(meta) = std::fs::symlink_metadata(&full) else {
+            return;
+        };
+        let opts = match_options();
+        if meta.file_type().is_symlink() {
+            if self.mode == LinkMode::Preserve {
+                match std::fs::read_link(&full) {
                     Ok(target) => self.record_link(rel.to_path_buf(), target, out),
-                    Err(e) => {
-                        warnings.push(format!("reading link {}: {e}", matched.display()));
-                    }
+                    Err(e) => warnings.push(format!("reading link {}: {e}", full.display())),
                 }
-            } else if matched.is_dir() {
-                self.walk_and_classify(source, &matched, None, opts, out, warnings);
-            } else {
-                let exists = self.dest.join(rel).exists();
-                self.record_file(rel.to_path_buf(), exists, out);
+                return;
             }
+            match std::fs::metadata(&full) {
+                Ok(target) if target.is_dir() => {
+                    self.walk_and_classify(source, &full, None, opts, out, warnings);
+                }
+                Ok(_) => {
+                    let exists = self.dest.join(rel).exists();
+                    self.record_file(rel.to_path_buf(), exists, out);
+                }
+                Err(e) => warnings.push(format!("reading link {}: {e}", full.display())),
+            }
+            return;
+        }
+        if meta.is_dir() {
+            self.walk_and_classify(source, &full, None, opts, out, warnings);
+        } else {
+            let exists = self.dest.join(rel).exists();
+            self.record_file(rel.to_path_buf(), exists, out);
         }
     }
 }
@@ -677,11 +695,7 @@ fn plan_with_mode(
     on: &(dyn Fn(IncludeEvent) + Sync),
     mode: LinkMode,
 ) -> IncludePlan {
-    let opts = glob::MatchOptions {
-        case_sensitive: true,
-        require_literal_separator: false,
-        require_literal_leading_dot: false,
-    };
+    let opts = match_options();
     let walk = Walk {
         dest,
         on,
@@ -892,7 +906,6 @@ fn is_glob(pattern: &str) -> bool {
 /// The pattern must already be trimmed of a trailing `/` and checked with
 /// [`escapes`]: this reads `Component::Normal` only, so a `..` or a root would
 /// silently vanish from the prefix rather than being refused.
-#[allow(dead_code)] // consumed by the jwalk-scoped walk that replaces glob expansion
 fn walk_root(pattern: &str) -> Option<PathBuf> {
     if !is_glob(pattern) {
         return None;
@@ -906,6 +919,23 @@ fn walk_root(pattern: &str) -> Option<PathBuf> {
         }
     }
     Some(root)
+}
+
+/// The options every include match is tested with.
+///
+/// `require_literal_separator` is true because that is what the old walker
+/// actually did: `glob_with` forced it true whatever it was handed
+/// (`glob-0.3.3/src/lib.rs:176`) and matched one path component at a time, so a
+/// single `*` has never crossed a `/` here. `matches_path_with` honours the
+/// flag, so carrying across the `false` this module used to build would widen
+/// every pattern and pull unrequested files into a worktree. `**` still
+/// recurses; it is a different token.
+fn match_options() -> glob::MatchOptions {
+    glob::MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    }
 }
 
 #[cfg(test)]
@@ -2384,5 +2414,156 @@ mod tests {
     fn walk_root_is_none_without_a_wildcard() {
         assert_eq!(walk_root(".tool-versions"), None);
         assert_eq!(walk_root(".claude/hooks"), None);
+    }
+
+    /// `glob_with` forces `require_literal_separator` to true and ignores the
+    /// value it is handed, so the `false` this module builds has never had an
+    /// effect. Matching a full relative path honours the flag, so carrying that
+    /// `false` across would widen every pattern: `apps/*/.env.local` would
+    /// start matching two directories down and pull unrequested files into a
+    /// worktree.
+    #[test]
+    fn a_single_wildcard_does_not_cross_a_directory_separator() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("apps/web/.env.local"), "shallow");
+        write(&src.join("apps/web/nested/.env.local"), "deep");
+
+        let plan = plan_includes(&src, &dst, &["apps/*/.env.local".to_string()]);
+
+        let missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        assert_eq!(missing, vec![PathBuf::from("apps/web/.env.local")]);
+    }
+
+    /// `**` matches across separators including zero of them, which is what
+    /// makes `**/.env.local` find a root-level file as well as a nested one.
+    #[test]
+    fn a_recursive_wildcard_matches_at_every_depth_including_none() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join(".env.local"), "root");
+        write(&src.join("apps/web/.env.local"), "nested");
+
+        let plan = plan_includes(&src, &dst, &["**/.env.local".to_string()]);
+
+        let mut missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        missing.sort();
+        assert_eq!(
+            missing,
+            vec![
+                PathBuf::from(".env.local"),
+                PathBuf::from("apps/web/.env.local"),
+            ]
+        );
+    }
+
+    /// A symlinked directory in the middle of a pattern is read through, as
+    /// `glob_with` reads through it today. jwalk's default would give it no
+    /// children and drop the file underneath with no warning at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_directory_mid_pattern_is_traversed() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("shared/web/.env.local"), "x");
+        std::fs::create_dir_all(src.join("apps")).unwrap();
+        std::os::unix::fs::symlink("../shared/web", src.join("apps/web")).unwrap();
+
+        let plan = plan_includes(&src, &dst, &["apps/*/.env.local".to_string()]);
+
+        let missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        assert_eq!(missing, vec![PathBuf::from("apps/web/.env.local")]);
+        assert!(plan.patterns[0].links.is_empty());
+    }
+
+    /// A link the pattern claims is still reproduced as a link, not read
+    /// through, even though the walk follows links to reach the case above.
+    /// This is what the child-clearing in `process_read_dir` protects.
+    #[cfg(unix)]
+    #[test]
+    fn a_claimed_symlinked_directory_is_planned_as_a_link() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("shared/web/.env.local"), "x");
+        std::fs::create_dir_all(src.join("apps")).unwrap();
+        std::os::unix::fs::symlink("../shared/web", src.join("apps/web")).unwrap();
+
+        let plan = plan_includes(&src, &dst, &["apps/*".to_string()]);
+
+        assert_eq!(plan.missing_len(), 0, "the link's contents are not planned");
+        assert_eq!(plan.patterns[0].links.len(), 1);
+        assert_eq!(plan.patterns[0].links[0].0, PathBuf::from("apps/web"));
+        assert_eq!(plan.patterns[0].links[0].1, PathBuf::from("../shared/web"));
+    }
+
+    /// A wildcard pattern whose literal prefix does not exist is silent, as it
+    /// is today: `apps/*/.env.local` in a repository with no `apps/` is a
+    /// common configuration and must not warn on every setup.
+    #[test]
+    fn a_missing_walk_root_is_silent() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("keep.txt"), "x");
+
+        let plan = plan_includes(&src, &dst, &["apps/*/.env.local".to_string()]);
+
+        assert_eq!(plan.missing_len(), 0);
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+    }
+
+    /// A `copy_out` pattern naming a symlink resolves through it and archives
+    /// the target's contents. `copy_out`'s own comment that a Follow-mode plan
+    /// holds no links depends on this, and nothing covered it before.
+    #[cfg(unix)]
+    #[test]
+    fn copy_out_resolves_a_pattern_that_names_a_link() {
+        let base = tempfile::tempdir().unwrap();
+        let wt = base.path().join("wt");
+        let dst = base.path().join("dst");
+        write(&wt.join("real/notes.md"), "kept");
+        std::os::unix::fs::symlink("real", wt.join("archive")).unwrap();
+
+        let (copied, warnings) = copy_out(&wt, &dst, &["archive".to_string()]);
+
+        assert_eq!(copied, 1, "{warnings:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            std::fs::read_to_string(dst.join("archive/notes.md")).unwrap(),
+            "kept"
+        );
+    }
+
+    /// Two runs over one tree plan identically. A parallel walk yields paths in
+    /// whatever order threads finish, so the per-pattern sort is what makes the
+    /// plan deterministic rather than a formality.
+    #[test]
+    fn planning_the_same_tree_twice_yields_the_same_plan() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        for i in 0..50 {
+            write(
+                &src.join("apps").join(format!("a{i}")).join(".env.local"),
+                "x",
+            );
+        }
+
+        let patterns = ["apps/*/.env.local".to_string()];
+        let first: Vec<_> = plan_includes(&src, &dst, &patterns)
+            .missing()
+            .map(Path::to_path_buf)
+            .collect();
+        let second: Vec<_> = plan_includes(&src, &dst, &patterns)
+            .missing()
+            .map(Path::to_path_buf)
+            .collect();
+
+        assert_eq!(first.len(), 50);
+        assert_eq!(first, second);
     }
 }
