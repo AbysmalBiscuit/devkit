@@ -1405,6 +1405,9 @@ mod tests {
     /// about. A symlink is a leaf, whatever it points at: a `Preserve`-mode
     /// archive reproduces links, and descending through one that names its
     /// own parent would recurse until the path outgrew the platform's limit.
+    /// Only the link tests assert on a whole archive, and creating a link is
+    /// what they need a Unix host for, so this is gated with them.
+    #[cfg(unix)]
     fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = fs::read_dir(dir) else {
             return;
