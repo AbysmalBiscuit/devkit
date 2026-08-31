@@ -1374,6 +1374,26 @@ mod tests {
         assert_eq!(*done.lock().unwrap(), vec![2]);
     }
 
+    /// Sort each contiguous run of `file …` lines. The copy is parallel within
+    /// one entry, so those lines may arrive in any order; the `start` and
+    /// `done` brackets around them may not.
+    fn sort_file_runs(log: &[String]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::with_capacity(log.len());
+        let mut run: Vec<String> = Vec::new();
+        for line in log {
+            if line.starts_with("file ") {
+                run.push(line.clone());
+            } else {
+                run.sort();
+                out.append(&mut run);
+                out.push(line.clone());
+            }
+        }
+        run.sort();
+        out.append(&mut run);
+        out
+    }
+
     /// The copy display draws one sub-step per include entry, so the copy has to
     /// bracket each pattern and count within it.
     #[test]
@@ -1418,7 +1438,7 @@ mod tests {
         assert_eq!(copied, 3);
         assert!(warnings.is_empty());
         assert_eq!(
-            *log.lock().unwrap(),
+            sort_file_runs(&log.lock().unwrap()),
             vec![
                 "start .tool-versions 0/2 1",
                 "file .tool-versions 1/1",
