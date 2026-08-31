@@ -440,11 +440,29 @@ impl Walk<'_> {
         let prune_plan = pruner.as_ref().map(|p| Prune::for_pattern(p.as_str()));
         #[cfg(test)]
         let read_threads = self.read_threads.clone();
+        // Seeds the ancestor chain with every canonicalised directory from
+        // the filesystem root down to `start`, not just `start`'s immediate
+        // parent: a worktree's own root sits several directories below ones
+        // the walk never reads by itself (`../devkit-worktrees/` holding
+        // every sibling worktree, for one), and nothing inside the walk ever
+        // climbs up to add those on its own. One `canonicalize` outside the
+        // walk, not one per directory. `skip(1)` drops `start` itself, since
+        // the walk adds `start` to the chain the moment it reads it, the
+        // same as every other directory it reads; seeding it here too would
+        // make `start` an ancestor of itself, which only bites when `start`
+        // is itself a symlink (a pattern naming a link directly) — jwalk
+        // represents the walk root as a child of its own parent in one
+        // internal call, and a self-seeded chain would refuse to read
+        // through it at all.
+        let root_seed: Vec<PathBuf> = std::fs::canonicalize(start)
+            .map(|c| c.ancestors().skip(1).map(Path::to_path_buf).collect())
+            .unwrap_or_default();
 
         let entries: Vec<_> = jwalk::WalkDirGeneric::<(Ancestors, ())>::new(start)
             .skip_hidden(false)
             .follow_links(true)
             .parallelism(crate::pool::jwalk_parallelism())
+            .root_read_dir_state(std::sync::Arc::new(root_seed))
             .process_read_dir(move |_depth, dir, state, children| {
                 // Test-only: records which pool thread performed this read,
                 // so a test can observe real parallel dispatch. No-op
@@ -457,9 +475,14 @@ impl Walk<'_> {
                 }
                 // Extends the ancestor chain with this directory, then
                 // refuses to descend into a child symlink that would
-                // re-enter one already on the path here. jwalk's own check
-                // only catches an absolute link target; canonicalising
-                // catches a relative one (`ln -s ..`) too.
+                // re-enter one already on the path here or above it. jwalk's
+                // own check only catches an absolute link target;
+                // canonicalising catches a relative one (`ln -s ..`) too, at
+                // any depth, because `root_read_dir_state` above already
+                // seeded the chain with everything from the filesystem root
+                // down to `start` — this loop only ever extends the chain
+                // further down and does not depend on however jwalk happens
+                // to sequence its first few calls.
                 if let Ok(here) = std::fs::canonicalize(dir) {
                     let mut seen = Vec::with_capacity(state.len() + 1);
                     seen.extend_from_slice(state);
@@ -969,8 +992,10 @@ fn is_glob(pattern: &str) -> bool {
 type Ancestors = std::sync::Arc<Vec<PathBuf>>;
 
 /// Whether following `link` re-enters a directory already on the path to it.
-/// Only a link can close a cycle, so an ordinary directory is never
-/// canonicalised and the check costs nothing on a tree without links.
+/// Only ever called on a symlinked directory, so this function's own
+/// `canonicalize` costs nothing on a tree without links; the chain it
+/// checks against is a different cost, paid on every directory the walk
+/// reads, link or not, to keep it current.
 fn closes_a_cycle(seen: &Ancestors, link: &Path) -> bool {
     let Ok(resolved) = std::fs::canonicalize(link) else {
         return false;
@@ -1312,6 +1337,24 @@ mod tests {
     fn write(path: &Path, body: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, body).unwrap();
+    }
+
+    /// Every plain file under `dir`, recursively, for asserting on an
+    /// archive's whole shape rather than one path at a time — the only way
+    /// to notice an extra file a narrower assertion would not think to ask
+    /// about.
+    fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_files(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
     }
 
     #[test]
@@ -2408,8 +2451,13 @@ mod tests {
         let wt = base.path().join("wt");
         let dst = base.path().join("dst");
         write(&wt.join("scratch/keep.txt"), "x");
-        // Relative, which jwalk misses, and absolute, which it catches. The
-        // canonicalising check covers both, so both belong here.
+        // `loop` exercises the canonicalising check: its raw target text
+        // (`..`) never matches jwalk's own absolute-text comparison, so only
+        // canonicalising catches it. `abs` exercises jwalk's own detection
+        // instead — its target text already matches an ancestor verbatim, so
+        // jwalk errors it out before this check's `children` loop ever sees
+        // it as an `Ok` entry; kept here to pin that the new check does not
+        // regress or duplicate what jwalk already refused on its own.
         std::os::unix::fs::symlink("..", wt.join("scratch/loop")).unwrap();
         std::os::unix::fs::symlink(wt.join("scratch"), wt.join("scratch/abs")).unwrap();
 
@@ -2441,6 +2489,42 @@ mod tests {
             copied, 1,
             "the real file is archived exactly once, not once per turn \
              around the cycle: {warnings:?}"
+        );
+    }
+
+    /// A cycle that resolves above the walk root's own parent, not just one
+    /// level up, must still be refused. Every branch in this project lives
+    /// in a worktree under a shared `../devkit-worktrees/`, so a pattern
+    /// rooted one directory short of that (`scratch/` inside a worktree)
+    /// leaves `ln -s ../..` resolving to the directory every other worktree
+    /// sits in; following it would sweep another session's in-progress work
+    /// into this one's archive.
+    #[cfg(unix)]
+    #[test]
+    fn copy_out_refuses_a_cycle_above_the_walk_roots_parent() {
+        let base = tempfile::tempdir().unwrap();
+        let worktrees = base.path().join("devkit-worktrees");
+        let wt = worktrees.join("branch");
+        let dst = base.path().join("dst");
+        write(&wt.join("scratch/keep.txt"), "x");
+        write(
+            &worktrees.join("sibling/secret.txt"),
+            "another session's work",
+        );
+        // Two levels above `scratch`: past its parent (the worktree root)
+        // and into the directory every worktree shares.
+        std::os::unix::fs::symlink("../..", wt.join("scratch/lp")).unwrap();
+
+        let (copied, warnings) = copy_out(&wt, &dst, &["scratch/".to_string()]);
+
+        let mut found = Vec::new();
+        collect_files(&dst, &mut found);
+        assert_eq!(
+            found,
+            vec![dst.join("scratch/keep.txt")],
+            "only the pattern's own file should land; a sibling worktree \
+             reached through the link means the cycle was followed \
+             instead of refused: copied={copied}, warnings={warnings:?}"
         );
     }
 
@@ -2836,6 +2920,40 @@ mod tests {
         assert_eq!(plan.patterns[0].links.len(), 1);
         assert_eq!(plan.patterns[0].links[0].0, PathBuf::from("apps/web"));
         assert_eq!(plan.patterns[0].links[0].1, PathBuf::from("../shared/web"));
+    }
+
+    /// A link that would close a cycle if followed is claimed under
+    /// `LinkMode::Preserve` the same way any other matched link is: clearing
+    /// `read_children` only stops descent, it does not drop the entry, so
+    /// `copy_includes` still reproduces `ln -s ..` as a link rather than
+    /// silently losing it the way `LinkMode::Follow` would.
+    #[cfg(unix)]
+    #[test]
+    fn copy_includes_reproduces_a_cyclical_link_instead_of_following_it() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("scratch/keep.txt"), "x");
+        std::os::unix::fs::symlink("..", src.join("scratch/loop")).unwrap();
+
+        let (copied, linked, warnings) = copy_includes(&src, &dst, &["scratch/".to_string()]);
+
+        assert_eq!(copied, 1, "the real file is archived once: {warnings:?}");
+        assert_eq!(
+            linked, 1,
+            "the cyclical link is reproduced, not walked into: {warnings:?}"
+        );
+        assert_eq!(
+            std::fs::read_link(dst.join("scratch/loop")).unwrap(),
+            Path::new(".."),
+            "the link entry survives clearing read_children, it is not dropped"
+        );
+        let mut landed: Vec<String> = std::fs::read_dir(dst.join("scratch"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        landed.sort();
+        assert_eq!(landed, vec!["keep.txt".to_string(), "loop".to_string()]);
     }
 
     /// A matched directory contributes its whole subtree, however deep, so
