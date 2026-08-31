@@ -450,6 +450,15 @@ impl Walk<'_> {
         if trimmed.is_empty() {
             return;
         }
+        // `source.join` discards the base for a rooted pattern and keeps a `..`
+        // component, so a pattern that leaves the tree has to be refused before
+        // the join rather than detected after it.
+        if escapes(trimmed) {
+            warnings.push(format!(
+                "include pattern reaches outside the source tree, skipped: {pattern}"
+            ));
+            return;
+        }
         let joined = source.join(trimmed);
         let Some(pat_str) = joined.to_str() else {
             warnings.push(format!("include pattern is not valid UTF-8: {pattern}"));
@@ -1253,6 +1262,41 @@ mod tests {
         );
         assert!(warnings[0].contains("../outside.md"), "{warnings:?}");
         assert!(warnings[1].contains("/etc/passwd"), "{warnings:?}");
+    }
+
+    /// `plan_one` builds its pattern from `source.join(trimmed)`, and
+    /// `Path::join` discards the base for a rooted pattern — on Windows too,
+    /// where `is_absolute` is false but `join` still replaces the base. Without
+    /// a gate, an include reads from outside the tree it is supposed to copy.
+    ///
+    /// The gate sits above the wildcard/literal split, so `../*/secrets` is
+    /// refused by the same check as `../outside.md`.
+    #[test]
+    fn an_escaping_include_pattern_is_refused() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("keep.txt"), "x");
+        write(&base.path().join("outside.md"), "secret");
+
+        let plan = plan_includes(
+            &src,
+            &dst,
+            &[
+                "../outside.md".to_string(),
+                "/etc/passwd".to_string(),
+                "../*/secrets".to_string(),
+                "keep.txt".to_string(),
+            ],
+        );
+
+        assert_eq!(plan.patterns.len(), 4, "every pattern keeps its entry");
+        assert_eq!(plan.missing_len(), 1);
+        assert_eq!(plan.missing().next().unwrap(), Path::new("keep.txt"));
+        assert_eq!(plan.warnings.len(), 3, "{:?}", plan.warnings);
+        assert!(plan.warnings.iter().any(|w| w.contains("../outside.md")));
+        assert!(plan.warnings.iter().any(|w| w.contains("/etc/passwd")));
+        assert!(plan.warnings.iter().any(|w| w.contains("../*/secrets")));
     }
 
     /// The policy difference between the two directions, asserted together so a
