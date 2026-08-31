@@ -726,7 +726,7 @@ fn is_glob(pattern: &str) -> bool {
 /// The pattern must already be trimmed of a trailing `/` and checked with
 /// [`escapes`]: this reads `Component::Normal` only, so a `..` or a root would
 /// silently vanish from the prefix rather than being refused.
-#[allow(dead_code)]
+#[allow(dead_code)] // consumed by the jwalk-scoped walk that replaces glob expansion
 fn walk_root(pattern: &str) -> Option<PathBuf> {
     if !is_glob(pattern) {
         return None;
@@ -2144,6 +2144,11 @@ mod tests {
         );
         assert_eq!(walk_root("src/[abc]/x"), Some(PathBuf::from("src")));
         assert_eq!(walk_root("logs/?.txt"), Some(PathBuf::from("logs")));
+        // Wildcards in non-trailing components: stops at the first wildcard-containing component.
+        assert_eq!(walk_root("apps/web-*/x"), Some(PathBuf::from("apps")));
+        assert_eq!(walk_root("apps/web*/config"), Some(PathBuf::from("apps")));
+        // Wildcard-suffixed component as the last component still returns the prefix.
+        assert_eq!(walk_root("apps/web-*"), Some(PathBuf::from("apps")));
     }
 
     /// A leading `**` scopes to nothing, so the walk starts at the source root.
