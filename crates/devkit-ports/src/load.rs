@@ -22,6 +22,9 @@ pub fn load(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
         main_checkout.as_deref(),
         checkout_root.as_deref(),
     )?;
+    // The one door every subcommand's config passes through, so the shared
+    // pool is sized here rather than at each caller.
+    devkit_common::pool::configure(cfg.parallelism.threads);
     let yaml_path = config::expand_tilde(&cfg.defaults.doppler_yaml);
     let p2p = match std::fs::read_to_string(&yaml_path) {
         Ok(y) => doppler::path_to_project(&y)?,
@@ -33,4 +36,28 @@ pub fn load(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
         catalog,
         provenance,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    /// `load` is the one door every subcommand's config goes through, so the
+    /// pool is configured there rather than at each of the eighteen call
+    /// sites, where it could be forgotten. The width is read back rather than
+    /// asserted equal to the configured value: `configure` writes a
+    /// process-global `OnceLock` that another test in this binary may have set
+    /// first, and `DEVKIT_THREADS` outranks it either way.
+    #[test]
+    fn load_configures_the_shared_pool() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("devkit.toml"),
+            "[config]\nroot = true\n[parallelism]\nthreads = 3\n",
+        )
+        .unwrap();
+
+        super::load(None, &project).unwrap();
+        assert!(devkit_common::pool::width() >= 1);
+    }
 }
