@@ -252,9 +252,9 @@ A thread count describes the machine rather than the project, so it belongs in
 the personal layer at `~/.config/devkit/config.toml`. A config may carry
 `[parallelism]` alone, with no `[defaults]` table around it.
 
-Four is the measured throughput knee for file copying. Raising it helps most on
-a filesystem where a stat is slow and concurrency hides the latency, such as a
-Windows drive mounted under WSL.
+The default is sized for file copying, past which added threads return little.
+Raising it helps most on a filesystem where a stat is slow and concurrency hides
+the latency, such as a Windows drive mounted under WSL.
 
 ### `[harness]`
 

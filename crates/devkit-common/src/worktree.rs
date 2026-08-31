@@ -505,8 +505,7 @@ impl Walk<'_> {
                     // A link that is claimed becomes a link in the plan,
                     // so the walk must not read through it. A link that
                     // is claimed by nothing is traversed: it may be the
-                    // only road to a file that is, and `glob_with` used
-                    // to read through one the same way.
+                    // only road to a file that is.
                     if mode == LinkMode::Preserve && child.path_is_symlink() {
                         let claimed = match &pruner {
                             Some(p) => matches_here(p, rel, opts),
@@ -1131,12 +1130,12 @@ impl Prune {
 
 /// The options every include match is tested with.
 ///
-/// `require_literal_separator` is true because that is what the old walker
-/// actually did: `glob_with` forced it true whatever it was handed
-/// (`glob-0.3.3/src/lib.rs:176`) and matched one path component at a time, so a
-/// single `*` has never crossed a `/` here. `matches_path_with` honours the
-/// flag, so building these with `false` would widen every pattern and pull
-/// unrequested files into a worktree. `**` still
+/// `require_literal_separator` is true so a single `*` matches within one path
+/// component and never crosses a `/`. `glob_with` forces the flag true whatever
+/// it is handed (`glob-0.3.3/src/lib.rs:176`), so that is the semantics every
+/// include pattern already in use was written against. `matches_path_with`
+/// instead honours the flag, and building these with `false` would widen every
+/// such pattern and pull unrequested files into a worktree. `**` still
 /// recurses; it is a different token.
 fn match_options() -> glob::MatchOptions {
     glob::MatchOptions {
@@ -1156,12 +1155,11 @@ mod tests {
     /// on the calling thread, not from inside `crate::pool::install`: doing
     /// the latter makes the walk see itself as already inside the pool and
     /// silently fall back to `Serial`, so every directory read for the whole
-    /// walk lands on one thread. `pool::jwalk_parallelism_uses_the_shared_pool_
-    /// from_outside_it` already asserted the helper's own behaviour and did
-    /// not catch this, because the bug was in how `walk_and_classify` called
-    /// it, not in the helper. This constructs a real `Walk` and drives the
-    /// real, private `walk_and_classify` directly (accessible from this
-    /// submodule), and asserts that more than one thread index shows up.
+    /// walk lands on one thread. Asserting on the helper alone cannot catch
+    /// that, because the helper is correct in isolation and only the call
+    /// shape is wrong. This constructs a real `Walk` and drives the real,
+    /// private `walk_and_classify` directly (accessible from this submodule),
+    /// and asserts that more than one thread index shows up.
     /// That assertion is decided, not sampled: jwalk runs the root
     /// callback on the calling thread, which is not a pool worker and
     /// records `None`, and dispatches every child read onto a worker,
@@ -1215,10 +1213,10 @@ mod tests {
     /// pattern -- glob does not forbid `/` inside a class -- but
     /// `Path::components()` splits inside the class, since it knows nothing
     /// of glob syntax, so the truncated prefix `x[a` fails to compile even
-    /// though the full pattern did. `Prune::for_pattern` used to `expect`
-    /// every prefix to compile and panicked on exactly this pattern; it now
-    /// degrades to treating the failing component as unbounded, the same way
-    /// a `**` is, and the match still happens correctly.
+    /// though the full pattern did. `Prune::for_pattern` treats such a
+    /// component as unbounded, the same way it treats a `**`, rather than
+    /// assuming every prefix compiles, and the match still happens
+    /// correctly.
     #[test]
     fn a_bracket_class_holding_a_separator_does_not_panic() {
         let base = tempfile::tempdir().unwrap();
