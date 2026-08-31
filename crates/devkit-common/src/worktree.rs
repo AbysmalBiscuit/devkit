@@ -441,11 +441,11 @@ impl Walk<'_> {
         #[cfg(test)]
         let read_threads = self.read_threads.clone();
 
-        let entries: Vec<_> = jwalk::WalkDir::new(start)
+        let entries: Vec<_> = jwalk::WalkDirGeneric::<(Ancestors, ())>::new(start)
             .skip_hidden(false)
             .follow_links(true)
             .parallelism(crate::pool::jwalk_parallelism())
-            .process_read_dir(move |_depth, dir, _state, children| {
+            .process_read_dir(move |_depth, dir, state, children| {
                 // Test-only: records which pool thread performed this read,
                 // so a test can observe real parallel dispatch. No-op
                 // (`read_threads` is always `None`) outside tests.
@@ -454,6 +454,25 @@ impl Walk<'_> {
                     rt.lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .insert(rayon::current_thread_index());
+                }
+                // Extends the ancestor chain with this directory, then
+                // refuses to descend into a child symlink that would
+                // re-enter one already on the path here. jwalk's own check
+                // only catches an absolute link target; canonicalising
+                // catches a relative one (`ln -s ..`) too.
+                if let Ok(here) = std::fs::canonicalize(dir) {
+                    let mut seen = Vec::with_capacity(state.len() + 1);
+                    seen.extend_from_slice(state);
+                    seen.push(here);
+                    *state = std::sync::Arc::new(seen);
+                }
+                for child in children.iter_mut().flatten() {
+                    if child.path_is_symlink()
+                        && child.file_type().is_dir()
+                        && closes_a_cycle(state, &dir.join(&child.file_name))
+                    {
+                        child.read_children = None;
+                    }
                 }
                 for child in children.iter_mut().flatten() {
                     let full = dir.join(&child.file_name);
@@ -942,6 +961,21 @@ fn matches_here(matcher: &glob::Pattern, rel: &Path, opts: glob::MatchOptions) -
 
 fn is_glob(pattern: &str) -> bool {
     pattern.contains(['*', '?', '['])
+}
+
+/// Canonicalised directories already entered on the path to the current one.
+/// jwalk detects a symlink cycle by comparing a link's raw target against
+/// absolute ancestors, so `ln -s ..` slips past it; this closes that.
+type Ancestors = std::sync::Arc<Vec<PathBuf>>;
+
+/// Whether following `link` re-enters a directory already on the path to it.
+/// Only a link can close a cycle, so an ordinary directory is never
+/// canonicalised and the check costs nothing on a tree without links.
+fn closes_a_cycle(seen: &Ancestors, link: &Path) -> bool {
+    let Ok(resolved) = std::fs::canonicalize(link) else {
+        return false;
+    };
+    seen.iter().any(|a| a == &resolved)
 }
 
 /// The literal directory prefix of a pattern: its components up to the first
@@ -2353,6 +2387,35 @@ mod tests {
             "no warning names the unarchived link: {warnings:?}"
         );
         assert!(!dest.join("inc/link.txt").exists());
+    }
+
+    /// `copy_out` follows links, and jwalk only detects a cycle whose target is
+    /// absolute. A relative one would descend until the OS path limit stopped
+    /// it, filling the archive with a nested duplicate of one subtree while the
+    /// worktree is being deleted.
+    ///
+    /// Carries a timeout because a regression hangs rather than fails.
+    #[cfg(unix)]
+    #[test]
+    fn copy_out_survives_a_relative_symlink_cycle() {
+        let base = tempfile::tempdir().unwrap();
+        let wt = base.path().join("wt");
+        let dst = base.path().join("dst");
+        write(&wt.join("scratch/keep.txt"), "x");
+        // Relative, which jwalk misses, and absolute, which it catches. The
+        // canonicalising check covers both, so both belong here.
+        std::os::unix::fs::symlink("..", wt.join("scratch/loop")).unwrap();
+        std::os::unix::fs::symlink(wt.join("scratch"), wt.join("scratch/abs")).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(copy_out(&wt, &dst, &["scratch/".to_string()]));
+        });
+
+        let (copied, _warnings) = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("copy_out descended a symlink cycle instead of refusing it");
+        assert!(copied >= 1, "the real file is still archived");
     }
 
     #[test]
