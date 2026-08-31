@@ -3237,6 +3237,32 @@ mod tests {
         assert_eq!(missing, vec![PathBuf::from("a/kept.txt")]);
     }
 
+    /// A symlinked directory the pattern names as its own literal anchor is
+    /// where the walk starts, not something the walk matched, so `Preserve`
+    /// walks through it. Naming it without a wildcard reproduces the link
+    /// instead. The two spellings are asymmetric and both are pinned here.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_anchor_is_walked_through_and_a_named_one_is_reproduced() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("real/deep.txt"), "x");
+        if !link_or_skip(Path::new("real"), &src.join("linked"), true) {
+            return;
+        }
+
+        let walked = plan_includes(&src, &dst, &["linked/**".to_string()]);
+        assert_eq!(walked.links().count(), 0);
+        let files: Vec<_> = walked.missing().map(Path::to_path_buf).collect();
+        assert_eq!(files, vec![PathBuf::from("linked/deep.txt")]);
+
+        let named = plan_includes(&src, &dst, &["linked/".to_string()]);
+        let links: Vec<_> = named.links().map(|(rel, _)| rel.to_path_buf()).collect();
+        assert_eq!(links, vec![PathBuf::from("linked")]);
+        assert_eq!(named.missing().count(), 0);
+    }
+
     #[test]
     fn escapes_refuses_every_component_that_leaves_the_base() {
         assert!(escapes("../secrets"));
