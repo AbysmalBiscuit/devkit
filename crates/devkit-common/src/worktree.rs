@@ -2389,12 +2389,18 @@ mod tests {
         assert!(!dest.join("inc/link.txt").exists());
     }
 
-    /// `copy_out` follows links, and jwalk only detects a cycle whose target is
-    /// absolute. A relative one would descend until the OS path limit stopped
-    /// it, filling the archive with a nested duplicate of one subtree while the
-    /// worktree is being deleted.
+    /// `copy_out` follows links, and jwalk only detects a cycle whose target
+    /// is absolute. A relative one does not hang: Linux bounds a symlink
+    /// chain by path length, not by depth, so an unclosed relative cycle
+    /// still terminates in milliseconds via `ENAMETOOLONG` — it just leaves
+    /// `scratch/keep.txt` copied dozens of times under nested copies of
+    /// `loop` first. `recv_timeout` guards a platform without that bound;
+    /// what actually pins the fix is the shape of what landed.
     ///
-    /// Carries a timeout because a regression hangs rather than fails.
+    /// Under `LinkMode::Follow` a symlinked directory is never its own plan
+    /// entry — the files reached by walking through it are — so a correct
+    /// copy of `scratch/` holds exactly the one real file and neither `loop`
+    /// nor `abs` itself, cycle or not.
     #[cfg(unix)]
     #[test]
     fn copy_out_survives_a_relative_symlink_cycle() {
@@ -2407,15 +2413,35 @@ mod tests {
         std::os::unix::fs::symlink("..", wt.join("scratch/loop")).unwrap();
         std::os::unix::fs::symlink(wt.join("scratch"), wt.join("scratch/abs")).unwrap();
 
+        let dst_for_copy = dst.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(copy_out(&wt, &dst, &["scratch/".to_string()]));
+            let _ = tx.send(copy_out(&wt, &dst_for_copy, &["scratch/".to_string()]));
         });
 
-        let (copied, _warnings) = rx
+        let (copied, warnings) = rx
             .recv_timeout(std::time::Duration::from_secs(60))
             .expect("copy_out descended a symlink cycle instead of refusing it");
-        assert!(copied >= 1, "the real file is still archived");
+
+        let mut landed: Vec<String> = std::fs::read_dir(dst.join("scratch"))
+            .map(|rd| {
+                rd.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        landed.sort();
+        assert_eq!(
+            landed,
+            vec!["keep.txt".to_string()],
+            "scratch/ should hold only the real file; `loop` or `abs` \
+             landing here means a cycle was followed instead of refused \
+             (copied={copied}, warnings={warnings:?})"
+        );
+        assert_eq!(
+            copied, 1,
+            "the real file is archived exactly once, not once per turn \
+             around the cycle: {warnings:?}"
+        );
     }
 
     #[test]
