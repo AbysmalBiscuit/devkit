@@ -2743,6 +2743,27 @@ mod tests {
         assert_eq!(plan.patterns[0].links[0].1, PathBuf::from("../shared/web"));
     }
 
+    /// A matched directory contributes its whole subtree, however deep, so
+    /// `should_prune`'s `matches_here` check must never be skipped: without
+    /// it, a directory past the pattern's own component count (`depth - 1`
+    /// beyond `prefixes.len()`) reads as unreachable and gets pruned, even
+    /// though it sits under a directory the pattern already matched. This
+    /// is the failure mode the whole pruning change exists to prevent, so it
+    /// gets its own test independent of the symlink case above, whose link
+    /// contents are deliberately never planned at all.
+    #[test]
+    fn a_matched_directory_plans_files_arbitrarily_deep_beneath_it() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("apps/web/deep/nested/file"), "x");
+
+        let plan = plan_includes(&src, &dst, &["apps/*".to_string()]);
+
+        let missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        assert_eq!(missing, vec![PathBuf::from("apps/web/deep/nested/file")]);
+    }
+
     /// A wildcard pattern whose literal prefix does not exist is silent, as it
     /// is today: `apps/*/.env.local` in a repository with no `apps/` is a
     /// common configuration and must not warn on every setup.
