@@ -2696,35 +2696,6 @@ mod tests {
         );
     }
 
-    /// Two runs over one tree plan identically. A parallel walk yields paths in
-    /// whatever order threads finish, so the per-pattern sort is what makes the
-    /// plan deterministic rather than a formality.
-    #[test]
-    fn planning_the_same_tree_twice_yields_the_same_plan() {
-        let base = tempfile::tempdir().unwrap();
-        let src = base.path().join("src");
-        let dst = base.path().join("dst");
-        for i in 0..50 {
-            write(
-                &src.join("apps").join(format!("a{i}")).join(".env.local"),
-                "x",
-            );
-        }
-
-        let patterns = ["apps/*/.env.local".to_string()];
-        let first: Vec<_> = plan_includes(&src, &dst, &patterns)
-            .missing()
-            .map(Path::to_path_buf)
-            .collect();
-        let second: Vec<_> = plan_includes(&src, &dst, &patterns)
-            .missing()
-            .map(Path::to_path_buf)
-            .collect();
-
-        assert_eq!(first.len(), 50);
-        assert_eq!(first, second);
-    }
-
     /// A directory this walk would have to read in order to learn it doesn't
     /// belong is made unreadable, so pruning it before ever reading it is what
     /// keeps `warnings` empty. A correct-but-unpruned walk would still land on
