@@ -12,6 +12,8 @@ user-invocable: true
 
 Every command spells two ways: `portm status` and `devkit ports status` run the same code, reachable through hardlinks `devkit install-links` creates. Each subcommand has `--help`, and when these docs and a `--help` disagree, the `--help` wins.
 
+Config keys resolve the same way. `devkit schema` prints the JSON Schema derived from the config types, so it holds every key's name, type and default. Dump it when a key is in question instead of trusting a reference doc to be current.
+
 ## Check for a canned task first
 
 Before running a project build, profiling flow, or verification command by hand, run `devrun task` and look for one already configured. A task renders **real registry ports** into its command, so a hand-typed port is exactly the drift devkit exists to prevent.
@@ -24,7 +26,7 @@ Before running a project build, profiling flow, or verification command by hand,
 | `references/servers.md` | starting or stopping dev servers, allocating ports, reading logs, another worktree's servers |
 | `references/tasks.md` | a `devrun task` hit a `require_live` gate, or you need to override its env |
 | `references/issues.md` | starting an issue worktree, checking out a PR, shipping for review, tearing down |
-| `references/diagnostics.md` | a credential is missing, or you need `doctor`, `brief`, or the `devkit.toml` schema |
+| `references/diagnostics.md` | a `devkit.toml` key's name, type or default is in question, a credential is missing, or you need `doctor` or `brief` |
 
 Global flags go **before** the subcommand (`issue -C ~/git/acme/app status`): `-C/--dir <path>` on `issue`/`devrun`/`portm`, `--config <file>` and `--timing[=trace]` / `--timing-log <FILE>` on `issue`/`devrun`.
 

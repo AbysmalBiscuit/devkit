@@ -118,6 +118,8 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 | `pr_base` | no (default `"staging"`) | Default base branch for PRs opened by `issue review`. |
 | `require_pr_reviewer` | no (default `false`) | Refuse `issue review request` when it would open a new PR without a `--to` reviewer. Left unset, the PR opens with no reviewer and nobody is Slacked. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
+| `ignored_checks` | no | Glob patterns for status-check names to discount from a PR's CHECK verdict, e.g. a deploy left red by an unfinished PR. Matched case-insensitively against each check's name. A PR reads green when only ignored checks fail, and those failures still appear in the triage output rather than being hidden. |
+| `stray_scan_width` | no (default `64`) | Width of each app's port-band scan window for stray detection: ports `[base_port, base_port + stray_scan_width)`. |
 | `issue_summary` | no (default `false`) | Write the issue summary file on every `issue setup`, as though `--summary` were passed. `--summary` / `--no-summary` still decide a single run. The file's path and body come from `templates.issue_summary_path` and `templates.issue_summary`. |
 | `worktree_include` | no | Glob patterns (relative to the primary checkout's root) for untracked local files copied into a newly created worktree by `issue setup` / `issue checkout-pr`, at the same relative path. `issue sync-includes` re-runs the same copy against worktrees that already exist, from this one pattern list. A pattern ending in `/`, or one matching a directory, copies recursively. Existing destinations are never overwritten by default; copy failures warn and are skipped (fail-open). `issue sync-includes --overwrite` is the opt-in way to replace files a worktree already has, and it needs a scope — one or more selectors, or `--all`. A match that is a symlink is reproduced as a symlink holding the same target, and its contents are not copied, so a symlinked directory becomes one link rather than a duplicated tree. Creating a symlink on Windows needs Developer Mode or administrator rights; where it is refused, the link is skipped with a warning and the rest of the run continues. A directory match reads its whole subtree into memory before copying any of it, so peak memory during a sync scales with the largest single include's subtree rather than staying flat. A trailing `**` matches every path below its anchor, its direct children included: `a/**` covers `a/f.txt` as well as `a/b/f.txt`, and a bare `**` covers a file sitting at the checkout root. A `.` component or a repeated separator names the same path it would in any other glob — `a/./b/*` and `a//b/*` both mean `a/b/*`. A symlinked directory named as a pattern's own literal anchor (`linked/**`) is walked through rather than reproduced, because the anchor is where the walk starts rather than something it matched; write `linked/` to get the link. Anchor patterns (`apps/*/.env.local`) rather than scanning the whole tree — `**` descends into `node_modules`. |
 
@@ -210,7 +212,20 @@ steps = [
 
 ### `[daemon]`
 
-Optional daemon-level tuning. Env overrides are listed alongside each key.
+Optional daemon-level tuning. Env overrides are listed alongside each key,
+because they are the one thing `devkit schema` does not carry: run it for any
+key's type and default, which it derives from the config types themselves.
+
+#### Supervision and lifetime
+
+| Key | Env override | Default | Meaning |
+|---|---|---|---|
+| `enabled` | `DEVKIT_DAEMON=1` | `false` | Run gate. The daemon autostarts only when this is true, `DEVKIT_DAEMON=1` is set, or `--supervise` is passed. |
+| `max_restarts` | `DEVKIT_DAEMON_MAX_RESTARTS` | `5` | Restarts allowed inside `restart_window_secs`. This and the key below are the crash-loop budget every restart path spends. |
+| `restart_window_secs` | `DEVKIT_DAEMON_RESTART_WINDOW` | `60` | Length of the sliding window `max_restarts` is counted over. |
+| `health_probe_secs` | `DEVKIT_DAEMON_HEALTH_PROBE_SECS` | `0` (off) | TCP health-probe interval. `0` starts no probe thread at all. A server judged hung is SIGTERMed and respawned through the crash path, inside the budget above. |
+| `health_fail_threshold` | `DEVKIT_DAEMON_HEALTH_FAIL_THRESHOLD` | `3` | Consecutive probe failures, after the server first answers, before it is judged hung. |
+| `idle_timeout_secs` | `DEVKIT_DAEMON_IDLE_SECS` | `1800` | Exit after this long with zero clients and zero supervised children. |
 
 #### Memory management
 
@@ -220,8 +235,9 @@ Two layers of memory control are available; they compose without conflict:
 |---|---|---|---|
 | `memory_max_mb` | `DEVKIT_DAEMON_MEM_MAX_MB` | `0` (off) | Hard kernel ceiling per supervised server tree, in MB. Linux-only (cgroup-v2). See subsection below. |
 | `memory_limit_mb` | `DEVKIT_DAEMON_MEM_LIMIT_MB` | `0` (off) | Soft RSS threshold, in MB. When a server's tree-RSS stays over this for `memory_limit_ticks` consecutive supervision ticks, the daemon SIGTERMs it and respawns within the crash-loop budget. Requires `memory_action = "restart"`. |
-| `memory_action` | `DEVKIT_DAEMON_MEMORY_ACTION` | `""` (off) | Set to `"restart"` to enable the soft poll-based restart on `memory_limit_mb` breach. |
-| `memory_limit_ticks` | `DEVKIT_DAEMON_MEM_LIMIT_TICKS` | `2` | Consecutive over-`memory_limit_mb` supervision ticks before the soft restart fires. |
+| `memory_action` | `DEVKIT_DAEMON_MEMORY_ACTION` | `"warn"` | What a `memory_limit_mb` breach does. `"warn"` logs and leaves the server alone; `"restart"` enables the soft poll-based restart. |
+| `memory_limit_ticks` | `DEVKIT_DAEMON_MEM_LIMIT_TICKS` | `3` | Consecutive over-`memory_limit_mb` supervision ticks before the soft restart fires. |
+| `memory_warn_mb` | `DEVKIT_DAEMON_MEM_WARN_MB` | `0` (off) | Log a loud line past this supervised tree-RSS, in MB. Warns only; it restarts nothing. |
 
 #### `memory_max_mb` — hard cgroup-v2 kernel cap (Linux only)
 
@@ -255,6 +271,25 @@ the personal layer at `~/.config/devkit/config.toml`. A config may carry
 The default is sized for file copying, past which added threads return little.
 Raising it helps most on a filesystem where a stat is slow and concurrency hides
 the latency, such as a Windows drive mounted under WSL.
+
+### `[docs]`
+
+Per-project overlay on the global docs manifest at `~/.config/devkit/docs.toml`.
+One `[[docs.libs]]` entry per library; every field except `name` is optional, so
+an entry here overrides a single field of the global entry and leaves the rest.
+`docs/commands.md` covers how a version is resolved and how checkouts are
+referenced and pruned.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `name` | yes | Id the library is addressed by on the `docm` command line, and the key an overlay entry merges onto. |
+| `ecosystem` | no | Which importer graph resolves the version (`rust`, `js`, `python`, `git`). Omit to detect it from the project's lockfiles. |
+| `package` | no | Registry package name when it differs from `name`, e.g. `@types/node`. |
+| `repo` | no | Git URL to clone, skipping the registry lookup that would find it. |
+| `ref` | no | Manual pin (tag, branch or sha). Wins over lockfile resolution. |
+| `src_dir` | no | Source directory inside the checkout, overriding layout detection. |
+| `docs_dir` | no | Docs directory inside the checkout, overriding layout detection. |
+| `notes` | no | Freeform note surfaced by `docm info` and `docm list`: what this library is here for. |
 
 ### `[harness]`
 

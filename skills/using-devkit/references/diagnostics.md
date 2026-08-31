@@ -30,6 +30,10 @@ Which sections appear is config-driven: `[brief]` has `enabled`, `pins`, `locks`
 
 ## `schema`
 
-`devkit schema` prints the JSON Schema derived from the config types.
+`devkit schema` prints the JSON Schema derived from the config types, so it is
+the authority on every key's name, type and default, and it cannot drift from
+what the binary accepts. Dump it when a key is in question. `docs/configuration.md`
+carries what a schema cannot: the env override for each key, and how keys
+constrain one another.
 
 `devkit schema init` prepends the taplo header directive (`#:schema <url>` on the first line, *not* a `# $schema = "…"` key) to the config at `<path>`, defaulting to `devkit.toml`. It writes a fully-commented starter when the file does not exist, and leaves a file that already names a schema alone. See `docs/configuration.md`.

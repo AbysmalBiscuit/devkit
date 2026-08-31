@@ -215,6 +215,9 @@ Version-correct local library checkouts backing the `devkit:docs` skill. Registe
 docm add tokio                    # registry lookup (crates.io/npm/PyPI)
 docm add https://github.com/godotengine/godot --ref 4.3-stable
 docm add react --project          # write to this repo's devkit.toml [docs]
+docm add zod --eco js             # name the ecosystem instead of probing for it
+docm add h3 --src-dir src --docs-dir docs   # override the detected checkout layout
+docm add tokio --notes "async runtime we copy patterns from"  # shown by info/list
 docm list                         # merged catalog: name, ecosystem, ref, origin
 docm list --project               # only what this checkout evidences; --json emits {pins, dropped}
 docm info tokio                   # path + version + layout map + notes
@@ -248,6 +251,18 @@ A library or ref name cannot collide with the cache's own control files: `regist
 A cache built by devkit 0.12.x has its layout migrated the first time any `docm` command runs against it: nested scoped library directories (`@scope/pkg/`) are renamed to the new encoding and their worktrees repaired, and legacy entries keep protecting their existing checkout until the library re-resolves under the new layout. `docm prune` then reclaims what the migration leaves behind, including retired `default` checkouts once nothing references them any longer.
 
 A 0.12.x `meta.toml` is not migrated. Three of the five tag patterns 0.12.x could record — `name-dash`, `name-dash-v` and `name-at` — no longer parse, and guessing which of the current patterns they meant would resolve a wrong git tag and serve wrong docs. Every `docm` command against such a cache fails instead, naming each `meta.toml` it cannot read in one run: delete those files and run `docm` again. The origin, layouts, tag pattern and commit records they hold are all re-derived.
+
+## `devkit-mcp`: agent access
+
+`devkit-mcp` (equivalently `devkit mcp`) serves the port and file-lock
+registries, the server-lifecycle facade and issue triage to MCP-capable coding
+agents over stdio. The actions, their arguments, and which of them mutate are in
+[agents.md](agents.md), alongside the plugin and per-host wiring.
+
+The gates differ from the CLI's on purpose: `devrun reap` is never exposed, and
+`devrun.down` stays scoped to the calling worktree, so an agent can detect
+strays but never kill another session's servers. `ports.strays` is the
+read-only half.
 
 ## Timing
 
