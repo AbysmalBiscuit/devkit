@@ -638,6 +638,15 @@ impl Walk<'_> {
                         .as_ref()
                         .and_then(jwalk::ReadChildren::error)
                     {
+                        // A directory that vanished between being listed and
+                        // being read raced a deletion; it is not a subtree the
+                        // walk failed to archive, so it is silent here for the
+                        // same reason it is silent on a failed entry.
+                        if err.io_error().map(std::io::Error::kind)
+                            == Some(std::io::ErrorKind::NotFound)
+                        {
+                            return None;
+                        }
                         let cause = err
                             .io_error()
                             .map_or_else(|| err.to_string(), std::io::Error::to_string);
