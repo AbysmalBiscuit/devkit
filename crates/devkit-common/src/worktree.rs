@@ -1,7 +1,10 @@
 use crate::git::{self, Worktree};
 use anyhow::Result;
+use rayon::prelude::*;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// This worktree's issue id. The setup record is authoritative because it holds
 /// whatever the tracker actually calls the issue; the branch and directory scan
@@ -148,8 +151,8 @@ pub fn apply_includes_with(
     overwrite: bool,
     on: &(dyn Fn(IncludeEvent) + Sync),
 ) -> (usize, usize, Vec<String>) {
-    let mut copied = 0usize;
-    let mut linked = 0usize;
+    let copied = AtomicUsize::new(0);
+    let linked = AtomicUsize::new(0);
     let mut warnings = Vec::new();
     let of = plan.patterns.len();
 
@@ -169,49 +172,59 @@ pub fn apply_includes_with(
             files: total,
         });
 
-        let before = copied;
-        let mut done = 0usize;
-        for rel in &worklist {
-            copy_file(
-                &source.join(rel),
-                &dest.join(rel),
-                overwrite,
-                &mut copied,
-                &mut warnings,
-            );
-            done += 1;
-            on(IncludeEvent::FileDone {
-                pattern: &entry.pattern,
-                done,
-                of: total,
+        let before = copied.load(Ordering::Relaxed);
+        let done = AtomicUsize::new(0);
+        let entry_warnings = Mutex::new(Vec::new());
+        let bump = |done: &AtomicUsize| IncludeEvent::FileDone {
+            pattern: &entry.pattern,
+            done: done.fetch_add(1, Ordering::Relaxed) + 1,
+            of: total,
+        };
+
+        // Files and links run as two phases rather than one mixed worklist:
+        // link creation is the failure-prone path on Windows, and keeping it
+        // apart keeps its counter and its warnings separable.
+        crate::pool::install(|| {
+            worklist.par_iter().for_each(|rel| {
+                copy_file(
+                    &source.join(rel),
+                    &dest.join(rel),
+                    overwrite,
+                    &copied,
+                    &entry_warnings,
+                );
+                on(bump(&done));
             });
-        }
-        for (rel, target) in &entry.links {
-            make_link(
-                &source.join(rel),
-                &dest.join(rel),
-                target,
-                overwrite,
-                &mut linked,
-                &mut warnings,
-            );
-            done += 1;
-            on(IncludeEvent::FileDone {
-                pattern: &entry.pattern,
-                done,
-                of: total,
+            entry.links.par_iter().for_each(|(rel, target)| {
+                make_link(
+                    &source.join(rel),
+                    &dest.join(rel),
+                    target,
+                    overwrite,
+                    &linked,
+                    &entry_warnings,
+                );
+                on(bump(&done));
             });
-        }
+        });
+
+        // Sorted within the pattern, and patterns keep configuration order, so
+        // two runs over one tree report warnings identically.
+        let mut w = entry_warnings
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner());
+        w.sort();
+        warnings.extend(w);
 
         on(IncludeEvent::EntryDone {
             pattern: &entry.pattern,
             index,
             of,
-            copied: copied - before,
+            copied: copied.load(Ordering::Relaxed) - before,
         });
     }
 
-    (copied, linked, warnings)
+    (copied.into_inner(), linked.into_inner(), warnings)
 }
 
 /// What an include walk or copy reports as it runs, so a caller can draw
@@ -585,13 +598,14 @@ pub fn copy_includes_with(
 
 /// Copy a single file, creating its destination's parent directories as
 /// needed. Unless `overwrite` is set, a destination that exists at this moment
-/// is left untouched. Errors are pushed as warnings.
+/// is left untouched. Errors are pushed as warnings. Safe to call from several
+/// threads at once: the counter and the warning list are shared.
 fn copy_file(
     src: &Path,
     dst: &Path,
     overwrite: bool,
-    copied: &mut usize,
-    warnings: &mut Vec<String>,
+    copied: &AtomicUsize,
+    warnings: &Mutex<Vec<String>>,
 ) {
     if !overwrite && dst.exists() {
         return;
@@ -599,16 +613,26 @@ fn copy_file(
     if let Some(parent) = dst.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
-        warnings.push(format!("creating {}: {e}", parent.display()));
+        warn(warnings, format!("creating {}: {e}", parent.display()));
         return;
     }
     match std::fs::copy(src, dst) {
-        Ok(_) => *copied += 1,
-        Err(e) => warnings.push(format!(
-            "copying {} -> {}: {e}",
-            src.display(),
-            dst.display()
-        )),
+        Ok(_) => {
+            copied.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(e) => warn(
+            warnings,
+            format!("copying {} -> {}: {e}", src.display(), dst.display()),
+        ),
+    }
+}
+
+/// Push a warning through a lock a poisoned thread may have left behind. A
+/// panicking worker must not silence every warning that follows it.
+fn warn(warnings: &Mutex<Vec<String>>, message: String) {
+    match warnings.lock() {
+        Ok(mut w) => w.push(message),
+        Err(poisoned) => poisoned.into_inner().push(message),
     }
 }
 
@@ -626,8 +650,8 @@ fn make_link(
     dst: &Path,
     target: &Path,
     overwrite: bool,
-    linked: &mut usize,
-    warnings: &mut Vec<String>,
+    linked: &AtomicUsize,
+    warnings: &Mutex<Vec<String>>,
 ) {
     match std::fs::symlink_metadata(dst) {
         Ok(meta) => {
@@ -643,7 +667,7 @@ fn make_link(
                 std::fs::remove_file(dst)
             };
             if let Err(e) = removed {
-                warnings.push(format!("replacing {}: {e}", dst.display()));
+                warn(warnings, format!("replacing {}: {e}", dst.display()));
                 return;
             }
         }
@@ -651,18 +675,19 @@ fn make_link(
             if let Some(parent) = dst.parent()
                 && let Err(e) = std::fs::create_dir_all(parent)
             {
-                warnings.push(format!("creating {}: {e}", parent.display()));
+                warn(warnings, format!("creating {}: {e}", parent.display()));
                 return;
             }
         }
     }
     match crate::sys::symlink(target, dst, src.is_dir()) {
-        Ok(()) => *linked += 1,
-        Err(e) => warnings.push(format!(
-            "linking {} -> {}: {e}",
-            dst.display(),
-            target.display()
-        )),
+        Ok(()) => {
+            linked.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(e) => warn(
+            warnings,
+            format!("linking {} -> {}: {e}", dst.display(), target.display()),
+        ),
     }
 }
 
@@ -1980,5 +2005,62 @@ mod tests {
             std::fs::read_link(dest.join("inc/link_dir")).unwrap(),
             Path::new("..").join("real_dir")
         );
+    }
+
+    /// The copy runs several files at once, so its counters and its warnings
+    /// have to survive concurrent writers. A hundred files is enough for the
+    /// pool to hand work to more than one thread.
+    #[test]
+    fn a_parallel_copy_counts_every_file_exactly_once() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        for i in 0..100 {
+            write(&src.join("many").join(format!("f{i}.txt")), "x");
+        }
+
+        let plan = plan_includes(&src, &dst, &["many/".to_string()]);
+        let seen = std::sync::Mutex::new(Vec::new());
+        let (copied, _, warnings) = apply_includes_with(&src, &dst, &plan, false, &|e| {
+            if let IncludeEvent::FileDone { done, .. } = e {
+                seen.lock().unwrap().push(done);
+            }
+        });
+
+        assert_eq!(copied, 100, "{warnings:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let mut seen = seen.lock().unwrap().clone();
+        seen.sort_unstable();
+        assert_eq!(seen, (1..=100).collect::<Vec<_>>());
+        for i in 0..100 {
+            assert!(dst.join("many").join(format!("f{i}.txt")).exists());
+        }
+    }
+
+    /// A copy started from inside the pool must finish rather than wait on
+    /// threads its own caller is holding. Carries a timeout because a
+    /// regression hangs rather than fails.
+    #[test]
+    fn a_copy_started_from_inside_the_pool_completes() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        for i in 0..20 {
+            write(&src.join("many").join(format!("f{i}.txt")), "x");
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let done = crate::pool::install(|| {
+                let plan = plan_includes(&src, &dst, &["many/".to_string()]);
+                apply_includes(&src, &dst, &plan, false).0
+            });
+            let _ = tx.send(done);
+        });
+
+        let copied = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("a nested copy exhausted the pool instead of running serially");
+        assert_eq!(copied, 20);
     }
 }
