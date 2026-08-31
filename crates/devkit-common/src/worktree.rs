@@ -769,7 +769,11 @@ impl Walk<'_> {
             return;
         };
         let opts = match_options();
-        if meta.file_type().is_symlink() {
+        // An empty `rel` is the source root, the base every other path is
+        // measured against. Recording it as a link would name the destination
+        // directory itself as the thing to replace, so the root is always
+        // walked as a directory whatever `symlink_metadata` says about it.
+        if meta.file_type().is_symlink() && !rel.as_os_str().is_empty() {
             if self.mode == LinkMode::Preserve {
                 match std::fs::read_link(&full) {
                     Ok(target) => self.record_link(rel.to_path_buf(), target, out),
@@ -3306,6 +3310,29 @@ mod tests {
         let (copied, warnings) = copy_out(&src, &dst, &[String::new()]);
         assert_eq!(copied, 0);
         assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// `Preserve` reaches the root through the same routing as `Follow`, and
+    /// the root is the base every planned path is measured against, so it is
+    /// walked as a directory rather than recorded as one link naming the
+    /// destination itself.
+    #[test]
+    fn a_dot_pattern_plans_the_root_as_files_not_as_a_link() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("keep.txt"), "1");
+        write(&src.join("deep/n.txt"), "2");
+
+        let plan = plan_includes(&src, &dst, &[".".to_string()]);
+
+        assert_eq!(plan.links().count(), 0);
+        let mut files: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        files.sort();
+        assert_eq!(
+            files,
+            vec![PathBuf::from("deep/n.txt"), PathBuf::from("keep.txt")]
+        );
     }
 
     #[test]

@@ -49,9 +49,9 @@ pub fn configure(threads: Option<NonZeroUsize>) {
 
 /// The pool's width: the running pool's own thread count once it is built, and
 /// the width it will be built at until then. Where the pool could not be built
-/// at all this reports the width that was asked for, while [`install`] runs the
-/// work on the calling thread: the requested width is the honest answer to what
-/// was configured, and there is no pool whose count could be read instead. `DEVKIT_THREADS` wins over
+/// at all this reports the width that was asked for, while [`install`] runs
+/// the work on the calling thread: the requested width is the honest answer
+/// to what was configured, and there is no pool whose count could be read. `DEVKIT_THREADS` wins over
 /// [`configure`], which wins over [`DEFAULT_THREADS`]. An unparseable or zero
 /// env value is ignored rather than treated as a request, because
 /// `ThreadPoolBuilder::num_threads(0)` means one thread per core: the opposite
