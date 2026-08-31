@@ -668,7 +668,17 @@ impl Walk<'_> {
                     let exists = self.dest.join(rel).exists();
                     self.record_file(rel.to_path_buf(), exists, out);
                 }
-                Err(e) => warnings.push(format!("reading link {}: {e}", full.display())),
+                // The link itself read fine, but its target could not be
+                // resolved; matches the wording `walk_and_classify` uses for
+                // the same failure reached through a wildcard pattern.
+                Err(_) => match std::fs::read_link(&full) {
+                    Ok(target) => warnings.push(format!(
+                        "not archiving {}: target {} could not be resolved",
+                        full.display(),
+                        target.display()
+                    )),
+                    Err(e) => warnings.push(format!("reading link {}: {e}", full.display())),
+                },
             }
             return;
         }
@@ -2658,6 +2668,31 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dst.join("archive/notes.md")).unwrap(),
             "kept"
+        );
+    }
+
+    /// A `copy_out` pattern naming a broken link directly warns the same way a
+    /// broken link found through a wildcard pattern does: naming the target
+    /// that could not be resolved, not just relaying the bare OS error. Before
+    /// the wording was aligned this warning named the link but never its
+    /// target, so this test would have failed against that message.
+    #[cfg(unix)]
+    #[test]
+    fn copy_out_warns_the_same_way_for_a_broken_link_named_directly() {
+        let base = tempfile::tempdir().unwrap();
+        let wt = base.path().join("wt");
+        let dst = base.path().join("dst");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::os::unix::fs::symlink("nowhere.txt", wt.join("link.txt")).unwrap();
+
+        let (copied, warnings) = copy_out(&wt, &dst, &["link.txt".to_string()]);
+
+        assert_eq!(copied, 0, "{warnings:?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("link.txt") && w.contains("nowhere.txt")),
+            "no warning names the unarchived link and its target: {warnings:?}"
         );
     }
 
