@@ -7,10 +7,17 @@ A Rust workspace (edition 2024): a root `devkit` binary package whose subcommand
 ```sh
 cargo build --release                       # devkit, devkitd → target/release
 cargo install --path .                       # install devkit, devkitd into ~/.cargo/bin
-cargo test --workspace                       # full gate — must stay green
+cargo nextest run --workspace --no-fail-fast # full gate — must stay green
 cargo clippy --workspace --all-targets -- -D warnings   # zero-warning policy
-cargo test -p devkit-ports --test registry   # multiprocess flock race test
+cargo nextest run -p devkit-ports --test registry       # multiprocess flock race test
 ```
+
+CI runs the gate with `cargo nextest run`, so run it that way locally too: it
+reports every failing test in one pass instead of stopping at the first failing
+executable, and is faster because it schedules across test binaries instead of
+running them one after another. Install it with `cargo install cargo-nextest
+--locked`. It skips doctests, which CI covers in a separate
+`cargo test --workspace --doc` step.
 
 Run all three before committing: CI runs them on every push and PR, and a push to `main` also drives release-please. Format with `cargo fmt --all` (the `--check` above only verifies) using the stable toolchain CI uses, so formatting matches.
 
@@ -66,7 +73,7 @@ Every completion script goes out through `completions::emit`, which runs `Genera
 ## Conventions
 
 - Commits follow Conventional Commits. Follow the active workflow skill's commit cadence (a design/plan skill commits its own artifact; per-task execution commits per task).
-- TDD: write the failing test first; `cargo test --workspace` is the merge gate.
+- TDD: write the failing test first; `cargo nextest run --workspace --no-fail-fast` is the merge gate.
 - Test scratch comes from `tempfile`: `tempfile::tempdir()` for a directory, a path joined onto one for a file. Never build a scratch path by hand from `std::env::temp_dir()` — a hand-built path outlives the test and fills `/tmp`. `TempDir` deletes its tree on drop, so bind it for as long as the path is used: a helper that returns a path derived from a guard must hand back the guard too, or the directory is gone before the caller reads it.
 - `anyhow` everywhere — its `.context()` chain and backtrace are the error-reporting mechanism. Each binary installs `report::install_panic_hook` for crash diagnostics; `RUST_BACKTRACE=1` adds a backtrace to both errors and panics.
 - App conventions are config-driven, never hardcoded: the URL-providing app is marked `provides_url`; per-app prep files come from `prep_files`; the apps directory is `defaults.apps_dir`. Example-specific values live in the personal config at `~/.config/devkit/config.toml` (outside the repo; see `docs/configuration.md`).

@@ -52,7 +52,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
       - name: Test workspace
-        run: cargo test --workspace --no-fail-fast
+        run: cargo nextest run --workspace --no-fail-fast
+      # nextest does not run doctests. The workspace has none today, so this
+      # guards against a future one being silently skipped; one platform is
+      # enough for that.
+      - name: Doc tests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --workspace --doc
       - name: Build without default features
         run: cargo build --workspace --no-default-features
