@@ -84,14 +84,38 @@ pub fn copy_includes(
     copy_includes_with(source, dest, patterns, &|_| {})
 }
 
-/// Whether a pattern could read or write outside its roots. `plan_includes`
-/// strips `source` lexically, so a `..` component survives into the path joined
-/// onto the destination and escapes both; an absolute or root-relative pattern
-/// replaces the base in `Path::join` outright. `has_root` catches `/etc/x` on
-/// Windows, where `is_absolute` is false but `join` still discards the base.
+/// Whether a pattern could read or write outside its roots. Only a `Normal`
+/// component keeps a joined path inside its base, and a `CurDir` one, which
+/// [`normalize_pattern`] drops. Everything else leaves: `plan_includes` strips
+/// `source` lexically, so a `..` survives into the path joined onto the
+/// destination and escapes both roots, while a root (`/etc/x`) or a Windows
+/// drive prefix (`C:foo`, which is neither absolute nor rooted) makes
+/// `Path::join` discard the base outright.
 fn escapes(pattern: &str) -> bool {
-    let p = Path::new(pattern);
-    p.is_absolute() || p.has_root() || p.components().any(|c| matches!(c, Component::ParentDir))
+    Path::new(pattern)
+        .components()
+        .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+}
+
+/// A pattern's `Normal` components joined by `/`: the pattern as `walk_root`
+/// and [`Prune`] already read it, since both go through `Path::components`,
+/// which drops a `.` and collapses a repeated separator. `glob::Pattern`
+/// instead compiles the text verbatim, so a matcher built from the raw text
+/// carries a component no walked path can ever have and `a/./b/*.txt` walks
+/// exactly the right directory and then rejects every file in it. Compiling
+/// the matcher from this keeps the walker and the matcher reading one pattern.
+///
+/// Only meaningful for a pattern [`escapes`] has cleared, which is what makes
+/// every remaining component `Normal` or `CurDir`.
+fn normalize_pattern(pattern: &str) -> String {
+    let parts: Vec<&str> = Path::new(pattern)
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+    parts.join("/")
 }
 
 /// Copy files matching `patterns` (globs relative to `source`) out of a worktree
@@ -680,31 +704,27 @@ impl Walk<'_> {
         warnings: &mut Vec<String>,
     ) {
         let trimmed = pattern.trim_end_matches('/');
-        // A leading `./` names the same path as the pattern without it, but
-        // left in it survives into `walk_root`'s literal prefix and into the
-        // compiled pattern, where it stops the two from agreeing on what a
-        // component is: `walk_root("./apps/*")` stops at `.` and matches
-        // nothing ever after.
-        let trimmed = trimmed.strip_prefix("./").unwrap_or(trimmed);
-        // An empty pattern would match the source directory itself and plan
-        // every file under the root.
-        if trimmed.is_empty() {
-            return;
-        }
-        // `source.join` discards the base for a rooted pattern and keeps a `..`
-        // component, so a pattern that leaves the tree is refused before any
-        // path is built from it.
+        // `source.join` discards the base for a rooted or drive-relative
+        // pattern and keeps a `..` component, so a pattern that leaves the
+        // tree is refused before any path is built from it.
         if escapes(trimmed) {
             warnings.push(format!(
                 "include pattern reaches outside the source tree, skipped: {pattern}"
             ));
             return;
         }
-        let Some(root) = walk_root(trimmed) else {
-            self.plan_literal(source, Path::new(trimmed), out, warnings);
+        let normalized = normalize_pattern(trimmed);
+        // An empty pattern would match the source directory itself and plan
+        // every file under the root.
+        if normalized.is_empty() {
+            return;
+        }
+        let normalized = normalized.as_str();
+        let Some(root) = walk_root(normalized) else {
+            self.plan_literal(source, Path::new(normalized), out, warnings);
             return;
         };
-        let matcher = match glob::Pattern::new(trimmed) {
+        let matcher = match glob::Pattern::new(normalized) {
             Ok(p) => p,
             Err(e) => {
                 warnings.push(format!("bad include pattern `{pattern}`: {e}"));
@@ -3132,5 +3152,47 @@ mod tests {
                 "{pattern}: no warning names the unreadable directory: {warnings:?}"
             );
         }
+    }
+
+    /// `walk_root` and the prune plan read a pattern through
+    /// `Path::components`, which drops a `.` component and collapses a
+    /// repeated separator. A matcher compiled from the raw text carries a
+    /// component no walked path can ever have, so the walk starts in exactly
+    /// the right directory and then rejects everything in it. Both spellings
+    /// name `a/b/*.txt` and both are accepted by every other glob a user has
+    /// met, so both have to keep matching.
+    #[test]
+    fn an_interior_dot_or_doubled_separator_still_matches() {
+        for pattern in ["a/./b/*.txt", "a//b/*.txt", "./a/b/*.txt", "a/b/./*.txt"] {
+            let base = tempfile::tempdir().unwrap();
+            let src = base.path().join("src");
+            let dst = base.path().join("dst");
+            write(&src.join("a/b/f.txt"), "kept");
+
+            let (copied, warnings) = copy_out(&src, &dst, &[pattern.to_string()]);
+
+            assert_eq!(copied, 1, "{pattern}: {warnings:?}");
+            assert!(warnings.is_empty(), "{pattern}: {warnings:?}");
+            assert_eq!(fs::read_to_string(dst.join("a/b/f.txt")).unwrap(), "kept");
+        }
+    }
+
+    #[test]
+    fn escapes_refuses_every_component_that_leaves_the_base() {
+        assert!(escapes("../secrets"));
+        assert!(escapes("apps/../../secrets"));
+        assert!(escapes("/etc/passwd"));
+        assert!(!escapes("apps/*/.env.local"));
+        assert!(!escapes("./apps/./.env"));
+    }
+
+    /// `C:foo` is neither absolute nor rooted, and `Path::join` still discards
+    /// the base for it, resolving against the current directory on drive C —
+    /// a read and, under `copy_out`, a write outside both roots.
+    #[cfg(windows)]
+    #[test]
+    fn escapes_refuses_a_drive_relative_pattern() {
+        assert!(escapes("C:foo"));
+        assert!(escapes(r"\\?\C:\foo"));
     }
 }
