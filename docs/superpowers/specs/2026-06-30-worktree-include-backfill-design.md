@@ -96,11 +96,20 @@ Add the `glob` crate (single-threaded, ~zero transitive deps, supports `**` and
 dotfiles). The existing `glob_match` in `crates/devkit-issue/src/prs.rs` matches
 flat CI-check *names* — no filesystem walk, no `**` — and is not reusable here.
 
-Parallelism (`jwalk`/`rayon`) is explicitly rejected: the workload is a handful of
-small files, the only cost that scales is the walk for `**` patterns, and worktree
-creation is already dominated by `git fetch` and per-app installs. A creation-time
-one-shot does not justify a global threadpool. If recursive scans over a huge tree
-ever become a real need, the correct fix is vendor-dir pruning, not threads.
+This design rejected parallelism (`jwalk`/`rayon`) on the reasoning that the
+workload is a handful of small files, that the only cost that scales is the walk
+for `**` patterns, and that a creation-time one-shot does not justify a global
+threadpool.
+
+That rejection was wrong, and the workload assumption is where it went wrong.
+Real include lists name large directories: a Godot project's `.godot/` is
+hundreds of megabytes of small files. `issue sync-includes` then repeats the
+whole walk-and-copy cycle once per worktree on the machine, so the cost is not a
+one-shot either. Measurement put the copy at roughly half its time under rayon
+and the walk at roughly a third under jwalk.
+
+`2026-08-31-parallel-includes-design.md` adopts both, on a bounded pool shared
+across the workspace rather than rayon's global one.
 
 ## Insertion points
 
@@ -146,4 +155,5 @@ The full gate (`cargo test --workspace`, `cargo clippy --workspace --all-targets
 - Changes to `worktree-sync-local.sh` (kept as the backfill-for-old-worktrees tool).
 - A dedicated `issue backfill` subcommand.
 - Vendor-directory pruning / `.gitignore`-aware walking.
-- Parallel directory walking.
+- Parallel directory walking. Adopted later by
+  `2026-08-31-parallel-includes-design.md`.
