@@ -57,6 +57,35 @@ pub fn pid_in_ports_json(body: &str, app_name: &str) -> Option<u32> {
     None
 }
 
+/// Source of the minimal TCP server used as the supervised-process fixture.
+///
+/// Binds and listens directly. `python3 -m http.server` is unsuitable: its
+/// `server_bind` resolves `socket.getfqdn(host)` between `bind()` and `listen()`,
+/// so wherever reverse resolution is slow the port refuses connections for the
+/// whole lookup and readiness polling waits it out.
+const TCP_SERVER_SRC: &str = r#"
+import socket, sys
+port = int(sys.argv[1])
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port))
+srv.listen(16)
+while True:
+    c, _ = srv.accept()
+    c.close()
+"#;
+
+/// Launch argv for a server that accepts TCP connections on `port`, which is all
+/// `supervise::probe_port` checks.
+pub fn tcp_server_argv(port: u16) -> Vec<String> {
+    vec![
+        "python3".into(),
+        "-c".into(),
+        TCP_SERVER_SRC.into(),
+        port.to_string(),
+    ]
+}
+
 /// A running `devkitd` instance bound to a throwaway HOME directory.
 pub struct Harness {
     pub home: tempfile::TempDir,

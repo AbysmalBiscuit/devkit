@@ -1,5 +1,5 @@
-// These tests drive the supervisor with POSIX signals (nix) and a `python3`
-// http server; both are Unix-only here. Windows supervision coverage is separate.
+// These tests drive the supervisor with POSIX signals (nix) and a `python3` TCP
+// server; both are Unix-only here. Windows supervision coverage is separate.
 #![cfg(unix)]
 
 mod common;
@@ -12,8 +12,8 @@ use nix::unistd::Pid;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-/// A python3 http.server binds quickly on the allocated port; the daemon's
-/// `Supervise` handler calls `wait_ready` and reports `ready=true`.
+/// The fixture server listens on the allocated port; the daemon's `Supervise`
+/// handler calls `wait_ready` and reports `ready=true`.
 #[test]
 fn supervised_python_server_becomes_ready() {
     let mut h = Harness::start();
@@ -26,12 +26,7 @@ fn supervised_python_server_becomes_ready() {
         holder: holder.clone(),
         app: "api".into(),
         role: Role::Issue,
-        argv: vec![
-            "python3".into(),
-            "-m".into(),
-            "http.server".into(),
-            port.to_string(),
-        ],
+        argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
         logfile: h.home.path().join("sup.log"),
@@ -69,12 +64,7 @@ fn restart_after_kill() {
         holder: holder.clone(),
         app: "api".into(),
         role: Role::Issue,
-        argv: vec![
-            "python3".into(),
-            "-m".into(),
-            "http.server".into(),
-            port.to_string(),
-        ],
+        argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
         logfile: h.home.path().join("kill.log"),
@@ -142,12 +132,7 @@ fn restart_survives_concurrent_snapshot() {
         holder: holder.clone(),
         app: "api".into(),
         role: Role::Issue,
-        argv: vec![
-            "python3".into(),
-            "-m".into(),
-            "http.server".into(),
-            port.to_string(),
-        ],
+        argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
         logfile: h.home.path().join("snap.log"),
@@ -585,12 +570,7 @@ fn cap_requested_without_delegation_falls_back() {
         holder: holder.clone(),
         app: "api".into(),
         role: Role::Issue,
-        argv: vec![
-            "python3".into(),
-            "-m".into(),
-            "http.server".into(),
-            port.to_string(),
-        ],
+        argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
         logfile: h.home.path().join("fallback.log"),
@@ -618,12 +598,7 @@ fn second_supervise_of_live_server_is_noop() {
         holder: holder.clone(),
         app: "api".into(),
         role: Role::Issue,
-        argv: vec![
-            "python3".into(),
-            "-m".into(),
-            "http.server".into(),
-            port.to_string(),
-        ],
+        argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
         logfile: h.home.path().join("noop.log"),
@@ -662,12 +637,7 @@ fn down_does_not_restart() {
         holder: holder.clone(),
         app: "api".into(),
         role: Role::Issue,
-        argv: vec![
-            "python3".into(),
-            "-m".into(),
-            "http.server".into(),
-            port.to_string(),
-        ],
+        argv: common::tcp_server_argv(port),
         cwd: ".".into(),
         env: BTreeMap::new(),
         logfile: h.home.path().join("down.log"),
