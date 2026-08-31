@@ -191,7 +191,7 @@
       "type": "object"
     },
     "Defaults": {
-      "description": "Project-wide paths and branch conventions. The first four keys are required\nof any config that configures a project — without them no worktree, branch,\nor baseline resolves. A config carrying only `[config]`, `[harness]`,\n`[docs]`, or `[brief]` omits the table entirely and takes the defaults.",
+      "description": "Project-wide paths and branch conventions. The first four keys are required\nof any config that configures a project — without them no worktree, branch,\nor baseline resolves. A config carrying only `[config]`, `[harness]`,\n`[docs]`, `[brief]`, or `[parallelism]` omits the table entirely and takes\nthe defaults.",
       "properties": {
         "apps_dir": {
           "default": "apps",
@@ -434,6 +434,22 @@
           "default": false,
           "description": "Query Linear for the issues linked to each PR in `issue prs` (one\nextra batched round trip per run). Off by default.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ParallelismConfig": {
+      "description": "Width of the shared worker pool. Machine tuning rather than a project\nconvention, so it belongs in the personal layer at\n`~/.config/devkit/config.toml` rather than a repository's `devkit.toml`.",
+      "properties": {
+        "threads": {
+          "default": null,
+          "description": "Threads in the pool devkit shares across its parallel work. The\n`DEVKIT_THREADS` environment variable wins over this; leaving it unset\ntakes the pool's own default. Zero is refused rather than clamped,\nbecause rayon reads a zero thread count as one thread per core.",
+          "format": "uint",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -789,7 +805,7 @@
         "worktree_include": [],
         "worktree_root": ""
       },
-      "description": "Project-wide paths and branch conventions. Required of any config that\nconfigures a project; omitted only by one built entirely from\n`[config]`, `[harness]`, `[docs]`, and `[brief]`."
+      "description": "Project-wide paths and branch conventions. Required of any config that\nconfigures a project; omitted only by one built entirely from\n`[config]`, `[harness]`, `[docs]`, `[brief]`, and `[parallelism]`."
     },
     "docs": {
       "$ref": "#/$defs/DocsManifest",
@@ -823,6 +839,13 @@
         "resolve_pr_links": false
       },
       "description": "Linear lookups that cost an extra API round trip."
+    },
+    "parallelism": {
+      "$ref": "#/$defs/ParallelismConfig",
+      "default": {
+        "threads": null
+      },
+      "description": "Width of the shared worker pool. Machine tuning; carries no project\nconvention, so a config may hold it alone."
     },
     "people": {
       "additionalProperties": {

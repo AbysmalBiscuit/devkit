@@ -11,7 +11,7 @@ pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
 pub struct Config {
     /// Project-wide paths and branch conventions. Required of any config that
     /// configures a project; omitted only by one built entirely from
-    /// `[config]`, `[harness]`, `[docs]`, and `[brief]`.
+    /// `[config]`, `[harness]`, `[docs]`, `[brief]`, and `[parallelism]`.
     #[serde(default)]
     pub defaults: Defaults,
     /// One table per runnable app, keyed by the app id passed to
@@ -35,6 +35,10 @@ pub struct Config {
     /// Which issue tracker backs `issue`. Detected when the table is absent.
     #[serde(default)]
     pub tracker: TrackerConfig,
+    /// Width of the shared worker pool. Machine tuning; carries no project
+    /// convention, so a config may hold it alone.
+    #[serde(default)]
+    pub parallelism: ParallelismConfig,
     /// Minijinja templates for the strings `issue setup` and `issue review`
     /// generate — branch names, worktree directories, PR fields, Slack bodies.
     #[serde(default)]
@@ -245,10 +249,24 @@ pub struct TrackerConfig {
     pub kind: Option<TrackerKind>,
 }
 
+/// Width of the shared worker pool. Machine tuning rather than a project
+/// convention, so it belongs in the personal layer at
+/// `~/.config/devkit/config.toml` rather than a repository's `devkit.toml`.
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ParallelismConfig {
+    /// Threads in the pool devkit shares across its parallel work. The
+    /// `DEVKIT_THREADS` environment variable wins over this; leaving it unset
+    /// takes the pool's own default. Zero is refused rather than clamped,
+    /// because rayon reads a zero thread count as one thread per core.
+    pub threads: Option<std::num::NonZeroUsize>,
+}
+
 /// Project-wide paths and branch conventions. The first four keys are required
 /// of any config that configures a project — without them no worktree, branch,
 /// or baseline resolves. A config carrying only `[config]`, `[harness]`,
-/// `[docs]`, or `[brief]` omits the table entirely and takes the defaults.
+/// `[docs]`, `[brief]`, or `[parallelism]` omits the table entirely and takes
+/// the defaults.
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct Defaults {
     /// Directory issue worktrees are created under. `~` is expanded. Names a
@@ -876,9 +894,10 @@ pub(crate) fn health_with_home(
 /// Tables a devkit.toml may carry on its own, with no project configured around
 /// them. Each is read by a crate that needs no path or branch convention:
 /// `[harness]` by `devkit-locks`, `[docs]` by `devkit-docs`, `[config]` by the
-/// layer walk below, `[brief]` by the session summary. A config built only from
-/// these resolves without a `[defaults]` table; anything else demands one.
-const STANDALONE_SECTIONS: [&str; 4] = ["config", "harness", "docs", "brief"];
+/// layer walk below, `[brief]` by the session summary, `[parallelism]` by the
+/// shared worker pool. A config built only from these resolves without a
+/// `[defaults]` table; anything else demands one.
+const STANDALONE_SECTIONS: [&str; 5] = ["config", "harness", "docs", "brief", "parallelism"];
 
 /// Resolve the effective config by layering and deep-merging all applicable
 /// files. `main_checkout` is this repository's main checkout when `start` is
@@ -1886,7 +1905,7 @@ steps = [
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
             project.join("devkit.toml"),
-            "[config]\nroot = true\n[harness]\nenforce_writes = true\n",
+            "[config]\nroot = true\n[harness]\nenforce_writes = true\n[parallelism]\nthreads = 2\n",
         )
         .unwrap();
 
@@ -2341,5 +2360,53 @@ steps = [
         assert_eq!(entry.from, vec!["scratch/".to_string()]);
         assert_eq!(entry.to, "/archive/{{ issue }}");
         assert!(!entry.required);
+    }
+
+    /// A thread count is machine tuning, set in the personal layer, so a config
+    /// carrying only `[parallelism]` has to resolve with no project around it.
+    #[test]
+    fn a_parallelism_only_config_needs_no_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("parallelism-only");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("devkit.toml"),
+            "[config]\nroot = true\n[parallelism]\nthreads = 8\n",
+        )
+        .unwrap();
+
+        let (cfg, _) = resolve_with_home(None, &project, None, None, None).unwrap();
+        assert_eq!(cfg.parallelism.threads.map(|n| n.get()), Some(8));
+        assert_eq!(health_with_home(&project, None, None), Health::Ok);
+    }
+
+    /// `ThreadPoolBuilder::num_threads(0)` means one thread per core, so zero is
+    /// the opposite of what it looks like. `NonZeroUsize` refuses it at parse time
+    /// instead of leaving a runtime clamp to remember.
+    #[test]
+    fn a_zero_thread_count_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("zero-threads");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("devkit.toml"),
+            "[config]\nroot = true\n[parallelism]\nthreads = 0\n",
+        )
+        .unwrap();
+
+        assert!(resolve_with_home(None, &project, None, None, None).is_err());
+    }
+
+    /// An absent table takes the pool's own default rather than a serde one, so
+    /// the number lives in exactly one place.
+    #[test]
+    fn an_absent_parallelism_table_leaves_threads_unset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("no-parallelism");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("devkit.toml"), "[config]\nroot = true\n").unwrap();
+
+        let (cfg, _) = resolve_with_home(None, &project, None, None, None).unwrap();
+        assert!(cfg.parallelism.threads.is_none());
     }
 }
