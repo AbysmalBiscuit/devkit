@@ -184,11 +184,17 @@ Config reaches the pool through `pool::configure(n)`. `worktree.rs` reads no
 config today, and threading one into `copy_includes` would push a machine setting
 through five call sites with no other use for it.
 
-The call site is `devkit_ports::load::load`, immediately after `config::resolve`.
-Every subcommand's config resolution passes through it, so one call covers all
-of them and none can forget it. Not `main`: `main` parses argv and dispatches,
-and config loads inside each subcommand with its own `--config` and start
-directory.
+The call site is `devkit_common::config::resolve`, a wrapper around
+`devkit_config::resolve` that resolves the layers and sizes the pool from the
+result. Every subcommand's config resolution passes through it —
+`devkit_ports::load::load` wraps it in turn for the commands that also need the
+app catalog, while `issue`'s `select_full` and `brief` call it directly for the
+commands that need the config alone — so one call covers all of them and none
+can forget it. `tests/no_stray_config.rs` enforces that rather than leaving it
+to review: `issue end` reaches `copy_out` through `select_full`, which resolved
+its own config and so ran the destructive archive at the default width whatever
+`[parallelism]` said. Not `main`: `main` parses argv and dispatches, and config
+loads inside each subcommand with its own `--config` and start directory.
 
 ## The walk
 

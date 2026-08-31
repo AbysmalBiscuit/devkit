@@ -13,18 +13,12 @@ pub struct Loaded {
     pub provenance: Provenance,
 }
 
+/// The config plus everything a `devrun` command needs alongside it: the
+/// doppler project map and the app catalog built from it. A command needing
+/// only the config resolves through `devkit_common::config` directly, which
+/// this wraps.
 pub fn load(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
-    let main_checkout = devkit_common::git::main_checkout(start).ok().flatten();
-    let checkout_root = devkit_common::git::checkout_root(start).ok();
-    let (cfg, provenance) = config::resolve(
-        explicit,
-        start,
-        main_checkout.as_deref(),
-        checkout_root.as_deref(),
-    )?;
-    // The one door every subcommand's config passes through, so the shared
-    // pool is sized here rather than at each caller.
-    devkit_common::pool::configure(cfg.parallelism.threads);
+    let (cfg, provenance) = devkit_common::config::resolve(explicit, start)?;
     let yaml_path = config::expand_tilde(&cfg.defaults.doppler_yaml);
     let p2p = match std::fs::read_to_string(&yaml_path) {
         Ok(y) => doppler::path_to_project(&y)?,
@@ -40,10 +34,9 @@ pub fn load(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
 
 #[cfg(test)]
 mod tests {
-    /// `load` is the one door every subcommand's config goes through, so the
-    /// pool is configured there rather than at each of the eighteen call
-    /// sites, where it could be forgotten. The width is pinned to verify
-    /// `load` actually calls `pool::configure` with the configured thread count.
+    /// `load` resolves through `devkit_common::config`, the one door that
+    /// sizes the shared pool. The width is pinned rather than the call read,
+    /// so a `load` that stopped going through that door fails here.
     #[test]
     fn load_configures_the_shared_pool() {
         let tmp = tempfile::tempdir().unwrap();

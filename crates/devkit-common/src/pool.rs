@@ -34,19 +34,35 @@ static CONFIGURED: OnceLock<NonZeroUsize> = OnceLock::new();
 static POOL: OnceLock<Option<Arc<rayon::ThreadPool>>> = OnceLock::new();
 
 /// Record the pool's width from config. The first call wins, and a call made
-/// after the pool has been built is ignored, so this belongs beside the config
-/// load rather than at a use site.
+/// once the pool has been built is dropped: the pool is sized once and cannot
+/// be resized, so accepting a later width would make [`width`] report a number
+/// the running pool does not have. This belongs beside the config load rather
+/// than at a use site.
 pub fn configure(threads: Option<NonZeroUsize>) {
+    if POOL.get().is_some() {
+        return;
+    }
     if let Some(n) = threads {
         let _ = CONFIGURED.set(n);
     }
 }
 
-/// The pool's width. `DEVKIT_THREADS` wins over [`configure`], which wins over
-/// [`DEFAULT_THREADS`]. An unparseable or zero env value is ignored rather than
-/// treated as a request, because `ThreadPoolBuilder::num_threads(0)` means one
-/// thread per core: the opposite of what someone capping threads intends.
+/// The pool's width: the running pool's own thread count once it is built, and
+/// the width it will be built at until then. `DEVKIT_THREADS` wins over
+/// [`configure`], which wins over [`DEFAULT_THREADS`]. An unparseable or zero
+/// env value is ignored rather than treated as a request, because
+/// `ThreadPoolBuilder::num_threads(0)` means one thread per core: the opposite
+/// of what someone capping threads intends.
 pub fn width() -> usize {
+    if let Some(Some(p)) = POOL.get() {
+        return p.current_num_threads();
+    }
+    requested_width()
+}
+
+/// The width the pool will be built at. Read from inside the pool's own
+/// initialiser, where [`width`] would find `POOL` not yet set anyway.
+fn requested_width() -> usize {
     if let Ok(v) = std::env::var("DEVKIT_THREADS")
         && let Ok(n) = v.parse::<NonZeroUsize>()
     {
@@ -56,11 +72,17 @@ pub fn width() -> usize {
 }
 
 /// The shared pool, or `None` when it could not be built. A build failure is
-/// not fatal: callers fall back to running their work on the calling thread.
+/// not fatal, but it is a degraded mode rather than a clean fallback:
+/// [`install`] runs the closure on the calling thread and
+/// [`jwalk_parallelism`] goes `Serial`, so a jwalk walk stays bounded, while a
+/// rayon parallel iterator inside an `install` closure reaches rayon's global
+/// pool at one thread per core. Building fails only where the process cannot
+/// spawn threads at all, which is also where that width hurts most; there is
+/// no narrower pool to fall back to at that point.
 fn pool() -> Option<&'static Arc<rayon::ThreadPool>> {
     POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(width())
+            .num_threads(requested_width())
             .thread_name(|i| format!("devkit-{i}"))
             .build()
             .ok()
@@ -113,6 +135,18 @@ mod tests {
     #[test]
     fn width_is_at_least_one() {
         assert!(width() >= 1);
+    }
+
+    /// The pool is sized once and cannot be resized, so a width recorded after
+    /// it is running would be a number no thread of it has. The assertion is
+    /// against the width observed just before the late call, not a constant,
+    /// so it does not race whatever else configured the pool first.
+    #[test]
+    fn a_late_configure_cannot_change_the_reported_width() {
+        install(|| ());
+        let running = width();
+        configure(NonZeroUsize::new(running + 7));
+        assert_eq!(width(), running);
     }
 
     /// The guard that keeps a nested walk from waiting on threads its own

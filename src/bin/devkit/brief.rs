@@ -104,11 +104,11 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
         return Ok(());
     };
     // `run` resolves this once for the functions in this file, which take it
-    // as a parameter. Resolvers below it do not share this value: `load::load`
-    // and the `config::resolve` callers each ask git for their own main
-    // checkout.
+    // as a parameter. Resolvers below it do not share this value:
+    // `load::load`, `config::health` and `devkit_common::config::resolve` each
+    // ask git for their own main checkout.
     let main_checkout = devkit_common::git::main_checkout(&cwd).ok().flatten();
-    let settings = brief_config(&cwd, main_checkout.as_deref());
+    let settings = brief_config(&cwd);
     if !settings.enabled {
         return Ok(());
     }
@@ -465,13 +465,12 @@ fn snapshot(
     })
 }
 
-/// The `[brief]` settings for `cwd`, defaulting to on. `config::resolve` and
-/// not `load::load`: `load` also reads doppler.yaml and builds the app
+/// The `[brief]` settings for `cwd`, defaulting to on. Config resolution alone
+/// and not `load::load`: `load` also reads doppler.yaml and builds the app
 /// catalog, which is what fails on a docs-only project. An unreadable config
 /// falls open to the defaults.
-fn brief_config(cwd: &Path, main_checkout: Option<&Path>) -> BriefConfig {
-    let checkout_root = devkit_common::git::checkout_root(cwd).ok();
-    config::resolve(None, cwd, main_checkout, checkout_root.as_deref())
+fn brief_config(cwd: &Path) -> BriefConfig {
+    devkit_common::config::resolve(None, cwd)
         .map(|(cfg, _)| cfg.brief)
         .unwrap_or_default()
 }
@@ -826,7 +825,7 @@ mod tests {
     fn a_malformed_config_falls_back_to_the_defaults() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("devkit.toml"), "this is not toml [[[").unwrap();
-        let cfg = brief_config(tmp.path(), None);
+        let cfg = brief_config(tmp.path());
         assert!(
             cfg.enabled,
             "an unreadable config costs a brief, never withholds one"

@@ -17,22 +17,15 @@ pub struct Selected {
 }
 
 /// `select` with the config itself and a health verdict attached. Both come
-/// from one `devkit_config::resolve`, so `Health::Ok` alongside a missing config
-/// cannot happen — `issue end` reads its preserve table from the same result its
-/// gate approved. Resolving the config directly rather than through
-/// `devkit_ports::load` is what keeps a `doppler.yaml` devkit cannot parse from
-/// reading as a broken config: the tracker and repositories need neither the
-/// doppler map nor the app catalog.
+/// from one `devkit_common::config::resolve`, so `Health::Ok` alongside a
+/// missing config cannot happen — `issue end` reads its preserve table from the
+/// same result its gate approved. Resolving the config alone rather than
+/// through `devkit_ports::load` is what keeps a `doppler.yaml` devkit cannot
+/// parse from reading as a broken config: the tracker and repositories need
+/// neither the doppler map nor the app catalog.
 pub fn select_full(config: Option<&str>, start: &str, pr_override: Option<&str>) -> Selected {
     let dir = Path::new(start);
-    let main = devkit_common::git::main_checkout(dir).ok().flatten();
-    let checkout_root = devkit_common::git::checkout_root(dir).ok();
-    let resolved = devkit_config::resolve(
-        config.map(Path::new),
-        dir,
-        main.as_deref(),
-        checkout_root.as_deref(),
-    );
+    let resolved = devkit_common::config::resolve(config.map(Path::new), dir);
     let health = devkit_config::Health::of(&resolved);
     let cfg = resolved.ok().map(|(c, _)| c);
     let (kind, github) = match &cfg {
