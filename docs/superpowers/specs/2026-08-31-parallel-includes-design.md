@@ -244,20 +244,25 @@ unaffected: glob's `chars_eq` treats `/` and `\\` as equivalent separators.
 
 The walk and the classification are two passes, not one.
 
-jwalk's `process_read_dir` and its spawn closures are `'static`, while the event
+jwalk's `process_read_dir` and its spawn closures are `'static`. The event
 callback is a borrowed `&(dyn Fn + Sync)` and `dest` is a borrowed `&Path`, so
-classification cannot run inside jwalk's own workers without wrapping everything
-in `Arc`.
+neither can go inside them, which rules out classifying in jwalk's own workers.
+
+Two things do run there, because both are owned and can be `Arc`d in: the
+pattern, so `process_read_dir` can clear a matched symlinked directory's
+children, and the canonicalised ancestor list in `ReadDirState`. Pruning the walk
+has to happen during the walk. Classification does not.
 
 Draining through `par_bridge` instead is worse: the classification consumers
 would occupy the same four threads jwalk's readers need, starving the walk.
 
-So the calling thread drains the jwalk iterator into a `Vec`, which costs no
-syscalls because `file_type` is cached from the directory read. Matching, the
-ancestor test, and the `dest.join(rel).exists()` check then run in one
-`par_iter` over that batch on the shared pool. That existence check is a syscall
-per candidate, roughly 75µs on a `/mnt/c` mount, so leaving it serial would cost
-about 22 seconds on a 300k-file tree and undo the walk's gain.
+So the calling thread drains the jwalk iterator into a `Vec`. That costs no
+syscalls of its own; `file_type` comes cached from the directory read, and what
+jwalk spends on a followed link it has already spent by the time the entry
+arrives. Matching, the ancestor test, and the `dest.join(rel).exists()` check
+then run in one `par_iter` over that batch on the shared pool. The existence
+check is a syscall per candidate, roughly 75µs on a `/mnt/c` mount, so leaving it
+serial would cost about 22 seconds on a 300k-file tree and undo the walk's gain.
 
 This is why `found` is an `AtomicUsize` and the walk's warnings are a
 `Mutex<Vec<String>>`. Draining and classifying serially instead would keep both
@@ -311,25 +316,31 @@ warnings precede all of them, so
 
 ## Symlinks
 
-`follow_links` maps one-to-one onto the existing `LinkMode`, so the mode stops
-being a hand-rolled branch and becomes a walker setting. `Preserve` sets
-`follow_links(false)`; `Follow`, used by `copy_out`, sets it true.
+Both modes set `follow_links(true)`. What separates them is how a *matched* link
+is classified, not whether the walk reads through one.
 
-`DirEntry::file_type` returns the target's type when following and the link's own
-type when not. Under `follow_links(false)` it costs no syscall, because jwalk
-caches it from the directory read, and the `is_symlink` helper's
-`symlink_metadata` call disappears for every walked entry. Under
-`follow_links(true)` jwalk does call `metadata`, plus `read_link` for
-directories, so the saving applies to `Preserve` only.
+`Preserve` classifies a matched link with `path_is_symlink()`, which reports true
+regardless of the setting, and clears its children so a matched symlinked
+directory contributes the link and not its contents. `Follow`, used by
+`copy_out`, resolves through every link and plans what it finds.
+
+`DirEntry::file_type` reports the target's type under `follow_links(true)`, and
+`path_is_symlink()` is what still identifies the entry as a link. jwalk calls
+`metadata` for a followed link, plus `read_link` for a directory, so the walk
+does not save the `symlink_metadata` call the old `is_symlink` helper made. It
+saves nothing on links and everything on ordinary files, whose `file_type` comes
+cached from the directory read.
 
 This settles a question the progress design left open. That design listed
 swapping `plan_dir`'s `child.is_dir()` for `entry.file_type()` as out of scope,
-because `file_type` does not traverse links while `Path::is_dir` does. Setting
-`follow_links` per mode removes the tension for entries that match a pattern or
-sit under a matched directory.
+because `file_type` does not traverse links while `Path::is_dir` does, so the
+swap would stop recursion into a symlinked directory.
 
-It does not remove it for a symlink in the *middle* of a pattern, which is a
-behaviour change. See [Intermediate symlinked
+`follow_links(true)` in both modes is what removes that tension. The walk reads
+through a symlinked directory exactly as `Path::is_dir` made it do, and
+`path_is_symlink()` supplies the link identity that `file_type` gives up. Which
+links get preserved is then a decision the plan makes, not an accident of how the
+walker stats things. See [Intermediate symlinked
 directories](#intermediate-symlinked-directories).
 
 ### Two jwalk defaults must be overridden
@@ -375,14 +386,20 @@ ancestor list of absolute paths (`jwalk-0.9.0/src/core/dir_entry.rs:214`). That
 catches an absolute-target cycle and reports it as a `Loop` error, which the
 fail-open warning path already handles.
 
-It does not catch a relative-target cycle. `ln -s .. loop` never equals an
-absolute ancestor, so the walk keeps descending until the path length hits the OS
-limit, planning a deeply duplicated subtree along the way. That is not worse than
-today's infinite loop, but it is not fixed either, and the spec should not claim
-otherwise.
+It does not catch a relative target. `ln -s .. loop` never equals an absolute
+ancestor, so the walk would descend until the path length hits the OS limit. That
+matters because `copy_out` archives files during `issue end`: the archive would
+fill with a deeply nested duplicate of one subtree while the worktree is being
+torn down, silently.
 
-An own canonicalising ancestor check would close it. Whether to build one is
-[unresolved](#unresolved-questions).
+The walk closes it with a canonicalised ancestor list, carried in jwalk's
+`ReadDirState`, which exists for exactly this kind of walk-scoped state and gives
+`.gitignore` state as its example. A directory already in the list is refused.
+
+The check runs only when entering a symlink. In `Follow` mode a plain directory
+cannot create a cycle, so ordinary directories cost nothing, and symlinked ones
+are rare enough that the `canonicalize` call does not show up against the readdir
+and stat traffic the walk already generates.
 
 ### Intermediate symlinked directories
 
@@ -393,10 +410,28 @@ pattern's components, because its `is_directory` test follows links. With
 
 Under `follow_links(false)`, jwalk gives a symlink entry no children
 (`jwalk-0.9.0/src/lib.rs:365`), and `apps/web` does not itself match the pattern,
-so that file silently disappears from the plan.
+so that file would silently disappear from the plan.
 
-Silent disappearance is the worst available failure, so this needs a decision
-rather than a default. It is [unresolved](#unresolved-questions).
+The walk traverses them instead, keeping today's behaviour. `Preserve` sets
+`follow_links(true)`, and `path_is_symlink()`, which the setting does not affect,
+is what classifies a link. A link that *matches* a pattern still becomes a
+planned link rather than its contents, which means its children are cleared in
+`process_read_dir`: with `follow_links(true)` jwalk descends into a matched
+symlinked directory before the plan can refuse it.
+
+Bulk duplication cannot reach this path. Copying a symlinked tree wholesale
+requires the link itself to match the pattern, and a matched link is reproduced
+as a link by the rule `2026-08-30-worktree-include-symlinks-design.md` shipped. A
+link that matches nothing only ever contributes the individual files under it
+that do.
+
+Reproducing the blocking link instead was considered and rejected. Link targets
+are written verbatim, so a relative target lands in the worktree resolving
+against the worktree's own parent: `../shared/web` under `apps/` becomes
+`<worktree>/shared/web`, which usually does not exist. An absolute target is
+worse, pointing the worktree's app directory into the primary clone. Either way
+the requested file is still missing, and the include pulls in a whole directory
+the pattern never named.
 
 ## Testing
 
@@ -436,11 +471,18 @@ New tests, in order of what they protect:
 6. **A `copy_out` pattern naming a symlink directly archives its target's
    contents**, rather than planning a link. Nothing covers this today, and the
    mode-aware step 4 is what makes it pass.
-7. **An absolute-target symlink cycle under `copy_out` warns and finishes.**
-   `ln -s /abs/path/to/dir cycle`, not `ln -s ..`, because jwalk detects only the
-   absolute form.
-8. **An include copy invoked from inside pool work completes.** It hangs rather
-   than fails when the re-entry guard regresses, so it carries a timeout.
+7. **A symlinked directory mid-pattern is traversed.** `apps/web` links to
+   `../shared/web`; pattern `apps/*/.env.local` plans `apps/web/.env.local` as a
+   file. Pins the behaviour jwalk's default would silently drop.
+8. **A matched symlinked directory is still a link, not its contents.** Same tree,
+   pattern `apps/*`. Guards the `process_read_dir` child-clearing against
+   `follow_links(true)` descending where the plan should refuse.
+9. **A symlink cycle under `copy_out` warns and finishes, relative or absolute.**
+   Both `ln -s ..` and `ln -s /abs/path`, since jwalk detects only the second and
+   the canonicalised ancestor list covers the first. Carries a timeout: a
+   regression hangs rather than fails.
+10. **An include copy invoked from inside pool work completes.** Also carries a
+    timeout, for the same reason.
 
 Verification of the performance claim is a one-off `hyperfine` run against a real
 tree during implementation, recorded in this document. It does not land in CI.
@@ -500,6 +542,13 @@ means `Arc`-ing past its `'static` bounds; classifying through `par_bridge` mean
 consumers competing with readers for four threads. Draining first costs a `Vec`
 of entries and buys a clean split.
 
+**A trailing `/` stays optional and meaningless.** Requiring it to mark
+directories was considered as a way to tell a link from its contents. It cannot
+address a symlink mid-pattern, because every path component before the last is a
+directory already, and making it mandatory would break every existing
+`worktree_include` naming a bare directory. Link-versus-contents control is a
+separate feature with its own migration.
+
 **Confinement is an explicit rejection, not a consequence.** Relative matching
 alone leaves the no-wildcard path free to stat anything `Path::join` resolves to,
 so `escapes()` gates both paths. Getting this by accident is how the current
@@ -507,32 +556,6 @@ escape survived.
 
 ## Unresolved questions
 
-**1. An intermediate symlinked directory silently drops its files.** See
-[Intermediate symlinked directories](#intermediate-symlinked-directories). Three
-ways out:
-
-- Traverse them, matching today. Set `follow_links(true)` in `Preserve` too, and
-  use `path_is_symlink()`, which is unaffected by the setting, to classify a
-  matched link. A matched symlinked directory must then have its children
-  cleared in `process_read_dir`, or jwalk descends into it before the plan can
-  refuse. Exact, and the most code.
-- Keep `follow_links(false)` and warn when the walk stops at a symlinked
-  directory that did not match. The files are still lost, but not silently.
-  Cheap and honest.
-- Classify a blocking link as a planned link. The user gets the files through the
-  reproduced link, but the worktree also gets everything else under it, which the
-  pattern never asked for.
-
-I lean toward warning. It is small, it makes the loss visible, and traversal can
-follow if anyone hits it.
-
-**2. Whether to close the relative-target symlink cycle.** jwalk catches only
-absolute-target cycles. A canonicalising ancestor check would close the rest, at
-one `canonicalize` per directory entered. `copy_out` is the only Follow-mode
-caller and it runs on a worktree about to be deleted, so the exposure is narrow.
-I lean toward leaving it, documented, since today's behaviour is an infinite loop
-and this is already better.
-
-**3. The performance claims come from a separate benchmarking session, not this
-branch.** The implementation records its own `hyperfine` numbers here. If the
-copy does not improve, the rayon half is worth reconsidering on its own.
+The performance claims come from a separate benchmarking session, not this
+branch. The implementation records its own `hyperfine` numbers here. If the copy
+does not improve, the rayon half is worth reconsidering on its own.
