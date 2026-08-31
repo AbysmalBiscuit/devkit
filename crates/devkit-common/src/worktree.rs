@@ -599,6 +599,12 @@ impl Walk<'_> {
         warnings: &mut Vec<String>,
     ) {
         let trimmed = pattern.trim_end_matches('/');
+        // A leading `./` names the same path as the pattern without it, but
+        // left in it survives into `walk_root`'s literal prefix and into the
+        // compiled pattern, where it stops the two from agreeing on what a
+        // component is: `walk_root("./apps/*")` stops at `.` and matches
+        // nothing ever after.
+        let trimmed = trimmed.strip_prefix("./").unwrap_or(trimmed);
         // An empty pattern would match the source directory itself and plan
         // every file under the root.
         if trimmed.is_empty() {
@@ -2532,6 +2538,25 @@ mod tests {
 
         let missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
         assert_eq!(missing, vec![PathBuf::from("apps/web/.env.local")]);
+    }
+
+    /// A leading `./` names the same pattern as one without it.
+    /// `walk_root("./apps/*")` stops at the `.` component before the walk
+    /// ever starts, and the compiled pattern with `./` left in never matches
+    /// a relative path that lacks it, so an untrimmed leading `./` used to
+    /// walk the whole tree and match nothing, silently.
+    #[test]
+    fn a_leading_current_dir_component_is_stripped() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("apps/web/.env.local"), "x");
+
+        let plan = plan_includes(&src, &dst, &["./apps/*/.env.local".to_string()]);
+
+        let missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        assert_eq!(missing, vec![PathBuf::from("apps/web/.env.local")]);
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
     }
 
     /// `**` matches across separators including zero of them, which is what
