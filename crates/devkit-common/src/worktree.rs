@@ -361,6 +361,15 @@ struct Walk<'a> {
     on: &'a (dyn Fn(IncludeEvent) + Sync),
     found: std::cell::Cell<usize>,
     mode: LinkMode,
+    /// Records the pool-thread index each directory read ran on, so a test
+    /// can observe real thread participation in a real call instead of
+    /// reading the parallelism wiring in isolation. `None` in every real
+    /// call; only a test constructs one with this set. `Arc`, not a
+    /// borrow: `process_read_dir` requires its closure to be `'static`,
+    /// which an owned handle satisfies independent of `Walk`'s own `'a`.
+    #[cfg(test)]
+    read_threads:
+        Option<std::sync::Arc<std::sync::Mutex<std::collections::HashSet<Option<usize>>>>>,
 }
 
 impl Walk<'_> {
@@ -429,46 +438,55 @@ impl Walk<'_> {
         // walk has no matcher (a directory match's own recursion), where
         // every path is claimed and nothing may be pruned.
         let prune_plan = pruner.as_ref().map(|p| Prune::for_pattern(p.as_str()));
+        #[cfg(test)]
+        let read_threads = self.read_threads.clone();
 
-        let entries: Vec<_> = crate::pool::install(|| {
-            jwalk::WalkDir::new(start)
-                .skip_hidden(false)
-                .follow_links(true)
-                .parallelism(crate::pool::jwalk_parallelism())
-                .process_read_dir(move |_depth, dir, _state, children| {
-                    for child in children.iter_mut().flatten() {
-                        let full = dir.join(&child.file_name);
-                        let Ok(rel) = full.strip_prefix(&prune_source) else {
-                            continue;
+        let entries: Vec<_> = jwalk::WalkDir::new(start)
+            .skip_hidden(false)
+            .follow_links(true)
+            .parallelism(crate::pool::jwalk_parallelism())
+            .process_read_dir(move |_depth, dir, _state, children| {
+                // Test-only: records which pool thread performed this read,
+                // so a test can observe real parallel dispatch. No-op
+                // (`read_threads` is always `None`) outside tests.
+                #[cfg(test)]
+                if let Some(rt) = &read_threads {
+                    rt.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(rayon::current_thread_index());
+                }
+                for child in children.iter_mut().flatten() {
+                    let full = dir.join(&child.file_name);
+                    let Ok(rel) = full.strip_prefix(&prune_source) else {
+                        continue;
+                    };
+                    // A link that is claimed becomes a link in the plan,
+                    // so the walk must not read through it. A link that
+                    // is claimed by nothing is traversed: it may be the
+                    // only road to a file that is, and `glob_with` used
+                    // to read through one the same way.
+                    if mode == LinkMode::Preserve && child.path_is_symlink() {
+                        let claimed = match &pruner {
+                            Some(p) => matches_here(p, rel, opts),
+                            None => true,
                         };
-                        // A link that is claimed becomes a link in the plan,
-                        // so the walk must not read through it. A link that
-                        // is claimed by nothing is traversed: it may be the
-                        // only road to a file that is, and `glob_with` used
-                        // to read through one the same way.
-                        if mode == LinkMode::Preserve && child.path_is_symlink() {
-                            let claimed = match &pruner {
-                                Some(p) => matches_here(p, rel, opts),
-                                None => true,
-                            };
-                            if claimed {
-                                child.read_children = None;
-                                continue;
-                            }
-                        }
-                        // No pattern in play (a directory match's own
-                        // recursion) claims everything, so there is nothing
-                        // to bound the walk by.
-                        if let (Some(plan), Some(p)) = (&prune_plan, &pruner)
-                            && plan.should_prune(p, rel, opts)
-                        {
+                        if claimed {
                             child.read_children = None;
+                            continue;
                         }
                     }
-                })
-                .into_iter()
-                .collect()
-        });
+                    // No pattern in play (a directory match's own
+                    // recursion) claims everything, so there is nothing
+                    // to bound the walk by.
+                    if let (Some(plan), Some(p)) = (&prune_plan, &pruner)
+                        && plan.should_prune(p, rel, opts)
+                    {
+                        child.read_children = None;
+                    }
+                }
+            })
+            .into_iter()
+            .collect();
 
         let verdicts: Vec<Classified> = crate::pool::install(|| {
             entries
@@ -730,6 +748,8 @@ fn plan_with_mode(
         on,
         found: std::cell::Cell::new(0),
         mode,
+        #[cfg(test)]
+        read_threads: None,
     };
     let mut warnings = Vec::new();
     let mut plans = Vec::with_capacity(patterns.len());
@@ -1057,6 +1077,62 @@ mod tests {
     use super::*;
     use crate::git::parse_porcelain;
     use std::path::Path;
+
+    /// `walk_and_classify` must evaluate `crate::pool::jwalk_parallelism()`
+    /// on the calling thread, not from inside `crate::pool::install`: doing
+    /// the latter makes the walk see itself as already inside the pool and
+    /// silently fall back to `Serial`, so every directory read for the whole
+    /// walk lands on one thread. `pool::jwalk_parallelism_uses_the_shared_pool_
+    /// from_outside_it` already asserted the helper's own behaviour and did
+    /// not catch this, because the bug was in how `walk_and_classify` called
+    /// it, not in the helper. This constructs a real `Walk` and drives the
+    /// real, private `walk_and_classify` directly (accessible from this
+    /// submodule), fanning out to enough independent directories that a
+    /// serial reader could only ever touch one thread, and asserts more than
+    /// one shows up. `Walk::read_threads` exists solely to make this
+    /// observable: production code never sets it to `Some`.
+    #[test]
+    fn the_walk_reads_directories_on_more_than_one_pool_thread() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        for i in 0..200 {
+            write(&src.join(format!("d{i}")).join("leaf.txt"), "x");
+        }
+        if crate::pool::width() < 2 {
+            // Parallelism cannot be observed on a pool configured with one
+            // worker; there is nothing to assert.
+            return;
+        }
+
+        let read_threads =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+        let walk = Walk {
+            dest: &dst,
+            on: &|_| {},
+            found: std::cell::Cell::new(0),
+            mode: LinkMode::Preserve,
+            read_threads: Some(read_threads.clone()),
+        };
+        let mut out = PatternPlan {
+            pattern: String::new(),
+            missing: Vec::new(),
+            existing: Vec::new(),
+            links: Vec::new(),
+        };
+        let mut warnings = Vec::new();
+
+        walk.walk_and_classify(&src, &src, None, match_options(), &mut out, &mut warnings);
+
+        assert_eq!(out.missing.len(), 200, "{warnings:?}");
+        let threads = read_threads.lock().unwrap();
+        assert!(
+            threads.len() > 1,
+            "directory reads landed on only one pool thread ({threads:?}); \
+             the walk is running serial"
+        );
+    }
+
     #[test]
     fn parses_two_worktrees() {
         let out = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /repo/eng-1\nHEAD def\nbranch refs/heads/lev/eng-1234-x\n";

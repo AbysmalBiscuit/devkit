@@ -17,10 +17,19 @@ use std::time::Duration;
 /// measured throughput knee for file copying.
 const DEFAULT_THREADS: usize = 4;
 
-/// How long jwalk waits for a pool thread before giving up. [`install`]'s guard
-/// means the pool is free whenever a walk starts, so this never fires in
-/// practice; it exists so a future caller that walks from two threads at once
-/// gets an error rather than a hang.
+/// How long jwalk waits for its first reader task to actually start running
+/// on the pool before giving up and returning a busy error instead of
+/// hanging.
+///
+/// This is live only because a walk calls [`jwalk_parallelism`] from outside
+/// [`install`]. Calling it from inside `install` made `jwalk_parallelism`
+/// see itself as already on the pool and fall back to `Serial`, whose jwalk
+/// timeout is unconditionally `None` — this constant was unreachable dead
+/// code for as long as every walk made that mistake. Called correctly, a
+/// walk genuinely queues onto the same bounded pool as whatever else devkit
+/// is running concurrently, so this timeout is the real backstop. Ten
+/// seconds is generous next to how quickly one directory read finishes, so
+/// ordinary contention between concurrent walks and copies does not trip it.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
 static CONFIGURED: OnceLock<NonZeroUsize> = OnceLock::new();
