@@ -1382,14 +1382,16 @@ mod tests {
     /// Every plain file under `dir`, recursively, for asserting on an
     /// archive's whole shape rather than one path at a time — the only way
     /// to notice an extra file a narrower assertion would not think to ask
-    /// about.
+    /// about. A symlink is a leaf, whatever it points at: a `Preserve`-mode
+    /// archive reproduces links, and descending through one that names its
+    /// own parent would recurse until the path outgrew the platform's limit.
     fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
                 collect_files(&path, out);
             } else {
                 out.push(path);
@@ -3175,6 +3177,64 @@ mod tests {
             assert!(warnings.is_empty(), "{pattern}: {warnings:?}");
             assert_eq!(fs::read_to_string(dst.join("a/b/f.txt")).unwrap(), "kept");
         }
+    }
+
+    /// A trailing `**` matches every path below its anchor, direct children
+    /// included, and a bare `**` therefore claims a file sitting at the source
+    /// root. That is what `a/**` reads as, and it is a wider set than a
+    /// filesystem-expanding glob returns, where `**` stands for directory
+    /// levels and a file needs one below the anchor to be reached.
+    #[test]
+    fn a_trailing_double_star_matches_direct_children() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("root.txt"), "r");
+        write(&src.join("a/a.txt"), "1");
+        write(&src.join("a/b/b.txt"), "2");
+
+        let anchored = plan_includes(&src, &dst, &["a/**".to_string()]);
+        let mut under_a: Vec<_> = anchored.missing().map(Path::to_path_buf).collect();
+        under_a.sort();
+        assert_eq!(
+            under_a,
+            vec![PathBuf::from("a/a.txt"), PathBuf::from("a/b/b.txt")]
+        );
+
+        let bare = plan_includes(&src, &dst, &["**".to_string()]);
+        let mut everything: Vec<_> = bare.missing().map(Path::to_path_buf).collect();
+        everything.sort();
+        assert_eq!(
+            everything,
+            vec![
+                PathBuf::from("a/a.txt"),
+                PathBuf::from("a/b/b.txt"),
+                PathBuf::from("root.txt"),
+            ]
+        );
+    }
+
+    /// A trailing `**` claims a symlinked directory itself, so `Preserve` mode
+    /// reproduces it as one link instead of descending through it and
+    /// duplicating the tree it points at.
+    #[cfg(unix)]
+    #[test]
+    fn a_trailing_double_star_claims_a_symlinked_directory_as_a_link() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("real/deep.txt"), "x");
+        write(&src.join("a/kept.txt"), "k");
+        if !link_or_skip(Path::new("../real"), &src.join("a/linked"), true) {
+            return;
+        }
+
+        let plan = plan_includes(&src, &dst, &["a/**".to_string()]);
+
+        let links: Vec<_> = plan.links().map(|(rel, _)| rel.to_path_buf()).collect();
+        assert_eq!(links, vec![PathBuf::from("a/linked")]);
+        let missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        assert_eq!(missing, vec![PathBuf::from("a/kept.txt")]);
     }
 
     #[test]
