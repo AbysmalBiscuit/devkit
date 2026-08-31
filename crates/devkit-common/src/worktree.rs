@@ -364,11 +364,13 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    fn classify_file(&self, rel: &Path, out: &mut PatternPlan) {
-        if self.dest.join(rel).exists() {
-            out.existing.push(rel.to_path_buf());
+    /// Record a classified file. Runs on the calling thread, so `found` needs
+    /// no synchronisation and `Found` still arrives in one order.
+    fn record_file(&self, rel: PathBuf, exists: bool, out: &mut PatternPlan) {
+        if exists {
+            out.existing.push(rel);
         } else {
-            out.missing.push(rel.to_path_buf());
+            out.missing.push(rel);
         }
         self.found.set(self.found.get() + 1);
         (self.on)(IncludeEvent::Found {
@@ -382,53 +384,178 @@ impl Walk<'_> {
     /// under `overwrite`, which writes the target's contents instead of
     /// reproducing the link. `make_link` decides per link whether to skip or
     /// replace.
-    fn classify_link(
-        &self,
-        rel: &Path,
-        src: &Path,
-        out: &mut PatternPlan,
-        warnings: &mut Vec<String>,
-    ) {
-        match std::fs::read_link(src) {
-            Ok(target) => out.links.push((rel.to_path_buf(), target)),
-            Err(e) => {
-                warnings.push(format!("reading link {}: {e}", src.display()));
-                return;
-            }
-        }
+    fn record_link(&self, rel: PathBuf, target: PathBuf, out: &mut PatternPlan) {
+        out.links.push((rel, target));
         self.found.set(self.found.get() + 1);
         (self.on)(IncludeEvent::Found {
             files: self.found.get(),
         });
     }
 
-    /// Recursively classify a directory's files without writing anything. `rel`
-    /// tracks the path relative to `dest` in lockstep with `src` so classified
-    /// paths stay dest-relative.
-    fn plan_dir(&self, src: &Path, rel: &Path, out: &mut PatternPlan, warnings: &mut Vec<String>) {
-        let entries = match std::fs::read_dir(src) {
-            Ok(e) => e,
-            Err(e) => {
-                warnings.push(format!("reading dir {}: {e}", src.display()));
-                return;
-            }
-        };
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(e) => {
-                    warnings.push(format!("reading entry in {}: {e}", src.display()));
-                    continue;
-                }
-            };
-            let child = src.join(entry.file_name());
-            let child_rel = rel.join(entry.file_name());
-            if self.mode == LinkMode::Preserve && is_symlink(&child) {
-                self.classify_link(&child_rel, &child, out, warnings);
-            } else if child.is_dir() {
-                self.plan_dir(&child, &child_rel, out, warnings);
-            } else {
-                self.classify_file(&child_rel, out);
+    /// Walk from `start` and classify what `matcher` claims, or everything
+    /// under it when `matcher` is `None`, which is what a directory match asks
+    /// for. Paths are recorded relative to `source`.
+    ///
+    /// Three passes, in order and for a reason. jwalk's callbacks are `'static`
+    /// while `dest` and the event callback are borrowed, so classification
+    /// cannot run in jwalk's workers; and draining through `par_bridge` would
+    /// put consumers on the same threads the readers need, starving the walk.
+    /// So: the calling thread drains, which costs no syscalls of its own
+    /// because `file_type` comes cached from the directory read; the pool
+    /// classifies, because `dest.join(rel).exists()` is a syscall per candidate
+    /// and around 75µs on a drive mounted under WSL; the calling thread
+    /// records.
+    ///
+    /// Two jwalk defaults are wrong here and both would fail quietly.
+    /// `skip_hidden` is true, and every include devkit exists for is a dotfile.
+    /// `parallelism` is rayon's global pool, which is the one the shared pool
+    /// exists to avoid.
+    fn walk_and_classify(
+        &self,
+        source: &Path,
+        start: &Path,
+        matcher: Option<&glob::Pattern>,
+        opts: glob::MatchOptions,
+        out: &mut PatternPlan,
+        warnings: &mut Vec<String>,
+    ) {
+        let mode = self.mode;
+        let dest = self.dest;
+        // Owned copies for the `'static` callback. Cloning a compiled pattern
+        // once per pattern is not a cost worth avoiding.
+        let pruner = matcher.cloned();
+        let prune_source = source.to_path_buf();
+
+        let entries: Vec<_> = crate::pool::install(|| {
+            jwalk::WalkDir::new(start)
+                .skip_hidden(false)
+                .follow_links(true)
+                .parallelism(crate::pool::jwalk_parallelism())
+                .process_read_dir(move |_depth, dir, _state, children| {
+                    if mode != LinkMode::Preserve {
+                        return;
+                    }
+                    // A link that is claimed becomes a link in the plan, so the
+                    // walk must not read through it. A link that is claimed by
+                    // nothing is traversed: it may be the only road to a file
+                    // that is, and `glob_with` reads through one today.
+                    for child in children.iter_mut().flatten() {
+                        if !child.path_is_symlink() {
+                            continue;
+                        }
+                        let full = dir.join(&child.file_name);
+                        let claimed = match (&pruner, full.strip_prefix(&prune_source)) {
+                            (Some(p), Ok(rel)) => matches_here(p, rel, opts),
+                            (None, _) => true,
+                            (Some(_), Err(_)) => false,
+                        };
+                        if claimed {
+                            child.read_children = None;
+                        }
+                    }
+                })
+                .into_iter()
+                .collect()
+        });
+
+        let verdicts: Vec<Classified> = crate::pool::install(|| {
+            entries
+                .par_iter()
+                .filter_map(|entry| {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => {
+                            // jwalk resolves a symlink's target eagerly to
+                            // learn whether to recurse into it, so a broken
+                            // link surfaces here as a `NotFound` error on the
+                            // link's own path rather than as an `Ok` entry.
+                            // Recover it the same way a resolvable link is
+                            // classified, instead of dropping it as a benign
+                            // miss.
+                            if mode == LinkMode::Preserve
+                                && e.io_error().map(std::io::Error::kind)
+                                    == Some(std::io::ErrorKind::NotFound)
+                                && let Some(full) = e.path()
+                                && is_symlink(full)
+                            {
+                                let Ok(rel) = full.strip_prefix(source) else {
+                                    return Some(Classified::Warning(format!(
+                                        "match outside source: {}",
+                                        full.display()
+                                    )));
+                                };
+                                if let Some(m) = matcher
+                                    && !matches_here(m, rel, opts)
+                                {
+                                    return None;
+                                }
+                                let rel = rel.to_path_buf();
+                                return Some(match std::fs::read_link(full) {
+                                    Ok(target) => Classified::Link { rel, target },
+                                    Err(e) => Classified::Warning(format!(
+                                        "reading link {}: {e}",
+                                        full.display()
+                                    )),
+                                });
+                            }
+                            // A wildcard whose literal prefix does not exist is
+                            // a common, benign configuration and stays as
+                            // silent as glob's own scope check made it.
+                            if e.io_error().map(std::io::Error::kind)
+                                == Some(std::io::ErrorKind::NotFound)
+                            {
+                                return None;
+                            }
+                            return Some(Classified::Warning(format!(
+                                "reading dir {}: {e}",
+                                start.display()
+                            )));
+                        }
+                    };
+                    // Depth 0 is `start` itself, which the caller has already
+                    // accounted for.
+                    if entry.depth() == 0 {
+                        return None;
+                    }
+                    let full = entry.path();
+                    let Ok(rel) = full.strip_prefix(source) else {
+                        return Some(Classified::Warning(format!(
+                            "match outside source: {}",
+                            full.display()
+                        )));
+                    };
+                    if let Some(m) = matcher
+                        && !matches_here(m, rel, opts)
+                    {
+                        return None;
+                    }
+                    let rel = rel.to_path_buf();
+                    if mode == LinkMode::Preserve && entry.path_is_symlink() {
+                        return Some(match std::fs::read_link(&full) {
+                            Ok(target) => Classified::Link { rel, target },
+                            Err(e) => {
+                                Classified::Warning(format!("reading link {}: {e}", full.display()))
+                            }
+                        });
+                    }
+                    // A directory is never an entry in the plan; the files
+                    // under it are, and the walk reaches them itself.
+                    if entry.file_type().is_dir() {
+                        return None;
+                    }
+                    Some(Classified::File {
+                        exists: dest.join(&rel).exists(),
+                        rel,
+                    })
+                })
+                .collect()
+        });
+
+        for verdict in verdicts {
+            match verdict {
+                Classified::File { rel, exists } => self.record_file(rel, exists, out),
+                Classified::Link { rel, target } => self.record_link(rel, target, out),
+                Classified::Warning(w) => warnings.push(w),
             }
         }
     }
@@ -486,11 +613,17 @@ impl Walk<'_> {
             // A link is classified before any is_dir test, which follows it and
             // would send a symlinked directory into the recursion.
             if self.mode == LinkMode::Preserve && is_symlink(&matched) {
-                self.classify_link(rel, &matched, out, warnings);
+                match std::fs::read_link(&matched) {
+                    Ok(target) => self.record_link(rel.to_path_buf(), target, out),
+                    Err(e) => {
+                        warnings.push(format!("reading link {}: {e}", matched.display()));
+                    }
+                }
             } else if matched.is_dir() {
-                self.plan_dir(&matched, rel, out, warnings);
+                self.walk_and_classify(source, &matched, None, opts, out, warnings);
             } else {
-                self.classify_file(rel, out);
+                let exists = self.dest.join(rel).exists();
+                self.record_file(rel.to_path_buf(), exists, out);
             }
         }
     }
@@ -709,6 +842,24 @@ fn make_link(
 /// costs one stat.
 pub fn needs_discovery(patterns: &[String]) -> bool {
     patterns.iter().any(|p| p.ends_with('/') || is_glob(p))
+}
+
+/// One walked entry's verdict, decided on the pool and applied to the plan on
+/// the calling thread. `PatternPlan` has a single owner this way, so the
+/// syscall-heavy part parallelises without the collection needing a lock.
+enum Classified {
+    File { rel: PathBuf, exists: bool },
+    Link { rel: PathBuf, target: PathBuf },
+    Warning(String),
+}
+
+/// Whether `rel` is claimed by `matcher`, either by matching it or by sitting
+/// under a directory that does. A directory match contributes its whole
+/// subtree, and testing ancestors keeps that rule stateless, so the walk needs
+/// nothing shared between threads to enforce it.
+fn matches_here(matcher: &glob::Pattern, rel: &Path, opts: glob::MatchOptions) -> bool {
+    rel.ancestors()
+        .any(|a| !a.as_os_str().is_empty() && matcher.matches_path_with(a, opts))
 }
 
 fn is_glob(pattern: &str) -> bool {
