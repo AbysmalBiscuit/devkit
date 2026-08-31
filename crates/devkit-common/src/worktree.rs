@@ -2456,8 +2456,8 @@ mod tests {
         // canonicalising catches it. `abs` exercises jwalk's own detection
         // instead — its target text already matches an ancestor verbatim, so
         // jwalk errors it out before this check's `children` loop ever sees
-        // it as an `Ok` entry; kept here to pin that the new check does not
-        // regress or duplicate what jwalk already refused on its own.
+        // it as an `Ok` entry; kept here to pin that the canonicalising check
+        // neither regresses nor duplicates what jwalk already refuses.
         std::os::unix::fs::symlink("..", wt.join("scratch/loop")).unwrap();
         std::os::unix::fs::symlink(wt.join("scratch"), wt.join("scratch/abs")).unwrap();
 
