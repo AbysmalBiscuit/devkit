@@ -714,9 +714,16 @@ impl Walk<'_> {
             return;
         }
         let normalized = normalize_pattern(trimmed);
-        // An empty pattern would match the source directory itself and plan
-        // every file under the root.
         if normalized.is_empty() {
+            // A pattern that renders empty and one written only from `.`
+            // components both normalise to nothing while meaning opposite
+            // things. The first names no path at all and is skipped. The
+            // second names the source root, which is a directory, so it
+            // archives every file under it the way naming any other directory
+            // does.
+            if !trimmed.is_empty() {
+                self.plan_literal(source, Path::new(""), out, warnings);
+            }
             return;
         }
         let normalized = normalized.as_str();
@@ -3261,6 +3268,35 @@ mod tests {
         let links: Vec<_> = named.links().map(|(rel, _)| rel.to_path_buf()).collect();
         assert_eq!(links, vec![PathBuf::from("linked")]);
         assert_eq!(named.missing().count(), 0);
+    }
+
+    /// A pattern made only of `.` components names the source root, and the
+    /// root is a directory, so it archives the whole tree. A pattern that is
+    /// empty to begin with names nothing and is skipped. Both normalise to the
+    /// same empty string, so the two are told apart by what the user wrote.
+    #[test]
+    fn a_dot_pattern_archives_the_root_and_an_empty_one_is_skipped() {
+        for pattern in [".", "./", "./."] {
+            let base = tempfile::tempdir().unwrap();
+            let src = base.path().join("src");
+            let dst = base.path().join("dst");
+            write(&src.join("keep.txt"), "1");
+            write(&src.join("deep/n.txt"), "2");
+
+            let (copied, warnings) = copy_out(&src, &dst, &[pattern.to_string()]);
+
+            assert_eq!(copied, 2, "{pattern}: {warnings:?}");
+            assert!(warnings.is_empty(), "{pattern}: {warnings:?}");
+            assert_eq!(fs::read_to_string(dst.join("deep/n.txt")).unwrap(), "2");
+        }
+
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("keep.txt"), "1");
+        let (copied, warnings) = copy_out(&src, &dst, &[String::new()]);
+        assert_eq!(copied, 0);
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
