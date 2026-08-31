@@ -42,10 +42,8 @@ pub fn load(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
 mod tests {
     /// `load` is the one door every subcommand's config goes through, so the
     /// pool is configured there rather than at each of the eighteen call
-    /// sites, where it could be forgotten. The width is read back rather than
-    /// asserted equal to the configured value: `configure` writes a
-    /// process-global `OnceLock` that another test in this binary may have set
-    /// first, and `DEVKIT_THREADS` outranks it either way.
+    /// sites, where it could be forgotten. The width is pinned to verify
+    /// `load` actually calls `pool::configure` with the configured thread count.
     #[test]
     fn load_configures_the_shared_pool() {
         let tmp = tempfile::tempdir().unwrap();
@@ -58,6 +56,15 @@ mod tests {
         .unwrap();
 
         super::load(None, &project).unwrap();
-        assert!(devkit_common::pool::width() >= 1);
+
+        // DEVKIT_THREADS outranks the config, so the expectation follows the
+        // same precedence `width` does. Without the `configure` call the width
+        // falls back to its default and this fails.
+        let expected = std::env::var("DEVKIT_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(3);
+        assert_eq!(devkit_common::pool::width(), expected);
     }
 }
