@@ -990,7 +990,9 @@ struct Prune {
     /// 0-based index of the first component pruning cannot bound past: the
     /// pattern's first bare `**` component, or the first component whose
     /// accumulated prefix could not itself be compiled as a pattern (see
-    /// `for_pattern`). A directory at or past this depth is never pruned.
+    /// `for_pattern`). `prefixes` holds exactly this many entries, so a
+    /// directory is bounded while its depth is at most this index, and
+    /// anything deeper is never pruned.
     unbounded_at: Option<usize>,
 }
 
@@ -1100,9 +1102,13 @@ mod tests {
     /// not catch this, because the bug was in how `walk_and_classify` called
     /// it, not in the helper. This constructs a real `Walk` and drives the
     /// real, private `walk_and_classify` directly (accessible from this
-    /// submodule), fanning out to enough independent directories that a
-    /// serial reader could only ever touch one thread, and asserts more than
-    /// one shows up. `Walk::read_threads` exists solely to make this
+    /// submodule), and asserts that more than one thread index shows up.
+    /// That assertion is decided, not sampled: jwalk runs the root
+    /// callback on the calling thread, which is not a pool worker and
+    /// records `None`, and dispatches every child read onto a worker,
+    /// which records `Some`. A parallel walk over sibling directories
+    /// therefore always yields both, and either way of going serial yields
+    /// exactly one. `Walk::read_threads` exists solely to make this
     /// observable: production code never sets it to `Some`.
     #[test]
     fn the_walk_reads_directories_on_more_than_one_pool_thread() {
