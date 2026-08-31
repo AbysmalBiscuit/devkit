@@ -425,6 +425,10 @@ impl Walk<'_> {
         // once per pattern is not a cost worth avoiding.
         let pruner = matcher.cloned();
         let prune_source = source.to_path_buf();
+        // Built once per pattern rather than per directory. `None` when this
+        // walk has no matcher (a directory match's own recursion), where
+        // every path is claimed and nothing may be pruned.
+        let prune_plan = pruner.as_ref().map(|p| Prune::for_pattern(p.as_str()));
 
         let entries: Vec<_> = crate::pool::install(|| {
             jwalk::WalkDir::new(start)
@@ -432,23 +436,32 @@ impl Walk<'_> {
                 .follow_links(true)
                 .parallelism(crate::pool::jwalk_parallelism())
                 .process_read_dir(move |_depth, dir, _state, children| {
-                    if mode != LinkMode::Preserve {
-                        return;
-                    }
-                    // A link that is claimed becomes a link in the plan, so the
-                    // walk must not read through it. A link that is claimed by
-                    // nothing is traversed: it may be the only road to a file
-                    // that is, and `glob_with` reads through one today.
                     for child in children.iter_mut().flatten() {
-                        if !child.path_is_symlink() {
-                            continue;
-                        }
                         let full = dir.join(&child.file_name);
-                        let claimed = match (&pruner, full.strip_prefix(&prune_source)) {
-                            (Some(p), Ok(rel)) => matches_here(p, rel, opts),
-                            (None, _) | (Some(_), Err(_)) => true,
+                        let Ok(rel) = full.strip_prefix(&prune_source) else {
+                            continue;
                         };
-                        if claimed {
+                        // A link that is claimed becomes a link in the plan,
+                        // so the walk must not read through it. A link that
+                        // is claimed by nothing is traversed: it may be the
+                        // only road to a file that is, and `glob_with` used
+                        // to read through one the same way.
+                        if mode == LinkMode::Preserve && child.path_is_symlink() {
+                            let claimed = match &pruner {
+                                Some(p) => matches_here(p, rel, opts),
+                                None => true,
+                            };
+                            if claimed {
+                                child.read_children = None;
+                                continue;
+                            }
+                        }
+                        // No pattern in play (a directory match's own
+                        // recursion) claims everything, so there is nothing
+                        // to bound the walk by.
+                        if let (Some(plan), Some(p)) = (&prune_plan, &pruner)
+                            && plan.should_prune(p, rel, opts)
+                        {
                             child.read_children = None;
                         }
                     }
@@ -919,6 +932,91 @@ fn walk_root(pattern: &str) -> Option<PathBuf> {
         }
     }
     Some(root)
+}
+
+/// Bounds a jwalk directory read to the subtrees a pattern could still match,
+/// so a directory two levels under `apps/*/.env.local` is never read at all
+/// rather than read and then discarded.
+///
+/// `require_literal_separator` makes a pattern's components line up with a
+/// path's components one-to-one, except a bare `**` component, which spans
+/// any number of them. That is what makes per-depth pruning sound: a
+/// directory whose own path does not satisfy the pattern's first `d`
+/// components cannot lead to a match at any depth below it, as long as
+/// nothing before depth `d` was a `**`. Built once per pattern rather than
+/// per directory.
+struct Prune {
+    /// `prefixes[k - 1]` is the pattern truncated to its first `k`
+    /// components, for `k` in `1..=` the count of components strictly before
+    /// the first `**` (or every component, if there is none). A directory is
+    /// tested against the prefix at its own depth.
+    prefixes: Vec<glob::Pattern>,
+    /// 0-based index of the pattern's first bare `**` component, if any. A
+    /// directory at or past this depth cannot be bounded by component count,
+    /// so it is never pruned.
+    recursive_at: Option<usize>,
+}
+
+impl Prune {
+    fn for_pattern(pattern: &str) -> Self {
+        let components: Vec<&str> = Path::new(pattern)
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(n) => n.to_str(),
+                _ => None,
+            })
+            .collect();
+        // A `**` elsewhere in a component (`a**b`) never reaches here: glob
+        // rejects it as a pattern error before a `Prune` is built for it, so
+        // the only way a component reads exactly "**" is the real wildcard.
+        let recursive_at = components.iter().position(|c| *c == "**");
+        let bound = recursive_at.unwrap_or(components.len());
+        let mut prefixes = Vec::with_capacity(bound);
+        let mut joined = String::new();
+        for part in &components[..bound] {
+            if !joined.is_empty() {
+                joined.push('/');
+            }
+            joined.push_str(part);
+            // A prefix of a pattern glob already compiled is itself a valid
+            // pattern: truncating at a component boundary cannot reintroduce
+            // the errors `Pattern::new` checks for.
+            prefixes.push(glob::Pattern::new(&joined).expect("prefix of a compiled pattern"));
+        }
+        Self {
+            prefixes,
+            recursive_at,
+        }
+    }
+
+    /// Whether the directory at `rel` (relative to the walk's source root)
+    /// cannot lead to a match and its contents may be skipped unread.
+    ///
+    /// Never prunes a directory `matches_here` already claims — a directory
+    /// match contributes its whole subtree, so nothing below it may ever be
+    /// pruned — nor one at or past a `**`, which cannot be bounded by
+    /// component count. Soundness over aggression: a directory this misses
+    /// costs only walk time; a directory it wrongly prunes silently drops a
+    /// file.
+    fn should_prune(&self, matcher: &glob::Pattern, rel: &Path, opts: glob::MatchOptions) -> bool {
+        let depth = rel.components().count();
+        // Depth 0 is the walk's own start directory. jwalk surfaces it once
+        // through a special root-entry callback rather than as an ordinary
+        // child, and there is nothing below the walk's own root to bound.
+        if depth == 0 {
+            return false;
+        }
+        if matches_here(matcher, rel, opts) {
+            return false;
+        }
+        if self.recursive_at.is_some_and(|i| depth > i) {
+            return false;
+        }
+        match self.prefixes.get(depth - 1) {
+            Some(prefix) => !prefix.matches_path_with(rel, opts),
+            None => true,
+        }
+    }
 }
 
 /// The options every include match is tested with.
@@ -2565,5 +2663,39 @@ mod tests {
 
         assert_eq!(first.len(), 50);
         assert_eq!(first, second);
+    }
+
+    /// A directory this walk would have to read in order to learn it doesn't
+    /// belong is made unreadable, so pruning it before ever reading it is what
+    /// keeps `warnings` empty. A correct-but-unpruned walk would still land on
+    /// the same matched file, so only an observation of the read itself — not
+    /// of the plan's contents — tells pruning apart from a walk that merely
+    /// found nothing else worth reporting.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreachable_directory_below_a_pattern_is_pruned_unread() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("apps/web/.env.local"), "x");
+        let blocked = src.join("apps/web/node_modules");
+        std::fs::create_dir_all(&blocked).unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root, and some CI containers, ignore directory permissions, which
+        // would make this test observe nothing either way. Detect that and
+        // skip rather than assert a pass that proves nothing.
+        let permissions_are_enforced = std::fs::read_dir(&blocked).is_err();
+
+        let plan = plan_includes(&src, &dst, &["apps/*/.env.local".to_string()]);
+
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !permissions_are_enforced {
+            return;
+        }
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+        let missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        assert_eq!(missing, vec![PathBuf::from("apps/web/.env.local")]);
     }
 }
