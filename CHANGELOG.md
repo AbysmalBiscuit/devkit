@@ -1,5 +1,79 @@
 # Changelog
 
+## [0.13.6](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.5...v0.13.6) (2026-08-31)
+
+
+### Features
+
+* **config:** add rendered-name length limits ([6a4c424](https://github.com/AbysmalBiscuit/devkit/commit/6a4c4247c1eae97e602919edb38d77f6aa654736))
+* **config:** add the [parallelism] table ([b5fb874](https://github.com/AbysmalBiscuit/devkit/commit/b5fb874c0d48cf9913a56592068620560967debd))
+* **config:** add the preserve table ([1eb7f4d](https://github.com/AbysmalBiscuit/devkit/commit/1eb7f4d116d94f2005d317f41615c8d2fef9f4ca))
+* **config:** size the shared pool from [parallelism] ([d3538cf](https://github.com/AbysmalBiscuit/devkit/commit/d3538cfe4bb6f57dd3acf84d96dbc7429c0ad431))
+* **issue:** add short_slug for worktree directories ([01c82d3](https://github.com/AbysmalBiscuit/devkit/commit/01c82d36e699c3e706c37fbeb020103eec1d530c))
+* **issue:** group sync-includes file lists ([141cc4c](https://github.com/AbysmalBiscuit/devkit/commit/141cc4ca909949030551d1be76e3714475085e18))
+* **issue:** measure a template's room for a slug ([fda4710](https://github.com/AbysmalBiscuit/devkit/commit/fda471023e64d66b91a7943336c5edfe8e971089))
+* **issue:** name symlinks as links in a sync-includes dry run ([6e63370](https://github.com/AbysmalBiscuit/devkit/commit/6e633704104ef33d76a9c372e4b5e55d52568de9))
+* **issue:** preserve worktree files before removing them ([0df2bef](https://github.com/AbysmalBiscuit/devkit/commit/0df2bef5fd45e9f0aada6c76a5c40f7bd2c2c59f))
+* **issue:** report created symlinks beside copied files ([094fee8](https://github.com/AbysmalBiscuit/devkit/commit/094fee89b22d52ea80f8829a37683c20935d763a))
+* **issue:** resolve and validate preserve entries ([7187b3c](https://github.com/AbysmalBiscuit/devkit/commit/7187b3cc8472332a2a56aeee0c46b7305ea8b446))
+* **issue:** return the config load outcome from select ([1ae0ab1](https://github.com/AbysmalBiscuit/devkit/commit/1ae0ab169f1702d1edd605671566c299812e9e48))
+* **issue:** show progress while copying worktree includes ([a1d59f6](https://github.com/AbysmalBiscuit/devkit/commit/a1d59f637aaa7fbad34a6f7501cd71269f6edf1d))
+* **pool:** add the workspace's shared worker pool ([0da87a9](https://github.com/AbysmalBiscuit/devkit/commit/0da87a9a16e3cf173c2f3f97ed649179e07f7d70))
+* **progress:** let steps draw sub-progress ([a05ae31](https://github.com/AbysmalBiscuit/devkit/commit/a05ae31857859f971084c0b593d182a4a143d9af))
+* **progress:** settle a step failed without a Result ([ae94517](https://github.com/AbysmalBiscuit/devkit/commit/ae945176bae9ef5edb66412054e19a601fab7df3))
+* **sys:** add a symlink primitive to the platform boundary ([9b04817](https://github.com/AbysmalBiscuit/devkit/commit/9b0481771b30c23936ad6e231514908f495a2fae))
+* **worktree:** add copy_out for archiving a worktree ([d7af7b2](https://github.com/AbysmalBiscuit/devkit/commit/d7af7b2c083576fdd21d765e9635d6fdef0d3909))
+* **worktree:** derive a pattern's literal walk root ([9c0fd6e](https://github.com/AbysmalBiscuit/devkit/commit/9c0fd6ebb7687bfb3603d6f2ef1645ec25315e92))
+* **worktree:** report progress from the include copy ([23f3875](https://github.com/AbysmalBiscuit/devkit/commit/23f38754718fed63e6f7c3cc98b0ad3df7a96978))
+* **worktree:** report progress from the include walk ([b05a4e8](https://github.com/AbysmalBiscuit/devkit/commit/b05a4e8f1afd2bbde6401ce984cca36c174a43ed))
+* **worktree:** reproduce a matched symlink instead of its contents ([5fb97dd](https://github.com/AbysmalBiscuit/devkit/commit/5fb97dd48dfa3277bc5d90f7eda8ab533fcf8711))
+* **worktree:** tell cheap includes from expensive ones ([4fd9b56](https://github.com/AbysmalBiscuit/devkit/commit/4fd9b562f4d6de8d72cb015789b4cf2da35efbaa))
+
+
+### Bug Fixes
+
+* **config:** size the shared pool at the one config door ([83614e2](https://github.com/AbysmalBiscuit/devkit/commit/83614e2618b84b5aec323cf805fb5e4ff672fa9f))
+* **issue:** ask the filesystem whether a preserve destination is inside ([823fa70](https://github.com/AbysmalBiscuit/devkit/commit/823fa70bf2629706580dd807c7ad9a608494e57c))
+* **issue:** cap the checkout-pr directory name ([0937531](https://github.com/AbysmalBiscuit/devkit/commit/09375310e80a19a6d9a9fed94afd149b97af12b7))
+* **issue:** clamp branch budget without slug ([f5a9f7f](https://github.com/AbysmalBiscuit/devkit/commit/f5a9f7fbba1a60a00164c6c3abe953f4b1509713))
+* **issue:** correct end's preserve reporting and summary sweep ([4fc1f85](https://github.com/AbysmalBiscuit/devkit/commit/4fc1f85ff8b1c4d35405ecdcbb4588080be069ad))
+* **issue:** name the config key in budget errors ([e19b86d](https://github.com/AbysmalBiscuit/devkit/commit/e19b86d219adc329fc3c4892b558ce86d180d2d1))
+* **issue:** pin include sub-step arithmetic and wording ([58fb1c9](https://github.com/AbysmalBiscuit/devkit/commit/58fb1c9480a2a7bbbeccdc78b38219a945e67200))
+* **issue:** report occupied symlinks by name, not by subtraction ([a256db2](https://github.com/AbysmalBiscuit/devkit/commit/a256db2a0635f7c3bbd6711a798ceacea2026173))
+* **issue:** tighten end's config and preserve gates ([c7ee838](https://github.com/AbysmalBiscuit/devkit/commit/c7ee838ec29d01f7b80ad144019f773bec991a73))
+* **progress:** cover detail rendering, degrade poisoned locks ([3a20483](https://github.com/AbysmalBiscuit/devkit/commit/3a20483fc74bd20f7e91a93fb1069c92f05cfbe0))
+* **progress:** gate substep and align its column ([ba890d7](https://github.com/AbysmalBiscuit/devkit/commit/ba890d71e53fb73640f17780605e912358cac00d))
+* **test:** strengthen pool configuration assertion to pin actual width ([9b989a4](https://github.com/AbysmalBiscuit/devkit/commit/9b989a49757cad570f06c59cc82dca0aae481435))
+* **worktree:** archive the root for a pattern of only dots ([2a4b10b](https://github.com/AbysmalBiscuit/devkit/commit/2a4b10b46f01bcd0888b86198f52d91302033802))
+* **worktree:** bound jwalk descent to what a pattern can match ([fdd071a](https://github.com/AbysmalBiscuit/devkit/commit/fdd071aedfe31b47264a06f65cedc83bc18b5138))
+* **worktree:** classify jwalk errors correctly ([a035cbe](https://github.com/AbysmalBiscuit/devkit/commit/a035cbe668cd66806ec8b12ee1067de59f7c0457))
+* **worktree:** degrade Prune when a prefix will not compile ([a86a4d9](https://github.com/AbysmalBiscuit/devkit/commit/a86a4d92fb1b9bb415aeea42112db0007de1ea72))
+* **worktree:** drain the walk on the calling thread ([bf172e7](https://github.com/AbysmalBiscuit/devkit/commit/bf172e77a43cf1d219acb9be47b36cdee5000e85))
+* **worktree:** drop an empty include pattern before the join ([39c3f30](https://github.com/AbysmalBiscuit/devkit/commit/39c3f30044b930ea1221bcc8a90a93eddc7db924))
+* **worktree:** drop change-relative phrasing in doc comment ([5185e36](https://github.com/AbysmalBiscuit/devkit/commit/5185e3626978d1b95feb1763a54e914caa502a8b))
+* **worktree:** gate a test helper to the platform that uses it ([52b4f61](https://github.com/AbysmalBiscuit/devkit/commit/52b4f616612c9fdb50ee7d4439f88647dd0ab1b8))
+* **worktree:** name the target of an unresolvable link ([dd11c2f](https://github.com/AbysmalBiscuit/devkit/commit/dd11c2fb54b23f650fe91c95d82dd12172b6fcc7))
+* **worktree:** name what consumes walk_root ([5268bf4](https://github.com/AbysmalBiscuit/devkit/commit/5268bf4c0863e779f557876e4f2aa88f198cc27e))
+* **worktree:** never plan the source root as a link ([cb20530](https://github.com/AbysmalBiscuit/devkit/commit/cb205304f730f503a8b8ac5d4985cf85ef0b1801))
+* **worktree:** plan a matched symlink as a link, not its contents ([9565235](https://github.com/AbysmalBiscuit/devkit/commit/95652355a1e9efafc9772c2794cbf58202c4bf06))
+* **worktree:** plan each file once across overlapping patterns ([6cbe052](https://github.com/AbysmalBiscuit/devkit/commit/6cbe052870971c5b63a1f56daa226a434f1b717b))
+* **worktree:** read a pattern's components once, not twice ([f690ff5](https://github.com/AbysmalBiscuit/devkit/commit/f690ff5273d991ffc67a07c38fc4e822ea58374e))
+* **worktree:** refuse a symlink cycle jwalk cannot see ([d8a5ac2](https://github.com/AbysmalBiscuit/devkit/commit/d8a5ac2973c9f621d6b00a51b6b75d03168d109e))
+* **worktree:** refuse an include pattern that leaves the source tree ([a4b3a72](https://github.com/AbysmalBiscuit/devkit/commit/a4b3a725468743d95efda59b096cfb36ae18d3fe))
+* **worktree:** report a directory the walk could not read ([bd1da6e](https://github.com/AbysmalBiscuit/devkit/commit/bd1da6e24973e921a35e6e1960fa946295237f14))
+* **worktree:** reword atomic comment, add empty-slot test ([ef065b8](https://github.com/AbysmalBiscuit/devkit/commit/ef065b8083d99bcc158c1f9796e71fb904fc90a2))
+* **worktree:** reword Walk's Sync doc comment ([36fa816](https://github.com/AbysmalBiscuit/devkit/commit/36fa816580777e1201727d48ffc2b02dc6794245))
+* **worktree:** seed the cycle check from every ancestor of the walk root ([ad8c35a](https://github.com/AbysmalBiscuit/devkit/commit/ad8c35a608afb26d41775c763db8c27b25f296ad))
+* **worktree:** stay silent on a directory deleted mid-walk ([4c308ca](https://github.com/AbysmalBiscuit/devkit/commit/4c308ca247c00d5641c2a4cd147f9e6fc4d79a6f))
+* **worktree:** strip a leading ./ from an include pattern ([80eb3da](https://github.com/AbysmalBiscuit/devkit/commit/80eb3daad9cf306fc8a682aa8a003a6bfef34dc9))
+
+
+### Performance Improvements
+
+* **worktree:** copy a pattern's files in parallel ([a2c272f](https://github.com/AbysmalBiscuit/devkit/commit/a2c272f19788b30ddec9e41c0745ca0135fb3c6f))
+* **worktree:** expand include patterns with a scoped jwalk ([faa49d9](https://github.com/AbysmalBiscuit/devkit/commit/faa49d9f3e6fba71b6330942361b492be0034e8c))
+* **worktree:** walk and classify a directory include in parallel ([3c5e492](https://github.com/AbysmalBiscuit/devkit/commit/3c5e492294976b27da1bf1f5671cb1ed83e1cddf))
+
 ## [0.13.5](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.4...v0.13.5) (2026-08-29)
 
 
