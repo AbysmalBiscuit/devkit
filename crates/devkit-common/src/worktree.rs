@@ -446,8 +446,7 @@ impl Walk<'_> {
                         let full = dir.join(&child.file_name);
                         let claimed = match (&pruner, full.strip_prefix(&prune_source)) {
                             (Some(p), Ok(rel)) => matches_here(p, rel, opts),
-                            (None, _) => true,
-                            (Some(_), Err(_)) => false,
+                            (None, _) | (Some(_), Err(_)) => true,
                         };
                         if claimed {
                             child.read_children = None;
@@ -465,19 +464,23 @@ impl Walk<'_> {
                     let entry = match entry {
                         Ok(e) => e,
                         Err(e) => {
-                            // jwalk resolves a symlink's target eagerly to
-                            // learn whether to recurse into it, so a broken
-                            // link surfaces here as a `NotFound` error on the
-                            // link's own path rather than as an `Ok` entry.
-                            // Recover it the same way a resolvable link is
-                            // classified, instead of dropping it as a benign
-                            // miss.
-                            if mode == LinkMode::Preserve
-                                && e.io_error().map(std::io::Error::kind)
-                                    == Some(std::io::ErrorKind::NotFound)
-                                && let Some(full) = e.path()
+                            // `follow_links` stats a symlink's target to
+                            // decide whether to recurse into it, so a
+                            // symlink whose target cannot be stat'd (broken,
+                            // permission-denied, or a jwalk-detected loop
+                            // back to an ancestor) never reaches this
+                            // `filter_map` as an `Ok` entry with
+                            // `path_is_symlink()` set. Recovering it here,
+                            // from the failed entry's own path, is the only
+                            // way such a link is ever classified.
+                            if let Some(full) = e.path()
                                 && is_symlink(full)
                             {
+                                // Depth 0 is `start` itself, which the
+                                // caller has already accounted for.
+                                if e.depth() == 0 {
+                                    return None;
+                                }
                                 let Ok(rel) = full.strip_prefix(source) else {
                                     return Some(Classified::Warning(format!(
                                         "match outside source: {}",
@@ -490,25 +493,37 @@ impl Walk<'_> {
                                     return None;
                                 }
                                 let rel = rel.to_path_buf();
-                                return Some(match std::fs::read_link(full) {
-                                    Ok(target) => Classified::Link { rel, target },
-                                    Err(e) => Classified::Warning(format!(
+                                return Some(match (mode, std::fs::read_link(full)) {
+                                    (LinkMode::Preserve, Ok(target)) => {
+                                        Classified::Link { rel, target }
+                                    }
+                                    // `copy_out` runs just before the source
+                                    // worktree is deleted, so a link this
+                                    // mode cannot follow has to be named now
+                                    // or it is never archived and never
+                                    // reported.
+                                    (LinkMode::Follow, Ok(target)) => Classified::Warning(format!(
+                                        "not archiving {}: target {} could not be resolved",
+                                        full.display(),
+                                        target.display()
+                                    )),
+                                    (_, Err(e)) => Classified::Warning(format!(
                                         "reading link {}: {e}",
                                         full.display()
                                     )),
                                 });
                             }
-                            // A wildcard whose literal prefix does not exist is
-                            // a common, benign configuration and stays as
-                            // silent as glob's own scope check made it.
+                            // The directory read raced a deletion: the
+                            // entry jwalk listed is already gone by the
+                            // time it stats it.
                             if e.io_error().map(std::io::Error::kind)
                                 == Some(std::io::ErrorKind::NotFound)
                             {
                                 return None;
                             }
                             return Some(Classified::Warning(format!(
-                                "reading dir {}: {e}",
-                                start.display()
+                                "reading {}: {e}",
+                                e.path().unwrap_or(start).display()
                             )));
                         }
                     };
@@ -2051,6 +2066,31 @@ mod tests {
             "archived as a real file, not a link"
         );
         assert_eq!(std::fs::read_to_string(&landed).unwrap(), "content");
+    }
+
+    /// `copy_out` cannot open through a broken link to archive its target, and
+    /// the worktree it walked is deleted right after, so a silently dropped
+    /// link here means the archive is incomplete with no record of why.
+    #[cfg(unix)]
+    #[test]
+    fn copy_out_warns_about_a_broken_link_it_cannot_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("wt");
+        let dest = tmp.path().join("archive");
+        std::fs::create_dir_all(source.join("inc")).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::os::unix::fs::symlink("nowhere.txt", source.join("inc/link.txt")).unwrap();
+
+        let (copied, warnings) = copy_out(&source, &dest, &["inc/".to_string()]);
+
+        assert_eq!(copied, 0, "{warnings:?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("link.txt") && w.contains("nowhere.txt")),
+            "no warning names the unarchived link: {warnings:?}"
+        );
+        assert!(!dest.join("inc/link.txt").exists());
     }
 
     #[test]
