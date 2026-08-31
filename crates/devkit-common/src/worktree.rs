@@ -599,12 +599,34 @@ impl Walk<'_> {
                             )));
                         }
                     };
+                    let full = entry.path();
+                    // jwalk stores a failed `read_dir` on the directory whose
+                    // read failed and still yields that directory as `Ok`, so
+                    // this is the only place an unreadable subtree is ever
+                    // visible. It is reported before the depth and matcher
+                    // guards below, because a directory the walk had to read
+                    // in order to learn it holds no match is still a subtree
+                    // dropped from the plan. A pruned directory is never read
+                    // and carries no `read_children` at all, so bounding the
+                    // walk cannot invent one of these.
+                    if let Some(err) = entry
+                        .read_children
+                        .as_ref()
+                        .and_then(jwalk::ReadChildren::error)
+                    {
+                        let cause = err
+                            .io_error()
+                            .map_or_else(|| err.to_string(), std::io::Error::to_string);
+                        return Some(Classified::Warning(format!(
+                            "reading dir {}: {cause}",
+                            full.display()
+                        )));
+                    }
                     // Depth 0 is `start` itself, which the caller has already
                     // accounted for.
                     if entry.depth() == 0 {
                         return None;
                     }
-                    let full = entry.path();
                     let Ok(rel) = full.strip_prefix(source) else {
                         return Some(Classified::Warning(format!(
                             "match outside source: {}",
@@ -3070,5 +3092,45 @@ mod tests {
         assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
         let missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
         assert_eq!(missing, vec![PathBuf::from("apps/web/.env.local")]);
+    }
+
+    /// A directory the walk has to read — because a pattern could still match
+    /// inside it — and cannot is reported by name. `copy_out` runs immediately
+    /// before its caller deletes the worktree, so this warning is the only
+    /// signal that a subtree was never archived. Every pattern shape is
+    /// asserted because each reaches the unreadable directory differently: a
+    /// directory include claims it, an anchored wildcard does not claim it but
+    /// must still read it, and a `**` claims everything below it.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_directory_a_pattern_must_read_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for pattern in ["inc/", "inc/*/*", "inc/**"] {
+            let base = tempfile::tempdir().unwrap();
+            let src = base.path().join("src");
+            let dst = base.path().join("dst");
+            write(&src.join("inc/open/a.txt"), "1");
+            write(&src.join("inc/locked/c.txt"), "2");
+            let locked = src.join("inc/locked");
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+            // Root, and some CI containers, ignore directory permissions,
+            // which leaves nothing to observe either way.
+            let permissions_are_enforced = fs::read_dir(&locked).is_err();
+
+            let (copied, warnings) = copy_out(&src, &dst, &[pattern.to_string()]);
+
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            if !permissions_are_enforced {
+                return;
+            }
+            assert_eq!(copied, 1, "{pattern}: {warnings:?}");
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.contains("inc/locked") && w.contains("Permission denied")),
+                "{pattern}: no warning names the unreadable directory: {warnings:?}"
+            );
+        }
     }
 }
