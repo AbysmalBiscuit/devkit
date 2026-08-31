@@ -983,14 +983,15 @@ fn walk_root(pattern: &str) -> Option<PathBuf> {
 /// per directory.
 struct Prune {
     /// `prefixes[k - 1]` is the pattern truncated to its first `k`
-    /// components, for `k` in `1..=` the count of components strictly before
-    /// the first `**` (or every component, if there is none). A directory is
-    /// tested against the prefix at its own depth.
+    /// components, for `k` in `1..=` the count of components this could be
+    /// built for before `unbounded_at`. A directory is tested against the
+    /// prefix at its own depth.
     prefixes: Vec<glob::Pattern>,
-    /// 0-based index of the pattern's first bare `**` component, if any. A
-    /// directory at or past this depth cannot be bounded by component count,
-    /// so it is never pruned.
-    recursive_at: Option<usize>,
+    /// 0-based index of the first component pruning cannot bound past: the
+    /// pattern's first bare `**` component, or the first component whose
+    /// accumulated prefix could not itself be compiled as a pattern (see
+    /// `for_pattern`). A directory at or past this depth is never pruned.
+    unbounded_at: Option<usize>,
 }
 
 impl Prune {
@@ -1009,19 +1010,31 @@ impl Prune {
         let bound = recursive_at.unwrap_or(components.len());
         let mut prefixes = Vec::with_capacity(bound);
         let mut joined = String::new();
-        for part in &components[..bound] {
+        let mut unbounded_at = recursive_at;
+        for (idx, part) in components[..bound].iter().enumerate() {
             if !joined.is_empty() {
                 joined.push('/');
             }
             joined.push_str(part);
-            // A prefix of a pattern glob already compiled is itself a valid
-            // pattern: truncating at a component boundary cannot reintroduce
-            // the errors `Pattern::new` checks for.
-            prefixes.push(glob::Pattern::new(&joined).expect("prefix of a compiled pattern"));
+            // `Path::components()` splits on `/` without knowing glob
+            // syntax, so a bracket class holding a literal `/` (`x[a/b]y`:
+            // valid glob, pointless under `require_literal_separator`, but
+            // legal) can truncate mid-class here, and the truncated prefix
+            // then fails to compile even though the full pattern did.
+            // Degrade instead of trusting every prefix compiles: stop
+            // bounding at the first component this happens on, exactly the
+            // way a `**` stops it.
+            match glob::Pattern::new(&joined) {
+                Ok(p) => prefixes.push(p),
+                Err(_) => {
+                    unbounded_at = Some(idx);
+                    break;
+                }
+            }
         }
         Self {
             prefixes,
-            recursive_at,
+            unbounded_at,
         }
     }
 
@@ -1030,7 +1043,7 @@ impl Prune {
     ///
     /// Never prunes a directory `matches_here` already claims — a directory
     /// match contributes its whole subtree, so nothing below it may ever be
-    /// pruned — nor one at or past a `**`, which cannot be bounded by
+    /// pruned — nor one at or past `unbounded_at`, which cannot be bounded by
     /// component count. Soundness over aggression: a directory this misses
     /// costs only walk time; a directory it wrongly prunes silently drops a
     /// file.
@@ -1045,7 +1058,7 @@ impl Prune {
         if matches_here(matcher, rel, opts) {
             return false;
         }
-        if self.recursive_at.is_some_and(|i| depth > i) {
+        if self.unbounded_at.is_some_and(|i| depth > i) {
             return false;
         }
         match self.prefixes.get(depth - 1) {
@@ -1131,6 +1144,29 @@ mod tests {
             "directory reads landed on only one pool thread ({threads:?}); \
              the walk is running serial"
         );
+    }
+
+    /// A bracket class holding a literal `/` (`x[a/b]y`) compiles as a whole
+    /// pattern -- glob does not forbid `/` inside a class -- but
+    /// `Path::components()` splits inside the class, since it knows nothing
+    /// of glob syntax, so the truncated prefix `x[a` fails to compile even
+    /// though the full pattern did. `Prune::for_pattern` used to `expect`
+    /// every prefix to compile and panicked on exactly this pattern; it now
+    /// degrades to treating the failing component as unbounded, the same way
+    /// a `**` is, and the match still happens correctly.
+    #[test]
+    fn a_bracket_class_holding_a_separator_does_not_panic() {
+        let base = tempfile::tempdir().unwrap();
+        let src = base.path().join("src");
+        let dst = base.path().join("dst");
+        write(&src.join("xay"), "matches the class");
+        write(&src.join("xzy"), "does not match the class");
+
+        let plan = plan_includes(&src, &dst, &["x[a/b]y".to_string()]);
+
+        let missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
+        assert_eq!(missing, vec![PathBuf::from("xay")]);
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
     }
 
     #[test]
