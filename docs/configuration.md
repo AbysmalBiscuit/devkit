@@ -417,18 +417,24 @@ Commands devkit runs when a lifecycle event fires. Each key is named `{before,af
 | Key | Fires on | Cwd |
 |---|---|---|
 | `after_worktree_create` | `issue setup` and `issue checkout-pr`, once the worktree exists and its apps are prepared, after the command has reported the worktree | the new worktree's root |
+| `after_worktree_remove` | `issue end`, once per worktree it removed, after every removal in the run has finished and the stale worktree entries are pruned | the main repository root |
+| `after_end` | `issue end`, once per run that removed at least one worktree, after every `after_worktree_remove` hook | the main repository root |
 
-The event names a state change, not the caller. `after_worktree_create` fires from both `issue setup` and `issue checkout-pr`; naming it after either command would have been wrong for the other. A new hook key fires from every command that reaches its state.
+Most keys name a state change rather than the caller. `after_worktree_create` fires from both `issue setup` and `issue checkout-pr`; naming it after either command would have been wrong for the other, and a new state key fires from every command that reaches its state. `after_end` is the deliberate exception: a run-level event has exactly one caller by construction and no worktree state it could be named for.
 
-Each argv element is a minijinja template over `worktree`, `branch`, `issue`, `slug`, `apps`, `prefix`, and `[templates.variables]`. Hooks run in the order listed.
+A worktree kept back by a required `[preserve]` failure, refused as dirty, or skipped at the confirmation prompt never fires `after_worktree_remove`. A run that removed nothing fires neither key, including the early exits that report nothing to clean up.
 
-Failures are **fail-open**: a hook that cannot be rendered, cannot be spawned, or exits non-zero prints a `warning:` line to stderr, and the remaining hooks still run. The worktree already exists by the time hooks fire, so a missing program must not fail the command that created it. Hook output is captured and discarded, which keeps the JSON line the command prints last on stdout.
+Each argv element is a minijinja template over `[templates.variables]` plus the keys its own event carries. `after_worktree_create` renders over `worktree`, `branch`, `issue`, `slug`, `apps`, and `prefix`. `after_worktree_remove` adds `worktree_root` and `primary`; its worktree is already gone, so those values come from the `.devkit/issue.toml` record read before the removal. `after_end` carries `removed` (the removed worktree paths, in the order they were confirmed), `count`, `prefix`, `worktree_root`, and `primary`, and none of the single-worktree keys. Hooks run in the order listed, and every `after_worktree_remove` finishes before `after_end` starts.
+
+Failures are **fail-open**: a hook that cannot be rendered, cannot be spawned, or exits non-zero prints a `warning:` line to stderr, and the remaining hooks still run. The worktree already exists by the time hooks fire, so a missing program must not fail the command that created it. Hook output is captured and discarded, which keeps the JSON line the command prints last on stdout. The `issue end` keys fire after the removals have joined and the run has printed its summary, so a failing hook cannot keep a removed worktree from being reported as removed. When the main repository root does not resolve, both are skipped with a warning rather than run in a directory the removal just deleted.
 
 As an array, a deeper `devkit.toml` replaces the whole list rather than appending — set machine-wide hooks in `~/.config/devkit/config.toml` and expect a project that defines the same key to take over entirely.
 
 ```toml
 [hooks]
 after_worktree_create = [["zoxide", "add", "{{ worktree }}"]]
+after_worktree_remove = [["zoxide", "remove", "{{ worktree }}"]]
+after_end = [["alacritree", "project", "refresh"]]
 ```
 
 ### `[preserve.<name>]`

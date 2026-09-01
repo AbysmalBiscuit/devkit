@@ -334,11 +334,33 @@
       "type": "object"
     },
     "HooksConfig": {
-      "description": "Commands run on a devkit lifecycle event. Each key is named\n`{before,after}_<event>` and holds a list of argv arrays — no shell, so\npipes, `&&`, and globs are not available. A hook that fails to render,\nspawn, or exit zero warns on stderr and the remaining hooks still run.",
+      "description": "Commands run on a devkit lifecycle event. Most keys are named\n`{before,after}_<event>` after the state change rather than the command\nthat reached it; `after_end` is the exception and names its run, because a\nrun-level event has exactly one caller and no worktree state to be named\nfor. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and\nglobs are not available. A hook that fails to render, spawn, or exit zero\nwarns on stderr and the remaining hooks still run.",
       "properties": {
+        "after_end": {
+          "default": [],
+          "description": "Runs once at the end of an `issue end` run that removed at least one\nworktree, after every `after_worktree_remove` hook, in the main\nrepository root. A run-level event: it carries `removed` (the removed\nworktree paths, in the order they were confirmed), `count`, `prefix`,\n`worktree_root`, `primary`, and `[templates.variables]`, and none of\nthe single-worktree keys.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
         "after_worktree_create": {
           "default": [],
           "description": "Runs once in the root of a worktree `issue setup` or\n`issue checkout-pr` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `issue`, `slug`,\n`apps`, `prefix`, and `[templates.variables]`.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "after_worktree_remove": {
+          "default": [],
+          "description": "Runs once per worktree `issue end` removed, after every removal in the\nrun has finished and the stale worktree entries are pruned. The\nworktree is gone by then, so these run in the main repository root;\n`issue`, `slug` and `apps` come from the `.devkit/issue.toml` record\nread before the removal. Rendered over `worktree`, `branch`, `issue`,\n`slug`, `apps`, `prefix`, `worktree_root`, `primary`, and\n`[templates.variables]`.",
           "items": {
             "items": {
               "type": "string"
@@ -829,7 +851,9 @@
     "hooks": {
       "$ref": "#/$defs/HooksConfig",
       "default": {
-        "after_worktree_create": []
+        "after_end": [],
+        "after_worktree_create": [],
+        "after_worktree_remove": []
       },
       "description": "Commands devkit runs when a lifecycle event fires, keyed\n`{before,after}_<event>`."
     },

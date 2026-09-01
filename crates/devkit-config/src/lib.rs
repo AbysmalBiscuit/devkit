@@ -150,10 +150,13 @@ impl Default for BriefConfig {
     }
 }
 
-/// Commands run on a devkit lifecycle event. Each key is named
-/// `{before,after}_<event>` and holds a list of argv arrays — no shell, so
-/// pipes, `&&`, and globs are not available. A hook that fails to render,
-/// spawn, or exit zero warns on stderr and the remaining hooks still run.
+/// Commands run on a devkit lifecycle event. Most keys are named
+/// `{before,after}_<event>` after the state change rather than the command
+/// that reached it; `after_end` is the exception and names its run, because a
+/// run-level event has exactly one caller and no worktree state to be named
+/// for. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and
+/// globs are not available. A hook that fails to render, spawn, or exit zero
+/// warns on stderr and the remaining hooks still run.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HooksConfig {
@@ -163,6 +166,23 @@ pub struct HooksConfig {
     /// rendered as minijinja over `worktree`, `branch`, `issue`, `slug`,
     /// `apps`, `prefix`, and `[templates.variables]`.
     pub after_worktree_create: Vec<Vec<String>>,
+
+    /// Runs once per worktree `issue end` removed, after every removal in the
+    /// run has finished and the stale worktree entries are pruned. The
+    /// worktree is gone by then, so these run in the main repository root;
+    /// `issue`, `slug` and `apps` come from the `.devkit/issue.toml` record
+    /// read before the removal. Rendered over `worktree`, `branch`, `issue`,
+    /// `slug`, `apps`, `prefix`, `worktree_root`, `primary`, and
+    /// `[templates.variables]`.
+    pub after_worktree_remove: Vec<Vec<String>>,
+
+    /// Runs once at the end of an `issue end` run that removed at least one
+    /// worktree, after every `after_worktree_remove` hook, in the main
+    /// repository root. A run-level event: it carries `removed` (the removed
+    /// worktree paths, in the order they were confirmed), `count`, `prefix`,
+    /// `worktree_root`, `primary`, and `[templates.variables]`, and none of
+    /// the single-worktree keys.
+    pub after_end: Vec<Vec<String>>,
 }
 
 /// Files copied out of a worktree before `issue end` removes it. Each entry
@@ -2408,5 +2428,29 @@ steps = [
 
         let (cfg, _) = resolve_with_home(None, &project, None, None, None).unwrap();
         assert!(cfg.parallelism.threads.is_none());
+    }
+
+    #[test]
+    fn parses_the_issue_end_hook_keys() {
+        let cfg: Config = toml::from_str(
+            "[hooks]\n\
+             after_worktree_remove = [[\"zoxide\", \"remove\", \"{{ worktree }}\"]]\n\
+             after_end = [[\"alacritree\", \"project\", \"refresh\"]]\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.hooks.after_worktree_remove.len(), 1);
+        assert_eq!(
+            cfg.hooks.after_worktree_remove[0],
+            ["zoxide", "remove", "{{ worktree }}"]
+        );
+        assert_eq!(cfg.hooks.after_end.len(), 1);
+        assert_eq!(cfg.hooks.after_end[0], ["alacritree", "project", "refresh"]);
+    }
+
+    #[test]
+    fn the_issue_end_hook_keys_default_empty() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.hooks.after_worktree_remove.is_empty());
+        assert!(cfg.hooks.after_end.is_empty());
     }
 }
