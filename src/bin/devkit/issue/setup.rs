@@ -138,51 +138,8 @@ pub(crate) fn prep_apps(
     Ok(())
 }
 
-/// Width a hook's command is elided to in its progress step: sized for an
-/// 80-column terminal alongside the mark, the `[i/n]` counter, and the
-/// elapsed time.
-const HOOK_LABEL_MAX: usize = 56;
-
-/// Render one hook's argv against `ctx`/`vars`.
-fn render_hook(
-    hook: &[String],
-    ctx: &serde_json::Value,
-    vars: &BTreeMap<String, String>,
-) -> Result<Vec<String>> {
-    hook.iter()
-        .map(|part| {
-            devkit_common::template::render(part, ctx, vars)
-                .with_context(|| format!("rendering hook argument `{part}`"))
-        })
-        .collect()
-}
-
-/// Run an already-rendered hook argv in `worktree`.
-fn run_rendered(worktree: &Path, argv: &[String]) -> Result<()> {
-    let (prog, rest) = argv.split_first().context("empty hook command")?;
-    capture(
-        prog,
-        &rest.iter().map(String::as_str).collect::<Vec<_>>(),
-        worktree.to_str(),
-    )?;
-    Ok(())
-}
-
-/// The progress-step label for a hook command.
-fn hook_label(argv: &[String]) -> String {
-    format!(
-        "Hook: {}",
-        devkit_common::ui::truncate(
-            &argv.join(" ").replace(['\n', '\r', '\t'], " "),
-            HOOK_LABEL_MAX
-        )
-    )
-}
-
 /// Run each `hooks.after_worktree_create` command in the new worktree, in
-/// order, one progress step each. Fail-open: the worktree already exists and
-/// is usable by the time these run, so a hook that fails warns on stderr and
-/// the rest still run.
+/// order. The worktree already exists and is usable by the time these run.
 pub(crate) fn run_after_worktree_create(
     worktree: &Path,
     hooks: &[Vec<String>],
@@ -190,20 +147,7 @@ pub(crate) fn run_after_worktree_create(
     vars: &BTreeMap<String, String>,
     steps: &Steps,
 ) {
-    for hook in hooks {
-        let rendered = render_hook(hook, ctx, vars);
-        // A hook that cannot render still draws its step, labelled from the
-        // template source so the offending argument is visible. The step
-        // counter only advances inside `during_result`, so skipping the step
-        // would leave the run ending short of its total.
-        let label = hook_label(rendered.as_deref().unwrap_or(hook));
-        if let Err(e) = steps.during_result(&label, || run_rendered(worktree, &rendered?)) {
-            eprintln!(
-                "warning: after_worktree_create hook `{}` failed: {e:#}",
-                hook.join(" ")
-            );
-        }
-    }
+    crate::issue::hooks::run_all(worktree, "after_worktree_create", hooks, ctx, vars, steps);
 }
 
 /// How many files may pass before the transient line is redrawn. A large
@@ -811,116 +755,6 @@ mod tests {
 
     fn ctx() -> serde_json::Value {
         json!({"prefix": "lev/", "issue": "eng-1", "slug": "fix", "apps": ["web"], "app": "web"})
-    }
-
-    #[test]
-    fn render_hook_expands_each_argument() {
-        let hook = vec![
-            "git".to_string(),
-            "init".to_string(),
-            "{{ slug }}-wt".to_string(),
-        ];
-        let argv = render_hook(&hook, &ctx(), &novars()).unwrap();
-        assert_eq!(argv, vec!["git", "init", "fix-wt"]);
-    }
-
-    #[test]
-    fn render_hook_reports_the_argument_it_could_not_render() {
-        let hook = vec!["git".to_string(), "{{ nope }}".to_string()];
-        let err = render_hook(&hook, &ctx(), &novars()).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("{{ nope }}"),
-            "the error names the offending argument: {err:#}"
-        );
-    }
-
-    #[test]
-    fn hook_label_keeps_a_short_command_whole() {
-        let argv = vec!["bun".to_string(), "install".to_string()];
-        assert_eq!(hook_label(&argv), "Hook: bun install");
-    }
-
-    #[test]
-    fn hook_label_elides_a_long_command() {
-        let argv = vec!["bash".to_string(), "-c".to_string(), "x".repeat(200)];
-        let label = hook_label(&argv);
-        assert!(label.starts_with("Hook: bash -c "), "label was {label}");
-        assert!(label.ends_with('…'), "label was {label}");
-        assert_eq!(
-            label.chars().count(),
-            "Hook: ".chars().count() + HOOK_LABEL_MAX
-        );
-    }
-
-    #[test]
-    fn hook_label_collapses_embedded_newlines() {
-        let argv = vec![
-            "bash".to_string(),
-            "-c".to_string(),
-            "echo one\necho two".to_string(),
-        ];
-        let label = hook_label(&argv);
-        assert!(!label.contains('\n'), "label was {label:?}");
-        assert_eq!(label, "Hook: bash -c echo one\necho two".replace('\n', " "));
-    }
-
-    #[test]
-    fn hook_renders_args_and_runs_in_the_worktree() {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks = vec![vec![
-            "git".to_string(),
-            "init".to_string(),
-            "{{ slug }}-wt".to_string(),
-        ]];
-        run_after_worktree_create(dir.path(), &hooks, &ctx(), &novars(), &Steps::persistent());
-        assert!(dir.path().join("fix-wt").exists());
-    }
-
-    #[test]
-    fn failing_hook_does_not_stop_the_next_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks = vec![
-            vec!["devkit-no-such-program-xyz".to_string()],
-            vec!["git".to_string(), "init".to_string(), "after".to_string()],
-        ];
-        run_after_worktree_create(dir.path(), &hooks, &ctx(), &novars(), &Steps::persistent());
-        assert!(dir.path().join("after").exists());
-    }
-
-    #[test]
-    fn unrenderable_hook_does_not_stop_the_next_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks = vec![
-            vec![
-                "git".to_string(),
-                "init".to_string(),
-                "{{ nope }}".to_string(),
-            ],
-            vec!["git".to_string(), "init".to_string(), "after".to_string()],
-        ];
-        run_after_worktree_create(dir.path(), &hooks, &ctx(), &novars(), &Steps::persistent());
-        assert!(dir.path().join("after").exists());
-    }
-
-    #[test]
-    fn every_hook_consumes_a_step_even_when_it_cannot_render() {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks = vec![
-            vec![
-                "git".to_string(),
-                "init".to_string(),
-                "{{ nope }}".to_string(),
-            ],
-            vec!["git".to_string(), "init".to_string(), "after".to_string()],
-        ];
-        let steps = Steps::persistent_with_total(hooks.len());
-        run_after_worktree_create(dir.path(), &hooks, &ctx(), &novars(), &steps);
-        assert_eq!(
-            steps.started(),
-            2,
-            "an unrenderable hook must still consume its step"
-        );
-        assert!(dir.path().join("after").exists(), "the next hook still ran");
     }
 
     /// The backfill is a step of the run like any other, so a caller's `[i/N]`

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 mod checkout;
 mod dashboard;
 mod end;
+mod hooks;
 mod info;
 mod info_cache;
 mod preserve;
