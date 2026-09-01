@@ -505,11 +505,22 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
                 let ctx = end_context(&removed, &prefix, &wt_root, Some(root));
                 crate::issue::hooks::run_all(root, "after_end", after_end, &ctx, &vars, &steps);
             }
-            // The worktree the command was run from is usually the one just
-            // removed, so there is no directory left to inherit.
-            None => eprintln!(
-                "warning: after_worktree_remove and after_end hooks skipped: the main repository root did not resolve"
-            ),
+            // The worktree each hook describes is already gone, so its own
+            // root is not available; the main repository root is the only
+            // stable directory left to run in.
+            None => {
+                let mut keys: Vec<&str> = Vec::new();
+                if !after_worktree_remove.is_empty() {
+                    keys.push("after_worktree_remove");
+                }
+                if !after_end.is_empty() {
+                    keys.push("after_end");
+                }
+                eprintln!(
+                    "warning: {} hooks skipped: the main repository root did not resolve",
+                    keys.join(" and ")
+                );
+            }
         }
     }
     anyhow::ensure!(
