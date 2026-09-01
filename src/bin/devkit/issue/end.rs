@@ -3,7 +3,6 @@ use devkit_common::progress::Steps;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::issue::triage::render;
 use devkit_issue::status::{IssueWorktree, gather_with, label, reason_not_finished};
@@ -195,6 +194,51 @@ pub struct EndFlags {
     pub no_preserve: bool,
 }
 
+/// The approved worktrees that were actually removed, in approval order. The
+/// removal phase runs in parallel and finishes out of order, so its unordered
+/// result is put back into the order the prompts ran in before any hook or
+/// report reads it.
+fn removed_in_order(
+    approved: &[IssueWorktree],
+    removed: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    approved
+        .iter()
+        .map(|r| r.worktree.clone())
+        .filter(|w| removed.contains(w))
+        .collect()
+}
+
+/// The `after_worktree_remove` render context for each approved worktree,
+/// keyed by its path. Built before the removal phase: `issue`, `slug` and
+/// `apps` come from `.devkit/issue.toml`, which the removal deletes along with
+/// everything else in the worktree.
+fn remove_contexts(
+    approved: &[IssueWorktree],
+    prefix: &str,
+    worktree_root: &Path,
+    primary: Option<&Path>,
+) -> std::collections::HashMap<String, serde_json::Value> {
+    approved
+        .iter()
+        .map(|row| {
+            let wt = Path::new(&row.worktree);
+            let record = devkit_common::record::read(wt);
+            (
+                row.worktree.clone(),
+                crate::issue::preserve::context(
+                    wt,
+                    &row.branch,
+                    record.as_ref(),
+                    prefix,
+                    worktree_root,
+                    primary,
+                ),
+            )
+        })
+        .collect()
+}
+
 pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -> Result<()> {
     let EndFlags {
         yes,
@@ -314,6 +358,17 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
         })
         .unwrap_or_default();
 
+    // Read before the removal phase so a hook can name the issue and slug of a
+    // worktree whose record no longer exists.
+    let empty: &[Vec<String>] = &[];
+    let cfg_hooks = sel.config.as_ref().map(|c| &c.hooks);
+    let after_worktree_remove = cfg_hooks.map_or(empty, |h| h.after_worktree_remove.as_slice());
+    let remove_ctxs = if after_worktree_remove.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        remove_contexts(&approved, &prefix, &wt_root, main.as_deref().map(Path::new))
+    };
+
     let mut blocked: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut files = 0usize;
     // Entry names rather than a count of runs: one entry that archived for
@@ -358,7 +413,8 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
 
     // Phase 3: the removals, in parallel.
     let total = approved.len() - blocked.len();
-    let removed = AtomicUsize::new(0);
+    let removed: Mutex<std::collections::HashSet<String>> =
+        Mutex::new(std::collections::HashSet::new());
     let branch_lock = Mutex::new(());
     std::thread::scope(|s| {
         for row in approved.iter().filter(|r| !blocked.contains(&r.worktree)) {
@@ -371,7 +427,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
                     cleanup(&row.worktree, &row.issue_id, force, branch_lock)
                 }) {
                     Ok(()) => {
-                        removed.fetch_add(1, Ordering::Relaxed);
+                        removed.lock().unwrap().insert(row.worktree.clone());
                     }
                     Err(e) => {
                         let msg = if e.downcast_ref::<Dirty>().is_some() {
@@ -385,11 +441,12 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
             });
         }
     });
+    let removed = removed_in_order(&approved, &removed.into_inner().unwrap());
 
     // Every removal has joined; a single prune reclaims any stale worktree
     // entries without racing a concurrent removal.
-    if let Some(main) = main {
-        let _ = devkit_common::git::Git::at(Path::new(&main))
+    if let Some(main) = &main {
+        let _ = devkit_common::git::Git::at(Path::new(main))
             .args(["worktree", "prune"])
             .output();
     }
@@ -401,7 +458,35 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
             if archived.len() == 1 { "y" } else { "ies" }
         );
     }
-    println!("Removed {} of {}.", removed.load(Ordering::Relaxed), total);
+    println!("Removed {} of {}.", removed.len(), total);
+    // After the summary and after the prune: a hook sees every removal
+    // finished, and its progress step cannot tear the report. A run that
+    // removed nothing changed nothing on disk, so nothing fires.
+    if !removed.is_empty() && !after_worktree_remove.is_empty() {
+        match main.as_deref() {
+            Some(root) => {
+                let root = Path::new(root);
+                for wt in &removed {
+                    let Some(ctx) = remove_ctxs.get(wt) else {
+                        continue;
+                    };
+                    crate::issue::hooks::run_all(
+                        root,
+                        "after_worktree_remove",
+                        after_worktree_remove,
+                        ctx,
+                        &vars,
+                        &steps,
+                    );
+                }
+            }
+            // The worktree the command was run from is usually the one just
+            // removed, so there is no directory left to inherit.
+            None => eprintln!(
+                "warning: after_worktree_remove hooks skipped: the main repository root did not resolve"
+            ),
+        }
+    }
     anyhow::ensure!(
         required_failures == 0,
         "{required_failures} worktree(s) kept: a required preserve entry failed"
@@ -656,5 +741,81 @@ mod tests {
             .output()
             .unwrap();
         assert!(!branches.trim().is_empty(), "branch untouched");
+    }
+
+    fn approved_row(worktree: &str, branch: &str, issue_id: &str) -> IssueWorktree {
+        IssueWorktree {
+            worktree: worktree.into(),
+            branch: branch.into(),
+            issue_id: issue_id.into(),
+            dirty: false,
+            pr: devkit_issue::status::PrStatus::None,
+            state: None,
+            finished: true,
+            reason_not_finished: None,
+        }
+    }
+
+    #[test]
+    fn removed_worktrees_come_back_in_approval_order() {
+        let approved = vec![
+            approved_row("/wt/a", "lev/a", "ENG-1"),
+            approved_row("/wt/b", "lev/b", "ENG-2"),
+            approved_row("/wt/c", "lev/c", "ENG-3"),
+        ];
+        // The parallel removal phase finishes in whatever order it finishes.
+        let done: std::collections::HashSet<String> = ["/wt/c".to_string(), "/wt/a".to_string()]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            removed_in_order(&approved, &done),
+            vec!["/wt/a".to_string(), "/wt/c".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_worktree_that_was_not_removed_is_left_out() {
+        let approved = vec![approved_row("/wt/a", "lev/a", "ENG-1")];
+        let done = std::collections::HashSet::new();
+        assert!(removed_in_order(&approved, &done).is_empty());
+    }
+
+    #[test]
+    fn the_remove_context_reads_the_record_before_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("eng-9-fix");
+        std::fs::create_dir_all(&wt).unwrap();
+        devkit_common::record::write(
+            &wt,
+            &devkit_common::record::IssueRecord {
+                issue: "ENG-9".into(),
+                slug: "fix".into(),
+                apps: vec!["web".into()],
+                summary: None,
+                pr: None,
+            },
+        )
+        .unwrap();
+        let approved = vec![approved_row(wt.to_str().unwrap(), "lev/eng-9-fix", "ENG-9")];
+
+        let ctxs = remove_contexts(&approved, "lev/", dir.path(), None);
+
+        let ctx = &ctxs[wt.to_str().unwrap()];
+        assert_eq!(ctx["issue"], "ENG-9");
+        assert_eq!(ctx["slug"], "fix");
+        assert_eq!(ctx["branch"], "lev/eng-9-fix");
+        assert_eq!(ctx["worktree"], wt.display().to_string());
+    }
+
+    #[test]
+    fn a_worktree_with_no_record_still_gets_a_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("no-record");
+        std::fs::create_dir_all(&wt).unwrap();
+        let approved = vec![approved_row(wt.to_str().unwrap(), "lev/x", "ENG-0")];
+
+        let ctxs = remove_contexts(&approved, "lev/", dir.path(), None);
+
+        assert_eq!(ctxs[wt.to_str().unwrap()]["issue"], "");
     }
 }
