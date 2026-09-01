@@ -72,9 +72,9 @@ The create hook runs in the worktree it just made. That path no longer exists
 here, so both new hooks run in the main repo root, which `end.rs` already
 resolves as `main_repo(start)` for the post-join prune.
 
-Inheriting the caller's cwd is not an option. `issue end` is usually run from
-inside the worktree being removed, so the process cwd is a deleted directory by
-the time a hook would spawn.
+Inheriting the caller's cwd is not an option: the worktree each hook describes
+is already gone, so its own root is not available, and the main repository
+root is the only stable directory left.
 
 When `main_repo` does not resolve, both hook sets are skipped with one
 `warning:` line naming what was skipped. The command still succeeds: a resolution
