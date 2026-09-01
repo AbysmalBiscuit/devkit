@@ -239,6 +239,28 @@ fn remove_contexts(
         .collect()
 }
 
+/// The `after_end` render context. A run may have removed several worktrees,
+/// so it carries the list rather than any one worktree's identity, and omits
+/// `worktree`, `branch`, `issue` and `slug` entirely: there is no honest single
+/// value for them.
+fn end_context(
+    removed: &[String],
+    prefix: &str,
+    worktree_root: &Path,
+    primary: Option<&Path>,
+) -> serde_json::Value {
+    let mut ctx = serde_json::json!({
+        "removed": removed,
+        "count": removed.len(),
+        "prefix": prefix,
+        "worktree_root": worktree_root.display().to_string(),
+    });
+    if let Some(primary) = primary {
+        ctx["primary"] = serde_json::Value::String(primary.display().to_string());
+    }
+    ctx
+}
+
 pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -> Result<()> {
     let EndFlags {
         yes,
@@ -363,6 +385,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
     let empty: &[Vec<String>] = &[];
     let cfg_hooks = sel.config.as_ref().map(|c| &c.hooks);
     let after_worktree_remove = cfg_hooks.map_or(empty, |h| h.after_worktree_remove.as_slice());
+    let after_end = cfg_hooks.map_or(empty, |h| h.after_end.as_slice());
     let remove_ctxs = if after_worktree_remove.is_empty() {
         std::collections::HashMap::new()
     } else {
@@ -462,7 +485,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
     // After the summary and after the prune: a hook sees every removal
     // finished, and its progress step cannot tear the report. A run that
     // removed nothing changed nothing on disk, so nothing fires.
-    if !removed.is_empty() && !after_worktree_remove.is_empty() {
+    if !removed.is_empty() && !(after_worktree_remove.is_empty() && after_end.is_empty()) {
         match main.as_deref() {
             Some(root) => {
                 let root = Path::new(root);
@@ -479,11 +502,13 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
                         &steps,
                     );
                 }
+                let ctx = end_context(&removed, &prefix, &wt_root, Some(root));
+                crate::issue::hooks::run_all(root, "after_end", after_end, &ctx, &vars, &steps);
             }
             // The worktree the command was run from is usually the one just
             // removed, so there is no directory left to inherit.
             None => eprintln!(
-                "warning: after_worktree_remove hooks skipped: the main repository root did not resolve"
+                "warning: after_worktree_remove and after_end hooks skipped: the main repository root did not resolve"
             ),
         }
     }
@@ -817,5 +842,34 @@ mod tests {
         let ctxs = remove_contexts(&approved, "lev/", dir.path(), None);
 
         assert_eq!(ctxs[wt.to_str().unwrap()]["issue"], "");
+    }
+
+    #[test]
+    fn the_end_context_carries_every_removed_worktree() {
+        let removed = vec!["/wt/a".to_string(), "/wt/b".to_string()];
+        let ctx = end_context(&removed, "lev/", Path::new("/wt"), Some(Path::new("/repo")));
+        assert_eq!(ctx["removed"][0], "/wt/a");
+        assert_eq!(ctx["removed"][1], "/wt/b");
+        assert_eq!(ctx["count"], 2);
+        assert_eq!(ctx["prefix"], "lev/");
+        assert_eq!(ctx["worktree_root"], "/wt");
+        assert_eq!(ctx["primary"], "/repo");
+    }
+
+    #[test]
+    fn the_end_context_omits_a_primary_that_did_not_resolve() {
+        let ctx = end_context(&["/wt/a".to_string()], "lev/", Path::new("/wt"), None);
+        assert!(ctx.get("primary").is_none());
+    }
+
+    #[test]
+    fn the_end_context_names_no_single_worktree() {
+        let ctx = end_context(&["/wt/a".to_string()], "lev/", Path::new("/wt"), None);
+        for key in ["worktree", "branch", "issue", "slug", "apps"] {
+            assert!(
+                ctx.get(key).is_none(),
+                "a run-level context must not carry `{key}`"
+            );
+        }
     }
 }
