@@ -243,7 +243,7 @@ fn collect(cmd: &clap::Command, path: String, rows: &mut Vec<(String, String)>) 
 ///
 /// ASCII on purpose: help text reaches the generated PowerShell completion
 /// scripts verbatim, and Windows PowerShell 5.1 reads a BOM-less UTF-8 `.ps1`
-/// as cp1252, where the trailing byte of `…` becomes a quote character that
+/// as cp1252, where the trailing byte of `...` becomes a quote character that
 /// closes a string early.
 fn truncate(s: &str) -> String {
     if s.chars().count() <= WIDTH {
