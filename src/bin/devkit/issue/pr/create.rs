@@ -362,6 +362,7 @@ mod tests {
             apps: Vec::new(),
             summary: None,
             pr: None,
+            baseline: None,
         };
         let ctx = base_ctx(Some(&record), "lev/eng-1-fix");
         let out = render_review("Closes {{ issue }}", "pr_body", &ctx, &vars, None).unwrap();

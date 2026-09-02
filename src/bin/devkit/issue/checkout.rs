@@ -465,6 +465,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
                     repo: Some(pr_repo.slug.clone()),
                     number: meta.number,
                 }),
+                baseline: None,
             },
         )?;
         Ok(issue)

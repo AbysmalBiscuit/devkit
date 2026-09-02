@@ -254,6 +254,7 @@ mod tests {
             apps: vec!["web".into()],
             summary: None,
             pr: None,
+            baseline: None,
         };
         let loc = github::PrLocator {
             repo: Some("o/r".into()),

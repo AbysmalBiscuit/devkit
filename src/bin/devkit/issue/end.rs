@@ -569,6 +569,7 @@ mod tests {
                 apps: vec![],
                 summary: Some(summary.display().to_string()),
                 pr: None,
+                baseline: None,
             },
         )
         .unwrap();
@@ -589,6 +590,7 @@ mod tests {
                 apps: vec![],
                 summary: None,
                 pr: None,
+                baseline: None,
             },
         )
         .unwrap();
@@ -628,6 +630,7 @@ mod tests {
                 apps: vec![],
                 summary: Some(summary.display().to_string()),
                 pr: None,
+                baseline: None,
             },
         )
         .unwrap();
@@ -710,6 +713,7 @@ mod tests {
                 apps: vec![],
                 summary: Some(recorded.display().to_string()),
                 pr: None,
+                baseline: None,
             },
         )
         .unwrap();
@@ -829,6 +833,7 @@ mod tests {
                 apps: vec!["web".into()],
                 summary: None,
                 pr: None,
+                baseline: None,
             },
         )
         .unwrap();
