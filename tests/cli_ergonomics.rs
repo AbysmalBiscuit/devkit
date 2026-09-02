@@ -253,3 +253,164 @@ fn devkit_help_names_every_shim() {
         );
     }
 }
+
+/// Run the built `devkit` with `DEVKIT_HELP` pinned, since `cargo nextest`
+/// cannot hand a test a terminal and the piped stdout would otherwise decide
+/// the view for us.
+fn help_run(view: &str, args: &[&str]) -> (String, bool) {
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .args(args)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env("DEVKIT_HELP", view)
+        .output()
+        .expect("spawn devkit");
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (text, out.status.success())
+}
+
+#[test]
+fn the_full_view_descends_into_every_group() {
+    let (text, ok) = help_run("full", &["--help"]);
+    assert!(ok, "devkit --help failed: {text}");
+    assert!(text.contains("devkit docs prune"), "{text}");
+    assert!(text.contains("devkit issue review request"), "{text}");
+}
+
+#[test]
+fn the_terse_view_lists_only_the_top_level() {
+    let (text, _) = help_run("terse", &["--help"]);
+    assert!(!text.contains("docs prune"), "{text}");
+    assert!(!text.contains("issue review request"), "{text}");
+}
+
+#[test]
+fn short_help_stays_terse_under_a_full_environment() {
+    let (text, _) = help_run("full", &["-h"]);
+    assert!(!text.contains("docs prune"), "-h is unconditional: {text}");
+    assert!(text.contains("issue       = devkit issue"), "{text}");
+}
+
+#[test]
+fn the_full_view_keeps_the_shim_footer() {
+    let (text, _) = help_run("full", &["--help"]);
+    assert!(text.contains("issue       = devkit issue"), "{text}");
+}
+
+#[test]
+fn help_matches_the_long_flag() {
+    assert_eq!(
+        help_run("full", &["help"]).0,
+        help_run("full", &["--help"]).0
+    );
+    assert_eq!(
+        help_run("terse", &["help"]).0,
+        help_run("terse", &["--help"]).0
+    );
+}
+
+#[test]
+fn full_outranks_a_terse_environment() {
+    let (text, ok) = help_run("terse", &["help", "--full"]);
+    assert!(ok, "help --full failed: {text}");
+    assert!(text.contains("devkit docs prune"), "{text}");
+}
+
+#[test]
+fn a_group_renders_only_its_own_subtree() {
+    let (text, _) = help_run("full", &["issue", "--help"]);
+    assert!(text.contains("devkit issue setup"), "{text}");
+    assert!(!text.contains("docs prune"), "no sibling groups: {text}");
+}
+
+/// A help flag claims the node it appears under, so a later token that also
+/// names a real subcommand does not move the target deeper. `issue setup`
+/// appears in a tree rooted at `issue` and could not appear in one rooted at
+/// `issue review`, which is what separates the two outcomes.
+#[test]
+fn the_first_help_wins() {
+    let (text, _) = help_run("full", &["issue", "--help", "review"]);
+    assert!(
+        text.contains("devkit issue setup"),
+        "rooted at issue, not at the trailing token: {text}"
+    );
+    assert!(!text.contains("docs prune"), "not the whole tree: {text}");
+}
+
+#[test]
+fn an_alias_resolves_to_its_canonical_node() {
+    let (text, ok) = help_run("full", &["docs", "remove", "--help"]);
+    assert!(ok, "docs remove --help failed: {text}");
+    assert!(text.contains("Usage: devkit docs rm"), "{text}");
+}
+
+#[test]
+fn a_valued_global_flag_does_not_swallow_the_subcommand() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().to_string_lossy().to_string();
+    let (text, _) = help_run("full", &["issue", "-C", &path, "status", "--help"]);
+    assert!(
+        text.contains("Usage: devkit issue status"),
+        "resolved to issue status, not the issue root: {text}"
+    );
+    assert!(
+        !text.contains("devkit issue setup"),
+        "not the issue tree: {text}"
+    );
+}
+
+#[test]
+fn an_unknown_subcommand_is_still_an_error() {
+    let (text, ok) = help_run("full", &["issue", "typo", "--help"]);
+    assert!(!ok, "an unrecognized subcommand must fail: {text}");
+    assert!(text.contains("typo"), "{text}");
+}
+
+#[test]
+fn a_required_option_does_not_block_a_help_request() {
+    let (text, ok) = help_run("full", &["issue", "setup", "--help"]);
+    assert!(ok, "issue setup --help failed: {text}");
+    assert!(text.contains("--slug"), "{text}");
+}
+
+#[test]
+fn a_separator_hides_a_later_help() {
+    let (text, ok) = help_run("full", &["docs", "path", "--", "--help"]);
+    assert!(
+        !ok || !text.contains("devkit docs prune"),
+        "no tree after --: {text}"
+    );
+}
+
+#[test]
+fn full_help_for_a_leaf_prints_its_long_help() {
+    let (text, ok) = help_run("full", &["help", "docs", "add", "--full"]);
+    assert!(ok, "help docs add --full failed: {text}");
+    assert!(text.contains("--eco"), "leaf argument help: {text}");
+    assert!(!text.contains("devkit docs prune"), "not a tree: {text}");
+}
+
+#[test]
+fn short_help_outranks_a_long_help_in_the_same_argv() {
+    let (text, _) = help_run("full", &["--help", "-h"]);
+    assert!(!text.contains("docs prune"), "-h wins: {text}");
+}
+
+#[test]
+fn the_three_help_spellings_agree() {
+    let a = help_run("full", &["issue", "help", "status"]).0;
+    let b = help_run("full", &["help", "issue", "status"]).0;
+    let c = help_run("full", &["issue", "status", "--help"]).0;
+    assert_eq!(a, b);
+    assert_eq!(b, c);
+}
+
+#[test]
+fn the_full_view_stays_inside_the_line_cap_and_ascii() {
+    let (text, _) = help_run("full", &["--help"]);
+    for line in text.lines() {
+        assert!(line.chars().count() <= 100, "line over cap: {line}");
+        assert!(line.is_ascii(), "line is not ascii: {line}");
+    }
+    assert!(!text.contains("devkit help "), "no help nodes: {text}");
+}

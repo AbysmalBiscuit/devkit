@@ -1088,3 +1088,28 @@ fn doctor_reports_a_foreign_shim_name() {
         "an unclaimed shim is a warning, not a doctor failure: {text}"
     );
 }
+
+/// `docs/install.md` promises that running devkit at all links the old names
+/// beside the executable, and names `devkit --help` as one such invocation.
+/// The help intercept sits a few lines below `links::ensure_current`, so
+/// moving it above would silently break exactly the command the docs cite.
+#[test]
+fn full_help_still_links_the_old_names() {
+    let (dir, exe) = staged();
+    let state = tempfile::tempdir().expect("state dir");
+    let out = retry_on_busy(|| {
+        Command::new(&exe)
+            .arg("--help")
+            .env("HOME", state.path())
+            .env("XDG_STATE_HOME", state.path())
+            .env("DEVKIT_HELP", "full")
+            .output()
+    });
+    assert!(
+        out.status.success(),
+        "devkit --help failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let docm = shim_path(dir.path(), "docm");
+    assert!(docm.exists(), "devkit --help never linked docm");
+}

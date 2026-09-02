@@ -324,3 +324,25 @@ fn devkit_mcp_shim_serves_a_request() {
         "shim should answer the request: {text}"
     );
 }
+
+/// Under a shim name the tree roots every path at the name the caller typed,
+/// so a line can be copied and run as-is. The scope test is the other half:
+/// `docm` shows the docs subtree and nothing else in the CLI.
+#[test]
+fn the_shim_tree_is_rooted_at_the_shim_name() {
+    let (_dir, link) = shimtest::linked("docm");
+    let out = Command::new(&link)
+        .arg("--help")
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env("DEVKIT_HELP", "full")
+        .output()
+        .expect("spawn docm --help");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "docm --help exited non-zero: {text}");
+    assert!(text.contains("docm add"), "rooted at the shim name: {text}");
+    assert!(
+        !text.contains("devkit docs add"),
+        "not the canonical path: {text}"
+    );
+    assert!(!text.contains("issue setup"), "docs subtree only: {text}");
+}

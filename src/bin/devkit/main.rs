@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use devkit::completions::{self, Shell};
 use std::ffi::OsString;
@@ -211,6 +211,65 @@ fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
     }
 }
 
+/// Answer a help request that the full view owns. Returns `true` when it
+/// printed, meaning `main` is done; `false` hands the arguments back to clap
+/// untouched, which is what keeps the terse view clap's own rendering.
+fn intercept_help(root: &clap::Command, args: &[OsString]) -> Result<bool> {
+    let Some(req) = devkit::help::resolve(root, args) else {
+        return Ok(false);
+    };
+    if req.short_help {
+        return Ok(false);
+    }
+    let decision = devkit::help::decide(
+        req.full_flag,
+        std::env::var(devkit::help::ENV).ok().as_deref(),
+        devkit_common::ui::stdout_is_tty(),
+    );
+    if let Some(warning) = &decision.warning {
+        eprintln!("warning: {warning}");
+    }
+    if decision.verbosity == devkit::help::Verbosity::Terse {
+        return Ok(false);
+    }
+
+    // Build before walking. `build()` is what assigns each subcommand its
+    // `devkit issue status` usage name and copies the parent's `global(true)`
+    // arguments down; a subcommand cloned out of an unbuilt tree prints
+    // `Usage: status [IDS]...` with no `-C`, `--config` or `--timing`.
+    let mut built = root.clone();
+    built.build();
+    let mut node = built;
+    for name in &req.path {
+        node = node
+            .find_subcommand(name)
+            .cloned()
+            .with_context(|| format!("no `{name}` subcommand"))?;
+    }
+    let path = std::iter::once(root.get_name().to_string())
+        .chain(req.path.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut out = std::io::stdout().lock();
+    let printed = if node.get_subcommands().next().is_some() {
+        // `build()` added a `help` subcommand at every level; the renderer
+        // skips them, so building first costs the tree nothing.
+        devkit::help::tree(&node, &path, &mut out)
+    } else {
+        // A leaf has no tree. Printing its long help directly is also what
+        // keeps `--full` away from the real parse, which would reject it.
+        node.print_long_help()
+    };
+    match printed {
+        // `devkit --help | head` closes the pipe on us. The reader is done,
+        // which is not this command failing; `completions::emit` treats a
+        // broken pipe the same way.
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(true),
+        other => other.map(|()| true).map_err(Into::into),
+    }
+}
+
 fn main() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().collect();
     // The marker probe `links::answers_probe_marker` uses: answered before
@@ -246,6 +305,16 @@ fn main() -> Result<()> {
         .any(|a| a.as_os_str() == std::ffi::OsStr::new("install-links"));
     if !is_install_links && let Ok(exe) = std::env::current_exe() {
         links::ensure_current(&exe);
+    }
+    // After the automatic linking pass on purpose: `docs/install.md` promises
+    // that running devkit at all creates the shim hardlinks, and names
+    // `devkit --help` as an invocation that does it.
+    let root = match shim {
+        Some(s) => shim_command(s.sub.name(), s.name),
+        None => Cli::command(),
+    };
+    if intercept_help(&root, &args)? {
+        return Ok(());
     }
     match shim {
         Some(s) => dispatch_shim(s, args),
