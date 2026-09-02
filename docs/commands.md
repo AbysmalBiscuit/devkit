@@ -210,7 +210,7 @@ issue review request --no-notify                              # push, add review
 
 The `pr_title` the Slack template renders is the PR's own title, read from GitHub, not a locally rendered one — the command is not creating the PR and has no title of its own to offer.
 
-Everything that can refuse the run happens before anything changes the PR: the recipients are resolved, and the reviewer gate judged, while the PR is still whatever it was. A run that ends up with nobody to notify leaves a draft a draft.
+Everything that can refuse the run happens before the draft flip: the recipients are resolved, and the reviewer gate judged, before a draft is ever marked ready for review. A run that ends up with nobody to notify leaves a draft a draft.
 
 Whichever way the PR is resolved, its head commit must be this worktree's `HEAD` or the command refuses it: a branch name is shared across forks and does not prove the PR carries this work, and a wrongly bound PR that later merges would let `issue end` delete a branch whose commits never landed. A squash- or rebase-merged PR still matches, since the comparison is against the branch head the PR carries rather than the commit that landed on the base.
 
