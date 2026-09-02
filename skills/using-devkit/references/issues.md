@@ -6,12 +6,14 @@
 issue setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary|--no-summary] [--dry-run] [--no-gitignore]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue pr [status] [selector] [--json] [--cache-only]  # also the bare `issue pr`
+issue pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--pr <URL|number>] [--arg k=v]
+issue pr ready [--to <alias>] [--no-push] [--pr <URL|number>]
 issue pr checkout <target> [<worktree-path>] [--setup] [--apps a,b]
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree] [--no-preserve]
 issue sync-includes [selectors…] [--overwrite [--all]] [-y] [--dry-run]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size N] [--retries N]
 issue dashboard [--chart bar|line] [--bucket B] [--mode M] [--all-roles] [--author gh] [--no-plots] [--no-cache]
-issue review request ["<message>"] [--to <alias|#channel>] [--pr <URL|number>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--no-notify] [--arg k=v]
+issue review request ["<message>"] [--to <alias|#channel>] [--pr <URL|number>] [--no-push] [--no-notify] [--arg k=v]
 issue review finish ["<message>"] [--to <alias|#channel>] [--pr <n>] [--arg k=v]
 ```
 
@@ -43,23 +45,34 @@ A bare `3340` is probed against both the PRs and the tracker's issues, so on a G
 
 The optional second positional overrides the worktree path (default: the config-resolved placement). `--setup` also runs the per-app setup commands; `--apps a,b` narrows which apps that covers. Prints `pr`, `worktree`, and `branch` — JSON to a pipe, a table to a terminal.
 
+## `pr create` and `pr ready` — open the PR
+
+`pr create` pushes the branch (**never force-pushes**) and opens its PR, printing the URL; a branch that already has one reuses it and keeps its draft state. `--draft`/`--ready` decide the state for the run, `defaults.pr_create_state` when neither is passed. `pr ready` flips a draft to ready and is a no-op on a PR that is already ready. Both take `--to <alias>` to add GitHub reviewers, and neither posts to Slack.
+
+`defaults.require_pr_reviewer` refuses any run that would leave a PR ready with no human reviewer: `pr create --ready`, `pr ready`, and `review request`'s draft flip. A draft is never gated.
+
 ## `review request` — ship for review
 
-Pushes the branch (**never force-pushes**), opens or reuses its PR, requests the reviewers, and Slack-messages them the PR link plus your body. With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON object for an agent to forward.
+Pushes the branch, requests the reviewers on the PR, and Slack-messages them the PR link plus your body. With `$SLACK_TOKEN` set it posts directly; otherwise it emits a `SlackIntent` JSON object for an agent to forward.
+
+It opens no PR: a branch with none is an error naming `issue pr create`. Ship with the two commands in order.
 
 ```sh
+issue pr create
 issue review request "Auth fix ready, please review session handling." --to bob
 ```
+
+A run that notifies marks a draft ready for review first; `--no-notify` leaves draft state alone.
 
 | Arg / flag | Meaning |
 |---|---|
 | `[BODY]` | Positional Slack body; fills the `review_request` template's `{{ input }}`. |
 | `--to <alias\|#channel>` | **Repeatable.** A `[people]` alias — which carries both `slack` and an optional `github`, so one flag sets reviewer *and* recipient — or a literal `#channel`. |
 | `--pr <URL\|number>` | Act on this PR for this run. A pasted GitHub PR URL keeps its own repository; a bare number means `pr_repo`. The command records whichever PR it acted on, so this is how a worktree bound to the wrong PR is rebound, including the superseded case where the old and new PRs share a head branch and the branch lookup is ambiguous. Without it the PR comes from the worktree's record, and failing that from its branch. |
-| `--no-notify` | Pin targets to what `--to` resolved to, possibly none, instead of falling back to the PR's current reviewers. |
+| `--no-notify` | Send no Slack and leave draft state alone. Pins targets to what `--to` resolved to, possibly none, instead of falling back to the PR's current reviewers. |
 | `--arg k=v` | **Repeatable.** Override a declared template variable. |
 
-On an existing PR with no `--to`, it resolves the PR's current human reviewers and notifies them; `--no-notify` suppresses that.
+With no `--to`, it resolves the PR's current human reviewers and notifies them; `--no-notify` suppresses that.
 
 However the PR was resolved, its head commit must equal this worktree's `HEAD` or the command refuses. A branch name is shared across forks and does not prove the PR carries this work. A squash- or rebase-merged PR still matches, since the comparison is against the branch head the PR carries. Under `--no-push`, a branch ahead of its remote fails this check.
 

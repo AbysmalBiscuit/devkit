@@ -162,17 +162,11 @@ fn fetch_context(number: u64, from_record: bool) -> String {
 /// A PR that was just created must carry this worktree's commits, which can
 /// only be checked once it exists — so this runs after the call rather than
 /// before it. A failure here leaves the PR open on GitHub, which is why the
-/// caller says so in the error. The fetched PR is handed back so the caller
-/// does not ask GitHub for it twice.
-pub(crate) fn verify_created(
-    repo: &github::Repo,
-    number: u64,
-    head: &str,
-) -> Result<github::PrBrief> {
+/// caller says so in the error.
+pub(crate) fn verify_created(repo: &github::Repo, number: u64, head: &str) -> Result<()> {
     let created = github::pr_meta_full(repo, number).context("fetching the PR just created")?;
     finish::assert_belongs(&created, head)
-        .context("the PR just created does not carry this worktree's commits")?;
-    Ok(created)
+        .context("the PR just created does not carry this worktree's commits")
 }
 
 /// The record to write once a PR is resolved: the existing record with its
@@ -257,8 +251,6 @@ pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found> {
 pub(crate) struct Resolved {
     pub url: String,
     pub locator: github::PrLocator,
-    pub pr: github::PrBrief,
-    pub created: bool,
 }
 
 /// Renders the PR body on demand.
@@ -337,10 +329,8 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
                 eprintln!("{note}");
             }
             Resolved {
-                url: pr.url.clone(),
+                url: pr.url,
                 locator,
-                pr,
-                created: false,
             }
         }
         PrAction::Create => {
@@ -384,14 +374,9 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             let created_repo = locator.resolve(args.existing.repos)?;
             // The gate runs before the record is written and before any
             // notification goes out.
-            let pr = verify_created(&created_repo, locator.number, args.head)
+            verify_created(&created_repo, locator.number, args.head)
                 .with_context(|| format!("{url} is open with nothing recorded"))?;
-            Resolved {
-                url,
-                locator,
-                pr,
-                created: true,
-            }
+            Resolved { url, locator }
         }
     };
 

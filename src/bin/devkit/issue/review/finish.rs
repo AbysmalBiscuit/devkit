@@ -26,9 +26,9 @@ struct PrLite {
 }
 
 #[derive(Deserialize)]
-struct PrFull {
+pub(crate) struct PrFull {
     url: String,
-    title: String,
+    pub(crate) title: String,
     author: Author,
 }
 
@@ -107,7 +107,7 @@ fn branch_pr_number(b: &str, cwd: &str, repo: &github::Repo) -> Result<Option<u6
 }
 
 /// URL/title/author for PR `n`, over direct HTTP when possible else `gh pr view`.
-fn fetch_pr_full(n: u64, cwd: &str, repo: &github::Repo) -> Result<PrFull> {
+pub(crate) fn fetch_pr_full(n: u64, cwd: &str, repo: &github::Repo) -> Result<PrFull> {
     if github::token().is_some()
         && let Ok(f) = github::pr_full(&repo.slug, n)
     {

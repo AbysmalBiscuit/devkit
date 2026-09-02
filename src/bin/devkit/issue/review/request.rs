@@ -1,9 +1,9 @@
-use anyhow::{Result, bail};
-use devkit_common::cmd::gh_json_in;
+use anyhow::{Context, Result, bail};
+use devkit_common::cmd::{gh_capture, gh_json_in};
 use devkit_common::git::Git;
 use devkit_common::github;
 use devkit_common::progress::Steps;
-use devkit_config::{Person, PrCreateState};
+use devkit_config::Person;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -11,15 +11,12 @@ use crate::issue::pr::create;
 
 use super::{
     Target, base_ctx, deliver, guard_branch, is_human_login, parse_args, person_by_login,
-    render_review, resolve_target, target_from_person, with_fields,
+    resolve_target, target_from_person, with_fields,
 };
 
 pub struct Args {
     pub body: Option<String>,
     pub to: Vec<String>,
-    pub base: Option<String>,
-    pub pr_title: Option<String>,
-    pub pr_body: Option<String>,
     pub no_push: bool,
     pub no_notify: bool,
     /// Use this PR for this run: a GitHub PR URL keeps its own repository, a
@@ -140,6 +137,12 @@ fn resolve_request_targets(
     Ok(targets)
 }
 
+/// Asking a human to look at a draft is incoherent, so a notifying run promotes
+/// it. `--no-notify` tells nobody, and promoting a PR to ready tells everybody.
+fn should_flip(is_draft: bool, no_notify: bool) -> bool {
+    is_draft && !no_notify
+}
+
 pub fn run(args: Args) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = devkit_ports::load::load(
@@ -177,29 +180,6 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     let base = base_ctx(record.as_ref(), &branch);
-    let pr_title = render_review(
-        tmpls.pr_title(),
-        "pr_title",
-        &with_fields(
-            &base,
-            &[(
-                "input",
-                serde_json::json!(args.pr_title.clone().unwrap_or_default()),
-            )],
-        ),
-        &vars,
-        missing_at,
-    )?;
-    let body_ctx = with_fields(
-        &base,
-        &[
-            (
-                "input",
-                serde_json::json!(args.pr_body.clone().unwrap_or_default()),
-            ),
-            ("pr_title", serde_json::json!(pr_title)),
-        ],
-    );
 
     let head = Git::at(std::path::Path::new(&start))
         .args(["rev-parse", "HEAD"])
@@ -208,58 +188,82 @@ pub fn run(args: Args) -> Result<()> {
         .to_string();
 
     let steps = Steps::persistent();
-    let resolved = create::ensure(create::Ensure {
-        existing: create::Existing {
-            start: &start,
-            branch: &branch,
-            repos: &repos,
-            record: record.as_ref(),
-            explicit_pr: args.pr.as_deref().map(create::parse_pr_flag).transpose()?,
-            no_push: args.no_push,
-            steps: &steps,
-        },
-        head: &head,
-        // Asking for a review means the PR is ready for one, whatever
-        // `defaults.pr_create_state` says.
-        state: PrCreateState::Ready,
-        asked: None,
-        base: args
-            .base
-            .clone()
-            .unwrap_or_else(|| loaded.config.defaults.pr_base.clone()),
-        pr_title: pr_title.clone(),
-        pr_body: Box::new(|| {
-            render_review(tmpls.pr_body(), "pr_body", &body_ctx, &vars, missing_at)
-        }),
-        reviewers,
-        require_reviewer: loaded.config.defaults.require_pr_reviewer,
+    let found = create::resolve_existing(&create::Existing {
+        start: &start,
+        branch: &branch,
+        repos: &repos,
+        record: record.as_ref(),
+        explicit_pr: args.pr.as_deref().map(create::parse_pr_flag).transpose()?,
+        no_push: args.no_push,
         steps: &steps,
     })?;
+    crate::issue::pr::require_existing_pr(found.pr.as_ref().map(|p| p.state.as_str()))?;
+    let pr = found.pr.expect("require_existing_pr rejects a missing PR");
+    let locator = found.locator.expect("a resolved PR carries a locator");
+    let repo = found.repo;
+    // Every mutation below is gated on the PR carrying this worktree's commits.
+    super::finish::assert_belongs(&pr, &head)?;
 
-    let targets = if resolved.created {
-        explicit
-    } else {
-        match pinned_targets(&explicit, args.no_notify) {
-            Some(t) => t,
-            None => {
-                let repo = resolved.locator.resolve(&repos)?;
-                steps.during_result("Resolving reviewers…", || {
-                    resolve_request_targets(&explicit, resolved.pr.number, &start, &repo, people)
-                })?
-            }
-        }
+    let number = pr.number.to_string();
+    if !reviewers.is_empty() {
+        let joined = reviewers.join(",");
+        steps
+            .during_result("Adding reviewers…", || {
+                gh_capture(
+                    &["pr", "edit", &number, "--add-reviewer", &joined],
+                    &repo,
+                    &start,
+                )
+            })
+            .context("gh pr edit --add-reviewer failed")?;
+    }
+
+    if should_flip(pr.is_draft, args.no_notify) {
+        let required = loaded.config.defaults.require_pr_reviewer;
+        // Two network round trips that decide nothing with the gate off.
+        let already = if required {
+            steps.during_result("Resolving reviewers…", || {
+                crate::issue::pr::reviewer_logins_on(pr.number, &start, &repo)
+            })?
+        } else {
+            Vec::new()
+        };
+        // Refusing before the flip leaves the PR a draft.
+        crate::issue::pr::require_reviewer_for_ready(&already, &reviewers, required)?;
+        steps
+            .during_result("Marking ready for review…", || {
+                gh_capture(&["pr", "ready", &number], &repo, &start)
+            })
+            .context("gh pr ready failed")?;
+    }
+
+    if let Some(rec) = create::record_with_pr(record.as_ref(), locator) {
+        devkit_common::record::write(std::path::Path::new(&toplevel), &rec)?;
+    }
+
+    let targets = match pinned_targets(&explicit, args.no_notify) {
+        Some(t) => t,
+        None => steps.during_result("Resolving reviewers…", || {
+            resolve_request_targets(&explicit, pr.number, &start, &repo, people)
+        })?,
     };
 
     if args.no_notify {
-        println!("{}", resolved.url);
+        println!("{}", pr.url);
         return Ok(());
     }
+
+    let full = steps
+        .during_result("Fetching PR title…", || {
+            super::finish::fetch_pr_full(pr.number, &start, &repo)
+        })
+        .context("fetching the PR's title")?;
 
     let notify_ctx = with_fields(
         &base,
         &[
-            ("pr_url", serde_json::json!(resolved.url)),
-            ("pr_title", serde_json::json!(pr_title)),
+            ("pr_url", serde_json::json!(pr.url)),
+            ("pr_title", serde_json::json!(full.title)),
             (
                 "input",
                 serde_json::json!(args.body.clone().unwrap_or_default()),
@@ -336,6 +340,16 @@ mod tests {
 
         let (logins, _) = reviewer_logins(&[chan("#eng"), person("lev", Some("LevValle"))]);
         assert!(crate::issue::pr::require_reviewer_for_ready(&[], &logins, true).is_ok());
+    }
+
+    #[test]
+    fn notifying_flips_a_draft_but_no_notify_does_not() {
+        assert!(should_flip(
+            /* is_draft */ true, /* no_notify */ false
+        ));
+        assert!(!should_flip(true, true));
+        assert!(!should_flip(false, false));
+        assert!(!should_flip(false, true));
     }
 
     #[test]

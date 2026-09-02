@@ -330,27 +330,18 @@ pub(crate) enum PrCmd {
 
 #[derive(Subcommand)]
 pub(crate) enum ReviewCmd {
-    /// Push, open/reuse the PR, request review, and Slack the reviewers.
+    /// Request review on this branch's PR and Slack the reviewers.
     Request {
         /// Slack body; fills the `review_request` template's `{{ input }}`.
         body: Option<String>,
         /// Recipient: a `[people]` alias or `#channel`. Repeatable.
         #[arg(long = "to")]
         to: Vec<String>,
-        /// PR base branch, instead of the configured baseline ref.
-        #[arg(long)]
-        base: Option<String>,
-        /// PR title, instead of the one the template renders.
-        #[arg(long = "pr-title")]
-        pr_title: Option<String>,
-        /// PR body, instead of the one the template renders.
-        #[arg(long = "pr-body")]
-        pr_body: Option<String>,
-        /// Open or update the PR without pushing the branch first.
+        /// Update the PR without pushing the branch first.
         #[arg(long = "no-push")]
         no_push: bool,
-        /// Add no reviewer beyond `--to` and send no Slack: never falls back to the
-        /// PR's current reviewers.
+        /// Add no reviewer beyond `--to`, leave draft state alone, and send no
+        /// Slack: never falls back to the PR's current reviewers.
         #[arg(long = "no-notify")]
         no_notify: bool,
         /// Use this PR for this run: a GitHub PR URL or a bare number (meaning
@@ -574,9 +565,6 @@ pub fn run(cli: IssueCli) -> Result<()> {
             ReviewCmd::Request {
                 body,
                 to,
-                base,
-                pr_title,
-                pr_body,
                 no_push,
                 no_notify,
                 pr,
@@ -584,9 +572,6 @@ pub fn run(cli: IssueCli) -> Result<()> {
             } => review::request::run(review::request::Args {
                 body,
                 to,
-                base,
-                pr_title,
-                pr_body,
                 no_push,
                 no_notify,
                 pr,

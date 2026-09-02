@@ -102,12 +102,14 @@ Every subcommand works from the primary checkout, which it resolves through git:
 issue setup <ID|URL> [--slug <slug>] [--apps <a,b>] [--summary|--no-summary] [--no-gitignore] [--dry-run]  # id also accepted as --issue <ID>
 issue status [ids…]                           # read-only triage table (also the bare `issue`)
 issue pr [status] [selector] [--json] [--cache-only] # one worktree's PR number + issue id (defaults to current; also the bare `issue pr`)
+issue pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push] [--pr <URL|number>] [--arg k=v]
+issue pr ready [--to <alias>] [--no-push] [--pr <URL|number>]
 issue pr checkout <PR_ISSUE_URL> [WORKTREE_PATH] [--setup [--apps a,b]]
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
 issue sync-includes [selectors…] [--overwrite [--all]] [-y] [--dry-run] [-v]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size <N>] [--retries <N>]
 issue dashboard [--bucket auto|day|week|month] [--chart bar|line] [--mode absolute|proportional] [--all-roles] [--author <email>] [--no-plots] [--no-cache]
-issue review request [<body>] [--to <alias|#channel>] [--pr <URL|number>] [--base <branch>] [--pr-title <t>] [--pr-body <b>] [--no-push] [--no-notify] [--arg k=v]
+issue review request [<body>] [--to <alias|#channel>] [--pr <URL|number>] [--no-push] [--no-notify] [--arg k=v]
 issue review finish  [<body>] [--pr <number>] [--to <alias|#channel>] [--arg k=v]
 ```
 
@@ -130,6 +132,39 @@ Each `[hooks] after_worktree_create` command runs last, in the new worktree's ro
 ### `pr status`
 
 Shows one worktree's PR number and issue id (current worktree, or a SELECTOR). Bare `issue pr` means `issue pr status`, the way bare `issue` means `issue status`. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single machine-readable object (the `IssueWorktree` struct, with `pr_number`/`issue_id` for scripts). `--cache-only` skips the network — the PR number comes from the per-worktree cache at `<worktree>/.devkit/pr.json`, and the STATE and VERDICT columns render as `—`. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
+
+### `pr create`
+
+Pushes the branch and opens this branch's PR, printing its URL. It posts no Slack — announcing the PR is `issue review request`.
+
+```sh
+issue pr create                                  # state from defaults.pr_create_state
+issue pr create --ready --to igor                # open ready, with a reviewer
+issue pr create --draft --pr-title "Fix login"   # open a draft under an explicit title
+```
+
+- `--draft` and `--ready` are mutually exclusive and decide the state for this run; without either, `defaults.pr_create_state` does.
+- A branch that already has a PR reuses it instead of opening a second one: `--to` reviewers are added and everything else is left alone. A reused PR keeps the draft state it has, so a `--draft`/`--ready` that contradicts it is reported as ignored, naming the command that moves it (`issue pr ready`, or `gh pr ready --undo`).
+- `--to <alias>` (repeatable) adds the `[people]` aliases that carry a `github` handle as GitHub reviewers. An alias without one warns and is skipped.
+- `--base <branch>` overrides `defaults.pr_base`. `--pr-title` and `--pr-body` supply the `{{ input }}` of the `pr_title` and `pr_body` templates; the rendered title must not be empty. The body template is rendered only when a PR is actually opened, so a `pr_body` reading `{{ issue }}` cannot fail a run that only reuses one.
+- `--no-push` opens the PR without pushing the branch first. `--pr <URL|number>` acts on that PR for this run, recording it — the way a worktree bound to the wrong PR is rebound. `--arg key=value` (repeatable) overrides a variable declared in `[templates.variables]`.
+- Whichever PR the run ends on, its head commit must be this worktree's `HEAD`: a reused PR is checked before it is touched, and a newly opened one straight after, since that can only be checked once it exists. A failure there leaves the PR open on GitHub and says so.
+
+### `pr ready`
+
+Marks this branch's PR ready for review, printing its URL. Like `pr create` it pushes first and posts no Slack.
+
+```sh
+issue pr ready
+issue pr ready --to igor        # add a reviewer in the same run
+```
+
+- A PR that is already ready is left untouched: nothing is flipped, the run says so on stderr and still exits zero. Running it twice is the same as running it once.
+- `--to <alias>` (repeatable) adds GitHub reviewers, the same as `pr create`'s.
+- `--no-push` and `--pr <URL|number>` behave as they do on `pr create`, and the head-commit check gates every mutation the same way.
+- A branch with no PR is an error naming `issue pr create`; a merged or closed PR is refused for what it is.
+
+`defaults.require_pr_reviewer` guards every path that leaves a PR ready for review: `issue pr create --ready`, `issue pr ready`, and the draft flip `issue review request` makes when it notifies. Each refuses unless a human reviewer is on the PR — one already there, whether the request is still pending or they have already reviewed, or one `--to` adds in the same run. The refusal comes before the flip, so a gated run leaves the PR a draft. A draft is never gated: an unreviewed draft is not a violation. With the gate off, `pr ready` and `review request` spend no lookup on it.
 
 ### `pr checkout`
 
@@ -157,21 +192,23 @@ Add `--setup [--apps a,b]` to also run the per-app prep pipeline, exactly as `is
 
 ### `review request`
 
-Push the branch, open or reuse the PR, request review on GitHub, and Slack the reviewers.
+Push the branch, request review on this branch's PR, and Slack the reviewers. It opens no PR: a branch that has none is an error naming `issue pr create`, and a merged or closed PR is refused for what it is.
 
 ```sh
 issue review request "ready for a look" --to igor
 issue review request --to igor --to '#eng' --arg team=infra   # body optional; channel + people
 issue review request                                          # re-ping the PR's existing reviewers
-issue review request --no-notify                              # push + open/reuse the PR, tell nobody
+issue review request --no-notify                              # push, add reviewers, tell nobody
 ```
 
 - `--to <alias|#channel>` (repeatable). People are added as GitHub reviewers (those with a `github` handle) and Slacked; `#channels` are Slack-only. Omit `--to` to re-request and Slack the PR's current human reviewers.
-- Opening a new PR without `--to` creates it unreviewed and notifies nobody. Set `defaults.require_pr_reviewer = true` in `devkit.toml` to make `--to` mandatory on that path.
-- `--no-notify` sends no Slack and never falls back to the PR's current reviewers, so the branch can be pushed and the PR opened or reused silently. It prints the PR URL instead. Combined with `--to` it still adds those GitHub reviewers, just without the Slack. It does not bypass `require_pr_reviewer`.
+- A run that notifies marks a draft PR ready for review first, since asking a human to look at a draft is incoherent. `defaults.require_pr_reviewer` gates that flip exactly as it gates `issue pr ready`, and a refusal leaves the PR a draft.
+- `--no-notify` sends no Slack, never falls back to the PR's current reviewers, and leaves draft state alone. It prints the PR URL instead. Combined with `--to` it still adds those GitHub reviewers, just without the Slack.
 - `--pr <URL|number>` acts on that PR for this run: a pasted GitHub PR URL keeps its own repository, a bare number means `pr_repo`. Since the command records whichever PR it acted on, this is also how a worktree bound to the wrong PR is rebound — the recovery for a superseded PR, where two PRs share a head branch and the branch lookup is ambiguous. Otherwise the PR comes from the worktree's record, and failing that from its branch.
-- `--base`, `--pr-title`, `--pr-body`, `--no-push` as before.
+- `--no-push` as before.
 - `--arg key=value` (repeatable) overrides a variable declared in `[templates.variables]`.
+
+The `pr_title` the Slack template renders is the PR's own title, read from GitHub, not a locally rendered one — the command is not creating the PR and has no title of its own to offer.
 
 Whichever way the PR is resolved, its head commit must be this worktree's `HEAD` or the command refuses it: a branch name is shared across forks and does not prove the PR carries this work, and a wrongly bound PR that later merges would let `issue end` delete a branch whose commits never landed. A squash- or rebase-merged PR still matches, since the comparison is against the branch head the PR carries rather than the commit that landed on the base.
 

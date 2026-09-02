@@ -38,7 +38,9 @@ pub(crate) fn guard_branch(branch: &str) -> Result<()> {
     Ok(())
 }
 
-/// Map a detected PR state to the next action.
+/// Map a detected PR state to the next action. `issue pr create` is the only
+/// caller that acts on `Create` by opening a PR; `issue pr ready` and `issue
+/// review request` refuse it, since neither opens one.
 pub(crate) fn action_for(pr_state: Option<&str>) -> PrAction {
     match pr_state {
         None => PrAction::Create,
