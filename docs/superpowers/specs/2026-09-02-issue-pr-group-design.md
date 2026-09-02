@@ -20,7 +20,7 @@ one job: tell humans the PR is ready, which includes making that true.
 
 ## Scope
 
-**In:** the `issue pr` group (`status`, `create`, `ready`, `draft`, `checkout`);
+**In:** the `issue pr` group (`status`, `create`, `ready`, `checkout`);
 `is_draft` carried through `PrBrief`, `PrStatus`, the triage render, and the
 reviewer queue; `defaults.require_pr_reviewer` moved to the ready transition and
 re-pointed at GitHub reviewers; `review request` requiring an existing PR and
@@ -83,7 +83,6 @@ worktree's row from the same table `status` renders for all of them
 | `issue pr status [selector] [--json] [--cache-only]` | today's `issue info`, unchanged behavior |
 | `issue pr create [--draft\|--ready] [--to] [--base] [--pr-title] [--pr-body] [--no-push] [--pr]` | push, create or reuse, gate, write the record |
 | `issue pr ready [--no-push] [--pr]` | push, gate, mark ready for review |
-| `issue pr draft [--pr]` | mark ready-for-review back to draft |
 | `issue pr checkout <target> [path] [--setup] [--apps]` | today's `issue checkout-pr` |
 | `issue review request …` | resolve the PR, flip draft to ready, add reviewers, Slack |
 | `issue review finish …` | unchanged |
@@ -144,6 +143,16 @@ Push (unless `--no-push`), resolve the PR the way `review request` does today
   anything. Report the existing PR and its draft state.
 - **MERGED or CLOSED:** stop, as `action_for` already does.
 
+The reuse arm never changes draft state. `create` means "make sure a PR exists",
+and a flag that also flips an existing PR would be doing two unrelated jobs
+depending on whether one happened to be there already. A state flag that
+contradicts the PR found is reported rather than ignored:
+
+```
+PR #123 already exists and is ready for review.
+--draft was ignored. To move it back: gh pr ready --undo
+```
+
 The reuse arm runs `assert_belongs` because it writes the record, and the record
 is what makes a PR authoritative downstream. `finish.rs:356` has a test for the
 failure this prevents: a mistyped `--pr` names a real PR, the record makes it
@@ -158,10 +167,10 @@ state comes from config.
 as passive in that reviewer's queue, and "start this and put it on someone's
 radar" is a thing people want.
 
-### `issue pr ready` and `issue pr draft`
+### `issue pr ready`
 
-`ready` pushes (unless `--no-push`), fetches the PR, runs `assert_belongs`, then
-marks it ready. Idempotent: already-ready is reported and exits zero.
+Pushes (unless `--no-push`), fetches the PR, runs `assert_belongs`, then marks it
+ready. Idempotent: already-ready is reported and exits zero.
 
 The push is not optional-by-default. Without it, `pr create --draft`, two more
 commits, `pr ready` fails `assert_belongs` with "PR #N is at X but this worktree
@@ -169,8 +178,7 @@ is at Y", an error whose stated diagnosis is wrong. The PR does carry this work;
 the remote just hasn't heard about it. Without the gate instead, `ready` marks
 whatever same-named PR resolves, which is the fork case the reuse arm closes.
 
-`draft` is the reverse and needs no push: moving a PR out of review does not
-depend on what the remote has.
+There is no devkit command for the reverse. See the rejected alternatives.
 
 ### `issue review request`
 
@@ -220,7 +228,6 @@ doing what its name says.
 | `pr create` (create arm) | yes | `verify_created` after |
 | `pr create` (reuse arm) | yes | yes |
 | `pr ready` | yes | yes |
-| `pr draft` | no | yes |
 | `pr checkout` | no | unchanged |
 | `review request` | yes | yes |
 | `review finish` | no | no, by design |
@@ -269,6 +276,8 @@ mismatch, and config keys are not command names.
   paths; satisfied by an existing requested reviewer with no `--to`; not
   satisfied by a `#channel`.
 - `pr ready` on an already-ready PR exits zero and mutates nothing.
+- `pr create --draft` against an existing ready PR leaves it ready and says the
+  flag was ignored.
 - `review request` with no PR fails naming `issue pr create`.
 - `review request` heals a record whose `pr` is `None`.
 - The hidden aliases dispatch: `issue info` reaches `pr status`, `issue
@@ -281,6 +290,12 @@ tracker data as well as PR data, so filing it under `pr` misnames it. Rejected:
 `info` is a name that describes nothing, it predates the namespace, and the
 columns you run it for are the PR and the verdict. The hidden alias covers
 anything already written against it.
+
+**An `issue pr draft` demote command.** Rejected. `gh pr ready --undo` already
+does it, and a devkit wrapper would add only PR resolution from the record.
+Every reason `pr ready` exists as a command is absent going the other way: no
+push is needed, no reviewer gate applies, and only one caller would ever want
+it. `pr create --draft` does not cover the case either, and deliberately so.
 
 **`issue pr open` for the ready transition.** Rejected. "I opened a PR" means
 "created" to every developer alive, `pr create` would sit beside it in `--help`,
@@ -303,10 +318,5 @@ become a selector you can never use.
 
 ## Open questions
 
-1. `pr create` on a branch whose PR exists and is already ready: reuse silently,
-   or say so? Leaning on a one-line note, since the flags that would have shaped
-   a new PR were ignored.
-2. Should `pr draft` refuse when the PR has approvals, or is that the author's
-   business?
-3. Does anything outside this repo read `issue info --json`? If so the alias is
+1. Does anything outside this repo read `issue info --json`? If so the alias is
    permanent rather than transitional.
