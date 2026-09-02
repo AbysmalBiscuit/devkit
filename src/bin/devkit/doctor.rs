@@ -83,9 +83,18 @@ fn count_strays() -> usize {
     devkit_ports::strays::scan(&loaded.config, &data).len()
 }
 
-/// Severity of the "unreferenced baselines" check by orphan count and the
-/// bytes reclaiming them would free.
-fn baseline_orphan_check(count: usize, bytes: u64) -> Check {
+/// Severity of the "unreferenced baselines" check by orphan count, the bytes
+/// reclaiming them would free, and the count of worktrees whose record could
+/// not be read. `unreadable` takes priority: while any exist, `orphaned`
+/// cannot tell which baselines are unreferenced, so no byte figure is worth
+/// quoting.
+fn baseline_orphan_check(count: usize, bytes: u64, unreadable: usize) -> Check {
+    if unreadable > 0 {
+        return Check::Warn(format!(
+            "{unreadable} worktree(s) unreadable — baseline orphan state can't be \
+             determined until they're repaired"
+        ));
+    }
     match count {
         0 => Check::Ok("no unreferenced baselines".into()),
         n => Check::Warn(format!(
@@ -95,21 +104,22 @@ fn baseline_orphan_check(count: usize, bytes: u64) -> Check {
     }
 }
 
-/// Count of baselines nothing references, and the bytes reclaiming them would
-/// free, for the current directory's config. Resilient like `count_strays`:
-/// no config, no baseline directory, or any other error yields `(0, 0)` so
-/// `doctor` never fails on this row.
-fn baseline_orphans() -> (usize, u64) {
+/// Count of baselines nothing references, the bytes reclaiming them would
+/// free, and the count of worktrees `baseline::orphaned` could not read, for
+/// the current directory's config. Resilient like `count_strays`: no config,
+/// no baseline directory, or any other error yields `(0, 0, 0)` so `doctor`
+/// never fails on this row.
+fn baseline_orphans() -> (usize, u64, usize) {
     let Ok(loaded) = devkit_ports::load::load(None, std::path::Path::new(".")) else {
-        return (0, 0);
+        return (0, 0, 0);
     };
     let Ok(dir) = crate::baseline::dir(&loaded.config) else {
-        return (0, 0);
+        return (0, 0, 0);
     };
     let Ok(repo) = devkit_common::git::primary_checkout(std::path::Path::new(".")) else {
-        return (0, 0);
+        return (0, 0, 0);
     };
-    crate::baseline::orphaned(&dir, &repo.to_string_lossy()).unwrap_or((0, 0))
+    crate::baseline::orphaned(&dir, &repo.to_string_lossy()).unwrap_or((0, 0, 0))
 }
 
 /// Which tracker `issue` talks to here, and how devkit arrived at it.
@@ -369,8 +379,8 @@ fn gather(steps: &Steps) -> Vec<Row> {
             key: "baseline_orphans",
             source: Source::Unset,
             check: {
-                let (count, bytes) = baseline_orphans();
-                baseline_orphan_check(count, bytes)
+                let (count, bytes, unreadable) = baseline_orphans();
+                baseline_orphan_check(count, bytes, unreadable)
             },
         },
         Row {
@@ -577,15 +587,26 @@ mod tests {
 
     #[test]
     fn no_orphans_is_an_ok_row() {
-        assert!(matches!(baseline_orphan_check(0, 0), Check::Ok(_)));
+        assert!(matches!(baseline_orphan_check(0, 0, 0), Check::Ok(_)));
     }
 
     #[test]
     fn orphans_warn_and_name_the_prune_command() {
-        let Check::Warn(msg) = baseline_orphan_check(2, 1_500_000_000) else {
+        let Check::Warn(msg) = baseline_orphan_check(2, 1_500_000_000, 0) else {
             panic!("expected a warning");
         };
         assert!(msg.contains("devrun baseline prune"), "{msg}");
+    }
+
+    /// An unreadable worktree means no baseline is provably orphaned, so the
+    /// row must not quote a byte figure — one it cannot back up.
+    #[test]
+    fn unreadable_worktrees_warn_without_a_byte_figure() {
+        let Check::Warn(msg) = baseline_orphan_check(0, 0, 3) else {
+            panic!("expected a warning");
+        };
+        assert!(msg.contains('3'), "{msg}");
+        assert!(!msg.contains("MiB"), "{msg}");
     }
 
     #[test]

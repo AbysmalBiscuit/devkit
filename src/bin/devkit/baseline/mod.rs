@@ -1129,14 +1129,23 @@ pub fn list(baseline_dir: &Path, repo: &str) -> Result<Listing> {
     })
 }
 
-/// Baselines nothing references, and the disk reclaiming them would free.
+/// Baselines nothing references, and the disk reclaiming them would free —
+/// `(count, bytes, unreadable)`. `unreadable` is the number of worktrees
+/// `referencers` could not read; per its own invariant, no baseline is
+/// provably orphaned while any of those exist, so `count` and `bytes` are 0
+/// whenever it is nonzero rather than a guess that a later `prune` would
+/// refuse.
+///
 /// `list` sizes every slot with `dir_size` — a parallel walk of a full
 /// repository checkout, prep files and all — because its table shows a size
 /// column for every row; `doctor` only needs the reclaimable total, so this
 /// sizes just the slots that qualify. The common case, no orphans, walks
 /// nothing.
-pub fn orphaned(baseline_dir: &Path, repo: &str) -> Result<(usize, u64)> {
+pub fn orphaned(baseline_dir: &Path, repo: &str) -> Result<(usize, u64, usize)> {
     let refs = referencers(repo)?;
+    if !refs.unreadable.is_empty() {
+        return Ok((0, 0, refs.unreadable.len()));
+    }
     let mut count = 0;
     let mut bytes = 0;
     for path in slots_in(baseline_dir)? {
@@ -1146,7 +1155,7 @@ pub fn orphaned(baseline_dir: &Path, repo: &str) -> Result<(usize, u64)> {
         count += 1;
         bytes += dir_size(&path);
     }
-    Ok((count, bytes))
+    Ok((count, bytes, 0))
 }
 
 /// What a sweep took, what it deliberately left where it was, and what it
@@ -2047,6 +2056,43 @@ mod tests {
             !drop_reference(&f.repo, &f.baseline, &registry::Data::default(), false).unwrap(),
             "a baseline was reclaimed on a scan that could not read every worktree"
         );
+    }
+
+    /// A baseline nothing references is not reported as orphaned while some
+    /// other worktree's record can't even be parsed: `referencers` cannot rule
+    /// out that the unreadable one names it, so `orphaned` must not either —
+    /// the same invariant `a_worktree_that_cannot_be_classified_is_unreadable`
+    /// covers for `drop_reference`.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_worktree_blocks_orphan_detection() {
+        let f = two_worktrees_sharing_one_baseline();
+        let baseline_dir = f.baseline.parent().unwrap();
+
+        // A second baseline nothing references — an orphan on a clean scan.
+        fixture_git(Path::new(&f.repo), &["checkout", "-q", "main"]);
+        std::fs::write(Path::new(&f.repo).join("g"), "y").unwrap();
+        fixture_git(Path::new(&f.repo), &["add", "."]);
+        fixture_git(Path::new(&f.repo), &["commit", "-qm", "two"]);
+        let sha2 = fixture_git(Path::new(&f.repo), &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        let orphan = baseline_dir.join(short(&sha2));
+        fixture_git(
+            Path::new(&f.repo),
+            &["worktree", "add", "--detach", orphan.to_str().unwrap()],
+        );
+        write_marker(&orphan, &fresh_marker(&sha2)).unwrap();
+
+        corrupt_record(&f.a);
+
+        let (count, bytes, unreadable) = orphaned(baseline_dir, &f.repo).unwrap();
+        assert_eq!(unreadable, 1, "only `a`'s record was corrupted");
+        assert_eq!(
+            count, 0,
+            "nothing is provably orphaned while a tree can't be read"
+        );
+        assert_eq!(bytes, 0);
     }
 
     /// Repin `worktree` at `baseline` spelled through a symlinked parent: the
