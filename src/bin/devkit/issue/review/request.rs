@@ -6,9 +6,9 @@ use devkit_common::progress::Steps;
 use devkit_config::Person;
 use std::collections::HashMap;
 
+use crate::issue::pr::resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing};
 use crate::issue::pr::{
-    self, add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr,
-    reviewer_logins,
+    add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr, reviewer_logins,
 };
 
 use super::{
@@ -134,16 +134,12 @@ pub fn run(args: Args) -> Result<()> {
         .to_string();
 
     let steps = Steps::persistent();
-    let found = pr::resolve::resolve_existing(&pr::resolve::Existing {
+    let found = resolve_existing(&Existing {
         start: &start,
         branch: &branch,
         repos: &repos,
         record: record.as_ref(),
-        explicit_pr: args
-            .pr
-            .as_deref()
-            .map(pr::resolve::parse_pr_flag)
-            .transpose()?,
+        explicit_pr: args.pr.as_deref().map(parse_pr_flag).transpose()?,
         no_push: args.no_push,
         steps: &steps,
     })?;
@@ -184,7 +180,7 @@ pub fn run(args: Args) -> Result<()> {
             .context("gh pr ready failed")?;
     }
 
-    if let Some(rec) = pr::resolve::record_with_pr(record.as_ref(), locator) {
+    if let Some(rec) = record_with_pr(record.as_ref(), locator) {
         devkit_common::record::write(std::path::Path::new(&toplevel), &rec)?;
     }
 
