@@ -71,12 +71,12 @@ devrun task [<name>] [--env K=V] [--env-file F] [--dry-run]
 
 ### `devrun down` scope
 
-Stops servers and releases their ports. By default it stops every server in the current worktree. Reaching another worktree requires an explicit scope flag and a confirmation read from a terminal.
+Stops servers and releases their ports. By default it stops every server in the current worktree, plus those under the baseline this worktree is the sole referencer of — a baseline nobody else names is this worktree's own. Reaching another worktree, or a baseline another worktree also names, requires an explicit scope flag and a confirmation read from a terminal.
 
 | Command | Effect |
 |---|---|
-| `devrun down` | stop all servers in this worktree |
-| `devrun down --role baseline` | this worktree, baseline only |
+| `devrun down` | stop all servers in this worktree and its own baseline |
+| `devrun down --role baseline` | this worktree's own baseline only |
 | `devrun down api` | this worktree, fuzzy-match `api` across columns |
 | `devrun down --all` | every server, every worktree (one batch prompt) |
 | `devrun down --others` | every server in every *other* worktree |
@@ -324,15 +324,9 @@ A 0.12.x `meta.toml` is not migrated. Three of the five tag patterns 0.12.x coul
 
 ## `devkit-mcp`: agent access
 
-`devkit-mcp` (equivalently `devkit mcp`) serves the port and file-lock
-registries, the server-lifecycle facade and issue triage to MCP-capable coding
-agents over stdio. The actions, their arguments, and which of them mutate are in
-[agents.md](agents.md), alongside the plugin and per-host wiring.
+`devkit-mcp` (equivalently `devkit mcp`) serves the port and file-lock registries, the server-lifecycle facade and issue triage to MCP-capable coding agents over stdio. The actions, their arguments, and which of them mutate are in [agents.md](agents.md), alongside the plugin and per-host wiring.
 
-The gates differ from the CLI's on purpose: `devrun reap` is never exposed, and
-`devrun.down` stays scoped to the calling worktree, so an agent can detect
-strays but never kill another session's servers. `ports.strays` is the
-read-only half.
+The gates differ from the CLI's on purpose: `devrun reap` is never exposed, and `devrun.down` stays scoped to the calling worktree, so an agent can detect strays but never kill another session's servers. `ports.strays` is the read-only half. That scope is the holder alone, so `devrun.down` reaches no baseline at all — a baseline's servers are held by the baseline directory. `devrun down` from a terminal in the worktree stops them.
 
 ## Timing
 
