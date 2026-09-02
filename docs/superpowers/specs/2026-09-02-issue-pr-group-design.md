@@ -71,7 +71,8 @@ receives.
 `issue info` and `issue checkout-pr` predate any PR namespace. `info` renders one
 worktree's row from the same table `status` renders for all of them
 (`triage.rs`), defaulting to the current worktree, and its `--json` emits
-`IssueWorktree` through a hand-written `Serialize` (`status.rs:78`).
+`IssueWorktree` through a hand-written `Serialize`
+(`crates/devkit-issue/src/status.rs:78`).
 
 ## Design
 
@@ -89,8 +90,10 @@ worktree's row from the same table `status` renders for all of them
 
 `status` earns its word rather than being a bare positional on `pr`: clap
 resolves subcommands before positionals, so `issue pr <selector>` would make a
-branch or worktree named `create` unreachable, and an optional positional beside
-optional subcommands needs `args_conflicts_with_subcommands` to behave.
+branch or worktree named `create` unreachable. With `status` holding the
+selector, `Pr { #[command(subcommand)] cmd: Option<PrCmd> }` mirrors the
+`IssueCli.cmd: Option<Cmd>` the top level already uses (`mod.rs:57`), with `None`
+meaning status.
 
 `issue info` and `issue checkout-pr` remain as hidden top-level variants
 dispatching to the same functions, so muscle memory and existing scripts keep
@@ -99,7 +102,7 @@ parser.
 
 ### Draft in the PR model
 
-`PrBrief` gains `is_draft: bool`. Three queries select it and two parsers read
+`PrBrief` gains `is_draft: bool`. Four queries select it and three parsers read
 it:
 
 | Site | Add |
@@ -109,10 +112,25 @@ it:
 | `github.rs:835` `parse_pr_node` | read it |
 | `github.rs:626` `parse_brief` (REST) | read the `draft` key already in the payload |
 | `crates/devkit-issue/src/status.rs:318` `heads_query` | `isDraft` |
+| `review/request.rs:34` `PrFlat` and `:122` `existing_pr` | `isDraft` in the `--json` list and the struct |
+
+`PrFlat` is the `gh pr list` fallback, taken whenever `github::token()` is
+`None`. Defaulting it to `false` would make every draft read as ready on exactly
+the path that has no token.
+
+A missing `isDraft` parses as `false` rather than failing, matching how
+`parse_pr_node` already treats `headRefOid`. Strict parsing would mean rewriting
+every JSON fixture in `github.rs` and `status.rs` to buy nothing.
 
 `PrStatus::Unique` gains `is_draft: bool` alongside `number`, `state`, `url`.
-Every `Unique { .. }` destructuring is exhaustive, so the compiler names each
-site that needs updating.
+The compiler finds the sites that construct it, chiefly `pr_status_of`
+(`crates/devkit-issue/src/status.rs:204`, the single place a `HeadLookup`
+becomes a `PrStatus`) and `apply_cached_pr` (`info.rs:313`).
+
+It does not find the sites that read it. `pr_label` (`triage.rs:8`),
+`status.rs:37,44,53,589`, and `info.rs:194` all match `Unique { .. }` with a rest
+pattern and keep compiling while silently ignoring the new field. Those are found
+by grep, not by rustc, and `pr_label` is the one the render depends on.
 
 `state_label()` keeps returning `OPEN` for a draft. Its doc comment records that
 it is the value the serialized `pr_state` field carries for consumers written
@@ -121,11 +139,16 @@ machine breaks. Draft reaches consumers through the tagged `pr` field, which
 serializes the new bool for free.
 
 Rendering does change. `pr_label` (`triage.rs:5`) renders `DRAFT #123` where the
-PR is a draft, and `pr_cell` (`triage.rs:49`) dims it rather than painting it
-yellow, since a draft is not waiting on anyone.
+PR is a draft.
 
 `info_cache::CachedPr` gains the field so `--cache-only` reports draft state
-without a network call.
+without a network call. It is `#[serde(default)]`: `info_cache::read`
+(`info_cache.rs:22`) returns `None` on a parse failure, so a required field would
+give every existing `pr.json` one silent cache miss.
+
+`pr_cell` (`triage.rs:50`) dims a draft rather than painting it yellow, since a
+draft is not waiting on anyone. It checks the flag before its match on
+`state_label()`, which would otherwise take the `OPEN` arm.
 
 `reviewer_state` (`prs.rs:557`) returns `draft` instead of `REVIEW NEEDED` when
 the PR is a draft. Today a pending review request wins unconditionally, so a
@@ -162,10 +185,15 @@ worktree whose work never landed.
 `--draft` and `--ready` are a mutually exclusive clap group. Neither given, the
 state comes from config.
 
-`--to` sets GitHub reviewers and sends no Slack. It is allowed alongside
-`--draft`: once `reviewer_state` reads the flag, a draft with a reviewer shows
-as passive in that reviewer's queue, and "start this and put it on someone's
-radar" is a thing people want.
+`--to` sets GitHub reviewers and sends no Slack, on both arms: `gh pr create
+--reviewer` when creating, `gh pr edit --add-reviewer` (`request.rs:364`) when
+reusing. It is allowed alongside `--draft`: once `reviewer_state` reads the flag,
+a draft with a reviewer shows as passive in that reviewer's queue, and "start
+this and put it on someone's radar" is a thing people want.
+
+`action_for` keeps its single mapping, `None => Create`. `pr create` acts on it;
+`review request` bails on it. Two mappers for one PR-state question would be two
+places to keep in sync.
 
 ### `issue pr ready`
 
@@ -177,6 +205,14 @@ commits, `pr ready` fails `assert_belongs` with "PR #N is at X but this worktree
 is at Y", an error whose stated diagnosis is wrong. The PR does carry this work;
 the remote just hasn't heard about it. Without the gate instead, `ready` marks
 whatever same-named PR resolves, which is the fork case the reuse arm closes.
+
+The mark-ready call is `gh pr ready <n>` through `cmd::gh_capture`, which appends
+`--repo` so an ambient `GH_REPO` cannot redirect it. `github.rs` has no GraphQL
+mutation helper and the token-less path needs `gh` anyway.
+
+Like `pr create`, it writes the resolved locator into `.devkit/issue.toml`. A
+command that fetched the PR and gated on it has the binding in hand; leaving the
+record empty here and healing it in the next command would be arbitrary.
 
 There is no devkit command for the reverse. See the rejected alternatives.
 
@@ -197,29 +233,41 @@ today. Dropping that would leave the record empty forever and push `status` and
 `--no-notify` does not flip the draft. It means "update GitHub, tell nobody", and
 promoting a PR to ready is telling everybody.
 
-The Slack `{{ pr_title }}` now comes from the fetched PR rather than the locally
-rendered `pr_title` template, the way `review finish` already reads it
-(`finish.rs:110`). A re-request stops depending on a template that renders
-nothing being created.
+The Slack `{{ pr_title }}` now comes from the PR rather than the locally rendered
+`pr_title` template, so a re-request stops depending on a template for a PR it is
+not creating.
+
+The title comes from a `github::pr_full` call, the one `review finish` already
+makes (`finish.rs:110`). `PrBrief` has no title field (`github.rs:548`) and
+adding one would mean touching all six construction sites for a field one caller
+wants. One extra round trip on a command that already makes several is the
+cheaper trade.
 
 ### Where `require_pr_reviewer` lives
 
 It moves to the ready transition, and it counts human GitHub reviewers instead of
 Slack targets.
 
-A run that would leave a PR ready with no human reviewer is refused, naming
-`issue review request --to`. Reviewers counted are the PR's current requested
-reviewers (`request.rs:97`, already filtered by `is_human_login`) unioned with
-whatever `--to` adds in this run.
+The gate fires on a run that *makes* a PR ready, not on every run that touches a
+ready one. Three paths reach it: `pr create --ready`, `pr ready`, and `review
+request` flipping a draft. A run that transitions nothing is not refused for a
+violation it did not create. `pr create --draft` with no reviewer is no longer a
+violation, because it isn't one.
 
-That covers three paths: `pr create --ready`, `pr ready`, and `review request`
-flipping a draft. `pr create --draft` with no reviewer is no longer a violation,
-because it isn't one.
+The invariant still holds under `--no-notify`, which never flips a draft: the
+only ways to reach ready are the three gated paths.
 
-Two behaviors change for a project with the key set. `--to '#eng'` no longer
-satisfies it, since a channel is not a reviewer. And `review request --no-notify`
-against a reviewer-less PR now refuses where it used to pass. Both are the gate
-doing what its name says.
+A human reviewer means a login that is either currently requested or has already
+submitted a review, unioned with whatever `--to` adds in this run. Requested
+alone is not enough: GitHub drops a login from `reviewRequests` the moment they
+review (`crates/devkit-issue/src/prs.rs:485`), so a draft that collected an early
+approval would show zero reviewers and be refused. `requested_reviewers`
+(`github.rs:881`) returns raw logins including bots, so the gate helper applies
+`is_human_login` itself rather than relying on the fetcher.
+
+One behavior changes for a project with the key set: `--to '#eng'` no longer
+satisfies it, since a channel is not a reviewer. That is the gate doing what its
+name says.
 
 ### Which commands push and gate
 
@@ -243,14 +291,15 @@ pr_create_state = "draft"   # or "ready"
 
 Default `draft`. A two-value enum rather than a `pr_draft` bool, because
 `pr_draft = false` is a double negative for what is really "open it ready".
-Modeled like `Role`: one type with `ValueEnum` and `Display`, matched
-exhaustively.
+Matched exhaustively, with `Deserialize`, `Serialize`, `JsonSchema`, and
+`Display`. No `ValueEnum`: `devkit-config` has no clap dependency, and the CLI
+surface is `--draft` / `--ready` rather than a value.
 
 `require_pr_reviewer` keeps its name and gains a new doc comment describing the
-transition it now guards.
-
-Both flow into `schema/devkit-config.json` through the existing derive; the
-committed schema is regenerated with `DEVKIT_UPDATE_SCHEMA=1 cargo test`.
+transition it now guards. Config doc comments are copied verbatim into
+`schema/devkit-config.json`, so this one and `after_worktree_create`'s reference
+to `issue checkout-pr` (`crates/devkit-config/src/lib.rs:163`) both reach the
+committed schema, which is regenerated with `DEVKIT_UPDATE_SCHEMA=1 cargo test`.
 
 ## Documentation
 
@@ -259,6 +308,10 @@ committed schema is regenerated with `DEVKIT_UPDATE_SCHEMA=1 cargo test`.
 moved gate. `skills/using-devkit/references/issues.md` teaches the new flow, and
 its `issue info --json` recipe becomes `issue pr status --json`.
 
+`docs/agents.md:23` lists the CLI-only `issue` verbs; `issue pr` joins `review`
+and `end` there, and the `reviews` rows gain a `draft` action value MCP consumers
+have not seen before.
+
 Prose across the repo referring to `checkout-pr` by name is updated. The config
 keys `templates.checkout_worktree_dir` and `checkout_worktree_dir_max` keep their
 names: renaming them would break every existing config to fix a cosmetic
@@ -266,15 +319,16 @@ mismatch, and config keys are not command names.
 
 ## Testing
 
-- `is_draft` survives each transport: the GraphQL node parse, the REST parse, and
-  the `heads_query` split.
+- `is_draft` survives each transport: the GraphQL node parse, the REST parse, the
+  `heads_query` split, and the `gh pr list` fallback.
+- A payload with no `isDraft` parses as not-draft rather than failing.
 - `pr_label` renders `DRAFT #n`, and `state_label()` still returns `OPEN` for the
   same row.
 - `reviewer_state` returns `draft` for a draft carrying a review request.
-- `action_for` maps a draft to the reuse arm and a MERGED PR to Stop.
 - The reviewer gate: refused with no human reviewer on each of the three ready
-  paths; satisfied by an existing requested reviewer with no `--to`; not
-  satisfied by a `#channel`.
+  paths; satisfied by an existing requested reviewer with no `--to`; satisfied by
+  a reviewer who already submitted and is no longer requested; not satisfied by a
+  `#channel`; not fired by a run that transitions nothing.
 - `pr ready` on an already-ready PR exits zero and mutates nothing.
 - `pr create --draft` against an existing ready PR leaves it ready and says the
   flag was ignored.
@@ -282,6 +336,22 @@ mismatch, and config keys are not command names.
 - `review request` heals a record whose `pr` is `None`.
 - The hidden aliases dispatch: `issue info` reaches `pr status`, `issue
   checkout-pr` reaches `pr checkout`.
+- `tests/shim_dispatch.rs:228` asserts `issue --help` lists `checkout-pr`. Hiding
+  the variant removes it from help, so the assertion moves to `pr`.
+
+## Commit sequence
+
+Ordered so no intermediate commit leaves the tree broken. Only the last is
+breaking.
+
+1. `feat(github): carry is_draft on PrBrief` — the queries, both parsers, `PrFlat`, lenient parse, fixtures.
+2. `feat(issue): tag PrStatus::Unique with is_draft` — `pr_status_of`, `apply_cached_pr`, `CachedPr`; MCP serializes it for free.
+3. `feat(issue): render drafts in triage and the reviewer queue` — `pr_label`, `pr_cell`, `reviewer_state`.
+4. `feat(config): add defaults.pr_create_state` — the enum, schema regen, `configuration.md`.
+5. `feat(issue): add the pr command group` — `pr status` and `pr checkout` as pure moves, hidden aliases, the shim test, prose.
+6. `feat(issue): add pr create` — extract the create arm out of `request.rs` into a shared module that `review request` still calls.
+7. `feat(issue): add pr ready` — the mark-ready call, idempotence, the reviewer-gate helper.
+8. `feat(issue)!: require an existing PR in review request` — drop the creation flags, move the gate, the draft flip, the title source, the `commands.md` rewrite.
 
 ## Rejected alternatives
 
