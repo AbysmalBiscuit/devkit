@@ -198,6 +198,11 @@
           "description": "Repo-relative directory apps live under (e.g. \"apps\"). Used to infer app\npaths from doppler.yaml and to detect changed apps in a diff.",
           "type": "string"
         },
+        "baseline_dir": {
+          "default": "",
+          "description": "Directory baseline worktrees are created under, one per fork-point\ncommit. `~` is expanded. Names a location on this machine, so a relative\nvalue anchors to the directory of the layer that declared it. Defaults to\n`_baselines` under `worktree_root`.",
+          "type": "string"
+        },
         "baseline_path": {
           "default": "",
           "description": "Checkout path for the baseline server. `~` is expanded. Names a\nlocation on this machine, so a relative value anchors to the\ndirectory of the config layer that declared it, even when that layer\nis the repository's main checkout.",
@@ -833,6 +838,7 @@
       "$ref": "#/$defs/Defaults",
       "default": {
         "apps_dir": "apps",
+        "baseline_dir": "",
         "baseline_path": "",
         "baseline_ref": "",
         "branch_prefix": "",

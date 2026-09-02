@@ -326,6 +326,12 @@ pub struct Defaults {
     /// is the repository's main checkout.
     #[serde(default)]
     pub baseline_path: String,
+    /// Directory baseline worktrees are created under, one per fork-point
+    /// commit. `~` is expanded. Names a location on this machine, so a relative
+    /// value anchors to the directory of the layer that declared it. Defaults to
+    /// `_baselines` under `worktree_root`.
+    #[serde(default)]
+    pub baseline_dir: String,
     /// Path to the repo's `doppler.yaml`; its `setup` paths seed app path
     /// inference. `~` is expanded. Names a file inside the repository being
     /// worked on, so a relative value anchors to the checkout reading the
@@ -388,6 +394,7 @@ impl Default for Defaults {
             branch_prefix: String::new(),
             baseline_ref: String::new(),
             baseline_path: String::new(),
+            baseline_dir: String::new(),
             doppler_yaml: String::new(),
             apps_dir: default_apps_dir(),
             pr_base: default_pr_base(),
@@ -1187,16 +1194,31 @@ fn resolve_defaults(
     {
         cfg.defaults.worktree_root = d.to_string_lossy().into_owned();
     }
+    cfg.defaults.worktree_root = resolve_path_key(
+        &cfg.defaults.worktree_root,
+        "defaults.worktree_root",
+        PathKind::Host,
+        origin,
+        checkout_root,
+    )?;
+    // Computed from the now-resolved worktree_root, so a derived value is
+    // already absolute before it goes through its own resolve_path_key below.
+    if cfg.defaults.baseline_dir.is_empty() && !cfg.defaults.worktree_root.is_empty() {
+        cfg.defaults.baseline_dir = Path::new(&cfg.defaults.worktree_root)
+            .join("_baselines")
+            .to_string_lossy()
+            .into_owned();
+    }
     for (key, kind, field) in [
-        (
-            "defaults.worktree_root",
-            PathKind::Host,
-            &mut cfg.defaults.worktree_root,
-        ),
         (
             "defaults.baseline_path",
             PathKind::Host,
             &mut cfg.defaults.baseline_path,
+        ),
+        (
+            "defaults.baseline_dir",
+            PathKind::Host,
+            &mut cfg.defaults.baseline_dir,
         ),
         (
             "defaults.doppler_yaml",
@@ -1330,6 +1352,55 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             Path::new(&cfg.defaults.worktree_root),
             normalize_lexically(&explicit)
         );
+    }
+    #[test]
+    fn baseline_dir_defaults_under_worktree_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("w");
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            format!(
+                "[config]\nroot = true\n[defaults]\nworktree_root = '{}'\n",
+                root.display().to_string().replace('\\', "\\\\")
+            ),
+        )
+        .unwrap();
+        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
+        assert_eq!(
+            Path::new(&cfg.defaults.baseline_dir),
+            normalize_lexically(&root.join("_baselines"))
+        );
+    }
+    #[test]
+    fn an_explicit_baseline_dir_wins_over_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("w");
+        let explicit = dir.path().join("elsewhere");
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            format!(
+                "[config]\nroot = true\n[defaults]\nworktree_root = '{}'\nbaseline_dir = '{}'\n",
+                root.display().to_string().replace('\\', "\\\\"),
+                explicit.display().to_string().replace('\\', "\\\\")
+            ),
+        )
+        .unwrap();
+        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
+        assert_eq!(
+            Path::new(&cfg.defaults.baseline_dir),
+            normalize_lexically(&explicit)
+        );
+    }
+    #[test]
+    fn no_worktree_root_leaves_baseline_dir_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n[defaults]\n",
+        )
+        .unwrap();
+        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
+        assert_eq!(cfg.defaults.baseline_dir, "");
     }
     #[test]
     fn parses_sample() {
