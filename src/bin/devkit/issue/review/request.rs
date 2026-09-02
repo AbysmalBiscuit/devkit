@@ -204,6 +204,16 @@ pub fn run(args: Args) -> Result<()> {
     // Every mutation below is gated on the PR carrying this worktree's commits.
     super::finish::assert_belongs(&pr, &head)?;
 
+    // Resolving the recipients can refuse the run — a PR with no reviewers and
+    // no `--to` names nobody — so it happens before any mutation. Refusing
+    // after the flip would leave the PR ready for a review nobody was asked for.
+    let targets = match pinned_targets(&explicit, args.no_notify) {
+        Some(t) => t,
+        None => steps.during_result("Resolving reviewers…", || {
+            resolve_request_targets(&explicit, pr.number, &start, &repo, people)
+        })?,
+    };
+
     let number = pr.number.to_string();
     if !reviewers.is_empty() {
         let joined = reviewers.join(",");
@@ -240,13 +250,6 @@ pub fn run(args: Args) -> Result<()> {
     if let Some(rec) = create::record_with_pr(record.as_ref(), locator) {
         devkit_common::record::write(std::path::Path::new(&toplevel), &rec)?;
     }
-
-    let targets = match pinned_targets(&explicit, args.no_notify) {
-        Some(t) => t,
-        None => steps.during_result("Resolving reviewers…", || {
-            resolve_request_targets(&explicit, pr.number, &start, &repo, people)
-        })?,
-    };
 
     if args.no_notify {
         println!("{}", pr.url);
