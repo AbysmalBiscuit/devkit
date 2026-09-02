@@ -2,6 +2,8 @@
 //! resolves through here, so a project that declares nothing still gets the
 //! remote's default branch.
 
+mod locks;
+
 use anyhow::{Context, Result};
 use devkit_common::worktree::BASELINE_MARKER;
 use devkit_config::Config;
