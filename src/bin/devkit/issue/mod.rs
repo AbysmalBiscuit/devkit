@@ -103,7 +103,8 @@ pub(crate) enum Cmd {
     },
     /// Check out an existing PR into a new worktree.
     ///
-    /// Accepts a PR number, issue id, or URL.
+    /// Accepts a PR number, issue id, or URL. Compatibility alias for
+    /// `issue pr checkout`, which is where this lives now.
     #[command(hide = true)]
     CheckoutPr {
         /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue URL.
@@ -129,6 +130,8 @@ pub(crate) enum Cmd {
         ids: Vec<String>,
     },
     /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
+    ///
+    /// Compatibility alias for `issue pr status`, which is where this lives now.
     #[command(hide = true)]
     Info {
         /// Issue id, branch, worktree basename, or path. Defaults to cwd.

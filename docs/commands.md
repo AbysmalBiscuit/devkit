@@ -205,10 +205,12 @@ issue review request --no-notify                              # push, add review
 - A run that notifies marks a draft PR ready for review first, since asking a human to look at a draft is incoherent. `defaults.require_pr_reviewer` gates that flip exactly as it gates `issue pr ready`, and a refusal leaves the PR a draft.
 - `--no-notify` sends no Slack, never falls back to the PR's current reviewers, and leaves draft state alone. It prints the PR URL instead. Combined with `--to` it still adds those GitHub reviewers, just without the Slack.
 - `--pr <URL|number>` acts on that PR for this run: a pasted GitHub PR URL keeps its own repository, a bare number means `pr_repo`. Since the command records whichever PR it acted on, this is also how a worktree bound to the wrong PR is rebound — the recovery for a superseded PR, where two PRs share a head branch and the branch lookup is ambiguous. Otherwise the PR comes from the worktree's record, and failing that from its branch.
-- `--no-push` as before.
+- `--no-push` requests the review against the branch as GitHub already has it, without pushing first.
 - `--arg key=value` (repeatable) overrides a variable declared in `[templates.variables]`.
 
 The `pr_title` the Slack template renders is the PR's own title, read from GitHub, not a locally rendered one — the command is not creating the PR and has no title of its own to offer.
+
+Everything that can refuse the run happens before anything changes the PR: the recipients are resolved, and the reviewer gate judged, while the PR is still whatever it was. A run that ends up with nobody to notify leaves a draft a draft.
 
 Whichever way the PR is resolved, its head commit must be this worktree's `HEAD` or the command refuses it: a branch name is shared across forks and does not prove the PR carries this work, and a wrongly bound PR that later merges would let `issue end` delete a branch whose commits never landed. A squash- or rebase-merged PR still matches, since the comparison is against the branch head the PR carries rather than the commit that landed on the base.
 

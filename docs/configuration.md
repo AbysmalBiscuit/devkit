@@ -115,7 +115,7 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 | `baseline_ref` | yes | Git ref the baseline server tracks (e.g. `origin/staging`). |
 | `baseline_path` | yes | Checkout path for the baseline server. `~` is expanded. |
 | `doppler_yaml` | no | Path to the repo's `doppler.yaml`; its `setup` paths seed app **path inference**. `~` is expanded. Absent → apps need an explicit `path`. |
-| `pr_base` | no (default `"staging"`) | Default base branch for PRs opened by `issue review`. |
+| `pr_base` | no (default `"staging"`) | Default base branch for PRs opened by `issue pr create`. |
 | `pr_create_state` | no (default `"draft"`) | State `issue pr create` opens a PR in when neither `--draft` nor `--ready` is given: `"draft"` or `"ready"`. |
 | `require_pr_reviewer` | no (default `false`) | Refuse any run that would leave a PR ready for review with no human GitHub reviewer: `issue pr create --ready`, `issue pr ready`, and the draft-to-ready flip in `issue review request`. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
