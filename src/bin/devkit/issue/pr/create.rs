@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::issue::review::{
     self, PrAction, Target, action_for, base_ctx, finish, guard_branch, parse_args, render_review,
-    require_pr_title, require_reviewer, resolve_target, with_fields,
+    require_pr_title, resolve_target, with_fields,
 };
 
 pub struct Args {
@@ -279,6 +279,8 @@ pub(crate) struct Ensure<'a> {
     pub pr_body: RenderBody<'a>,
     /// GitHub logins to request as reviewers.
     pub reviewers: Vec<String>,
+    /// `defaults.require_pr_reviewer`: whether opening a PR ready for review
+    /// demands a human reviewer.
     pub require_reviewer: bool,
     pub steps: &'a Steps,
 }
@@ -343,7 +345,10 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
         }
         PrAction::Create => {
             require_pr_title(&args.pr_title)?;
-            require_reviewer(&args.reviewers, args.require_reviewer)?;
+            // A draft is not gated: an unreviewed draft is not a violation.
+            if matches!(args.state, PrCreateState::Ready) {
+                super::require_reviewer_for_ready(&[], &args.reviewers, args.require_reviewer)?;
+            }
             let pr_body = pr_body.expect("Create implies a rendered body");
             let mut gh_args = vec![
                 "pr",

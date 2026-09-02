@@ -82,7 +82,11 @@ pub(crate) fn targets_from_logins(
 
 /// Logins currently requested as reviewers on PR `pr`, over direct HTTP when a
 /// token is available, else `gh pr view --json reviewRequests`.
-fn requested_reviewer_logins(pr: u64, cwd: &str, repo: &github::Repo) -> Result<Vec<String>> {
+pub(crate) fn requested_reviewer_logins(
+    pr: u64,
+    cwd: &str,
+    repo: &github::Repo,
+) -> Result<Vec<String>> {
     if github::token().is_some()
         && let Ok(logins) = github::requested_reviewers(&repo.slug, pr)
     {
@@ -322,16 +326,16 @@ mod tests {
     }
 
     /// `require_pr_reviewer` is satisfied by what `--to` contributes as a GitHub
-    /// reviewer, so a `#channel` and a person with no handle both leave a create
+    /// reviewer, so a `#channel` and a person with no handle both leave a PR
     /// with nobody to review it.
     #[test]
     fn the_reviewer_gate_reads_handles_not_slack_recipients() {
         let (logins, _) = reviewer_logins(&[chan("#eng"), person("igor", None)]);
         assert!(logins.is_empty());
-        assert!(crate::issue::review::require_reviewer(&logins, true).is_err());
+        assert!(crate::issue::pr::require_reviewer_for_ready(&[], &logins, true).is_err());
 
         let (logins, _) = reviewer_logins(&[chan("#eng"), person("lev", Some("LevValle"))]);
-        assert!(crate::issue::review::require_reviewer(&logins, true).is_ok());
+        assert!(crate::issue::pr::require_reviewer_for_ready(&[], &logins, true).is_ok());
     }
 
     #[test]

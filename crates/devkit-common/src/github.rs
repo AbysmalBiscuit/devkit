@@ -648,6 +648,23 @@ fn parse_requested_reviewers(v: &Value) -> Vec<String> {
         .collect()
 }
 
+fn parse_submitted_reviewers(v: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in v.as_array().into_iter().flatten() {
+        let Some(login) = r
+            .get("user")
+            .and_then(|u| u.get("login"))
+            .and_then(|l| l.as_str())
+        else {
+            continue;
+        };
+        if !out.iter().any(|s| s == login) {
+            out.push(login.to_string());
+        }
+    }
+    out
+}
+
 /// Whether PR `n` exists in `slug` (`owner/repo`).
 pub fn pr_exists(slug: &str, n: u64) -> Result<bool> {
     Ok(rest_get_opt(&format!("/repos/{slug}/pulls/{n}"))?.is_some())
@@ -887,6 +904,14 @@ pub fn pr_by_head(repo: &Repo, branch: &str) -> HeadLookup {
 pub fn requested_reviewers(slug: &str, n: u64) -> Result<Vec<String>> {
     let v = rest_get(&format!("/repos/{slug}/pulls/{n}/requested_reviewers"))?;
     Ok(parse_requested_reviewers(&v))
+}
+
+/// Logins that have submitted a review on PR `n`. GitHub removes a reviewer
+/// from `requested_reviewers` once they review, so a caller asking "is anyone
+/// reviewing this" needs both lists.
+pub fn submitted_reviewers(slug: &str, n: u64) -> Result<Vec<String>> {
+    let v = rest_get(&format!("/repos/{slug}/pulls/{n}/reviews"))?;
+    Ok(parse_submitted_reviewers(&v))
 }
 
 /// Open/merge timestamps + line counts of one PR, for timeline charts.
@@ -1234,6 +1259,16 @@ mod tests {
         let v = json!({ "users": [{"login": "alice"}, {"login": "carol"}], "teams": [] });
         assert_eq!(parse_requested_reviewers(&v), vec!["alice", "carol"]);
         assert!(parse_requested_reviewers(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn parse_submitted_reviewers_dedupes_and_skips_empty_logins() {
+        let v = json!([
+            { "user": { "login": "igoracc" }, "state": "COMMENTED" },
+            { "user": { "login": "igoracc" }, "state": "APPROVED" },
+            { "user": null, "state": "APPROVED" }
+        ]);
+        assert_eq!(parse_submitted_reviewers(&v), vec!["igoracc".to_string()]);
     }
 
     #[test]

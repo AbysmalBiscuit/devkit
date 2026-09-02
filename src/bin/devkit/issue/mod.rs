@@ -286,6 +286,20 @@ pub(crate) enum PrCmd {
         #[arg(long = "arg")]
         args: Vec<String>,
     },
+    /// Mark this branch's PR ready for review.
+    Ready {
+        /// Reviewer: a `[people]` alias. Repeatable. Adds GitHub reviewers and
+        /// sends no Slack.
+        #[arg(long = "to")]
+        to: Vec<String>,
+        /// Mark ready without pushing the branch first.
+        #[arg(long = "no-push")]
+        no_push: bool,
+        /// Use this PR for this run: a GitHub PR URL or a bare number (meaning
+        /// `pr_repo`). Replaces a wrong recorded binding.
+        #[arg(long)]
+        pr: Option<String>,
+    },
     /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
     Status {
         /// Issue id, branch, worktree basename, or path. Defaults to cwd.
@@ -445,6 +459,13 @@ pub fn run(cli: IssueCli) -> Result<()> {
                     no_push,
                     pr,
                     args,
+                    dir: cli.dir,
+                    config: cli.config,
+                }),
+                PrCmd::Ready { to, no_push, pr } => pr::ready::run(pr::ready::Args {
+                    to,
+                    no_push,
+                    pr,
                     dir: cli.dir,
                     config: cli.config,
                 }),
