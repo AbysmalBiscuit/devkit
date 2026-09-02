@@ -9,9 +9,7 @@ pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Config {
-    /// Project-wide paths and branch conventions. Required of any config that
-    /// configures a project; omitted only by one built entirely from
-    /// `[config]`, `[harness]`, `[docs]`, `[brief]`, and `[parallelism]`.
+    /// Project-wide paths and branch conventions.
     #[serde(default)]
     pub defaults: Defaults,
     /// One table per runnable app, keyed by the app id passed to
@@ -303,26 +301,30 @@ impl std::fmt::Display for PrCreateState {
     }
 }
 
-/// Project-wide paths and branch conventions. The first four keys are required
-/// of any config that configures a project — without them no worktree, branch,
-/// or baseline resolves. A config carrying only `[config]`, `[harness]`,
-/// `[docs]`, `[brief]`, or `[parallelism]` omits the table entirely and takes
-/// the defaults.
+/// Project-wide paths and branch conventions. Each key is independently
+/// optional and empty (or, for `apps_dir`/`pr_base`/`stray_scan_width`, its own
+/// documented default) when unset; an empty path or branch key is not
+/// validated at config load, and what happens when it is used is up to the
+/// feature that reads it.
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct Defaults {
     /// Directory issue worktrees are created under. `~` is expanded. Names a
     /// location on this machine, so a relative value anchors to the
     /// directory of the config layer that declared it, even when that layer
     /// is the repository's main checkout.
+    #[serde(default)]
     pub worktree_root: String,
     /// Prefix on branches created by `issue setup`, e.g. `you/`.
+    #[serde(default)]
     pub branch_prefix: String,
     /// Git ref the baseline server tracks, e.g. `origin/staging`.
+    #[serde(default)]
     pub baseline_ref: String,
     /// Checkout path for the baseline server. `~` is expanded. Names a
     /// location on this machine, so a relative value anchors to the
     /// directory of the config layer that declared it, even when that layer
     /// is the repository's main checkout.
+    #[serde(default)]
     pub baseline_path: String,
     /// Path to the repo's `doppler.yaml`; its `setup` paths seed app path
     /// inference. `~` is expanded. Names a file inside the repository being
@@ -978,14 +980,6 @@ pub(crate) fn health_with_home(
     Health::of(&resolve_with_home(None, start, main_checkout, None, home))
 }
 
-/// Tables a devkit.toml may carry on its own, with no project configured around
-/// them. Each is read by a crate that needs no path or branch convention:
-/// `[harness]` by `devkit-locks`, `[docs]` by `devkit-docs`, `[config]` by the
-/// layer walk below, `[brief]` by the session summary, `[parallelism]` by the
-/// shared worker pool. A config built only from these resolves without a
-/// `[defaults]` table; anything else demands one.
-const STANDALONE_SECTIONS: [&str; 5] = ["config", "harness", "docs", "brief", "parallelism"];
-
 /// Resolve the effective config by layering and deep-merging all applicable
 /// files. `main_checkout` is this repository's main checkout when `start` is
 /// a linked worktree of one, and `checkout_root` is the repository checkout
@@ -1024,16 +1018,6 @@ pub(crate) fn resolve_with_home(
     let layers = discover(explicit, start, main_checkout, home)?;
     let order: Vec<PathBuf> = layers.iter().map(|(p, _)| p.clone()).collect();
     let (merged, origin, shadowed) = merge_layers(&layers);
-    if !merged.contains_key("defaults")
-        && let Some(section) = merged
-            .keys()
-            .find(|k| !STANDALONE_SECTIONS.contains(&k.as_str()))
-    {
-        anyhow::bail!(
-            "deserializing merged devkit config: missing field `defaults`, \
-             which `[{section}]` needs"
-        );
-    }
     let mut cfg: Config = toml::Value::Table(merged)
         .try_into()
         .context("deserializing merged devkit config")?;
@@ -1273,6 +1257,24 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         )
         .unwrap();
         assert!(bare.defaults.worktree_include.is_empty());
+    }
+    #[test]
+    fn a_defaults_table_with_one_key_deserializes() {
+        let cfg: Config = toml::from_str("[defaults]\nbranch_prefix = 'lev/'\n").unwrap();
+        assert_eq!(cfg.defaults.branch_prefix, "lev/");
+        assert_eq!(cfg.defaults.worktree_root, "");
+        assert_eq!(cfg.defaults.baseline_ref, "");
+    }
+    #[test]
+    fn a_config_with_a_section_but_no_defaults_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n[github]\nissues_repo = 'a/b'\n",
+        )
+        .unwrap();
+        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None).unwrap();
+        assert_eq!(cfg.defaults.worktree_root, "");
     }
     #[test]
     fn parses_sample() {
@@ -2046,26 +2048,6 @@ steps = [
         assert_eq!(cfg.defaults.pr_base, "staging");
         assert_eq!(cfg.defaults.stray_scan_width, 64);
         assert_eq!(health_with_home(&project, None, None), Health::Ok);
-    }
-
-    #[test]
-    fn a_config_that_configures_a_project_still_needs_defaults() {
-        // Relaxing the requirement for standalone sections must not let an
-        // `[apps]` table through with empty paths — that would launch servers
-        // against a worktree root of "".
-        let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("apps-no-defaults");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(
-            project.join("devkit.toml"),
-            "[config]\nroot = true\n[apps.api]\nbase_port = 9100\nlaunch = ['echo']\n",
-        )
-        .unwrap();
-
-        match health_with_home(&project, None, None) {
-            Health::Broken(why) => assert!(why.contains("defaults"), "{why}"),
-            other => panic!("expected Broken, got {other:?}"),
-        }
     }
 
     #[test]

@@ -191,7 +191,7 @@
       "type": "object"
     },
     "Defaults": {
-      "description": "Project-wide paths and branch conventions. The first four keys are required\nof any config that configures a project — without them no worktree, branch,\nor baseline resolves. A config carrying only `[config]`, `[harness]`,\n`[docs]`, `[brief]`, or `[parallelism]` omits the table entirely and takes\nthe defaults.",
+      "description": "Project-wide paths and branch conventions. Each key is independently\noptional and empty (or, for `apps_dir`/`pr_base`/`stray_scan_width`, its own\ndocumented default) when unset; an empty path or branch key is not\nvalidated at config load, and what happens when it is used is up to the\nfeature that reads it.",
       "properties": {
         "apps_dir": {
           "default": "apps",
@@ -199,14 +199,17 @@
           "type": "string"
         },
         "baseline_path": {
+          "default": "",
           "description": "Checkout path for the baseline server. `~` is expanded. Names a\nlocation on this machine, so a relative value anchors to the\ndirectory of the config layer that declared it, even when that layer\nis the repository's main checkout.",
           "type": "string"
         },
         "baseline_ref": {
+          "default": "",
           "description": "Git ref the baseline server tracks, e.g. `origin/staging`.",
           "type": "string"
         },
         "branch_prefix": {
+          "default": "",
           "description": "Prefix on branches created by `issue setup`, e.g. `you/`.",
           "type": "string"
         },
@@ -260,16 +263,11 @@
           "type": "array"
         },
         "worktree_root": {
+          "default": "",
           "description": "Directory issue worktrees are created under. `~` is expanded. Names a\nlocation on this machine, so a relative value anchors to the\ndirectory of the config layer that declared it, even when that layer\nis the repository's main checkout.",
           "type": "string"
         }
       },
-      "required": [
-        "worktree_root",
-        "branch_prefix",
-        "baseline_ref",
-        "baseline_path"
-      ],
       "type": "object"
     },
     "DocsManifest": {
@@ -848,7 +846,7 @@
         "worktree_include": [],
         "worktree_root": ""
       },
-      "description": "Project-wide paths and branch conventions. Required of any config that\nconfigures a project; omitted only by one built entirely from\n`[config]`, `[harness]`, `[docs]`, `[brief]`, and `[parallelism]`."
+      "description": "Project-wide paths and branch conventions."
     },
     "docs": {
       "$ref": "#/$defs/DocsManifest",
