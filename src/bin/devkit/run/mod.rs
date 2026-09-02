@@ -807,14 +807,19 @@ fn sole_referenced_baseline(repo: &str, current: &str) -> Option<PathBuf> {
     (!crate::baseline::shared_with_others(&refs, &path, Path::new(current))).then_some(path)
 }
 
-/// The baseline this worktree's record names, when the path it names really is
-/// one. The record is a plain file inside the worktree, so a pin can be made to
-/// name a sibling worktree; a path carrying no baseline marker names servers
-/// this worktree has no claim on.
+/// The baseline this worktree's record names, when the path it names provably
+/// is one. The record is a plain file inside the worktree, so a pin can be made
+/// to name a sibling worktree; a path whose marker cannot be read names servers
+/// this worktree has no claim on, exactly as one carrying no marker does.
 fn pinned_baseline(worktree: &Path) -> Option<PathBuf> {
+    use devkit_common::worktree::BaselineState;
     let pin = devkit_common::record::read(worktree)?.baseline?;
     let path = PathBuf::from(pin.path);
-    devkit_common::worktree::is_baseline(&path).then_some(path)
+    matches!(
+        devkit_common::worktree::baseline_state(&path),
+        BaselineState::Yes
+    )
+    .then_some(path)
 }
 
 /// Whether the registry tracks anything under `holder`.
@@ -865,11 +870,19 @@ fn report_down(out: &run::DownOutcome) {
     }
 }
 
-/// The selection is decided and stopped under the pinned baseline's slot lock,
-/// which `up` also holds while writing its record: without it another worktree
-/// can take the lock between the sole-referencer check and the kill, write a
-/// record naming this baseline, and — `up` being idempotent for a live pid — be
-/// told its baseline is ready moments before these servers die.
+/// The exemption is resolved and acted on under the pinned baseline's slot
+/// lock, and the lock is released before any prompt. Holding it across a `y/n`
+/// would put an unbounded human wait under a lock that `remove_if_unreferenced`
+/// blocks on while holding the *directory* lock, stalling every prune in the
+/// baseline directory; and the exemption changes nothing about the prompting
+/// path, where every row is offered by holder and confirmed one by one.
+///
+/// The lock narrows, but does not close, the window between deciding who
+/// references the baseline and stopping its servers: `up` takes this lock
+/// across `baseline::ensure` and writes its record after releasing it, so a
+/// worktree that adopts this baseline in that gap can still be told its
+/// baseline is ready moments before these servers die. Closing it needs the pin
+/// write to move inside `ensure`'s lock.
 ///
 /// Anything that leaves the baseline unresolved leaves the cross-worktree gate
 /// exactly where it was, so a repository that cannot be located and a record
@@ -877,30 +890,55 @@ fn report_down(out: &run::DownOutcome) {
 fn cmd_down(cwd: &str, args: &DownArgs) -> Result<()> {
     let current = toplevel(cwd)?;
     let repo = devkit_common::git::primary_checkout(Path::new(cwd)).ok();
-    // The wait for the slot lock is unbounded, and another worktree's `up`
-    // holds it across a whole bootstrap. A baseline holding no rows has nothing
-    // to exempt, so that wait is skipped rather than spent deciding about
-    // servers that do not exist: rows appearing afterwards are outside the
-    // scope this builds and stay behind the terminal gate.
+    // A baseline holding no rows has nothing to exempt, and the wait for its
+    // lock is unbounded, so the decision is skipped rather than queued behind
+    // whatever holds it. Rows appearing afterwards are outside the scope this
+    // then builds and stay behind the terminal gate.
     let pinned = match pinned_baseline(Path::new(&current)) {
         Some(p) if holds_rows(&p, &registry::snapshot()?) => Some(p),
         _ => None,
     };
-    match (pinned, repo) {
-        (Some(pin), Some(repo)) => crate::baseline::with_slot_lock(&pin, || {
+    if let (Some(pin), Some(repo)) = (pinned, repo) {
+        let stopped = crate::baseline::with_slot_lock(&pin, || {
             // The record can be rewritten between the read that named the slot
             // and the lock over it. A baseline this run holds no lock for gets
             // no exemption.
-            let own =
-                sole_referenced_baseline(&repo.to_string_lossy(), &current).filter(|b| *b == pin);
-            down_selection(&current, args, own.as_deref())
-        }),
-        _ => down_selection(&current, args, None),
+            match sole_referenced_baseline(&repo.to_string_lossy(), &current).filter(|b| *b == pin)
+            {
+                Some(own) => down_own(&current, args, &own),
+                None => Ok(false),
+            }
+        })?;
+        if stopped {
+            return Ok(());
+        }
     }
+    down_selection(&current, args)
 }
 
-fn down_selection(current: &str, args: &DownArgs, own_baseline: Option<&Path>) -> Result<()> {
-    let selector = build_selector(args, current, own_baseline);
+/// Stop the selection when the exemption covers all of it, reporting whether it
+/// did. `false` hands the run to [`down_selection`], which reaches further than
+/// this worktree and so prompts — outside the lock, and with no exemption,
+/// since a selection that reaches another worktree can only do so through a
+/// scope flag, whose scope the exemption does not widen.
+fn down_own(current: &str, args: &DownArgs, baseline: &Path) -> Result<bool> {
+    let selector = build_selector(args, current, Some(baseline));
+    let data = registry::snapshot()?;
+    let ports = registry::select(&data, &selector, registry::now());
+    let matched: Vec<(u16, &registry::Entry)> = ports
+        .iter()
+        .filter_map(|p| data.entries.get(p).map(|e| (*p, e)))
+        .collect();
+    if ports.is_empty() || touches_foreign(&matched, current, Some(baseline)) {
+        return Ok(false);
+    }
+    let out = run::bring_down_ports(&ports)?;
+    report_down(&out);
+    Ok(true)
+}
+
+fn down_selection(current: &str, args: &DownArgs) -> Result<()> {
+    let selector = build_selector(args, current, None);
     let data = registry::snapshot()?;
     let now = registry::now();
     let ports = registry::select(&data, &selector, now);
@@ -914,7 +952,7 @@ fn down_selection(current: &str, args: &DownArgs, own_baseline: Option<&Path>) -
         .collect();
 
     // Entirely in the current worktree: stop directly, no prompt.
-    if !touches_foreign(&matched, current, own_baseline) {
+    if !touches_foreign(&matched, current, None) {
         let out = run::bring_down_ports(&ports)?;
         report_down(&out);
         return Ok(());
@@ -1472,6 +1510,17 @@ mod tests {
         std::fs::remove_dir_all(worktree.join(".devkit")).unwrap();
     }
 
+    /// Leave a directory's baseline marker unresolvable — a symlink loop here,
+    /// a permission failure in the field — so it can be neither read nor ruled
+    /// out.
+    #[cfg(unix)]
+    fn make_unclassifiable(dir: &Path) {
+        let marker = dir.join(".devkit").join("baseline.toml");
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&marker);
+        std::os::unix::fs::symlink(&marker, &marker).unwrap();
+    }
+
     fn two_worktrees_naming_one_baseline() -> Pins {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("main");
@@ -1557,6 +1606,29 @@ mod tests {
     fn a_worktree_that_names_no_baseline_has_none() {
         let f = two_worktrees_naming_one_baseline();
         unpin(&f.a);
+        assert_eq!(sole(&f, &f.a), None);
+    }
+
+    /// Worktree discovery folds a tree it cannot classify in with the
+    /// baselines, so a sibling whose marker is unreadable is dropped before its
+    /// record is ever read — and a reference nobody can see would otherwise
+    /// read as no reference at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_sibling_that_cannot_be_classified_leaves_the_baseline_foreign() {
+        let f = two_worktrees_naming_one_baseline();
+        make_unclassifiable(&f.b);
+        assert_eq!(sole(&f, &f.a), None, "b's record still names the baseline");
+    }
+
+    /// The pin names the directory whose servers the exemption would stop, so
+    /// a marker that cannot be read there is no proof of anything.
+    #[cfg(unix)]
+    #[test]
+    fn a_pin_whose_marker_cannot_be_read_is_refused() {
+        let f = two_worktrees_naming_one_baseline();
+        unpin(&f.b);
+        make_unclassifiable(&f.baseline);
         assert_eq!(sole(&f, &f.a), None);
     }
 

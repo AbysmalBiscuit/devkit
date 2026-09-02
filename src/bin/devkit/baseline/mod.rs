@@ -428,9 +428,10 @@ fn slot_name(path: &Path) -> Result<String> {
 pub struct References {
     /// Baseline path → the worktrees naming it.
     pub by_baseline: BTreeMap<PathBuf, Vec<PathBuf>>,
-    /// Worktrees whose record exists and does not parse. Which baseline each
-    /// names is unknown, so no baseline is provably unreferenced while any of
-    /// these exist.
+    /// Worktrees this scan could not read a baseline out of: the record exists
+    /// and does not parse, or the tree could not even be classified. Which
+    /// baseline each names is unknown, so no baseline is provably unreferenced
+    /// while any of these exist.
     pub unreadable: Vec<PathBuf>,
 }
 
@@ -449,7 +450,7 @@ impl References {
             .map(|p| p.display().to_string())
             .collect();
         Some(format!(
-            "no baseline can be reclaimed while these worktrees' records are unreadable: {}",
+            "no baseline can be reclaimed while these worktrees cannot be read: {}",
             names.join(", ")
         ))
     }
@@ -463,11 +464,16 @@ impl References {
 /// --role baseline` run from there writes a record naming the baseline, and a
 /// scan that skipped it would let a sibling `issue end` reclaim a baseline the
 /// primary checkout is still serving from.
+///
+/// A worktree that could not be classified counts as unreadable rather than as
+/// a baseline. Folding it in with the baselines would drop it from the scan
+/// before its record was ever read, and a worktree whose reference nobody can
+/// see is exactly what the unreadable list exists to stop.
 pub fn referencers(repo: &str) -> Result<References> {
-    let (main, others) = devkit_common::worktree::discover(repo)?;
+    let trees = devkit_common::worktree::discover_all(repo)?;
     let mut by_baseline: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
-    let mut unreadable = Vec::new();
-    for path in std::iter::once(main).chain(others.into_iter().map(|w| w.path)) {
+    let mut unreadable = trees.undecidable;
+    for path in std::iter::once(trees.main).chain(trees.linked.into_iter().map(|w| w.path)) {
         match devkit_common::record::read_state(&path) {
             RecordState::Ok(r) => {
                 if let Some(b) = r.baseline {
@@ -541,12 +547,13 @@ pub fn with_slot_lock<T>(baseline: &Path, f: impl FnOnce() -> Result<T>) -> Resu
 /// to confirm with, which is exactly what the cross-worktree gate on `devrun
 /// down` exists to prevent.
 ///
-/// The referencer scan and `down` both run under `previous`'s slot lock.
-/// Computing the sole referencer without it is a time-of-check race the reuse
-/// path makes reachable: between the two, another worktree's `up` takes the
-/// lock, writes its record, and — `up` being idempotent for a live pid —
-/// reports these very servers as its own running baseline. Since `up` writes
-/// its record under the same lock, holding it across both closes the window.
+/// The referencer scan and `down` both run under `previous`'s slot lock, which
+/// narrows the time-of-check race the reuse path makes reachable: between the
+/// two, another worktree's `up` adopts this baseline and — `up` being
+/// idempotent for a live pid — reports these very servers as its own running
+/// baseline, moments before they are stopped. The window is narrowed rather
+/// than closed, because `up` writes its record after `ensure` has returned and
+/// released this lock; closing it needs that pin write to move inside `ensure`.
 pub fn release_abandoned(
     repo: &str,
     worktree: &Path,
@@ -1433,6 +1440,31 @@ mod tests {
 
     fn corrupt_record(wt: &Path) {
         std::fs::write(wt.join(".devkit").join("issue.toml"), "issue = ").unwrap();
+    }
+
+    /// A worktree whose baseline marker cannot be resolved is filtered out of
+    /// the listings with the baselines, so its record is never read. Counting
+    /// it as unreadable is what keeps a reference nobody can see from being
+    /// counted as no reference at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_worktree_that_cannot_be_classified_is_unreadable() {
+        let f = two_worktrees_sharing_one_baseline();
+        let marker = f.b.join(devkit_common::worktree::BASELINE_MARKER);
+        std::os::unix::fs::symlink(&marker, &marker).unwrap();
+
+        let refs = referencers(&f.repo).unwrap();
+        assert!(
+            refs.unreadable
+                .iter()
+                .any(|p| devkit_common::git::same_path(p, &f.b)),
+            "{:?}",
+            refs.unreadable
+        );
+        assert!(
+            !drop_reference(&f.repo, &f.baseline, &registry::Data::default(), false).unwrap(),
+            "a baseline was reclaimed on a scan that could not read every worktree"
+        );
     }
 
     #[test]

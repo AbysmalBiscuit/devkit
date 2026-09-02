@@ -12,15 +12,39 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// `--clean-worktree` can remove one while worktrees still reference it.
 pub const BASELINE_MARKER: &str = ".devkit/baseline.toml";
 
-/// Whether a worktree is a baseline. Uses `metadata` rather than `exists`,
-/// which folds every error into `false`: a permission failure would otherwise
-/// classify a baseline as an issue worktree, which is the unsafe direction.
-pub fn is_baseline(worktree: &Path) -> bool {
+/// Whether a worktree is a baseline, third answer included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaselineState {
+    Yes,
+    No,
+    /// The marker can be neither read nor ruled out: a permission failure, or
+    /// `.devkit` occupied by something that is not a directory.
+    Unknown,
+}
+
+/// A worktree's baseline classification. Uses `metadata` rather than `exists`,
+/// which folds every error into `false` and so cannot tell "no marker" apart
+/// from "the marker could not be read".
+///
+/// `Unknown` is an answer, and each caller decides what to do with it. One that
+/// grants something on the strength of it — exempting a baseline from the
+/// cross-worktree `down` gate, deleting a tree, proving nobody references one —
+/// must refuse an `Unknown`. One that only sorts worktrees into lists folds it
+/// in with the baselines, which is what [`is_baseline`] does.
+pub fn baseline_state(worktree: &Path) -> BaselineState {
     match std::fs::metadata(worktree.join(BASELINE_MARKER)) {
-        Ok(_) => true,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(_) => true,
+        Ok(_) => BaselineState::Yes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => BaselineState::No,
+        Err(_) => BaselineState::Unknown,
     }
+}
+
+/// Whether a worktree is one to treat as a baseline. An undecidable one counts:
+/// classifying it as an issue worktree is the unsafe direction for the listing
+/// consumers, putting an unknown tree into `issue status`, into a
+/// `sync-includes --all` copy, and within reach of `--clean-worktree`.
+pub fn is_baseline(worktree: &Path) -> bool {
+    !matches!(baseline_state(worktree), BaselineState::No)
 }
 
 /// This worktree's issue id. The setup record is authoritative because it holds
@@ -78,14 +102,49 @@ pub fn find_id(s: &str) -> Option<String> {
     None
 }
 
-/// (main_repo_path, other_worktrees) from a path inside any worktree.
-/// Baselines are filtered out: they are linked worktrees, so every consumer of
-/// this list — `issue status`, `sync-includes --all`, `--clean-worktree` —
-/// would otherwise treat one as an issue worktree.
-pub fn discover(start: &str) -> Result<(PathBuf, Vec<Worktree>)> {
+/// A repository's worktrees, sorted by what they are.
+pub struct Worktrees {
+    /// The primary checkout, which git always lists first.
+    pub main: PathBuf,
+    /// The linked worktrees that are not baselines.
+    pub linked: Vec<Worktree>,
+    /// The linked worktrees whose classification failed. Kept apart from
+    /// `linked` rather than dropped: a caller proving something about every
+    /// worktree — that nobody else references a baseline, say — has proved
+    /// nothing while one of these exists, and one silently filtered out is one
+    /// it never learns about.
+    pub undecidable: Vec<PathBuf>,
+}
+
+/// Every worktree of the repository `start` sits in, classified.
+pub fn discover_all(start: &str) -> Result<Worktrees> {
     let mut all = git::worktrees(Path::new(start))?.into_iter();
     let main = all.next().expect("git never lists zero worktrees");
-    Ok((main.path, all.filter(|w| !is_baseline(&w.path)).collect()))
+    let mut linked = Vec::new();
+    let mut undecidable = Vec::new();
+    for w in all {
+        match baseline_state(&w.path) {
+            BaselineState::No => linked.push(w),
+            BaselineState::Yes => {}
+            BaselineState::Unknown => undecidable.push(w.path),
+        }
+    }
+    Ok(Worktrees {
+        main: main.path,
+        linked,
+        undecidable,
+    })
+}
+
+/// (main_repo_path, other_worktrees) from a path inside any worktree, for the
+/// callers that only need trees to list. Baselines are filtered out: they are
+/// linked worktrees, so `issue status`, `sync-includes --all` and
+/// `--clean-worktree` would otherwise treat one as an issue worktree — and a
+/// worktree that cannot be classified is filtered out with them. A caller that
+/// must not silently lose one uses [`discover_all`].
+pub fn discover(start: &str) -> Result<(PathBuf, Vec<Worktree>)> {
+    let w = discover_all(start)?;
+    Ok((w.main, w.linked))
 }
 
 /// Copy files matching `patterns` (path globs relative to `source`) into `dest`
@@ -1274,6 +1333,55 @@ mod tests {
         let (_, others) = discover(main.to_str().unwrap()).unwrap();
         let names: Vec<_> = others.iter().map(|w| w.path.clone()).collect();
         assert_eq!(names, vec![issue], "baseline still listed: {names:?}");
+    }
+
+    /// A marker that resolves to nothing decidable — here a symlink loop, in
+    /// the field a permission failure — leaves a worktree unclassifiable. The
+    /// listings fold it in with the baselines, but a caller counting references
+    /// must be told it exists rather than losing it silently.
+    #[cfg(unix)]
+    #[test]
+    fn a_marker_that_cannot_be_read_is_undecidable() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
+        let marker = dir.path().join(BASELINE_MARKER);
+        std::os::unix::fs::symlink(&marker, &marker).unwrap();
+        assert_eq!(baseline_state(dir.path()), BaselineState::Unknown);
+        assert!(
+            is_baseline(dir.path()),
+            "an unknown tree stays out of the listings"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_all_reports_an_unclassifiable_worktree_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |cwd: &std::path::Path, args: &[&str]| {
+            crate::git::Git::fixture(cwd)
+                .args(args.iter().copied())
+                .output()
+                .unwrap()
+        };
+        git(&main, &["init", "-q", "-b", "main"]);
+        std::fs::write(main.join("f"), "x").unwrap();
+        git(&main, &["add", "."]);
+        git(&main, &["commit", "-qm", "init"]);
+
+        let issue = tmp.path().join("issue");
+        git(
+            &main,
+            &["worktree", "add", "-b", "feat", issue.to_str().unwrap()],
+        );
+        std::fs::create_dir_all(issue.join(".devkit")).unwrap();
+        let marker = issue.join(BASELINE_MARKER);
+        std::os::unix::fs::symlink(&marker, &marker).unwrap();
+
+        let w = discover_all(main.to_str().unwrap()).unwrap();
+        assert!(w.linked.is_empty(), "{:?}", w.linked);
+        assert_eq!(w.undecidable, vec![issue]);
     }
 
     /// `walk_and_classify` must evaluate `crate::pool::jwalk_parallelism()`
