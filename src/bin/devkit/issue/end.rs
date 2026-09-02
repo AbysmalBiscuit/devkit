@@ -712,6 +712,128 @@ mod tests {
         assert!(other.exists(), "another issue's summary is untouched");
     }
 
+    /// A primary checkout at `dir/main` with one commit, ready for worktrees to
+    /// be added beside it.
+    fn repo_with_one_commit(dir: &std::path::Path) -> std::path::PathBuf {
+        let main = dir.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        fixture_git(&main, &["init", "-q", "-b", "main"]);
+        std::fs::write(main.join("f.txt"), "x\n").unwrap();
+        fixture_git(&main, &["add", "-A"]);
+        fixture_git(&main, &["commit", "-qm", "init"]);
+        main
+    }
+
+    fn fixture_git(cwd: &std::path::Path, args: &[&str]) {
+        devkit_common::git::Git::fixture(cwd)
+            .args(args.iter().copied())
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
+    }
+
+    fn record_pinned_at(wt: &std::path::Path, issue: &str, baseline: &std::path::Path) {
+        devkit_common::record::write(
+            wt,
+            &devkit_common::record::IssueRecord {
+                issue: issue.into(),
+                slug: "fix".into(),
+                apps: vec![],
+                summary: None,
+                pr: None,
+                baseline: Some(devkit_common::record::BaselinePin {
+                    sha: "d13d90b724bf8a3c".into(),
+                    path: baseline.display().to_string(),
+                }),
+            },
+        )
+        .unwrap();
+    }
+
+    /// The baseline is counted after the worktree is gone. Counting first would
+    /// find this worktree's own record still naming the baseline and decline,
+    /// leaving it behind on the last `issue end` that could have reclaimed it.
+    #[test]
+    fn cleanup_reclaims_the_baseline_the_record_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = repo_with_one_commit(dir.path());
+
+        let baseline = dir.path().join("_baselines").join("d13d90b724bf");
+        std::fs::create_dir_all(baseline.parent().unwrap()).unwrap();
+        fixture_git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                baseline.to_str().unwrap(),
+            ],
+        );
+        crate::baseline::write_marker(
+            &baseline,
+            &crate::baseline::Marker {
+                sha: "d13d90b724bf8a3c".into(),
+                apps: Default::default(),
+            },
+        )
+        .unwrap();
+
+        let wt = dir.path().join("wt-eng-5");
+        fixture_git(
+            &main,
+            &["worktree", "add", "-q", "-b", "eng-5", wt.to_str().unwrap()],
+        );
+        record_pinned_at(&wt, "ENG-5", &baseline);
+
+        cleanup(wt.to_str().unwrap(), "ENG-5", true, &Mutex::new(())).unwrap();
+
+        assert!(!wt.exists(), "worktree removed");
+        assert!(
+            !baseline.exists(),
+            "the last reference went with the worktree"
+        );
+    }
+
+    /// Reclaiming a baseline is best-effort — `devrun baseline prune` is the
+    /// guarantee — so a refused removal warns and the worktree still goes. The
+    /// pin here names a sibling issue worktree, which is what a stale or
+    /// hand-edited record looks like and the one target worth refusing hardest.
+    #[test]
+    fn cleanup_survives_a_baseline_it_cannot_reclaim() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = repo_with_one_commit(dir.path());
+
+        let sibling = dir.path().join("wt-eng-7");
+        fixture_git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "eng-7",
+                sibling.to_str().unwrap(),
+            ],
+        );
+        std::fs::write(sibling.join("f.txt"), "uncommitted work\n").unwrap();
+
+        let wt = dir.path().join("wt-eng-6");
+        fixture_git(
+            &main,
+            &["worktree", "add", "-q", "-b", "eng-6", wt.to_str().unwrap()],
+        );
+        record_pinned_at(&wt, "ENG-6", &sibling);
+
+        cleanup(wt.to_str().unwrap(), "ENG-6", true, &Mutex::new(())).unwrap();
+
+        assert!(!wt.exists(), "the removal completed");
+        assert!(sibling.exists(), "a sibling worktree must survive the pin");
+        assert_eq!(
+            std::fs::read_to_string(sibling.join("f.txt")).unwrap(),
+            "uncommitted work\n"
+        );
+    }
+
     /// The sweep is the fallback for a record that names no summary. Once the
     /// record names one, that file is the whole target: an `ISSUE_*` file for
     /// the same issue sitting beside the primary checkout is somebody else's,

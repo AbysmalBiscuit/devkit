@@ -442,21 +442,26 @@ impl References {
 /// Which worktrees name each baseline. Derived rather than stored: a registry
 /// would keep a phantom reference alive after a plain `git worktree remove`,
 /// and the fix for that is this scan with a file to maintain beside it.
+///
+/// The primary checkout is scanned alongside the linked worktrees: `devrun up
+/// --role baseline` run from there writes a record naming the baseline, and a
+/// scan that skipped it would let a sibling `issue end` reclaim a baseline the
+/// primary checkout is still serving from.
 pub fn referencers(repo: &str) -> Result<References> {
-    let (_, others) = devkit_common::worktree::discover(repo)?;
+    let (main, others) = devkit_common::worktree::discover(repo)?;
     let mut by_baseline: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
     let mut unreadable = Vec::new();
-    for w in others {
-        match devkit_common::record::read_state(&w.path) {
+    for path in std::iter::once(main).chain(others.into_iter().map(|w| w.path)) {
+        match devkit_common::record::read_state(&path) {
             RecordState::Ok(r) => {
                 if let Some(b) = r.baseline {
                     by_baseline
                         .entry(PathBuf::from(b.path))
                         .or_default()
-                        .push(w.path);
+                        .push(path);
                 }
             }
-            RecordState::Unusable => unreadable.push(w.path),
+            RecordState::Unusable => unreadable.push(path),
             RecordState::Absent => {}
         }
     }
@@ -495,6 +500,16 @@ pub fn drop_reference(
     ports: &registry::Data,
     force: bool,
 ) -> Result<bool> {
+    // The locks are named from the path's parent while `git worktree remove`
+    // resolves the same path against the repository, so a relative path locks
+    // a file under the calling process's working directory and guards neither
+    // the tree nor the callers of it. Config resolves `baseline_dir` to an
+    // absolute path, which leaves a hand-edited record as the only source.
+    anyhow::ensure!(
+        baseline.is_absolute(),
+        "baseline path must be absolute: {}",
+        baseline.display()
+    );
     let root = baseline.parent().context("baseline path has no parent")?;
     locks::with_dir(root, || {
         let refs = referencers(repo)?;
@@ -537,6 +552,17 @@ fn remove_if_unreferenced(
         if !baseline.exists() {
             return Ok(false);
         }
+        // The path comes from a record inside the worktree being removed, and
+        // `referencers` keys on baseline paths, so a pin naming something else
+        // is never a key and reaches here as unreferenced. `git worktree
+        // remove --force` accepts a sibling linked worktree of the same
+        // repository and takes its uncommitted work with it, so the marker is
+        // what decides whether this path is ours to delete.
+        anyhow::ensure!(
+            devkit_common::worktree::is_baseline(baseline),
+            "{} is not a baseline worktree; refusing to remove it",
+            baseline.display()
+        );
         // A live server in the tree is the one thing worth refusing for.
         if !force && live_rows_hold(baseline, ports) {
             anyhow::bail!(
@@ -1367,22 +1393,26 @@ mod tests {
         assert!(!f.baseline.exists());
     }
 
-    /// The regression test for the leak this design's ordering exists to
-    /// prevent. Counting references while the caller's own worktree still
-    /// exists makes each of two concurrent `issue end` runs see the other and
-    /// decline, which leaks the baseline in the common case rather than a rare
-    /// one.
+    /// Two callers that both find themselves holding the last reference must
+    /// produce one remover and no leak. The barrier forces the interleaving
+    /// worth testing: both worktrees are gone before either counts, so both see
+    /// zero referencers and both try to remove. Without it the threads can
+    /// serialize, one declining because the other's worktree still stands,
+    /// which never exercises the contention.
     #[test]
     fn two_concurrent_ends_leave_no_baseline_behind() {
         let f = two_worktrees_sharing_one_baseline();
+        let gate = std::sync::Barrier::new(2);
         let removed: Vec<bool> = std::thread::scope(|s| {
             let handles: Vec<_> = [f.a.clone(), f.b.clone()]
                 .into_iter()
                 .map(|wt| {
                     let repo = f.repo.clone();
                     let baseline = f.baseline.clone();
+                    let gate = &gate;
                     s.spawn(move || {
                         remove_worktree(&repo, &wt);
+                        gate.wait();
                         let ports = registry::Data::default();
                         drop_reference(&repo, &baseline, &ports, false).unwrap()
                     })
@@ -1396,6 +1426,67 @@ mod tests {
             "exactly one remover"
         );
         assert!(!f.baseline.exists(), "baseline leaked");
+    }
+
+    /// The removal target comes from a record inside the worktree being
+    /// removed, so a wrong or hand-edited pin aims `git worktree remove
+    /// --force` at whatever it names. A sibling issue worktree of the same
+    /// repository is a valid removal target for git and would go, uncommitted
+    /// work included, so identity is checked before anything is deleted.
+    #[test]
+    fn a_pin_aimed_at_a_sibling_worktree_is_refused() {
+        let f = two_worktrees_sharing_one_baseline();
+        std::fs::write(f.b.join("f"), "uncommitted work").unwrap();
+        remove_worktree(&f.repo, &f.a);
+        let ports = registry::Data::default();
+
+        let err = drop_reference(&f.repo, &f.b, &ports, false).unwrap_err();
+        assert!(format!("{err:#}").contains("not a baseline"), "{err:#}");
+        assert!(f.b.exists(), "a sibling worktree must survive");
+        assert_eq!(
+            std::fs::read_to_string(f.b.join("f")).unwrap(),
+            "uncommitted work"
+        );
+    }
+
+    /// A relative path locks under whatever directory the process was started
+    /// in while `git worktree remove` resolves it against the repository, so
+    /// the lock guards neither the caller nor the tree. Config resolves
+    /// `baseline_dir` to an absolute path, which leaves a hand-edited record as
+    /// the only source of one.
+    #[test]
+    fn a_relative_pin_path_is_refused_before_any_lock() {
+        let f = two_worktrees_sharing_one_baseline();
+        let ports = registry::Data::default();
+
+        let err = drop_reference(&f.repo, Path::new("_baselines"), &ports, false).unwrap_err();
+        assert!(format!("{err:#}").contains("absolute"), "{err:#}");
+        assert!(
+            !Path::new(".locks").exists(),
+            "a lock file was created under the process working directory"
+        );
+    }
+
+    /// The primary checkout is a worktree like any other and can name a
+    /// baseline in its own record — `devrun up --role baseline` run from there
+    /// writes exactly that. A scan that skipped it would let a sibling
+    /// `issue end` reclaim a baseline still in use.
+    #[test]
+    fn a_record_in_the_primary_checkout_counts_as_a_referencer() {
+        let f = two_worktrees_sharing_one_baseline();
+        let repo = PathBuf::from(&f.repo);
+        write_pin(&repo, "d13d90b724bf8a3c", &f.baseline).unwrap();
+        remove_worktree(&f.repo, &f.a);
+        remove_worktree(&f.repo, &f.b);
+        let ports = registry::Data::default();
+
+        assert_eq!(
+            referencers(&f.repo).unwrap().by_baseline[&f.baseline].len(),
+            1,
+            "the primary checkout's record is the one remaining reference"
+        );
+        assert!(!drop_reference(&f.repo, &f.baseline, &ports, false).unwrap());
+        assert!(f.baseline.exists(), "a referenced baseline was removed");
     }
 
     #[test]
