@@ -251,3 +251,286 @@ fn truncate(s: &str) -> String {
     }
     s.chars().take(WIDTH - 3).collect::<String>() + "..."
 }
+
+use std::ffi::OsString;
+
+/// Argument ids the probe adds. Prefixed so they cannot collide with a real
+/// argument id in any subcommand.
+const ID_HELP: &str = "devkit_probe_help";
+const ID_SHORT: &str = "devkit_probe_h";
+const ID_FULL: &str = "devkit_probe_full";
+
+/// A resolved help request.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Request {
+    /// Canonical subcommand names from the root down to the target node, empty
+    /// when the target is the root itself. Canonical, so an alias like
+    /// `remove` arrives as `rm`.
+    pub path: Vec<String>,
+    /// A `-h` appeared. The caller renders terse and ignores everything else.
+    pub short_help: bool,
+    /// A `--full` appeared anywhere in the request.
+    pub full_flag: bool,
+}
+
+fn long_flag(id: &'static str, long: &'static str) -> clap::Arg {
+    clap::Arg::new(id)
+        .long(long)
+        .action(clap::ArgAction::SetTrue)
+        .hide(true)
+}
+
+fn short_flag(id: &'static str, short: char) -> clap::Arg {
+    clap::Arg::new(id)
+        .short(short)
+        .action(clap::ArgAction::SetTrue)
+        .hide(true)
+}
+
+/// The `help` subcommand the probe defines in place of clap's, so `--full`
+/// parses instead of erroring.
+fn help_node() -> clap::Command {
+    clap::Command::new("help")
+        .arg(clap::Arg::new("path").num_args(0..))
+        .arg(long_flag(ID_HELP, "help"))
+        .arg(short_flag(ID_SHORT, 'h'))
+        .arg(long_flag(ID_FULL, "full"))
+}
+
+/// Add the probe's own arguments to one node, then recurse.
+///
+/// The help arguments are per-node, never global: a global argument propagates
+/// its value down the whole chain, which would erase *which* level asked for
+/// help and make `root group --help status` target `status` instead of
+/// `group`. Required arguments and required subcommands are cleared so a help
+/// request parses cleanly; that is what removes the need for `ignore_errors`,
+/// which would also swallow an unrecognized subcommand and turn invalid argv
+/// into successful help output.
+///
+/// `required(false)` alone is not enough. `issue setup`'s positional is
+/// `required_unless_present = "issue"`, a separate condition clap evaluates on
+/// its own, so clearing it takes an explicit reset. `required_unless_present_all`,
+/// `required_if_eq*` and required `ArgGroup`s are unused in this CLI today; a
+/// future one needs the matching reset here, and the test that catches it is
+/// `a_required_option_does_not_block_a_help_request`.
+fn per_node(cmd: clap::Command) -> clap::Command {
+    let has_subs = cmd.get_subcommands().next().is_some();
+    let mut cmd = cmd
+        .subcommand_required(false)
+        .arg_required_else_help(false)
+        .mut_args(|a| {
+            a.required(false)
+                .required_unless_present(clap::builder::Resettable::Reset)
+        })
+        .mut_subcommands(per_node)
+        .arg(long_flag(ID_HELP, "help"))
+        .arg(short_flag(ID_SHORT, 'h'))
+        .arg(long_flag(ID_FULL, "full"));
+    // Only where clap would have generated one, so a leaf keeps its
+    // positional: `docs add help` registers a library named `help`.
+    if has_subs {
+        cmd = cmd.subcommand(help_node());
+    }
+    cmd
+}
+
+fn probe(root: &clap::Command) -> clap::Command {
+    per_node(root.clone())
+        .disable_help_flag(true)
+        .disable_help_subcommand(true)
+}
+
+/// Resolve a help request out of `args`, or `None` when this is not a help
+/// request or the arguments do not parse. Declining on a parse error is what
+/// leaves an unrecognized subcommand for the real parse to report.
+pub fn resolve(root: &clap::Command, args: &[OsString]) -> Option<Request> {
+    let matches = probe(root).try_get_matches_from(args).ok()?;
+
+    let mut path: Vec<String> = Vec::new();
+    let mut short_help = matches.get_flag(ID_SHORT);
+    let mut full_flag = matches.get_flag(ID_FULL);
+    // `-h` counts as a help request too, even though the caller then renders
+    // terse: without it a bare `-h` resolves to nothing and the short-help
+    // precedence rule never gets a request to apply to.
+    let mut help_depth = (matches.get_flag(ID_HELP) || short_help).then_some(0usize);
+    let mut help_sub: Option<Vec<String>> = None;
+
+    let mut cur = &matches;
+    while let Some((name, sub)) = cur.subcommand() {
+        short_help |= sub.get_flag(ID_SHORT);
+        full_flag |= sub.get_flag(ID_FULL);
+        if name == "help" {
+            help_sub = Some(
+                sub.get_many::<String>("path")
+                    .map(|v| v.cloned().collect())
+                    .unwrap_or_default(),
+            );
+            break;
+        }
+        path.push(name.to_string());
+        if (sub.get_flag(ID_HELP) || sub.get_flag(ID_SHORT)) && help_depth.is_none() {
+            help_depth = Some(path.len());
+        }
+        cur = sub;
+    }
+
+    // A help flag outranks the `help` subcommand's positionals, so
+    // `root --help help group` targets the root. That is the same
+    // first-help-wins rule clap applies to `root --help group`, and keeping
+    // the two spellings on one rule is what stops them disagreeing.
+    let target = match (help_depth, help_sub) {
+        (Some(depth), _) => path[..depth].to_vec(),
+        (None, Some(rest)) => {
+            let mut t = path;
+            t.extend(rest);
+            t
+        }
+        (None, None) => return None,
+    };
+
+    Some(Request {
+        path: target,
+        short_help,
+        full_flag,
+    })
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    /// A stand-in for the real tree carrying the shapes that break a
+    /// hand-written argv walker: a value-taking global flag, an alias, a
+    /// required option, and a leaf with a positional.
+    fn sample() -> clap::Command {
+        clap::Command::new("root")
+            .arg(
+                clap::Arg::new("dir")
+                    .short('C')
+                    .long("dir")
+                    .global(true)
+                    .num_args(1),
+            )
+            .subcommand(
+                clap::Command::new("group")
+                    .subcommand(clap::Command::new("status"))
+                    .subcommand(clap::Command::new("rm").visible_alias("remove"))
+                    // Mirrors the real `issue setup`: a positional that is
+                    // `required_unless_present`, not plainly `required`. A
+                    // probe that only clears `required` still fails here.
+                    .subcommand(
+                        clap::Command::new("setup")
+                            .arg(clap::Arg::new("slug").long("slug").num_args(1))
+                            .arg(
+                                clap::Arg::new("slug_pos")
+                                    .required_unless_present("slug")
+                                    .conflicts_with("slug"),
+                            ),
+                    )
+                    .subcommand(
+                        clap::Command::new("add").arg(clap::Arg::new("target").required(true)),
+                    ),
+            )
+    }
+
+    fn req(argv: &[&str]) -> Option<Request> {
+        let args: Vec<OsString> = std::iter::once("root")
+            .chain(argv.iter().copied())
+            .map(OsString::from)
+            .collect();
+        resolve(&sample(), &args)
+    }
+
+    #[test]
+    fn a_valued_global_flag_does_not_swallow_the_subcommand() {
+        let r = req(&["group", "-C", "status", "status", "--help"]).expect("help request");
+        assert_eq!(r.path, ["group", "status"]);
+    }
+
+    #[test]
+    fn an_unknown_subcommand_declines_so_the_real_parse_errors() {
+        assert!(req(&["group", "typo", "--help"]).is_none());
+    }
+
+    #[test]
+    fn a_required_option_does_not_block_a_help_request() {
+        let r = req(&["group", "setup", "--help"]).expect("help request");
+        assert_eq!(r.path, ["group", "setup"]);
+    }
+
+    #[test]
+    fn the_first_help_wins() {
+        let r = req(&["group", "--help", "status"]).expect("help request");
+        assert_eq!(
+            r.path,
+            ["group"],
+            "help at the group level targets the group"
+        );
+    }
+
+    #[test]
+    fn a_separator_hides_a_later_help() {
+        assert!(req(&["group", "add", "--", "--help"]).is_none());
+    }
+
+    #[test]
+    fn a_leaf_positional_named_help_is_not_a_help_request() {
+        assert!(req(&["group", "add", "help"]).is_none());
+    }
+
+    #[test]
+    fn an_alias_resolves_to_the_canonical_name() {
+        let r = req(&["group", "remove", "--help"]).expect("help request");
+        assert_eq!(r.path, ["group", "rm"]);
+    }
+
+    #[test]
+    fn short_help_is_reported_separately() {
+        assert!(req(&["group", "-h"]).expect("help request").short_help);
+        assert!(!req(&["group", "--help"]).expect("help request").short_help);
+        assert!(req(&["--help", "-h"]).expect("help request").short_help);
+    }
+
+    #[test]
+    fn the_help_subcommand_names_the_target() {
+        assert_eq!(
+            req(&["help"]).expect("help request").path,
+            [] as [String; 0]
+        );
+        assert_eq!(
+            req(&["help", "group"]).expect("help request").path,
+            ["group"]
+        );
+        assert_eq!(
+            req(&["help", "group", "status"])
+                .expect("help request")
+                .path,
+            ["group", "status"]
+        );
+        assert_eq!(
+            req(&["group", "help", "status"])
+                .expect("help request")
+                .path,
+            ["group", "status"]
+        );
+    }
+
+    #[test]
+    fn a_help_flag_outranks_the_help_subcommand() {
+        let r = req(&["--help", "help", "group"]).expect("help request");
+        assert_eq!(r.path, [] as [String; 0], "the flag came first");
+    }
+
+    #[test]
+    fn full_is_read_from_anywhere_in_a_help_request() {
+        assert!(req(&["help", "--full"]).expect("help request").full_flag);
+        assert!(req(&["--help", "--full"]).expect("help request").full_flag);
+        assert!(
+            req(&["help", "group", "add", "--full"])
+                .expect("help request")
+                .full_flag
+        );
+        assert!(!req(&["--help"]).expect("help request").full_flag);
+    }
+}
