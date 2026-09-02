@@ -222,12 +222,18 @@ pub fn fingerprint(app: &App, includes: &[String]) -> String {
 
 /// A baseline is one shared tree, so it renders with one stable identity rather
 /// than borrowing the identity of whichever worktree happened to create it.
-/// Keying on the sha keeps two baselines from sharing per-issue resources, and
-/// supplying `issue`/`slug`/`branch` at all is what lets a `prep_files`
-/// template that names one render here: `template::render` is strict.
-fn bootstrap_context(sha: &str, apps: &[String]) -> serde_json::Value {
+/// Keying on the sha keeps two baselines from sharing per-issue resources.
+/// This is the render context every baseline bootstrap uses for `prep_files`
+/// and, extended with `worktree`, for `after_worktree_create`; it carries
+/// every key those templates are documented to see (`prefix`, `issue`,
+/// `slug`, `branch`, `role`, plus `apps` and `sha` for the bootstrap itself)
+/// so a project's template renders in a baseline exactly as it does in an
+/// issue worktree: `template::render` is strict, and a key missing here is a
+/// hard bootstrap failure there.
+fn bootstrap_context(sha: &str, apps: &[String], prefix: &str) -> serde_json::Value {
     let id = format!("baseline-{}", short(sha));
     serde_json::json!({
+        "prefix": prefix,
         "issue": id,
         "slug": id,
         "branch": id,
@@ -271,7 +277,7 @@ pub fn ensure(
         Slot::Exhausted(why) => anyhow::bail!(why),
     };
     locks::with_slot(&root, &name, || {
-        let ctx = bootstrap_context(sha, apps);
+        let ctx = bootstrap_context(sha, apps, &cfg.defaults.branch_prefix);
         let vars = &cfg.templates.variables;
         let includes = &cfg.defaults.worktree_include;
         let primary_s = primary
@@ -318,10 +324,17 @@ pub fn ensure(
                     prep_apps(&path, &branch, &stale, catalog, &ctx, vars)
                 })?;
             }
+            let mut hook_ctx = ctx.clone();
+            if let Some(obj) = hook_ctx.as_object_mut() {
+                obj.insert(
+                    "worktree".into(),
+                    serde_json::Value::String(path.to_string_lossy().into_owned()),
+                );
+            }
             run_after_worktree_create(
                 &path,
                 &cfg.hooks.after_worktree_create,
-                &ctx,
+                &hook_ctx,
                 vars,
                 &env,
                 steps,
@@ -460,7 +473,8 @@ mod tests {
 
     #[test]
     fn the_synthetic_identity_is_stable_per_sha() {
-        let ctx = bootstrap_context("d13d90b724bf8a3c", &["api".to_string()]);
+        let ctx = bootstrap_context("d13d90b724bf8a3c", &["api".to_string()], "lev/");
+        assert_eq!(ctx["prefix"], "lev/");
         assert_eq!(ctx["issue"], "baseline-d13d90b724bf");
         assert_eq!(ctx["slug"], "baseline-d13d90b724bf");
         assert_eq!(ctx["branch"], "baseline-d13d90b724bf");
@@ -473,7 +487,7 @@ mod tests {
     /// propagates a render error with `?`.
     #[test]
     fn a_prep_template_naming_the_issue_renders_in_a_baseline() {
-        let ctx = bootstrap_context("d13d90b724bf8a3c", &["api".to_string()]);
+        let ctx = bootstrap_context("d13d90b724bf8a3c", &["api".to_string()], "lev/");
         let got = devkit_common::template::render(
             "ISSUE={{ issue }} ROLE={{ role }}",
             &ctx,
@@ -544,6 +558,71 @@ mod tests {
 
         let again = ensure(&cfg, &catalog, &primary, &sha, &[], &Steps::persistent()).unwrap();
         assert_eq!(again, path, "a complete baseline is reused, not rebuilt");
+    }
+
+    /// A `prep_files` entry naming `{{ prefix }}` must render inside a baseline
+    /// bootstrap rather than hard-failing it: `template::render` is strict, and
+    /// `prefix` is a documented `prep_files` context key.
+    #[test]
+    fn a_prep_template_naming_the_prefix_renders_in_a_baseline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let root = tmp.path().join("baselines");
+        let mut cfg = cfg_rooted_at(&root);
+        cfg.defaults.branch_prefix = "lev/".into();
+        let catalog = HashMap::from([(
+            "api".to_string(),
+            app_with(vec![prep(".env", "PREFIX={{ prefix }}")], vec![]),
+        )]);
+
+        let path = ensure(
+            &cfg,
+            &catalog,
+            &primary,
+            &sha,
+            &["api".to_string()],
+            &Steps::persistent(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(path.join("apps/api/.env")).unwrap(),
+            "PREFIX=lev/"
+        );
+    }
+
+    /// `after_worktree_create` is documented to render over `worktree`, and its
+    /// shipped default (`zoxide add {{ worktree }}`) depends on it. `git init`
+    /// stands in for that default: it renders `{{ worktree }}` and leaves a
+    /// directory behind only if the argument rendered.
+    #[test]
+    fn the_after_worktree_create_hook_sees_the_baseline_directory_as_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let root = tmp.path().join("baselines");
+        let mut cfg = cfg_rooted_at(&root);
+        cfg.hooks.after_worktree_create = vec![vec![
+            "git".to_string(),
+            "init".to_string(),
+            "{{ worktree }}/artifact".to_string(),
+        ]];
+
+        let path = ensure(
+            &cfg,
+            &HashMap::new(),
+            &primary,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .unwrap();
+
+        assert!(
+            path.join("artifact").exists(),
+            "the hook never received `worktree`"
+        );
     }
 
     /// An interrupted bootstrap leaves a tree with no marker. The next run owns
