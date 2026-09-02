@@ -889,14 +889,18 @@ fn a_group_renders_only_its_own_subtree() {
     assert!(!text.contains("docs prune"), "no sibling groups: {text}");
 }
 
+/// A help flag claims the node it appears under, so a later token that also
+/// names a real subcommand does not move the target deeper. `issue setup`
+/// appears in a tree rooted at `issue` and could not appear in one rooted at
+/// `issue review`, which is what separates the two outcomes.
 #[test]
 fn the_first_help_wins() {
     let (text, _) = help_run("full", &["issue", "--help", "review"]);
-    assert!(text.contains("devkit issue setup"), "the issue tree: {text}");
     assert!(
-        !text.contains("devkit issue review request"),
-        "not the review subtree: {text}"
+        text.contains("devkit issue setup"),
+        "rooted at issue, not at the trailing token: {text}"
     );
+    assert!(!text.contains("docs prune"), "not the whole tree: {text}");
 }
 
 #[test]
