@@ -243,6 +243,10 @@ fn hidden_aliases_stay_reachable_but_unlisted() {
         !text.contains("checkout-pr"),
         "checkout-pr should be hidden from help: {text}"
     );
+    assert!(
+        !text.contains("info"),
+        "info should be hidden from help: {text}"
+    );
 
     let out = Command::new(&link)
         .env("DEVKIT_SKIP_AUTOLINK", "1")
@@ -253,6 +257,87 @@ fn hidden_aliases_stay_reachable_but_unlisted() {
         out.status.success(),
         "issue info must still parse: {}",
         String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .args(["checkout-pr", "--help"])
+        .output()
+        .expect("spawn issue shim");
+    assert!(
+        out.status.success(),
+        "issue checkout-pr must still parse: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The group's own help must list both actions, not just exist.
+#[test]
+fn pr_group_lists_status_and_checkout() {
+    let (_dir, link) = shimtest::linked("issue");
+    let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .args(["pr", "--help"])
+        .output()
+        .expect("spawn issue shim");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        out.status.success(),
+        "issue pr --help exited non-zero: {text}"
+    );
+    assert!(
+        text.contains("status") && text.contains("checkout"),
+        "issue pr --help should list both subcommands: {text}"
+    );
+}
+
+/// Bare `issue pr` must resolve to `pr status`, byte-for-byte the same as the
+/// hidden `issue info` alias it replaces, not fall through expecting
+/// `checkout`'s TARGET positional.
+#[test]
+fn bare_pr_matches_info() {
+    let (_dir, link) = shimtest::linked("issue");
+    let state = tempfile::tempdir().expect("state dir");
+    let project = empty_repo();
+    // `info`/`pr status` resolve the current branch, unlike `status`, which
+    // `empty_repo` alone suffices for; give it a HEAD to resolve.
+    devkit_common::git::Git::fixture(project.path())
+        .args(["commit", "--allow-empty", "-q", "-m", "init"])
+        .output()
+        .expect("git commit");
+
+    let pr_out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .arg("pr")
+        .current_dir(project.path())
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .output()
+        .expect("spawn bare issue pr");
+    assert!(
+        pr_out.status.success(),
+        "bare issue pr should run status: {}",
+        String::from_utf8_lossy(&pr_out.stderr)
+    );
+
+    let info_out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .arg("info")
+        .current_dir(project.path())
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path())
+        .output()
+        .expect("spawn issue info");
+    assert!(
+        info_out.status.success(),
+        "issue info should still run: {}",
+        String::from_utf8_lossy(&info_out.stderr)
+    );
+
+    assert_eq!(
+        String::from_utf8_lossy(&pr_out.stdout),
+        String::from_utf8_lossy(&info_out.stdout),
+        "bare `issue pr` should render exactly what `issue info` does"
     );
 }
 
