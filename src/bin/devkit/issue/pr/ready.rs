@@ -65,6 +65,14 @@ pub fn run(args: Args) -> Result<()> {
     // Every mutation below is gated on the PR carrying this worktree's commits.
     review::finish::assert_belongs(&pr, &head)?;
 
+    // Recorded before the flip, not after: the binding is true the moment the
+    // PR is resolved and verified, and a run that dies mid-flight then leaves
+    // the record naming a PR that exists rather than GitHub holding a state
+    // change nothing local knows about.
+    if let Some(rec) = record_with_pr(record.as_ref(), locator) {
+        devkit_common::record::write(&toplevel, &rec)?;
+    }
+
     let number = pr.number.to_string();
     add_reviewers(pr.number, &reviewers, &repo, &start, &steps)?;
 
@@ -88,10 +96,6 @@ pub fn run(args: Args) -> Result<()> {
             .context("gh pr ready failed")?;
     } else {
         eprintln!("PR #{number} is already ready for review.");
-    }
-
-    if let Some(rec) = record_with_pr(record.as_ref(), locator) {
-        devkit_common::record::write(&toplevel, &rec)?;
     }
 
     println!("{}", pr.url);
