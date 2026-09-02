@@ -168,7 +168,6 @@ fn devrun_shim_still_refuses_reap_without_a_terminal() {
 worktree_root = "wts"
 branch_prefix = "x/"
 baseline_ref = "origin/main"
-baseline_path = "b"
 
 [apps.api]
 base_port = {port}

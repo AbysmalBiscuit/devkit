@@ -14,7 +14,8 @@ fn write(path: &Path, body: &str) {
 /// project `devkit.toml` that carries only `[brief]`/`[tasks]` needs this
 /// alongside them or resolution fails and `[brief]` settings never take
 /// effect.
-const DEFAULTS: &str = "[defaults]\nworktree_root = \"/w\"\nbranch_prefix = \"x/\"\nbaseline_ref = \"r\"\nbaseline_path = \"/b\"\n\n";
+const DEFAULTS: &str =
+    "[defaults]\nworktree_root = \"/w\"\nbranch_prefix = \"x/\"\nbaseline_ref = \"r\"\n\n";
 
 struct Project {
     root: PathBuf,

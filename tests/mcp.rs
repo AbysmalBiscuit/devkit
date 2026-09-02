@@ -19,7 +19,6 @@ const MINIMAL_CONFIG: &str = r#"[defaults]
 worktree_root = "."
 branch_prefix = "test/"
 baseline_ref = "origin/main"
-baseline_path = "."
 doppler_yaml = "nonexistent.yaml"
 
 [apps.web]

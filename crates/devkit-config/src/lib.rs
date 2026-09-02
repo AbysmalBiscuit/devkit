@@ -320,12 +320,6 @@ pub struct Defaults {
     /// Git ref the baseline server tracks, e.g. `origin/staging`.
     #[serde(default)]
     pub baseline_ref: String,
-    /// Checkout path for the baseline server. `~` is expanded. Names a
-    /// location on this machine, so a relative value anchors to the
-    /// directory of the config layer that declared it, even when that layer
-    /// is the repository's main checkout.
-    #[serde(default)]
-    pub baseline_path: String,
     /// Directory baseline worktrees are created under, one per fork-point
     /// commit. `~` is expanded. Names a location on this machine, so a relative
     /// value anchors to the directory of the layer that declared it. Defaults to
@@ -393,7 +387,6 @@ impl Default for Defaults {
             worktree_root: String::new(),
             branch_prefix: String::new(),
             baseline_ref: String::new(),
-            baseline_path: String::new(),
             baseline_dir: String::new(),
             doppler_yaml: String::new(),
             apps_dir: default_apps_dir(),
@@ -1047,6 +1040,9 @@ pub(crate) fn resolve_with_home(
     let layers = discover(explicit, start, main_checkout, home)?;
     let order: Vec<PathBuf> = layers.iter().map(|(p, _)| p.clone()).collect();
     let (merged, origin, shadowed) = merge_layers(&layers);
+    if let Some(warning) = check_baseline_path(&origin, home)? {
+        eprintln!("{warning}");
+    }
     let mut cfg: Config = toml::Value::Table(merged)
         .try_into()
         .context("deserializing merged devkit config")?;
@@ -1060,6 +1056,38 @@ pub(crate) fn resolve_with_home(
             shadowed,
         },
     ))
+}
+
+/// Check a leftover `defaults.baseline_path`: baselines are now per-fork-point
+/// worktrees created under `defaults.baseline_dir`, not one checkout at a
+/// fixed path, so the old key can no longer be honored. A project layer gets a
+/// hard error naming the replacement. The home layer only gets a warning to
+/// print (`Ok(Some(_))`) and is otherwise ignored — a home config is read
+/// from every directory on the machine, including repositories that are not
+/// devkit projects, and erroring there would fail every command run from any
+/// of them. `Ok(None)` means the key is absent.
+fn check_baseline_path(
+    origin: &HashMap<String, PathBuf>,
+    home: Option<&Path>,
+) -> Result<Option<String>> {
+    let Some(from) = origin.get("defaults.baseline_path") else {
+        return Ok(None);
+    };
+    let home = home.map(absolutize).transpose()?;
+    if home.as_deref() == Some(from.as_path()) {
+        return Ok(Some(format!(
+            "warning: `defaults.baseline_path` in {} is ignored; \
+             baselines now live under `defaults.baseline_dir`",
+            from.display()
+        )));
+    }
+    bail!(
+        "`defaults.baseline_path` in {} is no longer a checkout path. Set \
+         `defaults.baseline_dir` to the directory baselines are created \
+         under, and remove the old checkout with \
+         `git worktree remove --force <path>`",
+        from.display()
+    );
 }
 
 /// Refuse a `[templates.variables]` entry that a render context already
@@ -1243,11 +1271,6 @@ fn resolve_defaults(
     }
     for (key, kind, field) in [
         (
-            "defaults.baseline_path",
-            PathKind::Host,
-            &mut cfg.defaults.baseline_path,
-        ),
-        (
             "defaults.baseline_dir",
             PathKind::Host,
             &mut cfg.defaults.baseline_dir,
@@ -1288,7 +1311,7 @@ mod tests {
 worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/git/example/_baseline"
+baseline_dir = "~/git/example/_baselines"
 doppler_yaml = "~/git/example/app/doppler.yaml"
 [apps.api]
 base_port = 9100
@@ -1304,7 +1327,6 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             worktree_root = "/w"
             branch_prefix = "you/"
             baseline_ref = "origin/staging"
-            baseline_path = "/b"
             worktree_include = ["apps/*/.env.local", ".tool-versions"]
             [apps]
             "#,
@@ -1324,7 +1346,6 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             worktree_root = "/w"
             branch_prefix = "you/"
             baseline_ref = "origin/staging"
-            baseline_path = "/b"
             [apps]
             "#,
         )
@@ -1580,7 +1601,6 @@ pr_create_state = "wip"
 worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/git/example/_baseline"
 doppler_yaml = "~/git/example/app/doppler.yaml"
 stray_scan_width = 128
 [apps.api]
@@ -1597,7 +1617,6 @@ launch = ["nitro", "dev", "--port", "{{ port }}"]
 worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/git/example/_baseline"
 doppler_yaml = "~/git/example/app/doppler.yaml"
 pr_base = "staging"
 [apps.api]
@@ -1632,7 +1651,6 @@ github = "exampleuser"
 worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/git/example/_baseline"
 ignored_checks = ["vercel*", "*Preview*"]
 [apps.api]
 base_port = 9100
@@ -1649,7 +1667,6 @@ launch = ["nitro", "dev", "--port", "{{ port }}"]
 worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/git/example/_baseline"
 require_pr_reviewer = true
 [apps.api]
 base_port = 9100
@@ -1809,11 +1826,9 @@ content = \"key = 1\\n\"\n"
     /// Every `[defaults]` key a `Config` requires, with `ABS_W` as the worktree
     /// root so the layering tests read back what they wrote.
     #[cfg(not(windows))]
-    const FULL_DEFAULTS: &str =
-        "worktree_root='/w'\nbranch_prefix='x/'\nbaseline_ref='r'\nbaseline_path='/b'\n";
+    const FULL_DEFAULTS: &str = "worktree_root='/w'\nbranch_prefix='x/'\nbaseline_ref='r'\n";
     #[cfg(windows)]
-    const FULL_DEFAULTS: &str =
-        "worktree_root='C:\\w'\nbranch_prefix='x/'\nbaseline_ref='r'\nbaseline_path='C:\\b'\n";
+    const FULL_DEFAULTS: &str = "worktree_root='C:\\w'\nbranch_prefix='x/'\nbaseline_ref='r'\n";
 
     #[test]
     fn resolve_merges_parent_and_child() {
@@ -2034,7 +2049,6 @@ content = \"key = 1\\n\"\n"
 worktree_root = "~/wt"
 branch_prefix = "x/"
 baseline_ref = "origin/main"
-baseline_path = "/b"
 
 [apps.api]
 base_port = 9100
@@ -2146,7 +2160,6 @@ overwrite = true
 worktree_root = "wts"
 branch_prefix = "x/"
 baseline_ref = "origin/main"
-baseline_path = "~/tmp/baseline"
 
 [tasks.api-prod-build]
 description = "prod nitro build"
@@ -2180,7 +2193,7 @@ steps = [
     #[test]
     fn tasks_roundtrip_through_toml() {
         let src = "[defaults]\nworktree_root = \"w\"\nbranch_prefix = \"x/\"\n\
-                   baseline_ref = \"m\"\nbaseline_path = \"b\"\n\
+                   baseline_ref = \"m\"\n\
                    [tasks.t]\nrun = [\"git\", \"version\"]\n\
                    [tasks.s]\nsteps = [{ task = \"t\" }, { up = \"api\" }]\n";
         let c = Config::parse(src).unwrap();
@@ -2350,7 +2363,7 @@ steps = [
 
     #[test]
     fn task_require_live_roundtrips() {
-        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\nbaseline_path='b'\n[tasks.build]\nrun=['git']\nrequire_live=['api']\n";
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n[tasks.build]\nrun=['git']\nrequire_live=['api']\n";
         let c = Config::parse(s).unwrap();
         assert_eq!(c.tasks["build"].require_live, vec!["api"]);
         let out = toml::to_string(&c).unwrap();
@@ -2382,14 +2395,14 @@ steps = [
 
     #[test]
     fn expand_vars_treats_double_dollar_as_a_literal() {
-        let got = expand_vars("/opt/$${NOT_A_VAR}/x", "defaults.baseline_path").unwrap();
+        let got = expand_vars("/opt/$${NOT_A_VAR}/x", "defaults.baseline_dir").unwrap();
         assert_eq!(got, "/opt/${NOT_A_VAR}/x");
     }
 
     #[test]
     fn expand_vars_passes_a_bare_dollar_through() {
         // A `$` not followed by `{` or `$` is a legal path character, so it stays.
-        let got = expand_vars("/opt/a$b/c", "defaults.baseline_path").unwrap();
+        let got = expand_vars("/opt/a$b/c", "defaults.baseline_dir").unwrap();
         assert_eq!(got, "/opt/a$b/c");
     }
 
@@ -2461,7 +2474,7 @@ steps = [
              worktree_root = \"../proj-worktrees\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
-             baseline_path = \"../proj-worktrees/_baseline\"\n",
+             baseline_dir = \"../proj-worktrees/_baseline\"\n",
         );
         let (cfg, _) = resolve_with_home(None, &proj, None, None, None, None).unwrap();
         assert_eq!(
@@ -2469,7 +2482,7 @@ steps = [
             tmp.path().join("proj-worktrees").to_string_lossy()
         );
         assert_eq!(
-            cfg.defaults.baseline_path,
+            cfg.defaults.baseline_dir,
             tmp.path()
                 .join("proj-worktrees")
                 .join("_baseline")
@@ -2488,8 +2501,7 @@ steps = [
             "[defaults]\n\
              worktree_root = \"../proj-worktrees\"\n\
              branch_prefix = \"lev/\"\n\
-             baseline_ref = \"origin/main\"\n\
-             baseline_path = \"\"\n",
+             baseline_ref = \"origin/main\"\n",
         );
         let (from_root, _) = resolve_with_home(None, &proj, None, None, None, None).unwrap();
         let (from_nested, _) = resolve_with_home(None, &nested, None, None, None, None).unwrap();
@@ -2509,14 +2521,14 @@ steps = [
              worktree_root = '{ABS_W}'\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
-             baseline_path = \"~/wt/_baseline\"\n"
+             baseline_dir = \"~/wt/_baseline\"\n"
             ),
         );
         let (cfg, _) = resolve_with_home(None, tmp.path(), None, None, None, None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, ABS_W);
         let home = home_dir().expect("a home directory to expand `~` against");
         assert_eq!(
-            cfg.defaults.baseline_path,
+            cfg.defaults.baseline_dir,
             home.join("wt").join("_baseline").to_string_lossy()
         );
     }
@@ -2530,11 +2542,11 @@ steps = [
              worktree_root = \"/srv/trees\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
-             baseline_path = \"\"\n",
+             doppler_yaml = \"\"\n",
         );
         let (cfg, _) = resolve_with_home(None, tmp.path(), None, None, None, None).unwrap();
         assert_eq!(
-            cfg.defaults.baseline_path, "",
+            cfg.defaults.doppler_yaml, "",
             "an unset path must not become the layer dir"
         );
     }
@@ -2548,8 +2560,7 @@ steps = [
             "[defaults]\n\
              worktree_root = \"/srv/trees\"\n\
              branch_prefix = \"${DEVKIT_TEST_DEV}/\"\n\
-             baseline_ref = \"origin/main\"\n\
-             baseline_path = \"\"\n",
+             baseline_ref = \"origin/main\"\n",
         );
         let (cfg, _) = resolve_with_home(None, tmp.path(), None, None, None, None).unwrap();
         assert_eq!(cfg.defaults.branch_prefix, "lev/");
@@ -2563,8 +2574,7 @@ steps = [
             "[defaults]\n\
              worktree_root = \"${DEVKIT_TEST_MISSING_ROOT}/trees\"\n\
              branch_prefix = \"lev/\"\n\
-             baseline_ref = \"origin/main\"\n\
-             baseline_path = \"\"\n",
+             baseline_ref = \"origin/main\"\n",
         );
         let err = resolve_with_home(None, tmp.path(), None, None, None, None)
             .expect_err("unset var must fail the load");
@@ -2588,11 +2598,11 @@ steps = [
              worktree_root = \"/srv/trees\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
-             baseline_path = \"${DEVKIT_TEST_EMPTY}\"\n",
+             doppler_yaml = \"${DEVKIT_TEST_EMPTY}\"\n",
         );
         let (cfg, _) = resolve_with_home(None, tmp.path(), None, None, None, None).unwrap();
         assert_eq!(
-            cfg.defaults.baseline_path, "",
+            cfg.defaults.doppler_yaml, "",
             "a set-but-empty variable must not become the layer dir"
         );
     }
@@ -2608,8 +2618,7 @@ steps = [
             "[defaults]\n\
              worktree_root = \"../proj-worktrees\"\n\
              branch_prefix = \"lev/\"\n\
-             baseline_ref = \"origin/main\"\n\
-             baseline_path = \"\"\n",
+             baseline_ref = \"origin/main\"\n",
         );
         // `resolve_with_home` absolutizes a relative `start` against the
         // process's current directory, so this test drives that path the same
@@ -2636,7 +2645,7 @@ steps = [
     fn tracker_kind_parses_from_the_table() {
         let c: Config = toml::from_str(
             "[defaults]\nworktree_root = \"/x\"\nbranch_prefix = \"l/\"\n\
-             baseline_ref = \"origin/main\"\nbaseline_path = \"\"\n\
+             baseline_ref = \"origin/main\"\n\
              [tracker]\nkind = \"github\"\n",
         )
         .unwrap();
@@ -2659,10 +2668,60 @@ steps = [
     fn an_absent_tracker_table_leaves_the_kind_unset() {
         let c: Config = toml::from_str(
             "[defaults]\nworktree_root = \"/x\"\nbranch_prefix = \"l/\"\n\
-             baseline_ref = \"origin/main\"\nbaseline_path = \"\"\n",
+             baseline_ref = \"origin/main\"\n",
         )
         .unwrap();
         assert_eq!(c.tracker.kind, None, "absent means detect, not linear");
+    }
+
+    #[test]
+    fn baseline_path_in_a_project_layer_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n[defaults]\nbaseline_path = '/old'\n",
+        )
+        .unwrap();
+        let err = resolve_with_home(None, dir.path(), None, None, None, None).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("baseline_dir"), "names the replacement: {msg}");
+        assert!(msg.contains("devkit.toml"), "names the layer: {msg}");
+    }
+
+    /// `check_baseline_path` is what `resolve_with_home` calls, tested directly
+    /// against the origin map so the outcome depends only on which layer
+    /// declared the key — not on whatever else discovery would merge in above
+    /// a tempdir. Paired with the error-arm test below: swapping the two
+    /// branches in the implementation fails both.
+    #[test]
+    fn check_baseline_path_warns_when_its_origin_is_the_home_layer() {
+        let home = tempfile::tempdir().unwrap();
+        let home_cfg = home.path().join("config.toml");
+        let mut origin = HashMap::new();
+        origin.insert("defaults.baseline_path".to_string(), home_cfg.clone());
+
+        let warning = check_baseline_path(&origin, Some(&home_cfg))
+            .unwrap()
+            .expect("the home layer warns rather than erroring");
+        assert!(warning.contains("baseline_dir"), "{warning}");
+    }
+
+    #[test]
+    fn check_baseline_path_errors_when_its_origin_is_not_the_home_layer() {
+        let home = tempfile::tempdir().unwrap();
+        let home_cfg = home.path().join("config.toml");
+        let project = tempfile::tempdir().unwrap();
+        let project_cfg = project.path().join("devkit.toml");
+        let mut origin = HashMap::new();
+        origin.insert("defaults.baseline_path".to_string(), project_cfg.clone());
+
+        let err = check_baseline_path(&origin, Some(&home_cfg)).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("baseline_dir"), "names the replacement: {msg}");
+        assert!(
+            msg.contains(&project_cfg.display().to_string()),
+            "names the layer: {msg}"
+        );
     }
 
     /// A typo in `required` is the one config mistake that produces no signal

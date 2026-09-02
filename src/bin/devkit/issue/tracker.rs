@@ -70,7 +70,6 @@ mod tests {
                  worktree_root = \"wts\"\n\
                  branch_prefix = \"lev/\"\n\
                  baseline_ref = \"origin/main\"\n\
-                 baseline_path = \"baseline\"\n\
                  \n\
                  [tracker]\n\
                  kind = \"{kind}\"\n"
@@ -127,8 +126,7 @@ mod tests {
              [defaults]\n\
              worktree_root = \"wts\"\n\
              branch_prefix = \"lev/\"\n\
-             baseline_ref = \"origin/main\"\n\
-             baseline_path = \"base\"\n",
+             baseline_ref = \"origin/main\"\n",
         )
         .unwrap();
         let explicit = dir.path().join("explicit.toml");
@@ -157,7 +155,6 @@ mod tests {
              worktree_root = \"wts\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
-             baseline_path = \"base\"\n\
              doppler_yaml = \"doppler.yaml\"\n\
              \n\
              [preserve.notes]\n\
@@ -186,7 +183,6 @@ mod tests {
              worktree_root = \"wts\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
-             baseline_path = \"base\"\n\
              doppler_yaml = \"doppler.yaml\"\n\
              \n\
              [preserve.notes]\n\

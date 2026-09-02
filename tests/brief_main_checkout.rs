@@ -18,8 +18,7 @@ fn git(args: &[&str], cwd: &Path) {
 const DEFAULTS: &str = "[defaults]\n\
                          worktree_root = \"wts\"\n\
                          branch_prefix = \"x/\"\n\
-                         baseline_ref = \"origin/main\"\n\
-                         baseline_path = \"b\"\n";
+                         baseline_ref = \"origin/main\"\n";
 
 /// A main checkout carrying `body` as its `devkit.toml`, plus a linked
 /// worktree beside it with no config of its own. The file is written after

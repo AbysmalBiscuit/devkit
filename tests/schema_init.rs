@@ -40,7 +40,7 @@ fn a_missing_config_is_created_with_the_directive_first() {
         "worktree_root",
         "branch_prefix",
         "baseline_ref",
-        "baseline_path",
+        "baseline_dir",
     ] {
         assert!(body.contains(key), "missing {key}: {body}");
     }

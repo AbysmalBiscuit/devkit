@@ -291,7 +291,7 @@ mod tests {
     // binary builds its tests (a dependency builds without its own test cfg).
     fn sample_cfg() -> Config {
         Config::parse(
-            "[defaults]\nworktree_root='/w'\nbranch_prefix='x/'\nbaseline_ref='r'\nbaseline_path='/b'\n[apps.api]\nbase_port=1\nlaunch=['a']\n",
+            "[defaults]\nworktree_root='/w'\nbranch_prefix='x/'\nbaseline_ref='r'\n[apps.api]\nbase_port=1\nlaunch=['a']\n",
         )
         .unwrap()
     }

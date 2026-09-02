@@ -29,7 +29,6 @@ fn setup() -> tempfile::TempDir {
 worktree_root = "wts"
 branch_prefix = "x/"
 baseline_ref = "origin/main"
-baseline_path = "b"
 
 [apps.front]
 base_port = 39240

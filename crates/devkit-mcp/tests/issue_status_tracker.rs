@@ -28,7 +28,6 @@ fn fixture(kind: Option<&str>) -> tempfile::TempDir {
              worktree_root = \"wts\"\n\
              branch_prefix = \"lev/\"\n\
              baseline_ref = \"origin/main\"\n\
-             baseline_path = \"baseline\"\n\
              {table}"
         ),
     )

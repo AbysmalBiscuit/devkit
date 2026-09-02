@@ -10,8 +10,7 @@ const BODY: &str = "[config]\n\
                     [defaults]\n\
                     worktree_root = \"../proj-worktrees\"\n\
                     branch_prefix = \"lev/\"\n\
-                    baseline_ref = \"origin/main\"\n\
-                    baseline_path = \"\"\n";
+                    baseline_ref = \"origin/main\"\n";
 
 /// A relative `--config` or `$DEVKIT_CONFIG` must resolve its layer-relative
 /// paths exactly as the upward walk does. `worktree_root` is a ports-registry

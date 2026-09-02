@@ -102,7 +102,7 @@ const STARTER: &str = r#"
 # worktree_root = "~/git/<project>-worktrees"
 # branch_prefix = "<you>/"
 # baseline_ref = "origin/main"
-# baseline_path = "~/git/<project>-worktrees/_baseline"
+# baseline_dir = "~/git/<project>-worktrees/_baselines"
 
 # An app needs base_port and launch to parse at all, and path to resolve
 # without a doppler.yaml to infer it from.

@@ -20,7 +20,7 @@ fn repository_relative_paths_anchor_to_the_checkout_root() {
          worktree_root = \"trees\"\n\
          branch_prefix = \"x/\"\n\
          baseline_ref = \"origin/main\"\n\
-         baseline_path = \".\"\n\
+         baseline_dir = \".\"\n\
          doppler_yaml = \"doppler.yaml\"\n",
     )
     .unwrap();
@@ -54,8 +54,8 @@ fn repository_relative_paths_anchor_to_the_checkout_root() {
         "host path: still anchors to the declaring layer"
     );
     assert_eq!(
-        Path::new(&cfg.defaults.baseline_path),
+        Path::new(&cfg.defaults.baseline_dir),
         main.path(),
-        "host path: baseline_path anchors to the declaring layer too"
+        "host path: baseline_dir anchors to the declaring layer too"
     );
 }

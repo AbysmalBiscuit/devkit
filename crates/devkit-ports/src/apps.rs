@@ -84,7 +84,7 @@ mod tests {
 worktree_root = "~/git/example"
 branch_prefix = "lev/"
 baseline_ref = "origin/staging"
-baseline_path = "~/git/example/_baseline"
+baseline_dir = "~/git/example/_baselines"
 doppler_yaml = "~/git/example/app/doppler.yaml"
 [apps.api]
 base_port = 9100
