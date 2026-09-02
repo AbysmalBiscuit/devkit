@@ -338,7 +338,7 @@ pub struct Defaults {
     /// paths from doppler.yaml and to detect changed apps in a diff.
     #[serde(default = "default_apps_dir")]
     pub apps_dir: String,
-    /// Base branch used when opening PRs (e.g. "staging", "main").
+    /// Base branch used when opening PRs (e.g. "main", "staging").
     #[serde(default = "default_pr_base")]
     pub pr_base: String,
     /// State `issue pr create` opens a PR in when neither `--draft` nor
@@ -406,7 +406,7 @@ fn default_apps_dir() -> String {
 }
 
 fn default_pr_base() -> String {
-    "staging".to_string()
+    "main".to_string()
 }
 
 fn default_stray_scan_width() -> u16 {
@@ -1460,6 +1460,11 @@ github = "exampleuser"
         assert_eq!(igor.github.as_deref(), Some("exampleuser"));
     }
     #[test]
+    fn pr_base_defaults_to_main() {
+        let cfg: Config = toml::from_str("[defaults]\n").unwrap();
+        assert_eq!(cfg.defaults.pr_base, "main");
+    }
+    #[test]
     fn ignored_checks_parse_and_default() {
         assert!(
             Config::parse(SAMPLE)
@@ -2101,7 +2106,7 @@ steps = [
         let (cfg, _) = resolve_with_home(None, &project, None, None, None, None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, "");
         assert_eq!(cfg.defaults.apps_dir, "apps");
-        assert_eq!(cfg.defaults.pr_base, "staging");
+        assert_eq!(cfg.defaults.pr_base, "main");
         assert_eq!(cfg.defaults.stray_scan_width, 64);
         assert_eq!(health_with_home(&project, None, None, None), Health::Ok);
     }

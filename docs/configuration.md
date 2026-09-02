@@ -59,7 +59,7 @@ To do it by hand, the directive is a taplo **header**: first line, preceded only
 #:schema https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json
 
 [defaults]
-worktree_root = "~/git/example-worktrees"
+worktree_root = "~/git/example_worktrees"
 ```
 
 A filesystem path works too, which is how to validate against an unreleased schema — including devkit's own checkout, where the release URL does not yet resolve:
@@ -90,7 +90,7 @@ The schema is generated from the same Rust types serde reads — the doc comment
 
 Three things it deliberately does not do:
 
-- **Nothing is required at the top level.** `[defaults]` is required of the *merged* config, not of any one file — a layer carries only what it overrides, and devkit's own `devkit.toml` is `[harness]` and nothing else. An editor validates the file in front of it, so requiring `[defaults]` would mark correct overlays as errors.
+- **Nothing is required at the top level, `[defaults]` included.** A layer carries only what it overrides, and devkit's own `devkit.toml` is `[harness]` and nothing else. An editor validates the file in front of it, so requiring `[defaults]` would mark correct overlays as errors.
 - **Unknown keys pass.** devkit ignores keys it does not recognise, so a schema that rejected them would be stricter than the parser. A misspelled `lock = false` still silently does nothing.
 - **Post-parse rules are invisible to it**, such as an app needing a `path` when there is no `doppler.yaml` to infer one, or a task setting exactly one of `run`/`steps`.
 
@@ -110,12 +110,12 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 
 | Key | Required | Meaning |
 |---|---|---|
-| `worktree_root` | yes | Directory under which issue worktrees are created. `~` is expanded. |
-| `branch_prefix` | yes | Prefix for branches created by `issue setup` (e.g. `you/`). |
-| `baseline_ref` | yes | Git ref the baseline server tracks (e.g. `origin/staging`). |
-| `baseline_path` | yes | Checkout path for the baseline server. `~` is expanded. |
+| `worktree_root` | no | Directory under which issue worktrees are created. `~` is expanded. Defaults to the primary checkout's `_worktrees` sibling, e.g. `~/git/example_worktrees` beside `~/git/example`. |
+| `branch_prefix` | no | Prefix for branches created by `issue setup` (e.g. `you/`). |
+| `baseline_ref` | no | Git ref the baseline server tracks (e.g. `origin/staging`). Defaults to the remote's default branch, read from `origin/HEAD`. When neither resolves, the error names both fixes: set `defaults.baseline_ref`, or run `git remote set-head origin -a`. |
+| `baseline_path` | no | Checkout path for the baseline server. `~` is expanded. |
 | `doppler_yaml` | no | Path to the repo's `doppler.yaml`; its `setup` paths seed app **path inference**. `~` is expanded. Absent → apps need an explicit `path`. |
-| `pr_base` | no (default `"staging"`) | Default base branch for PRs opened by `issue pr create`. |
+| `pr_base` | no (default `"main"`) | Default base branch for PRs opened by `issue pr create`. |
 | `pr_create_state` | no (default `"draft"`) | State `issue pr create` opens a PR in when neither `--draft` nor `--ready` is given: `"draft"` or `"ready"`. |
 | `require_pr_reviewer` | no (default `false`) | Refuse any run that would leave a PR ready for review with no human GitHub reviewer other than the PR's own author: `issue pr create --ready`, `issue pr ready`, and the draft-to-ready flip in `issue review request`. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
@@ -140,8 +140,8 @@ Step 3 is what lets a project commit its `devkit.toml`:
 
 ```toml
 [defaults]
-worktree_root = "../myproject-worktrees"
-baseline_path = "../myproject-worktrees/_baseline"
+worktree_root = "../myproject_worktrees"
+baseline_path = "../myproject_worktrees/_baseline"
 baseline_ref  = "origin/main"
 ```
 
@@ -568,10 +568,10 @@ Review base context for `review_request`: `branch`, `issue`/`slug`/`apps` from t
 
 ```toml
 [defaults]
-worktree_root  = "~/git/acme"
+worktree_root  = "~/git/acme_worktrees"
 branch_prefix  = "you/"
 baseline_ref   = "origin/staging"
-baseline_path  = "~/git/acme/_baseline"
+baseline_path  = "~/git/acme_worktrees/_baseline"
 doppler_yaml   = "~/git/acme/app/doppler.yaml"
 pr_base        = "staging"
 

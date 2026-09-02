@@ -232,8 +232,8 @@
           "type": "boolean"
         },
         "pr_base": {
-          "default": "staging",
-          "description": "Base branch used when opening PRs (e.g. \"staging\", \"main\").",
+          "default": "main",
+          "description": "Base branch used when opening PRs (e.g. \"main\", \"staging\").",
           "type": "string"
         },
         "pr_create_state": {
@@ -839,7 +839,7 @@
         "doppler_yaml": "",
         "ignored_checks": [],
         "issue_summary": false,
-        "pr_base": "staging",
+        "pr_base": "main",
         "pr_create_state": "draft",
         "require_pr_reviewer": false,
         "stray_scan_width": 64,
