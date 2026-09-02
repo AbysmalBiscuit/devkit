@@ -79,10 +79,13 @@ pub fn find_id(s: &str) -> Option<String> {
 }
 
 /// (main_repo_path, other_worktrees) from a path inside any worktree.
+/// Baselines are filtered out: they are linked worktrees, so every consumer of
+/// this list — `issue status`, `sync-includes --all`, `--clean-worktree` —
+/// would otherwise treat one as an issue worktree.
 pub fn discover(start: &str) -> Result<(PathBuf, Vec<Worktree>)> {
     let mut all = git::worktrees(Path::new(start))?.into_iter();
     let main = all.next().expect("git never lists zero worktrees");
-    Ok((main.path, all.collect()))
+    Ok((main.path, all.filter(|w| !is_baseline(&w.path)).collect()))
 }
 
 /// Copy files matching `patterns` (path globs relative to `source`) into `dest`
@@ -1237,6 +1240,40 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(dir.path().join(BASELINE_MARKER), "sha = 'abc'\n").unwrap();
         assert!(is_baseline(dir.path()));
+    }
+
+    #[test]
+    fn discover_skips_a_worktree_carrying_a_baseline_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |cwd: &std::path::Path, args: &[&str]| {
+            crate::git::Git::fixture(cwd)
+                .args(args.iter().copied())
+                .output()
+                .unwrap()
+        };
+        git(&main, &["init", "-q", "-b", "main"]);
+        std::fs::write(main.join("f"), "x").unwrap();
+        git(&main, &["add", "."]);
+        git(&main, &["commit", "-qm", "init"]);
+
+        let issue = tmp.path().join("issue");
+        git(
+            &main,
+            &["worktree", "add", "-b", "feat", issue.to_str().unwrap()],
+        );
+        let bl = tmp.path().join("bl");
+        git(
+            &main,
+            &["worktree", "add", "--detach", bl.to_str().unwrap()],
+        );
+        std::fs::create_dir_all(bl.join(".devkit")).unwrap();
+        std::fs::write(bl.join(BASELINE_MARKER), "sha = 'abc'\n").unwrap();
+
+        let (_, others) = discover(main.to_str().unwrap()).unwrap();
+        let names: Vec<_> = others.iter().map(|w| w.path.clone()).collect();
+        assert_eq!(names, vec![issue], "baseline still listed: {names:?}");
     }
 
     /// `walk_and_classify` must evaluate `crate::pool::jwalk_parallelism()`
