@@ -782,15 +782,17 @@ fn decide(
             BASELINE_MARKER
         ),
     }
-    // Resolving the tree is not optional: a `here` that fell back to the
-    // unresolved spelling would compare against a resolved `cwd` and could miss
-    // that the caller is standing inside the very tree about to be removed.
-    // `current_dir` is already resolved on the platforms devkit runs on, so its
-    // fallback costs nothing.
+    // Both sides resolve or the guard refuses. A side that fell back to its
+    // unresolved spelling would be compared against a resolved one, and on
+    // Windows the two can never match at all — `canonicalize` returns a
+    // `\\?\`-prefixed path and `current_dir` does not — so a fallback here
+    // silently disarms the one check standing between the sweep and the
+    // caller's own directory.
     let here = std::fs::canonicalize(baseline)
         .with_context(|| format!("resolving {}", baseline.display()))?;
     let cwd = std::env::current_dir().context("resolving the current directory")?;
-    let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    let cwd = std::fs::canonicalize(&cwd)
+        .with_context(|| format!("resolving the current directory {}", cwd.display()))?;
     if cwd == here || cwd.starts_with(&here) {
         anyhow::bail!("cd out of {} before removing it", baseline.display());
     }
@@ -804,9 +806,10 @@ fn decide(
     }
     match registration(registered, baseline) {
         None => return orphan_removal(baseline).map(Some),
-        // Git refuses to remove a locked worktree, `--force` included, so the
-        // lock is a refusal here rather than a failure the real sweep walks
-        // into and reports on every run.
+        // The single `--force` the removal below passes does not override a
+        // lock, and a repeated `-f -f` that would is not devkit's to pass on
+        // somebody's behalf. So the lock is a refusal here rather than a
+        // failure the real sweep walks into and reports on every run.
         Some(w) if w.locked => anyhow::bail!(
             "{} is a locked worktree; `git worktree unlock` it first",
             baseline.display()
@@ -853,9 +856,11 @@ fn registration<'a>(
 /// baseline is left in when its registration goes and its files stay. Reclaimed
 /// as a plain directory — but only once nothing stands behind its `.git`: a
 /// tree whose `.git` resolves is some repository's checkout, and a sweep run
-/// from a different repository has no claim on it. This is the only path in
-/// devkit that reaches `remove_dir_all`, so the unproven case refuses with the
-/// live one.
+/// from a different repository has no claim on it. The guard exists because
+/// this deletion is the one that has no registration to check the tree against
+/// — a `Slot::Rebuild` deletes a tree this repository registered moments
+/// earlier and needs nothing of the sort — so the unproven case refuses with
+/// the live one.
 fn orphan_removal(baseline: &Path) -> Result<Removal> {
     match gitdir_state(baseline) {
         GitdirState::Absent => Ok(Removal::Orphan),
@@ -921,7 +926,16 @@ fn gitdir_state(dir: &Path) -> GitdirState {
     let Ok(named) = std::str::from_utf8(named) else {
         return GitdirState::Unknown;
     };
-    let named = Path::new(named.trim());
+    // git strips only the trailing newline when it reads this file back, so
+    // every other space belongs to the directory name. Rather than reproduce
+    // git's parse on a path that decides a deletion, anything still carrying
+    // whitespace at either end after the separator is left unproven.
+    let named = named.trim_end_matches(['\r', '\n']);
+    let named = named.strip_prefix(' ').unwrap_or(named);
+    if named != named.trim() {
+        return GitdirState::Unknown;
+    }
+    let named = Path::new(named);
     let target = if named.is_absolute() {
         named.to_path_buf()
     } else {
@@ -2466,6 +2480,42 @@ mod tests {
             matches!(gitdir_state(&repo), GitdirState::Resolves),
             "a .git directory is a repository"
         );
+    }
+
+    /// git keeps every space in a directory name and strips only the trailing
+    /// newline when it reads a `.git` file back, so a `gitdir:` whose target
+    /// ends in a space names a directory git resolves. Trimming it here would
+    /// name a different directory, find nothing there, and delete somebody's
+    /// tree as abandoned; the unproven spelling refuses instead, in both sweep
+    /// modes.
+    #[test]
+    fn a_gitdir_padded_with_whitespace_is_refused_in_both_modes() {
+        let f = two_worktrees_sharing_one_baseline();
+        let root = f.baseline.parent().unwrap();
+        let stranger = root.join("bbbbbbbbbbbb");
+        write_marker(&stranger, &fresh_marker("abc")).unwrap();
+        std::fs::write(
+            stranger.join(".git"),
+            format!("gitdir: {}/admin \n", root.display()),
+        )
+        .unwrap();
+
+        assert!(matches!(gitdir_state(&stranger), GitdirState::Unknown));
+        for sweep in [Sweep::Report, Sweep::Remove] {
+            let err = remove_if_unreferenced(
+                &f.repo,
+                &stranger,
+                &referencers(&f.repo).unwrap(),
+                &registrations(&f.repo).unwrap(),
+                Gates::sweep(true, true),
+                &registry::Data::default(),
+                sweep,
+            )
+            .unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("neither read nor ruled out"), "{msg}");
+            assert!(stranger.exists(), "the refused tree was removed");
+        }
     }
 
     /// `Absent` is the only answer that reaches `remove_dir_all`, so every

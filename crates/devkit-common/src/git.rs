@@ -243,8 +243,9 @@ pub struct Worktree {
     pub branch: String,
     /// A bare repository has no working tree, so it holds no config.
     pub bare: bool,
-    /// `git worktree lock`ed. Git refuses to remove one until it is unlocked,
-    /// even with `--force`, so a caller that removes worktrees must ask.
+    /// `git worktree lock`ed. Git refuses to remove one for a single `--force`
+    /// — only a repeated `-f -f` overrides a lock — so a caller that removes
+    /// worktrees must ask.
     pub locked: bool,
 }
 

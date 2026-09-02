@@ -341,9 +341,9 @@ fn prune_leaves_another_repositorys_tree_alone() {
     );
 }
 
-/// Git refuses to remove a locked worktree, `--force` included, so the sweep
-/// refuses it first. A dry run that promised it would be describing a removal
-/// nobody can perform.
+/// Git refuses to remove a locked worktree for the single `--force` the sweep
+/// passes, so the sweep refuses it first. A dry run that promised it would be
+/// describing a removal this command will not perform.
 #[test]
 fn prune_refuses_a_locked_baseline_in_both_modes() {
     let f = fixture();
