@@ -3,7 +3,10 @@
 //! remote's default branch.
 
 use anyhow::{Context, Result};
+use devkit_common::worktree::BASELINE_MARKER;
 use devkit_config::Config;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The ref a worktree's baseline is measured against: the configured
@@ -36,9 +39,94 @@ pub fn pin(worktree: &Path, target: &str) -> Result<String> {
     Ok(sha.to_string())
 }
 
+/// One app's prep fingerprint at the sha the baseline was built from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppMark {
+    pub fingerprint: String,
+}
+
+/// The contents of a baseline worktree's marker file: the sha it was built at,
+/// and each app's prep fingerprint at that build.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Marker {
+    pub sha: String,
+    #[serde(default)]
+    pub apps: BTreeMap<String, AppMark>,
+}
+
+/// The result of reading a baseline's marker. `Absent` and `Unusable` are
+/// both "no marker to trust", but only `Absent` means a fresh baseline may be
+/// built here — `Unusable` means something occupies the path already and
+/// must be dealt with before a rebuild can proceed.
+#[allow(dead_code)]
+pub enum MarkerState {
+    Ok(Marker),
+    Unusable,
+    Absent,
+}
+
+/// Written last, after every bootstrap step, so its presence is what makes a
+/// baseline complete: a directory without one is an interrupted bootstrap
+/// whatever its HEAD says. It also carries identity, which lets a stray
+/// directory be told from a real baseline, and each app's prep fingerprint.
+#[allow(dead_code)]
+pub fn write_marker(dir: &Path, m: &Marker) -> Result<()> {
+    let p = dir.join(BASELINE_MARKER);
+    let parent = p.parent().expect("marker path has a parent");
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let body = toml::to_string(m).context("serializing baseline marker")?;
+    // Rename rather than write in place: a crash partway through a write would
+    // otherwise leave a file that parses as neither a marker nor its absence.
+    let tmp = p.with_extension("toml.tmp");
+    std::fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, &p).with_context(|| format!("renaming into {}", p.display()))
+}
+
+#[allow(dead_code)]
+pub fn read_marker(dir: &Path) -> MarkerState {
+    match std::fs::read_to_string(dir.join(BASELINE_MARKER)) {
+        Err(_) => MarkerState::Absent,
+        Ok(body) => match toml::from_str(&body) {
+            Ok(m) => MarkerState::Ok(m),
+            Err(_) => MarkerState::Unusable,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_marker_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut apps = std::collections::BTreeMap::new();
+        apps.insert(
+            "api".to_string(),
+            AppMark {
+                fingerprint: "9f2c".into(),
+            },
+        );
+        let m = Marker {
+            sha: "d13d90b724bf".into(),
+            apps,
+        };
+        write_marker(dir.path(), &m).unwrap();
+        assert!(matches!(read_marker(dir.path()), MarkerState::Ok(got) if got == m));
+    }
+
+    #[test]
+    fn an_absent_marker_is_absent_and_a_corrupt_one_is_unusable() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(read_marker(dir.path()), MarkerState::Absent));
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
+        std::fs::write(
+            dir.path().join(devkit_common::worktree::BASELINE_MARKER),
+            "sha = ",
+        )
+        .unwrap();
+        assert!(matches!(read_marker(dir.path()), MarkerState::Unusable));
+    }
 
     #[test]
     fn a_configured_ref_wins_over_detection() {

@@ -6,6 +6,23 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Marker identifying a baseline worktree. Baselines are linked worktrees, so
+/// without a way to tell one apart each becomes an `UNKNOWN` row in
+/// `issue status`, `sync-includes --all` copies into it, and
+/// `--clean-worktree` can remove one while worktrees still reference it.
+pub const BASELINE_MARKER: &str = ".devkit/baseline.toml";
+
+/// Whether a worktree is a baseline. Uses `metadata` rather than `exists`,
+/// which folds every error into `false`: a permission failure would otherwise
+/// classify a baseline as an issue worktree, which is the unsafe direction.
+pub fn is_baseline(worktree: &Path) -> bool {
+    match std::fs::metadata(worktree.join(BASELINE_MARKER)) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
+}
+
 /// This worktree's issue id. The setup record is authoritative because it holds
 /// whatever the tracker actually calls the issue; the branch and directory scan
 /// is the fallback that keeps worktrees made without a record — by a plain
@@ -1212,6 +1229,15 @@ mod tests {
     use super::*;
     use crate::git::parse_porcelain;
     use std::path::Path;
+
+    #[test]
+    fn a_directory_with_the_marker_is_a_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_baseline(dir.path()));
+        std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
+        std::fs::write(dir.path().join(BASELINE_MARKER), "sha = 'abc'\n").unwrap();
+        assert!(is_baseline(dir.path()));
+    }
 
     /// `walk_and_classify` must evaluate `crate::pool::jwalk_parallelism()`
     /// on the calling thread, not from inside `crate::pool::install`: doing
