@@ -200,14 +200,9 @@ fn completion_scripts_are_ascii_only() {
 #[test]
 fn no_generated_script_declares_a_help_path() {
     for shell in ["nushell", "fish", "zsh", "bash", "powershell", "elvish"] {
-        let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
-            .args(["completions", shell, "--all"])
-            .env("DEVKIT_SKIP_AUTOLINK", "1")
-            .output()
-            .unwrap_or_else(|e| panic!("spawn completions {shell}: {e}"));
-        let text = String::from_utf8_lossy(&out.stdout);
+        let script = all_shells_script(shell);
         assert!(
-            !text.contains("devkit help "),
+            !script.contains("devkit help "),
             "{shell} script declares a help subtree"
         );
     }
