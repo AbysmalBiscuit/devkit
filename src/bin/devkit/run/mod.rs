@@ -410,7 +410,7 @@ fn print_summary(rows: &[Row]) {
             r.role.to_string(),
             r.app.clone(),
             r.port.to_string(),
-            ui::link(url, url),
+            ui::url_cell(url),
             r.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             match r.ready {
                 Some(true) => "yes".into(),
@@ -420,6 +420,8 @@ fn print_summary(rows: &[Row]) {
             r.log.display().to_string(),
         ]);
     }
+    let budget = ui::url_column_budget(rows.iter().map(|r| r.url.as_str()));
+    ui::pin_url_column(&mut t, 3, budget);
     println!("{t}");
 }
 

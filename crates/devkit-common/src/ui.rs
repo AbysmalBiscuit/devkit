@@ -1,5 +1,5 @@
 use anstyle::{AnsiColor, Style};
-use comfy_table::{ContentArrangement, Table, presets::NOTHING};
+use comfy_table::{ColumnConstraint, ContentArrangement, Table, Width, presets::NOTHING};
 use std::io::IsTerminal;
 
 /// A borderless table that wraps/truncates its content to the terminal width.
@@ -107,6 +107,51 @@ pub fn truncate(s: &str, max: usize) -> String {
     let mut out: String = s.chars().take(keep).collect();
     out.push('…');
     out
+}
+
+/// The widest visible label a linked URL cell carries before it is elided.
+pub const URL_LABEL_MAX: usize = 38;
+
+/// A table cell holding `url`, linked when the terminal supports OSC 8.
+///
+/// comfy-table measures a cell's width with OSC 8 stripped but splits a long
+/// one with a splitter that does not recognise the escape, tearing the link
+/// apart and printing its target as visible text. The label is therefore
+/// elided to fit a column [`pin_url_column`] pins, and the click still reaches
+/// the whole `url`. Without hyperlink support the full text is kept instead,
+/// where wrapping costs nothing.
+pub fn url_cell(url: &str) -> String {
+    if hyperlinks_enabled_on(Stream::Stdout) {
+        link(&truncate(url, URL_LABEL_MAX), url)
+    } else {
+        url.to_string()
+    }
+}
+
+/// The pin width [`pin_url_column`] should use for a table whose URL cells
+/// come from `urls`: the widest label they will actually render, capped at
+/// [`URL_LABEL_MAX`], so a table of short URLs does not reserve a needlessly
+/// wide column.
+pub fn url_column_budget<'a>(urls: impl IntoIterator<Item = &'a str>) -> usize {
+    urls.into_iter()
+        .map(|u| u.chars().count().min(URL_LABEL_MAX))
+        .max()
+        .unwrap_or(URL_LABEL_MAX)
+}
+
+/// Pin the column at `index` so a [`url_cell`] in it is never split.
+///
+/// The width is `budget` (see [`url_column_budget`]) plus comfy-table's left
+/// and right cell padding. Pinning is skipped without hyperlink support,
+/// where the cell is plain text that wraps harmlessly and is better shown
+/// whole.
+pub fn pin_url_column(table: &mut Table, index: usize, budget: usize) {
+    if !hyperlinks_enabled_on(Stream::Stdout) {
+        return;
+    }
+    if let Some(col) = table.column_mut(index) {
+        col.set_constraint(ColumnConstraint::Absolute(Width::Fixed(budget as u16 + 2)));
+    }
 }
 
 // --- colour --------------------------------------------------------------------

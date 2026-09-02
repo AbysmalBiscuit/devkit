@@ -785,6 +785,7 @@ pub fn status_table_linked(
     if !urls.is_empty() {
         headers.push("URL");
     }
+    let url_col = headers.len() - 1;
     let mut t = devkit_common::ui::table(&headers);
     let now = now();
     for (port, e) in &data.entries {
@@ -810,11 +811,15 @@ pub fn status_table_linked(
         ];
         if !urls.is_empty() {
             row.push(match urls.get(port) {
-                Some(u) => devkit_common::ui::link(u, u),
+                Some(u) => devkit_common::ui::url_cell(u),
                 None => "-".to_string(),
             });
         }
         t.add_row(row);
+    }
+    if !urls.is_empty() {
+        let budget = devkit_common::ui::url_column_budget(urls.values().map(|s| s.as_str()));
+        devkit_common::ui::pin_url_column(&mut t, url_col, budget);
     }
     format!("{t}")
 }
