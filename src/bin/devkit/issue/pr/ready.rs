@@ -19,10 +19,12 @@ pub struct Args {
     pub config: Option<String>,
 }
 
-/// A ready PR needs no call: `gh pr ready` on one is a no-op, but skipping it
-/// keeps the run silent and offline-safe.
-fn needs_flip(is_draft: bool) -> bool {
-    is_draft
+/// Whether this run would change the PR: flip a draft, or hand it reviewers it
+/// does not have. The reviewer gate guards that transition, not the ready
+/// state, so an already-ready PR with no `--to` is left alone rather than
+/// looked up and judged.
+fn changes_the_pr(is_draft: bool, added: &[String]) -> bool {
+    is_draft || !added.is_empty()
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -85,19 +87,23 @@ pub fn run(args: Args) -> Result<()> {
             .context("gh pr edit --add-reviewer failed")?;
     }
 
-    let required = loaded.config.defaults.require_pr_reviewer;
-    // Two network round trips that decide nothing with the gate off.
-    let already = if required {
-        steps.during_result("Resolving reviewers…", || {
-            reviewer_logins_on(pr.number, &start, &repo)
-        })?
-    } else {
-        Vec::new()
-    };
-    // Refusing before the flip leaves the PR a draft.
-    require_reviewer_for_ready(&already, &reviewers, required)?;
+    if changes_the_pr(pr.is_draft, &reviewers) {
+        let required = loaded.config.defaults.require_pr_reviewer;
+        // Two network round trips that decide nothing with the gate off.
+        let already = if required {
+            steps.during_result("Resolving reviewers…", || {
+                reviewer_logins_on(pr.number, &start, &repo)
+            })?
+        } else {
+            Vec::new()
+        };
+        // Refusing before the flip leaves the PR a draft.
+        require_reviewer_for_ready(&already, &reviewers, required)?;
+    }
 
-    if needs_flip(pr.is_draft) {
+    // `gh pr ready` on a PR that is already ready is a no-op; skipping the call
+    // keeps the run quiet.
+    if pr.is_draft {
         steps
             .during_result("Marking ready for review…", || {
                 gh_capture(&["pr", "ready", &number], &repo, &start)
@@ -119,9 +125,14 @@ pub fn run(args: Args) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// An already-ready PR with nothing to add changes nothing, so the run must
+    /// not spend a reviewer lookup on it and must not be refused by a gate
+    /// guarding a transition it is not making.
     #[test]
-    fn an_already_ready_pr_needs_no_call() {
-        assert!(!needs_flip(/* is_draft */ false));
-        assert!(needs_flip(true));
+    fn an_already_ready_pr_with_nothing_to_add_is_left_alone() {
+        assert!(!changes_the_pr(/* is_draft */ false, &[]));
+        assert!(changes_the_pr(true, &[]));
+        assert!(changes_the_pr(false, &["igoracc".to_string()]));
+        assert!(changes_the_pr(true, &["igoracc".to_string()]));
     }
 }
