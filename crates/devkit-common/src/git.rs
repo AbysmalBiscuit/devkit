@@ -366,6 +366,25 @@ pub fn primary_checkout(start: &Path) -> Result<PathBuf> {
     }
 }
 
+/// The conventional worktree directory for a checkout: its own name plus
+/// `_worktrees`, beside it. The underscore separates the suffix from a project
+/// name, which commonly contains hyphens.
+pub fn derived_worktree_root(primary: &Path) -> Option<PathBuf> {
+    let name = primary.file_name()?.to_str()?;
+    Some(primary.parent()?.join(format!("{name}_worktrees")))
+}
+
+/// The repository's main worktree, or `None` when it is bare. Distinct from
+/// [`primary_checkout`], which falls back to the caller's own checkout: from a
+/// linked worktree of a bare repository that fallback names the linked worktree
+/// itself, so anything derived per-repository must not use it.
+pub fn non_bare_main(start: &Path) -> Result<Option<PathBuf>> {
+    Ok(worktrees(start)?
+        .first()
+        .filter(|w| !w.bare)
+        .map(|w| w.path.clone()))
+}
+
 /// The branch checked out at `start`, or `DETACHED` when `start` has no
 /// branch checked out.
 pub fn branch(start: &Path) -> Result<String> {
@@ -383,7 +402,7 @@ pub fn branch(start: &Path) -> Result<String> {
 
 /// Compare two paths by identity where the filesystem can answer, falling back
 /// to a lexical comparison when either does not exist.
-fn same_path(a: &Path, b: &Path) -> bool {
+pub fn same_path(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
@@ -663,5 +682,57 @@ mod tests {
         let repo = repo_with_commit();
         run(&["checkout", "-q", "--detach"], repo.path()).unwrap();
         assert_eq!(branch(repo.path()).unwrap(), "DETACHED");
+    }
+
+    #[test]
+    fn the_derived_worktree_root_is_the_underscore_sibling() {
+        let got = derived_worktree_root(Path::new("/home/lev/Git/lev/devkit"));
+        assert_eq!(
+            got,
+            Some(PathBuf::from("/home/lev/Git/lev/devkit_worktrees"))
+        );
+    }
+
+    #[test]
+    fn a_path_with_no_parent_derives_nothing() {
+        assert_eq!(derived_worktree_root(Path::new("/")), None);
+    }
+
+    #[test]
+    fn a_bare_main_worktree_has_no_non_bare_main() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("origin.git");
+        let seed = tmp.path().join("seed");
+        std::fs::create_dir_all(&seed).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            Git::fixture(cwd)
+                .args(args.iter().copied())
+                .output()
+                .unwrap()
+        };
+        git(&seed, &["init", "-q", "-b", "main"]);
+        std::fs::write(seed.join("f"), "x").unwrap();
+        git(&seed, &["add", "."]);
+        git(&seed, &["commit", "-qm", "init"]);
+        git(
+            tmp.path(),
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                seed.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+
+        // A linked worktree of a bare repository: `checkout_root` succeeds and
+        // names this worktree, so deriving from it would give every worktree its
+        // own root. `non_bare_main` is the value that must stay empty.
+        let wt = tmp.path().join("wt");
+        git(
+            &bare,
+            &["worktree", "add", "--detach", wt.to_str().unwrap()],
+        );
+        assert_eq!(non_bare_main(&wt).unwrap(), None);
     }
 }

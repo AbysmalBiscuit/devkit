@@ -39,6 +39,7 @@ fn repository_relative_paths_anchor_to_the_checkout_root() {
         &start,
         Some(main.path()),
         Some(checkout_root.as_path()),
+        None,
     )
     .unwrap();
 
