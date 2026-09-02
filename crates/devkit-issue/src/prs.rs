@@ -556,12 +556,6 @@ fn my_vote(pr: &PrNode, me: &str) -> &'static str {
 /// (my_vote, action) for a PR where I'm a reviewer.
 fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
     let vote = my_vote(pr, me);
-    let requested = pr
-        .review_requests
-        .nodes
-        .iter()
-        .filter_map(|r| r.requested_reviewer.as_ref())
-        .any(|rr| rr.login == me);
     let vote_label = match vote {
         "APPROVED" => "approved",
         "CHANGES_REQUESTED" => "changes",
@@ -569,6 +563,17 @@ fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
         _ => "-",
     }
     .to_string();
+    // A draft is the author's to finish, so it is passive for a reviewer even
+    // while a review request sits on it.
+    if pr.is_draft {
+        return (vote_label, "draft".into());
+    }
+    let requested = pr
+        .review_requests
+        .nodes
+        .iter()
+        .filter_map(|r| r.requested_reviewer.as_ref())
+        .any(|rr| rr.login == me);
     let action = if requested {
         "REVIEW NEEDED"
     } else {
@@ -1620,6 +1625,21 @@ mod tests {
         assert_eq!(vote, "approved");
         assert_eq!(action, "done (approved)");
     }
+
+    #[test]
+    fn a_draft_is_not_review_needed() {
+        let pr = node(serde_json::json!({
+            "number": 1, "url": "u", "headRefName": "h", "isDraft": true,
+            "reviewDecision": null, "mergeable": "MERGEABLE",
+            "author": { "login": "someone" },
+            "reviewRequests": { "nodes": [
+                { "requestedReviewer": { "login": "me" } }
+            ] }
+        }));
+        let (_, action) = reviewer_state(&pr, "me");
+        assert_eq!(action, "draft");
+    }
+
     #[test]
     fn issue_ids_of_finds_swe() {
         assert_eq!(issue_ids_of("lev/swe-123-fix", ""), vec!["SWE-123"]);

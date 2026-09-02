@@ -5,7 +5,15 @@ use devkit_issue::status::{IssueWorktree, PrStatus, StatusReport};
 fn pr_label(row: &IssueWorktree) -> String {
     match &row.pr {
         PrStatus::None => "no PR".into(),
-        PrStatus::Unique { number, state, .. } => format!("{state} #{number}"),
+        PrStatus::Unique {
+            number,
+            state,
+            is_draft,
+            ..
+        } => {
+            let word = if *is_draft { "DRAFT" } else { state };
+            format!("{word} #{number}")
+        }
         PrStatus::Ambiguous { candidates } => format!("ambiguous ({})", candidates.len()),
         PrStatus::Unknown { .. } => "unknown".into(),
     }
@@ -49,11 +57,16 @@ pub(crate) fn tree_cell(dirty: bool) -> String {
 
 pub(crate) fn pr_cell(row: &IssueWorktree) -> String {
     let label = pr_label(row);
-    let colored = match row.pr.state_label() {
-        "MERGED" => ui::green(&label),
-        "OPEN" => ui::yellow(&label),
-        "CLOSED" => ui::red(&label),
-        _ => ui::dim(&label), // NO_PR | AMBIGUOUS | UNKNOWN
+    let drafting = matches!(row.pr, PrStatus::Unique { is_draft: true, .. });
+    let colored = if drafting {
+        ui::dim(&label)
+    } else {
+        match row.pr.state_label() {
+            "MERGED" => ui::green(&label),
+            "OPEN" => ui::yellow(&label),
+            "CLOSED" => ui::red(&label),
+            _ => ui::dim(&label), // NO_PR | AMBIGUOUS | UNKNOWN
+        }
     };
     match row.pr.url() {
         Some(u) => ui::link(&colored, u),
@@ -253,5 +266,27 @@ mod tests {
         let fitted = ui::truncate(&long, BRANCH_MAX);
         assert_eq!(fitted.chars().count(), BRANCH_MAX);
         assert_eq!(branch_cell(&long), ui::dim(&fitted));
+    }
+
+    #[test]
+    fn a_draft_labels_as_draft() {
+        let row = row_with(PrStatus::Unique {
+            number: 7,
+            state: "OPEN".into(),
+            url: "u7".into(),
+            is_draft: true,
+        });
+        assert_eq!(pr_label(&row), "DRAFT #7");
+    }
+
+    #[test]
+    fn a_ready_pr_keeps_its_state_label() {
+        let row = row_with(PrStatus::Unique {
+            number: 7,
+            state: "OPEN".into(),
+            url: "u7".into(),
+            is_draft: false,
+        });
+        assert_eq!(pr_label(&row), "OPEN #7");
     }
 }
