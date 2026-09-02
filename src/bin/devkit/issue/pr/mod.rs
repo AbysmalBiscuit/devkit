@@ -4,10 +4,67 @@ use devkit_common::github;
 use devkit_common::progress::Steps;
 use serde::Deserialize;
 
-use crate::issue::review::{PrAction, action_for, is_human_login};
+use crate::issue::review::{PrAction, Target, action_for, is_human_login};
 
 pub(crate) mod create;
 pub(crate) mod ready;
+pub(crate) mod resolve;
+
+/// GitHub logins among targets that can be requested as reviewers, plus warnings
+/// for people that have no github handle. Channels are silently Slack-only.
+pub(crate) fn reviewer_logins(targets: &[Target]) -> (Vec<String>, Vec<String>) {
+    let mut logins = Vec::new();
+    let mut warnings = Vec::new();
+    for t in targets {
+        match &t.github {
+            Some(login) => logins.push(login.clone()),
+            None if t.slack_id.is_some() => {
+                warnings.push(format!(
+                    "`{}` has no github handle; not added as reviewer",
+                    t.name
+                ));
+            }
+            None => {}
+        }
+    }
+    (logins, warnings)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewRequestsView {
+    review_requests: Vec<ReviewRequest>,
+}
+
+#[derive(Deserialize)]
+struct ReviewRequest {
+    #[serde(default)]
+    login: Option<String>,
+}
+
+/// Logins currently requested as reviewers on PR `pr`, over direct HTTP when a
+/// token is available, else `gh pr view --json reviewRequests`.
+pub(crate) fn requested_reviewer_logins(
+    pr: u64,
+    cwd: &str,
+    repo: &github::Repo,
+) -> Result<Vec<String>> {
+    if github::token().is_some()
+        && let Ok(logins) = github::requested_reviewers(&repo.slug, pr)
+    {
+        return Ok(logins);
+    }
+    let view: ReviewRequestsView = gh_json_in(
+        &["pr", "view", &pr.to_string(), "--json", "reviewRequests"],
+        repo,
+        cwd,
+    )?;
+    Ok(view
+        .review_requests
+        .into_iter()
+        .filter_map(|r| r.login)
+        .collect())
+}
 
 #[derive(Deserialize)]
 struct ReviewsView {
@@ -67,7 +124,7 @@ fn submitted_reviewer_logins(pr: u64, cwd: &str, repo: &github::Repo) -> Result<
 /// list the moment they review, so a PR that collected an early look would
 /// otherwise count nobody.
 pub(crate) fn reviewer_logins_on(pr: u64, cwd: &str, repo: &github::Repo) -> Result<Vec<String>> {
-    let mut out = crate::issue::review::request::requested_reviewer_logins(pr, cwd, repo)?;
+    let mut out = requested_reviewer_logins(pr, cwd, repo)?;
     out.extend(submitted_reviewer_logins(pr, cwd, repo)?);
     Ok(out)
 }
@@ -167,6 +224,49 @@ pub(crate) fn gate_ready(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chan(name: &str) -> Target {
+        Target {
+            channel: name.into(),
+            name: name.into(),
+            slack_id: None,
+            github: None,
+        }
+    }
+    fn person(name: &str, gh: Option<&str>) -> Target {
+        Target {
+            channel: format!("U_{name}"),
+            name: name.into(),
+            slack_id: Some(format!("U_{name}")),
+            github: gh.map(String::from),
+        }
+    }
+
+    #[test]
+    fn reviewer_logins_collects_handles_and_warns() {
+        let targets = vec![
+            person("lev", Some("LevValle")),
+            person("igor", None),
+            chan("#eng"),
+        ];
+        let (logins, warnings) = reviewer_logins(&targets);
+        assert_eq!(logins, vec!["LevValle"]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("igor"));
+    }
+
+    /// `require_pr_reviewer` is satisfied by what `--to` contributes as a GitHub
+    /// reviewer, so a `#channel` and a person with no handle both leave a PR
+    /// with nobody to review it.
+    #[test]
+    fn the_reviewer_gate_reads_handles_not_slack_recipients() {
+        let (logins, _) = reviewer_logins(&[chan("#eng"), person("igor", None)]);
+        assert!(logins.is_empty());
+        assert!(require_reviewer_for_ready(&[], &logins, true).is_err());
+
+        let (logins, _) = reviewer_logins(&[chan("#eng"), person("lev", Some("LevValle"))]);
+        assert!(require_reviewer_for_ready(&[], &logins, true).is_ok());
+    }
 
     #[test]
     fn the_gate_is_off_unless_configured() {

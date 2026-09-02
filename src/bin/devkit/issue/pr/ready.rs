@@ -5,8 +5,8 @@ use devkit_common::github;
 use devkit_common::progress::Steps;
 use std::path::Path;
 
-use super::create::{Existing, parse_pr_flag, record_with_pr, resolve_existing};
-use super::{add_reviewers, gate_ready, require_existing_pr};
+use super::resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing};
+use super::{add_reviewers, gate_ready, require_existing_pr, reviewer_logins};
 use crate::issue::review::{self, Target, guard_branch, resolve_target};
 
 pub struct Args {
@@ -34,7 +34,7 @@ pub fn run(args: Args) -> Result<()> {
         .iter()
         .map(|v| resolve_target(v, people))
         .collect::<Result<_>>()?;
-    let (reviewers, warnings) = review::request::reviewer_logins(&explicit);
+    let (reviewers, warnings) = reviewer_logins(&explicit);
     for w in &warnings {
         eprintln!("warning: {w}");
     }

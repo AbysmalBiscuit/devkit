@@ -51,14 +51,6 @@ pub(crate) fn action_for(pr_state: Option<&str>) -> PrAction {
     }
 }
 
-/// Reject an empty rendered PR title on the create path.
-pub(crate) fn require_pr_title(title: &str) -> Result<()> {
-    if title.trim().is_empty() {
-        bail!("--pr-title is required to create a PR");
-    }
-    Ok(())
-}
-
 /// Build a `Target` from a `[people]` alias and its entry.
 pub(crate) fn target_from_person(alias: &str, p: &Person) -> Target {
     Target {
@@ -251,12 +243,6 @@ mod tests {
         assert_eq!(action_for(Some("OPEN")), PrAction::AddReviewer);
         assert!(matches!(action_for(Some("MERGED")), PrAction::Stop(_)));
         assert!(matches!(action_for(Some("CLOSED")), PrAction::Stop(_)));
-    }
-
-    #[test]
-    fn require_pr_title_rejects_empty() {
-        assert!(require_pr_title("  ").is_err());
-        assert!(require_pr_title("Fix login").is_ok());
     }
 
     #[test]

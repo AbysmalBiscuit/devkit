@@ -1,13 +1,15 @@
 use anyhow::{Context, Result, bail};
-use devkit_common::cmd::{gh_capture, gh_json_in};
+use devkit_common::cmd::gh_capture;
 use devkit_common::git::Git;
 use devkit_common::github;
 use devkit_common::progress::Steps;
 use devkit_config::Person;
-use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::issue::pr::create;
+use crate::issue::pr::{
+    self, add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr,
+    reviewer_logins,
+};
 
 use super::{
     Target, base_ctx, deliver, guard_branch, is_human_login, parse_args, person_by_login,
@@ -28,38 +30,6 @@ pub struct Args {
     pub config: Option<String>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReviewRequestsView {
-    review_requests: Vec<ReviewRequest>,
-}
-
-#[derive(Deserialize)]
-struct ReviewRequest {
-    #[serde(default)]
-    login: Option<String>,
-}
-
-/// GitHub logins among targets that can be requested as reviewers, plus warnings
-/// for people that have no github handle. Channels are silently Slack-only.
-pub(crate) fn reviewer_logins(targets: &[Target]) -> (Vec<String>, Vec<String>) {
-    let mut logins = Vec::new();
-    let mut warnings = Vec::new();
-    for t in targets {
-        match &t.github {
-            Some(login) => logins.push(login.clone()),
-            None if t.slack_id.is_some() => {
-                warnings.push(format!(
-                    "`{}` has no github handle; not added as reviewer",
-                    t.name
-                ));
-            }
-            None => {}
-        }
-    }
-    (logins, warnings)
-}
-
 /// Build Slack targets from reviewer logins via reverse lookup. Unmatched logins
 /// are skipped with a warning.
 pub(crate) fn targets_from_logins(
@@ -75,30 +45,6 @@ pub(crate) fn targets_from_logins(
         }
     }
     (targets, warnings)
-}
-
-/// Logins currently requested as reviewers on PR `pr`, over direct HTTP when a
-/// token is available, else `gh pr view --json reviewRequests`.
-pub(crate) fn requested_reviewer_logins(
-    pr: u64,
-    cwd: &str,
-    repo: &github::Repo,
-) -> Result<Vec<String>> {
-    if github::token().is_some()
-        && let Ok(logins) = github::requested_reviewers(&repo.slug, pr)
-    {
-        return Ok(logins);
-    }
-    let view: ReviewRequestsView = gh_json_in(
-        &["pr", "view", &pr.to_string(), "--json", "reviewRequests"],
-        repo,
-        cwd,
-    )?;
-    Ok(view
-        .review_requests
-        .into_iter()
-        .filter_map(|r| r.login)
-        .collect())
 }
 
 /// `--no-notify` pins the targets to whatever `--to` resolved to — possibly none —
@@ -188,16 +134,20 @@ pub fn run(args: Args) -> Result<()> {
         .to_string();
 
     let steps = Steps::persistent();
-    let found = create::resolve_existing(&create::Existing {
+    let found = pr::resolve::resolve_existing(&pr::resolve::Existing {
         start: &start,
         branch: &branch,
         repos: &repos,
         record: record.as_ref(),
-        explicit_pr: args.pr.as_deref().map(create::parse_pr_flag).transpose()?,
+        explicit_pr: args
+            .pr
+            .as_deref()
+            .map(pr::resolve::parse_pr_flag)
+            .transpose()?,
         no_push: args.no_push,
         steps: &steps,
     })?;
-    crate::issue::pr::require_existing_pr(found.pr.as_ref().map(|p| p.state.as_str()))?;
+    require_existing_pr(found.pr.as_ref().map(|p| p.state.as_str()))?;
     let pr = found.pr.expect("require_existing_pr rejects a missing PR");
     let locator = found.locator.expect("a resolved PR carries a locator");
     let repo = found.repo;
@@ -215,11 +165,11 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     let number = pr.number.to_string();
-    crate::issue::pr::add_reviewers(pr.number, &reviewers, &repo, &start, &steps)?;
+    add_reviewers(pr.number, &reviewers, &repo, &start, &steps)?;
 
     if should_flip(pr.is_draft, args.no_notify) {
         // Refusing before the flip leaves the PR a draft.
-        crate::issue::pr::gate_ready(
+        gate_ready(
             pr.number,
             &reviewers,
             loaded.config.defaults.require_pr_reviewer,
@@ -234,7 +184,7 @@ pub fn run(args: Args) -> Result<()> {
             .context("gh pr ready failed")?;
     }
 
-    if let Some(rec) = create::record_with_pr(record.as_ref(), locator) {
+    if let Some(rec) = pr::resolve::record_with_pr(record.as_ref(), locator) {
         devkit_common::record::write(std::path::Path::new(&toplevel), &rec)?;
     }
 
@@ -275,14 +225,6 @@ pub fn run(args: Args) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn chan(name: &str) -> Target {
-        Target {
-            channel: name.into(),
-            name: name.into(),
-            slack_id: None,
-            github: None,
-        }
-    }
     fn person(name: &str, gh: Option<&str>) -> Target {
         Target {
             channel: format!("U_{name}"),
@@ -304,32 +246,6 @@ mod tests {
         assert_eq!(reviewer_logins(&one).0, vec!["igoracc"]);
 
         assert!(pinned_targets(&[igor], false).is_none());
-    }
-
-    #[test]
-    fn reviewer_logins_collects_handles_and_warns() {
-        let targets = vec![
-            person("lev", Some("LevValle")),
-            person("igor", None),
-            chan("#eng"),
-        ];
-        let (logins, warnings) = reviewer_logins(&targets);
-        assert_eq!(logins, vec!["LevValle"]);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("igor"));
-    }
-
-    /// `require_pr_reviewer` is satisfied by what `--to` contributes as a GitHub
-    /// reviewer, so a `#channel` and a person with no handle both leave a PR
-    /// with nobody to review it.
-    #[test]
-    fn the_reviewer_gate_reads_handles_not_slack_recipients() {
-        let (logins, _) = reviewer_logins(&[chan("#eng"), person("igor", None)]);
-        assert!(logins.is_empty());
-        assert!(crate::issue::pr::require_reviewer_for_ready(&[], &logins, true).is_err());
-
-        let (logins, _) = reviewer_logins(&[chan("#eng"), person("lev", Some("LevValle"))]);
-        assert!(crate::issue::pr::require_reviewer_for_ready(&[], &logins, true).is_ok());
     }
 
     #[test]
