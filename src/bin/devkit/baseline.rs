@@ -82,10 +82,19 @@ pub fn write_marker(dir: &Path, m: &Marker) -> Result<()> {
     std::fs::rename(&tmp, &p).with_context(|| format!("renaming into {}", p.display()))
 }
 
+/// Reads a baseline's marker. A missing file is `Absent`: nothing was ever
+/// built here, so the directory is free to build fresh. Any other read
+/// failure (permission denied, the path occupied by something unreadable as
+/// a file) is `Unusable`, not `Absent` — an I/O error does not prove there is
+/// no baseline, only that this call could not confirm one, and treating that
+/// as a clean slate risks building over a baseline other worktrees still
+/// reference. A file that reads but does not parse as TOML is `Unusable` for
+/// the same reason: something occupies the path and cannot be trusted.
 #[allow(dead_code)]
 pub fn read_marker(dir: &Path) -> MarkerState {
     match std::fs::read_to_string(dir.join(BASELINE_MARKER)) {
-        Err(_) => MarkerState::Absent,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => MarkerState::Absent,
+        Err(_) => MarkerState::Unusable,
         Ok(body) => match toml::from_str(&body) {
             Ok(m) => MarkerState::Ok(m),
             Err(_) => MarkerState::Unusable,
@@ -125,6 +134,26 @@ mod tests {
             "sha = ",
         )
         .unwrap();
+        assert!(matches!(read_marker(dir.path()), MarkerState::Unusable));
+    }
+
+    /// A non-`NotFound` read error (here, the marker path occupied by a
+    /// directory instead of a file) must not read as `Absent` — that would
+    /// tell a caller a live baseline it cannot read is a clean slate to
+    /// build fresh over.
+    #[test]
+    fn an_unreadable_marker_is_unusable_not_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker_path = dir.path().join(devkit_common::worktree::BASELINE_MARKER);
+        std::fs::create_dir_all(&marker_path).unwrap();
+
+        let err = std::fs::read_to_string(&marker_path).unwrap_err();
+        assert_ne!(
+            err.kind(),
+            std::io::ErrorKind::NotFound,
+            "test assumes reading a directory as a file yields a non-NotFound error on this platform"
+        );
+
         assert!(matches!(read_marker(dir.path()), MarkerState::Unusable));
     }
 
