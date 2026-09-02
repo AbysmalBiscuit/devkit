@@ -230,21 +230,26 @@ fn issue_shim_parses_issue_arguments() {
     );
 }
 
+/// The full tree walks the whole subtree and roots every path at the name the
+/// caller typed, so asserting on `issue <name>` names the alias exactly and
+/// covers every level, not just the one clap's terse listing prints. The view
+/// is pinned because a test's stdout is a pipe, which would otherwise pick it.
 #[test]
 fn hidden_aliases_stay_reachable_but_unlisted() {
     let (_dir, link) = shimtest::linked("issue");
     let out = Command::new(&link)
         .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env("DEVKIT_HELP", "full")
         .arg("--help")
         .output()
         .expect("spawn issue shim");
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
-        !text.contains("checkout-pr"),
+        !text.contains("issue checkout-pr"),
         "checkout-pr should be hidden from help: {text}"
     );
     assert!(
-        !text.contains("info"),
+        !text.contains("issue info"),
         "info should be hidden from help: {text}"
     );
 
@@ -272,11 +277,15 @@ fn hidden_aliases_stay_reachable_but_unlisted() {
 }
 
 /// The group's own help must list every action it carries, not just exist.
+/// Pinned to the full tree so the surface under test is the same wherever
+/// stdout points, and asserted on the whole `issue pr <name>` path so a match
+/// cannot come from a word that happens to appear in some other line.
 #[test]
 fn pr_group_lists_its_subcommands() {
     let (_dir, link) = shimtest::linked("issue");
     let out = Command::new(&link)
         .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env("DEVKIT_HELP", "full")
         .args(["pr", "--help"])
         .output()
         .expect("spawn issue shim");
@@ -286,33 +295,35 @@ fn pr_group_lists_its_subcommands() {
         "issue pr --help exited non-zero: {text}"
     );
     for sub in ["create", "ready", "status", "checkout"] {
+        let path = format!("issue pr {sub}");
         assert!(
-            text.contains(sub),
-            "issue pr --help should list `{sub}`: {text}"
+            text.contains(&path),
+            "issue pr --help should list `{path}`: {text}"
         );
     }
 }
 
 /// `pr ready`'s dispatch arm is otherwise only compile-checked, so nothing
-/// proves the subcommand parses from the command line at all.
+/// proves the subcommand parses from the command line at all. Asked with `-h`,
+/// the one spelling that answers with an Options block wherever stdout points.
 #[test]
 fn pr_ready_parses() {
     let (_dir, link) = shimtest::linked("issue");
     let out = Command::new(&link)
         .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .args(["pr", "ready", "--help"])
+        .args(["pr", "ready", "-h"])
         .output()
         .expect("spawn issue shim");
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
         out.status.success(),
-        "issue pr ready --help exited non-zero: {}",
+        "issue pr ready -h exited non-zero: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     for flag in ["--to", "--no-push", "--pr"] {
         assert!(
             text.contains(flag),
-            "issue pr ready --help should list `{flag}`: {text}"
+            "issue pr ready -h should list `{flag}`: {text}"
         );
     }
 }
