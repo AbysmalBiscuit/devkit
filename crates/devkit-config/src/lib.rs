@@ -1359,6 +1359,10 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         // directory whose name genuinely contains one and checks that a TOML
         // literal string carries it through verbatim: TOML literal strings
         // (single-quoted) take their content as-is, with no escape handling.
+        // This discriminates on platforms where a backslash is an ordinary
+        // filename character (Linux, macOS); where it is a path separator,
+        // `normalize_lexically`'s component walk collapses the doubled and
+        // single-backslash forms to the same path, absorbing the distinction.
         let dir = tempfile::tempdir().unwrap();
         let explicit = dir.path().join("a\\b");
         std::fs::write(
