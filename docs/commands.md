@@ -77,14 +77,14 @@ Stops servers and releases their ports. By default it stops every server in the 
 |---|---|
 | `devrun down` | stop all servers in this worktree and its own baseline |
 | `devrun down --role baseline` | this worktree's own baseline only |
-| `devrun down api` | this worktree, fuzzy-match `api` across columns |
+| `devrun down api` | this worktree and its own baseline, fuzzy-match `api` across columns |
 | `devrun down --all` | every server, every worktree (one batch prompt) |
 | `devrun down --others` | every server in every *other* worktree |
 | `devrun down --others api` | `api` in other worktrees (per-worktree prompts) |
 | `devrun down --holder ../wt/feat-x` | one specific worktree |
 | `devrun down --all --app api --older-than 1h` | precise filter, all worktrees |
 
-A positional selector substring-matches across `HOLDER`/`APP`/`PORT`/`ROLE`/`PID` and is mutually exclusive with the column filters (`--app`, `--port`, `--role`, `--pid`, `--listening`/`--not-listening`, `--older-than`). `--older-than` accepts `90s`, `30m`, `2h`, `1d` (bare number = seconds). Any selection that reaches outside the current worktree prints a preview and prompts; with no interactive terminal it is refused. `--all`/`--batch` collapse the per-worktree prompts into one.
+A positional selector substring-matches across `HOLDER`/`APP`/`PORT`/`ROLE`/`PID` and is mutually exclusive with the column filters (`--app`, `--port`, `--role`, `--pid`, `--listening`/`--not-listening`, `--older-than`). `--older-than` accepts `90s`, `30m`, `2h`, `1d` (bare number = seconds). Any selection that reaches a holder other than the current worktree or its own baseline prints a preview and prompts; with no interactive terminal it is refused. `--all`/`--batch` collapse the per-worktree prompts into one.
 
 ## `issue`: issue lifecycle
 
@@ -326,7 +326,9 @@ A 0.12.x `meta.toml` is not migrated. Three of the five tag patterns 0.12.x coul
 
 `devkit-mcp` (equivalently `devkit mcp`) serves the port and file-lock registries, the server-lifecycle facade and issue triage to MCP-capable coding agents over stdio. The actions, their arguments, and which of them mutate are in [agents.md](agents.md), alongside the plugin and per-host wiring.
 
-The gates differ from the CLI's on purpose: `devrun reap` is never exposed, and `devrun.down` stays scoped to the calling worktree, so an agent can detect strays but never kill another session's servers. `ports.strays` is the read-only half. That scope is the holder alone, so `devrun.down` reaches no baseline at all — a baseline's servers are held by the baseline directory. `devrun down` from a terminal in the worktree stops them.
+The gates differ from the CLI's on purpose: `devrun reap` is never exposed, and `devrun.down` takes one holder and stops that holder's servers, with none of the CLI's cross-worktree prompts. `ports.strays` is the read-only half of stray handling.
+
+That holder is the `root` the caller passes, and the handler does not check it against the calling session, so `devrun.down` stops whatever holder it is given — including a baseline directory, whose path `devrun.status` with `all` reports. The CLI's terminal gate is not a property of the MCP surface, and an agent host that needs one enforces it by not granting `devrun.down`.
 
 ## Timing
 
