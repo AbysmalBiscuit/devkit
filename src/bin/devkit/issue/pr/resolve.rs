@@ -26,6 +26,16 @@ struct PrFlat {
     head_ref_oid: String,
     #[serde(default)]
     is_draft: bool,
+    #[serde(default)]
+    author: Option<GhAuthor>,
+}
+
+/// `gh pr list --json author` reports the author as an object; the login is
+/// absent for an account that no longer exists.
+#[derive(Deserialize)]
+struct GhAuthor {
+    #[serde(default)]
+    login: Option<String>,
 }
 
 /// The existing PR for head branch `branch`, over direct HTTP when possible
@@ -44,7 +54,7 @@ fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<gi
             "--state",
             "all",
             "--json",
-            "number,state,url,headRefName,headRefOid,isDraft",
+            "number,state,url,headRefName,headRefOid,isDraft,author",
         ],
         repo,
         cwd,
@@ -58,6 +68,7 @@ fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<gi
         head_ref_oid: p.head_ref_oid,
         head_repo_owner: None,
         is_draft: p.is_draft,
+        author_login: p.author.and_then(|a| a.login),
     }))
 }
 

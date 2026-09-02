@@ -320,6 +320,7 @@ mod tests {
             head_ref_oid: "cafe1".into(),
             head_repo_owner: None,
             is_draft: false,
+            author_login: None,
         }
     }
 
@@ -339,6 +340,7 @@ mod tests {
             head_ref_oid: oid.into(),
             head_repo_owner: None,
             is_draft: false,
+            author_login: None,
         }
     }
 

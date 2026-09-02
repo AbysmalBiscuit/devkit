@@ -149,16 +149,22 @@ pub(crate) fn require_existing_pr(pr_state: Option<&str>) -> Result<()> {
 /// `existing` are the logins already on the PR and `added` the ones this run
 /// requests. Both count: GitHub drops a reviewer from `reviewRequests` the
 /// moment they review, so counting pending requests alone would refuse a PR
-/// that has already been looked at.
+/// that has already been looked at. `author` is the PR's own author, who does
+/// not review their own PR whichever list they turn up in.
 pub(crate) fn require_reviewer_for_ready(
     existing: &[String],
     added: &[String],
     required: bool,
+    author: Option<&str>,
 ) -> Result<()> {
     if !required {
         return Ok(());
     }
-    let any_human = existing.iter().chain(added).any(|l| is_human_login(l));
+    let is_author = |l: &str| author.is_some_and(|a| a.eq_ignore_ascii_case(l));
+    let any_human = existing
+        .iter()
+        .chain(added)
+        .any(|l| is_human_login(l) && !is_author(l));
     if !any_human {
         bail!(
             "refusing to mark this PR ready with no human reviewer \
@@ -197,8 +203,8 @@ pub(crate) fn add_reviewers(
 /// Whether the PR's own reviewers still decide the gate. What this run requests
 /// can satisfy it on its own, and with the gate off nothing has to: either way
 /// the lookup is two network round trips that change no answer.
-fn needs_reviewer_lookup(added: &[String], required: bool) -> bool {
-    require_reviewer_for_ready(&[], added, required).is_err()
+fn needs_reviewer_lookup(added: &[String], required: bool, author: Option<&str>) -> bool {
+    require_reviewer_for_ready(&[], added, required, author).is_err()
 }
 
 /// Refuse a run about to make PR `number` ready for review with no human
@@ -208,17 +214,18 @@ pub(crate) fn gate_ready(
     number: u64,
     added: &[String],
     required: bool,
+    author: Option<&str>,
     repo: &github::Repo,
     cwd: &str,
     steps: &Steps,
 ) -> Result<()> {
-    if !needs_reviewer_lookup(added, required) {
+    if !needs_reviewer_lookup(added, required, author) {
         return Ok(());
     }
-    let already = steps.during_result("Resolving reviewers…", || {
+    let already = steps.during_result("Resolving the PR's reviewers…", || {
         reviewer_logins_on(number, cwd, repo)
     })?;
-    require_reviewer_for_ready(&already, added, required)
+    require_reviewer_for_ready(&already, added, required, author)
 }
 
 #[cfg(test)]
@@ -262,32 +269,32 @@ mod tests {
     fn the_reviewer_gate_reads_handles_not_slack_recipients() {
         let (logins, _) = reviewer_logins(&[chan("#eng"), person("igor", None)]);
         assert!(logins.is_empty());
-        assert!(require_reviewer_for_ready(&[], &logins, true).is_err());
+        assert!(require_reviewer_for_ready(&[], &logins, true, None).is_err());
 
         let (logins, _) = reviewer_logins(&[chan("#eng"), person("lev", Some("LevValle"))]);
-        assert!(require_reviewer_for_ready(&[], &logins, true).is_ok());
+        assert!(require_reviewer_for_ready(&[], &logins, true, None).is_ok());
     }
 
     #[test]
     fn the_gate_is_off_unless_configured() {
-        assert!(require_reviewer_for_ready(&[], &[], false).is_ok());
+        assert!(require_reviewer_for_ready(&[], &[], false, None).is_ok());
     }
 
     #[test]
     fn a_ready_pr_needs_a_human_reviewer() {
-        let err = require_reviewer_for_ready(&[], &[], true).unwrap_err();
+        let err = require_reviewer_for_ready(&[], &[], true, None).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("--to"), "names the way to satisfy it: {msg}");
     }
 
     #[test]
     fn an_existing_reviewer_satisfies_the_gate() {
-        assert!(require_reviewer_for_ready(&["igoracc".into()], &[], true).is_ok());
+        assert!(require_reviewer_for_ready(&["igoracc".into()], &[], true, None).is_ok());
     }
 
     #[test]
     fn a_reviewer_added_this_run_satisfies_the_gate() {
-        assert!(require_reviewer_for_ready(&[], &["igoracc".into()], true).is_ok());
+        assert!(require_reviewer_for_ready(&[], &["igoracc".into()], true, None).is_ok());
     }
 
     /// The PR's own reviewer list is fetched only when it can still change the
@@ -295,16 +302,33 @@ mod tests {
     /// round trips decide nothing.
     #[test]
     fn the_reviewer_lookup_is_skipped_when_it_decides_nothing() {
-        assert!(!needs_reviewer_lookup(&[], false));
-        assert!(!needs_reviewer_lookup(&["igoracc".into()], false));
-        assert!(!needs_reviewer_lookup(&["igoracc".into()], true));
-        assert!(needs_reviewer_lookup(&[], true));
-        assert!(needs_reviewer_lookup(&["dependabot[bot]".into()], true));
+        assert!(!needs_reviewer_lookup(&[], false, None));
+        assert!(!needs_reviewer_lookup(&["igoracc".into()], false, None));
+        assert!(!needs_reviewer_lookup(&["igoracc".into()], true, None));
+        assert!(needs_reviewer_lookup(&[], true, None));
+        assert!(needs_reviewer_lookup(
+            &["dependabot[bot]".into()],
+            true,
+            None
+        ));
+    }
+
+    /// A PR's author does not review their own PR. GitHub records a
+    /// self-authored COMMENTED review like anyone else's, so counting it would
+    /// let the gate pass with nobody but the author having looked. Logins
+    /// compare case-insensitively: `--to` carries whatever case `[people]`
+    /// spells the handle in, GitHub's own answer carries the account's.
+    #[test]
+    fn an_author_does_not_review_their_own_pr() {
+        let author = Some("LevValle");
+        assert!(require_reviewer_for_ready(&["LevValle".into()], &[], true, author).is_err());
+        assert!(require_reviewer_for_ready(&[], &["levvalle".into()], true, author).is_err());
+        assert!(require_reviewer_for_ready(&["igoracc".into()], &[], true, author).is_ok());
     }
 
     #[test]
     fn a_bot_is_not_a_reviewer() {
-        assert!(require_reviewer_for_ready(&["dependabot[bot]".into()], &[], true).is_err());
+        assert!(require_reviewer_for_ready(&["dependabot[bot]".into()], &[], true, None).is_err());
     }
 
     #[test]

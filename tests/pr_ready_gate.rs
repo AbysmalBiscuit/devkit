@@ -99,3 +99,62 @@ fn a_draft_with_no_human_reviewer_is_refused_before_the_flip() {
         "a refused run leaves the PR a draft: {calls}"
     );
 }
+
+/// The hole the gate was built to close, and the one it left open: GitHub
+/// records a review a PR's own author submits like anyone else's, so counting
+/// it let `require_pr_reviewer` pass with nobody but the author having looked.
+#[test]
+fn a_self_review_does_not_satisfy_the_gate() {
+    let fake = ghfake::Fake::new(
+        REQUIRE_REVIEWER,
+        &ghfake::Pr {
+            number: 1,
+            state: "OPEN",
+            is_draft: true,
+            author: "LevValle",
+        },
+    );
+    fake.set_reviews(r#"{"reviews":[{"author":{"login":"LevValle"},"state":"COMMENTED"}]}"#);
+    let out = fake.issue(&["pr", "ready", "--no-push"]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        !out.status.success(),
+        "a PR reviewed only by its author must be refused: {stderr}"
+    );
+    assert!(
+        stderr.contains("no human reviewer"),
+        "the refusal must name the gate: {stderr}"
+    );
+    assert!(
+        !fake.calls().contains("pr ready"),
+        "a refused run leaves the draft a draft: {}",
+        fake.calls()
+    );
+}
+
+/// Someone else's review is still a review, whatever kind it is: GitHub drops a
+/// reviewer from `reviewRequests` the moment they submit, so a PR that has been
+/// looked at would otherwise count nobody.
+#[test]
+fn another_persons_review_satisfies_the_gate() {
+    let fake = ghfake::Fake::new(
+        REQUIRE_REVIEWER,
+        &ghfake::Pr {
+            number: 1,
+            state: "OPEN",
+            is_draft: true,
+            author: "LevValle",
+        },
+    );
+    fake.set_reviews(r#"{"reviews":[{"author":{"login":"igoracc"},"state":"COMMENTED"}]}"#);
+    let out = fake.issue(&["pr", "ready", "--no-push"]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(out.status.success(), "must be allowed through: {stderr}");
+    assert!(
+        fake.calls().contains("pr ready"),
+        "the PR is flipped: {}",
+        fake.calls()
+    );
+}

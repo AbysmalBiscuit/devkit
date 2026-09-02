@@ -321,6 +321,7 @@ pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clon
 pub fn heads_query(slug: &str, branches: &[String]) -> String {
     let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
     let fields = "totalCount nodes { number state url headRefName headRefOid isDraft \
+                  author { login } \
                   headRepositoryOwner { login } }";
     let aliases = branches
         .iter()
@@ -887,6 +888,7 @@ mod tests {
             head_ref_oid: format!("oid{n}"),
             head_repo_owner: None,
             is_draft: false,
+            author_login: None,
         }
     }
 
@@ -1369,6 +1371,7 @@ mod tests {
             head_ref_oid: "abc123".into(),
             head_repo_owner: None,
             is_draft: true,
+            author_login: None,
         };
         let status = pr_status_of(&github::HeadLookup::Unique(pr));
         assert_eq!(

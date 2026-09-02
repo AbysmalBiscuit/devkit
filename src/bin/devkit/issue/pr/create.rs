@@ -147,7 +147,13 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             // A draft is not gated: an unreviewed draft is not a violation.
             match args.state {
                 PrCreateState::Ready => {
-                    require_reviewer_for_ready(&[], &args.reviewers, args.require_reviewer)?;
+                    require_reviewer_for_ready(
+                        &[],
+                        &args.reviewers,
+                        args.require_reviewer,
+                        // The PR this run is about to open has no author yet.
+                        None,
+                    )?;
                 }
                 PrCreateState::Draft => {}
             }

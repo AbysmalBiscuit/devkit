@@ -559,6 +559,10 @@ pub struct PrBrief {
     /// so this is the only thing separating "still being written" from "waiting
     /// on a reviewer".
     pub is_draft: bool,
+    /// Who opened the PR. `None` when the payload omitted it, or for a deleted
+    /// account. The reviewer gate reads this: an author does not review their
+    /// own PR.
+    pub author_login: Option<String>,
 }
 
 fn as_str(v: &Value, key: &str) -> String {
@@ -636,6 +640,11 @@ fn parse_brief(v: &Value) -> Option<PrBrief> {
         head_ref_oid: head_sha(v),
         head_repo_owner: head_repo_owner(v),
         is_draft: v.get("draft").and_then(|d| d.as_bool()).unwrap_or(false),
+        author_login: v
+            .get("user")
+            .and_then(|u| u.get("login"))
+            .and_then(|l| l.as_str())
+            .map(String::from),
     })
 }
 
@@ -731,7 +740,7 @@ fn group_by_repo(targets: &[(String, u64)]) -> Vec<(&str, Vec<usize>)> {
 /// into one `repository` alias, so a cross-repository target costs an extra
 /// alias rather than an extra round trip.
 pub fn prs_by_number_query(targets: &[(String, u64)]) -> String {
-    let fields = "number state url headRefName headRefOid isDraft \
+    let fields = "number state url headRefName headRefOid isDraft author { login } \
                   headRepositoryOwner { login }";
     let repos = group_by_repo(targets)
         .into_iter()
@@ -844,7 +853,7 @@ pub fn head_query(slug: &str, branch: &str) -> String {
                           states: [OPEN, CLOSED, MERGED]) {{
                totalCount
                nodes {{ number state url headRefName headRefOid isDraft
-                        headRepositoryOwner {{ login }} }}
+                        author {{ login }} headRepositoryOwner {{ login }} }}
              }} }} }}"#,
         owner = serde_json::Value::from(owner),
         name = serde_json::Value::from(name),
@@ -865,6 +874,7 @@ fn parse_pr_node(n: &Value) -> Option<PrBrief> {
             .as_str()
             .map(str::to_string),
         is_draft: n["isDraft"].as_bool().unwrap_or(false),
+        author_login: n["author"]["login"].as_str().map(str::to_string),
     })
 }
 

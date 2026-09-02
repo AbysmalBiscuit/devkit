@@ -169,6 +169,7 @@ pub fn run(args: Args) -> Result<()> {
             pr.number,
             &reviewers,
             loaded.config.defaults.require_pr_reviewer,
+            pr.author_login.as_deref(),
             &repo,
             &start,
             &steps,
