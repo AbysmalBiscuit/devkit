@@ -319,6 +319,7 @@ mod tests {
             head_ref_name: "feat/x".into(),
             head_ref_oid: "cafe1".into(),
             head_repo_owner: None,
+            is_draft: false,
         }
     }
 
@@ -337,6 +338,7 @@ mod tests {
             head_ref_name: "feat/x".into(),
             head_ref_oid: oid.into(),
             head_repo_owner: None,
+            is_draft: false,
         }
     }
 

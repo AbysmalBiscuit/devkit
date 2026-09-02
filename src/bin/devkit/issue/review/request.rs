@@ -41,6 +41,8 @@ struct PrFlat {
     url: String,
     head_ref_name: String,
     head_ref_oid: String,
+    #[serde(default)]
+    is_draft: bool,
 }
 
 #[derive(Deserialize)]
@@ -128,7 +130,7 @@ fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<gi
             "--state",
             "all",
             "--json",
-            "number,state,url,headRefName,headRefOid",
+            "number,state,url,headRefName,headRefOid,isDraft",
         ],
         repo,
         cwd,
@@ -141,6 +143,7 @@ fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<gi
         head_ref_name: p.head_ref_name,
         head_ref_oid: p.head_ref_oid,
         head_repo_owner: None,
+        is_draft: p.is_draft,
     }))
 }
 

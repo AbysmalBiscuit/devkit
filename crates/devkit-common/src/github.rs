@@ -555,6 +555,10 @@ pub struct PrBrief {
     pub head_ref_oid: String,
     /// The fork the head branch lives in, when the API reported one.
     pub head_repo_owner: Option<String>,
+    /// Whether the PR is a draft. GitHub reports a draft's `state` as `OPEN`,
+    /// so this is the only thing separating "still being written" from "waiting
+    /// on a reviewer".
+    pub is_draft: bool,
 }
 
 fn as_str(v: &Value, key: &str) -> String {
@@ -631,6 +635,7 @@ fn parse_brief(v: &Value) -> Option<PrBrief> {
         head_ref_name: head_ref(v),
         head_ref_oid: head_sha(v),
         head_repo_owner: head_repo_owner(v),
+        is_draft: v.get("draft").and_then(|d| d.as_bool()).unwrap_or(false),
     })
 }
 
@@ -709,7 +714,7 @@ fn group_by_repo(targets: &[(String, u64)]) -> Vec<(&str, Vec<usize>)> {
 /// into one `repository` alias, so a cross-repository target costs an extra
 /// alias rather than an extra round trip.
 pub fn prs_by_number_query(targets: &[(String, u64)]) -> String {
-    let fields = "number state url headRefName headRefOid \
+    let fields = "number state url headRefName headRefOid isDraft \
                   headRepositoryOwner { login }";
     let repos = group_by_repo(targets)
         .into_iter()
@@ -821,7 +826,7 @@ pub fn head_query(slug: &str, branch: &str) -> String {
              pullRequests(headRefName: {branch}, first: 10,
                           states: [OPEN, CLOSED, MERGED]) {{
                totalCount
-               nodes {{ number state url headRefName headRefOid
+               nodes {{ number state url headRefName headRefOid isDraft
                         headRepositoryOwner {{ login }} }}
              }} }} }}"#,
         owner = serde_json::Value::from(owner),
@@ -842,6 +847,7 @@ fn parse_pr_node(n: &Value) -> Option<PrBrief> {
         head_repo_owner: n["headRepositoryOwner"]["login"]
             .as_str()
             .map(str::to_string),
+        is_draft: n["isDraft"].as_bool().unwrap_or(false),
     })
 }
 
@@ -1457,5 +1463,41 @@ mod tests {
             parse_head_lookup(&head_resp(NODE_A, 3)),
             HeadLookup::Ambiguous(_)
         ));
+    }
+
+    #[test]
+    fn parse_pr_node_reads_is_draft() {
+        let n = json!({
+            "number": 7, "state": "OPEN", "url": "u7",
+            "headRefName": "feat/x", "headRefOid": "abc123",
+            "isDraft": true
+        });
+        assert!(parse_pr_node(&n).unwrap().is_draft);
+    }
+
+    #[test]
+    fn a_node_without_is_draft_is_not_a_draft() {
+        let n = json!({
+            "number": 7, "state": "OPEN", "url": "u7",
+            "headRefName": "feat/x", "headRefOid": "abc123"
+        });
+        assert!(!parse_pr_node(&n).unwrap().is_draft);
+    }
+
+    #[test]
+    fn parse_brief_reads_the_rest_draft_key() {
+        let v = json!({
+            "number": 42, "state": "open",
+            "html_url": "https://github.com/a/b/pull/42",
+            "head": { "ref": "you/eng-1-foo" },
+            "draft": true
+        });
+        assert!(parse_brief(&v).unwrap().is_draft);
+    }
+
+    #[test]
+    fn every_pr_query_selects_is_draft() {
+        assert!(prs_by_number_query(&targets()).contains("isDraft"));
+        assert!(head_query("o/r", "feat/x").contains("isDraft"));
     }
 }

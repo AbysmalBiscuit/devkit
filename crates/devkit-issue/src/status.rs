@@ -315,7 +315,7 @@ pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clon
 /// count — what the 500 cap was fighting — stops mattering.
 pub fn heads_query(slug: &str, branches: &[String]) -> String {
     let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
-    let fields = "totalCount nodes { number state url headRefName headRefOid \
+    let fields = "totalCount nodes { number state url headRefName headRefOid isDraft \
                   headRepositoryOwner { login } }";
     let aliases = branches
         .iter()
@@ -881,6 +881,7 @@ mod tests {
             head_ref_name: head.into(),
             head_ref_oid: format!("oid{n}"),
             head_repo_owner: None,
+            is_draft: false,
         }
     }
 
@@ -1340,5 +1341,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Not a git repository: `git status --porcelain` fails to run here.
         assert!(dirty_of(dir.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn heads_query_selects_is_draft() {
+        let q = heads_query("o/r", &["feat/a".into()]);
+        assert!(
+            q.contains("isDraft"),
+            "heads_query must select isDraft: {q}"
+        );
     }
 }
