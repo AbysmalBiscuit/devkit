@@ -100,9 +100,9 @@ Every subcommand works from the primary checkout, which it resolves through git:
 
 ```
 issue setup <ID|URL> [--slug <slug>] [--apps <a,b>] [--summary|--no-summary] [--no-gitignore] [--dry-run]  # id also accepted as --issue <ID>
-issue checkout-pr <PR_ISSUE_URL> [WORKTREE_PATH] [--setup [--apps a,b]]
 issue status [ids…]                           # read-only triage table (also the bare `issue`)
-issue info [selector] [--json] [--cache-only] # one worktree's PR number + issue id (defaults to current)
+issue pr [status] [selector] [--json] [--cache-only] # one worktree's PR number + issue id (defaults to current; also the bare `issue pr`)
+issue pr checkout <PR_ISSUE_URL> [WORKTREE_PATH] [--setup [--apps a,b]]
 issue end [ids…] [-y] [--force] [--pr-only] [--clean-worktree]
 issue sync-includes [selectors…] [--overwrite [--all]] [-y] [--dry-run] [-v]
 issue prs [-m|--mine] [-r|--reviews] [-R owner/repo] [--no-cache] [--batch-size <N>] [--retries <N>]
@@ -127,7 +127,11 @@ The tracker fetch happens before anything is created, so a missing credential or
 
 Each `[hooks] after_worktree_create` command runs last, in the new worktree's root, after the result has been reported. A hook that cannot render, cannot spawn, or exits non-zero warns and the rest still run: the worktree is already usable, so a missing program must not fail the command that created it. `docs/configuration.md` covers the table.
 
-### `checkout-pr`
+### `pr status`
+
+Shows one worktree's PR number and issue id (current worktree, or a SELECTOR). Bare `issue pr` means `issue pr status`, the way bare `issue` means `issue status`. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single machine-readable object (the `IssueWorktree` struct, with `pr_number`/`issue_id` for scripts). `--cache-only` skips the network — the PR number comes from the per-worktree cache at `<worktree>/.devkit/pr.json`, and the STATE and VERDICT columns render as `—`. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
+
+### `pr checkout`
 
 Checks out an existing PR branch into a new worktree, unlike `setup`, which creates a new branch. The target may be:
 
@@ -140,12 +144,11 @@ The worktree directory is named by the `templates.checkout_worktree_dir` templat
 
 Add `--setup [--apps a,b]` to also run the per-app prep pipeline, exactly as `issue setup` does. The worktree gets a `.devkit/issue.toml` record so `issue status`/`issue end` recognise it. Its result prints as a table on a terminal and as JSON otherwise, exactly as `setup` does. `after_worktree_create` fires here too, with or without `--setup`, because the event names the new worktree rather than the command that made it.
 
-### `status`, `info`, `end`, `sync-includes`
+### `status`, `end`, `sync-includes`
 
 - **`status`** (the default when you run bare `issue`): triage table of every issue worktree. A worktree is FINISHED when its PR is MERGED, its working tree is clean, and its issue has reached a completed state in the tracker. A project with no tracker has no state to wait for, so the merged PR and the clean tree decide it alone; a tracker that has no state for the issue — an id it does not know, or an API it could not reach — holds the verdict open rather than promoting the worktree.
-- **`info`**: shows one worktree's PR number and issue id. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single machine-readable object (the `IssueWorktree` struct, with `pr_number`/`issue_id` for scripts). `--cache-only` skips the network — the PR number comes from the per-worktree cache at `<worktree>/.devkit/pr.json`, and the STATE and VERDICT columns render as `—`. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
 - **`end`**: removes FINISHED worktrees, preserving each `[preserve.<name>]` entry's files first. `--pr-only` ignores the tracker-state and issue-id gates (finished = PR merged + clean), so a worktree carrying no issue id still qualifies; `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation; `--no-preserve` skips preservation for the run. A `devkit.toml` that exists but fails to load makes every run refuse — even in a project with no `[preserve]` table, since the table cannot be read without loading the config — and `--no-preserve` is the way through; an absent `devkit.toml` is not a failure. A `required` entry whose preservation fails keeps that worktree, its branch, and its summary intact, and the command exits non-zero once every selected worktree has been handled. Once every removal has finished and the stale worktree entries are pruned, each `[hooks] after_worktree_remove` command runs for every worktree actually removed, then each `[hooks] after_end` command runs once — both in the main repository root, since the worktree they describe is gone. A run that removed nothing runs neither, and a failing hook warns without changing the exit status.
-- **`sync-includes`**: re-copies the `defaults.worktree_include` files from the primary checkout into worktrees that already exist, the same list `setup` and `checkout-pr` backfill at creation time. Use it when a file is added to that list after a worktree already exists. `selectors` match by issue id, branch, worktree basename, or path, same as `info`; omit them to sync every worktree. It deliberately does not resolve a PR number the way `end` and `info` do, since that needs a network call this command has no reason to make. By default it copies files the worktree is missing and warns about, but leaves alone, any file the worktree already has. A matched symlink is reproduced as a symlink pointing at the same target rather than being followed, so its contents are never duplicated into the worktree; links are counted and reported separately from copied files. On Windows this needs Developer Mode or administrator rights, and a refused link warns and is skipped. `--overwrite` opts into replacing those, prompting once per worktree with the list of files it would clobber; declining that prompt falls back to the default behaviour for that worktree, so the files it is missing are still copied. Because the files being replaced are untracked ones git cannot restore, `--overwrite` needs a scope: one or more selectors, or `--all` for every worktree in the repository, other sessions' included. `-y` answers the prompt without asking and does nothing on its own. `--dry-run` reports what would happen and writes nothing. Every list of files it prints is grouped by top-level directory and names only the first few from each, so an include reaching a build or asset cache does not bury the rest of the run; `--verbose` (`-v`) names every file instead.
+- **`sync-includes`**: re-copies the `defaults.worktree_include` files from the primary checkout into worktrees that already exist, the same list `setup` and `pr checkout` backfill at creation time. Use it when a file is added to that list after a worktree already exists. `selectors` match by issue id, branch, worktree basename, or path, same as `pr status`; omit them to sync every worktree. It deliberately does not resolve a PR number the way `end` and `pr status` do, since that needs a network call this command has no reason to make. By default it copies files the worktree is missing and warns about, but leaves alone, any file the worktree already has. A matched symlink is reproduced as a symlink pointing at the same target rather than being followed, so its contents are never duplicated into the worktree; links are counted and reported separately from copied files. On Windows this needs Developer Mode or administrator rights, and a refused link warns and is skipped. `--overwrite` opts into replacing those, prompting once per worktree with the list of files it would clobber; declining that prompt falls back to the default behaviour for that worktree, so the files it is missing are still copied. Because the files being replaced are untracked ones git cannot restore, `--overwrite` needs a scope: one or more selectors, or `--all` for every worktree in the repository, other sessions' included. `-y` answers the prompt without asking and does nothing on its own. `--dry-run` reports what would happen and writes nothing. Every list of files it prints is grouped by top-level directory and names only the first few from each, so an include reaching a build or asset cache does not bury the rest of the run; `--verbose` (`-v`) names every file instead.
 
 ### `prs` and `dashboard`
 
@@ -182,7 +185,7 @@ issue review finish --pr 1234 --to lev                # from anywhere, explicit 
 ```
 
 - Resolves the PR from `--pr <number>`, else the worktree's record, else the current branch. `--pr` applies to that run only and never rewrites the record.
-- No head-commit check here, unlike `issue review request`: this is the reviewer's command, run in a worktree `issue checkout-pr` built, where `HEAD` falls behind the moment the author pushes again.
+- No head-commit check here, unlike `issue review request`: this is the reviewer's command, run in a worktree `issue pr checkout` built, where `HEAD` falls behind the moment the author pushes again.
 - Defaults to notifying the PR author; `--to` overrides (repeatable, people or `#channels`).
 - `--arg key=value` as above.
 
@@ -190,7 +193,7 @@ Templates: `review_request` and `review_finish` under `[templates]`. Per-recipie
 
 ### Live rendering
 
-On a TTY, `issue` and `issue info` draw the triage table immediately and fill in each cell with an animated braille spinner as git, GitHub, and tracker data land. `issue prs` shows the previous run's tables dimmed with a fetch spinner below noting they are as of the last run (stale-while-revalidate), then swaps the fresh tables in place — the two renders are line-for-line parallel, so the screen does not shift. The step-driven commands (`checkout-pr`, `setup`, `end`, `review`) keep every completed step on screen as a numbered `✓` log line with its elapsed time. All of this live rendering goes to stderr and is TTY-gated — stdout, piped output, and redirected output are unaffected.
+On a TTY, `issue` and `issue pr status` draw the triage table immediately and fill in each cell with an animated braille spinner as git, GitHub, and tracker data land. `issue prs` shows the previous run's tables dimmed with a fetch spinner below noting they are as of the last run (stale-while-revalidate), then swaps the fresh tables in place — the two renders are line-for-line parallel, so the screen does not shift. The step-driven commands (`pr checkout`, `setup`, `end`, `review`) keep every completed step on screen as a numbered `✓` log line with its elapsed time. All of this live rendering goes to stderr and is TTY-gated — stdout, piped output, and redirected output are unaffected.
 
 ## `lockm`: file locks
 

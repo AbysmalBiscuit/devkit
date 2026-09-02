@@ -521,7 +521,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     Ok(())
 }
 
-/// What `checkout-pr` prints: a labelled table for a reader, the JSON a caller
+/// What `pr checkout` prints: a labelled table for a reader, the JSON a caller
 /// parses for anything else.
 fn report(pr: u64, branch: &str, worktree: &str) -> Result<()> {
     if !devkit_common::ui::stdout_is_tty() {

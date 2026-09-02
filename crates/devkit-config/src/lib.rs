@@ -161,7 +161,7 @@ impl Default for BriefConfig {
 #[serde(default)]
 pub struct HooksConfig {
     /// Runs once in the root of a worktree `issue setup` or
-    /// `issue checkout-pr` has just created, after its apps are prepared and
+    /// `issue pr checkout` has just created, after its apps are prepared and
     /// after the command has reported the worktree. Each argv element is
     /// rendered as minijinja over `worktree`, `branch`, `issue`, `slug`,
     /// `apps`, `prefix`, and `[templates.variables]`.
@@ -489,7 +489,7 @@ pub const DEFAULT_BRANCH_MAX: usize = 46;
 /// branch limit because a directory name is charged against a filesystem path
 /// limit and a branch name is not.
 pub const DEFAULT_WORKTREE_DIR_MAX: usize = 24;
-/// Longest worktree directory name `issue checkout-pr` renders.
+/// Longest worktree directory name `issue pr checkout` renders.
 pub const DEFAULT_CHECKOUT_WORKTREE_DIR_MAX: usize = 46;
 
 pub const DEFAULT_BRANCH: &str = "{{ prefix }}{{ slug }}";
@@ -548,13 +548,13 @@ pub struct Templates {
     /// setup that stops. Has no effect on a `worktree_dir` that does not render
     /// `{{ short_slug }}`. Defaults to 24.
     pub worktree_dir_max: Option<usize>,
-    /// Worktree directory name created by `issue checkout-pr`. Context:
+    /// Worktree directory name created by `issue pr checkout`. Context:
     /// `pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are
     /// slugified, and the `linear_*` names are historical: they carry
     /// whichever tracker's id and title resolved, and are empty on the
     /// PR-only path.
     pub checkout_worktree_dir: Option<String>,
-    /// Longest worktree directory name `issue checkout-pr` will render.
+    /// Longest worktree directory name `issue pr checkout` will render.
     /// `pr_title` and `linear_title` are shortened to fit, splitting the budget
     /// when a template renders both. A template whose fixed text already fills
     /// this is an error. Defaults to 46.

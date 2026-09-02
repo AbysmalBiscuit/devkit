@@ -113,7 +113,7 @@ const STARTER: &str = r#"
 
 # Commands run on a lifecycle event, as argv arrays (no shell). Failures warn
 # and are skipped. after_worktree_create runs in a worktree `issue setup` or
-# `issue checkout-pr` has just created.
+# `issue pr checkout` has just created.
 # [hooks]
 # after_worktree_create = [["zoxide", "add", "{{ worktree }}"]]
 "#;

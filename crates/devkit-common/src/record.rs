@@ -17,7 +17,7 @@ pub struct IssueRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     /// The pull request this worktree's work belongs to, written by
-    /// `checkout-pr` and by `issue review request` whenever either resolves
+    /// `pr checkout` and by `issue review request` whenever either resolves
     /// one. The locator identifies both repository and number, so a PR outside
     /// `pr_repo` is still findable. Absent on records written before it existed
     /// and on an `issue setup` worktree whose PR does not exist yet.

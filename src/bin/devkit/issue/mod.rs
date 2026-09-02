@@ -103,6 +103,7 @@ pub(crate) enum Cmd {
     /// Check out an existing PR into a new worktree.
     ///
     /// Accepts a PR number, issue id, or URL.
+    #[command(hide = true)]
     CheckoutPr {
         /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue URL.
         target: String,
@@ -116,12 +117,18 @@ pub(crate) enum Cmd {
         #[arg(long, value_delimiter = ',')]
         apps: Vec<String>,
     },
+    /// Pull-request lifecycle for this worktree.
+    Pr {
+        #[command(subcommand)]
+        cmd: Option<PrCmd>,
+    },
     /// Read-only report of every issue worktree (optionally filtered by ID).
     Status {
         /// Issue ids to report on; omit for every issue worktree.
         ids: Vec<String>,
     },
     /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
+    #[command(hide = true)]
     Info {
         /// Issue id, branch, worktree basename, or path. Defaults to cwd.
         selector: Option<String>,
@@ -245,6 +252,36 @@ pub(crate) enum Cmd {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum PrCmd {
+    /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
+    Status {
+        /// Issue id, branch, worktree basename, or path. Defaults to cwd.
+        selector: Option<String>,
+        /// Emit the worktree as one JSON object instead of a table.
+        #[arg(long)]
+        json: bool,
+        /// Skip the network: take the PR number from the worktree's cache and
+        /// leave the issue state blank.
+        #[arg(long = "cache-only")]
+        cache_only: bool,
+    },
+    /// Check out an existing PR (by number, issue id, or URL) into a new worktree.
+    Checkout {
+        /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue URL.
+        target: String,
+        /// Worktree path; defaults to the config-resolved placement.
+        worktree_path: Option<String>,
+        /// Also write each app's prep files and run its setup commands.
+        #[arg(long)]
+        setup: bool,
+        /// Apps to bootstrap under --setup. Omit for a worktree with no per-app
+        /// setup.
+        #[arg(long, value_delimiter = ',')]
+        apps: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub(crate) enum ReviewCmd {
     /// Push, open/reuse the PR, request review, and Slack the reviewers.
     Request {
@@ -348,6 +385,39 @@ pub fn run(cli: IssueCli) -> Result<()> {
             cache_only,
             cli.config.as_deref(),
         ),
+        Some(Cmd::Pr { cmd }) => {
+            let cmd = cmd.unwrap_or(PrCmd::Status {
+                selector: None,
+                json: false,
+                cache_only: false,
+            });
+            match cmd {
+                PrCmd::Status {
+                    selector,
+                    json,
+                    cache_only,
+                } => info::run(
+                    &start(&cli.dir),
+                    selector.as_deref(),
+                    json,
+                    cache_only,
+                    cli.config.as_deref(),
+                ),
+                PrCmd::Checkout {
+                    target,
+                    worktree_path,
+                    setup,
+                    apps,
+                } => checkout::run(checkout::CheckoutArgs {
+                    target,
+                    worktree_path,
+                    setup,
+                    apps,
+                    dir: cli.dir,
+                    config: cli.config,
+                }),
+            }
+        }
         Some(Cmd::End {
             ids,
             yes,

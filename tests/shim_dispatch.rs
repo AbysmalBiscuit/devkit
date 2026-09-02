@@ -225,8 +225,34 @@ fn issue_shim_parses_issue_arguments() {
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(out.status.success(), "issue --help exited non-zero: {text}");
     assert!(
-        text.contains("checkout-pr"),
+        text.contains("Pull-request lifecycle"),
         "shim should list issue's own subcommands: {text}"
+    );
+}
+
+#[test]
+fn hidden_aliases_stay_reachable_but_unlisted() {
+    let (_dir, link) = shimtest::linked("issue");
+    let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .arg("--help")
+        .output()
+        .expect("spawn issue shim");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        !text.contains("checkout-pr"),
+        "checkout-pr should be hidden from help: {text}"
+    );
+
+    let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .args(["info", "--help"])
+        .output()
+        .expect("spawn issue shim");
+    assert!(
+        out.status.success(),
+        "issue info must still parse: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 

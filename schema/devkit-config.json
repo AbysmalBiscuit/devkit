@@ -354,7 +354,7 @@
         },
         "after_worktree_create": {
           "default": [],
-          "description": "Runs once in the root of a worktree `issue setup` or\n`issue checkout-pr` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `issue`, `slug`,\n`apps`, `prefix`, and `[templates.variables]`.",
+          "description": "Runs once in the root of a worktree `issue setup` or\n`issue pr checkout` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `issue`, `slug`,\n`apps`, `prefix`, and `[templates.variables]`.",
           "items": {
             "items": {
               "type": "string"
@@ -672,14 +672,14 @@
           ]
         },
         "checkout_worktree_dir": {
-          "description": "Worktree directory name created by `issue checkout-pr`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are\nslugified, and the `linear_*` names are historical: they carry\nwhichever tracker's id and title resolved, and are empty on the\nPR-only path.",
+          "description": "Worktree directory name created by `issue pr checkout`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are\nslugified, and the `linear_*` names are historical: they carry\nwhichever tracker's id and title resolved, and are empty on the\nPR-only path.",
           "type": [
             "string",
             "null"
           ]
         },
         "checkout_worktree_dir_max": {
-          "description": "Longest worktree directory name `issue checkout-pr` will render.\n`pr_title` and `linear_title` are shortened to fit, splitting the budget\nwhen a template renders both. A template whose fixed text already fills\nthis is an error. Defaults to 46.",
+          "description": "Longest worktree directory name `issue pr checkout` will render.\n`pr_title` and `linear_title` are shortened to fit, splitting the budget\nwhen a template renders both. A template whose fixed text already fills\nthis is an error. Defaults to 46.",
           "format": "uint",
           "minimum": 0,
           "type": [

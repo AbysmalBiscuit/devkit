@@ -212,7 +212,7 @@ pub fn run(args: Args) -> Result<()> {
 
     // No head-oid gate here, unlike every other path that resolves a PR:
     // `review finish` is the reviewer's command, run in a worktree
-    // `checkout-pr` built, where `HEAD` goes stale the moment the author pushes
+    // `pr checkout` built, where `HEAD` goes stale the moment the author pushes
     // again. Requiring the PR's head to equal `HEAD` would refuse the ordinary
     // flow. Nothing here mutates the PR or the record — the effect is a Slack
     // message to the author.

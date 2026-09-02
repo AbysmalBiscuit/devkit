@@ -1,4 +1,4 @@
-//! Branch/worktree slug derivation, shared by `setup` and `checkout-pr`.
+//! Branch/worktree slug derivation, shared by `setup` and `pr checkout`.
 
 use anyhow::{Context, Result};
 use devkit_common::tracker::IssueRef;

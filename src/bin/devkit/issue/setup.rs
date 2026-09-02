@@ -94,7 +94,7 @@ fn write_prep_files(
     Ok(())
 }
 
-/// Per-app bootstrap shared by `setup` and `checkout-pr --setup`: write each
+/// Per-app bootstrap shared by `setup` and `pr checkout --setup`: write each
 /// app's prep files (rendered against `base_ctx` plus `app`/`branch`/`worktree`),
 /// then run its setup commands in its directory.
 pub(crate) fn prep_apps(
