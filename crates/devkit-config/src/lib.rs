@@ -282,6 +282,27 @@ pub struct ParallelismConfig {
     pub threads: Option<std::num::NonZeroUsize>,
 }
 
+/// The state a PR is opened in by `issue pr create` when neither `--draft` nor
+/// `--ready` is passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PrCreateState {
+    /// Opened as a draft. Reviewers are notified only once it is marked ready.
+    #[default]
+    Draft,
+    /// Opened ready for review.
+    Ready,
+}
+
+impl std::fmt::Display for PrCreateState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Draft => f.write_str("draft"),
+            Self::Ready => f.write_str("ready"),
+        }
+    }
+}
+
 /// Project-wide paths and branch conventions. The first four keys are required
 /// of any config that configures a project — without them no worktree, branch,
 /// or baseline resolves. A config carrying only `[config]`, `[harness]`,
@@ -318,8 +339,14 @@ pub struct Defaults {
     /// Base branch used when opening PRs (e.g. "staging", "main").
     #[serde(default = "default_pr_base")]
     pub pr_base: String,
-    /// Refuse `issue review request` when it would open a PR with no `--to`
-    /// reviewer. Off by default: a PR opens unreviewed and nobody is Slacked.
+    /// State `issue pr create` opens a PR in when neither `--draft` nor
+    /// `--ready` is given. Draft by default, so a new PR never lands in
+    /// anyone's review queue until it is marked ready.
+    #[serde(default)]
+    pub pr_create_state: PrCreateState,
+    /// Refuse any run that would leave a PR ready for review with no human
+    /// GitHub reviewer: `issue pr create --ready`, `issue pr ready`, and the
+    /// draft-to-ready flip in `issue review request`. Off by default.
     #[serde(default)]
     pub require_pr_reviewer: bool,
     /// Glob patterns for status-check names to discount from a PR's CHECK
@@ -361,6 +388,7 @@ impl Default for Defaults {
             doppler_yaml: String::new(),
             apps_dir: default_apps_dir(),
             pr_base: default_pr_base(),
+            pr_create_state: PrCreateState::default(),
             require_pr_reviewer: false,
             ignored_checks: Vec::new(),
             stray_scan_width: default_stray_scan_width(),
@@ -1233,6 +1261,37 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         let bare = Config::parse(SAMPLE).unwrap();
         assert_eq!(bare.github.issues_repo, None);
         assert_eq!(bare.github.pr_repo, None);
+    }
+    #[test]
+    fn pr_create_state_defaults_to_draft() {
+        let c = Config::parse(SAMPLE).unwrap();
+        assert_eq!(c.defaults.pr_create_state, PrCreateState::Draft);
+    }
+    #[test]
+    fn pr_create_state_parses_ready() {
+        let src = r#"
+[defaults]
+worktree_root = "/w"
+branch_prefix = "you/"
+baseline_ref = "origin/main"
+baseline_path = "/b"
+pr_create_state = "ready"
+"#;
+        let c = Config::parse(src).unwrap();
+        assert_eq!(c.defaults.pr_create_state, PrCreateState::Ready);
+        assert_eq!(c.defaults.pr_create_state.to_string(), "ready");
+    }
+    #[test]
+    fn an_unknown_pr_create_state_is_an_error() {
+        let src = r#"
+[defaults]
+worktree_root = "/w"
+branch_prefix = "you/"
+baseline_ref = "origin/main"
+baseline_path = "/b"
+pr_create_state = "wip"
+"#;
+        assert!(Config::parse(src).is_err());
     }
     #[test]
     fn parses_app_setup_commands() {

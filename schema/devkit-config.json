@@ -233,9 +233,14 @@
           "description": "Base branch used when opening PRs (e.g. \"staging\", \"main\").",
           "type": "string"
         },
+        "pr_create_state": {
+          "$ref": "#/$defs/PrCreateState",
+          "default": "draft",
+          "description": "State `issue pr create` opens a PR in when neither `--draft` nor\n`--ready` is given. Draft by default, so a new PR never lands in\nanyone's review queue until it is marked ready."
+        },
         "require_pr_reviewer": {
           "default": false,
-          "description": "Refuse `issue review request` when it would open a PR with no `--to`\nreviewer. Off by default: a PR opens unreviewed and nobody is Slacked.",
+          "description": "Refuse any run that would leave a PR ready for review with no human\nGitHub reviewer: `issue pr create --ready`, `issue pr ready`, and the\ndraft-to-ready flip in `issue review request`. Off by default.",
           "type": "boolean"
         },
         "stray_scan_width": {
@@ -496,6 +501,21 @@
         "slack"
       ],
       "type": "object"
+    },
+    "PrCreateState": {
+      "description": "The state a PR is opened in by `issue pr create` when neither `--draft` nor\n`--ready` is passed.",
+      "oneOf": [
+        {
+          "const": "draft",
+          "description": "Opened as a draft. Reviewers are notified only once it is marked ready.",
+          "type": "string"
+        },
+        {
+          "const": "ready",
+          "description": "Opened ready for review.",
+          "type": "string"
+        }
+      ]
     },
     "PrepFile": {
       "description": "A file written into an app's directory during `issue setup`, before the app's\n`setup` commands run. `content` is written verbatim — no format assembly or\nnewline injection. Parent directories are created. Existing files are left\nuntouched unless `overwrite` is set.",
@@ -822,6 +842,7 @@
         "ignored_checks": [],
         "issue_summary": false,
         "pr_base": "staging",
+        "pr_create_state": "draft",
         "require_pr_reviewer": false,
         "stray_scan_width": 64,
         "worktree_include": [],
