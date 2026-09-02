@@ -250,8 +250,11 @@ fn prune_refuses_the_baseline_it_is_standing_in() {
 /// baseline a rebuild would not bring back. Untracked files are not that
 /// signal — every baseline carries rendered prep files and its own marker, and
 /// the sweep tests around this one prove those do not block a removal.
+///
+/// The two waivers stay apart: an operator whose baseline carries an edit must
+/// not have to switch off the running-servers gate to get past it.
 #[test]
-fn prune_refuses_a_baseline_somebody_edited_until_forced() {
+fn prune_refuses_a_baseline_somebody_edited_until_the_edits_are_discarded() {
     let f = fixture();
     git(
         &f.repo,
@@ -268,8 +271,107 @@ fn prune_refuses_a_baseline_somebody_edited_until_forced() {
         "unexpected refusal:\n{stderr}"
     );
 
-    devkit_ok(&f.repo, &f.state, &["run", "baseline", "prune", "--force"]);
-    assert!(!f.baseline.exists(), "--force did not waive the edit");
+    let forced = devkit(&f.repo, &f.state, &["run", "baseline", "prune", "--force"]);
+    assert!(
+        f.baseline.exists(),
+        "--force waived an edit it has no business waiving"
+    );
+    assert!(!forced.status.success(), "the refusal exited 0");
+
+    devkit_ok(
+        &f.repo,
+        &f.state,
+        &["run", "baseline", "prune", "--discard-edits"],
+    );
+    assert!(
+        !f.baseline.exists(),
+        "--discard-edits did not waive the edit"
+    );
+}
+
+/// The one path in devkit that reaches `remove_dir_all`. A marked directory
+/// under `_baselines` that git has no registration for is reclaimed — unless
+/// its `.git` resolves, which makes it some other repository's checkout. The
+/// unit tests prove the classifier; this proves the sweep an operator runs is
+/// wired to it.
+#[test]
+fn prune_leaves_another_repositorys_tree_alone() {
+    let f = fixture();
+    git(
+        &f.repo,
+        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
+    );
+    // Marked, so it is a candidate; unregistered here, so it takes the orphan
+    // path; standing on a git directory that resolves, so it is somebody's.
+    let stranger = f.baselines.join("aaaaaaaaaaaa");
+    std::fs::create_dir_all(stranger.join(".devkit")).unwrap();
+    std::fs::write(
+        stranger.join(".devkit").join("baseline.toml"),
+        "sha = 'abc'\n",
+    )
+    .unwrap();
+    std::fs::write(stranger.join("uncommitted.txt"), "somebody's work\n").unwrap();
+    std::fs::write(
+        stranger.join(".git"),
+        format!("gitdir: {}\n", f.repo.join(".git").display()),
+    )
+    .unwrap();
+
+    let dry = devkit(
+        &f.repo,
+        &f.state,
+        &["run", "baseline", "prune", "--dry-run"],
+    );
+    let stdout = String::from_utf8_lossy(&dry.stdout);
+    assert!(
+        !stdout.contains("aaaaaaaaaaaa"),
+        "the dry run promised somebody else's tree:\n{stdout}"
+    );
+
+    let out = devkit(&f.repo, &f.state, &["run", "baseline", "prune", "--force"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stranger.join("uncommitted.txt").exists(),
+        "another repository's tree was deleted:\n{stderr}"
+    );
+    assert!(!out.status.success(), "the refusal exited 0");
+    assert!(
+        stderr.contains("repository that owns it"),
+        "unexpected refusal:\n{stderr}"
+    );
+}
+
+/// Git refuses to remove a locked worktree, `--force` included, so the sweep
+/// refuses it first. A dry run that promised it would be describing a removal
+/// nobody can perform.
+#[test]
+fn prune_refuses_a_locked_baseline_in_both_modes() {
+    let f = fixture();
+    git(
+        &f.repo,
+        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
+    );
+    git(&f.repo, &["worktree", "lock", f.baseline.to_str().unwrap()]);
+
+    let dry = devkit(
+        &f.repo,
+        &f.state,
+        &["run", "baseline", "prune", "--dry-run"],
+    );
+    let stdout = String::from_utf8_lossy(&dry.stdout);
+    assert!(
+        !stdout.contains(&name_of(&f.baseline)),
+        "the dry run promised a locked worktree:\n{stdout}"
+    );
+
+    let out = devkit(&f.repo, &f.state, &["run", "baseline", "prune", "--force"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(f.baseline.exists(), "a locked baseline was removed");
+    assert!(!out.status.success(), "the refusal exited 0");
+    assert!(
+        stderr.contains("git worktree unlock"),
+        "unexpected refusal:\n{stderr}"
+    );
 }
 
 /// One unreadable record means no baseline can be proven unreferenced, so the

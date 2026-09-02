@@ -243,6 +243,9 @@ pub struct Worktree {
     pub branch: String,
     /// A bare repository has no working tree, so it holds no config.
     pub bare: bool,
+    /// `git worktree lock`ed. Git refuses to remove one until it is unlocked,
+    /// even with `--force`, so a caller that removes worktrees must ask.
+    pub locked: bool,
 }
 
 /// Parse `git worktree list --porcelain`. Git lists the main worktree first,
@@ -252,11 +255,13 @@ pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
     let mut path: Option<String> = None;
     let mut branch: Option<String> = None;
     let mut bare = false;
+    let mut locked = false;
 
     fn flush(
         p: &mut Option<String>,
         b: &mut Option<String>,
         bare: &mut bool,
+        locked: &mut bool,
         v: &mut Vec<Worktree>,
     ) {
         if let Some(pp) = p.take() {
@@ -264,21 +269,25 @@ pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
                 path: PathBuf::from(pp),
                 branch: b.take().unwrap_or_else(|| "DETACHED".into()),
                 bare: std::mem::take(bare),
+                locked: std::mem::take(locked),
             });
         }
     }
 
     for line in out.lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
-            flush(&mut path, &mut branch, &mut bare, &mut all);
+            flush(&mut path, &mut branch, &mut bare, &mut locked, &mut all);
             path = Some(p.to_string());
         } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
             branch = Some(b.to_string());
         } else if line.trim() == "bare" {
             bare = true;
+        } else if line.trim() == "locked" || line.starts_with("locked ") {
+            // The reason is optional and free text, so only its presence is read.
+            locked = true;
         }
     }
-    flush(&mut path, &mut branch, &mut bare, &mut all);
+    flush(&mut path, &mut branch, &mut bare, &mut locked, &mut all);
     all
 }
 
@@ -683,6 +692,19 @@ mod tests {
         let parsed = parse_porcelain("worktree /x/b.git\nbare\n");
         assert_eq!(parsed.len(), 1);
         assert!(parsed[0].bare);
+    }
+
+    /// The lock is what makes git refuse a removal, and the reason git prints
+    /// after it is optional free text.
+    #[test]
+    fn parse_porcelain_reads_the_lock_with_or_without_a_reason() {
+        let parsed = parse_porcelain(
+            "worktree /x/a\nbranch refs/heads/a\nlocked\n\n\
+             worktree /x/b\nbranch refs/heads/b\nlocked being restored\n\n\
+             worktree /x/c\nbranch refs/heads/c\n",
+        );
+        let locked: Vec<bool> = parsed.iter().map(|w| w.locked).collect();
+        assert_eq!(locked, vec![true, true, false], "{parsed:?}");
     }
 
     #[test]

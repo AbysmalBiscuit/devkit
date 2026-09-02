@@ -183,6 +183,10 @@ pub(crate) enum BaselineCmd {
         /// Remove a baseline even while servers are running under it.
         #[arg(long)]
         force: bool,
+        /// Remove a baseline even though tracked files in it were edited,
+        /// discarding those edits with the tree.
+        #[arg(long)]
+        discard_edits: bool,
     },
 }
 
@@ -485,9 +489,16 @@ pub fn run(cli: RunCli) -> Result<()> {
         Cmd::Completions { shell } => crate::emit_completions(*shell, "run", "devrun"),
         Cmd::Baseline { cmd } => match cmd {
             BaselineCmd::List => cmd_baseline_list(&cli, &cwd),
-            BaselineCmd::Prune { dry_run, force } => {
-                cmd_baseline_prune(&cli, &cwd, *dry_run, *force)
-            }
+            BaselineCmd::Prune {
+                dry_run,
+                force,
+                discard_edits,
+            } => cmd_baseline_prune(
+                &cli,
+                &cwd,
+                *dry_run,
+                crate::baseline::Gates::sweep(*force, *discard_edits),
+            ),
         },
         Cmd::Task {
             name,
@@ -565,10 +576,15 @@ fn cmd_baseline_list(cli: &RunCli, cwd: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_baseline_prune(cli: &RunCli, cwd: &str, dry_run: bool, force: bool) -> Result<()> {
+fn cmd_baseline_prune(
+    cli: &RunCli,
+    cwd: &str,
+    dry_run: bool,
+    gates: crate::baseline::Gates,
+) -> Result<()> {
     let (dir, repo) = baseline_scope(cli, cwd)?;
     let ports = registry::snapshot()?;
-    let out = crate::baseline::prune_all(&dir, &repo, &ports, dry_run, force)?;
+    let out = crate::baseline::prune_all(&dir, &repo, &ports, dry_run, gates)?;
     if out.removed.is_empty() {
         println!("no baseline to remove under {}", dir.display());
     } else {
