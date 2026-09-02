@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use devkit_common::git::Git;
 use devkit_common::progress::Steps;
 use devkit_common::record::RecordState;
-use devkit_common::worktree::BASELINE_MARKER;
+use devkit_common::worktree::{BASELINE_MARKER, BaselineState};
 use devkit_config::{Config, expand_tilde};
 use devkit_ports::apps::App;
 use devkit_ports::registry;
@@ -563,9 +563,20 @@ pub fn release_abandoned(
     with_slot_lock(previous, || {
         // A pin is a plain path in a file a person can edit, and these rows are
         // stopped by pid. A path carrying no baseline marker names servers this
-        // run has no claim on.
-        if !devkit_common::worktree::is_baseline(previous) {
-            return Ok(());
+        // run has no claim on, and neither does one whose marker cannot be
+        // read: an unproven claim is no claim.
+        match devkit_common::worktree::baseline_state(previous) {
+            BaselineState::Yes => {}
+            BaselineState::No => return Ok(()),
+            BaselineState::Unknown => {
+                eprintln!(
+                    "warning: leaving the servers under {} running: its {} can be neither \
+                     read nor ruled out, so this run cannot tell the tree is a baseline",
+                    previous.display(),
+                    BASELINE_MARKER
+                );
+                return Ok(());
+            }
         }
         let refs = referencers(repo)?;
         if !refs.unreadable.is_empty() {
@@ -653,12 +664,23 @@ fn remove_if_unreferenced(
         // is never a key and reaches here as unreferenced. `git worktree
         // remove --force` accepts a sibling linked worktree of the same
         // repository and takes its uncommitted work with it, so the marker is
-        // what decides whether this path is ours to delete.
-        anyhow::ensure!(
-            devkit_common::worktree::is_baseline(baseline),
-            "{} is not a baseline worktree; refusing to remove it",
-            baseline.display()
-        );
+        // what decides whether this path is ours to delete — and a marker that
+        // cannot be read decides nothing. The two refusals are worded apart
+        // because they are different problems: one path is somebody else's,
+        // the other is unreadable and may well be a baseline.
+        match devkit_common::worktree::baseline_state(baseline) {
+            BaselineState::Yes => {}
+            BaselineState::No => anyhow::bail!(
+                "{} is not a baseline worktree; refusing to remove it",
+                baseline.display()
+            ),
+            BaselineState::Unknown => anyhow::bail!(
+                "cannot tell whether {} is a baseline worktree: its {} can be neither \
+                 read nor ruled out; refusing to remove it",
+                baseline.display(),
+                BASELINE_MARKER
+            ),
+        }
         // A live server in the tree is the one thing worth refusing for.
         if !force && live_rows_hold(baseline, ports) {
             anyhow::bail!(
@@ -1438,6 +1460,17 @@ mod tests {
         );
     }
 
+    /// Leave a directory's baseline marker unresolvable — a symlink loop here,
+    /// a permission failure in the field — so it can be neither read nor ruled
+    /// out.
+    #[cfg(unix)]
+    fn make_unclassifiable(dir: &Path) {
+        let marker = dir.join(BASELINE_MARKER);
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&marker);
+        std::os::unix::fs::symlink(&marker, &marker).unwrap();
+    }
+
     fn corrupt_record(wt: &Path) {
         std::fs::write(wt.join(".devkit").join("issue.toml"), "issue = ").unwrap();
     }
@@ -1450,8 +1483,7 @@ mod tests {
     #[test]
     fn a_worktree_that_cannot_be_classified_is_unreadable() {
         let f = two_worktrees_sharing_one_baseline();
-        let marker = f.b.join(devkit_common::worktree::BASELINE_MARKER);
-        std::os::unix::fs::symlink(&marker, &marker).unwrap();
+        make_unclassifiable(&f.b);
 
         let refs = referencers(&f.repo).unwrap();
         assert!(
@@ -1566,6 +1598,77 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(f.b.join("f")).unwrap(),
             "uncommitted work"
+        );
+    }
+
+    /// The identity check decides whether `git worktree remove --force` runs,
+    /// so a marker that can be neither read nor ruled out must refuse: the tree
+    /// goes with its uncommitted work either way. The refusal names the
+    /// classification failure, because "this is somebody else's tree" and "this
+    /// tree cannot be read" send an operator to different places.
+    #[cfg(unix)]
+    #[test]
+    fn a_baseline_that_cannot_be_classified_is_not_removed() {
+        let f = two_worktrees_sharing_one_baseline();
+        remove_worktree(&f.repo, &f.a);
+        remove_worktree(&f.repo, &f.b);
+        make_unclassifiable(&f.baseline);
+        // Built by hand, empty: the removal must be refused by the identity
+        // check rather than by a scan that already knows it cannot prove
+        // anything.
+        let refs = References {
+            by_baseline: BTreeMap::new(),
+            unreadable: vec![],
+        };
+
+        let err = remove_if_unreferenced(
+            &f.repo,
+            &f.baseline,
+            &refs,
+            &registry::Data::default(),
+            true,
+        )
+        .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(msg.contains("cannot tell"), "{msg}");
+        assert!(msg.contains(BASELINE_MARKER), "{msg}");
+        assert!(
+            !msg.contains("is not a baseline"),
+            "an unreadable marker is not the same as a missing one: {msg}"
+        );
+        assert!(
+            f.baseline.exists(),
+            "force removed a tree it could not read"
+        );
+    }
+
+    /// Whether the pin names a baseline decides before anything else runs, so
+    /// an unclassifiable one is left alone rather than carried into the scan.
+    /// The unreadable repository is what makes that ordering observable: a run
+    /// that got as far as counting referencers would fail on it.
+    #[cfg(unix)]
+    #[test]
+    fn an_unclassifiable_pin_target_keeps_its_servers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let previous = tmp.path().join("_baselines").join("d13d90b724bf");
+        make_unclassifiable(&previous);
+        let mut stopped = false;
+
+        release_abandoned(
+            tmp.path().join("not-a-repository").to_str().unwrap(),
+            &tmp.path().join("wt"),
+            &previous,
+            |_| {
+                stopped = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !stopped,
+            "servers stopped under a path this run cannot read"
         );
     }
 
