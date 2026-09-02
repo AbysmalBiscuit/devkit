@@ -78,8 +78,11 @@ pub(crate) struct Resolved {
     pub locator: github::PrLocator,
 }
 
-/// Renders the PR body on demand.
-type RenderBody<'a> = Box<dyn FnOnce() -> Result<String> + 'a>;
+/// Renders the PR title on demand.
+type RenderTitle<'a> = Box<dyn FnOnce() -> Result<String> + 'a>;
+
+/// Renders the PR body on demand, from the title this run resolved.
+type RenderBody<'a> = Box<dyn FnOnce(&str) -> Result<String> + 'a>;
 
 pub(crate) struct Ensure<'a> {
     pub existing: Existing<'a>,
@@ -89,10 +92,12 @@ pub(crate) struct Ensure<'a> {
     /// `reuse_note` reports only a flag the user actually typed.
     pub asked: Option<PrCreateState>,
     pub base: String,
-    pub pr_title: String,
-    /// Deferred rather than rendered: a `pr_body` template reading `{{ issue }}`
-    /// cannot be rendered outside a worktree `issue setup` created, and a run
-    /// that only reuses a PR never needs a body.
+    /// Deferred for the same reason as `pr_body`, and called in the same place:
+    /// only a run that opens a PR needs a title.
+    pub pr_title: RenderTitle<'a>,
+    /// Deferred rather than rendered: a `pr_title`/`pr_body` template reading
+    /// `{{ issue }}` cannot be rendered outside a worktree `issue setup`
+    /// created, and a run that only reuses a PR needs neither.
     pub pr_body: RenderBody<'a>,
     /// GitHub logins to request as reviewers.
     pub reviewers: Vec<String>,
@@ -100,16 +105,6 @@ pub(crate) struct Ensure<'a> {
     /// demands a human reviewer.
     pub require_reviewer: bool,
     pub steps: &'a Steps,
-}
-
-/// The body to open a PR with, rendered only when this run is about to open
-/// one. Reuse leaves the template untouched, so a body that needs the issue
-/// record cannot fail a run that has no use for it.
-fn body_for(action: &PrAction, render: RenderBody<'_>) -> Result<Option<String>> {
-    match action {
-        PrAction::Create => render().map(Some),
-        PrAction::AddReviewer | PrAction::Stop(_) => Ok(None),
-    }
 }
 
 /// Resolve this branch's PR and, when there is none, open one. A reused PR
@@ -121,7 +116,6 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
     let joined = args.reviewers.join(",");
 
     let action = action_for(found.pr.as_ref().map(|p| p.state.as_str()));
-    let pr_body = body_for(&action, args.pr_body)?;
 
     let resolved = match action {
         PrAction::Stop(reason) => bail!("{reason}"),
@@ -143,30 +137,22 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             }
         }
         PrAction::Create => {
-            require_pr_title(&args.pr_title)?;
-            // A draft is not gated: an unreviewed draft is not a violation.
+            // The gate runs before either template: a run this policy refuses
+            // must say so, not die first on a `pr_body` the refusal means it
+            // never needed. A draft is not gated — an unreviewed draft is not a
+            // violation — and the author is nobody yet, since the PR this run
+            // is about to open has none.
             match args.state {
                 PrCreateState::Ready => {
-                    require_reviewer_for_ready(
-                        &[],
-                        &args.reviewers,
-                        args.require_reviewer,
-                        // The PR this run is about to open has no author yet.
-                        None,
-                    )?;
+                    require_reviewer_for_ready(&[], &args.reviewers, args.require_reviewer, None)?;
                 }
                 PrCreateState::Draft => {}
             }
-            let pr_body = pr_body.expect("Create implies a rendered body");
+            let pr_title = (args.pr_title)()?;
+            require_pr_title(&pr_title)?;
+            let pr_body = (args.pr_body)(&pr_title)?;
             let mut gh_args = vec![
-                "pr",
-                "create",
-                "--base",
-                &args.base,
-                "--title",
-                &args.pr_title,
-                "--body",
-                &pr_body,
+                "pr", "create", "--base", &args.base, "--title", &pr_title, "--body", &pr_body,
             ];
             if !args.reviewers.is_empty() {
                 gh_args.push("--reviewer");
@@ -241,29 +227,8 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     let ctx = base_ctx(record.as_ref(), &branch);
-    let pr_title = render_review(
-        tmpls.pr_title(),
-        "pr_title",
-        &with_fields(
-            &ctx,
-            &[(
-                "input",
-                serde_json::json!(args.pr_title.clone().unwrap_or_default()),
-            )],
-        ),
-        &vars,
-        missing_at,
-    )?;
-    let body_ctx = with_fields(
-        &ctx,
-        &[
-            (
-                "input",
-                serde_json::json!(args.pr_body.clone().unwrap_or_default()),
-            ),
-            ("pr_title", serde_json::json!(pr_title)),
-        ],
-    );
+    let title_input = serde_json::json!(args.pr_title.clone().unwrap_or_default());
+    let body_input = serde_json::json!(args.pr_body.clone().unwrap_or_default());
 
     let head = Git::at(Path::new(&start))
         .args(["rev-parse", "HEAD"])
@@ -303,9 +268,19 @@ pub fn run(args: Args) -> Result<()> {
             .base
             .clone()
             .unwrap_or_else(|| loaded.config.defaults.pr_base.clone()),
-        pr_title,
-        pr_body: Box::new(|| {
-            render_review(tmpls.pr_body(), "pr_body", &body_ctx, &vars, missing_at)
+        pr_title: Box::new(|| {
+            let ctx = with_fields(&ctx, &[("input", title_input)]);
+            render_review(tmpls.pr_title(), "pr_title", &ctx, &vars, missing_at)
+        }),
+        pr_body: Box::new(|title| {
+            let ctx = with_fields(
+                &ctx,
+                &[
+                    ("input", body_input),
+                    ("pr_title", serde_json::json!(title)),
+                ],
+            );
+            render_review(tmpls.pr_body(), "pr_body", &ctx, &vars, missing_at)
         }),
         reviewers,
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
@@ -391,32 +366,5 @@ mod tests {
         let ctx = base_ctx(Some(&record), "lev/eng-1-fix");
         let out = render_review("Closes {{ issue }}", "pr_body", &ctx, &vars, None).unwrap();
         assert_eq!(out, "Closes ENG-1");
-    }
-
-    #[test]
-    fn a_reused_pr_never_renders_the_body() {
-        for action in [
-            PrAction::AddReviewer,
-            PrAction::Stop("already merged".into()),
-        ] {
-            let rendered = std::cell::Cell::new(false);
-            let body = body_for(
-                &action,
-                Box::new(|| {
-                    rendered.set(true);
-                    bail!("`pr_body` reads the issue record")
-                }),
-            )
-            .expect("reuse must not fail on a body it has no use for");
-            assert!(body.is_none());
-            assert!(!rendered.get(), "the body template must not be rendered");
-        }
-    }
-
-    #[test]
-    fn a_created_pr_renders_the_body() {
-        let body = body_for(&PrAction::Create, Box::new(|| Ok("Closes ENG-1".into())))
-            .expect("a create renders its body");
-        assert_eq!(body.as_deref(), Some("Closes ENG-1"));
     }
 }
