@@ -1019,7 +1019,9 @@ fn status_urls_by_holder(
             }
             continue;
         }
-        let Ok(l) = load::load(None, Path::new(holder)) else {
+        // Another worktree's config: its unresolvable apps are that project's
+        // business, not a note to print on this terminal.
+        let Ok(l) = load::load_quiet(None, Path::new(holder)) else {
             continue;
         };
         urls.extend(status_urls(

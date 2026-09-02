@@ -24,26 +24,27 @@ impl App {
 }
 
 /// Build the catalog: an app's path comes from its explicit `path` or is inferred from
-/// doppler.yaml; an app whose path resolves to neither is skipped with a warning.
+/// doppler.yaml. Returns the catalog alongside the names it skipped.
 ///
 /// An app whose path can be resolved neither from config nor from doppler.yaml is
-/// skipped with a warning rather than failing the whole catalog — a config may list
-/// apps that aren't present in every checkout. Requesting such an app surfaces a
-/// plain "unknown app" error at the call site.
+/// skipped rather than failing the whole catalog — a config may list apps that
+/// aren't present in every checkout. Requesting such an app surfaces a plain
+/// "unknown app" error at the call site. The skipped names are returned rather
+/// than printed because a caller reading *another* worktree's config has no
+/// business reporting that config's gaps on this terminal.
 pub fn catalog(
     cfg: &Config,
     path_to_project: &HashMap<String, String>,
-) -> Result<HashMap<String, App>> {
+) -> Result<(HashMap<String, App>, Vec<String>)> {
     let mut out = HashMap::new();
+    let mut skipped = Vec::new();
     for (name, a) in &cfg.apps {
         let Some(path) = a
             .path
             .clone()
             .or_else(|| guess_path(&cfg.defaults.apps_dir, name, path_to_project))
         else {
-            eprintln!(
-                "note: skipping app `{name}` — no path in config and none inferrable from doppler.yaml"
-            );
+            skipped.push(name.clone());
             continue;
         };
         out.insert(
@@ -62,7 +63,7 @@ pub fn catalog(
             },
         );
     }
-    Ok(out)
+    Ok((out, skipped))
 }
 
 fn guess_path(apps_dir: &str, name: &str, p2p: &HashMap<String, String>) -> Option<String> {
@@ -97,7 +98,7 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         let cfg = Config::parse(SAMPLE).unwrap();
         let mut p2p = HashMap::new();
         p2p.insert("apps/api".to_string(), "api-foundry".to_string());
-        let cat = catalog(&cfg, &p2p).unwrap();
+        let (cat, _) = catalog(&cfg, &p2p).unwrap();
         // `api` has no explicit `path`; it is inferred from the doppler.yaml key.
         assert_eq!(cat["api"].path, "apps/api");
     }
@@ -105,9 +106,11 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
     #[test]
     fn skips_apps_with_unresolvable_path() {
         // `api` has no `path` in the sample; without a doppler entry for it, it is
-        // skipped rather than erroring the whole catalog.
+        // skipped rather than erroring the whole catalog, and named to the caller
+        // rather than printed.
         let cfg = Config::parse(SAMPLE).unwrap();
-        let cat = catalog(&cfg, &HashMap::new()).unwrap();
+        let (cat, skipped) = catalog(&cfg, &HashMap::new()).unwrap();
         assert!(cat.is_empty());
+        assert_eq!(skipped, vec!["api".to_string()]);
     }
 }
