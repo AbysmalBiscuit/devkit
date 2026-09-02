@@ -244,6 +244,31 @@ fn bootstrap_context(sha: &str, apps: &[String], prefix: &str) -> serde_json::Va
     })
 }
 
+/// The directory the baselines of this project live in, with the two
+/// misconfigurations that make a slot under it unsafe to name already refused.
+fn baselines_root(cfg: &Config, sha: &str) -> Result<PathBuf> {
+    anyhow::ensure!(
+        !cfg.defaults.baseline_dir.is_empty(),
+        "`--role baseline` needs `defaults.worktree_root` or `defaults.baseline_dir`"
+    );
+    // An empty sha names the baseline root itself as its slot, and a `Rebuild`
+    // there would take the whole directory — every other baseline with it.
+    anyhow::ensure!(!sha.is_empty(), "a baseline needs a fork-point commit");
+    Ok(expand_tilde(&cfg.defaults.baseline_dir))
+}
+
+/// The directory [`ensure`] would serve `sha` from, resolved without building
+/// or creating anything — the existing slot when one holds this sha, else the
+/// candidate a build would take. A path that does not exist yet is the honest
+/// answer for a fork point with no baseline.
+pub fn planned_path(cfg: &Config, sha: &str) -> Result<PathBuf> {
+    let root = baselines_root(cfg, sha)?;
+    match slot(&root, sha) {
+        Slot::Reuse(p, _) | Slot::Rebuild(p) | Slot::Create(p) => Ok(p),
+        Slot::Exhausted(why) => anyhow::bail!(why),
+    }
+}
+
 /// The baseline directory for `sha`, created if needed. Reuse preps only what
 /// has drifted; a new or interrupted tree is built from scratch.
 ///
@@ -260,14 +285,7 @@ pub fn ensure(
     apps: &[String],
     steps: &Steps,
 ) -> Result<PathBuf> {
-    anyhow::ensure!(
-        !cfg.defaults.baseline_dir.is_empty(),
-        "`--role baseline` needs `defaults.worktree_root` or `defaults.baseline_dir`"
-    );
-    // An empty sha names the baseline root itself as its slot, and a `Rebuild`
-    // there would take the whole directory — every other baseline with it.
-    anyhow::ensure!(!sha.is_empty(), "a baseline needs a fork-point commit");
-    let root = expand_tilde(&cfg.defaults.baseline_dir);
+    let root = baselines_root(cfg, sha)?;
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
 
     // The slot is resolved twice: once to name the lock, once inside it, since

@@ -650,6 +650,16 @@ fn cmd_up(
                     }
                     let baseline_target = crate::baseline::target(cfg, Path::new(cwd))?;
                     let sha = crate::baseline::pin(wt, &baseline_target)?;
+                    // A dry run reports the baseline it would use and leaves the
+                    // world as it found it. Bootstrapping runs the project's
+                    // `setup` commands and `after_worktree_create` hooks, and
+                    // repinning stops the servers under the pin it replaces —
+                    // effects nobody asking for a plan has consented to.
+                    if dry_run {
+                        let path = crate::baseline::planned_path(cfg, &sha)?;
+                        g.push((Role::Baseline, path.to_string_lossy().into_owned(), path));
+                        continue;
+                    }
                     let previous = devkit_common::record::read(wt).and_then(|r| r.baseline);
                     let primary = devkit_common::git::primary_checkout(Path::new(cwd))?;
                     let path =
