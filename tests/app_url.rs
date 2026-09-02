@@ -57,17 +57,55 @@ launch = ["git", "version"]
 
 fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
     let state = dir.join("state");
+    run_in_with_state(dir, &state, args)
+}
+
+/// Like `run_in`, but with the state directory (and thus `ports.json`) held
+/// separately from `dir` — lets two project directories share one registry.
+fn run_in_with_state(dir: &Path, state: &Path, args: &[&str]) -> std::process::Output {
     devkit_run()
         .args(args)
         .current_dir(dir)
         .env("HOME", dir)
-        .env("XDG_STATE_HOME", &state)
+        .env("XDG_STATE_HOME", state)
         .env("XDG_CONFIG_HOME", dir.join("config"))
-        .env("LOCALAPPDATA", &state) // Windows: keep the registry off the real one
+        .env("LOCALAPPDATA", state) // Windows: keep the registry off the real one
         .env("USERPROFILE", dir) // Windows: keep config resolution off the real home
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .expect("run devkit run")
+}
+
+/// A temp dir that is a git repo with a devkit.toml defining a single `web`
+/// app at the given port and url template.
+fn setup_with_web_app(base_port: u16, url: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    devkit_common::git::Git::fixture(root)
+        .args(["init", "-q"])
+        .output()
+        .unwrap();
+    std::fs::write(
+        root.join("devkit.toml"),
+        format!(
+            r#"
+[defaults]
+worktree_root = "wts"
+branch_prefix = "x/"
+baseline_ref = "origin/main"
+baseline_path = "b"
+
+[apps.web]
+base_port = {base_port}
+path = "."
+url = "{url}"
+provides_url = true
+launch = ["git", "version"]
+"#
+        ),
+    )
+    .expect("write devkit.toml");
+    dir
 }
 
 #[test]
@@ -116,6 +154,30 @@ fn status_shows_each_apps_rendered_url() {
     assert!(
         stdout.contains("http://localhost:39260"),
         "default url not shown in status: {stdout}"
+    );
+}
+
+#[test]
+fn status_all_resolves_each_holders_url_against_its_own_config() {
+    let state = tempfile::tempdir().expect("tempdir for shared state");
+    let a = setup_with_web_app(39700, "https://project-a.localhost:{{ port }}/dash");
+    let b = setup_with_web_app(39800, "http://project-b.example:{{ port }}/other");
+
+    let up_a = run_in_with_state(a.path(), state.path(), &["up", "web", "--dry-run"]);
+    assert!(up_a.status.success(), "{up_a:?}");
+    let up_b = run_in_with_state(b.path(), state.path(), &["up", "web", "--dry-run"]);
+    assert!(up_b.status.success(), "{up_b:?}");
+
+    let out = run_in_with_state(a.path(), state.path(), &["status", "--all"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("https://project-a.localhost:39700/dash"),
+        "project A's own url missing: {stdout}"
+    );
+    assert!(
+        stdout.contains("http://project-b.example:39800/other"),
+        "project B's row should resolve against project B's own config, not A's: {stdout}"
     );
 }
 

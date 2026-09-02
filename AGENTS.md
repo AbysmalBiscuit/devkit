@@ -103,7 +103,7 @@ When multiple sessions share one checkout, claim files before editing them with 
 
 ## Registry facade
 
-Go through `registry::{alloc, record_pid, release, release_ports, snapshot, prune, listening_view, status_table, status_table_with}` — they keep liveness syscalls (bind/stat/kill) out of the exclusive lock. Don't reintroduce probing inside `with_lock`. This facade is also the seam the `devkitd` daemon plugs into.
+Go through `registry::{alloc, record_pid, release, release_ports, snapshot, prune, listening_view, status_table, status_table_with, status_table_linked}` — they keep liveness syscalls (bind/stat/kill) out of the exclusive lock. Don't reintroduce probing inside `with_lock`. This facade is also the seam the `devkitd` daemon plugs into.
 
 When a `devkitd` daemon is running it is the *authoritative* registry for both the port and lock registries: it loads `ports.json` and `locks.json` into memory under `devkitd.lock` (held exclusive for its life), serves reads from memory over two sockets (`ports.sock` for ports, `locks.sock` for locks), and writes through to the respective files on each mutation. Direct callers take `devkitd.lock` *shared* before any write (`FlockStore` / `registry::with_lock`) and hard-error (`DaemonHoldsLock`) if the daemon holds it — so a non-daemon binary can never modify the files behind a live daemon. Reads are ungated. `devkit-locks` exposes the same `Store` seam as `devkit-ports`: `FlockStore` is the direct flock-guarded path; `MemoryStore` is the daemon path.
 

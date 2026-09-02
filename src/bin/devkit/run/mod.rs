@@ -12,7 +12,7 @@ use devkit_config::expand_tilde;
 use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
 use devkit_ports::run;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -968,7 +968,9 @@ fn status_urls(
         let Some(app) = catalog.get(&e.app) else {
             continue;
         };
-        let group_ports = &groups[&(e.holder.as_str(), e.role)];
+        let Some(group_ports) = groups.get(&(e.holder.as_str(), e.role)) else {
+            continue;
+        };
         if let Ok(url) = devkit_common::template::render_launch(
             app.url_template(),
             Some(*port),
@@ -981,39 +983,83 @@ fn status_urls(
     urls
 }
 
+/// The rendered URL per port for every holder in scope, each resolved against
+/// the config that governs that holder.
+///
+/// `ports.json` is machine-global, so `--all` lists rows from unrelated
+/// projects where an app name like `web` collides. Rendering a foreign row
+/// through the caller's own templates would produce a link to a host that does
+/// not serve that port. A holder whose config will not load contributes no URLs.
+fn status_urls_by_holder(
+    data: &registry::Data,
+    only_holder: Option<&str>,
+    cwd_holder: Option<&str>,
+    cwd_loaded: Option<&load::Loaded>,
+) -> BTreeMap<u16, String> {
+    let holders: BTreeSet<&str> = data
+        .entries
+        .values()
+        .map(|e| e.holder.as_str())
+        .filter(|h| only_holder.is_none_or(|only| *h == only))
+        .collect();
+
+    let mut urls = BTreeMap::new();
+    for holder in holders {
+        if cwd_holder.is_some_and(|h| h == holder) {
+            if let Some(l) = cwd_loaded {
+                urls.extend(status_urls(
+                    data,
+                    Some(holder),
+                    &l.catalog,
+                    &l.config.templates.variables,
+                ));
+            }
+            continue;
+        }
+        let Ok(l) = load::load(None, Path::new(holder)) else {
+            continue;
+        };
+        urls.extend(status_urls(
+            data,
+            Some(holder),
+            &l.catalog,
+            &l.config.templates.variables,
+        ));
+    }
+    urls
+}
+
 fn cmd_status(cwd: &str, all: bool) -> Result<()> {
     let data = registry::snapshot()?;
     // Outside a git repo there's no worktree to scope to; show nothing tracked.
     let current = if all { None } else { toplevel(cwd).ok() };
     let loaded = load::load(None, Path::new(cwd));
-    let urls = match &loaded {
-        Ok(l) => status_urls(
-            &data,
-            current.as_deref(),
-            &l.catalog,
-            &l.config.templates.variables,
-        ),
-        Err(_) => BTreeMap::new(),
-    };
     match (&current, all) {
-        (Some(h), _) => println!(
-            "{}",
-            registry::status_table_linked(
-                &data,
-                Some(h),
-                &registry::listening_view(&data, Some(h)),
-                &urls
+        (Some(h), _) => {
+            let urls =
+                status_urls_by_holder(&data, Some(h), current.as_deref(), loaded.as_ref().ok());
+            println!(
+                "{}",
+                registry::status_table_linked(
+                    &data,
+                    Some(h),
+                    &registry::listening_view(&data, Some(h)),
+                    &urls
+                )
             )
-        ),
-        (None, true) => println!(
-            "{}",
-            registry::status_table_linked(
-                &data,
-                None,
-                &registry::listening_view(&data, None),
-                &urls
+        }
+        (None, true) => {
+            let urls = status_urls_by_holder(&data, None, current.as_deref(), loaded.as_ref().ok());
+            println!(
+                "{}",
+                registry::status_table_linked(
+                    &data,
+                    None,
+                    &registry::listening_view(&data, None),
+                    &urls
+                )
             )
-        ),
+        }
         (None, false) => println!(
             "{}",
             registry::status_table(&registry::Data::default(), None)
