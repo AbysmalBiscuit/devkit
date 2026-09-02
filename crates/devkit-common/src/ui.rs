@@ -112,46 +112,126 @@ pub fn truncate(s: &str, max: usize) -> String {
 /// The widest visible label a linked URL cell carries before it is elided.
 pub const URL_LABEL_MAX: usize = 38;
 
-/// A table cell holding `url`, linked when the terminal supports OSC 8.
+/// The narrowest a URL column is worth linking at all — the width of
+/// `http://localhost:39240`, the default URL a project that configures
+/// nothing gets. Below this a link is not worth the space it costs the other
+/// columns.
+const MIN_URL_COL: usize = 22;
+
+/// Add `rows` to `table`, linking column `url_col` when there is room for it.
 ///
-/// comfy-table measures a cell's width with OSC 8 stripped but splits a long
+/// comfy-table measures a cell with the OSC 8 escape stripped but splits a long
 /// one with a splitter that does not recognise the escape, tearing the link
-/// apart and printing its target as visible text. The label is therefore
-/// elided to fit a column [`pin_url_column`] pins, and the click still reaches
-/// the whole `url`. Without hyperlink support the full text is kept instead,
-/// where wrapping costs nothing.
-pub fn url_cell(url: &str) -> String {
-    if hyperlinks_enabled_on(Stream::Stdout) {
-        link(&truncate(url, URL_LABEL_MAX), url)
-    } else {
-        url.to_string()
-    }
-}
-
-/// The pin width [`pin_url_column`] should use for a table whose URL cells
-/// come from `urls`: the widest label they will actually render, capped at
-/// [`URL_LABEL_MAX`], so a table of short URLs does not reserve a needlessly
-/// wide column.
-pub fn url_column_budget<'a>(urls: impl IntoIterator<Item = &'a str>) -> usize {
-    urls.into_iter()
-        .map(|u| u.chars().count().min(URL_LABEL_MAX))
-        .max()
-        .unwrap_or(URL_LABEL_MAX)
-}
-
-/// Pin the column at `index` so a [`url_cell`] in it is never split.
+/// apart and printing its target as visible text. A linked cell is therefore
+/// pinned to a width it cannot exceed — and because that pin costs the other
+/// columns real space, URLs stay plain text when too little is left. Unlinked
+/// text carries no escape, so wrapping it is harmless.
 ///
-/// The width is `budget` (see [`url_column_budget`]) plus comfy-table's left
-/// and right cell padding. Pinning is skipped without hyperlink support,
-/// where the cell is plain text that wraps harmlessly and is better shown
-/// whole.
-pub fn pin_url_column(table: &mut Table, index: usize, budget: usize) {
+/// A cell in `url_col` is treated as a URL (and considered for linking) only
+/// when it contains `://`; anything else (a `-` placeholder for a missing
+/// URL) is added unchanged.
+pub fn add_rows_linking_urls(table: &mut Table, rows: Vec<Vec<String>>, url_col: usize) {
     if !hyperlinks_enabled_on(Stream::Stdout) {
+        for row in rows {
+            table.add_row(row);
+        }
         return;
     }
-    if let Some(col) = table.column_mut(index) {
+
+    let mut widest: Vec<usize> = table
+        .header()
+        .map(|h| {
+            h.cell_iter()
+                .map(|c| visible(&c.content()).chars().count())
+                .collect()
+        })
+        .unwrap_or_default();
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i == widest.len() {
+                widest.push(0);
+            }
+            let w = visible(cell).chars().count();
+            if w > widest[i] {
+                widest[i] = w;
+            }
+        }
+    }
+
+    let others: usize = widest
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != url_col)
+        .map(|(_, w)| w + 2)
+        .sum();
+    let avail = term_width_on(Stream::Stdout).saturating_sub(others);
+
+    let longest_url = rows
+        .iter()
+        .filter_map(|r| r.get(url_col))
+        .filter(|c| c.contains("://"))
+        .map(|c| c.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let budget = (avail >= MIN_URL_COL).then(|| longest_url.min(avail - 2).min(URL_LABEL_MAX));
+
+    for mut row in rows {
+        if let Some(budget) = budget
+            && let Some(cell) = row.get_mut(url_col)
+            && cell.contains("://")
+        {
+            let url = std::mem::take(cell);
+            *cell = link(&truncate(&url, budget), &url);
+        }
+        table.add_row(row);
+    }
+
+    if let Some(budget) = budget
+        && let Some(col) = table.column_mut(url_col)
+    {
         col.set_constraint(ColumnConstraint::Absolute(Width::Fixed(budget as u16 + 2)));
     }
+}
+
+/// Strip ANSI SGR and OSC 8 hyperlink escapes, leaving only the visible
+/// glyphs — the width comfy-table measures a styled or linked cell at.
+fn visible(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            // OSC: ESC ] ... (ST = ESC \ or BEL)
+            if i + 1 < bytes.len() && bytes[i + 1] == b']' {
+                i += 2;
+                while i < bytes.len() {
+                    if bytes[i] == 0x07 {
+                        i += 1;
+                        break;
+                    }
+                    if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            // CSI/SGR: ESC [ ... letter
+            if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+                i += 2;
+                while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
 }
 
 // --- colour --------------------------------------------------------------------
@@ -460,46 +540,6 @@ mod tests {
         assert_eq!(truncate("exactly-ten", 11), "exactly-ten");
         assert_eq!(truncate("abcdefghij", 5), "abcd…");
         assert_eq!(truncate("anything", 0), "anything");
-    }
-
-    /// Strip OSC 8 hyperlink sequences and SGR colour codes, leaving only the
-    /// visible glyphs — used to measure on-screen width in tests.
-    fn visible(s: &str) -> String {
-        let mut out = String::new();
-        let bytes = s.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == 0x1b {
-                // OSC: ESC ] ... (ST = ESC \ or BEL)
-                if i + 1 < bytes.len() && bytes[i + 1] == b']' {
-                    i += 2;
-                    while i < bytes.len() {
-                        if bytes[i] == 0x07 {
-                            i += 1;
-                            break;
-                        }
-                        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
-                    continue;
-                }
-                // CSI/SGR: ESC [ ... letter
-                if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-                    i += 2;
-                    while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
-                        i += 1;
-                    }
-                    i += 1;
-                    continue;
-                }
-            }
-            out.push(bytes[i] as char);
-            i += 1;
-        }
-        out
     }
 
     /// comfy-table's `custom_styling` must measure cell width by *visible*

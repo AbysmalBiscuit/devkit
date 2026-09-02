@@ -404,24 +404,25 @@ struct Row {
 
 fn print_summary(rows: &[Row]) {
     let mut t = ui::table(&["ROLE", "APP", "PORT", "URL", "PID", "READY", "LOG"]);
-    for r in rows {
-        let url = &r.url;
-        t.add_row(vec![
-            r.role.to_string(),
-            r.app.clone(),
-            r.port.to_string(),
-            ui::url_cell(url),
-            r.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-            match r.ready {
-                Some(true) => "yes".into(),
-                Some(false) => "NO".into(),
-                None => "-".into(),
-            },
-            r.log.display().to_string(),
-        ]);
-    }
-    let budget = ui::url_column_budget(rows.iter().map(|r| r.url.as_str()));
-    ui::pin_url_column(&mut t, 3, budget);
+    let table_rows = rows
+        .iter()
+        .map(|r| {
+            vec![
+                r.role.to_string(),
+                r.app.clone(),
+                r.port.to_string(),
+                r.url.clone(),
+                r.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+                match r.ready {
+                    Some(true) => "yes".into(),
+                    Some(false) => "NO".into(),
+                    None => "-".into(),
+                },
+                r.log.display().to_string(),
+            ]
+        })
+        .collect();
+    ui::add_rows_linking_urls(&mut t, table_rows, 3);
     println!("{t}");
 }
 

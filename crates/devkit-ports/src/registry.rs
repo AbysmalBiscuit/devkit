@@ -788,6 +788,7 @@ pub fn status_table_linked(
     let url_col = headers.len() - 1;
     let mut t = devkit_common::ui::table(&headers);
     let now = now();
+    let mut rows = Vec::new();
     for (port, e) in &data.entries {
         if let Some(h) = only_holder
             && e.holder != h
@@ -810,16 +811,16 @@ pub fn status_table_linked(
             format!("{}s", now.saturating_sub(e.ts)),
         ];
         if !urls.is_empty() {
-            row.push(match urls.get(port) {
-                Some(u) => devkit_common::ui::url_cell(u),
-                None => "-".to_string(),
-            });
+            row.push(urls.get(port).cloned().unwrap_or_else(|| "-".to_string()));
         }
-        t.add_row(row);
+        rows.push(row);
     }
-    if !urls.is_empty() {
-        let budget = devkit_common::ui::url_column_budget(urls.values().map(|s| s.as_str()));
-        devkit_common::ui::pin_url_column(&mut t, url_col, budget);
+    if urls.is_empty() {
+        for row in rows {
+            t.add_row(row);
+        }
+    } else {
+        devkit_common::ui::add_rows_linking_urls(&mut t, rows, url_col);
     }
     format!("{t}")
 }
