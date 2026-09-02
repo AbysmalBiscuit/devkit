@@ -1,5 +1,6 @@
 //! The two help views: clap's own rendering, and the full command tree.
 
+use std::ffi::OsString;
 use std::io::{self, Write};
 
 /// Longest `about` the full-tree view can print without truncating, given the
@@ -112,6 +113,60 @@ mod decide_tests {
     }
 }
 
+/// Render `cmd` and every subcommand under it, one line per node, as
+/// `<path>  <about>`, followed by `cmd`'s `after_help` when it has one.
+///
+/// `path` is the full invoked path of `cmd` itself, so a shim renders under the
+/// name the caller typed: `docm add`, never `add` or `devkit docs add`.
+pub fn tree(cmd: &clap::Command, path: &str, out: &mut dyn Write) -> io::Result<()> {
+    let mut rows = Vec::new();
+    collect(cmd, path.to_string(), &mut rows);
+    let pad = rows
+        .iter()
+        .map(|(p, _)| p.chars().count())
+        .max()
+        .unwrap_or(0);
+    for (path, about) in &rows {
+        let line = if about.is_empty() {
+            path.clone()
+        } else {
+            format!("{path:<pad$}  {about}")
+        };
+        writeln!(out, "{}", truncate(&line))?;
+    }
+    if let Some(after) = cmd.get_after_help() {
+        writeln!(out)?;
+        writeln!(out, "{after}")?;
+    }
+    Ok(())
+}
+
+/// Depth-first in declaration order, so a group is immediately followed by its
+/// own children and the shape of the CLI survives the flattening.
+fn collect(cmd: &clap::Command, path: String, rows: &mut Vec<(String, String)>) {
+    let about = cmd.get_about().map(ToString::to_string).unwrap_or_default();
+    rows.push((path.clone(), about));
+    for sub in cmd.get_subcommands() {
+        if sub.get_name() == "help" || sub.is_hide_set() {
+            continue;
+        }
+        collect(sub, format!("{path} {}", sub.get_name()), rows);
+    }
+}
+
+/// Cut `s` to `WIDTH` columns, marking the cut with an ASCII ellipsis.
+///
+/// ASCII on purpose: help text reaches the generated PowerShell completion
+/// scripts verbatim, and Windows PowerShell 5.1 reads a BOM-less UTF-8 `.ps1`
+/// as cp1252, where the trailing byte of `...` becomes a quote character that
+/// closes a string early.
+fn truncate(s: &str) -> String {
+    if s.chars().count() <= WIDTH {
+        return s.to_string();
+    }
+    s.chars().take(WIDTH - 3).collect::<String>() + "..."
+}
+
 #[cfg(test)]
 mod tree_tests {
     use super::*;
@@ -197,62 +252,6 @@ mod tree_tests {
         assert!(text.contains("..."), "an over-cap line is marked: {text}");
     }
 }
-
-/// Render `cmd` and every subcommand under it, one line per node, as
-/// `<path>  <about>`, followed by `cmd`'s `after_help` when it has one.
-///
-/// `path` is the full invoked path of `cmd` itself, so a shim renders under the
-/// name the caller typed: `docm add`, never `add` or `devkit docs add`.
-pub fn tree(cmd: &clap::Command, path: &str, out: &mut dyn Write) -> io::Result<()> {
-    let mut rows = Vec::new();
-    collect(cmd, path.to_string(), &mut rows);
-    let pad = rows
-        .iter()
-        .map(|(p, _)| p.chars().count())
-        .max()
-        .unwrap_or(0);
-    for (path, about) in &rows {
-        let line = if about.is_empty() {
-            path.clone()
-        } else {
-            format!("{path:<pad$}  {about}")
-        };
-        writeln!(out, "{}", truncate(&line))?;
-    }
-    if let Some(after) = cmd.get_after_help() {
-        writeln!(out)?;
-        writeln!(out, "{after}")?;
-    }
-    Ok(())
-}
-
-/// Depth-first in declaration order, so a group is immediately followed by its
-/// own children and the shape of the CLI survives the flattening.
-fn collect(cmd: &clap::Command, path: String, rows: &mut Vec<(String, String)>) {
-    let about = cmd.get_about().map(ToString::to_string).unwrap_or_default();
-    rows.push((path.clone(), about));
-    for sub in cmd.get_subcommands() {
-        if sub.get_name() == "help" || sub.is_hide_set() {
-            continue;
-        }
-        collect(sub, format!("{path} {}", sub.get_name()), rows);
-    }
-}
-
-/// Cut `s` to `WIDTH` columns, marking the cut with an ASCII ellipsis.
-///
-/// ASCII on purpose: help text reaches the generated PowerShell completion
-/// scripts verbatim, and Windows PowerShell 5.1 reads a BOM-less UTF-8 `.ps1`
-/// as cp1252, where the trailing byte of `...` becomes a quote character that
-/// closes a string early.
-fn truncate(s: &str) -> String {
-    if s.chars().count() <= WIDTH {
-        return s.to_string();
-    }
-    s.chars().take(WIDTH - 3).collect::<String>() + "..."
-}
-
-use std::ffi::OsString;
 
 /// Argument ids the probe adds. Prefixed so they cannot collide with a real
 /// argument id in any subcommand.
