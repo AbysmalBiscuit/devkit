@@ -172,7 +172,7 @@ In `existing_pr`, request the field and pass it through:
     }))
 ```
 
-Run `cargo build --workspace` and set `is_draft` on every other site the compiler reports, including test fixtures that construct `PrBrief` literally.
+Run `cargo build --workspace` and set `is_draft` on every other site the compiler reports. `src/bin/devkit/issue/review/finish.rs:314` (`brief`, `brief_at`) builds `PrBrief` literals in tests, as do the fixtures in `github.rs`.
 
 - [ ] **Step 5: Run the full gate**
 
@@ -187,7 +187,8 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/devkit-common/src/github.rs crates/devkit-issue/src/status.rs src/bin/devkit/issue/review/request.rs
+git diff --stat        # review every file the compiler forced
+git add -u
 git commit -m "$(cat <<'EOF'
 feat(github): carry is_draft on PrBrief
 
@@ -357,7 +358,7 @@ And the cache write near line 114:
         }
 ```
 
-Run `cargo build --workspace` and fix every remaining construction site the compiler names, including test fixtures.
+Run `cargo build --workspace` and fix every remaining construction site the compiler names: `src/bin/devkit/issue/select.rs:71`, `src/bin/devkit/issue/status.rs:358`, and `src/bin/devkit/issue/triage.rs:145,193` each build `PrStatus::Unique` literals.
 
 - [ ] **Step 5: Run the full gate**
 
@@ -372,7 +373,8 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/devkit-issue/src/status.rs src/bin/devkit/issue/info_cache.rs src/bin/devkit/issue/info.rs
+git diff --stat        # review every file the compiler forced
+git add -u
 git commit -m "$(cat <<'EOF'
 feat(issue): tag PrStatus::Unique with is_draft
 
@@ -396,6 +398,7 @@ EOF
 **Files:**
 - Modify: `src/bin/devkit/issue/triage.rs` (`pr_label` at 5, `pr_cell` at 50)
 - Modify: `crates/devkit-issue/src/prs.rs` (`reviewer_state` at 557)
+- Modify: `docs/agents.md`
 
 **Interfaces:**
 - Consumes: `PrStatus::Unique { is_draft }` from Task 2, `PrNode::is_draft` (already present at `prs.rs:205`).
@@ -405,26 +408,11 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-In `src/bin/devkit/issue/triage.rs`, add a `mod tests` if none exists:
+`src/bin/devkit/issue/triage.rs:123` already has a `mod tests` carrying a
+`row_with(pr: PrStatus) -> IssueWorktree` helper. Add these two tests inside it,
+without redeclaring the module or the helper:
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn row_with(pr: PrStatus) -> IssueWorktree {
-        IssueWorktree {
-            worktree: "/w".into(),
-            branch: "feat/x".into(),
-            issue_id: "ENG-1".into(),
-            dirty: false,
-            pr,
-            state: None,
-            finished: false,
-            reason_not_finished: None,
-        }
-    }
-
     #[test]
     fn a_draft_labels_as_draft() {
         let row = row_with(PrStatus::Unique {
@@ -446,23 +434,24 @@ mod tests {
         });
         assert_eq!(pr_label(&row), "OPEN #7");
     }
-}
 ```
 
-In `crates/devkit-issue/src/prs.rs`, inside `mod tests`, add a case beside the existing `reviewer_state` tests:
+In `crates/devkit-issue/src/prs.rs`, inside `mod tests`, add a case beside the
+existing `reviewer_state` tests. That module does not import the `json!` macro,
+so qualify it, and build the node through the existing `node` helper at
+`prs.rs:958`:
 
 ```rust
     #[test]
     fn a_draft_is_not_review_needed() {
-        let pr: PrNode = serde_json::from_value(json!({
+        let pr = node(serde_json::json!({
             "number": 1, "url": "u", "headRefName": "h", "isDraft": true,
             "reviewDecision": null, "mergeable": "MERGEABLE",
             "author": { "login": "someone" },
             "reviewRequests": { "nodes": [
                 { "requestedReviewer": { "login": "me" } }
             ] }
-        }))
-        .unwrap();
+        }));
         let (_, action) = reviewer_state(&pr, "me");
         assert_eq!(action, "draft");
     }
@@ -564,7 +553,12 @@ fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
 
 `paint_action` (`src/bin/devkit/issue/prs.rs:13`) already falls through to `ui::dim` for an unrecognised verb, so `"draft"` renders dim with no renderer change.
 
-- [ ] **Step 6: Run the full gate**
+- [ ] **Step 6: Document the new action value**
+
+In `docs/agents.md`, note that a `reviews` row's ACTION can now read `draft`, a
+value MCP consumers reading that table have not seen before.
+
+- [ ] **Step 7: Run the full gate**
 
 ```bash
 cargo fmt --all
@@ -574,10 +568,10 @@ cargo nextest run --workspace --no-fail-fast
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/bin/devkit/issue/triage.rs crates/devkit-issue/src/prs.rs
+git add -u
 git commit -m "$(cat <<'EOF'
 feat(issue): render drafts in triage and the reviewer queue
 
@@ -662,19 +656,14 @@ In `crates/devkit-config/src/lib.rs`, beside the other config types:
 ```rust
 /// The state a PR is opened in by `issue pr create` when neither `--draft` nor
 /// `--ready` is passed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PrCreateState {
     /// Opened as a draft. Reviewers are notified only once it is marked ready.
+    #[default]
     Draft,
     /// Opened ready for review.
     Ready,
-}
-
-impl Default for PrCreateState {
-    fn default() -> Self {
-        Self::Draft
-    }
 }
 
 impl std::fmt::Display for PrCreateState {
@@ -718,7 +707,7 @@ Expected: PASS.
 - [ ] **Step 5: Regenerate the committed schema**
 
 ```bash
-DEVKIT_UPDATE_SCHEMA=1 cargo test -p devkit --test schema 2>/dev/null || DEVKIT_UPDATE_SCHEMA=1 cargo test schema
+DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 git diff --stat schema/devkit-config.json
 ```
 
@@ -765,6 +754,7 @@ EOF
 
 **Files:**
 - Modify: `src/bin/devkit/issue/mod.rs` (`Cmd` enum at 61, dispatch in `run` at 320)
+- Modify: `src/bin/devkit/main.rs:115` (the `issue` about line)
 - Modify: `tests/shim_dispatch.rs:228`
 - Modify: `docs/commands.md`, `docs/agents.md`, `AGENTS.md`, `skills/using-devkit/references/issues.md`
 
@@ -780,26 +770,38 @@ In `tests/shim_dispatch.rs`, replace the assertion at line 228:
 
 ```rust
     assert!(
-        text.contains("pr"),
+        text.contains("Pull-request lifecycle"),
         "shim should list issue's own subcommands: {text}"
     );
 ```
 
-Add a test asserting the old names still parse but no longer advertise themselves:
+`text.contains("pr")` would be a vacuous assertion: `prs` and `Prepare` both
+satisfy it. Match the group's description instead.
+
+Add a test asserting the old names still parse but no longer advertise
+themselves. This file has no `issue_cmd` helper; every test spawns the shim the
+way `issue_shim_parses_issue_arguments` does at `shim_dispatch.rs:219`:
 
 ```rust
 #[test]
 fn hidden_aliases_stay_reachable_but_unlisted() {
-    let out = issue_cmd(&["--help"]).output().expect("issue --help runs");
+    let (_dir, link) = shimtest::linked("issue");
+    let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .arg("--help")
+        .output()
+        .expect("spawn issue shim");
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
         !text.contains("checkout-pr"),
         "checkout-pr should be hidden from help: {text}"
     );
 
-    let out = issue_cmd(&["info", "--help"])
+    let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .args(["info", "--help"])
         .output()
-        .expect("issue info --help runs");
+        .expect("spawn issue shim");
     assert!(
         out.status.success(),
         "issue info must still parse: {}",
@@ -916,6 +918,13 @@ In `run`, route both spellings into the same functions. Normalise the group firs
 
 Leave the existing `Cmd::Info` and `Cmd::CheckoutPr` arms untouched: they already call the same functions.
 
+The `issue` about line is printed by `issue --help`, so hiding the variants is
+not enough on its own. In `src/bin/devkit/main.rs:115`:
+
+```rust
+    /// Issue lifecycle: setup, pr, status, end, sync-includes, prs, dashboard, review.
+```
+
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `cargo nextest run --test shim_dispatch`
@@ -924,10 +933,15 @@ Expected: PASS.
 
 - [ ] **Step 6: Update the docs**
 
-- `docs/commands.md`: rename the `checkout-pr` section to `pr checkout`, split `info` out of the `status, info, end, sync-includes` heading into an `issue pr status` entry, and note that `issue info` and `issue checkout-pr` still work but are undocumented aliases.
+The hidden aliases are absent from the docs as well as from `--help`: the docs
+teach one name per job.
+
+- `docs/commands.md`: rename the `checkout-pr` section to `pr checkout`, split `info` out of the `status, info, end, sync-includes` heading into an `issue pr status` entry, and update the cross-references at `docs/commands.md:159,167`.
 - `docs/agents.md`: add `issue pr` to the line naming the CLI-only `issue` verbs.
-- `AGENTS.md`: update the `src/bin/devkit/` row's list of `issue` subcommands.
+- `AGENTS.md:37`: update the `src/bin/devkit/` row's list of `issue` subcommands.
 - `skills/using-devkit/references/issues.md`: replace `issue checkout-pr` with `issue pr checkout` and the `issue info --json` recipe with `issue pr status --json`.
+- `docs/configuration.md:124,357,367,419,423,615`, `src/bin/devkit/schema.rs:116`, and the comments at `record.rs:20`, `slug.rs:1`, `setup.rs:97`, `review/finish.rs:215`, `checkout.rs:524`: same rename.
+- `crates/devkit-config/src/lib.rs:164,523,529` name `checkout-pr` in doc comments that reach the committed schema. Rename them and regenerate with `DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema`.
 
 - [ ] **Step 7: Run the full gate**
 
@@ -942,7 +956,8 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/bin/devkit/issue/mod.rs tests/shim_dispatch.rs docs/ AGENTS.md skills/using-devkit/
+git diff --stat
+git add -u
 git commit -m "$(cat <<'EOF'
 feat(issue): add the pr command group
 
@@ -969,7 +984,11 @@ EOF
 
 **Interfaces:**
 - Consumes: `PrCreateState` from Task 4; `PrStatus`/`PrBrief` draft flags from Tasks 1–2.
-- Produces: `pr::create::run(pr::create::Args { .. }) -> Result<()>`, plus `pr::create::Resolved { url: String, locator: github::PrLocator, created: bool, is_draft: bool }` and `pr::create::ensure(...) -> Result<Resolved>`, the shared create-or-reuse path Task 8 calls from `review request`.
+- Produces two entry points, because Task 8 needs the resolution half without the create half:
+  - `pr::create::resolve_existing(&Existing) -> Result<Found>` where `Found { pr: Option<github::PrBrief>, locator: Option<github::PrLocator>, repo: github::Repo }`. Pushes, then resolves through explicit `--pr`, the record, and branch discovery.
+  - `pr::create::ensure(Ensure<'_>) -> Result<Resolved>` where `Resolved { url: String, locator: github::PrLocator, pr: github::PrBrief, created: bool }`. Calls `resolve_existing`, then creates or reuses.
+  - `pr::create::run(pr::create::Args) -> Result<()>`, the subcommand.
+  - Moved from `review/request.rs` and re-exported: `parse_pr_flag`, `acting_repo`, `verify_created`, `record_with_pr`, `existing_pr`, `PrFlat`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1075,41 +1094,72 @@ Run: `cargo nextest run --bin devkit -E 'test(wanted_state) or test(reuse)'`
 
 Expected: PASS.
 
-- [ ] **Step 5: Move the create-or-reuse path out of `review request`**
+- [ ] **Step 5: Split the create-or-reuse path out of `review request`**
 
-Extract the body of `review::request::run` from the branch resolution through the `PrAction` match into `pr::create::ensure`, keeping the behavior identical:
+Extract in two pieces, not one. Task 8 needs to resolve a PR *without* creating
+one, so the push-and-resolve half stands alone:
 
 ```rust
-/// The PR this run acts on, created or reused.
-pub(crate) struct Resolved {
-    pub url: String,
-    pub locator: github::PrLocator,
-    pub created: bool,
-    pub is_draft: bool,
-}
-
-pub(crate) struct Ensure<'a> {
+/// Inputs to the push-and-resolve half.
+pub(crate) struct Existing<'a> {
     pub start: &'a str,
     pub branch: &'a str,
-    pub head: &'a str,
     pub repos: &'a github::Repos,
     pub record: Option<&'a devkit_common::record::IssueRecord>,
     pub explicit_pr: Option<github::PrLocator>,
     pub no_push: bool,
+    pub steps: &'a devkit_common::progress::Steps,
+}
+
+/// What resolution found. `pr` is `None` when this branch has no PR.
+pub(crate) struct Found {
+    pub pr: Option<github::PrBrief>,
+    pub locator: Option<github::PrLocator>,
+    pub repo: github::Repo,
+}
+
+/// Push the branch, then resolve this run's PR: explicit `--pr`, then the
+/// record, then branch discovery. The repository a locator names wins over
+/// `pr_repo`, so the fetch that the head-oid gate validates and the edit it
+/// protects read the same repository.
+pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found>;
+
+/// The PR this run acts on, created or reused.
+pub(crate) struct Resolved {
+    pub url: String,
+    pub locator: github::PrLocator,
+    pub pr: github::PrBrief,
+    pub created: bool,
+}
+
+pub(crate) struct Ensure<'a> {
+    pub existing: Existing<'a>,
+    pub head: &'a str,
     pub state: PrCreateState,
+    /// The explicit `--draft` / `--ready`, or `None` when neither was passed.
+    /// `reuse_note` reports only a flag the user actually typed.
+    pub asked: Option<PrCreateState>,
     pub base: String,
     pub pr_title: String,
     pub pr_body: String,
     pub reviewers: Vec<String>,
+    pub require_reviewer: bool,
     pub steps: &'a devkit_common::progress::Steps,
 }
 
 pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved>;
 ```
 
-Move with it: `PrFlat`, `existing_pr`, `parse_pr_flag`, `acting_repo`, `fetch_context`, `verify_created`, and `record_with_pr`. `review request` imports them from `pr::create` rather than owning them.
+Move into `pr::create` from `review/request.rs`: `PrFlat`, `existing_pr`,
+`parse_pr_flag`, `acting_repo`, `fetch_context`, `verify_created`, and
+`record_with_pr`. `review request` imports them from `pr::create` rather than
+owning them. Mark each `pub(crate)`.
 
-`ensure`'s create arm passes `--draft` to `gh pr create` when `state` is `PrCreateState::Draft`:
+`ensure` calls `resolve_existing`, then branches on `action_for`:
+
+- `Create`: render nothing extra, pass `--draft` to `gh pr create` when `state` is `PrCreateState::Draft`, run `verify_created`, write the record.
+- `AddReviewer`: run `assert_belongs`, apply `--to` through `gh pr edit --add-reviewer`, print `reuse_note(number, pr.is_draft, args.asked)` when it returns `Some`, write the record. Never change draft state.
+- `Stop(reason)`: bail with the reason.
 
 ```rust
             if matches!(state, PrCreateState::Draft) {
@@ -1117,7 +1167,11 @@ Move with it: `PrFlat`, `existing_pr`, `parse_pr_flag`, `acting_repo`, `fetch_co
             }
 ```
 
-Its reuse arm runs `assert_belongs` before writing the record, exactly as the `AddReviewer` arm does today, and applies `--to` reviewers through the existing `gh pr edit --add-reviewer` call.
+`require_reviewer` is threaded but unused until Task 7 adds the gate.
+
+`review::request::run` calls `ensure` with `state: PrCreateState::Ready` and
+`asked: None`, which is what it does today, so its behavior is unchanged by this
+task.
 
 - [ ] **Step 6: Wire up the subcommand**
 
@@ -1155,7 +1209,45 @@ Add to `PrCmd` in `src/bin/devkit/issue/mod.rs`:
     },
 ```
 
-Add the dispatch arm calling `pr::create::run`, and `mod pr;` beside the other module declarations.
+Add `mod pr;` beside the other module declarations, and the dispatch arm. `Args`
+mirrors the variant's fields plus the two globals every `issue` subcommand
+carries:
+
+```rust
+pub struct Args {
+    pub draft: bool,
+    pub ready: bool,
+    pub to: Vec<String>,
+    pub base: Option<String>,
+    pub pr_title: Option<String>,
+    pub pr_body: Option<String>,
+    pub no_push: bool,
+    pub pr: Option<String>,
+    pub args: Vec<String>,
+    pub dir: Option<String>,
+    pub config: Option<String>,
+}
+```
+
+`--arg key=value` comes across with the rest: the `pr_title` and `pr_body`
+templates read `[templates.variables]` overrides through it, so leaving it behind
+would make those templates un-overridable. Add the flag to the `PrCmd::Create`
+variant alongside the others, spelled as it is on `ReviewCmd::Request`.
+
+`run` derives `asked` from the flags the user typed, not from the resolved state:
+
+```rust
+    let asked = if args.draft {
+        Some(PrCreateState::Draft)
+    } else if args.ready {
+        Some(PrCreateState::Ready)
+    } else {
+        None
+    };
+```
+
+Deriving it from `wanted_state` instead would print "--draft was ignored" on
+every reuse under the default config.
 
 - [ ] **Step 7: Run the full gate**
 
@@ -1197,6 +1289,8 @@ EOF
 - Modify: `src/bin/devkit/issue/pr/mod.rs` (declare `ready`, add the gate helper)
 - Modify: `src/bin/devkit/issue/mod.rs` (add `PrCmd::Ready`)
 - Modify: `crates/devkit-common/src/github.rs` (add `submitted_reviewers`)
+- Modify: `src/bin/devkit/issue/pr/create.rs` (gate the create-ready path)
+- Modify: `src/bin/devkit/issue/review/mod.rs` (delete `require_reviewer` and its test)
 
 **Interfaces:**
 - Consumes: `pr::create::{Resolved, parse_pr_flag, acting_repo}` from Task 6; `github::requested_reviewers`; `review::is_human_login`.
@@ -1306,6 +1400,13 @@ pub fn submitted_reviewers(slug: &str, n: u64) -> Result<Vec<String>> {
 }
 ```
 
+`rest_get` resolves a bearer token through `bearer()` (`github.rs:86`) and errors
+without one, so this call cannot be the only path. Wrap it in `pr/mod.rs` with a
+`gh pr view <n> --json reviews` fallback through `cmd::gh_json_in`, mirroring
+`requested_reviewer_logins` (`review/request.rs:97`), which already does exactly
+this for the pending list. A machine authenticated only through `gh auth login`
+must still be able to run `pr ready`.
+
 - [ ] **Step 4: Write the gate**
 
 In `src/bin/devkit/issue/pr/mod.rs`:
@@ -1362,10 +1463,15 @@ fn needs_flip(is_draft: bool) -> bool {
 2. Push the branch unless `--no-push`, the same call `review request` makes at `request.rs:265`. Without it, any commit made since `pr create` fails the head-oid gate with an error whose stated diagnosis is wrong.
 3. Resolve the PR through `pr::create::parse_pr_flag` / the record / branch discovery, and the repository through `pr::create::acting_repo`.
 4. `review::finish::assert_belongs(&pr, &head)?`.
-5. Fetch both reviewer lists (`github::requested_reviewers` and `github::submitted_reviewers`), concatenate them, resolve `--to` through `review::resolve_target` into logins, and call `require_reviewer_for_ready`.
-6. If `needs_flip(pr.is_draft)`, run `gh pr ready <n>` through `cmd::gh_capture`, which appends `--repo`. Otherwise print that the PR is already ready and exit zero.
-7. Write the resolved locator into `.devkit/issue.toml` through `pr::create::record_with_pr`.
-8. Print the PR URL.
+5. Resolve `--to` through `review::resolve_target` into logins, and apply them: when the list is non-empty, run `gh pr edit <n> --add-reviewer <logins>` through `cmd::gh_capture`. The flag's help says it adds GitHub reviewers, so a run that only counted them for the gate would be lying.
+6. When `require_pr_reviewer` is set, fetch both reviewer lists (`requested_reviewers` and `submitted_reviewers`, each behind the `gh` fallback), concatenate, and call `require_reviewer_for_ready`. Skip both fetches when the key is off: they are two network round trips that decide nothing.
+7. If `needs_flip(pr.is_draft)`, run `gh pr ready <n>` through `cmd::gh_capture`, which appends `--repo`. Otherwise print that the PR is already ready and exit zero.
+8. Write the resolved locator into `.devkit/issue.toml` through `pr::create::record_with_pr`.
+9. Print the PR URL.
+
+Steps 1 through 4 are `pr::create::resolve_existing` plus `assert_belongs`: call
+it with `Existing { start, branch, repos, record, explicit_pr, no_push, steps }`
+rather than reimplementing the resolution.
 
 - [ ] **Step 6: Wire up the subcommand**
 
@@ -1387,13 +1493,27 @@ Add to `PrCmd`:
     },
 ```
 
-Add the dispatch arm calling `pr::ready::run`.
+Add the dispatch arm calling `pr::ready::run`:
+
+```rust
+pub struct Args {
+    pub to: Vec<String>,
+    pub no_push: bool,
+    pub pr: Option<String>,
+    pub dir: Option<String>,
+    pub config: Option<String>,
+}
+```
 
 - [ ] **Step 7: Gate `pr create --ready` too**
 
 In `pr::create::ensure`'s create arm, call `require_reviewer_for_ready(&[], &reviewers, required)` before `gh pr create` when `state` is `PrCreateState::Ready`. A draft create is not gated: an unreviewed draft is not a violation.
 
-Delete the old `review::require_reviewer` and its call at `request.rs:384`, which checked Slack targets rather than GitHub reviewers and only ran on the create arm.
+Delete `review::require_reviewer` (`review/mod.rs:60`), its call inside
+`pr::create::ensure`'s create arm (moved there by Task 6), and the test
+`require_reviewer_only_gates_when_configured` at `review/mod.rs:278`, which
+exercises the deleted function and would otherwise fail to compile. It checked
+Slack targets rather than GitHub reviewers and only ran when creating.
 
 - [ ] **Step 8: Run the full gate**
 
@@ -1439,7 +1559,7 @@ EOF
 - Modify: `docs/commands.md`, `skills/using-devkit/references/issues.md`
 
 **Interfaces:**
-- Consumes: `pr::create::{ensure, parse_pr_flag, acting_repo, record_with_pr}` from Task 6; `pr::require_reviewer_for_ready` from Task 7.
+- Consumes: `pr::create::{resolve_existing, Existing, Found, record_with_pr}` from Task 6; `pr::require_reviewer_for_ready` from Task 7. Not `ensure`: this command must never create a PR.
 - Produces: nothing later tasks depend on. This is the only breaking commit.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1475,6 +1595,23 @@ In `src/bin/devkit/issue/review/request.rs`, inside `mod tests`:
         assert!(!should_flip(true, true));
         assert!(!should_flip(false, false));
     }
+
+    #[test]
+    fn a_record_without_a_pr_gets_one_written() {
+        let rec = devkit_common::record::IssueRecord {
+            issue: "ENG-1".into(),
+            slug: "fix-login".into(),
+            apps: Vec::new(),
+            summary: None,
+            pr: None,
+        };
+        let loc = github::PrLocator {
+            repo: Some("o/r".into()),
+            number: 7,
+        };
+        let healed = record_with_pr(Some(&rec), loc.clone()).expect("a record to heal");
+        assert_eq!(healed.pr, Some(loc));
+    }
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1509,11 +1646,48 @@ fn should_flip(is_draft: bool, no_notify: bool) -> bool {
 }
 ```
 
-- [ ] **Step 4: Drop the create path and the creation flags**
+- [ ] **Step 4: Resolve without creating**
 
-Remove the `PrAction::Create` arm from `run` and call `require_existing_pr` after the PR fetch. Remove `--base`, `--pr-title`, `--pr-body` from `ReviewCmd::Request` in `src/bin/devkit/issue/mod.rs` and from `request::Args`, along with `require_pr_title` and the `pr_title`/`pr_body` template renders.
+Task 6 moved the create-or-reuse path into `pr::create::ensure`. Swap
+`review::request::run`'s call to `ensure` for the resolution half alone:
 
-`action_for` keeps its single `None => Create` mapping; only its doc comment changes to note that `pr create` acts on `Create` while `review request` refuses it.
+```rust
+    let found = crate::issue::pr::create::resolve_existing(&crate::issue::pr::create::Existing {
+        start: &start,
+        branch: &branch,
+        repos: &repos,
+        record: record.as_ref(),
+        explicit_pr: explicit_loc,
+        no_push: args.no_push,
+        steps: &steps,
+    })?;
+    require_existing_pr(found.pr.as_ref().map(|p| p.state.as_str()))?;
+    let pr = found.pr.expect("require_existing_pr rejects a missing PR");
+    let repo = found.repo;
+    let loc = found.locator.expect("a resolved PR carries a locator");
+    super::finish::assert_belongs(&pr, &head)?;
+```
+
+`pr` is a `github::PrBrief`, so `pr.number`, `pr.url` and `pr.is_draft` are all
+in hand for the steps that follow. Write the record from `loc` through
+`pr::create::record_with_pr`, which is the record heal: a PR found by branch
+discovery gets bound to a `setup` worktree whose record still carries
+`pr: None`.
+
+Remove `--base`, `--pr-title`, `--pr-body` from `ReviewCmd::Request` in
+`src/bin/devkit/issue/mod.rs` and from `request::Args`, along with the
+`pr_title`/`pr_body` template renders. Delete `review::require_pr_title`
+(`review/mod.rs:52`) and the test `require_pr_title_rejects_empty` at
+`review/mod.rs:264`, which exercises it: `pr create` now owns the only path that
+needs a title.
+
+Rewrite the two doc comments that describe the old behavior: the
+`ReviewCmd::Request` summary at `issue/mod.rs:246` ("Push, open/reuse the PR…")
+and `--no-notify`'s at `issue/mod.rs:265`.
+
+`action_for` keeps its single `None => Create` mapping; only its doc comment
+changes, to note that `pr create` acts on `Create` while `review request`
+refuses it.
 
 - [ ] **Step 5: Flip the draft, gated**
 
@@ -1544,11 +1718,19 @@ Replace the locally rendered `pr_title` in the notify context with the fetched t
 
 ```rust
     let full = steps
-        .during_result("Fetching PR title…", || github::pr_full(&repo.slug, pr.number))
+        .during_result("Fetching PR title…", || {
+            super::finish::fetch_pr_full(&repo, pr.number, &start)
+        })
         .context("fetching the PR's title")?;
 ```
 
 and pass `full.title` as the `pr_title` field of `notify_ctx`.
+
+Use `finish::fetch_pr_full` (`review/finish.rs:110`), widening it to
+`pub(crate)`, rather than `github::pr_full` directly. `pr_full` goes through
+`rest_get`, which errors without a token; `fetch_pr_full` already carries the
+`gh` fallback for exactly this read. Match its real parameter list when calling
+it.
 
 - [ ] **Step 7: Update the docs**
 
