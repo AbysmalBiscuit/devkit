@@ -99,6 +99,27 @@ fn a_url_may_reference_another_apps_port() {
 }
 
 #[test]
+fn status_shows_each_apps_rendered_url() {
+    let dir = setup();
+    // `resolve_ports` allocates the registry rows before `--dry-run` skips the
+    // spawn, so a dry-run `up` already persists the reservations `status` reads.
+    let up = run_in(dir.path(), &["up", "front", "web", "--dry-run"]);
+    assert!(up.status.success(), "{up:?}");
+
+    let out = run_in(dir.path(), &["status"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("https://app.localhost:39240/dashboard"),
+        "custom url not shown in status: {stdout}"
+    );
+    assert!(
+        stdout.contains("http://localhost:39260"),
+        "default url not shown in status: {stdout}"
+    );
+}
+
+#[test]
 fn url_env_wiring_uses_the_providers_url() {
     let dir = setup();
     let out = run_in(dir.path(), &["up", "web", "--dry-run"]);

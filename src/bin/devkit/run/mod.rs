@@ -937,20 +937,90 @@ fn reap_roots(strays: &[devkit_ports::strays::Stray]) -> Vec<u32> {
     strays.iter().filter_map(|s| s.pid).collect()
 }
 
+/// The rendered URL per port for the rows `status` is about to show.
+///
+/// A template may reference a sibling's port via `ports[...]`, so the lookup
+/// map is built per (holder, role) group — the same grouping `up` allocates
+/// under. An app absent from the catalog, or a template that fails to render,
+/// simply has no URL.
+fn status_urls(
+    data: &registry::Data,
+    only_holder: Option<&str>,
+    catalog: &HashMap<String, devkit_ports::apps::App>,
+    variables: &BTreeMap<String, String>,
+) -> BTreeMap<u16, String> {
+    let mut groups: HashMap<(&str, Role), BTreeMap<String, u16>> = HashMap::new();
+    for (port, e) in &data.entries {
+        if only_holder.is_some_and(|h| e.holder != h) {
+            continue;
+        }
+        groups
+            .entry((e.holder.as_str(), e.role))
+            .or_default()
+            .insert(e.app.clone(), *port);
+    }
+
+    let mut urls = BTreeMap::new();
+    for (port, e) in &data.entries {
+        if only_holder.is_some_and(|h| e.holder != h) {
+            continue;
+        }
+        let Some(app) = catalog.get(&e.app) else {
+            continue;
+        };
+        let group_ports = &groups[&(e.holder.as_str(), e.role)];
+        if let Ok(url) = devkit_common::template::render_launch(
+            app.url_template(),
+            Some(*port),
+            group_ports,
+            variables,
+        ) {
+            urls.insert(*port, url);
+        }
+    }
+    urls
+}
+
 fn cmd_status(cwd: &str, all: bool) -> Result<()> {
     let data = registry::snapshot()?;
     // Outside a git repo there's no worktree to scope to; show nothing tracked.
     let current = if all { None } else { toplevel(cwd).ok() };
+    let loaded = load::load(None, Path::new(cwd));
+    let urls = match &loaded {
+        Ok(l) => status_urls(
+            &data,
+            current.as_deref(),
+            &l.catalog,
+            &l.config.templates.variables,
+        ),
+        Err(_) => BTreeMap::new(),
+    };
     match (&current, all) {
-        (Some(h), _) => println!("{}", registry::status_table(&data, Some(h))),
-        (None, true) => println!("{}", registry::status_table(&data, None)),
+        (Some(h), _) => println!(
+            "{}",
+            registry::status_table_linked(
+                &data,
+                Some(h),
+                &registry::listening_view(&data, Some(h)),
+                &urls
+            )
+        ),
+        (None, true) => println!(
+            "{}",
+            registry::status_table_linked(
+                &data,
+                None,
+                &registry::listening_view(&data, None),
+                &urls
+            )
+        ),
         (None, false) => println!(
             "{}",
             registry::status_table(&registry::Data::default(), None)
         ),
     }
     // Untracked strays (best-effort; never fails status).
-    if let Ok(loaded) = load::load(None, Path::new(cwd)) {
+    if let Ok(loaded) = &loaded {
         let strays = devkit_ports::strays::scan(&loaded.config, &data);
         let scoped = strays_in_scope(&strays, current.as_deref());
         let rendered = render_strays(&scoped);
@@ -1018,6 +1088,7 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::{apps_from_diff, available_apps};
+    use std::collections::{BTreeMap, HashMap};
 
     #[test]
     fn reap_refused_without_tty() {
@@ -1187,5 +1258,129 @@ mod tests {
             available_apps(&[]),
             "no apps configured (add [apps.<name>] to devkit.toml)"
         );
+    }
+
+    fn status_urls_app(url: Option<&str>) -> devkit_ports::apps::App {
+        devkit_ports::apps::App {
+            name: "app".into(),
+            base_port: 0,
+            path: ".".into(),
+            launch: vec![],
+            url: url.map(String::from),
+            url_env: None,
+            provides_url: false,
+            static_env: HashMap::new(),
+            prep_files: vec![],
+            setup: vec![],
+        }
+    }
+
+    fn status_urls_entry(
+        app: &str,
+        holder: &str,
+        role: devkit_ports::registry::Role,
+    ) -> devkit_ports::registry::Entry {
+        devkit_ports::registry::Entry {
+            app: app.into(),
+            holder: holder.into(),
+            role,
+            pid: None,
+            logfile: None,
+            ts: 0,
+        }
+    }
+
+    #[test]
+    fn status_urls_uses_the_localhost_default_for_an_app_with_no_configured_url() {
+        use super::status_urls;
+        let mut data = devkit_ports::registry::Data::default();
+        data.entries.insert(
+            4100,
+            status_urls_entry("api", "/wt", devkit_ports::registry::Role::Issue),
+        );
+        let mut catalog = HashMap::new();
+        catalog.insert("api".to_string(), status_urls_app(None));
+
+        let urls = status_urls(&data, None, &catalog, &BTreeMap::new());
+        assert_eq!(
+            urls.get(&4100).map(String::as_str),
+            Some("http://localhost:4100")
+        );
+    }
+
+    #[test]
+    fn status_urls_resolves_a_sibling_reference_within_its_own_group() {
+        use super::status_urls;
+        let mut data = devkit_ports::registry::Data::default();
+        // Group 1: front on 4100, peer references front's port.
+        data.entries.insert(
+            4100,
+            status_urls_entry("front", "/wt1", devkit_ports::registry::Role::Issue),
+        );
+        data.entries.insert(
+            4101,
+            status_urls_entry("peer", "/wt1", devkit_ports::registry::Role::Issue),
+        );
+        // Group 2: front on a different port, so a peer resolving the wrong
+        // group's port would give a different answer.
+        data.entries.insert(
+            4200,
+            status_urls_entry("front", "/wt2", devkit_ports::registry::Role::Issue),
+        );
+        data.entries.insert(
+            4201,
+            status_urls_entry("peer", "/wt2", devkit_ports::registry::Role::Issue),
+        );
+
+        let mut catalog = HashMap::new();
+        catalog.insert("front".to_string(), status_urls_app(None));
+        catalog.insert(
+            "peer".to_string(),
+            status_urls_app(Some("http://localhost:{{ ports['front'] }}/peer")),
+        );
+
+        let urls = status_urls(&data, None, &catalog, &BTreeMap::new());
+        assert_eq!(
+            urls.get(&4101).map(String::as_str),
+            Some("http://localhost:4100/peer")
+        );
+        assert_eq!(
+            urls.get(&4201).map(String::as_str),
+            Some("http://localhost:4200/peer")
+        );
+    }
+
+    #[test]
+    fn status_urls_skips_a_row_whose_app_is_not_in_the_catalog() {
+        use super::status_urls;
+        let mut data = devkit_ports::registry::Data::default();
+        data.entries.insert(
+            4100,
+            status_urls_entry("ghost", "/wt", devkit_ports::registry::Role::Issue),
+        );
+
+        let urls = status_urls(&data, None, &HashMap::new(), &BTreeMap::new());
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn status_urls_scopes_to_only_holder() {
+        use super::status_urls;
+        let mut data = devkit_ports::registry::Data::default();
+        data.entries.insert(
+            4100,
+            status_urls_entry("api", "/wt1", devkit_ports::registry::Role::Issue),
+        );
+        data.entries.insert(
+            4200,
+            status_urls_entry("api", "/wt2", devkit_ports::registry::Role::Issue),
+        );
+        let mut catalog = HashMap::new();
+        catalog.insert("api".to_string(), status_urls_app(None));
+
+        let urls = status_urls(&data, Some("/wt1"), &catalog, &BTreeMap::new());
+        assert_eq!(urls.len(), 1);
+        assert!(urls.contains_key(&4100));
+        assert!(!urls.contains_key(&4200));
     }
 }

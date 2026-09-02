@@ -255,6 +255,67 @@ mod tests {
             "the supplied view wins over a re-probe: {text}"
         );
     }
+
+    #[test]
+    fn status_table_linked_adds_a_url_column_when_urls_are_supplied() {
+        let mut data = Data::default();
+        data.entries.insert(
+            4100,
+            Entry {
+                app: "api".into(),
+                holder: "/w/root".into(),
+                role: Role::Issue,
+                pid: Some(42),
+                logfile: None,
+                ts: now(),
+            },
+        );
+        data.entries.insert(
+            4200,
+            Entry {
+                app: "web".into(),
+                holder: "/w/root".into(),
+                role: Role::Issue,
+                pid: Some(43),
+                logfile: None,
+                ts: now(),
+            },
+        );
+        let view: BTreeMap<u16, bool> = [(4100u16, true), (4200u16, true)].into_iter().collect();
+        let urls: BTreeMap<u16, String> = [(4100u16, "http://localhost:4100".to_string())]
+            .into_iter()
+            .collect();
+        let text = status_table_linked(&data, Some("/w/root"), &view, &urls);
+        assert!(text.contains("URL"), "{text}");
+        assert!(text.contains("http://localhost:4100"), "{text}");
+        let web_row = text
+            .lines()
+            .find(|l| l.contains("4200"))
+            .unwrap_or_else(|| panic!("no row for port 4200: {text}"));
+        assert!(
+            web_row.trim_end().ends_with('-'),
+            "a scoped-in port with no urls entry renders `-`: {web_row}"
+        );
+    }
+
+    #[test]
+    fn status_table_linked_drops_the_url_column_when_urls_is_empty() {
+        let mut data = Data::default();
+        data.entries.insert(
+            4100,
+            Entry {
+                app: "api".into(),
+                holder: "/w/root".into(),
+                role: Role::Issue,
+                pid: Some(42),
+                logfile: None,
+                ts: now(),
+            },
+        );
+        let view: BTreeMap<u16, bool> = [(4100u16, true)].into_iter().collect();
+        let text = status_table_linked(&data, Some("/w/root"), &view, &BTreeMap::new());
+        assert!(!text.contains("URL"), "{text}");
+    }
 }
 
 use std::net::{SocketAddr, TcpStream};
@@ -705,8 +766,26 @@ pub fn status_table_with(
     only_holder: Option<&str>,
     view: &BTreeMap<u16, bool>,
 ) -> String {
-    let mut t =
-        devkit_common::ui::table(&["PORT", "APP", "ROLE", "HOLDER", "PID", "LISTENING", "AGE"]);
+    status_table_linked(data, only_holder, view, &BTreeMap::new())
+}
+
+/// `status_table_with` plus a rendered URL per port, shown as an OSC 8 link
+/// where the terminal supports one.
+///
+/// An empty `urls` drops the column entirely, which is what keeps `portm
+/// status` and `devkit brief` at their seven columns: neither loads the app
+/// catalog a URL template comes from.
+pub fn status_table_linked(
+    data: &Data,
+    only_holder: Option<&str>,
+    view: &BTreeMap<u16, bool>,
+    urls: &BTreeMap<u16, String>,
+) -> String {
+    let mut headers = vec!["PORT", "APP", "ROLE", "HOLDER", "PID", "LISTENING", "AGE"];
+    if !urls.is_empty() {
+        headers.push("URL");
+    }
+    let mut t = devkit_common::ui::table(&headers);
     let now = now();
     for (port, e) in &data.entries {
         if let Some(h) = only_holder
@@ -715,7 +794,7 @@ pub fn status_table_with(
             continue;
         }
         let label = devkit_common::paths::leaf(&e.holder).unwrap_or(&e.holder);
-        t.add_row(vec![
+        let mut row = vec![
             port.to_string(),
             e.app.clone(),
             e.role.to_string(),
@@ -728,7 +807,14 @@ pub fn status_table_with(
             }
             .to_string(),
             format!("{}s", now.saturating_sub(e.ts)),
-        ]);
+        ];
+        if !urls.is_empty() {
+            row.push(match urls.get(port) {
+                Some(u) => devkit_common::ui::link(u, u),
+                None => "-".to_string(),
+            });
+        }
+        t.add_row(row);
     }
     format!("{t}")
 }
