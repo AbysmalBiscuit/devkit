@@ -1031,13 +1031,15 @@ fn status_urls_by_holder(
 
 fn cmd_status(cwd: &str, all: bool) -> Result<()> {
     let data = registry::snapshot()?;
-    // Outside a git repo there's no worktree to scope to; show nothing tracked.
-    let current = if all { None } else { toplevel(cwd).ok() };
+    // `here` is which worktree the caller is in; `current` is which rows to
+    // show. `--all` widens the display without changing where the caller is,
+    // and the already-loaded config belongs to `here`.
+    let here = toplevel(cwd).ok();
+    let current = if all { None } else { here.clone() };
     let loaded = load::load(None, Path::new(cwd));
     match (&current, all) {
         (Some(h), _) => {
-            let urls =
-                status_urls_by_holder(&data, Some(h), current.as_deref(), loaded.as_ref().ok());
+            let urls = status_urls_by_holder(&data, Some(h), here.as_deref(), loaded.as_ref().ok());
             println!(
                 "{}",
                 registry::status_table_linked(
@@ -1049,7 +1051,7 @@ fn cmd_status(cwd: &str, all: bool) -> Result<()> {
             )
         }
         (None, true) => {
-            let urls = status_urls_by_holder(&data, None, current.as_deref(), loaded.as_ref().ok());
+            let urls = status_urls_by_holder(&data, None, here.as_deref(), loaded.as_ref().ok());
             println!(
                 "{}",
                 registry::status_table_linked(
