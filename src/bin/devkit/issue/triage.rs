@@ -11,7 +11,14 @@ fn pr_label(row: &IssueWorktree) -> String {
             is_draft,
             ..
         } => {
-            let word = if *is_draft { "DRAFT" } else { state };
+            // Only an open PR can be a live draft: GitHub keeps the flag set on
+            // one closed while still a draft, and reporting that as DRAFT would
+            // read as work still in flight.
+            let word = if *is_draft && state == "OPEN" {
+                "DRAFT"
+            } else {
+                state
+            };
             format!("{word} #{number}")
         }
         PrStatus::Ambiguous { candidates } => format!("ambiguous ({})", candidates.len()),
@@ -57,7 +64,14 @@ pub(crate) fn tree_cell(dirty: bool) -> String {
 
 pub(crate) fn pr_cell(row: &IssueWorktree) -> String {
     let label = pr_label(row);
-    let drafting = matches!(row.pr, PrStatus::Unique { is_draft: true, .. });
+    let drafting = matches!(
+        &row.pr,
+        PrStatus::Unique {
+            is_draft: true,
+            state,
+            ..
+        } if state == "OPEN"
+    );
     let colored = if drafting {
         ui::dim(&label)
     } else {
@@ -277,6 +291,22 @@ mod tests {
             is_draft: true,
         });
         assert_eq!(pr_label(&row), "DRAFT #7");
+        assert_eq!(pr_cell(&row), ui::link(&ui::dim("DRAFT #7"), "u7"));
+    }
+
+    /// GitHub keeps the draft flag on a PR closed while still a draft. An
+    /// abandoned draft is not a live one, so the column reports what became of
+    /// it rather than what it was.
+    #[test]
+    fn a_closed_draft_reads_as_closed() {
+        let row = row_with(PrStatus::Unique {
+            number: 7,
+            state: "CLOSED".into(),
+            url: "u7".into(),
+            is_draft: true,
+        });
+        assert_eq!(pr_label(&row), "CLOSED #7");
+        assert_eq!(pr_cell(&row), ui::link(&ui::red("CLOSED #7"), "u7"));
     }
 
     #[test]
