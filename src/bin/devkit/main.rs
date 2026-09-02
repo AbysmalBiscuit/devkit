@@ -117,7 +117,7 @@ enum Cmd {
     /// Supervised dev servers and canned project tasks.
     #[command(display_name = "devkit run")]
     Run(run::RunCli),
-    /// Issue lifecycle: setup, status, review, end.
+    /// Set up, track, review and retire issue worktrees
     #[command(display_name = "devkit issue")]
     Issue(issue::IssueCli),
     /// Serve the devkit MCP tools over stdio.
