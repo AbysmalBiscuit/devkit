@@ -145,8 +145,11 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
         PrAction::Create => {
             require_pr_title(&args.pr_title)?;
             // A draft is not gated: an unreviewed draft is not a violation.
-            if matches!(args.state, PrCreateState::Ready) {
-                require_reviewer_for_ready(&[], &args.reviewers, args.require_reviewer)?;
+            match args.state {
+                PrCreateState::Ready => {
+                    require_reviewer_for_ready(&[], &args.reviewers, args.require_reviewer)?;
+                }
+                PrCreateState::Draft => {}
             }
             let pr_body = pr_body.expect("Create implies a rendered body");
             let mut gh_args = vec![
@@ -163,8 +166,9 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
                 gh_args.push("--reviewer");
                 gh_args.push(&joined);
             }
-            if matches!(args.state, PrCreateState::Draft) {
-                gh_args.push("--draft");
+            match args.state {
+                PrCreateState::Draft => gh_args.push("--draft"),
+                PrCreateState::Ready => {}
             }
             let out = steps
                 .during_result("Creating PR…", || {
