@@ -271,9 +271,9 @@ fn hidden_aliases_stay_reachable_but_unlisted() {
     );
 }
 
-/// The group's own help must list both actions, not just exist.
+/// The group's own help must list every action it carries, not just exist.
 #[test]
-fn pr_group_lists_status_and_checkout() {
+fn pr_group_lists_its_subcommands() {
     let (_dir, link) = shimtest::linked("issue");
     let out = Command::new(&link)
         .env("DEVKIT_SKIP_AUTOLINK", "1")
@@ -285,10 +285,36 @@ fn pr_group_lists_status_and_checkout() {
         out.status.success(),
         "issue pr --help exited non-zero: {text}"
     );
+    for sub in ["create", "ready", "status", "checkout"] {
+        assert!(
+            text.contains(sub),
+            "issue pr --help should list `{sub}`: {text}"
+        );
+    }
+}
+
+/// `pr ready`'s dispatch arm is otherwise only compile-checked, so nothing
+/// proves the subcommand parses from the command line at all.
+#[test]
+fn pr_ready_parses() {
+    let (_dir, link) = shimtest::linked("issue");
+    let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .args(["pr", "ready", "--help"])
+        .output()
+        .expect("spawn issue shim");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
-        text.contains("status") && text.contains("checkout"),
-        "issue pr --help should list both subcommands: {text}"
+        out.status.success(),
+        "issue pr ready --help exited non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    for flag in ["--to", "--no-push", "--pr"] {
+        assert!(
+            text.contains(flag),
+            "issue pr ready --help should list `{flag}`: {text}"
+        );
+    }
 }
 
 /// `pr create` resolves its state from at most one flag, so clap has to be the
