@@ -186,22 +186,16 @@ pub fn run(args: Args) -> Result<()> {
         &vars,
         missing_at,
     )?;
-    let pr_body = render_review(
-        tmpls.pr_body(),
-        "pr_body",
-        &with_fields(
-            &base,
-            &[
-                (
-                    "input",
-                    serde_json::json!(args.pr_body.clone().unwrap_or_default()),
-                ),
-                ("pr_title", serde_json::json!(pr_title)),
-            ],
-        ),
-        &vars,
-        missing_at,
-    )?;
+    let body_ctx = with_fields(
+        &base,
+        &[
+            (
+                "input",
+                serde_json::json!(args.pr_body.clone().unwrap_or_default()),
+            ),
+            ("pr_title", serde_json::json!(pr_title)),
+        ],
+    );
 
     let head = Git::at(std::path::Path::new(&start))
         .args(["rev-parse", "HEAD"])
@@ -230,7 +224,9 @@ pub fn run(args: Args) -> Result<()> {
             .clone()
             .unwrap_or_else(|| loaded.config.defaults.pr_base.clone()),
         pr_title: pr_title.clone(),
-        pr_body,
+        pr_body: Box::new(|| {
+            render_review(tmpls.pr_body(), "pr_body", &body_ctx, &vars, missing_at)
+        }),
         reviewers,
         require_reviewer: loaded.config.defaults.require_pr_reviewer,
         steps: &steps,
@@ -323,6 +319,19 @@ mod tests {
         assert_eq!(logins, vec!["LevValle"]);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("igor"));
+    }
+
+    /// `require_pr_reviewer` is satisfied by what `--to` contributes as a GitHub
+    /// reviewer, so a `#channel` and a person with no handle both leave a create
+    /// with nobody to review it.
+    #[test]
+    fn the_reviewer_gate_reads_handles_not_slack_recipients() {
+        let (logins, _) = reviewer_logins(&[chan("#eng"), person("igor", None)]);
+        assert!(logins.is_empty());
+        assert!(crate::issue::review::require_reviewer(&logins, true).is_err());
+
+        let (logins, _) = reviewer_logins(&[chan("#eng"), person("lev", Some("LevValle"))]);
+        assert!(crate::issue::review::require_reviewer(&logins, true).is_ok());
     }
 
     #[test]
