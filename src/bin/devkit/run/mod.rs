@@ -149,6 +149,11 @@ pub(crate) enum Cmd {
         /// Shell to emit the script for.
         shell: Shell,
     },
+    /// Inspect and reclaim this project's baseline worktrees.
+    Baseline {
+        #[command(subcommand)]
+        cmd: BaselineCmd,
+    },
     /// Run a canned task from `[tasks]` (no name: list the configured tasks).
     Task {
         /// Task to run; omit to list the configured tasks.
@@ -163,6 +168,21 @@ pub(crate) enum Cmd {
         /// Print the rendered plan (cwd, argv, env, resolved ports) without executing.
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum BaselineCmd {
+    /// List the baseline worktrees, with the worktrees referencing each.
+    List,
+    /// Remove every baseline no worktree references any more.
+    Prune {
+        /// Report what a real sweep would remove, removing nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Remove a baseline even while servers are running under it.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -463,6 +483,12 @@ pub fn run(cli: RunCli) -> Result<()> {
             cmd_logs(&cwd, app, role.and_then(RoleSelector::filter), *follow)
         }
         Cmd::Completions { shell } => crate::emit_completions(*shell, "run", "devrun"),
+        Cmd::Baseline { cmd } => match cmd {
+            BaselineCmd::List => cmd_baseline_list(&cli, &cwd),
+            BaselineCmd::Prune { dry_run, force } => {
+                cmd_baseline_prune(&cli, &cwd, *dry_run, *force)
+            }
+        },
         Cmd::Task {
             name,
             env,
@@ -477,6 +503,84 @@ pub fn run(cli: RunCli) -> Result<()> {
             *dry_run,
         ),
     }
+}
+
+/// The baseline directory this project's config names, and the checkout every
+/// referencer scan and worktree removal is run against.
+fn baseline_scope(cli: &RunCli, cwd: &str) -> Result<(PathBuf, String)> {
+    let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
+    let dir = crate::baseline::dir(&loaded.config)?;
+    let repo = devkit_common::git::primary_checkout(Path::new(cwd))?;
+    Ok((dir, repo.to_string_lossy().into_owned()))
+}
+
+/// A baseline holds a dependency tree, so MiB is the useful unit until the tree
+/// is small enough for it to read as nothing at all.
+fn human_size(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * KIB;
+    match bytes {
+        b if b >= MIB => format!("{} MiB", b / MIB),
+        b if b >= KIB => format!("{} KiB", b / KIB),
+        b => format!("{b} B"),
+    }
+}
+
+fn cmd_baseline_list(cli: &RunCli, cwd: &str) -> Result<()> {
+    let (dir, repo) = baseline_scope(cli, cwd)?;
+    let rows = crate::baseline::list(&dir, &repo)?;
+    if rows.is_empty() {
+        println!("no baselines under {}", dir.display());
+        return Ok(());
+    }
+    println!("{}", dir.display());
+    let mut t = ui::table(&["BASELINE", "SHA", "SIZE", "REFERENCED BY"]);
+    for r in &rows {
+        let referencers = if r.referencers.is_empty() {
+            "-".to_string()
+        } else {
+            r.referencers
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        t.add_row(vec![
+            r.path.file_name().unwrap_or_default().to_string_lossy(),
+            match &r.sha {
+                Some(sha) => crate::baseline::short(sha).into(),
+                None => "-".into(),
+            },
+            human_size(r.bytes).into(),
+            referencers.into(),
+        ]);
+    }
+    println!("{t}");
+    Ok(())
+}
+
+fn cmd_baseline_prune(cli: &RunCli, cwd: &str, dry_run: bool, force: bool) -> Result<()> {
+    let (dir, repo) = baseline_scope(cli, cwd)?;
+    let ports = registry::snapshot()?;
+    let out = crate::baseline::prune_all(&dir, &repo, &ports, dry_run, force)?;
+    if out.removed.is_empty() {
+        println!("no baseline to remove under {}", dir.display());
+    } else {
+        println!("{}:", if dry_run { "would remove" } else { "removed" });
+        for p in &out.removed {
+            println!("  {}", p.display());
+        }
+    }
+    if !out.reported.is_empty() {
+        println!(
+            "left alone, no {}:",
+            devkit_common::worktree::BASELINE_MARKER
+        );
+        for p in &out.reported {
+            println!("  {}", p.display());
+        }
+    }
+    Ok(())
 }
 
 fn cmd_task(

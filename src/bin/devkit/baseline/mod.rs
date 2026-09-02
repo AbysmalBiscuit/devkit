@@ -244,17 +244,22 @@ fn bootstrap_context(sha: &str, apps: &[String], prefix: &str) -> serde_json::Va
     })
 }
 
-/// The directory the baselines of this project live in, with the two
-/// misconfigurations that make a slot under it unsafe to name already refused.
-fn baselines_root(cfg: &Config, sha: &str) -> Result<PathBuf> {
+/// The directory the baselines of this project live in.
+pub fn dir(cfg: &Config) -> Result<PathBuf> {
     anyhow::ensure!(
         !cfg.defaults.baseline_dir.is_empty(),
-        "`--role baseline` needs `defaults.worktree_root` or `defaults.baseline_dir`"
+        "a baseline needs `defaults.worktree_root` or `defaults.baseline_dir`"
     );
+    Ok(expand_tilde(&cfg.defaults.baseline_dir))
+}
+
+/// [`dir`] with the second misconfiguration that makes a slot under it unsafe
+/// to name already refused.
+fn baselines_root(cfg: &Config, sha: &str) -> Result<PathBuf> {
     // An empty sha names the baseline root itself as its slot, and a `Rebuild`
     // there would take the whole directory — every other baseline with it.
     anyhow::ensure!(!sha.is_empty(), "a baseline needs a fork-point commit");
-    Ok(expand_tilde(&cfg.defaults.baseline_dir))
+    dir(cfg)
 }
 
 /// The directory [`ensure`] would serve `sha` from, resolved without building
@@ -643,20 +648,33 @@ pub fn drop_reference(
     let root = baseline.parent().context("baseline path has no parent")?;
     locks::with_dir(root, || {
         let refs = referencers(repo)?;
-        remove_if_unreferenced(repo, baseline, &refs, ports, force)
+        remove_if_unreferenced(repo, baseline, &refs, ports, force, Sweep::Remove)
     })
+}
+
+/// Whether a sweep acts on what it decides. `Report` runs every check a
+/// `Remove` runs and stops one step short of the removal, which is what keeps a
+/// dry run's answer identical to the real one's.
+#[derive(Clone, Copy, PartialEq)]
+enum Sweep {
+    Remove,
+    Report,
 }
 
 /// The body of [`drop_reference`], without the directory lock. A sweep already
 /// holds that lock and calls this directly: `flock` blocks on a second open of
 /// the same file even within one process, so a locked function must never call
 /// another locked function.
+///
+/// `Ok(true)` means the baseline was removed, or under [`Sweep::Report`] that
+/// it would have been; `Err` is a refusal either way.
 fn remove_if_unreferenced(
     repo: &str,
     baseline: &Path,
     refs: &References,
     ports: &registry::Data,
     force: bool,
+    sweep: Sweep,
 ) -> Result<bool> {
     if let Some(note) = refs.unreadable_note() {
         eprintln!("warning: {note}");
@@ -707,6 +725,9 @@ fn remove_if_unreferenced(
                 baseline.display()
             );
         }
+        if sweep == Sweep::Report {
+            return Ok(true);
+        }
         // Always `--force`: a baseline holds include copies and rendered prep
         // files, and any untracked file would otherwise refuse the removal.
         Git::at(Path::new(repo))
@@ -715,6 +736,134 @@ fn remove_if_unreferenced(
             .output()?;
         Ok(true)
     })
+}
+
+/// The directories under `baseline_dir` a sweep or a listing considers, sorted.
+/// The lock directory sits among them and is not one, and a `baseline_dir` that
+/// does not exist holds none.
+fn slots_in(baseline_dir: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(baseline_dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(e).with_context(|| format!("reading {}", baseline_dir.display()));
+        }
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("reading {}", baseline_dir.display()))?
+            .path();
+        if path.is_dir() && path.file_name().is_some_and(|n| n != locks::DIR) {
+            out.push(path);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// One baseline directory as an operator sees it.
+pub struct Listed {
+    pub path: PathBuf,
+    /// The fork point its marker names, absent when there is no marker to trust.
+    pub sha: Option<String>,
+    pub referencers: Vec<PathBuf>,
+    pub bytes: u64,
+}
+
+/// Enumerate via `read_dir` rather than `git worktree list`: a directory git no
+/// longer knows about is exactly what an operator needs to see, and the git
+/// list would render it invisible.
+pub fn list(baseline_dir: &Path, repo: &str) -> Result<Vec<Listed>> {
+    let refs = referencers(repo)?;
+    let mut out = Vec::new();
+    for path in slots_in(baseline_dir)? {
+        let sha = match read_marker(&path) {
+            MarkerState::Ok(m) => Some(m.sha),
+            MarkerState::Unusable | MarkerState::Absent => None,
+        };
+        out.push(Listed {
+            referencers: refs
+                .naming(&path)
+                .into_iter()
+                .map(Path::to_path_buf)
+                .collect(),
+            bytes: dir_size(&path),
+            path,
+            sha,
+        });
+    }
+    Ok(out)
+}
+
+/// What a sweep took, and what it deliberately left where it was.
+#[derive(Default)]
+pub struct Pruned {
+    pub removed: Vec<PathBuf>,
+    pub reported: Vec<PathBuf>,
+}
+
+/// Remove every unreferenced baseline in one pass under a single directory
+/// lock. Calls `remove_if_unreferenced` directly rather than `drop_reference`,
+/// which takes that same lock: two open file descriptions on one lock file
+/// block each other even inside one process.
+///
+/// A dry run walks the same path and stops one step short of each removal, so
+/// `removed` names exactly what a real sweep would take, and the refusals it
+/// would print are printed here too.
+pub fn prune_all(
+    baseline_dir: &Path,
+    repo: &str,
+    ports: &registry::Data,
+    dry_run: bool,
+    force: bool,
+) -> Result<Pruned> {
+    // Taking the directory lock would create a directory this project has never
+    // needed, and there is nothing under it to sweep.
+    if !baseline_dir.exists() {
+        return Ok(Pruned::default());
+    }
+    let sweep = if dry_run {
+        Sweep::Report
+    } else {
+        Sweep::Remove
+    };
+    locks::with_dir(baseline_dir, || {
+        let refs = referencers(repo)?;
+        let mut removed = Vec::new();
+        let mut reported = Vec::new();
+        for path in slots_in(baseline_dir)? {
+            // No marker means devkit cannot prove it created this tree, so it
+            // is named and left alone rather than deleted.
+            if matches!(read_marker(&path), MarkerState::Absent) {
+                reported.push(path);
+                continue;
+            }
+            match remove_if_unreferenced(repo, &path, &refs, ports, force, sweep) {
+                Ok(true) => removed.push(path),
+                Ok(false) => {}
+                // One stuck baseline must not abandon the sweep.
+                Err(e) => eprintln!("warning: {}: {e:#}", path.display()),
+            }
+        }
+        Ok(Pruned { removed, reported })
+    })
+}
+
+/// Total bytes under `path`. Walked in parallel because a baseline holds a full
+/// dependency tree; `jwalk_parallelism` is evaluated here, on the thread that
+/// builds the walk, since inside `pool::install` it would see itself as nested
+/// and silently go serial.
+fn dir_size(path: &Path) -> u64 {
+    let parallelism = devkit_common::pool::jwalk_parallelism();
+    jwalk::WalkDir::new(path)
+        .parallelism(parallelism)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.metadata().ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum()
 }
 
 /// Point a worktree's record at a baseline, leaving its other fields alone.
@@ -1685,6 +1834,7 @@ mod tests {
             &refs,
             &registry::Data::default(),
             true,
+            Sweep::Remove,
         )
         .unwrap_err();
 

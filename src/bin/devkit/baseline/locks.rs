@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 /// being built.
 pub const REENTRY_VAR: &str = "DEVKIT_BASELINE_BOOTSTRAP";
 
-const DIR: &str = ".locks";
+/// Where the lock files live inside `baseline_dir`. A sweep over that directory
+/// meets this entry alongside the slots and skips it.
+pub const DIR: &str = ".locks";
 /// No 12-hex slot name can equal this, so the directory lock and a slot lock
 /// are always different files.
 const DIR_LOCK: &str = "_dir";

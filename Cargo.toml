@@ -30,6 +30,7 @@ rpassword.workspace = true
 toml.workspace = true
 fd-lock.workspace = true
 interprocess.workspace = true
+jwalk.workspace = true
 chrono.workspace = true
 textplots.workspace = true
 rgb.workspace = true

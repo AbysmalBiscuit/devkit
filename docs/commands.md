@@ -61,12 +61,15 @@ devrun down [--role …] [--all | --others | --holder <path>] [--app …] [--old
 devrun status [--all]
 devrun reap [--all]
 devrun logs <app> [--role …] [-f]
+
 devrun task [<name>] [--env K=V] [--env-file F] [--dry-run]
 ```
 
 - **`up`**: defaults to `--role issue` and allocates ports from the live registry at start time, so a worktree needs no reservation up front. `--supervise` hands the servers to `devkitd`, which restarts them on crash within the crash-loop budget. `--dry-run` prints the launch plan without starting anything: under `--role baseline` it reports the baseline directory a real run would use, without bootstrapping one and without repinning the worktree, so the reported path need not exist yet.
 - **`status`**: lists tracked servers for this worktree (`--all` for every worktree). Each row carries the app's rendered URL, clickable where the terminal supports it and is wide enough to hold the link without crowding out the other columns. Below the tracked table it shows an **untracked (outside the registry)** section: dev servers detected listening on a configured app's port band, or matching a configured app's launch signature, that the registry doesn't own — i.e. started outside `devrun up`. Read-only; reaping is a separate command.
 - **`reap`**: kills dev servers found running outside devrun (this worktree by default; `--all` reaches every worktree). It prints the matched process trees, then **requires an interactive terminal** and a confirmation before sending SIGTERM (escalating to SIGKILL). There is no `--yes`/`--force` bypass — with no terminal it refuses and kills nothing, so an agent (no PTY) can never reap. Detection is also available read-only to agents via the `ports.strays` MCP action; killing is not.
+- **`baseline list`**: the baseline directory as it is on disk (columns: baseline, sha, size, referenced by). It enumerates the directory rather than asking git, so a tree git has no registration for is still listed — which is the state an operator most needs to see.
+- **`baseline prune`**: removes every baseline no worktree's `.devkit/issue.toml` names any more, one pass under the baseline directory's lock. A directory carrying no `.devkit/baseline.toml` is named and left where it is: devkit cannot prove it created it. A baseline with running servers is refused unless `--force`, and one baseline's refusal does not abandon the sweep. `--dry-run` runs every check a real sweep runs and stops short of each removal, so what it reports is what a real run would take.
 - **`task`**: run a canned `[tasks]` oneshot or sequence (no name lists them).
 
 ### `devrun down` scope

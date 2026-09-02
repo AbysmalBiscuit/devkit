@@ -319,6 +319,7 @@ dependencies = [
  "fd-lock",
  "indicatif",
  "interprocess",
+ "jwalk",
  "nix",
  "rgb",
  "rpassword",
