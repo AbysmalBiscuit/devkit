@@ -705,6 +705,18 @@ pub struct Provenance {
     pub layers: Vec<PathBuf>,
     /// Dotted config path (e.g. `apps.api.base_port`) → file that supplied it.
     pub origin: HashMap<String, PathBuf>,
+    /// Dotted config path → the layers a higher one overrode, lowest first.
+    /// A leaf only one layer sets has no entry here.
+    pub shadowed: HashMap<String, Vec<Shadow>>,
+}
+
+/// A value a later config layer overrode.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shadow {
+    /// The layer that set it.
+    pub file: PathBuf,
+    /// What it held there.
+    pub value: toml::Value,
 }
 
 /// Deep-merge parsed layers given lowest→highest precedence. Tables merge key by
@@ -712,13 +724,27 @@ pub struct Provenance {
 /// layer. Records, per leaf dotted-path, the highest layer that set it.
 pub(crate) fn merge_layers(
     layers: &[(PathBuf, toml::Table)],
-) -> (toml::Table, HashMap<String, PathBuf>) {
+) -> (
+    toml::Table,
+    HashMap<String, PathBuf>,
+    HashMap<String, Vec<Shadow>>,
+) {
     let mut merged = toml::Table::new();
-    let mut origin = HashMap::new();
+    let mut seen = Seen::default();
     for (path, table) in layers {
-        deep_merge(&mut merged, table, path, "", &mut origin);
+        deep_merge(&mut merged, table, path, "", &mut seen);
     }
-    (merged, origin)
+    (merged, seen.winner, seen.shadowed)
+}
+
+/// What each leaf has been set to so far, as the layers are merged in
+/// precedence order. `value` tracks the winning value alongside its file so
+/// that overwriting a leaf can record both halves of what it displaced.
+#[derive(Default)]
+struct Seen {
+    winner: HashMap<String, PathBuf>,
+    value: HashMap<String, toml::Value>,
+    shadowed: HashMap<String, Vec<Shadow>>,
 }
 
 fn deep_merge(
@@ -726,7 +752,7 @@ fn deep_merge(
     overlay: &toml::Table,
     src: &Path,
     prefix: &str,
-    origin: &mut HashMap<String, PathBuf>,
+    seen: &mut Seen,
 ) {
     for (k, v) in overlay {
         let path = if prefix.is_empty() {
@@ -735,9 +761,9 @@ fn deep_merge(
             format!("{prefix}.{k}")
         };
         if let (Some(toml::Value::Table(at)), toml::Value::Table(ot)) = (acc.get_mut(k), v) {
-            deep_merge(at, ot, src, &path, origin);
+            deep_merge(at, ot, src, &path, seen);
         } else {
-            record_origin(&path, v, src, origin);
+            record_origin(&path, v, src, seen);
             acc.insert(k.clone(), v.clone());
         }
     }
@@ -745,15 +771,22 @@ fn deep_merge(
 
 /// Record the source file for every scalar/array leaf reachable from `v`. A table
 /// recurses into its keys; everything else is a single leaf.
-fn record_origin(path: &str, v: &toml::Value, src: &Path, origin: &mut HashMap<String, PathBuf>) {
+fn record_origin(path: &str, v: &toml::Value, src: &Path, seen: &mut Seen) {
     match v {
         toml::Value::Table(t) => {
             for (k, sub) in t {
-                record_origin(&format!("{path}.{k}"), sub, src, origin);
+                record_origin(&format!("{path}.{k}"), sub, src, seen);
             }
         }
         _ => {
-            origin.insert(path.to_string(), src.to_path_buf());
+            let prev_file = seen.winner.insert(path.to_string(), src.to_path_buf());
+            let prev_value = seen.value.insert(path.to_string(), v.clone());
+            if let (Some(file), Some(value)) = (prev_file, prev_value) {
+                seen.shadowed
+                    .entry(path.to_string())
+                    .or_default()
+                    .push(Shadow { file, value });
+            }
         }
     }
 }
@@ -985,7 +1018,7 @@ pub(crate) fn resolve_with_home(
     let start = start_buf.as_path();
     let layers = discover(explicit, start, main_checkout, home)?;
     let order: Vec<PathBuf> = layers.iter().map(|(p, _)| p.clone()).collect();
-    let (merged, origin) = merge_layers(&layers);
+    let (merged, origin, shadowed) = merge_layers(&layers);
     if !merged.contains_key("defaults")
         && let Some(section) = merged
             .keys()
@@ -1005,6 +1038,7 @@ pub(crate) fn resolve_with_home(
         Provenance {
             layers: order,
             origin,
+            shadowed,
         },
     ))
 }
@@ -1498,19 +1532,30 @@ content = \"key = 1\\n\"\n"
     fn deeper_layer_overrides_scalar_keeps_others() {
         let base = tbl("[defaults]\nworktree_root='/a'\nbranch_prefix='x/'\n");
         let top = tbl("[defaults]\nbranch_prefix='y/'\n");
-        let (m, origin) =
+        let (m, origin, shadowed) =
             merge_layers(&[(PathBuf::from("/base"), base), (PathBuf::from("/top"), top)]);
         assert_eq!(m["defaults"]["branch_prefix"].as_str(), Some("y/"));
         assert_eq!(m["defaults"]["worktree_root"].as_str(), Some("/a"));
         assert_eq!(origin["defaults.branch_prefix"], PathBuf::from("/top"));
         assert_eq!(origin["defaults.worktree_root"], PathBuf::from("/base"));
+        // the overridden value is kept alongside the layer that held it
+        assert_eq!(
+            shadowed["defaults.branch_prefix"],
+            vec![Shadow {
+                file: PathBuf::from("/base"),
+                value: toml::Value::String("x/".into()),
+            }]
+        );
+        // a leaf only one layer sets is not recorded as shadowing anything
+        assert!(!shadowed.contains_key("defaults.worktree_root"));
     }
 
     #[test]
     fn arrays_replace_wholesale() {
         let base = tbl("[apps.api]\nlaunch=['a','b']\n");
         let top = tbl("[apps.api]\nlaunch=['c']\n");
-        let (m, origin) = merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
+        let (m, origin, _) =
+            merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
         let launch = m["apps"]["api"]["launch"].as_array().unwrap();
         assert_eq!(launch.len(), 1);
         assert_eq!(launch[0].as_str(), Some("c"));
@@ -1521,7 +1566,8 @@ content = \"key = 1\\n\"\n"
     fn nested_maps_merge_per_key() {
         let base = tbl("[apps.api.static_env]\nA='1'\nB='2'\n");
         let top = tbl("[apps.api.static_env]\nB='9'\nC='3'\n");
-        let (m, origin) = merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
+        let (m, origin, _) =
+            merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
         let se = &m["apps"]["api"]["static_env"];
         assert_eq!(se["A"].as_str(), Some("1"));
         assert_eq!(se["B"].as_str(), Some("9"));
@@ -1932,7 +1978,7 @@ steps = [
     fn tasks_merge_across_layers() {
         let base = tbl("[tasks.build]\nrun = ['git', 'version']\n[tasks.build.env]\nA = '1'\n");
         let top = tbl("[tasks.build.env]\nA = '9'\nB = '2'\n");
-        let (m, _) = merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
+        let (m, _, _) = merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
         let t = &m["tasks"]["build"];
         assert_eq!(t["run"][0].as_str(), Some("git"));
         assert_eq!(t["env"]["A"].as_str(), Some("9"));

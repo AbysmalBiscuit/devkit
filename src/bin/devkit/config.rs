@@ -6,6 +6,7 @@ use devkit_ports::apps::App;
 use devkit_ports::load;
 use devkit_ports::task::{self, TaskRow};
 use std::collections::{BTreeMap, HashMap};
+use std::io::Write;
 use std::path::Path;
 
 /// Show the resolved config, or list configured apps or tasks.
@@ -75,22 +76,21 @@ fn show(explicit: Option<&Path>, cwd: &str, origin: bool, json: bool) -> Result<
     let loaded = load::load(explicit, Path::new(cwd))?;
     let cfg = &loaded.config;
     let prov = &loaded.provenance;
-    match (origin, json) {
-        (true, false) => {
-            for line in origin_lines(cfg, prov)? {
-                println!("{line}");
-            }
-        }
-        (true, true) => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&origin_json(cfg, prov)?)?
-            );
-        }
-        (false, true) => println!("{}", serde_json::to_string_pretty(cfg)?),
-        (false, false) => println!("{}", toml::to_string_pretty(cfg)?),
-    }
-    Ok(())
+    let lines: Vec<String> = match (origin, json) {
+        (true, false) => layer_header(prov)
+            .into_iter()
+            .chain(origin_lines(cfg, prov)?)
+            .collect(),
+        (true, true) => vec![serde_json::to_string_pretty(&origin_json(cfg, prov)?)?],
+        // Plain `--json` stays a bare config object: programmatic callers
+        // deserialize it directly, and a wrapper would break them.
+        (false, true) => vec![serde_json::to_string_pretty(cfg)?],
+        (false, false) => layer_header(prov)
+            .into_iter()
+            .chain(std::iter::once(toml::to_string_pretty(cfg)?))
+            .collect(),
+    };
+    print_lines(lines)
 }
 
 /// `devkit config apps [--json]` — a pure readout of the merged app catalog.
@@ -186,6 +186,33 @@ fn apps_table(catalog: &HashMap<String, App>) -> String {
 }
 
 /// Flattened `path = value  # from <file>` (or `# (default)`) lines, sorted by path.
+/// Print `lines`, treating a reader that closed early (`devkit config | head`)
+/// as done rather than a crash: `println!` panics on a broken pipe, and this
+/// output is long enough that piping it into a pager or `head` is the norm.
+fn print_lines(lines: impl IntoIterator<Item = String>) -> Result<()> {
+    let mut out = std::io::stdout().lock();
+    for line in lines {
+        match writeln!(out, "{line}") {
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
+            other => other?,
+        }
+    }
+    Ok(())
+}
+
+/// The layer files as TOML comments, lowest precedence first, so the output
+/// stays a valid config while saying what produced it. Empty when nothing was
+/// resolved.
+fn layer_header(prov: &Provenance) -> Vec<String> {
+    if prov.layers.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec!["# layers, lowest to highest precedence:".to_string()];
+    out.extend(prov.layers.iter().map(|p| format!("#   {}", p.display())));
+    out.push(String::new());
+    out
+}
+
 fn origin_lines(cfg: &Config, prov: &Provenance) -> Result<Vec<String>> {
     let val = toml::Value::try_from(cfg).context("serializing config to toml")?;
     let mut leaves = Vec::new();
@@ -194,10 +221,30 @@ fn origin_lines(cfg: &Config, prov: &Provenance) -> Result<Vec<String>> {
     Ok(leaves
         .iter()
         .map(|(path, value)| match prov.origin.get(path) {
-            Some(f) => format!("{path} = {value}  # from {}", f.display()),
+            Some(f) => format!(
+                "{path} = {value}  # from {}{}",
+                f.display(),
+                overrides_clause(prov, path)
+            ),
             None => format!("{path} = {value}  # (default)"),
         })
         .collect())
+}
+
+/// What a value displaced, as ` (overrides <file>: <value>, ...)`, in the same
+/// lowest-to-highest order the layer header lists. Empty for a leaf only one
+/// layer sets, which is most of them.
+fn overrides_clause(prov: &Provenance, path: &str) -> String {
+    match prov.shadowed.get(path) {
+        None => String::new(),
+        Some(shadows) => {
+            let parts: Vec<String> = shadows
+                .iter()
+                .map(|s| format!("{}: {}", s.file.display(), s.value))
+                .collect();
+            format!(" (overrides {})", parts.join(", "))
+        }
+    }
 }
 
 /// `{ "config": <cfg>, "origins": { dotted-path: file } }` for `--origin --json`.
@@ -207,7 +254,28 @@ fn origin_json(cfg: &Config, prov: &Provenance) -> Result<serde_json::Value> {
         .iter()
         .map(|(k, v)| (k.clone(), v.display().to_string()))
         .collect();
-    Ok(serde_json::json!({ "config": cfg, "origins": origins }))
+    let layers: Vec<String> = prov
+        .layers
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    let overrides: BTreeMap<String, Vec<serde_json::Value>> = prov
+        .shadowed
+        .iter()
+        .map(|(k, shadows)| {
+            let v = shadows
+                .iter()
+                .map(|s| serde_json::json!({ "file": s.file.display().to_string(), "value": s.value.to_string() }))
+                .collect();
+            (k.clone(), v)
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "config": cfg,
+        "layers": layers,
+        "origins": origins,
+        "overrides": overrides,
+    }))
 }
 
 #[cfg(test)]
@@ -257,6 +325,66 @@ mod tests {
     }
 
     #[test]
+    fn layer_header_names_every_file_in_precedence_order() {
+        let prov = Provenance {
+            layers: vec![
+                PathBuf::from("/etc/devkit.toml"),
+                PathBuf::from("/r/devkit.toml"),
+            ],
+            ..Default::default()
+        };
+        let h = layer_header(&prov);
+        assert_eq!(h[0], "# layers, lowest to highest precedence:");
+        assert_eq!(h[1], "#   /etc/devkit.toml");
+        assert_eq!(h[2], "#   /r/devkit.toml");
+        // a blank line separates the header from the config it describes
+        assert_eq!(h[3], "");
+        // every line is a comment, so the output is still valid TOML
+        assert!(h[..3].iter().all(|l| l.starts_with('#')));
+    }
+
+    #[test]
+    fn no_layers_means_no_header() {
+        assert!(layer_header(&Provenance::default()).is_empty());
+    }
+
+    /// A leaf several layers set says which it displaced and what each held;
+    /// a leaf only one layer sets keeps the bare `# from <file>`.
+    #[test]
+    fn origin_lines_report_what_a_value_overrides() {
+        let cfg = sample_cfg();
+        let mut prov = Provenance::default();
+        prov.origin.insert(
+            "defaults.worktree_root".into(),
+            PathBuf::from("/r/local.toml"),
+        );
+        prov.shadowed.insert(
+            "defaults.worktree_root".into(),
+            vec![devkit_config::Shadow {
+                file: PathBuf::from("/r/devkit.toml"),
+                value: toml::Value::String("wts".into()),
+            }],
+        );
+        let lines = origin_lines(&cfg, &prov).unwrap();
+        let line = lines
+            .iter()
+            .find(|l| l.starts_with("defaults.worktree_root ="))
+            .unwrap();
+        assert!(line.contains("# from /r/local.toml"), "{line}");
+        assert!(
+            line.contains(r#"(overrides /r/devkit.toml: "wts")"#),
+            "{line}"
+        );
+        // a leaf with no shadow carries no clause
+        assert!(
+            lines
+                .iter()
+                .filter(|l| !l.starts_with("defaults.worktree_root ="))
+                .all(|l| !l.contains("overrides")),
+        );
+    }
+
+    #[test]
     fn origin_json_has_config_and_origins() {
         let cfg = sample_cfg();
         let mut prov = Provenance::default();
@@ -270,6 +398,9 @@ mod tests {
             v["origins"]["defaults.worktree_root"].as_str(),
             Some("/x/devkit.toml")
         );
+        // the layer list travels with the JSON so a consumer need not re-resolve it
+        assert_eq!(v["layers"].as_array().unwrap().len(), 0);
+        assert!(v.get("overrides").is_some());
     }
 
     fn sample_catalog() -> HashMap<String, App> {
