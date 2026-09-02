@@ -1341,13 +1341,35 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             dir.path().join("devkit.toml"),
             format!(
                 "[config]\nroot = true\n[defaults]\nworktree_root = '{}'\n",
-                explicit.display().to_string().replace('\\', "\\\\")
+                explicit.display()
             ),
         )
         .unwrap();
         let derived = dir.path().join("proj_worktrees");
         let (cfg, _) =
             resolve_with_home(None, dir.path(), None, None, None, Some(derived.as_path())).unwrap();
+        assert_eq!(
+            Path::new(&cfg.defaults.worktree_root),
+            normalize_lexically(&explicit)
+        );
+    }
+    #[test]
+    fn a_worktree_root_containing_a_backslash_round_trips() {
+        // Backslash is a legal filename character on Linux, so this builds a
+        // directory whose name genuinely contains one and checks that a TOML
+        // literal string carries it through verbatim: TOML literal strings
+        // (single-quoted) take their content as-is, with no escape handling.
+        let dir = tempfile::tempdir().unwrap();
+        let explicit = dir.path().join("a\\b");
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            format!(
+                "[config]\nroot = true\n[defaults]\nworktree_root = '{}'\n",
+                explicit.display()
+            ),
+        )
+        .unwrap();
+        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
         assert_eq!(
             Path::new(&cfg.defaults.worktree_root),
             normalize_lexically(&explicit)
@@ -1361,7 +1383,7 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             dir.path().join("devkit.toml"),
             format!(
                 "[config]\nroot = true\n[defaults]\nworktree_root = '{}'\n",
-                root.display().to_string().replace('\\', "\\\\")
+                root.display()
             ),
         )
         .unwrap();
@@ -1380,8 +1402,8 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             dir.path().join("devkit.toml"),
             format!(
                 "[config]\nroot = true\n[defaults]\nworktree_root = '{}'\nbaseline_dir = '{}'\n",
-                root.display().to_string().replace('\\', "\\\\"),
-                explicit.display().to_string().replace('\\', "\\\\")
+                root.display(),
+                explicit.display()
             ),
         )
         .unwrap();
