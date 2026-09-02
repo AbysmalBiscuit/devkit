@@ -68,7 +68,7 @@ pub fn list(cfg: &Config) -> Vec<TaskRow> {
 }
 
 /// Configured tasks as a text table, or a hint when none are configured.
-/// Shared by `devrun task`/`devrun config tasks` and `devkit brief` so all
+/// Shared by `devrun task`/`devkit config tasks` and `devkit brief` so all
 /// render identically.
 pub fn tasks_text(rows: &[TaskRow]) -> String {
     if rows.is_empty() {

@@ -17,7 +17,7 @@ The recommended setup is to keep your real config at `~/.config/devkit/config.to
 
 ## Layering
 
-Every `devkit.toml` from the filesystem root down to the cwd is merged, with `~/.config/devkit/config.toml` as the lowest-precedence base layer beneath them all. Deeper files override shallower ones per value: tables merge key-by-key, while scalars and arrays replace wholesale. `devrun config show` prints the merged result; `--origin` traces each value to the file it came from.
+Every `devkit.toml` from the filesystem root down to the cwd is merged, with `~/.config/devkit/config.toml` as the lowest-precedence base layer beneath them all. Deeper files override shallower ones per value: tables merge key-by-key, while scalars and arrays replace wholesale. `devkit config` prints the merged result, headed by the layer files in precedence order; `--origin` traces each value to the file it came from and names the layers it overrode.
 
 Two escapes bypass the walk:
 
@@ -86,7 +86,7 @@ https://github.com/AbysmalBiscuit/devkit/releases/download/v1.2.3/devkit-config.
 
 Either beats pointing at `main`, which validates your config against keys no released binary accepts yet.
 
-The schema is generated from the same Rust types serde reads — the doc comments in `crates/devkit-config/src/lib.rs` become the hover text — so it cannot describe a shape the binaries do not accept. It catches what config resolution would otherwise only report at run time, and only through `devrun config show`: an `[apps.x]` without `base_port` or `launch`, a value of the wrong type, a task step that is neither `task` nor `up`, an unknown `ecosystem`.
+The schema is generated from the same Rust types serde reads — the doc comments in `crates/devkit-config/src/lib.rs` become the hover text — so it cannot describe a shape the binaries do not accept. It catches what config resolution would otherwise only report at run time, and only through `devkit config`: an `[apps.x]` without `base_port` or `launch`, a value of the wrong type, a task step that is neither `task` nor `up`, an unknown `ecosystem`.
 
 Three things it deliberately does not do:
 

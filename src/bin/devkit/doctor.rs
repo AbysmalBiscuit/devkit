@@ -429,7 +429,7 @@ mod tests {
     }
 
     /// A config that exists and does not load is the one case that has to
-    /// fail: silence here is what sent users to `devrun config show` to find
+    /// fail: silence here is what sent users to `devkit config` to find
     /// out why every command was erroring. (`Health::Absent` is covered where
     /// the home layer can be held out of the resolution — see
     /// `config::health_tells_an_absent_config_from_a_broken_one`.)

@@ -61,16 +61,10 @@ devrun down [--role …] [--all | --others | --holder <path>] [--app …] [--old
 devrun status [--all]
 devrun reap [--all]
 devrun logs <app> [--role …] [-f]
-devrun config show [--origin] [--json]
-devrun config apps [--json]
-devrun config tasks [--json]
 devrun task [<name>] [--env K=V] [--env-file F] [--dry-run]
 ```
 
 - **`up`**: defaults to `--role issue` and allocates ports from the live registry at start time, so a worktree needs no reservation up front. `--supervise` hands the servers to `devkitd`, which restarts them on crash within the crash-loop budget. `--dry-run` prints the launch plan without starting anything.
-- **`config show`**: prints the effective merged config as TOML. `--origin` annotates each value with the file it was resolved from (or `# (default)` for serde defaults); `--json` emits JSON instead of TOML. `--origin --json` emits `{ "config": …, "origins": { "dotted.path": "file" } }`.
-- **`config apps`**: lists the configured apps from the merged config (columns: name, port, path, url, provides_url, url_env, launch). `--json` emits a structured array. A pure config readout with no live readiness — for running state use `devrun status`.
-- **`config tasks`**: lists the configured `[tasks]` from the merged config (columns: name, kind, app, description) — the same listing as a bare `devrun task`. `--json` emits a structured array.
 - **`status`**: lists tracked servers for this worktree (`--all` for every worktree). Each row carries the app's rendered URL, clickable where the terminal supports it and is wide enough to hold the link without crowding out the other columns. Below the tracked table it shows an **untracked (outside the registry)** section: dev servers detected listening on a configured app's port band, or matching a configured app's launch signature, that the registry doesn't own — i.e. started outside `devrun up`. Read-only; reaping is a separate command.
 - **`reap`**: kills dev servers found running outside devrun (this worktree by default; `--all` reaches every worktree). It prints the matched process trees, then **requires an interactive terminal** and a confirmation before sending SIGTERM (escalating to SIGKILL). There is no `--yes`/`--force` bypass — with no terminal it refuses and kills nothing, so an agent (no PTY) can never reap. Detection is also available read-only to agents via the `ports.strays` MCP action; killing is not.
 - **`task`**: run a canned `[tasks]` oneshot or sequence (no name lists them).
@@ -256,6 +250,9 @@ Configures and diagnoses the toolkit itself. `auth` validates a Linear or Slack 
 devkit auth <linear|slack> [--token <value>]   # validate + store; prompts (no echo) by default
 devkit auth github                              # report the GitHub identity devkit would use
 devkit doctor [--json]                          # check configured credentials
+devkit config [show] [--origin] [--json]        # the resolved config for this directory
+devkit config apps [--json]                     # the configured apps
+devkit config tasks [--json]                    # the configured tasks
 devkit brief [--pins-only] [--if-changed] [--additional-context]   # compact project brief
 devkit schema                                   # JSON Schema for devkit.toml, for editor validation
 devkit schema init [PATH]                       # point a devkit.toml at that schema (starter if absent)
@@ -265,6 +262,9 @@ devkit install-links [--force]                  # (re)create the old-name hardli
 
 - **`auth`**: prompts for the token without echo (or reads `--token`/piped stdin), validates it, and saves it. For Linear it also stores the workspace slug derived from the API, so issue links work without setting `LINEAR_WORKSPACE`.
 - **`auth github`**: reports, and stores nothing. devkit keeps no GitHub credential of its own because `gh auth login`, `GH_TOKEN` and `GITHUB_TOKEN` already cover it. It prints the identity behind the token devkit would send and which of the three supplied it, then lists `gh`'s own accounts separately below — those can differ from the token's identity, and the token's is the one devkit uses. A `--token` passed here is refused rather than quietly discarded, since accepting one would suggest devkit had stored it.
+- **`config`**: prints the resolved config for the current directory, as TOML, opening with the layer files it was merged from as comments in lowest-to-highest precedence order. A bare `devkit config` is `devkit config show`. `--origin` annotates each value with the file it was resolved from (or `# (default)` for serde defaults) and, where several layers set it, the layers it overrode and what each held. `--json` emits a bare config object; `--origin --json` emits `{ "config": …, "layers": [...], "origins": { "dotted.path": "file" }, "overrides": { "dotted.path": [{ "file": …, "value": … }] } }`. Flags may be spelled on either side of the subcommand.
+- **`config apps`**: lists the configured apps from the merged config (columns: name, port, path, url, provides_url, url_env, launch). `--json` emits a structured array. A pure config readout with no live readiness — for running state use `devrun status`.
+- **`config tasks`**: lists the configured `[tasks]` from the merged config (columns: name, kind, app, description) — the same listing as a bare `devrun task`. `--json` emits a structured array.
 - **`doctor`**: one row per credential — source (`env`/`file`/`unset`) and live validity. Exits non-zero when a credential that *is* set fails validation, or when a `devkit.toml` exists that does not load — the `config` row carries the cause, since a config that fails to deserialize makes every other devkit command fail the same way. Having no `devkit.toml` at all is reported without complaint. Also warns when the installed binaries are older than the newest devkit plugin checkout in `~/.claude/plugins/cache` (skewed binaries make agents follow docs for features the binaries lack), when servers run outside devrun, when the docs cache holds unreferenced checkouts, and — one row per old name — when a shim is missing or a name is held by something other than devkit; a shim problem is always a warning and never changes `doctor`'s exit code. The `tracker` row names the tracker `issue` talks to here and how devkit arrived at it — `[tracker] kind` or detection — and warns when devkit fell back to no tracker, which holds every issue-state gate closed.
 
 ### `brief`

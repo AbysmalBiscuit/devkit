@@ -14,9 +14,9 @@ devrun down [selector] [--role …] [--all|--others|--holder <path>] [--app …]
 devrun status [--all]                                 # tracked servers (this worktree, or all)
 devrun reap [--all]                                   # kill servers running OUTSIDE devrun (needs a TTY)
 devrun logs <app> [--role …] [-f]                     # print or follow one app's log
-devrun config show [--origin] [--json]                # effective merged config
-devrun config apps [--json]
-devrun config tasks [--json]
+devkit config [--origin] [--json]                     # resolved config + its layers
+devkit config apps [--json]
+devkit config tasks [--json]
 ```
 
 ### `up`
