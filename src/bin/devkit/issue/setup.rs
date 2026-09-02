@@ -139,15 +139,25 @@ pub(crate) fn prep_apps(
 }
 
 /// Run each `hooks.after_worktree_create` command in the new worktree, in
-/// order. The worktree already exists and is usable by the time these run.
+/// order, with `env` added to each child's environment. The worktree already
+/// exists and is usable by the time these run.
 pub(crate) fn run_after_worktree_create(
     worktree: &Path,
     hooks: &[Vec<String>],
     ctx: &serde_json::Value,
     vars: &BTreeMap<String, String>,
+    env: &[(&str, &str)],
     steps: &Steps,
 ) {
-    crate::issue::hooks::run_all(worktree, "after_worktree_create", hooks, ctx, vars, steps);
+    crate::issue::hooks::run_all(
+        worktree,
+        "after_worktree_create",
+        hooks,
+        ctx,
+        vars,
+        env,
+        steps,
+    );
 }
 
 /// How many files may pass before the transient line is redrawn. A large
@@ -448,6 +458,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         "slug": slug,
         "short_slug": dir_slug,
         "apps": args.apps,
+        "role": "issue",
     });
     let branch = devkit_common::template::render(cfg.templates.branch(), &ctx, vars)
         .context("rendering `branch` template")?
@@ -590,6 +601,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         &cfg.hooks.after_worktree_create,
         &hook_ctx,
         vars,
+        &[],
         &steps,
     );
     Ok(())

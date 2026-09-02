@@ -4,11 +4,22 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Run a command, capture stdout; error includes stderr on non-zero exit.
-pub fn capture(program: &str, args: &[&str], cwd: Option<&str>) -> Result<String> {
+/// Run a command with extra environment variables, capture stdout; the error
+/// includes stderr on non-zero exit. The variables reach the child only:
+/// `std::env::set_var` mutates a process other threads are reading, which is
+/// why edition 2024 made it `unsafe`.
+pub fn capture_env(
+    program: &str,
+    args: &[&str],
+    cwd: Option<&str>,
+    env: &[(&str, &str)],
+) -> Result<String> {
     let _span = crate::timing::subprocess_span(program, args).entered();
     let mut c = Command::new(program);
     c.args(args);
+    for (k, v) in env {
+        c.env(k, v);
+    }
     if let Some(d) = cwd {
         c.current_dir(d);
     }
@@ -24,6 +35,11 @@ pub fn capture(program: &str, args: &[&str], cwd: Option<&str>) -> Result<String
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Run a command, capture stdout; error includes stderr on non-zero exit.
+pub fn capture(program: &str, args: &[&str], cwd: Option<&str>) -> Result<String> {
+    capture_env(program, args, cwd, &[])
 }
 
 /// Run a command with a deadline, returning stdout only on success and `None`
@@ -138,6 +154,31 @@ mod tests {
     #[test]
     fn capture_returns_stdout() {
         assert_eq!(capture("echo", &["hi"], None).unwrap().trim(), "hi");
+    }
+
+    #[test]
+    fn capture_env_reaches_the_child_without_touching_this_process() {
+        let out = if cfg!(windows) {
+            capture_env(
+                "cmd",
+                &["/C", "echo %DEVKIT_TEST_ENV%"],
+                None,
+                &[("DEVKIT_TEST_ENV", "on")],
+            )
+        } else {
+            capture_env(
+                "sh",
+                &["-c", "printf %s \"$DEVKIT_TEST_ENV\""],
+                None,
+                &[("DEVKIT_TEST_ENV", "on")],
+            )
+        }
+        .unwrap();
+        assert_eq!(out.trim(), "on");
+        // Setting a variable for a child must not mutate this process: `set_var` is
+        // `unsafe` in edition 2024 precisely because other threads read the
+        // environment concurrently, and devkit runs progress threads.
+        assert!(std::env::var("DEVKIT_TEST_ENV").is_err());
     }
 
     #[test]

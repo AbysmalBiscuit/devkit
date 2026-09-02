@@ -64,7 +64,6 @@ pub fn reentry_conflict(marker: Option<&str>, slot_name: &str) -> bool {
 /// name** (`d13d90b724bf`, or `d13d90b724bf_2` after a collision), not the sha:
 /// two shas can share a short prefix and land in different directories, and a
 /// caller holding only a path can always name the slot.
-#[allow(dead_code)]
 pub fn with_slot<T>(
     baseline_dir: &Path,
     slot_name: &str,

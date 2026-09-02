@@ -289,7 +289,11 @@ fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
 /// the worktree is invisible to `issue status`/`issue end` yet blocks a re-run
 /// at the path-exists guard. A failure of the removal itself is ignored — the
 /// original error is what propagates.
-fn with_cleanup<T>(worktree: &Path, primary: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+pub(crate) fn with_cleanup<T>(
+    worktree: &Path,
+    primary: &str,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     match f() {
         Ok(v) => Ok(v),
         Err(e) => {
@@ -484,6 +488,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             "issue": issue,
             "slug": slugify(&meta.title),
             "apps": args.apps,
+            "role": "issue",
         });
         steps.during_result("Preparing apps…", || {
             crate::issue::setup::prep_apps(
@@ -504,6 +509,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         "apps": args.apps,
         "branch": meta.head_ref_name,
         "worktree": worktree_s,
+        "role": "issue",
     });
     steps.suspend(|| report(meta.number, &meta.head_ref_name, worktree_s))?;
 
@@ -512,6 +518,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         &cfg.hooks.after_worktree_create,
         &hook_ctx,
         &cfg.templates.variables,
+        &[],
         &steps,
     );
     Ok(())

@@ -2,7 +2,7 @@
 //! directory, and draw a progress step per command. Every hook key shares it.
 
 use anyhow::{Context, Result};
-use devkit_common::cmd::capture;
+use devkit_common::cmd::capture_env;
 use devkit_common::progress::Steps;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -26,13 +26,15 @@ fn render_hook(
         .collect()
 }
 
-/// Run an already-rendered hook argv in `cwd`.
-fn run_rendered(cwd: &Path, argv: &[String]) -> Result<()> {
+/// Run an already-rendered hook argv in `cwd`, with `env` added to the child's
+/// environment.
+fn run_rendered(cwd: &Path, argv: &[String], env: &[(&str, &str)]) -> Result<()> {
     let (prog, rest) = argv.split_first().context("empty hook command")?;
-    capture(
+    capture_env(
         prog,
         &rest.iter().map(String::as_str).collect::<Vec<_>>(),
         cwd.to_str(),
+        env,
     )?;
     Ok(())
 }
@@ -48,17 +50,18 @@ fn hook_label(argv: &[String]) -> String {
     )
 }
 
-/// Run each command in `hooks` in `cwd`, in order, one progress step each.
-/// `key` names the config key the commands came from, for the warning a
-/// failure prints. Fail-open: the state a hook reacts to has already happened
-/// by the time it runs, so a hook that fails warns on stderr and the rest
-/// still run.
+/// Run each command in `hooks` in `cwd`, in order, one progress step each,
+/// with `env` added to each child's environment. `key` names the config key
+/// the commands came from, for the warning a failure prints. Fail-open: the
+/// state a hook reacts to has already happened by the time it runs, so a hook
+/// that fails warns on stderr and the rest still run.
 pub(crate) fn run_all(
     cwd: &Path,
     key: &str,
     hooks: &[Vec<String>],
     ctx: &serde_json::Value,
     vars: &BTreeMap<String, String>,
+    env: &[(&str, &str)],
     steps: &Steps,
 ) {
     for hook in hooks {
@@ -68,7 +71,7 @@ pub(crate) fn run_all(
         // counter only advances inside `during_result`, so skipping the step
         // would leave the run ending short of its total.
         let label = hook_label(rendered.as_deref().unwrap_or(hook));
-        if let Err(e) = steps.during_result(&label, || run_rendered(cwd, &rendered?)) {
+        if let Err(e) = steps.during_result(&label, || run_rendered(cwd, &rendered?, env)) {
             eprintln!("warning: {key} hook `{}` failed: {e:#}", hook.join(" "));
         }
     }
@@ -94,6 +97,7 @@ mod tests {
             hooks,
             &ctx(),
             &novars(),
+            &[],
             steps,
         );
     }

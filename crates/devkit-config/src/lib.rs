@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -534,6 +534,15 @@ pub const DEFAULT_ISSUE_SUMMARY: &str = "\
 pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
     "{{ pr_number }}-{{ pr_title }}{% if linear_id %}_[{{ linear_id }}]{% endif %}";
 
+/// Names devkit puts in every render context. A `[templates.variables]` entry
+/// of the same name would be shadowed silently, because `template::render`
+/// merges variables underneath the context.
+///
+/// Only these two. `issue`, `slug`, `branch`, `apps` and `prefix` have been
+/// context keys from the start, so a project may already shadow one on
+/// purpose.
+const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
+
 /// Config-driven minijinja templates for the issue-lifecycle strings. Each
 /// `None` field falls back to its `DEFAULT_*` constant, which reproduces the
 /// historical hardcoded output. `variables` are user constants merged under
@@ -1041,6 +1050,7 @@ pub(crate) fn resolve_with_home(
     let mut cfg: Config = toml::Value::Table(merged)
         .try_into()
         .context("deserializing merged devkit config")?;
+    reject_reserved_variables(&cfg, &origin)?;
     resolve_defaults(&mut cfg, &origin, checkout_root, default_worktree_root)?;
     Ok((
         cfg,
@@ -1050,6 +1060,28 @@ pub(crate) fn resolve_with_home(
             shadowed,
         },
     ))
+}
+
+/// Refuse a `[templates.variables]` entry that a render context already
+/// supplies. Such an entry never reaches a template, so accepting it would
+/// leave the author reading a value that is not the one being rendered.
+fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
+    for name in RESERVED_VARIABLES {
+        if !cfg.templates.variables.contains_key(name) {
+            continue;
+        }
+        let key = format!("templates.variables.{name}");
+        let declared = match origin.get(&key) {
+            Some(p) => format!(" in {}", p.display()),
+            None => String::new(),
+        };
+        bail!(
+            "`[templates.variables] {name}`{declared} is a reserved name: \
+             devkit supplies `{name}` to every render context, so this value \
+             would never be used. Rename the variable."
+        );
+    }
+    Ok(())
 }
 
 /// Expand `${VAR}` references in a config value. `$$` is a literal `$`; a `$`
@@ -1317,6 +1349,31 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, "");
     }
+    #[test]
+    fn a_template_variable_colliding_with_a_context_key_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n[templates.variables]\nrole = 'x'\n",
+        )
+        .unwrap();
+        let err = resolve_with_home(None, dir.path(), None, None, None, None).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("role"), "{msg}");
+    }
+
+    #[test]
+    fn an_ordinary_template_variable_is_still_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n[templates.variables]\nregion = 'eu'\n",
+        )
+        .unwrap();
+        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
+        assert_eq!(cfg.templates.variables["region"], "eu");
+    }
+
     #[test]
     fn an_unset_worktree_root_takes_the_derived_default() {
         let dir = tempfile::tempdir().unwrap();

@@ -3,7 +3,7 @@ use clap::Subcommand;
 use devkit::completions::Shell;
 use std::path::PathBuf;
 
-mod checkout;
+pub(crate) mod checkout;
 mod dashboard;
 mod end;
 mod hooks;
@@ -14,7 +14,7 @@ mod preserve;
 mod prs;
 mod review;
 mod select;
-mod setup;
+pub(crate) mod setup;
 mod slug;
 mod status;
 mod summary;

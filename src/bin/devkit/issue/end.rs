@@ -499,11 +499,20 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
                         after_worktree_remove,
                         ctx,
                         &vars,
+                        &[],
                         &steps,
                     );
                 }
                 let ctx = end_context(&removed, &prefix, &wt_root, Some(root));
-                crate::issue::hooks::run_all(root, "after_end", after_end, &ctx, &vars, &steps);
+                crate::issue::hooks::run_all(
+                    root,
+                    "after_end",
+                    after_end,
+                    &ctx,
+                    &vars,
+                    &[],
+                    &steps,
+                );
             }
             // The worktree each hook describes is already gone, so its own
             // root is not available; the main repository root is the only

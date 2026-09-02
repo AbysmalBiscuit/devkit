@@ -4,11 +4,16 @@
 
 mod locks;
 
+use crate::issue::checkout::with_cleanup;
+use crate::issue::setup::{backfill_includes, prep_apps, run_after_worktree_create};
 use anyhow::{Context, Result};
+use devkit_common::git::Git;
+use devkit_common::progress::Steps;
 use devkit_common::worktree::BASELINE_MARKER;
-use devkit_config::Config;
+use devkit_config::{Config, expand_tilde};
+use devkit_ports::apps::App;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// The ref a worktree's baseline is measured against: the configured
@@ -60,7 +65,6 @@ pub struct Marker {
 /// both "no marker to trust", but only `Absent` means a fresh baseline may be
 /// built here — `Unusable` means something occupies the path already and
 /// must be dealt with before a rebuild can proceed.
-#[allow(dead_code)]
 pub enum MarkerState {
     Ok(Marker),
     Unusable,
@@ -71,7 +75,6 @@ pub enum MarkerState {
 /// baseline complete: a directory without one is an interrupted bootstrap
 /// whatever its HEAD says. It also carries identity, which lets a stray
 /// directory be told from a real baseline, and each app's prep fingerprint.
-#[allow(dead_code)]
 pub fn write_marker(dir: &Path, m: &Marker) -> Result<()> {
     let p = dir.join(BASELINE_MARKER);
     let parent = p.parent().expect("marker path has a parent");
@@ -92,7 +95,6 @@ pub fn write_marker(dir: &Path, m: &Marker) -> Result<()> {
 /// as a clean slate risks building over a baseline other worktrees still
 /// reference. A file that reads but does not parse as TOML is `Unusable` for
 /// the same reason: something occupies the path and cannot be trusted.
-#[allow(dead_code)]
 pub fn read_marker(dir: &Path) -> MarkerState {
     match std::fs::read_to_string(dir.join(BASELINE_MARKER)) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => MarkerState::Absent,
@@ -111,7 +113,6 @@ pub fn read_marker(dir: &Path) -> MarkerState {
 const MAX_SLOT_CANDIDATES: u32 = 64;
 
 /// Which directory serves `sha`, and what state it is in.
-#[allow(dead_code)]
 #[must_use]
 pub enum Slot {
     /// A complete baseline for this exact sha is already here.
@@ -132,7 +133,6 @@ pub enum Slot {
 /// index panics when that index falls inside a multi-byte character. Real
 /// shas are hex ASCII where the two coincide, but this function accepts any
 /// `&str`, so it walks char boundaries instead of assuming one.
-#[allow(dead_code)]
 pub fn short(sha: &str) -> &str {
     match sha.char_indices().nth(12) {
         Some((idx, _)) => &sha[..idx],
@@ -150,7 +150,6 @@ pub fn short(sha: &str) -> &str {
 /// next candidate, `<short>_2` and onward. The walk is bounded
 /// (`MAX_SLOT_CANDIDATES`) so a run of collisions reports `Exhausted` instead
 /// of looping forever.
-#[allow(dead_code)]
 pub fn slot(baseline_dir: &Path, sha: &str) -> Slot {
     let base = short(sha);
     for n in 1..=MAX_SLOT_CANDIDATES {
@@ -179,9 +178,562 @@ pub fn slot(baseline_dir: &Path, sha: &str) -> Slot {
     ))
 }
 
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn eat(mut h: u64, bytes: &[u8]) -> u64 {
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h
+}
+
+/// What an app was prepped from. A bare "this app is prepped" flag would go
+/// stale: a project that adds a key to an app's env file would give issue
+/// worktrees the new key and baselines the old one forever, and
+/// `issue sync-includes` no longer reaches baselines.
+///
+/// FNV-1a rather than `DefaultHasher`, whose output is explicitly not stable
+/// between Rust releases. This value is stored in the marker and compared on a
+/// later run, possibly under a different toolchain.
+pub fn fingerprint(app: &App, includes: &[String]) -> String {
+    let mut h = FNV_OFFSET;
+    for f in &app.prep_files {
+        h = eat(h, f.path.as_bytes());
+        h = eat(h, b"\0");
+        h = eat(h, f.content.as_bytes());
+        h = eat(h, b"\0");
+        h = eat(h, &[u8::from(f.overwrite)]);
+    }
+    for cmd in &app.setup {
+        for part in cmd {
+            h = eat(h, part.as_bytes());
+            h = eat(h, b"\0");
+        }
+        h = eat(h, b"\x01");
+    }
+    for i in includes {
+        h = eat(h, i.as_bytes());
+        h = eat(h, b"\0");
+    }
+    format!("{h:016x}")
+}
+
+/// A baseline is one shared tree, so it renders with one stable identity rather
+/// than borrowing the identity of whichever worktree happened to create it.
+/// Keying on the sha keeps two baselines from sharing per-issue resources, and
+/// supplying `issue`/`slug`/`branch` at all is what lets a `prep_files`
+/// template that names one render here: `template::render` is strict.
+fn bootstrap_context(sha: &str, apps: &[String]) -> serde_json::Value {
+    let id = format!("baseline-{}", short(sha));
+    serde_json::json!({
+        "issue": id,
+        "slug": id,
+        "branch": id,
+        "role": "baseline",
+        "sha": sha,
+        "apps": apps,
+    })
+}
+
+/// The baseline directory for `sha`, created if needed. Reuse preps only what
+/// has drifted; a new or interrupted tree is built from scratch.
+///
+/// Runs before the caller resolves ports, so a long bootstrap cannot outlive a
+/// reservation taken alongside it.
+///
+/// Takes the slot lock and never the directory lock, which is the half of the
+/// fixed order (directory, then slot) that belongs here.
+#[allow(dead_code)]
+pub fn ensure(
+    cfg: &Config,
+    catalog: &HashMap<String, App>,
+    primary: &Path,
+    sha: &str,
+    apps: &[String],
+    steps: &Steps,
+) -> Result<PathBuf> {
+    anyhow::ensure!(
+        !cfg.defaults.baseline_dir.is_empty(),
+        "`--role baseline` needs `defaults.worktree_root` or `defaults.baseline_dir`"
+    );
+    // An empty sha names the baseline root itself as its slot, and a `Rebuild`
+    // there would take the whole directory — every other baseline with it.
+    anyhow::ensure!(!sha.is_empty(), "a baseline needs a fork-point commit");
+    let root = expand_tilde(&cfg.defaults.baseline_dir);
+    std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
+
+    // The slot is resolved twice: once to name the lock, once inside it, since
+    // another process may have finished a bootstrap while this one waited.
+    let name = match slot(&root, sha) {
+        Slot::Reuse(p, _) | Slot::Rebuild(p) | Slot::Create(p) => slot_name(&p)?,
+        Slot::Exhausted(why) => anyhow::bail!(why),
+    };
+    locks::with_slot(&root, &name, || {
+        let ctx = bootstrap_context(sha, apps);
+        let vars = &cfg.templates.variables;
+        let includes = &cfg.defaults.worktree_include;
+        let primary_s = primary
+            .to_str()
+            .context("primary checkout path not UTF-8")?;
+        let env = [(locks::REENTRY_VAR, name.as_str())];
+
+        let (path, mut marker, built_here) = match slot(&root, sha) {
+            Slot::Reuse(path, marker) => (path, marker, false),
+            Slot::Rebuild(path) => {
+                let path_s = baseline_path_str(&path)?;
+                // Always `--force`: the tree may hold rendered prep files and
+                // include copies that a plain remove would refuse over.
+                let _ = Git::at(primary)
+                    .args(["worktree", "remove", "--force", path_s])
+                    .timeout(devkit_common::git::SLOW_TIMEOUT)
+                    .output();
+                let _ = std::fs::remove_dir_all(&path);
+                create(primary, &path, sha, steps)?;
+                (path, fresh_marker(sha), true)
+            }
+            Slot::Create(path) => {
+                create(primary, &path, sha, steps)?;
+                (path, fresh_marker(sha), true)
+            }
+            Slot::Exhausted(why) => anyhow::bail!(why),
+        };
+
+        let mut build = || -> Result<()> {
+            backfill_includes(primary_s, &path, includes, steps);
+            let stale: Vec<String> = apps
+                .iter()
+                .filter(|a| {
+                    catalog.get(*a).is_some_and(|app| {
+                        marker.apps.get(*a).map(|m| m.fingerprint.as_str())
+                            != Some(fingerprint(app, includes).as_str())
+                    })
+                })
+                .cloned()
+                .collect();
+            if !stale.is_empty() {
+                let branch = format!("baseline-{}", short(sha));
+                steps.during_result("Preparing apps…", || {
+                    prep_apps(&path, &branch, &stale, catalog, &ctx, vars)
+                })?;
+            }
+            run_after_worktree_create(
+                &path,
+                &cfg.hooks.after_worktree_create,
+                &ctx,
+                vars,
+                &env,
+                steps,
+            );
+            for a in apps {
+                if let Some(app) = catalog.get(a) {
+                    marker.apps.insert(
+                        a.clone(),
+                        AppMark {
+                            fingerprint: fingerprint(app, includes),
+                        },
+                    );
+                }
+            }
+            // Last, so an interrupted bootstrap leaves no marker and the probe
+            // table classifies the tree as `Rebuild` rather than complete.
+            write_marker(&path, &marker)
+        };
+
+        // A tree this call built gets removed on failure, so a half-built
+        // baseline never survives to be reused. A reused one is left standing:
+        // its marker still describes what is actually prepped, other worktrees
+        // and their running servers depend on the directory, and the drift that
+        // failed here is retried on the next run.
+        if built_here {
+            with_cleanup(&path, primary_s, build)?;
+        } else {
+            build()?;
+        }
+        Ok(path)
+    })
+}
+
+fn fresh_marker(sha: &str) -> Marker {
+    Marker {
+        sha: sha.to_string(),
+        apps: BTreeMap::new(),
+    }
+}
+
+/// Detached so the baseline never occupies a branch name and never shows up in
+/// a session manager's branch list.
+fn create(primary: &Path, path: &Path, sha: &str, steps: &Steps) -> Result<()> {
+    let path_s = baseline_path_str(path)?;
+    // A directory removed by hand leaves a registration behind; `worktree add`
+    // refuses over it until the registration is pruned.
+    let _ = Git::at(primary).args(["worktree", "prune"]).output();
+    steps.during_result("Creating baseline worktree…", || {
+        Git::at(primary)
+            .args(["worktree", "add", "--detach", path_s, sha])
+            .timeout(devkit_common::git::SLOW_TIMEOUT)
+            .output()
+    })?;
+    Ok(())
+}
+
+fn baseline_path_str(path: &Path) -> Result<&str> {
+    path.to_str()
+        .with_context(|| format!("baseline path not UTF-8: {}", path.display()))
+}
+
+/// The lock key for a slot: its directory name, which is what `locks::with_slot`
+/// takes.
+fn slot_name(path: &Path) -> Result<String> {
+    Ok(path
+        .file_name()
+        .with_context(|| format!("baseline slot has no directory name: {}", path.display()))?
+        .to_string_lossy()
+        .into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_with(prep: Vec<devkit_config::PrepFile>, setup: Vec<Vec<String>>) -> App {
+        App {
+            name: "api".into(),
+            base_port: 3000,
+            path: "apps/api".into(),
+            launch: vec!["run".into()],
+            url: None,
+            url_env: None,
+            provides_url: false,
+            static_env: Default::default(),
+            prep_files: prep,
+            setup,
+        }
+    }
+
+    fn prep(path: &str, content: &str) -> devkit_config::PrepFile {
+        devkit_config::PrepFile {
+            path: path.into(),
+            content: content.into(),
+            overwrite: false,
+        }
+    }
+
+    /// The FNV-1a offset basis, which an app with nothing to hash must produce.
+    /// This pins the algorithm: a fingerprint is stored in the marker and compared
+    /// on a later run, possibly under a different toolchain, so a hash that shifts
+    /// between Rust releases would either re-prep every baseline forever or stop
+    /// noticing a real change.
+    #[test]
+    fn an_app_with_nothing_to_hash_is_the_fnv_offset_basis() {
+        assert_eq!(
+            fingerprint(&app_with(vec![], vec![]), &[]),
+            "cbf29ce484222325"
+        );
+    }
+
+    #[test]
+    fn a_fingerprint_moves_when_prep_content_changes() {
+        let before = fingerprint(&app_with(vec![prep(".env", "A=1")], vec![]), &[]);
+        let after = fingerprint(&app_with(vec![prep(".env", "A=2")], vec![]), &[]);
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn a_fingerprint_moves_when_includes_change() {
+        let app = app_with(vec![], vec![]);
+        assert_ne!(
+            fingerprint(&app, &[".env".into()]),
+            fingerprint(&app, &[".env.local".into()])
+        );
+    }
+
+    /// Without a separator between fields, `["ab", "c"]` and `["a", "bc"]` hash
+    /// identically and a changed setup command goes unnoticed.
+    #[test]
+    fn field_boundaries_are_part_of_the_hash() {
+        let a = app_with(vec![], vec![vec!["ab".into(), "c".into()]]);
+        let b = app_with(vec![], vec![vec!["a".into(), "bc".into()]]);
+        assert_ne!(fingerprint(&a, &[]), fingerprint(&b, &[]));
+    }
+
+    #[test]
+    fn the_synthetic_identity_is_stable_per_sha() {
+        let ctx = bootstrap_context("d13d90b724bf8a3c", &["api".to_string()]);
+        assert_eq!(ctx["issue"], "baseline-d13d90b724bf");
+        assert_eq!(ctx["slug"], "baseline-d13d90b724bf");
+        assert_eq!(ctx["branch"], "baseline-d13d90b724bf");
+        assert_eq!(ctx["role"], "baseline");
+        assert_eq!(ctx["sha"], "d13d90b724bf8a3c");
+    }
+
+    /// A `prep_files` template naming `{{ issue }}` must render inside a baseline
+    /// rather than hard-failing: `template::render` is strict and `prep_apps`
+    /// propagates a render error with `?`.
+    #[test]
+    fn a_prep_template_naming_the_issue_renders_in_a_baseline() {
+        let ctx = bootstrap_context("d13d90b724bf8a3c", &["api".to_string()]);
+        let got = devkit_common::template::render(
+            "ISSUE={{ issue }} ROLE={{ role }}",
+            &ctx,
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(got, "ISSUE=baseline-d13d90b724bf ROLE=baseline");
+    }
+
+    fn fixture_git(cwd: &Path, args: &[&str]) -> String {
+        devkit_common::git::Git::fixture(cwd)
+            .args(args.iter().copied())
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"))
+    }
+
+    /// A primary checkout with one commit, and the sha of that commit.
+    fn primary_with_one_commit(at: &Path) -> String {
+        std::fs::create_dir_all(at).unwrap();
+        fixture_git(at, &["init", "-q", "-b", "main"]);
+        std::fs::write(at.join("f"), "x").unwrap();
+        fixture_git(at, &["add", "."]);
+        fixture_git(at, &["commit", "-qm", "one"]);
+        fixture_git(at, &["rev-parse", "HEAD"]).trim().to_string()
+    }
+
+    fn cfg_rooted_at(baseline_dir: &Path) -> Config {
+        let mut cfg = Config::default();
+        cfg.defaults.baseline_dir = baseline_dir.to_str().unwrap().to_string();
+        cfg
+    }
+
+    #[test]
+    fn an_unset_baseline_dir_names_the_two_keys_that_set_it() {
+        let err = ensure(
+            &Config::default(),
+            &HashMap::new(),
+            Path::new("/nonexistent"),
+            SHA,
+            &[],
+            &Steps::persistent(),
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("worktree_root"), "{msg}");
+        assert!(msg.contains("baseline_dir"), "{msg}");
+    }
+
+    #[test]
+    fn a_bootstrap_creates_a_detached_worktree_and_reuses_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let root = tmp.path().join("baselines");
+        let cfg = cfg_rooted_at(&root);
+        let catalog = HashMap::new();
+
+        let path = ensure(&cfg, &catalog, &primary, &sha, &[], &Steps::persistent()).unwrap();
+        assert_eq!(path, root.join(short(&sha)));
+        assert!(matches!(read_marker(&path), MarkerState::Ok(m) if m.sha == sha));
+        assert!(
+            !devkit_common::git::Git::fixture(&path)
+                .args(["symbolic-ref", "-q", "HEAD"])
+                .success()
+                .unwrap(),
+            "a baseline must occupy no branch name"
+        );
+
+        let again = ensure(&cfg, &catalog, &primary, &sha, &[], &Steps::persistent()).unwrap();
+        assert_eq!(again, path, "a complete baseline is reused, not rebuilt");
+    }
+
+    /// An interrupted bootstrap leaves a tree with no marker. The next run owns
+    /// that path: it replaces the tree rather than moving the baseline to a
+    /// collision slot and stranding the remains.
+    #[test]
+    fn a_markerless_tree_is_replaced_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let root = tmp.path().join("baselines");
+        let stale = root.join(short(&sha));
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("leftover"), "x").unwrap();
+
+        let path = ensure(
+            &cfg_rooted_at(&root),
+            &HashMap::new(),
+            &primary,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .unwrap();
+        assert_eq!(path, stale);
+        assert!(!path.join("leftover").exists(), "the stale tree survived");
+        assert!(matches!(read_marker(&path), MarkerState::Ok(_)));
+    }
+
+    /// The marker is written after every prep step, so a bootstrap that fails
+    /// partway can never be mistaken for a finished baseline.
+    #[test]
+    fn a_failed_bootstrap_leaves_nothing_to_mistake_for_a_baseline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let root = tmp.path().join("baselines");
+        let catalog = HashMap::from([(
+            "api".to_string(),
+            app_with(vec![], vec![vec!["devkit-no-such-program-xyz".into()]]),
+        )]);
+
+        let err = ensure(
+            &cfg_rooted_at(&root),
+            &catalog,
+            &primary,
+            &sha,
+            &["api".to_string()],
+            &Steps::persistent(),
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("api"), "{err:#}");
+        assert!(
+            !root.join(short(&sha)).exists(),
+            "a failed bootstrap left a tree behind"
+        );
+    }
+
+    /// An empty sha resolves its slot to the baseline root itself, where a
+    /// rebuild would remove every other baseline along with it.
+    #[test]
+    fn an_empty_sha_is_refused_before_any_slot_is_touched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("baselines");
+        let sibling = root.join("d13d90b724bf");
+        std::fs::create_dir_all(&sibling).unwrap();
+
+        assert!(
+            ensure(
+                &cfg_rooted_at(&root),
+                &HashMap::new(),
+                tmp.path(),
+                "",
+                &[],
+                &Steps::persistent(),
+            )
+            .is_err()
+        );
+        assert!(sibling.exists(), "an unrelated baseline was removed");
+    }
+
+    /// A tree this run did not build is left standing when prep fails: its
+    /// marker still describes what is prepped, and other worktrees — and any
+    /// server running out of it — depend on the directory.
+    #[test]
+    fn a_reused_baseline_survives_a_failed_re_prep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let root = tmp.path().join("baselines");
+        let cfg = cfg_rooted_at(&root);
+        let apps = ["api".to_string()];
+        let catalog_of = |app: App| HashMap::from([("api".to_string(), app)]);
+
+        let path = ensure(
+            &cfg,
+            &catalog_of(app_with(vec![prep(".env", "A=1")], vec![])),
+            &primary,
+            &sha,
+            &apps,
+            &Steps::persistent(),
+        )
+        .unwrap();
+        let before = match read_marker(&path) {
+            MarkerState::Ok(m) => m,
+            _ => panic!("the first bootstrap must leave a readable marker"),
+        };
+
+        // Drifted prep, so the app is stale, plus a setup command that cannot run.
+        let broken = app_with(
+            vec![prep(".env", "A=2")],
+            vec![vec!["devkit-no-such-program-xyz".into()]],
+        );
+        assert!(
+            ensure(
+                &cfg,
+                &catalog_of(broken),
+                &primary,
+                &sha,
+                &apps,
+                &Steps::persistent()
+            )
+            .is_err()
+        );
+        assert!(path.exists(), "the reused baseline was removed");
+        assert!(
+            matches!(read_marker(&path), MarkerState::Ok(m) if m == before),
+            "a failed re-prep must not claim the new fingerprint"
+        );
+    }
+
+    /// The fingerprint is what makes reuse safe: an app whose prep drifted is
+    /// prepped again, and one whose prep is unchanged is left alone.
+    #[test]
+    fn only_an_app_whose_fingerprint_moved_is_prepped_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let root = tmp.path().join("baselines");
+        let cfg = cfg_rooted_at(&root);
+        let apps = ["api".to_string()];
+        let overwriting = |content: &str| devkit_config::PrepFile {
+            path: ".env".into(),
+            content: content.into(),
+            overwrite: true,
+        };
+        let catalog_with = |content: &str| {
+            HashMap::from([(
+                "api".to_string(),
+                app_with(vec![overwriting(content)], vec![]),
+            )])
+        };
+
+        let path = ensure(
+            &cfg,
+            &catalog_with("A=1"),
+            &primary,
+            &sha,
+            &apps,
+            &Steps::persistent(),
+        )
+        .unwrap();
+        let env = path.join("apps/api/.env");
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "A=1");
+
+        // An edit that only a re-prep would undo: an unchanged fingerprint must
+        // leave it standing.
+        std::fs::write(&env, "EDITED").unwrap();
+        ensure(
+            &cfg,
+            &catalog_with("A=1"),
+            &primary,
+            &sha,
+            &apps,
+            &Steps::persistent(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "EDITED");
+
+        ensure(
+            &cfg,
+            &catalog_with("A=2"),
+            &primary,
+            &sha,
+            &apps,
+            &Steps::persistent(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "A=2");
+    }
 
     #[test]
     fn a_marker_round_trips() {
