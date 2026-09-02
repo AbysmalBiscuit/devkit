@@ -1,17 +1,17 @@
-use anyhow::{Context, Result, bail};
-use devkit_common::cmd::{gh_capture, gh_json_in};
+use anyhow::{Result, bail};
+use devkit_common::cmd::gh_json_in;
 use devkit_common::git::Git;
 use devkit_common::github;
 use devkit_common::progress::Steps;
-use devkit_config::Person;
+use devkit_config::{Person, PrCreateState};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use super::finish::{Fallback, decide_fallback, ensure_unambiguous_gh_match, resolve_acting};
+use crate::issue::pr::create;
+
 use super::{
-    PrAction, Target, action_for, base_ctx, deliver, guard_branch, is_human_login, parse_args,
-    person_by_login, render_review, require_pr_title, require_reviewer, resolve_target,
-    target_from_person, with_fields,
+    Target, base_ctx, deliver, guard_branch, is_human_login, parse_args, person_by_login,
+    render_review, resolve_target, target_from_person, with_fields,
 };
 
 pub struct Args {
@@ -29,20 +29,6 @@ pub struct Args {
     pub args: Vec<String>,
     pub dir: Option<String>,
     pub config: Option<String>,
-}
-
-/// The flat shape `gh pr list --json` returns, converted into `github::PrBrief`
-/// so the fallback path carries the same head oid the direct-HTTP path does.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PrFlat {
-    number: u64,
-    state: String,
-    url: String,
-    head_ref_name: String,
-    head_ref_oid: String,
-    #[serde(default)]
-    is_draft: bool,
 }
 
 #[derive(Deserialize)]
@@ -114,104 +100,6 @@ fn requested_reviewer_logins(pr: u64, cwd: &str, repo: &github::Repo) -> Result<
         .collect())
 }
 
-/// The existing PR for head branch `branch`, over direct HTTP when possible
-/// else `gh pr list`. `Ok(None)` means no PR.
-fn existing_pr(branch: &str, cwd: &str, repo: &github::Repo) -> Result<Option<github::PrBrief>> {
-    let looked = github::pr_by_head(repo, branch);
-    if decide_fallback(&looked) == Fallback::No {
-        return resolve_acting(&looked);
-    }
-    let v: Vec<PrFlat> = gh_json_in(
-        &[
-            "pr",
-            "list",
-            "--head",
-            branch,
-            "--state",
-            "all",
-            "--json",
-            "number,state,url,headRefName,headRefOid,isDraft",
-        ],
-        repo,
-        cwd,
-    )?;
-    ensure_unambiguous_gh_match(v.len())?;
-    Ok(v.into_iter().next().map(|p| github::PrBrief {
-        number: p.number,
-        state: p.state,
-        url: p.url,
-        head_ref_name: p.head_ref_name,
-        head_ref_oid: p.head_ref_oid,
-        head_repo_owner: None,
-        is_draft: p.is_draft,
-    }))
-}
-
-/// `--pr <URL|number>`: a GitHub PR URL keeps its own repository; a bare
-/// number means `pr_repo`.
-fn parse_pr_flag(s: &str) -> Result<github::PrLocator> {
-    if let Some(loc) = github::PrLocator::from_url(s) {
-        return Ok(loc);
-    }
-    Ok(github::PrLocator {
-        repo: None,
-        number: s
-            .trim()
-            .parse()
-            .with_context(|| format!("--pr is not a PR URL or number: {s}"))?,
-    })
-}
-
-/// The repository this run acts on: the one a resolved locator names, else
-/// `pr_repo`. The fetch the head-oid gate validates and the `gh pr edit` it
-/// protects must read the same repository — gating one repository's PR while
-/// editing another's is how a fork's same-numbered PR collects a stranger's
-/// reviewers.
-fn acting_repo(loc: Option<&github::PrLocator>, repos: &github::Repos) -> Result<github::Repo> {
-    match loc {
-        Some(loc) => loc.resolve(repos),
-        None => repos.prs().cloned(),
-    }
-}
-
-/// Context for a PR fetch that failed. A locator that came from the record
-/// names the flag that rebinds the worktree, since the record is not something
-/// a user is expected to edit by hand; an explicit `--pr` already is that
-/// escape hatch.
-fn fetch_context(number: u64, from_record: bool) -> String {
-    if from_record {
-        format!(
-            "fetching PR #{number}, recorded for this worktree — pass \
-             `--pr <URL|number>` to bind it to a different PR"
-        )
-    } else {
-        format!("fetching PR #{number}")
-    }
-}
-
-/// A PR that was just created must carry this worktree's commits, which can
-/// only be checked once it exists — so this runs after the call rather than
-/// before it. A failure here leaves the PR open on GitHub, which is why the
-/// caller says so in the error.
-fn verify_created(repo: &github::Repo, number: u64, head: &str) -> Result<()> {
-    let created = github::pr_meta_full(repo, number).context("fetching the PR just created")?;
-    super::finish::assert_belongs(&created, head)
-        .context("the PR just created does not carry this worktree's commits")
-}
-
-/// The record to write once a PR is resolved: the existing record with its
-/// `pr` field replaced. `None` when there is no record to attach it to — an
-/// `issue review request` run outside a worktree `issue setup` created.
-pub(crate) fn record_with_pr(
-    record: Option<&devkit_common::record::IssueRecord>,
-    loc: github::PrLocator,
-) -> Option<devkit_common::record::IssueRecord> {
-    record.map(|r| devkit_common::record::IssueRecord {
-        pr: Some(loc),
-        ..r.clone()
-    })
-}
-
 /// `--no-notify` pins the targets to whatever `--to` resolved to — possibly none —
 /// instead of falling back to the PR's current reviewers. `None` means no override:
 /// resolve them as usual.
@@ -219,8 +107,8 @@ pub(crate) fn pinned_targets(explicit: &[Target], no_notify: bool) -> Option<Vec
     no_notify.then(|| explicit.to_vec())
 }
 
-/// Notify-targets on the AddReviewer path: explicit `--to`, else the PR's
-/// existing human reviewers (reverse-looked-up).
+/// Notify-targets on the reuse path: explicit `--to`, else the PR's existing
+/// human reviewers (reverse-looked-up).
 fn resolve_request_targets(
     explicit: &[Target],
     pr: u64,
@@ -264,23 +152,15 @@ pub fn run(args: Args) -> Result<()> {
     let branch = devkit_common::git::branch(std::path::Path::new(&start))?;
     guard_branch(&branch)?;
 
-    let steps = Steps::persistent();
-    if !args.no_push {
-        steps
-            .during_result("Pushing branch…", || {
-                Git::at(std::path::Path::new(&start))
-                    .args(["push", "-u", "origin", &branch])
-                    .timeout(devkit_common::git::SLOW_TIMEOUT)
-                    .output()
-            })
-            .context("git push failed (refusing to force-push)")?;
-    }
-
     let explicit: Vec<Target> = args
         .to
         .iter()
         .map(|v| resolve_target(v, people))
         .collect::<Result<_>>()?;
+    let (reviewers, warnings) = reviewer_logins(&explicit);
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
 
     let toplevel = devkit_common::git::checkout_root(std::path::Path::new(&start))?
         .to_string_lossy()
@@ -306,6 +186,22 @@ pub fn run(args: Args) -> Result<()> {
         &vars,
         missing_at,
     )?;
+    let pr_body = render_review(
+        tmpls.pr_body(),
+        "pr_body",
+        &with_fields(
+            &base,
+            &[
+                (
+                    "input",
+                    serde_json::json!(args.pr_body.clone().unwrap_or_default()),
+                ),
+                ("pr_title", serde_json::json!(pr_title)),
+            ],
+        ),
+        &vars,
+        missing_at,
+    )?;
 
     let head = Git::at(std::path::Path::new(&start))
         .args(["rev-parse", "HEAD"])
@@ -313,152 +209,56 @@ pub fn run(args: Args) -> Result<()> {
         .trim()
         .to_string();
 
-    // Explicit `--pr`, then the record, then the worktree branch's PR.
-    let explicit_loc = args.pr.as_deref().map(parse_pr_flag).transpose()?;
-    let record_loc = record.as_ref().and_then(|r| r.pr.clone());
-    let resolved_loc = super::finish::resolve_locator(explicit_loc.as_ref(), record_loc.as_ref());
-    let repo = acting_repo(resolved_loc.as_ref(), &repos)?;
+    let steps = Steps::persistent();
+    let resolved = create::ensure(create::Ensure {
+        existing: create::Existing {
+            start: &start,
+            branch: &branch,
+            repos: &repos,
+            record: record.as_ref(),
+            explicit_pr: args.pr.as_deref().map(create::parse_pr_flag).transpose()?,
+            no_push: args.no_push,
+            steps: &steps,
+        },
+        head: &head,
+        // Asking for a review means the PR is ready for one, whatever
+        // `defaults.pr_create_state` says.
+        state: PrCreateState::Ready,
+        asked: None,
+        base: args
+            .base
+            .clone()
+            .unwrap_or_else(|| loaded.config.defaults.pr_base.clone()),
+        pr_title: pr_title.clone(),
+        pr_body,
+        reviewers,
+        require_reviewer: loaded.config.defaults.require_pr_reviewer,
+        steps: &steps,
+    })?;
 
-    // The PR this run already knows about, paired with the locator to persist
-    // for it once resolved — either the one that named it, or `repo` when
-    // branch discovery found it.
-    let (existing, existing_loc): (Option<github::PrBrief>, Option<github::PrLocator>) =
-        match &resolved_loc {
-            Some(loc) => {
-                let pr = steps
-                    .during_result(&format!("Fetching PR #{}…", loc.number), || {
-                        github::pr_meta_full(&repo, loc.number)
-                    })
-                    .with_context(|| fetch_context(loc.number, explicit_loc.is_none()))?;
-                (Some(pr), Some(loc.clone()))
-            }
+    let targets = if resolved.created {
+        explicit
+    } else {
+        match pinned_targets(&explicit, args.no_notify) {
+            Some(t) => t,
             None => {
-                let found = steps.during_result("Looking up existing PR…", || {
-                    existing_pr(&branch, &start, &repo)
-                })?;
-                let loc = found.as_ref().map(|p| github::PrLocator {
-                    repo: Some(repo.slug.clone()),
-                    number: p.number,
-                });
-                (found, loc)
+                let repo = resolved.locator.resolve(&repos)?;
+                steps.during_result("Resolving reviewers…", || {
+                    resolve_request_targets(&explicit, resolved.pr.number, &start, &repo, people)
+                })?
             }
-        };
-
-    let (pr_url, targets, final_loc) = match action_for(existing.as_ref().map(|p| p.state.as_str()))
-    {
-        PrAction::Stop(reason) => bail!("{reason}"),
-        PrAction::AddReviewer => {
-            let pr = existing.expect("AddReviewer implies an existing PR");
-            let loc = existing_loc.expect("AddReviewer implies a resolved locator");
-            // Mutating an existing PR is gated before the call: a mismatch here
-            // is refused before a single reviewer is added.
-            super::finish::assert_belongs(&pr, &head)?;
-            let targets = match pinned_targets(&explicit, args.no_notify) {
-                Some(t) => t,
-                None => steps.during_result("Resolving reviewers…", || {
-                    resolve_request_targets(&explicit, pr.number, &start, &repo, people)
-                })?,
-            };
-            let (logins, warnings) = reviewer_logins(&targets);
-            for w in &warnings {
-                eprintln!("warning: {w}");
-            }
-            if !logins.is_empty() {
-                steps
-                    .during_result("Adding reviewers…", || {
-                        gh_capture(
-                            &[
-                                "pr",
-                                "edit",
-                                &pr.number.to_string(),
-                                "--add-reviewer",
-                                &logins.join(","),
-                            ],
-                            &repo,
-                            &start,
-                        )
-                    })
-                    .context("gh pr edit --add-reviewer failed")?;
-            }
-            (pr.url, targets, loc)
-        }
-        PrAction::Create => {
-            require_pr_title(&pr_title)?;
-            require_reviewer(&explicit, loaded.config.defaults.require_pr_reviewer)?;
-            let (logins, warnings) = reviewer_logins(&explicit);
-            for w in &warnings {
-                eprintln!("warning: {w}");
-            }
-            let pr_body = render_review(
-                tmpls.pr_body(),
-                "pr_body",
-                &with_fields(
-                    &base,
-                    &[
-                        (
-                            "input",
-                            serde_json::json!(args.pr_body.clone().unwrap_or_default()),
-                        ),
-                        ("pr_title", serde_json::json!(pr_title)),
-                    ],
-                ),
-                &vars,
-                missing_at,
-            )?;
-            let base_branch = args
-                .base
-                .clone()
-                .unwrap_or_else(|| loaded.config.defaults.pr_base.clone());
-            let joined = logins.join(",");
-            let mut gh_args = vec![
-                "pr",
-                "create",
-                "--base",
-                &base_branch,
-                "--title",
-                &pr_title,
-                "--body",
-                &pr_body,
-            ];
-            if !logins.is_empty() {
-                gh_args.push("--reviewer");
-                gh_args.push(&joined);
-            }
-            let out = steps
-                .during_result("Creating PR…", || gh_capture(&gh_args, &repo, &start))
-                .context("gh pr create failed")?;
-            let url = out
-                .lines()
-                .rev()
-                .find(|l| l.contains("://"))
-                .context("could not parse a PR URL from `gh pr create` output")?
-                .trim()
-                .to_string();
-            let loc = github::PrLocator::from_url(&url)
-                .context("could not parse a PR number from `gh pr create` output")?;
-            let created_repo = loc.resolve(&repos)?;
-            // The gate runs before the record is written and before any
-            // notification goes out.
-            verify_created(&created_repo, loc.number, &head).with_context(|| {
-                format!("{url} is open with nothing recorded and no notification sent")
-            })?;
-            (url, explicit, loc)
         }
     };
 
-    if let Some(rec) = record_with_pr(record.as_ref(), final_loc) {
-        devkit_common::record::write(std::path::Path::new(&toplevel), &rec)?;
-    }
-
     if args.no_notify {
-        println!("{pr_url}");
+        println!("{}", resolved.url);
         return Ok(());
     }
 
     let notify_ctx = with_fields(
         &base,
         &[
-            ("pr_url", serde_json::json!(pr_url)),
+            ("pr_url", serde_json::json!(resolved.url)),
             ("pr_title", serde_json::json!(pr_title)),
             (
                 "input",
@@ -542,67 +342,5 @@ mod tests {
         assert_eq!(targets[0].name, "lev");
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("ghost"));
-    }
-
-    #[test]
-    fn parse_pr_flag_keeps_a_urls_repository_but_not_a_bare_numbers() {
-        let pasted = parse_pr_flag("https://github.com/o/r/pull/9").unwrap();
-        assert_eq!(pasted.repo.as_deref(), Some("o/r"));
-        assert_eq!(pasted.number, 9);
-
-        let bare = parse_pr_flag("9").unwrap();
-        assert_eq!(bare.repo, None);
-        assert_eq!(bare.number, 9);
-
-        assert!(parse_pr_flag("not-a-pr").is_err());
-    }
-
-    #[test]
-    fn the_acting_repository_comes_from_the_locator_not_pr_repo() {
-        let cfg = devkit_config::GithubConfig {
-            issues_repo: None,
-            pr_repo: Some("up/app".into()),
-        };
-        let repos = github::Repos::from_parts(&cfg, None, None);
-
-        let pasted = parse_pr_flag("https://github.com/me/fork/pull/9").unwrap();
-        assert_eq!(acting_repo(Some(&pasted), &repos).unwrap().slug, "me/fork");
-
-        let bare = parse_pr_flag("9").unwrap();
-        assert_eq!(acting_repo(Some(&bare), &repos).unwrap().slug, "up/app");
-
-        assert_eq!(acting_repo(None, &repos).unwrap().slug, "up/app");
-    }
-
-    #[test]
-    fn a_recorded_pr_that_will_not_resolve_names_the_rebind_flag() {
-        let recorded = fetch_context(9, true);
-        assert!(recorded.contains("--pr"), "{recorded}");
-        assert!(recorded.contains('9'), "{recorded}");
-
-        let explicit = fetch_context(9, false);
-        assert!(!explicit.contains("--pr"), "{explicit}");
-    }
-
-    #[test]
-    fn record_with_pr_replaces_only_the_pr_field() {
-        let base = devkit_common::record::IssueRecord {
-            issue: "ENG-1".into(),
-            slug: "fix-login".into(),
-            apps: vec!["web".into()],
-            summary: None,
-            pr: None,
-        };
-        let loc = github::PrLocator {
-            repo: Some("o/r".into()),
-            number: 9,
-        };
-        let got = record_with_pr(Some(&base), loc.clone()).expect("a record to update");
-        assert_eq!(got.pr, Some(loc.clone()));
-        assert_eq!(got.issue, base.issue);
-        assert_eq!(got.slug, base.slug);
-        assert_eq!(got.apps, base.apps);
-
-        assert!(record_with_pr(None, loc).is_none());
     }
 }

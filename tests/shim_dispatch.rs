@@ -291,6 +291,27 @@ fn pr_group_lists_status_and_checkout() {
     );
 }
 
+/// `pr create` resolves its state from at most one flag, so clap has to be the
+/// thing that refuses the pair.
+#[test]
+fn pr_create_refuses_draft_with_ready() {
+    let (_dir, link) = shimtest::linked("issue");
+    let out = Command::new(&link)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .args(["pr", "create", "--draft", "--ready"])
+        .output()
+        .expect("spawn issue shim");
+    let text = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        !out.status.success(),
+        "--draft --ready must be refused: {text}"
+    );
+    assert!(
+        text.contains("cannot be used with"),
+        "clap should report the conflict: {text}"
+    );
+}
+
 /// Bare `issue pr` must resolve to `pr status`, byte-for-byte the same as the
 /// hidden `issue info` alias it replaces, not fall through expecting
 /// `checkout`'s TARGET positional.

@@ -9,6 +9,7 @@ mod end;
 mod hooks;
 mod info;
 mod info_cache;
+mod pr;
 mod preserve;
 mod prs;
 mod review;
@@ -253,6 +254,38 @@ pub(crate) enum Cmd {
 
 #[derive(Subcommand)]
 pub(crate) enum PrCmd {
+    /// Push the branch and open (or reuse) this branch's PR.
+    Create {
+        /// Open as a draft, whatever `defaults.pr_create_state` says.
+        #[arg(long)]
+        draft: bool,
+        /// Open ready for review, whatever `defaults.pr_create_state` says.
+        #[arg(long, conflicts_with = "draft")]
+        ready: bool,
+        /// Reviewer: a `[people]` alias. Repeatable. Adds GitHub reviewers and
+        /// sends no Slack.
+        #[arg(long = "to")]
+        to: Vec<String>,
+        /// PR base branch, instead of the configured baseline ref.
+        #[arg(long)]
+        base: Option<String>,
+        /// PR title, instead of the one the template renders.
+        #[arg(long = "pr-title")]
+        pr_title: Option<String>,
+        /// PR body, instead of the one the template renders.
+        #[arg(long = "pr-body")]
+        pr_body: Option<String>,
+        /// Open or update the PR without pushing the branch first.
+        #[arg(long = "no-push")]
+        no_push: bool,
+        /// Use this PR for this run: a GitHub PR URL or a bare number (meaning
+        /// `pr_repo`). Replaces a wrong recorded binding.
+        #[arg(long)]
+        pr: Option<String>,
+        /// Override a declared template variable: `--arg key=value`. Repeatable.
+        #[arg(long = "arg")]
+        args: Vec<String>,
+    },
     /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
     Status {
         /// Issue id, branch, worktree basename, or path. Defaults to cwd.
@@ -392,6 +425,29 @@ pub fn run(cli: IssueCli) -> Result<()> {
                 cache_only: false,
             });
             match cmd {
+                PrCmd::Create {
+                    draft,
+                    ready,
+                    to,
+                    base,
+                    pr_title,
+                    pr_body,
+                    no_push,
+                    pr,
+                    args,
+                } => pr::create::run(pr::create::Args {
+                    draft,
+                    ready,
+                    to,
+                    base,
+                    pr_title,
+                    pr_body,
+                    no_push,
+                    pr,
+                    args,
+                    dir: cli.dir,
+                    config: cli.config,
+                }),
                 PrCmd::Status {
                     selector,
                     json,

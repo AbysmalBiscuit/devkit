@@ -57,11 +57,15 @@ pub(crate) fn require_pr_title(title: &str) -> Result<()> {
     Ok(())
 }
 
-/// Reject a create-path invocation with no `--to` when `defaults.require_pr_reviewer`
-/// is set. Unset, a PR may open with no reviewer and no Slack notification.
-pub(crate) fn require_reviewer(targets: &[Target], required: bool) -> Result<()> {
-    if required && targets.is_empty() {
-        bail!("at least one --to is required to create a PR (defaults.require_pr_reviewer is set)");
+/// Reject a create-path invocation that would open a PR with no GitHub
+/// reviewer, when `defaults.require_pr_reviewer` is set. Unset, a PR may open
+/// with no reviewer and no Slack notification.
+pub(crate) fn require_reviewer(reviewers: &[String], required: bool) -> Result<()> {
+    if required && reviewers.is_empty() {
+        bail!(
+            "at least one --to with a github handle is required to create a PR \
+             (defaults.require_pr_reviewer is set)"
+        );
     }
     Ok(())
 }
@@ -276,13 +280,8 @@ mod tests {
 
     #[test]
     fn require_reviewer_only_gates_when_configured() {
-        let none: Vec<Target> = Vec::new();
-        let some = vec![Target {
-            channel: "U_LEV".into(),
-            name: "lev".into(),
-            slack_id: Some("U_LEV".into()),
-            github: Some("LevValle".into()),
-        }];
+        let none: Vec<String> = Vec::new();
+        let some = vec!["LevValle".to_string()];
         assert!(require_reviewer(&none, false).is_ok());
         assert!(require_reviewer(&none, true).is_err());
         assert!(require_reviewer(&some, true).is_ok());
