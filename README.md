@@ -37,7 +37,7 @@ Running `devkit` once installs the old command names (`portm`, `devrun`, `issue`
 | `devkit auth` / `devkit doctor` | Store a Linear or Slack credential; report where every credential resolves from. |
 | `devkit brief` | Compact project orientation for a session-start hook. |
 
-Each command's `--help` is the authoritative flag list. [docs/commands.md](docs/commands.md) carries what `--help` cannot: resolution rules, the TTY gates, and the reasoning behind them.
+`-h` is the authoritative flag list under every condition; `--help` matches it at a terminal, but answers with the command tree when piped. [docs/commands.md](docs/commands.md) carries what `--help` cannot: resolution rules, the TTY gates, and the reasoning behind them.
 
 ## Coding agents
 

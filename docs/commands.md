@@ -11,6 +11,7 @@ where stdout points.
 |---|---|---|
 | `<cmd> -h` | terse | terse |
 | `<cmd> --help` | terse | full command tree |
+| `<cmd> --help --full` | full command tree | full command tree |
 | `<cmd> help` | terse | full command tree |
 | `<cmd> help --full` | full command tree | full command tree |
 
@@ -24,9 +25,10 @@ output goes.
 
 The tree is scoped, never cascading: `devkit issue --help` descends through
 `issue` and stops. A command with no subcommands keeps clap's own rendering of
-its flags and arguments, since a tree cannot carry those.
+its flags and arguments, since a tree cannot carry those — one that does have
+subcommands loses its own options block in the tree.
 
-Each command's own `--help` is the authoritative flag list. This file carries what `--help` cannot: the resolution rules, the gates, and the reasons.
+Each command's own `-h` is the authoritative flag list under every condition; `--help` matches it only at a terminal. This file carries what `--help` cannot: the resolution rules, the gates, and the reasons.
 
 - [`portm`: port registry](#portm-port-registry)
 - [`devrun`: supervised dev servers](#devrun-supervised-dev-servers)
