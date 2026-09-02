@@ -4,7 +4,6 @@
 //! look at it. A PR that is already ready is not made ready by this run, and a
 //! run whose own `--to` already names a human reviewer cannot learn anything
 //! from the PR's current list.
-#![cfg(unix)]
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
@@ -19,6 +18,7 @@ fn an_already_ready_pr_is_not_judged_by_the_gate() {
             number: 1,
             state: "OPEN",
             is_draft: false,
+            author: "someone-else",
         },
     );
     // A bot reviewer never satisfies the gate, so a gate that fired on this run
@@ -54,6 +54,7 @@ fn a_human_in_to_settles_the_gate_without_a_lookup() {
             number: 1,
             state: "OPEN",
             is_draft: true,
+            author: "someone-else",
         },
     );
     let out = fake.issue(&["pr", "ready", "--no-push", "--to", "lev"]);
@@ -80,6 +81,7 @@ fn a_draft_with_no_human_reviewer_is_refused_before_the_flip() {
             number: 1,
             state: "OPEN",
             is_draft: true,
+            author: "someone-else",
         },
     );
     let out = fake.issue(&["pr", "ready", "--no-push", "--to", "bot"]);

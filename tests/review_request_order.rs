@@ -3,7 +3,6 @@
 //! A run with no `--to` against a PR carrying no reviewers cannot name a
 //! recipient and refuses. Flipping the draft first would leave the PR promoted
 //! to ready by a run that told nobody and exited non-zero.
-#![cfg(unix)]
 
 #[path = "common/ghfake.rs"]
 mod ghfake;
@@ -16,6 +15,7 @@ fn a_refused_request_leaves_the_draft_alone() {
             number: 1,
             state: "OPEN",
             is_draft: true,
+            author: "someone-else",
         },
     );
     let out = fake.issue(&["review", "request", "--no-push"]);
