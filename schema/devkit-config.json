@@ -240,7 +240,7 @@
         },
         "require_pr_reviewer": {
           "default": false,
-          "description": "Refuse any run that would leave a PR ready for review with no human\nGitHub reviewer: `issue pr create --ready`, `issue pr ready`, and the\ndraft-to-ready flip in `issue review request`. Off by default.",
+          "description": "Refuse any run that would leave a PR ready for review with no human\nGitHub reviewer other than its own author: `issue pr create --ready`,\n`issue pr ready`, and the draft-to-ready flip in `issue review request`.\nOff by default.",
           "type": "boolean"
         },
         "stray_scan_width": {

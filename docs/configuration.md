@@ -117,7 +117,7 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 | `doppler_yaml` | no | Path to the repo's `doppler.yaml`; its `setup` paths seed app **path inference**. `~` is expanded. Absent → apps need an explicit `path`. |
 | `pr_base` | no (default `"staging"`) | Default base branch for PRs opened by `issue pr create`. |
 | `pr_create_state` | no (default `"draft"`) | State `issue pr create` opens a PR in when neither `--draft` nor `--ready` is given: `"draft"` or `"ready"`. |
-| `require_pr_reviewer` | no (default `false`) | Refuse any run that would leave a PR ready for review with no human GitHub reviewer: `issue pr create --ready`, `issue pr ready`, and the draft-to-ready flip in `issue review request`. |
+| `require_pr_reviewer` | no (default `false`) | Refuse any run that would leave a PR ready for review with no human GitHub reviewer other than the PR's own author: `issue pr create --ready`, `issue pr ready`, and the draft-to-ready flip in `issue review request`. |
 | `apps_dir` | no | Directory (relative to a worktree) that holds per-app subdirectories. |
 | `ignored_checks` | no | Glob patterns for status-check names to discount from a PR's CHECK verdict, e.g. a deploy left red by an unfinished PR. Matched case-insensitively against each check's name. A PR reads green when only ignored checks fail, and those failures still appear in the triage output rather than being hidden. |
 | `stray_scan_width` | no (default `64`) | Width of each app's port-band scan window for stray detection: ports `[base_port, base_port + stray_scan_width)`. |

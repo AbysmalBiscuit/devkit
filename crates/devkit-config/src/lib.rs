@@ -345,8 +345,9 @@ pub struct Defaults {
     #[serde(default)]
     pub pr_create_state: PrCreateState,
     /// Refuse any run that would leave a PR ready for review with no human
-    /// GitHub reviewer: `issue pr create --ready`, `issue pr ready`, and the
-    /// draft-to-ready flip in `issue review request`. Off by default.
+    /// GitHub reviewer other than its own author: `issue pr create --ready`,
+    /// `issue pr ready`, and the draft-to-ready flip in `issue review request`.
+    /// Off by default.
     #[serde(default)]
     pub require_pr_reviewer: bool,
     /// Glob patterns for status-check names to discount from a PR's CHECK

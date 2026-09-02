@@ -49,7 +49,7 @@ The optional second positional overrides the worktree path (default: the config-
 
 `pr create` pushes the branch (**never force-pushes**) and opens its PR, printing the URL; a branch that already has one reuses it and keeps its draft state. `--draft`/`--ready` decide the state for the run, `defaults.pr_create_state` when neither is passed. `pr ready` flips a draft to ready and is a no-op on a PR that is already ready. Both take `--to <alias>` to add GitHub reviewers, and neither posts to Slack.
 
-`defaults.require_pr_reviewer` refuses any run that would leave a PR ready with no human reviewer: `pr create --ready`, `pr ready`, and `review request`'s draft flip. A draft is never gated.
+`defaults.require_pr_reviewer` refuses any run that would leave a PR ready with no human reviewer other than the PR's own author: `pr create --ready`, `pr ready`, and `review request`'s draft flip. A draft is never gated.
 
 ## `review request` — ship for review
 
