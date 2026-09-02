@@ -257,7 +257,11 @@ pub(crate) enum Cmd {
 
 #[derive(Subcommand)]
 pub(crate) enum PrCmd {
-    /// Push the branch and open (or reuse) this branch's PR.
+    /// Open (or reuse) this branch's PR.
+    ///
+    /// Pushes the branch first unless `--no-push`. A PR this run opens is a
+    /// draft unless `--ready` or `defaults.pr_create_state` says otherwise;
+    /// an open PR that already exists is reused with its state left alone.
     Create {
         /// Open as a draft, whatever `defaults.pr_create_state` says.
         #[arg(long)]
@@ -290,6 +294,9 @@ pub(crate) enum PrCmd {
         args: Vec<String>,
     },
     /// Mark this branch's PR ready for review.
+    ///
+    /// Pushes the branch first unless `--no-push`. A PR that is already ready
+    /// is reported and changed in no way.
     Ready {
         /// Reviewer: a `[people]` alias. Repeatable. Adds GitHub reviewers and
         /// sends no Slack.
@@ -303,7 +310,9 @@ pub(crate) enum PrCmd {
         #[arg(long)]
         pr: Option<String>,
     },
-    /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
+    /// Show one worktree's PR and issue id.
+    ///
+    /// Reports the current worktree, or the one SELECTOR names.
     Status {
         /// Issue id, branch, worktree basename, or path. Defaults to cwd.
         selector: Option<String>,
@@ -315,7 +324,9 @@ pub(crate) enum PrCmd {
         #[arg(long = "cache-only")]
         cache_only: bool,
     },
-    /// Check out an existing PR (by number, issue id, or URL) into a new worktree.
+    /// Check out an existing PR into a new worktree.
+    ///
+    /// Accepts a PR number, issue id, or URL.
     Checkout {
         /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue URL.
         target: String,
