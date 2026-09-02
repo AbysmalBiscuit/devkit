@@ -72,6 +72,7 @@ mod tests {
                 number: n,
                 state: "OPEN".into(),
                 url: "".into(),
+                is_draft: false,
             },
             ..row()
         }

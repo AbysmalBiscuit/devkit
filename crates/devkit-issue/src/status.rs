@@ -19,6 +19,10 @@ pub enum PrStatus {
         number: u64,
         state: String,
         url: String,
+        /// A draft's `state` is `OPEN`, so `state_label` cannot express this and
+        /// deliberately does not try: consumers read `pr_state` and a changed
+        /// string there breaks them.
+        is_draft: bool,
     },
     /// Several PRs share this head branch. The verdict stays closed: `issue
     /// end` reads it to decide whether a worktree may be deleted, and a
@@ -207,6 +211,7 @@ fn pr_status_of(lookup: &github::HeadLookup) -> PrStatus {
             number: pr.number,
             state: pr.state.clone(),
             url: pr.url.clone(),
+            is_draft: pr.is_draft,
         },
         github::HeadLookup::NoMatch => PrStatus::None,
         github::HeadLookup::Ambiguous(candidates) => PrStatus::Ambiguous {
@@ -1032,6 +1037,7 @@ mod tests {
                 number: 1,
                 state: pr_state.into(),
                 url: "https://x/1".into(),
+                is_draft: false,
             }
         };
         IssueWorktree {
@@ -1194,6 +1200,7 @@ mod tests {
             number: 12,
             state: "MERGED".into(),
             url: "https://github.com/o/r/pull/12".into(),
+            is_draft: false,
         };
         assert_eq!(u.number(), Some(12));
         assert_eq!(u.state_label(), "MERGED");
@@ -1350,5 +1357,39 @@ mod tests {
             q.contains("isDraft"),
             "heads_query must select isDraft: {q}"
         );
+    }
+
+    #[test]
+    fn pr_status_of_carries_the_draft_flag() {
+        let pr = github::PrBrief {
+            number: 7,
+            state: "OPEN".into(),
+            url: "u7".into(),
+            head_ref_name: "feat/x".into(),
+            head_ref_oid: "abc123".into(),
+            head_repo_owner: None,
+            is_draft: true,
+        };
+        let status = pr_status_of(&github::HeadLookup::Unique(pr));
+        assert_eq!(
+            status,
+            PrStatus::Unique {
+                number: 7,
+                state: "OPEN".into(),
+                url: "u7".into(),
+                is_draft: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_draft_still_labels_as_open_for_serialized_consumers() {
+        let status = PrStatus::Unique {
+            number: 7,
+            state: "OPEN".into(),
+            url: "u7".into(),
+            is_draft: true,
+        };
+        assert_eq!(status.state_label(), "OPEN");
     }
 }

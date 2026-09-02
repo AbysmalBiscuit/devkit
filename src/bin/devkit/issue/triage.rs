@@ -146,6 +146,7 @@ mod tests {
                 number: 7,
                 state: pr_state.into(),
                 url: "".into(),
+                is_draft: false,
             }
         };
         row_with(pr)
@@ -193,7 +194,8 @@ mod tests {
             pr_label(&row_with(PrStatus::Unique {
                 number: 12,
                 state: "MERGED".into(),
-                url: "u".into()
+                url: "u".into(),
+                is_draft: false,
             })),
             "MERGED #12"
         );

@@ -359,6 +359,7 @@ mod tests {
             number: 1,
             state: "MERGED".into(),
             url: "".into(),
+            is_draft: false,
         };
         r
     }

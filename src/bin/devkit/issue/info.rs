@@ -111,13 +111,20 @@ pub fn run(
         let repo = repos.prs()?;
         info.link_base = live_enrich(&mut row, &d, &resolved, !json, repo)?;
 
-        if let PrStatus::Unique { number, state, url } = &row.pr {
+        if let PrStatus::Unique {
+            number,
+            state,
+            url,
+            is_draft,
+        } = &row.pr
+        {
             let _ = crate::issue::info_cache::write(
                 Path::new(&row.worktree),
                 &crate::issue::info_cache::CachedPr {
                     number: *number,
                     state: state.clone(),
                     url: url.clone(),
+                    is_draft: *is_draft,
                 },
             );
         }
@@ -314,6 +321,7 @@ fn apply_cached_pr(row: &mut IssueWorktree, pr: crate::issue::info_cache::Cached
         number: pr.number,
         state: pr.state,
         url: pr.url,
+        is_draft: pr.is_draft,
     };
     row.finished = false;
     row.reason_not_finished = None;
@@ -394,6 +402,7 @@ mod tests {
             number: 7,
             state: "MERGED".into(),
             url: "https://github.com/o/r/pull/7".into(),
+            is_draft: false,
         };
         let bound = |n: u64| devkit_common::github::PrLocator {
             repo: None,
@@ -423,6 +432,7 @@ mod tests {
                 number: 123,
                 state: "OPEN".into(),
                 url: "https://x/pr/123".into(),
+                is_draft: false,
             },
         );
         assert_eq!(r.pr.number(), Some(123));
@@ -449,6 +459,7 @@ mod tests {
                 number: 7,
                 state: "OPEN".into(),
                 url: "https://github.com/o/r/pull/7".into(),
+                is_draft: false,
             },
         );
         assert!(matches!(r.pr, PrStatus::Unique { number: 7, .. }));
@@ -483,12 +494,14 @@ mod tests {
                 number: 7,
                 state: "OPEN".into(),
                 url: "https://github.com/o/r/pull/7".into(),
+                is_draft: false,
             },
         );
         let live = PrStatus::Unique {
             number: 7,
             state: "OPEN".into(),
             url: "https://github.com/o/r/pull/7".into(),
+            is_draft: false,
         };
         reconcile_cache(&mut r, &live);
         assert!(matches!(r.pr, PrStatus::Unique { number: 7, .. }));
@@ -503,6 +516,7 @@ mod tests {
                 number: 7,
                 state: "OPEN".into(),
                 url: "https://github.com/o/r/pull/7".into(),
+                is_draft: false,
             },
         );
         let live = PrStatus::Unknown {

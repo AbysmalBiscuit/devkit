@@ -10,6 +10,10 @@ pub struct CachedPr {
     pub number: u64,
     pub state: String,
     pub url: String,
+    /// Defaulted because `read` treats a parse failure as a cache miss, so a
+    /// required field would silently invalidate every cache written earlier.
+    #[serde(default)]
+    pub is_draft: bool,
 }
 
 /// `<worktree>/.devkit/pr.json`.
@@ -48,6 +52,7 @@ mod tests {
             number: 123,
             state: "OPEN".into(),
             url: "https://x/pr/123".into(),
+            is_draft: false,
         };
         write(wt.path(), &pr).unwrap();
         assert_eq!(read(wt.path()), Some(pr));
@@ -76,6 +81,7 @@ mod tests {
                 number: 1,
                 state: "MERGED".into(),
                 url: "u".into(),
+                is_draft: false,
             },
         )
         .unwrap();
@@ -85,5 +91,18 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .collect();
         assert!(leftover.is_empty(), "temp file left behind: {leftover:?}");
+    }
+
+    #[test]
+    fn a_cache_without_is_draft_reads_as_not_draft() {
+        let wt = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(wt.path().join(".devkit")).unwrap();
+        std::fs::write(
+            wt.path().join(".devkit").join("pr.json"),
+            br#"{"number":1,"state":"OPEN","url":"u"}"#,
+        )
+        .unwrap();
+        let got = read(wt.path()).expect("a cache predating is_draft still reads");
+        assert!(!got.is_draft);
     }
 }
