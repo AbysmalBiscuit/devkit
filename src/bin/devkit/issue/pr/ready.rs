@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use devkit_common::cmd::gh_capture;
 use devkit_common::git::Git;
 use devkit_common::github;
@@ -6,8 +6,8 @@ use devkit_common::progress::Steps;
 use std::path::Path;
 
 use super::create::{Existing, parse_pr_flag, record_with_pr, resolve_existing};
-use super::{require_reviewer_for_ready, reviewer_logins_on};
-use crate::issue::review::{self, PrAction, Target, action_for, guard_branch, resolve_target};
+use super::{require_existing_pr, require_reviewer_for_ready, reviewer_logins_on};
+use crate::issue::review::{self, Target, guard_branch, resolve_target};
 
 pub struct Args {
     pub to: Vec<String>,
@@ -23,19 +23,6 @@ pub struct Args {
 /// keeps the run silent and offline-safe.
 fn needs_flip(is_draft: bool) -> bool {
     is_draft
-}
-
-/// Marking a PR ready acts on one that exists. Opening one is `issue pr
-/// create`'s job, so a branch with no PR is an error naming it.
-fn require_existing_pr(pr_state: Option<&str>) -> Result<()> {
-    match action_for(pr_state) {
-        PrAction::Create => bail!(
-            "no PR for this branch — run `issue pr create` first, \
-             or pass --pr <URL|number>"
-        ),
-        PrAction::AddReviewer => Ok(()),
-        PrAction::Stop(reason) => bail!("{reason}"),
-    }
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -136,16 +123,5 @@ mod tests {
     fn an_already_ready_pr_needs_no_call() {
         assert!(!needs_flip(/* is_draft */ false));
         assert!(needs_flip(true));
-    }
-
-    #[test]
-    fn no_pr_names_the_command_that_opens_one() {
-        let msg = format!("{}", require_existing_pr(None).unwrap_err());
-        assert!(
-            msg.contains("issue pr create"),
-            "names the way forward: {msg}"
-        );
-        assert!(require_existing_pr(Some("OPEN")).is_ok());
-        assert!(require_existing_pr(Some("MERGED")).is_err());
     }
 }

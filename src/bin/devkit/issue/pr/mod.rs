@@ -3,6 +3,8 @@ use devkit_common::cmd::gh_json_in;
 use devkit_common::github;
 use serde::Deserialize;
 
+use crate::issue::review::{PrAction, action_for, is_human_login};
+
 pub(crate) mod create;
 pub(crate) mod ready;
 
@@ -69,6 +71,20 @@ pub(crate) fn reviewer_logins_on(pr: u64, cwd: &str, repo: &github::Repo) -> Res
     Ok(out)
 }
 
+/// Marking a PR ready acts on one that exists. Opening one is `issue pr
+/// create`'s job, so a branch with no PR is an error naming it rather than a
+/// silent create.
+pub(crate) fn require_existing_pr(pr_state: Option<&str>) -> Result<()> {
+    match action_for(pr_state) {
+        PrAction::Create => bail!(
+            "no PR for this branch — run `issue pr create` first, \
+             or pass --pr <URL|number>"
+        ),
+        PrAction::AddReviewer => Ok(()),
+        PrAction::Stop(reason) => bail!("{reason}"),
+    }
+}
+
 /// Refuse a run that would leave a PR ready for review with no human reviewer,
 /// when `defaults.require_pr_reviewer` is set.
 ///
@@ -84,10 +100,7 @@ pub(crate) fn require_reviewer_for_ready(
     if !required {
         return Ok(());
     }
-    let any_human = existing
-        .iter()
-        .chain(added)
-        .any(|l| crate::issue::review::is_human_login(l));
+    let any_human = existing.iter().chain(added).any(|l| is_human_login(l));
     if !any_human {
         bail!(
             "refusing to mark this PR ready with no human reviewer \
@@ -127,6 +140,17 @@ mod tests {
     #[test]
     fn a_bot_is_not_a_reviewer() {
         assert!(require_reviewer_for_ready(&["dependabot[bot]".into()], &[], true).is_err());
+    }
+
+    #[test]
+    fn no_pr_names_the_command_that_opens_one() {
+        let msg = format!("{}", require_existing_pr(None).unwrap_err());
+        assert!(
+            msg.contains("issue pr create"),
+            "names the way forward: {msg}"
+        );
+        assert!(require_existing_pr(Some("OPEN")).is_ok());
+        assert!(require_existing_pr(Some("MERGED")).is_err());
     }
 
     /// `gh` reports the reviewer under `author`, not the REST API's `user`, and
