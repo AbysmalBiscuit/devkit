@@ -7,7 +7,7 @@ use devkit_common::worktree::BASELINE_MARKER;
 use devkit_config::Config;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The ref a worktree's baseline is measured against: the configured
 /// `baseline_ref`, else the remote's default branch.
@@ -102,6 +102,81 @@ pub fn read_marker(dir: &Path) -> MarkerState {
     }
 }
 
+/// Candidate directories tried for one sha before giving up. Two different
+/// shas sharing a 12-character prefix is already rare; this many sharing one
+/// is far beyond plausible, so hitting the bound signals a bug (or a
+/// deliberately doctored marker) rather than a baseline directory to build.
+const MAX_SLOT_CANDIDATES: u32 = 64;
+
+/// Which directory serves `sha`, and what state it is in.
+#[allow(dead_code)]
+#[must_use]
+pub enum Slot {
+    /// A complete baseline for this exact sha is already here.
+    Reuse(PathBuf, Marker),
+    /// Something occupies the path but its marker cannot be trusted.
+    Rebuild(PathBuf),
+    /// Nothing occupies the path: build fresh here.
+    Create(PathBuf),
+    /// No candidate resolved within `MAX_SLOT_CANDIDATES` tries.
+    Exhausted(String),
+}
+
+/// Directory-name form of a sha. Twelve hex characters is 48 bits against a
+/// few dozen directories, and it leaves Windows path headroom a 40-character
+/// name would spend.
+///
+/// Takes the first 12 *characters*, not bytes: slicing a `&str` by raw byte
+/// index panics when that index falls inside a multi-byte character. Real
+/// shas are hex ASCII where the two coincide, but this function accepts any
+/// `&str`, so it walks char boundaries instead of assuming one.
+#[allow(dead_code)]
+pub fn short(sha: &str) -> &str {
+    match sha.char_indices().nth(12) {
+        Some((idx, _)) => &sha[..idx],
+        None => sha,
+    }
+}
+
+/// Which directory serves `sha`, and in what state. An interrupted bootstrap
+/// leaves a registered worktree with no marker; classifying that as occupied
+/// would strand it, since the baseline would move to `_2`, prune reports
+/// rather than removes it, and the worktree filter would stop recognizing it.
+///
+/// Twelve-character names collide across unrelated shas, so a marker naming
+/// a different sha does not mean rebuild — it means this sha belongs in the
+/// next candidate, `<short>_2` and onward. The walk is bounded
+/// (`MAX_SLOT_CANDIDATES`) so a run of collisions reports `Exhausted` instead
+/// of looping forever.
+#[allow(dead_code)]
+pub fn slot(baseline_dir: &Path, sha: &str) -> Slot {
+    let base = short(sha);
+    for n in 1..=MAX_SLOT_CANDIDATES {
+        let name = if n == 1 {
+            base.to_string()
+        } else {
+            format!("{base}_{n}")
+        };
+        let path = baseline_dir.join(&name);
+        match read_marker(&path) {
+            MarkerState::Ok(m) if m.sha == sha => return Slot::Reuse(path, m),
+            MarkerState::Ok(_) => continue,
+            MarkerState::Unusable => return Slot::Rebuild(path),
+            MarkerState::Absent => {
+                return match std::fs::metadata(&path) {
+                    Ok(_) => Slot::Rebuild(path),
+                    Err(_) => Slot::Create(path),
+                };
+            }
+        }
+    }
+    Slot::Exhausted(format!(
+        "no free or reusable baseline slot for `{sha}` after {MAX_SLOT_CANDIDATES} \
+         candidates under `{}`",
+        baseline_dir.display()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +230,103 @@ mod tests {
         );
 
         assert!(matches!(read_marker(dir.path()), MarkerState::Unusable));
+    }
+
+    const SHA: &str = "d13d90b724bf8a3c0000000000000000000000ab";
+    const OTHER: &str = "0123456789ab0000000000000000000000000000";
+
+    fn place(root: &std::path::Path, name: &str, sha: &str) {
+        let d = root.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        write_marker(
+            &d,
+            &Marker {
+                sha: sha.into(),
+                apps: Default::default(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn an_empty_dir_creates_at_the_short_sha() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            matches!(slot(root.path(), SHA), Slot::Create(p) if p == root.path().join("d13d90b724bf"))
+        );
+    }
+
+    #[test]
+    fn a_matching_marker_is_reused() {
+        let root = tempfile::tempdir().unwrap();
+        place(root.path(), "d13d90b724bf", SHA);
+        assert!(matches!(slot(root.path(), SHA), Slot::Reuse(..)));
+    }
+
+    #[test]
+    fn a_colliding_marker_moves_to_the_next_candidate() {
+        let root = tempfile::tempdir().unwrap();
+        place(root.path(), "d13d90b724bf", OTHER);
+        assert!(matches!(slot(root.path(), SHA), Slot::Create(p) if p.ends_with("d13d90b724bf_2")));
+    }
+
+    #[test]
+    fn a_markerless_directory_is_rebuilt_in_place() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("d13d90b724bf")).unwrap();
+        assert!(matches!(slot(root.path(), SHA), Slot::Rebuild(p) if p.ends_with("d13d90b724bf")));
+    }
+
+    #[test]
+    fn a_corrupt_marker_is_rebuilt_in_place() {
+        let root = tempfile::tempdir().unwrap();
+        let d = root.path().join("d13d90b724bf");
+        std::fs::create_dir_all(d.join(".devkit")).unwrap();
+        std::fs::write(d.join(devkit_common::worktree::BASELINE_MARKER), "sha = ").unwrap();
+        assert!(matches!(slot(root.path(), SHA), Slot::Rebuild(_)));
+    }
+
+    /// Every candidate up to the bound collides with a genuinely different
+    /// sha (not an empty or corrupt marker), so the only way out is the
+    /// bound itself — proving the walk terminates instead of looping forever.
+    #[test]
+    fn exhausting_the_candidate_bound_reports_instead_of_looping() {
+        let root = tempfile::tempdir().unwrap();
+        for n in 1..=MAX_SLOT_CANDIDATES {
+            let name = if n == 1 {
+                "d13d90b724bf".to_string()
+            } else {
+                format!("d13d90b724bf_{n}")
+            };
+            let other = format!("d13d90b724bf{n:028x}");
+            assert_ne!(other, SHA, "constructed collision must not equal SHA");
+            place(root.path(), &name, &other);
+        }
+        assert!(matches!(slot(root.path(), SHA), Slot::Exhausted(_)));
+    }
+
+    #[test]
+    fn short_truncates_to_twelve_chars() {
+        assert_eq!(short(SHA), "d13d90b724bf");
+    }
+
+    #[test]
+    fn short_of_a_short_input_returns_it_whole() {
+        assert_eq!(short("abcd"), "abcd");
+    }
+
+    #[test]
+    fn short_of_an_empty_input_returns_empty() {
+        assert_eq!(short(""), "");
+    }
+
+    /// `short` must not panic when the 12th byte would split a multi-byte
+    /// UTF-8 character — real shas are hex ASCII, but the function takes any
+    /// `&str` and a caller could pass something else.
+    #[test]
+    fn short_does_not_panic_on_a_multibyte_boundary() {
+        let s = "1234567890€23";
+        let _ = short(s);
     }
 
     #[test]
