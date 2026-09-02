@@ -101,6 +101,12 @@ pub fn emit(
     let mut bodies = Vec::new();
     for (mut cmd, bin_name) in scripts {
         cmd.set_bin_name(bin_name);
+        // Before `build()`, which is what creates the per-level `help`
+        // subcommands; clap has no way to remove one afterwards. A global
+        // setting, so this one call covers every level. `cmd` is this
+        // function's own value, so no runtime behavior changes: `devkit help
+        // docs` keeps working, it just stops being declared.
+        cmd = cmd.disable_help_subcommand(true);
         cmd.build();
         let mut script = Vec::new();
         shell.try_generate(&cmd, &mut script)?;
