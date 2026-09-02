@@ -241,7 +241,10 @@ fn intercept_help(root: &clap::Command, args: &[OsString]) -> Result<bool> {
     built.build();
     let mut node = built;
     for name in &req.path {
-        let Some(next) = node.find_subcommand(name) else {
+        // clap's synthetic `help` node carries a child per sibling command, so
+        // walking into it would print a tree of `devkit help <cmd>` entries.
+        // Decline and let clap render its own usage.
+        let Some(next) = node.find_subcommand(name).filter(|_| name != "help") else {
             return Ok(false);
         };
         node = next.clone();

@@ -384,6 +384,20 @@ fn an_unrecognized_help_path_gets_clap_s_own_error() {
     assert!(stderr.contains("Usage:"), "{stderr}");
 }
 
+/// clap's `help` node carries a child per sibling command, so a tree rooted
+/// there would list `devkit help auth`, `devkit help brief` and the rest.
+/// Both views hand `help help` back to clap.
+#[test]
+fn the_help_node_itself_never_grows_a_tree() {
+    let (full, _) = help_run("full", &["help", "help"]);
+    let (terse, _) = help_run("terse", &["help", "help"]);
+    assert_eq!(full, terse, "the help node renders the same in both views");
+    assert!(
+        !full.contains("devkit help auth"),
+        "walked into clap's synthetic help node: {full}"
+    );
+}
+
 #[test]
 fn a_required_option_does_not_block_a_help_request() {
     let (text, ok) = help_run("full", &["issue", "setup", "--help"]);

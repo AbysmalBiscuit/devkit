@@ -312,6 +312,10 @@ fn help_node() -> clap::Command {
 /// `required_if_eq*` and required `ArgGroup`s are unused in this CLI today; a
 /// future one needs the matching reset here, and the test that catches it is
 /// `a_required_option_does_not_block_a_help_request`.
+///
+/// `--help`, `-h` and `--full` are reserved: a real command spelling one of
+/// them collides with the flag added here, which clap asserts on in debug
+/// builds and parses ambiguously in release ones.
 fn per_node(cmd: clap::Command) -> clap::Command {
     let has_subs = cmd.get_subcommands().next().is_some();
     let mut cmd = cmd
