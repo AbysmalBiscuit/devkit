@@ -436,6 +436,34 @@ pub struct References {
 }
 
 impl References {
+    /// The worktrees naming `baseline`, from every entry that is the same
+    /// directory as it. The map is keyed by the path each record spells, and
+    /// two records can spell one directory differently — a symlinked parent, or
+    /// a `baseline_dir` a per-worktree config layer resolves elsewhere — so an
+    /// entry is matched by identity, the comparison the worktrees inside it
+    /// already get. A lookup by exact key reads a reference spelled another way
+    /// as no reference at all, and both callers act on that answer: one exempts
+    /// the baseline from the cross-worktree gate, the other deletes it.
+    ///
+    /// Several entries can be the same directory, so this unions them rather
+    /// than taking the first match.
+    fn naming(&self, baseline: &Path) -> Vec<&Path> {
+        self.by_baseline
+            .iter()
+            .filter(|(spelling, _)| devkit_common::git::same_path(spelling, baseline))
+            .flat_map(|(_, holders)| holders.iter().map(PathBuf::as_path))
+            .collect()
+    }
+
+    /// The worktrees this scan could not read, as a list to print.
+    fn unreadable_names(&self) -> String {
+        self.unreadable
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// Why this scan can prove nothing, naming the worktrees to repair. A scan
     /// that stayed silent would leave a user with one corrupt
     /// `.devkit/issue.toml` watching baselines never get reclaimed, with
@@ -444,14 +472,9 @@ impl References {
         if self.unreadable.is_empty() {
             return None;
         }
-        let names: Vec<String> = self
-            .unreadable
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect();
         Some(format!(
             "no baseline can be reclaimed while these worktrees cannot be read: {}",
-            names.join(", ")
+            self.unreadable_names()
         ))
     }
 }
@@ -517,15 +540,14 @@ pub fn rows_for_holder(holder: &str, ports: &registry::Data) -> Vec<u16> {
 /// deciding whether a baseline is foreign — ask the same question, and both
 /// must read a scan they cannot prove complete as shared.
 ///
-/// The referencer paths come from `git worktree list` while a caller's own
-/// path comes from a `rev-parse`, and the two normalize the same directory
-/// differently, so identity is compared rather than the text.
+/// Both sides are compared by identity, never by text: the referencer paths
+/// come from `git worktree list` while a caller's own path comes from a
+/// `rev-parse`, and the baseline each record spells is whatever that worktree's
+/// config resolved. Any of those can spell one directory two ways.
 pub fn shared_with_others(refs: &References, baseline: &Path, worktree: &Path) -> bool {
-    refs.by_baseline.get(baseline).is_some_and(|holders| {
-        holders
-            .iter()
-            .any(|w| !devkit_common::git::same_path(w, worktree))
-    })
+    refs.naming(baseline)
+        .iter()
+        .any(|w| !devkit_common::git::same_path(w, worktree))
 }
 
 /// Run `f` while holding `baseline`'s slot lock, which is what serializes a
@@ -581,9 +603,10 @@ pub fn release_abandoned(
         let refs = referencers(repo)?;
         if !refs.unreadable.is_empty() {
             eprintln!(
-                "warning: leaving the servers under {} running: a worktree record that \
-                 does not parse could name it",
-                previous.display()
+                "warning: leaving the servers under {} running: these worktrees could not \
+                 be read, and any of them could name it: {}",
+                previous.display(),
+                refs.unreadable_names()
             );
             return Ok(());
         }
@@ -639,11 +662,7 @@ fn remove_if_unreferenced(
         eprintln!("warning: {note}");
         return Ok(false);
     }
-    if refs
-        .by_baseline
-        .get(baseline)
-        .is_some_and(|v| !v.is_empty())
-    {
+    if !refs.naming(baseline).is_empty() {
         return Ok(false);
     }
     let root = baseline.parent().context("baseline path has no parent")?;
@@ -1497,6 +1516,45 @@ mod tests {
             !drop_reference(&f.repo, &f.baseline, &registry::Data::default(), false).unwrap(),
             "a baseline was reclaimed on a scan that could not read every worktree"
         );
+    }
+
+    /// Repin `worktree` at `baseline` spelled through a symlinked parent: the
+    /// same directory, a different key in the scan.
+    #[cfg(unix)]
+    fn pin_through_a_link(tmp: &Path, worktree: &Path, baseline: &Path) -> PathBuf {
+        let link = tmp.join("link");
+        if !link.exists() {
+            std::os::unix::fs::symlink(tmp, &link).unwrap();
+        }
+        let spelled = link.join(baseline.strip_prefix(tmp).unwrap());
+        let mut rec = devkit_common::record::read(worktree).unwrap();
+        rec.baseline = Some(devkit_common::record::BaselinePin {
+            sha: "d13d90b724bf8a3c".into(),
+            path: spelled.to_string_lossy().into_owned(),
+        });
+        devkit_common::record::write(worktree, &rec).unwrap();
+        spelled
+    }
+
+    /// The removal target and the records that reference it are spelled by
+    /// whatever resolved each of them, so one directory can occupy two keys in
+    /// the scan. Looked up by exact key, a reference spelled another way reads
+    /// as no reference, and `git worktree remove --force` runs on a baseline a
+    /// live worktree is still using.
+    #[cfg(unix)]
+    #[test]
+    fn a_reference_spelled_another_way_still_holds_the_baseline() {
+        let f = two_worktrees_sharing_one_baseline();
+        let tmp = f.baseline.parent().unwrap().parent().unwrap().to_path_buf();
+        remove_worktree(&f.repo, &f.a);
+        let spelled = pin_through_a_link(&tmp, &f.b, &f.baseline);
+        assert_ne!(spelled, f.baseline, "the fixture must spell it differently");
+
+        assert!(
+            !drop_reference(&f.repo, &f.baseline, &registry::Data::default(), false).unwrap(),
+            "removed a baseline b still references"
+        );
+        assert!(f.baseline.exists(), "the tree is gone");
     }
 
     #[test]

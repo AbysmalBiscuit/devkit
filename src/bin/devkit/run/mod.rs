@@ -790,7 +790,8 @@ fn is_own(e: &registry::Entry, current: &str, own_baseline: Option<&Path>) -> bo
 
 /// The baseline this worktree is the only referencer of, if any. `None` when
 /// the worktree names no baseline, when the path it names is not one, when
-/// another worktree names the same one, or when any record is unreadable.
+/// another worktree names the same one, or when the scan could not read every
+/// worktree it had to.
 ///
 /// A baseline nobody else names is this worktree's own, so stopping its
 /// servers reaches no further than stopping the worktree's own. A shared
@@ -799,8 +800,9 @@ fn is_own(e: &registry::Entry, current: &str, own_baseline: Option<&Path>) -> bo
 fn sole_referenced_baseline(repo: &str, current: &str) -> Option<PathBuf> {
     let path = pinned_baseline(Path::new(current))?;
     let refs = crate::baseline::referencers(repo).ok()?;
-    // A record that does not parse could name this baseline, so nothing here is
-    // provably unshared while one exists.
+    // A worktree the scan could not read — a record that does not parse, a tree
+    // whose classification failed — could name this baseline, so nothing here
+    // is provably unshared while one exists.
     if !refs.unreadable.is_empty() {
         return None;
     }
@@ -917,10 +919,12 @@ fn cmd_down(cwd: &str, args: &DownArgs) -> Result<()> {
 }
 
 /// Stop the selection when the exemption covers all of it, reporting whether it
-/// did. `false` hands the run to [`down_selection`], which reaches further than
-/// this worktree and so prompts — outside the lock, and with no exemption,
-/// since a selection that reaches another worktree can only do so through a
-/// scope flag, whose scope the exemption does not widen.
+/// did. `false` means this run did nothing — the selection is empty, or it
+/// reaches past this worktree and its own baseline — and hands it to
+/// [`down_selection`], which reports the empty case and prompts for the other.
+/// That runs outside the lock and without the exemption: a selection reaching
+/// another worktree can only do so through a scope flag, whose scope the
+/// exemption does not widen.
 fn down_own(current: &str, args: &DownArgs, baseline: &Path) -> Result<bool> {
     let selector = build_selector(args, current, Some(baseline));
     let data = registry::snapshot()?;
@@ -1619,6 +1623,23 @@ mod tests {
         let f = two_worktrees_naming_one_baseline();
         make_unclassifiable(&f.b);
         assert_eq!(sole(&f, &f.a), None, "b's record still names the baseline");
+    }
+
+    /// Each record spells the baseline as whatever resolved it for that
+    /// worktree, so one directory can occupy two keys in the scan. A sibling
+    /// that reaches it through a symlinked parent is still a referencer, and
+    /// missing it grants the exemption over a shared baseline.
+    #[cfg(unix)]
+    #[test]
+    fn a_sibling_naming_the_baseline_another_way_keeps_it_shared() {
+        let f = two_worktrees_naming_one_baseline();
+        let tmp = f.a.parent().unwrap();
+        let link = tmp.join("link");
+        std::os::unix::fs::symlink(tmp, &link).unwrap();
+        let spelled = link.join(f.baseline.strip_prefix(tmp).unwrap());
+        pin(&f.b, &spelled);
+
+        assert_eq!(sole(&f, &f.a), None, "b still references the baseline");
     }
 
     /// The pin names the directory whose servers the exemption would stop, so
