@@ -34,8 +34,10 @@
 | `tests/install_links.rs` | the guard that `devkit --help` still creates the shim hardlinks, using that file's isolated-state helpers |
 | `tests/completions.rs` | assert no `help` declarations |
 | `docs/commands.md`, `docs/agents.md` | user-facing documentation |
-| `src/bin/devkit/run/mod.rs` | `available_apps`, and the two `cmd_up` failure paths that call it (Task 8) |
+| `src/bin/devkit/run/mod.rs` | `available_apps` and the two `cmd_up` failure paths that call it (Task 8); `status_urls` and the `cmd_status` rewiring (Task 9) |
 | `tests/up_apps_hint.rs` | new. `devrun up` naming the configured apps on both failure paths (Task 8) |
+| `crates/devkit-ports/src/registry.rs` | `status_table_linked`, the URL-carrying form `status_table_with` delegates to (Task 9) |
+| `tests/app_url.rs` | the `devrun status` URL column, reusing that file's fixture and isolation (Task 9) |
 
 ---
 
@@ -1540,6 +1542,173 @@ Check whether `docs/commands.md`'s `devrun up` section describes the failure
 behavior. If it does, extend that description to say the error names the
 configured apps. If it does not, add nothing: the error text speaks for itself
 and a living doc should not restate it. Report which you found and what you did.
+
+---
+
+### Task 9: a clickable URL column on `devrun status`
+
+## Why
+
+`devrun status` prints a bare port number. Reading it means reconstructing
+`http://localhost:<port>` by hand, and that is wrong outright for any app whose
+`devkit.toml` declares a custom `url` (https, a path suffix, a different host).
+`devrun up` already solves this — `print_summary` at `src/bin/devkit/run/mod.rs:405-423`
+renders a URL column with `ui::link(url, url)`. Match that spelling exactly.
+
+## Files
+
+- Modify: `crates/devkit-ports/src/registry.rs` (`status_table_with`, plus a unit test)
+- Modify: `src/bin/devkit/run/mod.rs` (`cmd_status`, plus a new helper and unit tests)
+- Modify: `tests/app_url.rs` (one integration test)
+
+## Interfaces
+
+### `crates/devkit-ports/src/registry.rs`
+
+Add, and make `status_table_with` delegate to it:
+
+```rust
+/// `status_table_with` plus a rendered URL per port, shown as an OSC 8 link
+/// where the terminal supports one.
+///
+/// An empty `urls` drops the column entirely, which is what keeps `portm
+/// status` and `devkit brief` at their seven columns: neither loads the app
+/// catalog a URL template comes from.
+pub fn status_table_linked(
+    data: &Data,
+    only_holder: Option<&str>,
+    view: &BTreeMap<u16, bool>,
+    urls: &BTreeMap<u16, String>,
+) -> String
+```
+
+Rules:
+- Headers are the existing seven, with `"URL"` appended only when `!urls.is_empty()`.
+- The URL cell is `devkit_common::ui::link(u, u)` for a port present in `urls`,
+  and `"-"` for a port absent from it. Do not invent another spelling — `ui::link`
+  already degrades to bare text when the terminal has no OSC 8 support, which is
+  what keeps piped output clean.
+- `status_table_with(data, only_holder, view)` becomes
+  `status_table_linked(data, only_holder, view, &BTreeMap::new())`. Its behavior
+  must not change; `crates/devkit-ports/src/registry.rs` already has
+  `status_table_renders_from_a_supplied_listening_view` pinning it.
+- `status_table` is unchanged.
+
+### `src/bin/devkit/run/mod.rs`
+
+Add:
+
+```rust
+/// The rendered URL per port for the rows `status` is about to show.
+///
+/// A template may reference a sibling's port via `ports[...]`, so the lookup
+/// map is built per (holder, role) group — the same grouping `up` allocates
+/// under. An app absent from the catalog, or a template that fails to render,
+/// simply has no URL.
+fn status_urls(
+    data: &registry::Data,
+    only_holder: Option<&str>,
+    catalog: &HashMap<String, devkit_ports::apps::App>,
+    variables: &BTreeMap<String, String>,
+) -> BTreeMap<u16, String>
+```
+
+Build it in two passes over `data.entries`, both applying the same
+`only_holder` filter that `status_table_with` applies:
+
+1. Group into `HashMap<(&str, Role), BTreeMap<String, u16>>` keyed by
+   `(holder, role)`, mapping app name to port. `Role` already derives
+   `Hash + Eq + Copy` (`crates/devkit-ports/src/registry.rs:13`).
+2. For each row, look up the app in `catalog`, then call
+   `devkit_common::template::render_launch(app.url_template(), Some(port), group_ports, variables)`.
+   Insert on `Ok`; skip the port on `Err`.
+
+`App::url_template()` (`crates/devkit-ports/src/apps.rs:21-23`) returns the
+app's `url` or the `http://localhost:{{ port }}` default, so every catalogued
+app yields a URL.
+
+### `cmd_status` rewiring
+
+`cmd_status` (around `src/bin/devkit/run/mod.rs:940`) currently prints the table
+first and only then calls `load::load` inside an `if let Ok(loaded)` for the
+stray scan. Restructure so the single existing `load::load(None, Path::new(cwd))`
+result serves both: load once, best-effort, build `urls` from
+`loaded.catalog` and `loaded.config.templates.variables` when it succeeded and
+an empty map when it did not, print the table via `status_table_linked`, then
+run the unchanged stray section off the same `loaded`.
+
+A config that fails to load must still print the table — exactly as it does
+today, just with no URL column. Do not add a second `load::load` call.
+
+Keep all three existing `match (&current, all)` arms and their holder scoping.
+
+## Tests
+
+### Unit, in `crates/devkit-ports/src/registry.rs`
+
+Two tests beside `status_table_renders_from_a_supplied_listening_view`:
+
+- A non-empty `urls` map puts a `URL` header and the URL text in the output, and
+  a scoped-in port with no `urls` entry renders `-`.
+- An empty `urls` map produces no `URL` header — the seven-column shape
+  `portm status` and `devkit brief` depend on.
+
+Set `DEVKIT_HYPERLINKS=never` is NOT available inside a unit test without
+touching process env, which is racy under a parallel test runner. Instead assert
+that the output CONTAINS the URL text; `ui::link` embeds the label verbatim in
+both the linked and unlinked forms, so the assertion holds either way. Do not
+assert on the absence or presence of escape bytes.
+
+### Unit, in `src/bin/devkit/run/mod.rs`
+
+Test `status_urls` directly against a hand-built `registry::Data` and a
+hand-built catalog:
+
+- An app with no configured `url` renders the `http://localhost:<port>` default.
+- An app whose `url` references a sibling via `ports['other']` resolves against
+  the sibling in the SAME (holder, role) group, not one in another group. Build
+  two groups that would give different answers, and assert each row gets its own
+  group's port.
+- A registry row whose app is not in the catalog produces no entry.
+- `only_holder = Some(h)` yields no entries for other holders.
+
+### Integration, in `tests/app_url.rs`
+
+The file's `setup()` fixture already defines `front` (custom https url with a
+path), `web` (default url) and `peer` (a url referencing `front`'s port), and
+`run_in` already isolates HOME/XDG_STATE_HOME/XDG_CONFIG_HOME/LOCALAPPDATA/USERPROFILE.
+Reuse both.
+
+Add one test that brings apps up and then reads `status`. FIRST verify which
+`up` invocation actually persists registry rows — check whether `--dry-run`
+writes reservations through `run::resolve_ports` -> `registry::alloc`, and if it
+does not, use whatever the file's other tests or `tests/down_ports.rs` do to get
+rows on disk. Then assert the `status` stdout contains
+`https://app.localhost:39240/dashboard` (the custom url) and
+`http://localhost:39260` (the default). Assert `out.status.success()` before
+asserting on stdout.
+
+Output is captured, not a terminal, so `ui::link` emits bare text and a plain
+`contains` works.
+
+## Gate
+
+```
+cargo nextest run --workspace --no-fail-fast
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+```
+
+## Docs
+
+`docs/commands.md` documents `devrun status`. Add one sentence to its existing
+description saying the table carries each app's URL, clickable where the
+terminal supports it. Keep it timeless — no version or count.
+
+## Commit
+
+Conventional Commits. Imperative, lowercase after the colon, no trailing
+period. Do not push. Do not open a PR.
 
 ---
 
