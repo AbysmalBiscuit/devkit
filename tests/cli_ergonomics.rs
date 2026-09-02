@@ -366,6 +366,24 @@ fn an_unknown_subcommand_is_still_an_error() {
     assert!(text.contains("typo"), "{text}");
 }
 
+/// The `help` subcommand's own path positional accepts any tokens and is
+/// never validated, so an unrecognized name reaches `intercept_help`. It must
+/// decline rather than report its own error, so clap's usual usage-carrying
+/// error and exit code are what the caller sees in every view.
+#[test]
+fn an_unrecognized_help_path_gets_clap_s_own_error() {
+    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .args(["help", "docs", "lst"])
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env("DEVKIT_HELP", "full")
+        .output()
+        .expect("spawn devkit");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "clap's exit code: {stderr}");
+    assert!(stderr.contains("unrecognized subcommand"), "{stderr}");
+    assert!(stderr.contains("Usage:"), "{stderr}");
+}
+
 #[test]
 fn a_required_option_does_not_block_a_help_request() {
     let (text, ok) = help_run("full", &["issue", "setup", "--help"]);

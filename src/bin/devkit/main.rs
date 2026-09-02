@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use devkit::completions::{self, Shell};
 use std::ffi::OsString;
@@ -241,10 +241,10 @@ fn intercept_help(root: &clap::Command, args: &[OsString]) -> Result<bool> {
     built.build();
     let mut node = built;
     for name in &req.path {
-        node = node
-            .find_subcommand(name)
-            .cloned()
-            .with_context(|| format!("no `{name}` subcommand"))?;
+        let Some(next) = node.find_subcommand(name) else {
+            return Ok(false);
+        };
+        node = next.clone();
     }
     let path = std::iter::once(root.get_name().to_string())
         .chain(req.path.iter().cloned())
