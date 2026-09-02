@@ -59,7 +59,7 @@ pub struct IssueCli {
 
 #[derive(Subcommand)]
 pub(crate) enum Cmd {
-    /// Prepare an issue worktree: branch, per-app setup commands, reserved ports.
+    /// Prepare an issue worktree: branch, setup commands, ports.
     Setup {
         /// Linear issue id or issue URL (equivalent to --issue).
         #[arg(
@@ -100,7 +100,9 @@ pub(crate) enum Cmd {
         #[arg(long = "no-gitignore")]
         no_gitignore: bool,
     },
-    /// Check out an existing PR (by number, issue id, or URL) into a new worktree.
+    /// Check out an existing PR into a new worktree.
+    ///
+    /// Accepts a PR number, issue id, or URL.
     CheckoutPr {
         /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue URL.
         target: String,
@@ -155,8 +157,9 @@ pub(crate) enum Cmd {
         #[arg(long = "no-preserve")]
         no_preserve: bool,
     },
-    /// Re-copy the `defaults.worktree_include` files from the primary checkout
-    /// into worktrees that already exist.
+    /// Re-copy worktree_include files into existing worktrees.
+    ///
+    /// Copies `defaults.worktree_include` files from the primary checkout.
     SyncIncludes {
         /// Issue ids, branches, worktree basenames, or paths to sync; omit for
         /// every worktree.
@@ -274,7 +277,9 @@ pub(crate) enum ReviewCmd {
         #[arg(long = "arg")]
         args: Vec<String>,
     },
-    /// Announce over Slack that you finished reviewing; notify the author or --to.
+    /// Announce over Slack that you finished reviewing.
+    ///
+    /// Notifies the author, or the `--to` recipients if given.
     Finish {
         /// Slack body; fills the `review_finish` template's `{{ input }}`.
         body: Option<String>,

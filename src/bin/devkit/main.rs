@@ -43,9 +43,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Validate and store a Linear or Slack credential, or report the GitHub
-    /// identity devkit would use (GitHub stores nothing, since `gh auth login`
-    /// or `GH_TOKEN`/`GITHUB_TOKEN` already cover that credential).
+    /// Store a Linear or Slack token, or report the GitHub identity.
+    ///
+    /// Validates the credential before writing it. GitHub stores nothing,
+    /// since `gh auth login` or `GH_TOKEN`/`GITHUB_TOKEN` already cover that
+    /// credential; for `github` this reports the identity behind whichever
+    /// token resolves.
     Auth {
         /// Credential to validate and store, or `github` to report identity.
         provider: Provider,
@@ -54,9 +57,11 @@ enum Cmd {
         #[arg(long)]
         token: Option<String>,
     },
-    /// Print a compact project brief (apps, tasks, live servers, library
-    /// versions) for the current checkout; silent outside a devkit-managed
-    /// project. Intended for coding-agent session hooks.
+    /// Print a project brief for the current checkout.
+    ///
+    /// Includes apps, tasks, live servers, and library versions; silent
+    /// outside a devkit-managed project. Intended for coding-agent session
+    /// hooks.
     Brief {
         /// Emit only the library-versions section, which is what a
         /// post-compaction re-injection wants, without respending the context
@@ -83,9 +88,10 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Print the JSON Schema for `devkit.toml` to stdout. Editors that speak
-    /// the TOML language server use it for completion and validation; see
-    /// `docs/configuration.md`.
+    /// Print the JSON Schema for `devkit.toml` to stdout.
+    ///
+    /// Editors that speak the TOML language server use it for completion and
+    /// validation; see `docs/configuration.md`.
     Schema {
         #[command(subcommand)]
         cmd: Option<SchemaCmd>,
@@ -108,25 +114,28 @@ enum Cmd {
     /// Version-correct local library docs and source checkouts.
     #[command(display_name = "devkit docs")]
     Docs(docs::DocsCli),
-    /// Supervised dev servers and canned project tasks for an issue worktree,
-    /// with optional baseline A/B.
+    /// Supervised dev servers and canned project tasks.
     #[command(display_name = "devkit run")]
     Run(run::RunCli),
-    /// Issue lifecycle: setup, checkout-pr, status, info, end, sync-includes, prs, dashboard, review.
+    /// Issue lifecycle: setup, status, review, end.
     #[command(display_name = "devkit issue")]
     Issue(issue::IssueCli),
     /// Serve the devkit MCP tools over stdio.
     #[command(display_name = "devkit mcp")]
     Mcp(mcp::McpCli),
-    /// Install the old command names (`issue`, `devrun`, ...) as hardlinks
-    /// beside this executable.
+    /// Install the old command names as hardlinks beside this binary.
+    ///
+    /// Creates hardlinks such as `issue` and `devrun` beside this
+    /// executable.
     InstallLinks(links::InstallLinksArgs),
 }
 
 #[derive(Subcommand)]
 enum SchemaCmd {
-    /// Point a `devkit.toml` at the published schema, creating a starter one
-    /// when it does not exist. Leaves a file that already names a schema alone.
+    /// Point a devkit.toml at the published schema.
+    ///
+    /// Creates a starter one when it does not exist; leaves a file that
+    /// already names a schema alone.
     Init {
         /// The config to point at the schema.
         #[arg(default_value = "devkit.toml")]
@@ -305,5 +314,36 @@ mod tests {
                 s.name
             );
         }
+    }
+
+    /// The full-tree help view prints one line per node as `<path>  <about>`,
+    /// capped at a hundred columns. An `about` longer than this budget would be
+    /// truncated in that view, so the cap is enforced here rather than papered
+    /// over at render time. Prose belongs in `long_about`, which a leaf's
+    /// `--help` still prints in full.
+    #[test]
+    fn every_about_fits_the_tree_line() {
+        fn walk(cmd: &clap::Command, path: &str, over: &mut Vec<String>) {
+            if let Some(about) = cmd.get_about() {
+                let text = about.to_string();
+                if text.chars().count() > devkit::help::ABOUT_MAX {
+                    over.push(format!("{path} ({} chars): {text}", text.chars().count()));
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                walk(sub, &format!("{path} {}", sub.get_name()), over);
+            }
+        }
+        let root = Cli::command();
+        let mut over = Vec::new();
+        for sub in root.get_subcommands() {
+            walk(sub, sub.get_name(), &mut over);
+        }
+        assert!(
+            over.is_empty(),
+            "about strings over {} chars:\n{}",
+            devkit::help::ABOUT_MAX,
+            over.join("\n")
+        );
     }
 }

@@ -77,8 +77,10 @@ pub(crate) enum Cmd {
         #[arg(long)]
         supervise: bool,
     },
-    /// Stop servers and release ports. Defaults to this worktree; reaching another
-    /// worktree needs --all/--others/--holder and prompts (requires a terminal).
+    /// Stop servers and release ports.
+    ///
+    /// Defaults to this worktree; reaching another worktree needs
+    /// --all/--others/--holder and prompts (requires a terminal).
     Down {
         /// Fuzzy selectors matched (substring) across columns. Mutually exclusive
         /// with the column filters below.
@@ -124,8 +126,10 @@ pub(crate) enum Cmd {
         #[arg(long)]
         all: bool,
     },
-    /// Kill untracked dev servers. This worktree by default; `--all`
-    /// reaches every worktree. Requires an interactive terminal (no agent path).
+    /// Kill untracked dev servers (interactive terminal only).
+    ///
+    /// This worktree by default; `--all` reaches every worktree. No agent
+    /// path exists, since the terminal requirement has no bypass.
     Reap {
         /// Reach every worktree, not only this one.
         #[arg(long)]

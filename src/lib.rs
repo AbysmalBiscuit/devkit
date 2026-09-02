@@ -4,3 +4,4 @@
 //! here so there is a single definition rather than six copies.
 
 pub mod completions;
+pub mod help;

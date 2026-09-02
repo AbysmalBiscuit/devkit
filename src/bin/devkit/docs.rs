@@ -18,7 +18,9 @@ pub struct DocsCli {
 
 #[derive(Subcommand)]
 pub(crate) enum Cmd {
-    /// Register a library: a package name (looked up on crates.io/npm/PyPI) or a git URL.
+    /// Register a library by package name or git URL.
+    ///
+    /// A package name is looked up on crates.io, npm, or PyPI in turn.
     Add {
         /// Package name to look up, or a git URL to clone directly.
         target: String,
@@ -85,7 +87,9 @@ pub(crate) enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Release this project's reference to libraries (checkouts are reclaimed by prune).
+    /// Release this project's reference to libraries.
+    ///
+    /// Checkouts are reclaimed later by `prune`.
     Forget {
         /// Libraries this project no longer needs.
         #[arg(required = true)]

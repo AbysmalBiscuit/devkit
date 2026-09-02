@@ -12,7 +12,9 @@ pub struct LocksCli {
 
 #[derive(Subcommand)]
 pub(crate) enum Cmd {
-    /// Claim one or more paths (files or directories). Fails if any is held by another session.
+    /// Claim one or more paths; fails if another session holds any.
+    ///
+    /// Paths may be files or directories.
     Acquire {
         /// Files or directories to claim.
         paths: Vec<String>,
@@ -80,8 +82,10 @@ pub(crate) enum Cmd {
         /// Shell to emit the script for.
         shell: Shell,
     },
-    /// Internal: evaluate a coding-agent hook payload (stdin JSON) and emit a
-    /// PreToolUse decision (stdout). Events: pretooluse | subagent-stop | session-end.
+    /// Internal: evaluate a coding-agent hook payload.
+    ///
+    /// Reads the payload as JSON on stdin and emits a PreToolUse decision on
+    /// stdout. Events: pretooluse | subagent-stop | session-end.
     #[command(hide = true)]
     Hook { event: String },
 }

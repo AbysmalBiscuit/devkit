@@ -28,7 +28,10 @@ pub(crate) enum Cmd {
         /// Apps to reserve a port for, one row each.
         apps: Vec<String>,
     },
-    /// Release a holder's reservations (default: this worktree), optionally only the named apps.
+    /// Release a holder's reservations (default: this worktree).
+    ///
+    /// Releases only the named apps when any are given, else everything the
+    /// holder has.
     Release {
         /// Only these apps; omit to release everything the holder has.
         apps: Vec<String>,
