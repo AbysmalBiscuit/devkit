@@ -655,15 +655,17 @@ fn cmd_up(
                     let path =
                         crate::baseline::ensure(cfg, catalog, &primary, &sha, &apps, &steps)?;
                     // A rebase repoints this worktree at a different baseline.
-                    // Its old baseline's servers stay alive under a holder no
-                    // worktree names any more: unreachable without a terminal,
-                    // and enough to block prune forever.
+                    // The servers it started there stay alive under a holder
+                    // this worktree no longer reaches, so they come down before
+                    // the pin moves — unless another worktree is pinned to the
+                    // same baseline, in which case they are still its.
                     if let Some(prev) = previous.filter(|p| Path::new(&p.path) != path) {
-                        let ports = registry::snapshot()?;
-                        let abandoned = crate::baseline::rows_for_holder(&prev.path, &ports);
-                        if !abandoned.is_empty() {
-                            run::bring_down_ports(&abandoned)?;
-                        }
+                        crate::baseline::release_abandoned(
+                            &issue_holder,
+                            wt,
+                            Path::new(&prev.path),
+                            |rows| run::bring_down_ports(rows).map(|_| ()),
+                        )?;
                     }
                     crate::baseline::write_pin(wt, &sha, &path)?;
                     g.push((Role::Baseline, path.to_string_lossy().into_owned(), path));

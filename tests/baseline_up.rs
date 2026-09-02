@@ -118,8 +118,9 @@ fn two_worktrees_at_one_fork_point_share_a_baseline() {
     assert_eq!(found.len(), 1, "one fork point, one baseline: {found:?}");
 }
 
-/// A rebase moves the merge base, so `up` repins. The old baseline's rows have
-/// a holder no worktree names any more, so they come down first.
+/// A rebase moves the merge base, so `up` repins. The rebasing worktree was the
+/// old baseline's only referencer, so nothing names it once the pin moves and
+/// its rows come down first.
 #[test]
 fn repinning_stops_the_abandoned_baselines_servers() {
     let tmp = tempfile::tempdir().unwrap();
@@ -165,6 +166,58 @@ fn repinning_stops_the_abandoned_baselines_servers() {
     assert!(
         !holders(&state).contains(&first),
         "rows under the abandoned baseline survived the repin"
+    );
+}
+
+/// A baseline two worktrees share survives one of them rebasing. Its rows serve
+/// the worktree still pinned there, and `up` has no terminal to confirm
+/// stopping another worktree's servers with.
+#[test]
+fn repinning_leaves_a_shared_baselines_servers_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let repo = tmp.path().join("proj");
+    project(&repo);
+
+    let a = tmp.path().join("proj_worktrees").join("a");
+    let b = tmp.path().join("proj_worktrees").join("b");
+    for (name, wt) in [("a", &a), ("b", &b)] {
+        git(
+            &repo,
+            &["worktree", "add", "-b", name, wt.to_str().unwrap()],
+        );
+        devkit_ok(
+            wt,
+            &state,
+            &["run", "up", "--role", "baseline", "--dry-run", "api"],
+        );
+    }
+    let shared = baseline_of(&a);
+    assert_eq!(shared, baseline_of(&b), "one fork point, one baseline");
+
+    devkit_ok(
+        &a,
+        &state,
+        &[
+            "ports", "alloc", "--holder", &shared, "--role", "baseline", "api",
+        ],
+    );
+    assert!(holders(&state).contains(&shared), "reservation not seeded");
+
+    git(&repo, &["commit", "-qm", "second", "--allow-empty"]);
+    git(&a, &["rebase", "-q", "main"]);
+    devkit_ok(
+        &a,
+        &state,
+        &["run", "up", "--role", "baseline", "--dry-run", "api"],
+    );
+
+    assert_ne!(baseline_of(&a), shared, "a still names the old baseline");
+    assert_eq!(baseline_of(&b), shared, "b was repinned by a's run");
+    assert!(
+        holders(&state).contains(&shared),
+        "a's repin took down the baseline b is still pinned to"
     );
 }
 

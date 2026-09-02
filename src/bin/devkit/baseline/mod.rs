@@ -488,6 +488,63 @@ pub fn rows_for_holder(holder: &str, ports: &registry::Data) -> Vec<u16> {
         .collect()
 }
 
+/// Hand the rows held by `previous` to `down`, when `worktree` is the only
+/// worktree still naming it. A worktree whose pin moves would otherwise leave
+/// servers under a holder it no longer reaches: unreachable without `--holder`
+/// and a terminal, unreachable from MCP, and enough to make prune refuse the
+/// directory forever.
+///
+/// A baseline several worktrees share is nobody's to stop. Stopping it here
+/// would take another worktree's servers down from a run that has no terminal
+/// to confirm with, which is exactly what the cross-worktree gate on `devrun
+/// down` exists to prevent.
+///
+/// The referencer scan and `down` both run under `previous`'s slot lock.
+/// Computing the sole referencer without it is a time-of-check race the reuse
+/// path makes reachable: between the two, another worktree's `up` takes the
+/// lock, writes its record, and — `up` being idempotent for a live pid —
+/// reports these very servers as its own running baseline. Since `up` writes
+/// its record under the same lock, holding it across both closes the window.
+pub fn release_abandoned(
+    repo: &str,
+    worktree: &Path,
+    previous: &Path,
+    down: impl FnOnce(&[u16]) -> Result<()>,
+) -> Result<()> {
+    let root = previous.parent().context("baseline path has no parent")?;
+    let name = slot_name(previous)?;
+    locks::with_slot(root, &name, || {
+        // A pin is a plain path in a file a person can edit, and these rows are
+        // stopped by pid. A path carrying no baseline marker names servers this
+        // run has no claim on.
+        if !devkit_common::worktree::is_baseline(previous) {
+            return Ok(());
+        }
+        let refs = referencers(repo)?;
+        if !refs.unreadable.is_empty() {
+            eprintln!(
+                "warning: leaving the servers under {} running: a worktree record that \
+                 does not parse could name it",
+                previous.display()
+            );
+            return Ok(());
+        }
+        let shared = refs.by_baseline.get(previous).is_some_and(|holders| {
+            holders
+                .iter()
+                .any(|w| !devkit_common::git::same_path(w, worktree))
+        });
+        if shared {
+            return Ok(());
+        }
+        let rows = rows_for_holder(&previous.to_string_lossy(), &registry::snapshot()?);
+        if rows.is_empty() {
+            return Ok(());
+        }
+        down(&rows)
+    })
+}
+
 /// Remove `baseline` when nothing references it any more. The caller's own
 /// worktree must already be gone: counting while it still exists makes two
 /// concurrent `issue end` runs each see the other and each decline.
