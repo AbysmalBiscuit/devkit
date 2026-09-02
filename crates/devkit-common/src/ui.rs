@@ -112,11 +112,17 @@ pub fn truncate(s: &str, max: usize) -> String {
 /// The widest visible label a linked URL cell carries before it is elided.
 pub const URL_LABEL_MAX: usize = 38;
 
-/// The narrowest a URL column is worth linking at all — the width of
+/// The narrowest visible label worth linking at all — the width of
 /// `http://localhost:39240`, the default URL a project that configures
 /// nothing gets. Below this a link is not worth the space it costs the other
 /// columns.
 const MIN_URL_COL: usize = 22;
+
+/// How much of the terminal any one non-URL column is credited with when
+/// deciding whether a link fits. A long branch name or log path would
+/// otherwise spend the whole width and suppress the link; those cells carry no
+/// escapes, so letting comfy-table wrap them costs nothing but a line.
+const OTHER_COL_MAX: usize = 20;
 
 /// Add `rows` to `table`, linking column `url_col` when there is room for it.
 ///
@@ -158,14 +164,6 @@ pub fn add_rows_linking_urls(table: &mut Table, rows: Vec<Vec<String>>, url_col:
         }
     }
 
-    let others: usize = widest
-        .iter()
-        .enumerate()
-        .filter(|&(i, _)| i != url_col)
-        .map(|(_, w)| w + 2)
-        .sum();
-    let avail = term_width_on(Stream::Stdout).saturating_sub(others);
-
     let longest_url = rows
         .iter()
         .filter_map(|r| r.get(url_col))
@@ -174,7 +172,7 @@ pub fn add_rows_linking_urls(table: &mut Table, rows: Vec<Vec<String>>, url_col:
         .max()
         .unwrap_or(0);
 
-    let budget = (avail >= MIN_URL_COL).then(|| longest_url.min(avail - 2).min(URL_LABEL_MAX));
+    let budget = link_budget(&widest, url_col, longest_url, term_width_on(Stream::Stdout));
 
     for mut row in rows {
         if let Some(budget) = budget
@@ -182,7 +180,7 @@ pub fn add_rows_linking_urls(table: &mut Table, rows: Vec<Vec<String>>, url_col:
             && cell.contains("://")
         {
             let url = std::mem::take(cell);
-            *cell = link(&truncate(&url, budget), &url);
+            *cell = link(&url_label(&url, budget), &url);
         }
         table.add_row(row);
     }
@@ -192,6 +190,49 @@ pub fn add_rows_linking_urls(table: &mut Table, rows: Vec<Vec<String>>, url_col:
     {
         col.set_constraint(ColumnConstraint::Absolute(Width::Fixed(budget as u16 + 2)));
     }
+}
+
+/// How wide the linked label may be, or `None` when the row is too narrow for
+/// a link to be worth its cost.
+///
+/// Every non-URL column is credited at most [`OTHER_COL_MAX`], because those
+/// cells carry no escapes: comfy-table may wrap them freely, so a long branch
+/// name or log path should not be what decides whether a URL gets linked.
+/// The returned budget plus its 2 columns of padding is what the caller pins
+/// the URL column to, which is what keeps comfy-table from ever splitting a
+/// linked cell.
+fn link_budget(
+    widest: &[usize],
+    url_col: usize,
+    longest_url: usize,
+    term_width: usize,
+) -> Option<usize> {
+    let others: usize = widest
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != url_col)
+        .map(|(_, w)| (*w).min(OTHER_COL_MAX) + 2)
+        .sum();
+    // What is left for the label itself, after the URL cell's own padding.
+    let avail = term_width.saturating_sub(others + 2);
+    (longest_url > 0 && avail >= MIN_URL_COL).then(|| longest_url.min(avail).min(URL_LABEL_MAX))
+}
+
+/// The visible label for a linked URL, at most `budget` glyphs.
+///
+/// Truncation drops the scheme before it drops anything else: what
+/// distinguishes one dev server from another is its host, port and path, and
+/// plain end-truncation eats the port first. The full URL stays in the link
+/// target either way.
+fn url_label(url: &str, budget: usize) -> String {
+    if url.chars().count() <= budget {
+        return url.to_string();
+    }
+    let bare = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    truncate(bare, budget)
 }
 
 /// Strip ANSI SGR and OSC 8 hyperlink escapes, leaving only the visible
@@ -540,6 +581,56 @@ mod tests {
         assert_eq!(truncate("exactly-ten", 11), "exactly-ten");
         assert_eq!(truncate("abcdefghij", 5), "abcd…");
         assert_eq!(truncate("anything", 0), "anything");
+    }
+
+    /// A long worktree path in the HOLDER column must not be what decides
+    /// whether the URL gets linked: that cell carries no escapes, so
+    /// comfy-table can wrap it, and only the linked cell needs a pin.
+    #[test]
+    fn a_wide_plain_column_does_not_suppress_the_link() {
+        // `devrun status`: seven plain columns plus the URL, one holder being a
+        // long worktree path.
+        let widest = [70, 6, 6, 5, 6, 8, 6, 22];
+        let budget = link_budget(&widest, 7, 22, 120);
+        assert_eq!(budget, Some(22), "a 22-char URL fits in 120 columns");
+    }
+
+    /// The pin costs the other columns real space, so below the point where a
+    /// link is worth that cost there is no pin at all — which is what keeps a
+    /// narrow terminal from crushing the seven other columns to one glyph.
+    #[test]
+    fn a_narrow_terminal_gets_no_link() {
+        let widest = [70, 6, 6, 5, 6, 8, 6, 22];
+        assert_eq!(link_budget(&widest, 7, 22, 60), None);
+    }
+
+    /// `MIN_URL_COL` is the label width, not the column width: the default
+    /// `http://localhost:39240` renders whole at exactly that budget.
+    #[test]
+    fn the_minimum_budget_renders_the_default_url_whole() {
+        let url = "http://localhost:39240";
+        assert_eq!(url.chars().count(), MIN_URL_COL);
+        assert_eq!(url_label(url, MIN_URL_COL), url);
+    }
+
+    /// No URL among the rows means nothing to link and nothing to pin — a pin
+    /// here would squeeze the column under its own header.
+    #[test]
+    fn no_url_means_no_pin() {
+        assert_eq!(link_budget(&[6, 3], 1, 0, 200), None);
+    }
+
+    /// End-truncation eats the port, which is the part that tells two dev
+    /// servers apart. The scheme goes first instead.
+    #[test]
+    fn a_truncated_label_keeps_the_host_and_port() {
+        let url = "http://app.localhost:39240/dashboard/overview";
+        let label = url_label(url, 24);
+        assert!(label.chars().count() <= 24, "label too wide: {label:?}");
+        assert!(
+            label.starts_with("app.localhost:39240"),
+            "host and port were truncated away: {label:?}"
+        );
     }
 
     /// comfy-table's `custom_styling` must measure cell width by *visible*
