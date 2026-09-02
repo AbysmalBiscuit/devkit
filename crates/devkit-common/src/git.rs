@@ -400,6 +400,20 @@ pub fn branch(start: &Path) -> Result<String> {
     })
 }
 
+/// The remote's default branch, e.g. `origin/main`, from the `origin/HEAD`
+/// symbolic ref. `git clone` sets it; `git init` plus a manually added remote
+/// does not, which is why the caller has a fallback to offer.
+pub fn default_remote_branch(repo: &Path) -> Result<String> {
+    let out = Git::at(repo)
+        .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .output()?;
+    let s = out.trim();
+    if s.is_empty() {
+        anyhow::bail!("origin/HEAD names no branch");
+    }
+    Ok(s.to_string())
+}
+
 /// Compare two paths by identity where the filesystem can answer, falling back
 /// to a lexical comparison when either does not exist.
 pub fn same_path(a: &Path, b: &Path) -> bool {
@@ -734,5 +748,38 @@ mod tests {
             &["worktree", "add", "--detach", wt.to_str().unwrap()],
         );
         assert_eq!(non_bare_main(&wt).unwrap(), None);
+    }
+
+    #[test]
+    fn the_default_remote_branch_comes_from_origin_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path();
+        Git::fixture(p)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        std::fs::write(p.join("f"), "x").unwrap();
+        Git::fixture(p).args(["add", "."]).output().unwrap();
+        Git::fixture(p)
+            .args(["commit", "-qm", "init"])
+            .output()
+            .unwrap();
+        Git::fixture(p)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(default_remote_branch(p).unwrap(), "origin/main");
+    }
+
+    #[test]
+    fn a_repo_without_origin_head_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path();
+        Git::fixture(p).args(["init", "-q"]).output().unwrap();
+        assert!(default_remote_branch(p).is_err());
     }
 }

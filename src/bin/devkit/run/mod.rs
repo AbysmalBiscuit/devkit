@@ -592,19 +592,22 @@ fn cmd_up(
     let catalog = &loaded.catalog;
     let known: Vec<String> = catalog.keys().cloned().collect();
 
-    let mut apps: Vec<String> = if !apps_arg.is_empty() {
-        apps_arg.to_vec()
-    } else {
+    let mut apps: Vec<String> = apps_arg.to_vec();
+    if apps.is_empty() {
+        // A run that names its apps needs no baseline; only diff-detection
+        // does, so the target resolves here rather than up front.
+        let baseline_target = crate::baseline::target(cfg, Path::new(cwd))?;
         let diff = Git::at(Path::new(cwd))
-            .args([
-                "diff",
-                &format!("{}...HEAD", cfg.defaults.baseline_ref),
-                "--stat",
-            ])
+            .args(["diff", &format!("{baseline_target}...HEAD"), "--stat"])
             .output()
             .unwrap_or_default();
-        apps_from_diff(&diff, &known, &cfg.defaults.apps_dir)
-    };
+        apps = apps_from_diff(&diff, &known, &cfg.defaults.apps_dir);
+        anyhow::ensure!(
+            !apps.is_empty(),
+            "no apps to run (none given and none detected in diff vs {baseline_target})\n{}",
+            available_apps(&known)
+        );
+    }
     for a in &apps {
         anyhow::ensure!(
             catalog.contains_key(a),
@@ -612,12 +615,6 @@ fn cmd_up(
             available_apps(&known)
         );
     }
-    anyhow::ensure!(
-        !apps.is_empty(),
-        "no apps to run (none given and none detected in diff vs {})\n{}",
-        cfg.defaults.baseline_ref,
-        available_apps(&known)
-    );
     run::ensure_provider(catalog, &mut apps);
 
     let user = parse_user_env(env_pairs, env_file)?;
@@ -639,12 +636,17 @@ fn cmd_up(
                     ));
                 }
                 Role::Baseline => {
+                    anyhow::ensure!(
+                        !cfg.defaults.baseline_path.is_empty(),
+                        "`--role baseline` needs `defaults.baseline_path`"
+                    );
+                    let baseline_target = crate::baseline::target(cfg, Path::new(cwd))?;
                     let bp = baseline_path
                         .to_str()
                         .context("baseline_path not UTF-8")?
                         .to_string();
                     steps.during("Refreshing baseline…", || {
-                        baseline::ensure_fresh(&issue_holder, &bp, &cfg.defaults.baseline_ref)
+                        baseline::ensure_fresh(&issue_holder, &bp, &baseline_target)
                     })?;
                     g.push((Role::Baseline, bp.clone(), baseline_path.clone()));
                 }

@@ -365,6 +365,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let primary_s = primary
         .to_str()
         .context("primary checkout path not UTF-8")?;
+    let baseline_target = crate::baseline::target(cfg, &primary)?;
 
     let repos = github::Repos::resolve(&cfg.github, primary_s, None);
     let tracker =
@@ -414,13 +415,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     })?;
     steps.during_result("Creating worktree…", || {
         Git::at(Path::new(primary_s))
-            .args([
-                "worktree",
-                "add",
-                "--detach",
-                worktree_s,
-                &cfg.defaults.baseline_ref,
-            ])
+            .args(["worktree", "add", "--detach", worktree_s, &baseline_target])
             .timeout(devkit_common::git::SLOW_TIMEOUT)
             .output()
     })?;

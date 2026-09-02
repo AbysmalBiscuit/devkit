@@ -488,6 +488,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let primary_s = primary
         .to_str()
         .context("primary checkout path not UTF-8")?;
+    let baseline_target = crate::baseline::target(cfg, &primary)?;
     let total = 2
         + usize::from(!args.apps.is_empty())
         + cfg.hooks.after_worktree_create.len()
@@ -510,7 +511,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
                 "-b",
                 &branch,
                 worktree.to_str().unwrap(),
-                &cfg.defaults.baseline_ref,
+                &baseline_target,
             ])
             .timeout(devkit_common::git::SLOW_TIMEOUT)
             .output()

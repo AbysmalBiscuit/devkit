@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 mod auth;
+mod baseline;
 mod brief;
 mod config;
 mod docs;
