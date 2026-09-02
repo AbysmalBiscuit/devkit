@@ -1129,6 +1129,26 @@ pub fn list(baseline_dir: &Path, repo: &str) -> Result<Listing> {
     })
 }
 
+/// Baselines nothing references, and the disk reclaiming them would free.
+/// `list` sizes every slot with `dir_size` — a parallel walk of a full
+/// repository checkout, prep files and all — because its table shows a size
+/// column for every row; `doctor` only needs the reclaimable total, so this
+/// sizes just the slots that qualify. The common case, no orphans, walks
+/// nothing.
+pub fn orphaned(baseline_dir: &Path, repo: &str) -> Result<(usize, u64)> {
+    let refs = referencers(repo)?;
+    let mut count = 0;
+    let mut bytes = 0;
+    for path in slots_in(baseline_dir)? {
+        if !refs.naming(&path).is_empty() {
+            continue;
+        }
+        count += 1;
+        bytes += dir_size(&path);
+    }
+    Ok((count, bytes))
+}
+
 /// What a sweep took, what it deliberately left where it was, and what it
 /// refused.
 #[derive(Default)]

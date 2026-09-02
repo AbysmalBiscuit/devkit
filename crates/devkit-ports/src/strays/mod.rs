@@ -235,9 +235,9 @@ fn managed_roots(cfg: &Config) -> Vec<String> {
                 .into_owned(),
         );
     }
-    if !cfg.defaults.baseline_path.is_empty() {
+    if !cfg.defaults.baseline_dir.is_empty() {
         roots.push(
-            expand_tilde(&cfg.defaults.baseline_path)
+            expand_tilde(&cfg.defaults.baseline_dir)
                 .to_string_lossy()
                 .into_owned(),
         );
@@ -246,7 +246,10 @@ fn managed_roots(cfg: &Config) -> Vec<String> {
 }
 
 /// Attribute a cwd to a worktree holder: prefer the longest known registry
-/// holder that prefixes it, else `worktree_root + first path segment`.
+/// holder that prefixes it, else `worktree_root + first path segment`. Roots
+/// are tried longest first — `baseline_dir` defaults to a subdirectory of
+/// `worktree_root`, and a shorter root matching first would attribute a stray
+/// inside a baseline to the baseline directory itself rather than the baseline.
 #[cfg(unix)]
 fn attribute_holder(cwd: &str, known: &[String], roots: &[String]) -> Option<String> {
     if let Some(h) = known
@@ -256,7 +259,9 @@ fn attribute_holder(cwd: &str, known: &[String], roots: &[String]) -> Option<Str
     {
         return Some(h.clone());
     }
-    for r in roots {
+    let mut by_depth: Vec<&String> = roots.iter().collect();
+    by_depth.sort_by_key(|r| std::cmp::Reverse(r.len()));
+    for r in by_depth {
         if let Some(rest) = cwd.strip_prefix(&format!("{r}/")) {
             let seg = rest.split('/').next().unwrap_or("");
             if !seg.is_empty() {
@@ -416,6 +421,35 @@ mod tests {
             let json = serde_json::to_string(&s).unwrap();
             assert_eq!(json, format!("\"{}\"", s.as_str()));
         }
+    }
+
+    /// `baseline_dir` defaults to `<worktree_root>/_baselines`, so `worktree_root`
+    /// is a prefix of it. First-match over the root list would attribute a stray
+    /// inside a baseline to `<worktree_root>/_baselines` — the container, not the
+    /// baseline — and `devrun down` would then address a holder no row uses.
+    #[cfg(unix)]
+    #[test]
+    fn a_stray_inside_a_baseline_is_attributed_to_that_baseline() {
+        let roots = vec!["/w".to_string(), "/w/_baselines".to_string()];
+        let got = attribute_holder("/w/_baselines/d13d90b724bf/apps/api", &[], &roots);
+        assert_eq!(got.as_deref(), Some("/w/_baselines/d13d90b724bf"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stray_in_a_plain_worktree_still_attributes_to_it() {
+        let roots = vec!["/w".to_string(), "/w/_baselines".to_string()];
+        let got = attribute_holder("/w/feat-x/apps/api", &[], &roots);
+        assert_eq!(got.as_deref(), Some("/w/feat-x"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_roots_names_the_baseline_directory() {
+        let mut cfg = Config::default();
+        cfg.defaults.worktree_root = "/w".into();
+        cfg.defaults.baseline_dir = "/w/_baselines".into();
+        assert!(managed_roots(&cfg).iter().any(|r| r == "/w/_baselines"));
     }
 
     #[test]

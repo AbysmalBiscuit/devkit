@@ -83,6 +83,35 @@ fn count_strays() -> usize {
     devkit_ports::strays::scan(&loaded.config, &data).len()
 }
 
+/// Severity of the "unreferenced baselines" check by orphan count and the
+/// bytes reclaiming them would free.
+fn baseline_orphan_check(count: usize, bytes: u64) -> Check {
+    match count {
+        0 => Check::Ok("no unreferenced baselines".into()),
+        n => Check::Warn(format!(
+            "{n} baseline(s) unreferenced, {} MiB reclaimable — run `devrun baseline prune`",
+            bytes / (1024 * 1024)
+        )),
+    }
+}
+
+/// Count of baselines nothing references, and the bytes reclaiming them would
+/// free, for the current directory's config. Resilient like `count_strays`:
+/// no config, no baseline directory, or any other error yields `(0, 0)` so
+/// `doctor` never fails on this row.
+fn baseline_orphans() -> (usize, u64) {
+    let Ok(loaded) = devkit_ports::load::load(None, std::path::Path::new(".")) else {
+        return (0, 0);
+    };
+    let Ok(dir) = crate::baseline::dir(&loaded.config) else {
+        return (0, 0);
+    };
+    let Ok(repo) = devkit_common::git::primary_checkout(std::path::Path::new(".")) else {
+        return (0, 0);
+    };
+    crate::baseline::orphaned(&dir, &repo.to_string_lossy()).unwrap_or((0, 0))
+}
+
 /// Which tracker `issue` talks to here, and how devkit arrived at it.
 /// Detection is ambient — a globally exported `LINEAR_API_KEY` resolves Linear
 /// for every project on the machine, including one that has nothing in Linear —
@@ -337,6 +366,14 @@ fn gather(steps: &Steps) -> Vec<Row> {
             check: stray_check(count_strays()),
         },
         Row {
+            key: "baseline_orphans",
+            source: Source::Unset,
+            check: {
+                let (count, bytes) = baseline_orphans();
+                baseline_orphan_check(count, bytes)
+            },
+        },
+        Row {
             key: "docs_cache",
             source: Source::Unset,
             check: docs_cache_check(),
@@ -536,6 +573,19 @@ mod tests {
     fn stray_check_severity_by_count() {
         assert!(matches!(stray_check(0), Check::Ok(_)));
         assert!(matches!(stray_check(3), Check::Warn(_)));
+    }
+
+    #[test]
+    fn no_orphans_is_an_ok_row() {
+        assert!(matches!(baseline_orphan_check(0, 0), Check::Ok(_)));
+    }
+
+    #[test]
+    fn orphans_warn_and_name_the_prune_command() {
+        let Check::Warn(msg) = baseline_orphan_check(2, 1_500_000_000) else {
+            panic!("expected a warning");
+        };
+        assert!(msg.contains("devrun baseline prune"), "{msg}");
     }
 
     #[test]
