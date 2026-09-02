@@ -308,23 +308,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
             // Mutating an existing PR is gated before the call: a mismatch here
             // is refused before a single reviewer is added.
             finish::assert_belongs(&pr, args.head)?;
-            if !args.reviewers.is_empty() {
-                steps
-                    .during_result("Adding reviewers…", || {
-                        gh_capture(
-                            &[
-                                "pr",
-                                "edit",
-                                &pr.number.to_string(),
-                                "--add-reviewer",
-                                &joined,
-                            ],
-                            &found.repo,
-                            start,
-                        )
-                    })
-                    .context("gh pr edit --add-reviewer failed")?;
-            }
+            super::add_reviewers(pr.number, &args.reviewers, &found.repo, start, steps)?;
             if let Some(note) = reuse_note(pr.number, pr.is_draft, args.asked) {
                 eprintln!("{note}");
             }

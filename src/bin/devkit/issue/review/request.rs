@@ -215,31 +215,18 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     let number = pr.number.to_string();
-    if !reviewers.is_empty() {
-        let joined = reviewers.join(",");
-        steps
-            .during_result("Adding reviewers…", || {
-                gh_capture(
-                    &["pr", "edit", &number, "--add-reviewer", &joined],
-                    &repo,
-                    &start,
-                )
-            })
-            .context("gh pr edit --add-reviewer failed")?;
-    }
+    crate::issue::pr::add_reviewers(pr.number, &reviewers, &repo, &start, &steps)?;
 
     if should_flip(pr.is_draft, args.no_notify) {
-        let required = loaded.config.defaults.require_pr_reviewer;
-        // Two network round trips that decide nothing with the gate off.
-        let already = if required {
-            steps.during_result("Resolving reviewers…", || {
-                crate::issue::pr::reviewer_logins_on(pr.number, &start, &repo)
-            })?
-        } else {
-            Vec::new()
-        };
         // Refusing before the flip leaves the PR a draft.
-        crate::issue::pr::require_reviewer_for_ready(&already, &reviewers, required)?;
+        crate::issue::pr::gate_ready(
+            pr.number,
+            &reviewers,
+            loaded.config.defaults.require_pr_reviewer,
+            &repo,
+            &start,
+            &steps,
+        )?;
         steps
             .during_result("Marking ready for review…", || {
                 gh_capture(&["pr", "ready", &number], &repo, &start)

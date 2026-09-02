@@ -6,7 +6,7 @@ use devkit_common::progress::Steps;
 use std::path::Path;
 
 use super::create::{Existing, parse_pr_flag, record_with_pr, resolve_existing};
-use super::{require_existing_pr, require_reviewer_for_ready, reviewer_logins_on};
+use super::{add_reviewers, gate_ready, require_existing_pr};
 use crate::issue::review::{self, Target, guard_branch, resolve_target};
 
 pub struct Args {
@@ -17,14 +17,6 @@ pub struct Args {
     pub pr: Option<String>,
     pub dir: Option<String>,
     pub config: Option<String>,
-}
-
-/// Whether this run would change the PR: flip a draft, or hand it reviewers it
-/// does not have. The reviewer gate guards that transition, not the ready
-/// state, so an already-ready PR with no `--to` is left alone rather than
-/// looked up and judged.
-fn changes_the_pr(is_draft: bool, added: &[String]) -> bool {
-    is_draft || !added.is_empty()
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -74,36 +66,20 @@ pub fn run(args: Args) -> Result<()> {
     review::finish::assert_belongs(&pr, &head)?;
 
     let number = pr.number.to_string();
-    if !reviewers.is_empty() {
-        let joined = reviewers.join(",");
-        steps
-            .during_result("Adding reviewers…", || {
-                gh_capture(
-                    &["pr", "edit", &number, "--add-reviewer", &joined],
-                    &repo,
-                    &start,
-                )
-            })
-            .context("gh pr edit --add-reviewer failed")?;
-    }
+    add_reviewers(pr.number, &reviewers, &repo, &start, &steps)?;
 
-    if changes_the_pr(pr.is_draft, &reviewers) {
-        let required = loaded.config.defaults.require_pr_reviewer;
-        // Two network round trips that decide nothing with the gate off.
-        let already = if required {
-            steps.during_result("Resolving reviewers…", || {
-                reviewer_logins_on(pr.number, &start, &repo)
-            })?
-        } else {
-            Vec::new()
-        };
-        // Refusing before the flip leaves the PR a draft.
-        require_reviewer_for_ready(&already, &reviewers, required)?;
-    }
-
-    // `gh pr ready` on a PR that is already ready is a no-op; skipping the call
-    // keeps the run quiet.
+    // `gh pr ready` on a PR that is already ready is a no-op, and the gate
+    // guards the flip rather than the run, so a ready PR is neither judged nor
+    // called about. Refusing before the flip leaves a draft a draft.
     if pr.is_draft {
+        gate_ready(
+            pr.number,
+            &reviewers,
+            loaded.config.defaults.require_pr_reviewer,
+            &repo,
+            &start,
+            &steps,
+        )?;
         steps
             .during_result("Marking ready for review…", || {
                 gh_capture(&["pr", "ready", &number], &repo, &start)
@@ -119,20 +95,4 @@ pub fn run(args: Args) -> Result<()> {
 
     println!("{}", pr.url);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// An already-ready PR with nothing to add changes nothing, so the run must
-    /// not spend a reviewer lookup on it and must not be refused by a gate
-    /// guarding a transition it is not making.
-    #[test]
-    fn an_already_ready_pr_with_nothing_to_add_is_left_alone() {
-        assert!(!changes_the_pr(/* is_draft */ false, &[]));
-        assert!(changes_the_pr(true, &[]));
-        assert!(changes_the_pr(false, &["igoracc".to_string()]));
-        assert!(changes_the_pr(true, &["igoracc".to_string()]));
-    }
 }

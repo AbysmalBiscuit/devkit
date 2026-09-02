@@ -1,6 +1,7 @@
-use anyhow::{Result, bail};
-use devkit_common::cmd::gh_json_in;
+use anyhow::{Context, Result, bail};
+use devkit_common::cmd::{gh_capture, gh_json_in};
 use devkit_common::github;
+use devkit_common::progress::Steps;
 use serde::Deserialize;
 
 use crate::issue::review::{PrAction, action_for, is_human_login};
@@ -111,6 +112,58 @@ pub(crate) fn require_reviewer_for_ready(
     Ok(())
 }
 
+/// Request `logins` as reviewers on PR `number`. A run with none to add makes
+/// no call at all, so an empty `--to` never touches the PR.
+pub(crate) fn add_reviewers(
+    number: u64,
+    logins: &[String],
+    repo: &github::Repo,
+    cwd: &str,
+    steps: &Steps,
+) -> Result<()> {
+    if logins.is_empty() {
+        return Ok(());
+    }
+    let joined = logins.join(",");
+    steps
+        .during_result("Adding reviewers…", || {
+            gh_capture(
+                &["pr", "edit", &number.to_string(), "--add-reviewer", &joined],
+                repo,
+                cwd,
+            )
+        })
+        .context("gh pr edit --add-reviewer failed")?;
+    Ok(())
+}
+
+/// Whether the PR's own reviewers still decide the gate. What this run requests
+/// can satisfy it on its own, and with the gate off nothing has to: either way
+/// the lookup is two network round trips that change no answer.
+fn needs_reviewer_lookup(added: &[String], required: bool) -> bool {
+    require_reviewer_for_ready(&[], added, required).is_err()
+}
+
+/// Refuse a run about to make PR `number` ready for review with no human
+/// reviewer. Call it only on the run that performs the flip: an already-ready
+/// PR is not made ready by anything happening here.
+pub(crate) fn gate_ready(
+    number: u64,
+    added: &[String],
+    required: bool,
+    repo: &github::Repo,
+    cwd: &str,
+    steps: &Steps,
+) -> Result<()> {
+    if !needs_reviewer_lookup(added, required) {
+        return Ok(());
+    }
+    let already = steps.during_result("Resolving reviewers…", || {
+        reviewer_logins_on(number, cwd, repo)
+    })?;
+    require_reviewer_for_ready(&already, added, required)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +188,18 @@ mod tests {
     #[test]
     fn a_reviewer_added_this_run_satisfies_the_gate() {
         assert!(require_reviewer_for_ready(&[], &["igoracc".into()], true).is_ok());
+    }
+
+    /// The PR's own reviewer list is fetched only when it can still change the
+    /// verdict: with the gate off, or with a human already in `--to`, the two
+    /// round trips decide nothing.
+    #[test]
+    fn the_reviewer_lookup_is_skipped_when_it_decides_nothing() {
+        assert!(!needs_reviewer_lookup(&[], false));
+        assert!(!needs_reviewer_lookup(&["igoracc".into()], false));
+        assert!(!needs_reviewer_lookup(&["igoracc".into()], true));
+        assert!(needs_reviewer_lookup(&[], true));
+        assert!(needs_reviewer_lookup(&["dependabot[bot]".into()], true));
     }
 
     #[test]
