@@ -34,7 +34,6 @@ pub fn target(cfg: &Config, repo: &Path) -> Result<String> {
 /// `target`. Local refs only, so no fetch is needed — extending a branch does
 /// not move its merge base with another branch, and the value changes only
 /// when the worktree is rebased.
-#[allow(dead_code)]
 pub fn pin(worktree: &Path, target: &str) -> Result<String> {
     let out = devkit_common::git::Git::at(worktree)
         .args(["merge-base", "HEAD", target])
@@ -253,7 +252,6 @@ fn bootstrap_context(sha: &str, apps: &[String], prefix: &str) -> serde_json::Va
 ///
 /// Takes the slot lock and never the directory lock, which is the half of the
 /// fixed order (directory, then slot) that belongs here.
-#[allow(dead_code)]
 pub fn ensure(
     cfg: &Config,
     catalog: &HashMap<String, App>,
@@ -481,7 +479,6 @@ pub fn live_rows_hold(baseline: &Path, ports: &registry::Data) -> bool {
 }
 
 /// The ports one holder owns, for `run::bring_down_ports`.
-#[allow(dead_code)]
 pub fn rows_for_holder(holder: &str, ports: &registry::Data) -> Vec<u16> {
     ports
         .entries
@@ -585,7 +582,6 @@ fn remove_if_unreferenced(
 /// Writes a record when there is none. A worktree made by hand rather than by
 /// `issue setup` still holds a reference, and skipping the write there would
 /// let prune reclaim a baseline that worktree is serving from.
-#[allow(dead_code)]
 pub fn write_pin(worktree: &Path, sha: &str, path: &Path) -> Result<()> {
     let mut rec = match devkit_common::record::read(worktree) {
         Some(rec) => rec,

@@ -1,4 +1,3 @@
-mod baseline;
 
 use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
@@ -7,7 +6,6 @@ use devkit_common::git::Git;
 use devkit_common::progress::Steps;
 use devkit_common::supervise;
 use devkit_common::ui;
-use devkit_config::expand_tilde;
 use devkit_ports::load;
 use devkit_ports::registry::{self, Role};
 use devkit_ports::run;
@@ -622,9 +620,10 @@ fn cmd_up(
 
     let steps = Steps::new();
 
-    // (role, holder, base_dir) — base_dir is where <app.path> is rooted.
+    // (role, holder, base_dir) — base_dir is where <app.path> is rooted. Every
+    // baseline is resolved here, before any port is, so a long bootstrap cannot
+    // outlive a reservation taken alongside it.
     let groups: Vec<(Role, String, PathBuf)> = {
-        let baseline_path = expand_tilde(&cfg.defaults.baseline_path);
         let mut g = Vec::new();
         for r in role.roles() {
             match r {
@@ -636,19 +635,38 @@ fn cmd_up(
                     ));
                 }
                 Role::Baseline => {
-                    anyhow::ensure!(
-                        !cfg.defaults.baseline_path.is_empty(),
-                        "`--role baseline` needs `defaults.baseline_path`"
-                    );
+                    let wt = Path::new(&issue_holder);
+                    // A baseline is its own baseline: bootstrapping from inside
+                    // one would build a second tree for the same fork point and
+                    // pin it to itself, under the `DETACHED` identity its HEAD
+                    // reports.
+                    if devkit_common::worktree::is_baseline(wt) {
+                        g.push((
+                            Role::Baseline,
+                            issue_holder.clone(),
+                            PathBuf::from(&issue_holder),
+                        ));
+                        continue;
+                    }
                     let baseline_target = crate::baseline::target(cfg, Path::new(cwd))?;
-                    let bp = baseline_path
-                        .to_str()
-                        .context("baseline_path not UTF-8")?
-                        .to_string();
-                    steps.during("Refreshing baseline…", || {
-                        baseline::ensure_fresh(&issue_holder, &bp, &baseline_target)
-                    })?;
-                    g.push((Role::Baseline, bp.clone(), baseline_path.clone()));
+                    let sha = crate::baseline::pin(wt, &baseline_target)?;
+                    let previous = devkit_common::record::read(wt).and_then(|r| r.baseline);
+                    let primary = devkit_common::git::primary_checkout(Path::new(cwd))?;
+                    let path =
+                        crate::baseline::ensure(cfg, catalog, &primary, &sha, &apps, &steps)?;
+                    // A rebase repoints this worktree at a different baseline.
+                    // Its old baseline's servers stay alive under a holder no
+                    // worktree names any more: unreachable without a terminal,
+                    // and enough to block prune forever.
+                    if let Some(prev) = previous.filter(|p| Path::new(&p.path) != path) {
+                        let ports = registry::snapshot()?;
+                        let abandoned = crate::baseline::rows_for_holder(&prev.path, &ports);
+                        if !abandoned.is_empty() {
+                            run::bring_down_ports(&abandoned)?;
+                        }
+                    }
+                    crate::baseline::write_pin(wt, &sha, &path)?;
+                    g.push((Role::Baseline, path.to_string_lossy().into_owned(), path));
                 }
             }
         }
