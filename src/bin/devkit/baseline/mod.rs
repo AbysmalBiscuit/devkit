@@ -506,6 +506,30 @@ pub fn rows_for_holder(holder: &str, ports: &registry::Data) -> Vec<u16> {
         .collect()
 }
 
+/// Whether any worktree other than `worktree` names `baseline` in this scan.
+/// The two callers of it — a repin releasing what it abandons, and `down`
+/// deciding whether a baseline is foreign — ask the same question, and both
+/// must read a scan they cannot prove complete as shared.
+///
+/// The referencer paths come from `git worktree list` while a caller's own
+/// path comes from a `rev-parse`, and the two normalize the same directory
+/// differently, so identity is compared rather than the text.
+pub fn shared_with_others(refs: &References, baseline: &Path, worktree: &Path) -> bool {
+    refs.by_baseline.get(baseline).is_some_and(|holders| {
+        holders
+            .iter()
+            .any(|w| !devkit_common::git::same_path(w, worktree))
+    })
+}
+
+/// Run `f` while holding `baseline`'s slot lock, which is what serializes a
+/// decision about who references it against the `up` that would change the
+/// answer.
+pub fn with_slot_lock<T>(baseline: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let root = baseline.parent().context("baseline path has no parent")?;
+    locks::with_slot(root, &slot_name(baseline)?, f)
+}
+
 /// Hand the rows held by `previous` to `down`, when `worktree` is the only
 /// worktree still naming it. A worktree whose pin moves would otherwise leave
 /// servers under a holder it no longer reaches: unreachable without `--holder`
@@ -529,9 +553,7 @@ pub fn release_abandoned(
     previous: &Path,
     down: impl FnOnce(&[u16]) -> Result<()>,
 ) -> Result<()> {
-    let root = previous.parent().context("baseline path has no parent")?;
-    let name = slot_name(previous)?;
-    locks::with_slot(root, &name, || {
+    with_slot_lock(previous, || {
         // A pin is a plain path in a file a person can edit, and these rows are
         // stopped by pid. A path carrying no baseline marker names servers this
         // run has no claim on.
@@ -547,12 +569,7 @@ pub fn release_abandoned(
             );
             return Ok(());
         }
-        let shared = refs.by_baseline.get(previous).is_some_and(|holders| {
-            holders
-                .iter()
-                .any(|w| !devkit_common::git::same_path(w, worktree))
-        });
-        if shared {
+        if shared_with_others(&refs, previous, worktree) {
             return Ok(());
         }
         let rows = rows_for_holder(&previous.to_string_lossy(), &registry::snapshot()?);

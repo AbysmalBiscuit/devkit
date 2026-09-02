@@ -76,7 +76,8 @@ pub(crate) enum Cmd {
     },
     /// Stop servers and release ports.
     ///
-    /// Defaults to this worktree; reaching another worktree needs
+    /// Defaults to this worktree and the baseline only it names; reaching
+    /// another worktree, or a shared baseline, needs
     /// --all/--others/--holder and prompts (requires a terminal).
     Down {
         /// Fuzzy selectors matched (substring) across columns. Mutually exclusive
@@ -304,7 +305,11 @@ struct DownArgs {
 
 /// Build the registry selector from CLI args. `--holder` paths resolve to their git
 /// toplevel when possible, else are used verbatim.
-fn build_selector(a: &DownArgs, current: &str) -> registry::DownSelector {
+fn build_selector(
+    a: &DownArgs,
+    current: &str,
+    own_baseline: Option<&Path>,
+) -> registry::DownSelector {
     let scope = if !a.holders.is_empty() {
         registry::Scope::Holders(
             a.holders
@@ -316,6 +321,8 @@ fn build_selector(a: &DownArgs, current: &str) -> registry::DownSelector {
         registry::Scope::All
     } else if a.others {
         registry::Scope::Others(current.to_string())
+    } else if let Some(b) = own_baseline {
+        registry::Scope::Holders(vec![current.to_string(), b.to_string_lossy().into_owned()])
     } else {
         registry::Scope::Current(current.to_string())
     };
@@ -761,9 +768,58 @@ fn cmd_up(
     Ok(())
 }
 
-/// True if any matched row belongs to a holder other than `current`.
-fn touches_foreign(matched: &[(u16, &registry::Entry)], current: &str) -> bool {
-    matched.iter().any(|(_, e)| e.holder != current)
+/// True if any matched row belongs to a holder other than `current` or the
+/// baseline `current` is the sole referencer of.
+fn touches_foreign(
+    matched: &[(u16, &registry::Entry)],
+    current: &str,
+    own_baseline: Option<&Path>,
+) -> bool {
+    matched
+        .iter()
+        .any(|(_, e)| !is_own(e, current, own_baseline))
+}
+
+/// Whether a row belongs to this worktree: its own holder, or the baseline it
+/// is the sole referencer of. Both sides of the baseline comparison are the
+/// path the baseline was created at — the record stores it and `up` writes it
+/// verbatim as the holder — so they match exactly.
+fn is_own(e: &registry::Entry, current: &str, own_baseline: Option<&Path>) -> bool {
+    e.holder == current || own_baseline.is_some_and(|b| Path::new(&e.holder) == b)
+}
+
+/// The baseline this worktree is the only referencer of, if any. `None` when
+/// the worktree names no baseline, when the path it names is not one, when
+/// another worktree names the same one, or when any record is unreadable.
+///
+/// A baseline nobody else names is this worktree's own, so stopping its
+/// servers reaches no further than stopping the worktree's own. A shared
+/// baseline stays foreign to every referencer, which keeps the terminal gate
+/// over every case where stopping it affects another worktree.
+fn sole_referenced_baseline(repo: &str, current: &str) -> Option<PathBuf> {
+    let path = pinned_baseline(Path::new(current))?;
+    let refs = crate::baseline::referencers(repo).ok()?;
+    // A record that does not parse could name this baseline, so nothing here is
+    // provably unshared while one exists.
+    if !refs.unreadable.is_empty() {
+        return None;
+    }
+    (!crate::baseline::shared_with_others(&refs, &path, Path::new(current))).then_some(path)
+}
+
+/// The baseline this worktree's record names, when the path it names really is
+/// one. The record is a plain file inside the worktree, so a pin can be made to
+/// name a sibling worktree; a path carrying no baseline marker names servers
+/// this worktree has no claim on.
+fn pinned_baseline(worktree: &Path) -> Option<PathBuf> {
+    let pin = devkit_common::record::read(worktree)?.baseline?;
+    let path = PathBuf::from(pin.path);
+    devkit_common::worktree::is_baseline(&path).then_some(path)
+}
+
+/// Whether the registry tracks anything under `holder`.
+fn holds_rows(holder: &Path, data: &registry::Data) -> bool {
+    !crate::baseline::rows_for_holder(&holder.to_string_lossy(), data).is_empty()
 }
 
 /// Render a status table limited to the given ports.
@@ -809,9 +865,42 @@ fn report_down(out: &run::DownOutcome) {
     }
 }
 
+/// The selection is decided and stopped under the pinned baseline's slot lock,
+/// which `up` also holds while writing its record: without it another worktree
+/// can take the lock between the sole-referencer check and the kill, write a
+/// record naming this baseline, and — `up` being idempotent for a live pid — be
+/// told its baseline is ready moments before these servers die.
+///
+/// Anything that leaves the baseline unresolved leaves the cross-worktree gate
+/// exactly where it was, so a repository that cannot be located and a record
+/// that names nothing both fall through to an unexempted `down`.
 fn cmd_down(cwd: &str, args: &DownArgs) -> Result<()> {
     let current = toplevel(cwd)?;
-    let selector = build_selector(args, &current);
+    let repo = devkit_common::git::primary_checkout(Path::new(cwd)).ok();
+    // The wait for the slot lock is unbounded, and another worktree's `up`
+    // holds it across a whole bootstrap. A baseline holding no rows has nothing
+    // to exempt, so that wait is skipped rather than spent deciding about
+    // servers that do not exist: rows appearing afterwards are outside the
+    // scope this builds and stay behind the terminal gate.
+    let pinned = match pinned_baseline(Path::new(&current)) {
+        Some(p) if holds_rows(&p, &registry::snapshot()?) => Some(p),
+        _ => None,
+    };
+    match (pinned, repo) {
+        (Some(pin), Some(repo)) => crate::baseline::with_slot_lock(&pin, || {
+            // The record can be rewritten between the read that named the slot
+            // and the lock over it. A baseline this run holds no lock for gets
+            // no exemption.
+            let own =
+                sole_referenced_baseline(&repo.to_string_lossy(), &current).filter(|b| *b == pin);
+            down_selection(&current, args, own.as_deref())
+        }),
+        _ => down_selection(&current, args, None),
+    }
+}
+
+fn down_selection(current: &str, args: &DownArgs, own_baseline: Option<&Path>) -> Result<()> {
+    let selector = build_selector(args, current, own_baseline);
     let data = registry::snapshot()?;
     let now = registry::now();
     let ports = registry::select(&data, &selector, now);
@@ -825,7 +914,7 @@ fn cmd_down(cwd: &str, args: &DownArgs) -> Result<()> {
         .collect();
 
     // Entirely in the current worktree: stop directly, no prompt.
-    if !touches_foreign(&matched, &current) {
+    if !touches_foreign(&matched, current, own_baseline) {
         let out = run::bring_down_ports(&ports)?;
         report_down(&out);
         return Ok(());
@@ -841,7 +930,7 @@ fn cmd_down(cwd: &str, args: &DownArgs) -> Result<()> {
     let mut chosen: Vec<u16> = Vec::new();
     if batch {
         println!("{}", preview_table(&data, &ports));
-        let holders = foreign_holders(&matched, &current);
+        let holders = foreign_holders(&matched, current);
         let includes_current = matched.iter().any(|(_, e)| e.holder == current);
         if confirm(&format!(
             "Stop {} server(s) across {} worktree(s)?",
@@ -852,7 +941,7 @@ fn cmd_down(cwd: &str, args: &DownArgs) -> Result<()> {
         }
     } else {
         // Per-worktree prompts for foreign holders; current worktree stops silently.
-        for holder in foreign_holders(&matched, &current) {
+        for holder in foreign_holders(&matched, current) {
             let group: Vec<u16> = matched
                 .iter()
                 .filter(|(_, e)| e.holder == holder)
@@ -1137,7 +1226,9 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::{apps_from_diff, available_apps};
+    use devkit_ports::registry;
     use std::collections::{BTreeMap, HashMap};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn reap_refused_without_tty() {
@@ -1237,7 +1328,7 @@ mod tests {
 
         // Default: current worktree, no filter.
         let a = DownArgs::default();
-        let s = build_selector(&a, "/wt/cur");
+        let s = build_selector(&a, "/wt/cur", None);
         assert!(matches!(s.scope, Scope::Current(ref h) if h == "/wt/cur"));
         assert!(matches!(s.filter, Filter::All));
 
@@ -1247,7 +1338,7 @@ mod tests {
             selectors: vec!["api".into()],
             ..Default::default()
         };
-        let s = build_selector(&a, "/wt/cur");
+        let s = build_selector(&a, "/wt/cur", None);
         assert!(matches!(s.scope, Scope::All));
         assert!(matches!(s.filter, Filter::Tokens(ref t) if t == &vec!["api".to_string()]));
 
@@ -1257,7 +1348,7 @@ mod tests {
             app: vec!["web".into()],
             ..Default::default()
         };
-        let s = build_selector(&a, "/wt/cur");
+        let s = build_selector(&a, "/wt/cur", None);
         assert!(matches!(s.scope, Scope::Others(ref h) if h == "/wt/cur"));
         match s.filter {
             Filter::Columns(c) => assert_eq!(c.app, vec!["web".to_string()]),
@@ -1265,22 +1356,208 @@ mod tests {
         }
     }
 
+    fn entry(holder: &str, role: registry::Role) -> registry::Entry {
+        registry::Entry {
+            app: "api".into(),
+            holder: holder.into(),
+            role,
+            pid: Some(1),
+            logfile: None,
+            ts: 0,
+        }
+    }
+
     #[test]
     fn touches_foreign_detects_other_holders() {
         use super::touches_foreign;
-        use devkit_ports::registry::{Entry, Role};
-        let e = |holder: &str| Entry {
-            app: "api".into(),
-            holder: holder.into(),
-            role: Role::Issue,
-            pid: None,
-            logfile: None,
-            ts: 0,
+        let cur = entry("/wt/cur", registry::Role::Issue);
+        let other = entry("/wt/other", registry::Role::Issue);
+        assert!(!touches_foreign(&[(1, &cur)], "/wt/cur", None));
+        assert!(touches_foreign(&[(1, &cur), (2, &other)], "/wt/cur", None));
+    }
+
+    #[test]
+    fn a_sole_referenced_baseline_is_not_foreign() {
+        use super::touches_foreign;
+        let bl = std::path::PathBuf::from("/b/d13d90b724bf");
+        let e = entry("/b/d13d90b724bf", registry::Role::Baseline);
+        let matched = vec![(3000u16, &e)];
+        assert!(
+            touches_foreign(&matched, "/wt/cur", None),
+            "no baseline: foreign"
+        );
+        assert!(
+            !touches_foreign(&matched, "/wt/cur", Some(&bl)),
+            "sole referencer stops its own baseline without a terminal"
+        );
+    }
+
+    #[test]
+    fn another_worktrees_baseline_stays_foreign() {
+        use super::touches_foreign;
+        let mine = std::path::PathBuf::from("/b/d13d90b724bf");
+        let e = entry("/b/0123456789ab", registry::Role::Baseline);
+        let matched = vec![(3000u16, &e)];
+        assert!(touches_foreign(&matched, "/wt/cur", Some(&mine)));
+    }
+
+    #[test]
+    fn the_default_scope_covers_the_worktree_and_its_own_baseline() {
+        use super::{DownArgs, build_selector};
+        let bl = std::path::PathBuf::from("/b/d13d90b724bf");
+        let a = DownArgs::default();
+        let s = build_selector(&a, "/wt/cur", Some(&bl));
+        match s.scope {
+            registry::Scope::Holders(hs) => {
+                assert!(hs.iter().any(|h| h == "/wt/cur"));
+                assert!(hs.iter().any(|h| h == "/b/d13d90b724bf"));
+            }
+            other => panic!("expected Holders, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_baseline_leaves_the_default_scope_current() {
+        use super::{DownArgs, build_selector};
+        let a = DownArgs::default();
+        let s = build_selector(&a, "/wt/cur", None);
+        assert!(matches!(s.scope, registry::Scope::Current(ref h) if h == "/wt/cur"));
+    }
+
+    /// A primary checkout, a baseline directory carrying the marker that makes
+    /// it one, and the worktrees `a` and `b` whose records both name it.
+    struct Pins {
+        _tmp: tempfile::TempDir,
+        repo: String,
+        baseline: PathBuf,
+        a: PathBuf,
+        b: PathBuf,
+    }
+
+    fn fixture_git(cwd: &Path, args: &[&str]) -> String {
+        devkit_common::git::Git::fixture(cwd)
+            .args(args.iter().copied())
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"))
+    }
+
+    fn mark_baseline(dir: &Path) {
+        std::fs::create_dir_all(dir.join(".devkit")).unwrap();
+        std::fs::write(
+            dir.join(".devkit").join("baseline.toml"),
+            "sha = \"d13d90b\"\n",
+        )
+        .unwrap();
+    }
+
+    fn pin(worktree: &Path, baseline: &Path) {
+        devkit_common::record::write(
+            worktree,
+            &devkit_common::record::IssueRecord {
+                issue: "i-1".into(),
+                slug: "i-1".into(),
+                apps: vec![],
+                summary: None,
+                pr: None,
+                baseline: Some(devkit_common::record::BaselinePin {
+                    sha: "d13d90b724bf8a3c".into(),
+                    path: baseline.to_string_lossy().into_owned(),
+                }),
+            },
+        )
+        .unwrap();
+    }
+
+    fn unpin(worktree: &Path) {
+        std::fs::remove_dir_all(worktree.join(".devkit")).unwrap();
+    }
+
+    fn two_worktrees_naming_one_baseline() -> Pins {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("main");
+        std::fs::create_dir_all(&repo).unwrap();
+        fixture_git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("f"), "x").unwrap();
+        fixture_git(&repo, &["add", "."]);
+        fixture_git(&repo, &["commit", "-qm", "one"]);
+
+        let baseline = tmp.path().join("_baselines").join("d13d90b724bf");
+        mark_baseline(&baseline);
+
+        let make = |name: &str| {
+            let wt = tmp.path().join(name);
+            fixture_git(
+                &repo,
+                &["worktree", "add", "-b", name, wt.to_str().unwrap()],
+            );
+            pin(&wt, &baseline);
+            wt
         };
-        let cur = e("/wt/cur");
-        let other = e("/wt/other");
-        assert!(!touches_foreign(&[(1, &cur)], "/wt/cur"));
-        assert!(touches_foreign(&[(1, &cur), (2, &other)], "/wt/cur"));
+        let a = make("a");
+        let b = make("b");
+        Pins {
+            _tmp: tmp,
+            repo: repo.to_string_lossy().into_owned(),
+            baseline,
+            a,
+            b,
+        }
+    }
+
+    fn sole(f: &Pins, current: &Path) -> Option<PathBuf> {
+        super::sole_referenced_baseline(&f.repo, current.to_str().unwrap())
+    }
+
+    #[test]
+    fn a_baseline_only_this_worktree_names_is_its_own() {
+        let f = two_worktrees_naming_one_baseline();
+        unpin(&f.b);
+        assert_eq!(sole(&f, &f.a), Some(f.baseline.clone()));
+    }
+
+    #[test]
+    fn a_shared_baseline_is_nobodys_own() {
+        let f = two_worktrees_naming_one_baseline();
+        assert_eq!(sole(&f, &f.a), None, "b names it too");
+        assert_eq!(sole(&f, &f.b), None);
+    }
+
+    /// A record that does not parse could name this baseline, so a scan that
+    /// cannot read one proves nothing about who else references it.
+    #[test]
+    fn an_unreadable_record_leaves_the_baseline_foreign() {
+        let f = two_worktrees_naming_one_baseline();
+        std::fs::write(f.b.join(".devkit").join("issue.toml"), "issue = ").unwrap();
+        assert_eq!(sole(&f, &f.a), None);
+    }
+
+    /// The record is a plain file inside the worktree, so a pin can be made to
+    /// name a sibling worktree. Exempting whatever it names would let a session
+    /// with no terminal stop another worktree's servers.
+    #[test]
+    fn a_pin_aimed_at_something_that_is_not_a_baseline_is_refused() {
+        let f = two_worktrees_naming_one_baseline();
+        pin(&f.a, &f.b);
+        assert_eq!(sole(&f, &f.a), None);
+    }
+
+    /// Being the only worktree that names a baseline is not the same as being
+    /// that worktree. A caller git does not list among the repository's
+    /// worktrees must not inherit the claim of the one that does.
+    #[test]
+    fn a_baseline_only_someone_else_names_is_not_the_callers() {
+        let f = two_worktrees_naming_one_baseline();
+        unpin(&f.b);
+        let outside = f.a.parent().unwrap().join("outside");
+        pin(&outside, &f.baseline);
+        assert_eq!(sole(&f, &outside), None);
+    }
+
+    #[test]
+    fn a_worktree_that_names_no_baseline_has_none() {
+        let f = two_worktrees_naming_one_baseline();
+        unpin(&f.a);
+        assert_eq!(sole(&f, &f.a), None);
     }
 
     #[test]
