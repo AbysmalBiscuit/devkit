@@ -5,7 +5,7 @@
 #[path = "common/baselinetest.rs"]
 mod baselinetest;
 
-use baselinetest::{devkit_ok, git, project, up};
+use baselinetest::{devkit, devkit_ok, git, project, up};
 use std::path::{Path, PathBuf};
 
 struct Fx {
@@ -153,7 +153,9 @@ fn dry_run_removes_nothing_and_still_reports() {
 }
 
 /// A baseline with a running server is refused by a real sweep, so a dry run
-/// that named it would be promising a removal the operator cannot get.
+/// that named it would be promising a removal the operator cannot get. A
+/// refusal is also what the exit status is for: a sweep that did not do what it
+/// was asked must not report success to the script that asked.
 #[test]
 fn a_dry_run_promises_no_removal_a_real_prune_refuses() {
     let f = fixture();
@@ -163,7 +165,7 @@ fn a_dry_run_promises_no_removal_a_real_prune_refuses() {
         &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
     );
 
-    let dry = devkit_ok(
+    let dry = devkit(
         &f.repo,
         &f.state,
         &["run", "baseline", "prune", "--dry-run"],
@@ -173,12 +175,122 @@ fn a_dry_run_promises_no_removal_a_real_prune_refuses() {
         !stdout.contains(&name_of(&f.baseline)),
         "dry run promised to remove a baseline with a running server:\n{stdout}"
     );
+    assert!(!dry.status.success(), "a refused dry run exited 0");
 
-    let real = devkit_ok(&f.repo, &f.state, &["run", "baseline", "prune"]);
+    let real = devkit(&f.repo, &f.state, &["run", "baseline", "prune"]);
     assert!(
         f.baseline.exists(),
         "a baseline with a running server was removed:\n{}",
         String::from_utf8_lossy(&real.stdout)
+    );
+    assert!(!real.status.success(), "a refused sweep exited 0");
+}
+
+/// A marked tree git has no registration for cannot go through `git worktree
+/// remove`, so the sweep reclaims the directory itself — and the dry run says
+/// so, because a dry run that named a removal the real run then failed at would
+/// leave the operator with a tree nothing ever reclaims.
+#[test]
+fn an_orphaned_baseline_is_reclaimed_and_the_dry_run_agrees() {
+    let f = fixture();
+    git(
+        &f.repo,
+        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
+    );
+    let orphan = f.baselines.join("000000000000");
+    std::fs::create_dir_all(orphan.join(".devkit")).unwrap();
+    std::fs::write(
+        orphan.join(".devkit").join("baseline.toml"),
+        "sha = 'abc'\n",
+    )
+    .unwrap();
+
+    let dry = devkit_ok(
+        &f.repo,
+        &f.state,
+        &["run", "baseline", "prune", "--dry-run"],
+    );
+    let stdout = String::from_utf8_lossy(&dry.stdout);
+    assert!(
+        stdout.contains("000000000000"),
+        "the dry run did not name the orphaned tree:\n{stdout}"
+    );
+    assert!(orphan.exists(), "a dry run removed it");
+
+    let real = devkit_ok(&f.repo, &f.state, &["run", "baseline", "prune"]);
+    assert!(
+        !orphan.exists(),
+        "the orphaned tree the dry run promised survived:\n{}",
+        String::from_utf8_lossy(&real.stdout)
+    );
+}
+
+/// Removing the directory the operator is standing in leaves their shell in a
+/// path that no longer resolves. `issue end` refuses the same way for a
+/// worktree.
+#[test]
+fn prune_refuses_the_baseline_it_is_standing_in() {
+    let f = fixture();
+    git(
+        &f.repo,
+        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
+    );
+
+    let out = devkit(&f.baseline, &f.state, &["run", "baseline", "prune"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(f.baseline.exists(), "prune removed its own cwd:\n{stderr}");
+    assert!(!out.status.success(), "the refusal exited 0");
+    assert!(
+        stderr.contains("cd out of"),
+        "unexpected refusal:\n{stderr}"
+    );
+}
+
+/// A modified tracked file is somebody's edit, and it is the only thing in a
+/// baseline a rebuild would not bring back. Untracked files are not that
+/// signal — every baseline carries rendered prep files and its own marker, and
+/// the sweep tests around this one prove those do not block a removal.
+#[test]
+fn prune_refuses_a_baseline_somebody_edited_until_forced() {
+    let f = fixture();
+    git(
+        &f.repo,
+        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
+    );
+    std::fs::write(f.baseline.join("devkit.toml"), "# edited by hand\n").unwrap();
+
+    let out = devkit(&f.repo, &f.state, &["run", "baseline", "prune"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(f.baseline.exists(), "an edited baseline was removed");
+    assert!(!out.status.success(), "the refusal exited 0");
+    assert!(
+        stderr.contains("modified tracked files"),
+        "unexpected refusal:\n{stderr}"
+    );
+
+    devkit_ok(&f.repo, &f.state, &["run", "baseline", "prune", "--force"]);
+    assert!(!f.baseline.exists(), "--force did not waive the edit");
+}
+
+/// One unreadable record means no baseline can be proven unreferenced, so the
+/// sweep reclaims nothing. A table that showed every baseline with no
+/// referencers would read as "all free to prune" and contradict it.
+#[test]
+fn list_names_the_worktrees_it_could_not_read() {
+    let f = fixture();
+    std::fs::write(f.wt.join(".devkit").join("issue.toml"), "not = toml = [").unwrap();
+
+    let listed = devkit_ok(&f.repo, &f.state, &["run", "baseline", "list"]);
+    let stderr = String::from_utf8_lossy(&listed.stderr);
+    assert!(
+        stderr.contains("cannot be read") && stderr.contains("proj_worktrees"),
+        "the listing hid the unreadable worktree:\n{stderr}"
+    );
+
+    devkit_ok(&f.repo, &f.state, &["run", "baseline", "prune"]);
+    assert!(
+        f.baseline.exists(),
+        "a sweep reclaimed a baseline while a record could not be read"
     );
 }
 

@@ -254,12 +254,14 @@ pub fn dir(cfg: &Config) -> Result<PathBuf> {
 }
 
 /// [`dir`] with the second misconfiguration that makes a slot under it unsafe
-/// to name already refused.
+/// to name already refused. The unset directory is reported first: a config
+/// naming no baseline directory is the problem to fix, whatever the sha.
 fn baselines_root(cfg: &Config, sha: &str) -> Result<PathBuf> {
+    let root = dir(cfg)?;
     // An empty sha names the baseline root itself as its slot, and a `Rebuild`
     // there would take the whole directory — every other baseline with it.
     anyhow::ensure!(!sha.is_empty(), "a baseline needs a fork-point commit");
-    dir(cfg)
+    Ok(root)
 }
 
 /// The directory [`ensure`] would serve `sha` from, resolved without building
@@ -447,8 +449,9 @@ impl References {
     /// a `baseline_dir` a per-worktree config layer resolves elsewhere — so an
     /// entry is matched by identity, the comparison the worktrees inside it
     /// already get. A lookup by exact key reads a reference spelled another way
-    /// as no reference at all, and both callers act on that answer: one exempts
-    /// the baseline from the cross-worktree gate, the other deletes it.
+    /// as no reference at all, and every caller acts on that answer: one
+    /// exempts the baseline from the cross-worktree gate, one deletes it, and
+    /// one shows an operator a baseline nothing appears to need.
     ///
     /// Several entries can be the same directory, so this unions them rather
     /// than taking the first match.
@@ -522,12 +525,18 @@ pub fn referencers(repo: &str) -> Result<References> {
 }
 
 /// Whether any live port row is held by `baseline`.
+///
+/// Holders are compared by identity, the way `References::naming` compares
+/// them: a sweep enumerates the baseline directory, so it meets whatever
+/// spelling that directory hands it, while a row was written from the spelling
+/// the worktree's config resolved. A text compare reads two spellings of one
+/// directory as two holders and lets a tree with running servers past the one
+/// refusal that exists to protect it.
 pub fn live_rows_hold(baseline: &Path, ports: &registry::Data) -> bool {
-    let holder = baseline.to_string_lossy();
-    ports
-        .entries
-        .values()
-        .any(|e| e.holder == holder && e.pid.is_some_and(registry::pid_alive))
+    ports.entries.values().any(|e| {
+        e.pid.is_some_and(registry::pid_alive)
+            && devkit_common::git::same_path(Path::new(&e.holder), baseline)
+    })
 }
 
 /// The ports one holder owns, for `run::bring_down_ports`.
@@ -648,17 +657,215 @@ pub fn drop_reference(
     let root = baseline.parent().context("baseline path has no parent")?;
     locks::with_dir(root, || {
         let refs = referencers(repo)?;
-        remove_if_unreferenced(repo, baseline, &refs, ports, force, Sweep::Remove)
+        if let Some(note) = refs.unreadable_note() {
+            eprintln!("warning: {note}");
+        }
+        remove_if_unreferenced(
+            repo,
+            baseline,
+            &refs,
+            Gates::reference(force),
+            ports,
+            Sweep::Remove,
+        )
     })
 }
 
-/// Whether a sweep acts on what it decides. `Report` runs every check a
-/// `Remove` runs and stops one step short of the removal, which is what keeps a
-/// dry run's answer identical to the real one's.
+/// Whether a sweep acts on what it decides. `Report` reaches the verdict
+/// `Remove` reaches and stops before carrying it out, which is what keeps a dry
+/// run's answer identical to the real one's.
 #[derive(Clone, Copy, PartialEq)]
 enum Sweep {
     Remove,
     Report,
+}
+
+/// The waivable half of the removal policy.
+#[derive(Clone, Copy)]
+struct Gates {
+    /// Waives the refusals below.
+    force: bool,
+    /// Whether a tree somebody has edited is a refusal. An operator's sweep
+    /// refuses one, because `--force` is right there to waive it and the edit
+    /// is the only thing in a baseline a rebuild would not bring back.
+    /// `drop_reference` does not: it has no `--force` to offer, and it runs
+    /// after the worktree that referenced the baseline is already gone, so an
+    /// unwaivable refusal there would strand the caller mid-teardown.
+    refuse_edits: bool,
+}
+
+impl Gates {
+    fn sweep(force: bool) -> Self {
+        Gates {
+            force,
+            refuse_edits: true,
+        }
+    }
+
+    fn reference(force: bool) -> Self {
+        Gates {
+            force,
+            refuse_edits: false,
+        }
+    }
+}
+
+/// How a baseline is reclaimed, once every gate has passed.
+#[derive(Debug)]
+enum Removal {
+    /// git has a registration for the tree, so git takes it down.
+    Worktree,
+    /// A marked tree git has no registration for. `git worktree remove` cannot
+    /// take it — it is not a working tree as far as this repository knows — so
+    /// the directory itself is all there is to reclaim.
+    Orphan,
+}
+
+/// Every gate between a baseline and its removal, reached without removing
+/// anything: `Ok(None)` leaves it alone with nothing to say, `Err` is a refusal
+/// to report, and `Ok(Some(_))` says it goes and by which mechanism.
+///
+/// Both sweep modes run this and nothing else decides, so a dry run cannot
+/// promise a removal the real run refuses.
+fn decide(
+    repo: &str,
+    baseline: &Path,
+    refs: &References,
+    gates: Gates,
+    ports: &registry::Data,
+) -> Result<Option<Removal>> {
+    // Nothing is provably unreferenced while a worktree's own pin cannot be
+    // read; the caller prints the note naming the worktrees to repair.
+    if !refs.unreadable.is_empty() || !refs.naming(baseline).is_empty() {
+        return Ok(None);
+    }
+    // The tree can be gone already: whoever held the slot lock before this call
+    // may have been the last referencer too. There is nothing left to remove
+    // and nothing went wrong.
+    if !baseline.exists() {
+        return Ok(None);
+    }
+    // Neither caller arrives with this tree proven to be devkit's: a sweep
+    // enumerates whatever the baseline directory holds, and `drop_reference` is
+    // handed a path out of a record a person can edit. `git worktree remove
+    // --force` accepts a sibling linked worktree of the same repository and
+    // takes its uncommitted work with it, so the marker is what decides whether
+    // this path is ours to delete — and a marker that cannot be read decides
+    // nothing. The two refusals are worded apart because they are different
+    // problems: one path is somebody else's, the other is unreadable and may
+    // well be a baseline.
+    match devkit_common::worktree::baseline_state(baseline) {
+        BaselineState::Yes => {}
+        BaselineState::No => anyhow::bail!(
+            "{} is not a baseline worktree; refusing to remove it",
+            baseline.display()
+        ),
+        BaselineState::Unknown => anyhow::bail!(
+            "cannot tell whether {} is a baseline worktree: its {} can be neither \
+             read nor ruled out; refusing to remove it",
+            baseline.display(),
+            BASELINE_MARKER
+        ),
+    }
+    let here = std::fs::canonicalize(baseline).unwrap_or_else(|_| baseline.to_path_buf());
+    let cwd = std::env::current_dir().context("resolving the current directory")?;
+    let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    if cwd == here || cwd.starts_with(&here) {
+        anyhow::bail!("cd out of {} before removing it", baseline.display());
+    }
+    // A live server in the tree is the one thing worth refusing for even when
+    // nobody has touched it.
+    if !gates.force && live_rows_hold(baseline, ports) {
+        anyhow::bail!(
+            "{} still has running servers; stop them or pass --force",
+            baseline.display()
+        );
+    }
+    if !is_registered(&registrations(repo)?, baseline) {
+        return orphan_removal(baseline).map(Some);
+    }
+    // Modified *tracked* files are a person's edit. Untracked files are not the
+    // same signal and are not counted: a baseline carries rendered prep files
+    // and installed dependencies by design, so a check that counted them would
+    // call every baseline dirty. This is also a different decision from the
+    // `--force` the `git worktree remove` always carries, which exists only so
+    // git stops refusing the removal over those same untracked files.
+    if gates.refuse_edits && !gates.force && has_local_edits(baseline)? {
+        anyhow::bail!(
+            "{} has modified tracked files; commit or discard them, or pass --force",
+            baseline.display()
+        );
+    }
+    Ok(Some(Removal::Worktree))
+}
+
+/// Every worktree path git has a registration for, baselines included:
+/// `worktree::discover_all` drops those, and telling a registered tree from an
+/// orphaned one is the whole question here.
+fn registrations(repo: &str) -> Result<Vec<PathBuf>> {
+    Ok(devkit_common::git::worktrees(Path::new(repo))?
+        .into_iter()
+        .map(|w| w.path)
+        .collect())
+}
+
+/// Whether git has a registration for `baseline`, compared by identity for the
+/// same reason `References::naming` is: git spells a path the way it was
+/// registered, a sweep spells it the way the directory read it back.
+fn is_registered(registrations: &[PathBuf], baseline: &Path) -> bool {
+    registrations
+        .iter()
+        .any(|p| devkit_common::git::same_path(p, baseline))
+}
+
+/// A marked tree this repository has no registration for, which is the state a
+/// baseline is left in when its registration goes and its files stay. Reclaimed
+/// as a plain directory — but only once nothing live stands behind its `.git`:
+/// a tree whose `.git` still resolves is some repository's checkout, and a
+/// sweep run from a different repository has no claim on it.
+fn orphan_removal(baseline: &Path) -> Result<Removal> {
+    anyhow::ensure!(
+        !resolves_a_gitdir(baseline),
+        "{} carries a baseline marker but this repository has no worktree registration \
+         for it, and its git directory still resolves; remove it from the repository \
+         that owns it",
+        baseline.display()
+    );
+    Ok(Removal::Orphan)
+}
+
+/// Whether `dir` still stands on a git administrative directory: a `.git`
+/// directory (a repository lives here) or a `.git` file whose `gitdir:` target
+/// exists (a live linked worktree). An abandoned baseline resolves neither.
+fn resolves_a_gitdir(dir: &Path) -> bool {
+    let dot = dir.join(".git");
+    match std::fs::read_to_string(&dot) {
+        Ok(body) => body
+            .lines()
+            .find_map(|l| l.strip_prefix("gitdir:"))
+            .map(str::trim)
+            .is_some_and(|target| {
+                let target = Path::new(target);
+                if target.is_absolute() {
+                    target.exists()
+                } else {
+                    dir.join(target).exists()
+                }
+            }),
+        // A `.git` directory reads back as an error, and so does no `.git` at
+        // all; only the first is a repository.
+        Err(_) => dot.is_dir(),
+    }
+}
+
+/// Whether the tree carries modified tracked files.
+fn has_local_edits(baseline: &Path) -> Result<bool> {
+    let out = Git::at(baseline)
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .timeout(devkit_common::git::SLOW_TIMEOUT)
+        .output()
+        .with_context(|| format!("reading the state of {}", baseline.display()))?;
+    Ok(!out.trim().is_empty())
 }
 
 /// The body of [`drop_reference`], without the directory lock. A sweep already
@@ -666,22 +873,22 @@ enum Sweep {
 /// the same file even within one process, so a locked function must never call
 /// another locked function.
 ///
-/// `Ok(true)` means the baseline was removed, or under [`Sweep::Report`] that
-/// it would have been; `Err` is a refusal either way.
+/// `Ok(true)` means the baseline was removed, or under [`Sweep::Report`] that it
+/// would have been; `Err` is a refusal either way.
 fn remove_if_unreferenced(
     repo: &str,
     baseline: &Path,
     refs: &References,
+    gates: Gates,
     ports: &registry::Data,
-    force: bool,
     sweep: Sweep,
 ) -> Result<bool> {
-    if let Some(note) = refs.unreadable_note() {
-        eprintln!("warning: {note}");
-        return Ok(false);
-    }
-    if !refs.naming(baseline).is_empty() {
-        return Ok(false);
+    // A dry run takes no lock. The wait for a slot lock is unbounded, so a
+    // read-only pass would queue behind a bootstrap while holding the directory
+    // lock, and it would leave a lock file behind for every slot it merely
+    // looked at — lock files are never unlinked.
+    if sweep == Sweep::Report {
+        return Ok(decide(repo, baseline, refs, gates, ports)?.is_some());
     }
     let root = baseline.parent().context("baseline path has no parent")?;
     let name = slot_name(baseline)?;
@@ -690,51 +897,29 @@ fn remove_if_unreferenced(
     // other than the baseline.
     let path_s = baseline_path_str(baseline)?;
     locks::with_slot(root, &name, || {
-        // Whoever held the lock before this call may have been the last
-        // referencer too, and removed the tree already. There is nothing left
-        // to remove and nothing went wrong.
-        if !baseline.exists() {
-            return Ok(false);
+        // The caller's scan predates this lock and `up` writes its pin after
+        // `ensure` has released the same lock, so a baseline built while this
+        // call waited has a referencer that scan cannot show. The decision is
+        // made against a scan taken inside the lock instead.
+        let fresh = referencers(repo)?;
+        match decide(repo, baseline, &fresh, gates, ports)? {
+            None => Ok(false),
+            Some(Removal::Worktree) => {
+                // Always `--force`: a baseline holds include copies and rendered
+                // prep files, and any untracked file would otherwise refuse the
+                // removal.
+                Git::at(Path::new(repo))
+                    .args(["worktree", "remove", "--force", path_s])
+                    .timeout(devkit_common::git::SLOW_TIMEOUT)
+                    .output()?;
+                Ok(true)
+            }
+            Some(Removal::Orphan) => {
+                std::fs::remove_dir_all(baseline)
+                    .with_context(|| format!("removing {}", baseline.display()))?;
+                Ok(true)
+            }
         }
-        // The path comes from a record inside the worktree being removed, and
-        // `referencers` keys on baseline paths, so a pin naming something else
-        // is never a key and reaches here as unreferenced. `git worktree
-        // remove --force` accepts a sibling linked worktree of the same
-        // repository and takes its uncommitted work with it, so the marker is
-        // what decides whether this path is ours to delete — and a marker that
-        // cannot be read decides nothing. The two refusals are worded apart
-        // because they are different problems: one path is somebody else's,
-        // the other is unreadable and may well be a baseline.
-        match devkit_common::worktree::baseline_state(baseline) {
-            BaselineState::Yes => {}
-            BaselineState::No => anyhow::bail!(
-                "{} is not a baseline worktree; refusing to remove it",
-                baseline.display()
-            ),
-            BaselineState::Unknown => anyhow::bail!(
-                "cannot tell whether {} is a baseline worktree: its {} can be neither \
-                 read nor ruled out; refusing to remove it",
-                baseline.display(),
-                BASELINE_MARKER
-            ),
-        }
-        // A live server in the tree is the one thing worth refusing for.
-        if !force && live_rows_hold(baseline, ports) {
-            anyhow::bail!(
-                "{} still has running servers; stop them or pass --force",
-                baseline.display()
-            );
-        }
-        if sweep == Sweep::Report {
-            return Ok(true);
-        }
-        // Always `--force`: a baseline holds include copies and rendered prep
-        // files, and any untracked file would otherwise refuse the removal.
-        Git::at(Path::new(repo))
-            .args(["worktree", "remove", "--force", path_s])
-            .timeout(devkit_common::git::SLOW_TIMEOUT)
-            .output()?;
-        Ok(true)
     })
 }
 
@@ -762,27 +947,72 @@ fn slots_in(baseline_dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// What a directory under `baseline_dir` is, as far as a listing can tell —
+/// which is also what decides how (and whether) a sweep reclaims it.
+pub enum SlotState {
+    /// A marked tree git has a worktree registration for.
+    Registered,
+    /// Marked, but this repository has no registration for it: a sweep reclaims
+    /// the directory itself.
+    Orphaned,
+    /// No marker, so devkit cannot prove it created this directory and a sweep
+    /// leaves it where it is.
+    Unmarked,
+    /// A marker that can be neither read nor ruled out.
+    Unreadable,
+}
+
+impl std::fmt::Display for SlotState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SlotState::Registered => "registered",
+            SlotState::Orphaned => "orphaned",
+            SlotState::Unmarked => "unmarked",
+            SlotState::Unreadable => "unreadable",
+        })
+    }
+}
+
 /// One baseline directory as an operator sees it.
 pub struct Listed {
     pub path: PathBuf,
     /// The fork point its marker names, absent when there is no marker to trust.
     pub sha: Option<String>,
+    pub state: SlotState,
     pub referencers: Vec<PathBuf>,
     pub bytes: u64,
+}
+
+/// The baseline directory as an operator sees it.
+pub struct Listing {
+    pub baselines: Vec<Listed>,
+    /// Why nothing here can be reclaimed at all, when some worktree's own pin
+    /// cannot be read. Without it the referencer column reads as "free to
+    /// prune" for every row while a sweep refuses all of them.
+    pub note: Option<String>,
 }
 
 /// Enumerate via `read_dir` rather than `git worktree list`: a directory git no
 /// longer knows about is exactly what an operator needs to see, and the git
 /// list would render it invisible.
-pub fn list(baseline_dir: &Path, repo: &str) -> Result<Vec<Listed>> {
+pub fn list(baseline_dir: &Path, repo: &str) -> Result<Listing> {
     let refs = referencers(repo)?;
-    let mut out = Vec::new();
+    let registered = registrations(repo)?;
+    let mut baselines = Vec::new();
     for path in slots_in(baseline_dir)? {
-        let sha = match read_marker(&path) {
-            MarkerState::Ok(m) => Some(m.sha),
-            MarkerState::Unusable | MarkerState::Absent => None,
+        let (sha, state) = match read_marker(&path) {
+            MarkerState::Ok(m) => {
+                let state = if is_registered(&registered, &path) {
+                    SlotState::Registered
+                } else {
+                    SlotState::Orphaned
+                };
+                (Some(m.sha), state)
+            }
+            MarkerState::Unusable => (None, SlotState::Unreadable),
+            MarkerState::Absent => (None, SlotState::Unmarked),
         };
-        out.push(Listed {
+        baselines.push(Listed {
             referencers: refs
                 .naming(&path)
                 .into_iter()
@@ -791,16 +1021,24 @@ pub fn list(baseline_dir: &Path, repo: &str) -> Result<Vec<Listed>> {
             bytes: dir_size(&path),
             path,
             sha,
+            state,
         });
     }
-    Ok(out)
+    Ok(Listing {
+        baselines,
+        note: refs.unreadable_note(),
+    })
 }
 
-/// What a sweep took, and what it deliberately left where it was.
+/// What a sweep took, what it deliberately left where it was, and what it
+/// refused.
 #[derive(Default)]
 pub struct Pruned {
     pub removed: Vec<PathBuf>,
     pub reported: Vec<PathBuf>,
+    /// Baselines this sweep could not take. Each one's reason is warned about
+    /// as it happens; the list is what tells the caller the run was incomplete.
+    pub refused: Vec<PathBuf>,
 }
 
 /// Remove every unreferenced baseline in one pass under a single directory
@@ -808,9 +1046,9 @@ pub struct Pruned {
 /// which takes that same lock: two open file descriptions on one lock file
 /// block each other even inside one process.
 ///
-/// A dry run walks the same path and stops one step short of each removal, so
-/// `removed` names exactly what a real sweep would take, and the refusals it
-/// would print are printed here too.
+/// A dry run reaches the same verdict for every slot and stops before carrying
+/// it out, so `removed` names exactly what a real sweep would take, and the
+/// refusals it would print are printed here too.
 pub fn prune_all(
     baseline_dir: &Path,
     repo: &str,
@@ -830,8 +1068,14 @@ pub fn prune_all(
     };
     locks::with_dir(baseline_dir, || {
         let refs = referencers(repo)?;
+        // Printed once for the sweep rather than once per slot: the note names
+        // the worktrees to repair, and it is the same list for every baseline.
+        if let Some(note) = refs.unreadable_note() {
+            eprintln!("warning: {note}");
+        }
         let mut removed = Vec::new();
         let mut reported = Vec::new();
+        let mut refused = Vec::new();
         for path in slots_in(baseline_dir)? {
             // No marker means devkit cannot prove it created this tree, so it
             // is named and left alone rather than deleted.
@@ -839,14 +1083,21 @@ pub fn prune_all(
                 reported.push(path);
                 continue;
             }
-            match remove_if_unreferenced(repo, &path, &refs, ports, force, sweep) {
+            match remove_if_unreferenced(repo, &path, &refs, Gates::sweep(force), ports, sweep) {
                 Ok(true) => removed.push(path),
                 Ok(false) => {}
                 // One stuck baseline must not abandon the sweep.
-                Err(e) => eprintln!("warning: {}: {e:#}", path.display()),
+                Err(e) => {
+                    eprintln!("warning: {}: {e:#}", path.display());
+                    refused.push(path);
+                }
             }
         }
-        Ok(Pruned { removed, reported })
+        Ok(Pruned {
+            removed,
+            reported,
+            refused,
+        })
     })
 }
 
@@ -854,9 +1105,15 @@ pub fn prune_all(
 /// dependency tree; `jwalk_parallelism` is evaluated here, on the thread that
 /// builds the walk, since inside `pool::install` it would see itself as nested
 /// and silently go serial.
+///
+/// jwalk's `skip_hidden` default is true and would fail quietly here: a
+/// baseline's `.venv`, `.next`, `.turbo` and its own `.devkit` are dotfiles, so
+/// the default reports a fraction of the tree, or nothing at all. Symlinks stay
+/// unfollowed so a link into a tree already counted is not counted twice.
 fn dir_size(path: &Path) -> u64 {
     let parallelism = devkit_common::pool::jwalk_parallelism();
     jwalk::WalkDir::new(path)
+        .skip_hidden(false)
         .parallelism(parallelism)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -1822,19 +2079,20 @@ mod tests {
         make_unclassifiable(&f.baseline);
         // Built by hand, empty: the removal must be refused by the identity
         // check rather than by a scan that already knows it cannot prove
-        // anything.
+        // anything. A real scan cannot supply that state — a tree it cannot
+        // classify is one of the worktrees it reports as unreadable — so the
+        // decision is driven directly.
         let refs = References {
             by_baseline: BTreeMap::new(),
             unreadable: vec![],
         };
 
-        let err = remove_if_unreferenced(
+        let err = decide(
             &f.repo,
             &f.baseline,
             &refs,
+            Gates::sweep(true),
             &registry::Data::default(),
-            true,
-            Sweep::Remove,
         )
         .unwrap_err();
 
@@ -2001,5 +2259,94 @@ mod tests {
         let err = drop_reference(&f.repo, &odd, &ports, false).unwrap_err();
         assert!(format!("{err:#}").contains("not UTF-8"), "{err:#}");
         assert!(odd.exists(), "the refused path must survive");
+    }
+
+    /// A baseline's biggest directories are dotted — `.venv`, `.next`,
+    /// `.turbo`, and the `.devkit` marker itself — and jwalk skips hidden
+    /// entries by default, so a size that ignored them would report a fraction
+    /// of the tree or nothing at all.
+    #[test]
+    fn a_size_counts_hidden_files_and_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("visible"), vec![b'x'; 100]).unwrap();
+        assert_eq!(dir_size(dir.path()), 100);
+
+        std::fs::create_dir_all(dir.path().join(".venv").join("lib")).unwrap();
+        std::fs::write(
+            dir.path().join(".venv").join("lib").join("f"),
+            vec![b'x'; 500],
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(".dotfile"), vec![b'x'; 7]).unwrap();
+
+        assert_eq!(dir_size(dir.path()), 607, "hidden entries were skipped");
+    }
+
+    /// The lock directory lives among the slots, and a baseline directory that
+    /// was never created is an empty listing rather than a failure.
+    #[test]
+    fn slots_skip_the_lock_directory_and_survive_an_absent_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("_baselines");
+        assert!(slots_in(&root).unwrap().is_empty());
+
+        std::fs::create_dir_all(root.join(locks::DIR)).unwrap();
+        std::fs::create_dir_all(root.join("bbbbbbbbbbbb")).unwrap();
+        std::fs::create_dir_all(root.join("aaaaaaaaaaaa")).unwrap();
+        std::fs::write(root.join("loose-file"), "x").unwrap();
+
+        assert_eq!(
+            slots_in(&root).unwrap(),
+            vec![root.join("aaaaaaaaaaaa"), root.join("bbbbbbbbbbbb")]
+        );
+    }
+
+    /// A marked tree this repository has no registration for is reclaimed as a
+    /// plain directory, since `git worktree remove` cannot take it — but not
+    /// while its git directory still resolves. That tree is some repository's
+    /// checkout, and a sweep run from a different one has no claim on it.
+    #[test]
+    fn an_orphan_standing_on_a_live_gitdir_is_refused() {
+        let f = two_worktrees_sharing_one_baseline();
+        remove_worktree(&f.repo, &f.a);
+        remove_worktree(&f.repo, &f.b);
+        let root = f.baseline.parent().unwrap();
+        let stranger = root.join("aaaaaaaaaaaa");
+        write_marker(&stranger, &fresh_marker("abc")).unwrap();
+        let admin = root.join("somebody-elses-admin-dir");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::write(
+            stranger.join(".git"),
+            format!("gitdir: {}\n", admin.display()),
+        )
+        .unwrap();
+
+        let err =
+            drop_reference(&f.repo, &stranger, &registry::Data::default(), false).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("repository that owns it"), "{msg}");
+        assert!(stranger.exists(), "the refused tree was removed");
+    }
+
+    /// The mark of a tree some repository still owns. An abandoned baseline
+    /// keeps its `.git` file while the admin directory it names is gone, and
+    /// that is the tree a sweep reclaims as a plain directory.
+    #[test]
+    fn a_gitdir_resolves_only_while_something_stands_behind_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = dir.path().join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        assert!(!resolves_a_gitdir(&tree), "no .git at all");
+
+        let admin = dir.path().join("admin");
+        std::fs::write(tree.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        assert!(!resolves_a_gitdir(&tree), "the target does not exist");
+
+        std::fs::create_dir_all(&admin).unwrap();
+        assert!(resolves_a_gitdir(&tree), "the target exists");
+
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        assert!(resolves_a_gitdir(&repo), "a .git directory is a repository");
     }
 }

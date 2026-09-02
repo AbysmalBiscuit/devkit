@@ -528,14 +528,19 @@ fn human_size(bytes: u64) -> String {
 
 fn cmd_baseline_list(cli: &RunCli, cwd: &str) -> Result<()> {
     let (dir, repo) = baseline_scope(cli, cwd)?;
-    let rows = crate::baseline::list(&dir, &repo)?;
-    if rows.is_empty() {
+    let listing = crate::baseline::list(&dir, &repo)?;
+    // The note goes out whether or not there is a table under it: it is the
+    // reason a sweep would reclaim nothing, and it outlives an empty directory.
+    if let Some(note) = &listing.note {
+        eprintln!("warning: {note}");
+    }
+    if listing.baselines.is_empty() {
         println!("no baselines under {}", dir.display());
         return Ok(());
     }
     println!("{}", dir.display());
-    let mut t = ui::table(&["BASELINE", "SHA", "SIZE", "REFERENCED BY"]);
-    for r in &rows {
+    let mut t = ui::table(&["BASELINE", "SHA", "STATE", "SIZE", "REFERENCED BY"]);
+    for r in &listing.baselines {
         let referencers = if r.referencers.is_empty() {
             "-".to_string()
         } else {
@@ -551,6 +556,7 @@ fn cmd_baseline_list(cli: &RunCli, cwd: &str) -> Result<()> {
                 Some(sha) => crate::baseline::short(sha).into(),
                 None => "-".into(),
             },
+            r.state.to_string().into(),
             human_size(r.bytes).into(),
             referencers.into(),
         ]);
@@ -580,6 +586,13 @@ fn cmd_baseline_prune(cli: &RunCli, cwd: &str, dry_run: bool, force: bool) -> Re
             println!("  {}", p.display());
         }
     }
+    // A sweep that refused work did not do what it was asked, and a script or a
+    // hook reading the exit status has no other way to learn that.
+    anyhow::ensure!(
+        out.refused.is_empty(),
+        "{} baseline(s) refused; see the warnings above",
+        out.refused.len()
+    );
     Ok(())
 }
 
@@ -1465,6 +1478,19 @@ mod tests {
         assert_eq!(parse_age("1d").unwrap(), 86400);
         assert_eq!(parse_age("45").unwrap(), 45, "bare number is seconds");
         assert!(parse_age("nope").is_err());
+    }
+
+    /// The unit changes at each boundary and the division truncates, so a tree
+    /// just short of the next unit must not round up into it.
+    #[test]
+    fn human_size_changes_unit_at_each_boundary() {
+        use super::human_size;
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1024), "1 KiB");
+        assert_eq!(human_size(1024 * 1024 - 1), "1023 KiB");
+        assert_eq!(human_size(1024 * 1024), "1 MiB");
+        assert_eq!(human_size(2 * 1024 * 1024 - 1), "1 MiB");
     }
 
     #[test]
