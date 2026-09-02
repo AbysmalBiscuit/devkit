@@ -7,6 +7,11 @@ devkit ships two things for agents:
 
 Either way the binaries must be on your `PATH`. The plugin's MCP entry and every config below invoke `devkit-mcp` by name. See [install.md](install.md).
 
+Running `devkit --help` through a pipe, which is what a tool call does, prints
+the whole command tree rather than the top-level list. One call is enough to
+learn every verb. Reach for a specific command's `--help` when you need its
+flags, arguments, and gates, which the tree does not carry.
+
 ## The MCP server
 
 `devkit-mcp` (equivalently, `devkit mcp`) exposes devkit's port and file-lock coordination to MCP-capable coding agents over stdio. It presents two tools:

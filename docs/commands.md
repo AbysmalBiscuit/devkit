@@ -2,6 +2,30 @@
 
 Every command below is a `devkit` subcommand and is also reachable under its own short name through a hardlink `devkit` creates beside itself. `docm list` and `devkit docs list` are the same command. See [install.md](install.md) for how those links are made and kept current.
 
+## Two help views
+
+Every command answers help in two shapes, and which one you get depends on
+where stdout points.
+
+| Spelling | At a terminal | Piped or redirected |
+|---|---|---|
+| `<cmd> -h` | terse | terse |
+| `<cmd> --help` | terse | full command tree |
+| `<cmd> help` | terse | full command tree |
+| `<cmd> help --full` | full command tree | full command tree |
+
+Terse is one line per direct subcommand. The full tree descends through every
+level, one line per command, so a coding agent reading help through a pipe
+learns the whole surface in a single call instead of one call per group.
+
+`-h` is terse under every condition and is the stable view to reach for. Set
+`DEVKIT_HELP=terse` or `DEVKIT_HELP=full` to pin the choice regardless of where
+output goes.
+
+The tree is scoped, never cascading: `devkit issue --help` descends through
+`issue` and stops. A command with no subcommands keeps clap's own rendering of
+its flags and arguments, since a tree cannot carry those.
+
 Each command's own `--help` is the authoritative flag list. This file carries what `--help` cannot: the resolution rules, the gates, and the reasons.
 
 - [`portm`: port registry](#portm-port-registry)
