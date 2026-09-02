@@ -257,6 +257,18 @@ pub fn apps_from_diff(diff_stat: &str, known: &[String], apps_dir: &str) -> Vec<
     found
 }
 
+/// The configured app names, appended to an error that leaves the caller
+/// without a usable one. Sorted, because the catalog is a hash map and an
+/// arbitrary order reads as noise.
+fn available_apps(known: &[String]) -> String {
+    if known.is_empty() {
+        return "no apps configured (add [apps.<name>] to devkit.toml)".into();
+    }
+    let mut names: Vec<&str> = known.iter().map(String::as_str).collect();
+    names.sort_unstable();
+    format!("available apps: {}", names.join(", "))
+}
+
 fn parse_user_env(pairs: &[String], file: Option<&str>) -> Result<BTreeMap<String, String>> {
     let mut m = BTreeMap::new();
     if let Some(f) = file {
@@ -627,12 +639,17 @@ fn cmd_up(
         apps_from_diff(&diff, &known, &cfg.defaults.apps_dir)
     };
     for a in &apps {
-        anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
+        anyhow::ensure!(
+            catalog.contains_key(a),
+            "unknown app `{a}`\n{}",
+            available_apps(&known)
+        );
     }
     anyhow::ensure!(
         !apps.is_empty(),
-        "no apps to run (none given and none detected in diff vs {})",
-        cfg.defaults.baseline_ref
+        "no apps to run (none given and none detected in diff vs {})\n{}",
+        cfg.defaults.baseline_ref,
+        available_apps(&known)
     );
     run::ensure_provider(catalog, &mut apps);
 
@@ -1000,7 +1017,7 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::apps_from_diff;
+    use super::{apps_from_diff, available_apps};
 
     #[test]
     fn reap_refused_without_tty() {
@@ -1156,5 +1173,19 @@ mod tests {
             "foundry-portal".to_string(),
         ];
         assert_eq!(apps_from_diff(diff, &known, "apps"), vec!["api", "lab-os"]);
+    }
+
+    #[test]
+    fn available_apps_sorts_the_names() {
+        let known = ["web".to_string(), "api".to_string(), "docs".to_string()];
+        assert_eq!(available_apps(&known), "available apps: api, docs, web");
+    }
+
+    #[test]
+    fn available_apps_says_so_when_none_are_configured() {
+        assert_eq!(
+            available_apps(&[]),
+            "no apps configured (add [apps.<name>] to devkit.toml)"
+        );
     }
 }
