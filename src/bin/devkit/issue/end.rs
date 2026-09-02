@@ -37,12 +37,31 @@ fn confirm(label: &str) -> bool {
     matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-/// The summary file `issue setup` recorded for this worktree, read before the
-/// worktree is removed and the record with it. Taken from the record rather
-/// than re-derived, so a `issue_summary_path` template edited since setup
-/// cannot leave the old file behind.
-fn recorded_summary(worktree: &Path) -> Option<String> {
-    devkit_common::record::read(worktree)?.summary
+/// What the record holds that outlives the worktree, read before the removal
+/// takes the record with it: the summary file `issue setup` wrote, and the
+/// baseline this worktree compared against. The summary comes from the record
+/// rather than being re-derived, so a `issue_summary_path` template edited
+/// since setup cannot leave the old file behind.
+fn recorded_leftovers(
+    worktree: &Path,
+) -> (Option<String>, Option<devkit_common::record::BaselinePin>) {
+    match devkit_common::record::read(worktree) {
+        Some(rec) => (rec.summary, rec.baseline),
+        None => (None, None),
+    }
+}
+
+/// Drop this worktree's reference to the baseline it compared against, removing
+/// the baseline when this was the last one. Runs after the worktree is gone, so
+/// two concurrent `issue end` runs cannot each count the other and each decline.
+///
+/// `issue end --force` is not threaded through: it waives uncommitted changes in
+/// the worktree, not a baseline's running servers, which stay a refusal.
+fn drop_baseline_reference(main: &Path, pin: &devkit_common::record::BaselinePin) -> Result<()> {
+    let repo = main.to_str().context("primary checkout path not UTF-8")?;
+    let ports = devkit_ports::registry::snapshot()?;
+    crate::baseline::drop_reference(repo, Path::new(&pin.path), &ports, false)?;
+    Ok(())
 }
 
 /// Whether `name` is an `ISSUE_*.md` file belonging to `issue_id`, for records
@@ -110,7 +129,7 @@ fn cleanup(
     if dirty && !force {
         return Err(Dirty.into());
     }
-    let summary = recorded_summary(&wt);
+    let (summary, baseline) = recorded_leftovers(&wt);
 
     let main = devkit_common::git::primary_checkout(&wt)?;
     let parent = main.parent().context("main repo has no parent")?;
@@ -125,6 +144,14 @@ fn cleanup(
         .args(rm)
         .timeout(devkit_common::git::SLOW_TIMEOUT)
         .output()?;
+
+    // Best-effort: `devrun baseline prune` is the guarantee, so a baseline left
+    // standing must not fail an otherwise-complete removal.
+    if let Some(pin) = &baseline
+        && let Err(e) = drop_baseline_reference(&main, pin)
+    {
+        eprintln!("warning: baseline {} not reclaimed: {e:#}", pin.path);
+    }
 
     // Ref deletion can rewrite packed-refs, so concurrent branch deletes contend
     // on packed-refs.lock. Serialize just this step; a thread that can't take the
@@ -583,7 +610,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = recorded_summary(&wt).expect("record names the summary");
+        let found = recorded_leftovers(&wt).0.expect("record names the summary");
         std::fs::remove_file(&found).unwrap();
         assert!(!summary.exists());
     }
@@ -603,7 +630,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(recorded_summary(dir.path()).is_none());
+        assert!(recorded_leftovers(dir.path()).0.is_none());
     }
 
     #[test]
@@ -739,7 +766,7 @@ mod tests {
     #[test]
     fn a_worktree_with_no_record_has_nothing_to_remove() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(recorded_summary(dir.path()).is_none());
+        assert!(recorded_leftovers(dir.path()).0.is_none());
     }
 
     /// `run_for` never deletes: a required entry that fails reports the reason

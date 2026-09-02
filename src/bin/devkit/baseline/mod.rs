@@ -9,9 +9,11 @@ use crate::issue::setup::{backfill_includes, prep_apps, run_after_worktree_creat
 use anyhow::{Context, Result};
 use devkit_common::git::Git;
 use devkit_common::progress::Steps;
+use devkit_common::record::RecordState;
 use devkit_common::worktree::BASELINE_MARKER;
 use devkit_config::{Config, expand_tilde};
 use devkit_ports::apps::App;
+use devkit_ports::registry;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -404,6 +406,180 @@ fn slot_name(path: &Path) -> Result<String> {
         .with_context(|| format!("baseline slot has no directory name: {}", path.display()))?
         .to_string_lossy()
         .into_owned())
+}
+
+/// Which worktrees name which baseline, as of one scan.
+pub struct References {
+    /// Baseline path → the worktrees naming it.
+    pub by_baseline: BTreeMap<PathBuf, Vec<PathBuf>>,
+    /// Worktrees whose record exists and does not parse. Which baseline each
+    /// names is unknown, so no baseline is provably unreferenced while any of
+    /// these exist.
+    pub unreadable: Vec<PathBuf>,
+}
+
+impl References {
+    /// Why this scan can prove nothing, naming the worktrees to repair. A scan
+    /// that stayed silent would leave a user with one corrupt
+    /// `.devkit/issue.toml` watching baselines never get reclaimed, with
+    /// nothing to point at.
+    fn unreadable_note(&self) -> Option<String> {
+        if self.unreadable.is_empty() {
+            return None;
+        }
+        let names: Vec<String> = self
+            .unreadable
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        Some(format!(
+            "no baseline can be reclaimed while these worktrees' records are unreadable: {}",
+            names.join(", ")
+        ))
+    }
+}
+
+/// Which worktrees name each baseline. Derived rather than stored: a registry
+/// would keep a phantom reference alive after a plain `git worktree remove`,
+/// and the fix for that is this scan with a file to maintain beside it.
+pub fn referencers(repo: &str) -> Result<References> {
+    let (_, others) = devkit_common::worktree::discover(repo)?;
+    let mut by_baseline: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    let mut unreadable = Vec::new();
+    for w in others {
+        match devkit_common::record::read_state(&w.path) {
+            RecordState::Ok(r) => {
+                if let Some(b) = r.baseline {
+                    by_baseline
+                        .entry(PathBuf::from(b.path))
+                        .or_default()
+                        .push(w.path);
+                }
+            }
+            RecordState::Unusable => unreadable.push(w.path),
+            RecordState::Absent => {}
+        }
+    }
+    Ok(References {
+        by_baseline,
+        unreadable,
+    })
+}
+
+/// Whether any live port row is held by `baseline`.
+pub fn live_rows_hold(baseline: &Path, ports: &registry::Data) -> bool {
+    let holder = baseline.to_string_lossy();
+    ports
+        .entries
+        .values()
+        .any(|e| e.holder == holder && e.pid.is_some_and(registry::pid_alive))
+}
+
+/// The ports one holder owns, for `run::bring_down_ports`.
+#[allow(dead_code)]
+pub fn rows_for_holder(holder: &str, ports: &registry::Data) -> Vec<u16> {
+    ports
+        .entries
+        .iter()
+        .filter(|(_, e)| e.holder == holder)
+        .map(|(p, _)| *p)
+        .collect()
+}
+
+/// Remove `baseline` when nothing references it any more. The caller's own
+/// worktree must already be gone: counting while it still exists makes two
+/// concurrent `issue end` runs each see the other and each decline.
+pub fn drop_reference(
+    repo: &str,
+    baseline: &Path,
+    ports: &registry::Data,
+    force: bool,
+) -> Result<bool> {
+    let root = baseline.parent().context("baseline path has no parent")?;
+    locks::with_dir(root, || {
+        let refs = referencers(repo)?;
+        remove_if_unreferenced(repo, baseline, &refs, ports, force)
+    })
+}
+
+/// The body of [`drop_reference`], without the directory lock. A sweep already
+/// holds that lock and calls this directly: `flock` blocks on a second open of
+/// the same file even within one process, so a locked function must never call
+/// another locked function.
+fn remove_if_unreferenced(
+    repo: &str,
+    baseline: &Path,
+    refs: &References,
+    ports: &registry::Data,
+    force: bool,
+) -> Result<bool> {
+    if let Some(note) = refs.unreadable_note() {
+        eprintln!("warning: {note}");
+        return Ok(false);
+    }
+    if refs
+        .by_baseline
+        .get(baseline)
+        .is_some_and(|v| !v.is_empty())
+    {
+        return Ok(false);
+    }
+    let root = baseline.parent().context("baseline path has no parent")?;
+    let name = slot_name(baseline)?;
+    // Resolved before the lock: handing `git worktree remove --force` a path
+    // that lost its non-UTF-8 bytes would aim a destructive command somewhere
+    // other than the baseline.
+    let path_s = baseline_path_str(baseline)?;
+    locks::with_slot(root, &name, || {
+        // Whoever held the lock before this call may have been the last
+        // referencer too, and removed the tree already. There is nothing left
+        // to remove and nothing went wrong.
+        if !baseline.exists() {
+            return Ok(false);
+        }
+        // A live server in the tree is the one thing worth refusing for.
+        if !force && live_rows_hold(baseline, ports) {
+            anyhow::bail!(
+                "{} still has running servers; stop them or pass --force",
+                baseline.display()
+            );
+        }
+        // Always `--force`: a baseline holds include copies and rendered prep
+        // files, and any untracked file would otherwise refuse the removal.
+        Git::at(Path::new(repo))
+            .args(["worktree", "remove", "--force", path_s])
+            .timeout(devkit_common::git::SLOW_TIMEOUT)
+            .output()?;
+        Ok(true)
+    })
+}
+
+/// Point a worktree's record at a baseline, leaving its other fields alone.
+///
+/// Writes a record when there is none. A worktree made by hand rather than by
+/// `issue setup` still holds a reference, and skipping the write there would
+/// let prune reclaim a baseline that worktree is serving from.
+#[allow(dead_code)]
+pub fn write_pin(worktree: &Path, sha: &str, path: &Path) -> Result<()> {
+    let mut rec = match devkit_common::record::read(worktree) {
+        Some(rec) => rec,
+        None => {
+            let branch = devkit_common::git::branch(worktree)?;
+            devkit_common::record::IssueRecord {
+                issue: branch.clone(),
+                slug: branch,
+                apps: vec![],
+                summary: None,
+                pr: None,
+                baseline: None,
+            }
+        }
+    };
+    rec.baseline = Some(devkit_common::record::BaselinePin {
+        sha: sha.to_string(),
+        path: path.to_string_lossy().into_owned(),
+    });
+    devkit_common::record::write(worktree, &rec)
 }
 
 #[cfg(test)]
@@ -1075,5 +1251,233 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("HEAD"), "{msg}");
         assert!(msg.contains("main"), "{msg}");
+    }
+
+    struct Fixture {
+        _tmp: tempfile::TempDir,
+        repo: String,
+        baseline: PathBuf,
+        a: PathBuf,
+        b: PathBuf,
+    }
+
+    /// One commit, one baseline at it, two issue worktrees whose records both
+    /// name that baseline.
+    fn two_worktrees_sharing_one_baseline() -> Fixture {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("main");
+        let sha = primary_with_one_commit(&repo);
+
+        let baseline = tmp.path().join("_baselines").join(short(&sha));
+        std::fs::create_dir_all(baseline.parent().unwrap()).unwrap();
+        fixture_git(
+            &repo,
+            &["worktree", "add", "--detach", baseline.to_str().unwrap()],
+        );
+        write_marker(&baseline, &fresh_marker(&sha)).unwrap();
+
+        let make = |name: &str| {
+            let wt = tmp.path().join(name);
+            fixture_git(
+                &repo,
+                &["worktree", "add", "-b", name, wt.to_str().unwrap()],
+            );
+            devkit_common::record::write(
+                &wt,
+                &devkit_common::record::IssueRecord {
+                    issue: name.to_string(),
+                    slug: name.to_string(),
+                    apps: vec![],
+                    summary: None,
+                    pr: None,
+                    baseline: Some(devkit_common::record::BaselinePin {
+                        sha: sha.clone(),
+                        path: baseline.to_string_lossy().into_owned(),
+                    }),
+                },
+            )
+            .unwrap();
+            wt
+        };
+        let a = make("a");
+        let b = make("b");
+        Fixture {
+            _tmp: tmp,
+            repo: repo.to_string_lossy().into_owned(),
+            baseline,
+            a,
+            b,
+        }
+    }
+
+    fn remove_worktree(repo: &str, wt: &Path) {
+        fixture_git(
+            Path::new(repo),
+            &["worktree", "remove", "--force", wt.to_str().unwrap()],
+        );
+    }
+
+    fn corrupt_record(wt: &Path) {
+        std::fs::write(wt.join(".devkit").join("issue.toml"), "issue = ").unwrap();
+    }
+
+    #[test]
+    fn a_corrupt_record_counts_as_a_referencer() {
+        let f = two_worktrees_sharing_one_baseline();
+        corrupt_record(&f.b);
+        remove_worktree(&f.repo, &f.a);
+        let ports = registry::Data::default();
+        assert!(!drop_reference(&f.repo, &f.baseline, &ports, false).unwrap());
+        assert!(f.baseline.exists(), "cannot-tell must not delete");
+    }
+
+    /// The refusal is silent to the user unless it says which record it could
+    /// not read: one corrupt `.devkit/issue.toml` otherwise stops every
+    /// baseline from ever being reclaimed with nothing to point at.
+    #[test]
+    fn the_refusal_names_the_worktrees_it_could_not_read() {
+        let refs = References {
+            by_baseline: BTreeMap::new(),
+            unreadable: vec![PathBuf::from("/w/a"), PathBuf::from("/w/b")],
+        };
+        let note = refs
+            .unreadable_note()
+            .expect("a note for unreadable records");
+        assert!(note.contains("/w/a"), "{note}");
+        assert!(note.contains("/w/b"), "{note}");
+        assert!(
+            References {
+                by_baseline: BTreeMap::new(),
+                unreadable: vec![],
+            }
+            .unreadable_note()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn the_last_referencer_removes_the_baseline() {
+        let f = two_worktrees_sharing_one_baseline();
+        let ports = registry::Data::default();
+        remove_worktree(&f.repo, &f.a);
+        assert!(!drop_reference(&f.repo, &f.baseline, &ports, false).unwrap());
+        assert!(f.baseline.exists());
+        remove_worktree(&f.repo, &f.b);
+        assert!(drop_reference(&f.repo, &f.baseline, &ports, false).unwrap());
+        assert!(!f.baseline.exists());
+    }
+
+    /// The regression test for the leak this design's ordering exists to
+    /// prevent. Counting references while the caller's own worktree still
+    /// exists makes each of two concurrent `issue end` runs see the other and
+    /// decline, which leaks the baseline in the common case rather than a rare
+    /// one.
+    #[test]
+    fn two_concurrent_ends_leave_no_baseline_behind() {
+        let f = two_worktrees_sharing_one_baseline();
+        let removed: Vec<bool> = std::thread::scope(|s| {
+            let handles: Vec<_> = [f.a.clone(), f.b.clone()]
+                .into_iter()
+                .map(|wt| {
+                    let repo = f.repo.clone();
+                    let baseline = f.baseline.clone();
+                    s.spawn(move || {
+                        remove_worktree(&repo, &wt);
+                        let ports = registry::Data::default();
+                        drop_reference(&repo, &baseline, &ports, false).unwrap()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(
+            removed.iter().filter(|r| **r).count(),
+            1,
+            "exactly one remover"
+        );
+        assert!(!f.baseline.exists(), "baseline leaked");
+    }
+
+    #[test]
+    fn a_live_row_refuses_without_force() {
+        let f = two_worktrees_sharing_one_baseline();
+        remove_worktree(&f.repo, &f.a);
+        remove_worktree(&f.repo, &f.b);
+        let mut ports = registry::Data::default();
+        ports.entries.insert(
+            3000,
+            registry::Entry {
+                app: "api".into(),
+                holder: f.baseline.to_string_lossy().into_owned(),
+                role: registry::Role::Baseline,
+                pid: Some(std::process::id()),
+                logfile: None,
+                ts: registry::now(),
+            },
+        );
+        let err = drop_reference(&f.repo, &f.baseline, &ports, false).unwrap_err();
+        assert!(format!("{err:#}").contains("running servers"), "{err:#}");
+        assert!(
+            drop_reference(&f.repo, &f.baseline, &ports, true).unwrap(),
+            "force removes"
+        );
+    }
+
+    /// A worktree made by hand has no record. It still references the baseline
+    /// it runs against, so the pin creates the record rather than declining.
+    #[test]
+    fn pinning_a_worktree_with_no_record_creates_one() {
+        let f = two_worktrees_sharing_one_baseline();
+        let bare = f.baseline.parent().unwrap().parent().unwrap().join("c");
+        fixture_git(
+            Path::new(&f.repo),
+            &["worktree", "add", "-b", "c", bare.to_str().unwrap()],
+        );
+        assert!(
+            devkit_common::record::read(&bare).is_none(),
+            "fixture must start recordless"
+        );
+
+        write_pin(&bare, "d13d90b724bf8a3c", &f.baseline).unwrap();
+        let rec = devkit_common::record::read(&bare).unwrap();
+        assert_eq!(rec.baseline.unwrap().path, f.baseline.to_string_lossy());
+        assert_eq!(rec.issue, "c", "identity falls back to the branch");
+
+        let refs = referencers(&f.repo).unwrap();
+        assert!(
+            refs.by_baseline[&f.baseline].contains(&bare),
+            "the new record counts"
+        );
+    }
+
+    /// A baseline holds rendered prep files and include copies that git does
+    /// not track, so a plain `worktree remove` would refuse over them.
+    #[test]
+    fn untracked_prep_output_does_not_block_removal() {
+        let f = two_worktrees_sharing_one_baseline();
+        std::fs::write(f.baseline.join(".env.local"), "A=1").unwrap();
+        remove_worktree(&f.repo, &f.a);
+        remove_worktree(&f.repo, &f.b);
+        let ports = registry::Data::default();
+        assert!(drop_reference(&f.repo, &f.baseline, &ports, false).unwrap());
+    }
+
+    /// `git worktree remove --force` deletes whatever path it is handed, so a
+    /// path that cannot round-trip through `&str` must stop the call rather
+    /// than reach it as something else.
+    #[test]
+    #[cfg(unix)]
+    fn a_non_utf8_baseline_path_is_refused_before_the_removal() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let f = two_worktrees_sharing_one_baseline();
+        let root = f.baseline.parent().unwrap();
+        let odd = root.join(std::ffi::OsStr::from_bytes(b"base\xffline"));
+        std::fs::create_dir_all(&odd).unwrap();
+        let ports = registry::Data::default();
+
+        let err = drop_reference(&f.repo, &odd, &ports, false).unwrap_err();
+        assert!(format!("{err:#}").contains("not UTF-8"), "{err:#}");
+        assert!(odd.exists(), "the refused path must survive");
     }
 }

@@ -96,7 +96,6 @@ fn with_slot_marked<T>(
 }
 
 /// Serializes a sweep over the whole directory against concurrent deletions.
-#[allow(dead_code)]
 pub fn with_dir<T>(baseline_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     hold(&lock_path(baseline_dir, DIR_LOCK), f)
 }
