@@ -34,6 +34,8 @@
 | `tests/install_links.rs` | the guard that `devkit --help` still creates the shim hardlinks, using that file's isolated-state helpers |
 | `tests/completions.rs` | assert no `help` declarations |
 | `docs/commands.md`, `docs/agents.md` | user-facing documentation |
+| `src/bin/devkit/run/mod.rs` | `available_apps`, and the two `cmd_up` failure paths that call it (Task 8) |
+| `tests/up_apps_hint.rs` | new. `devrun up` naming the configured apps on both failure paths (Task 8) |
 
 ---
 
@@ -1296,6 +1298,244 @@ Expected: all green.
 git add docs/commands.md docs/agents.md
 git commit -m "docs(help): document the terse and full views"
 ```
+
+---
+
+### Task 8: Name the configured apps when `devrun up` has none to run
+
+**Files:**
+- Modify: `src/bin/devkit/run/mod.rs` (`cmd_up`, and the `#[cfg(test)] mod tests` at the bottom)
+- Create: `tests/up_apps_hint.rs`
+
+**Interfaces:**
+- Consumes: nothing from the help-verbosity tasks. This task is independent of Tasks 1 through 7.
+- Produces: nothing later depends on.
+
+#### Why
+
+`devrun task` with no name lists the configured tasks, so a reader who forgot a
+name gets it back immediately. `devrun up` has no such affordance: naming an app
+that is not in the catalog gets `unknown app \`web\``, and a bare `devrun up`
+whose diff detects nothing gets `no apps to run (none given and none detected in
+diff vs origin/main)`. Both are exactly the moment the reader needs the list, and
+neither gives it.
+
+Bare `devrun up` keeps inferring apps from the diff. That inference is the
+documented behavior and several tests cover it, so this task does not replace it
+with a listing. The listing is appended to the two failure paths instead.
+
+#### The helper
+
+Add to `src/bin/devkit/run/mod.rs`, near `apps_from_diff`:
+
+```rust
+/// The configured app names, appended to an error that leaves the caller
+/// without a usable one. Sorted, because the catalog is a hash map and an
+/// arbitrary order reads as noise.
+fn available_apps(known: &[String]) -> String {
+    if known.is_empty() {
+        return "no apps configured (add [apps.<name>] to devkit.toml)".into();
+    }
+    let mut names: Vec<&str> = known.iter().map(String::as_str).collect();
+    names.sort_unstable();
+    format!("available apps: {}", names.join(", "))
+}
+```
+
+#### The two call sites
+
+In `cmd_up`, `known` is already bound a few lines above as
+`catalog.keys().cloned().collect()`. Replace the two `anyhow::ensure!` calls:
+
+```rust
+    for a in &apps {
+        anyhow::ensure!(
+            catalog.contains_key(a),
+            "unknown app `{a}`\n{}",
+            available_apps(&known)
+        );
+    }
+    anyhow::ensure!(
+        !apps.is_empty(),
+        "no apps to run (none given and none detected in diff vs {})\n{}",
+        cfg.defaults.baseline_ref,
+        available_apps(&known)
+    );
+```
+
+Leave every other `unknown app` site alone. The MCP `devrun.up` handler,
+`issue setup`, `issue checkout-pr` and `devkit ports` each raise their own; this
+task changes `devrun up` only.
+
+#### Step 1: Write the failing unit tests
+
+Add to the existing `#[cfg(test)] mod tests` at the bottom of
+`src/bin/devkit/run/mod.rs`:
+
+```rust
+#[test]
+fn available_apps_sorts_the_names() {
+    let known = ["web".to_string(), "api".to_string(), "docs".to_string()];
+    assert_eq!(available_apps(&known), "available apps: api, docs, web");
+}
+
+#[test]
+fn available_apps_says_so_when_none_are_configured() {
+    assert_eq!(
+        available_apps(&[]),
+        "no apps configured (add [apps.<name>] to devkit.toml)"
+    );
+}
+```
+
+#### Step 2: Run them to verify they fail
+
+Run: `cargo nextest run --bin devkit available_apps`
+Expected: FAIL to compile, `cannot find function available_apps in this scope`.
+
+#### Step 3: Write the helper and rewire the two call sites
+
+Use the code above.
+
+#### Step 4: Run the unit tests to verify they pass
+
+Run: `cargo nextest run --bin devkit available_apps`
+Expected: PASS, 2 tests.
+
+#### Step 5: Write the failing integration test
+
+The error text is what a person reads on a terminal, so it is asserted through
+the real binary rather than the helper alone. Create `tests/up_apps_hint.rs`:
+
+```rust
+//! `devrun up` names the configured apps on the two paths that leave the
+//! caller without one: an app that is not in the catalog, and a bare `up`
+//! whose diff detects nothing. Drives `devkit run` directly (not the `devrun`
+//! shim). Both paths fail before anything spawns, so no server is ever
+//! started. Uses an isolated HOME/XDG_STATE_HOME so the port registry never
+//! touches the real one.
+
+use std::path::Path;
+use std::process::Command;
+
+/// A temp dir that is a git repo (`cmd_up` resolves the worktree root) with a
+/// devkit.toml defining two apps and no tasks. `baseline_ref` names a ref that
+/// does not exist here, so the diff-inference pass finds nothing and the bare
+/// `up` reaches the "no apps to run" arm.
+fn setup() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let git = |args: &[&str]| {
+        devkit_common::git::Git::fixture(root)
+            .args(args.iter().copied())
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
+    };
+    git(&["init", "-q"]);
+    std::fs::write(
+        root.join("devkit.toml"),
+        r#"
+[defaults]
+worktree_root = "wts"
+branch_prefix = "x/"
+baseline_ref = "origin/main"
+baseline_path = "b"
+
+[apps.web]
+base_port = 39240
+path = "."
+launch = ["git", "version"]
+
+[apps.api]
+base_port = 39250
+path = "."
+launch = ["git", "version"]
+"#,
+    )
+    .expect("write devkit.toml");
+    dir
+}
+
+fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
+    let state = dir.join("state");
+    Command::new(env!("CARGO_BIN_EXE_devkit"))
+        .arg("run")
+        .args(args)
+        .current_dir(dir)
+        .env("HOME", dir)
+        .env("XDG_STATE_HOME", &state)
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .env("LOCALAPPDATA", &state) // Windows: keep the registry off the real one
+        .env("USERPROFILE", dir) // Windows: keep config resolution off the real home
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .output()
+        .expect("run devkit run")
+}
+
+#[test]
+fn an_unknown_app_names_the_configured_ones() {
+    let dir = setup();
+    let out = run_in(dir.path(), &["up", "nope"]);
+    assert!(!out.status.success(), "up with an unknown app should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("unknown app `nope`"),
+        "error should name the app that was not found: {err}"
+    );
+    assert!(
+        err.contains("available apps: api, web"),
+        "error should list the configured apps in sorted order: {err}"
+    );
+}
+
+#[test]
+fn a_bare_up_with_nothing_detected_names_the_configured_apps() {
+    let dir = setup();
+    let out = run_in(dir.path(), &["up"]);
+    assert!(!out.status.success(), "bare up with no diff should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no apps to run"),
+        "error should say nothing was resolved: {err}"
+    );
+    assert!(
+        err.contains("available apps: api, web"),
+        "error should list the configured apps in sorted order: {err}"
+    );
+}
+```
+
+#### Step 6: Run the integration tests to verify they pass
+
+Run: `cargo nextest run --test up_apps_hint`
+Expected: PASS, 2 tests.
+
+If `a_bare_up_with_nothing_detected_names_the_configured_apps` reaches a
+different error than "no apps to run" (for instance the diff inference picking
+something up, or the worktree-root resolution failing first), report what it
+actually printed rather than reshaping the assertion to match. The fixture is
+meant to reach that arm; if it does not, the fixture needs a fix and the
+controller wants to know.
+
+#### Step 7: Run the gate
+
+Run: `cargo nextest run --workspace --no-fail-fast && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all`
+Expected: all green. `apps_from_diff`'s existing tests are untouched: this task
+adds to the error paths and changes no inference behavior.
+
+#### Step 8: Commit
+
+```bash
+git add src/bin/devkit/run/mod.rs tests/up_apps_hint.rs
+git commit -m "feat(devrun): name configured apps when up has none"
+```
+
+#### Step 9: Document it
+
+Check whether `docs/commands.md`'s `devrun up` section describes the failure
+behavior. If it does, extend that description to say the error names the
+configured apps. If it does not, add nothing: the error text speaks for itself
+and a living doc should not restate it. Report which you found and what you did.
 
 ---
 
