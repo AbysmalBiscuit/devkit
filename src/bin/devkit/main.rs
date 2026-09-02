@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 mod auth;
 mod brief;
+mod config;
 mod docs;
 mod doctor;
 mod issue;
@@ -82,6 +83,9 @@ enum Cmd {
         #[arg(long)]
         additional_context: bool,
     },
+    /// Show the resolved config, or list configured apps or tasks.
+    #[command(display_name = "devkit config")]
+    Config(config::ConfigCli),
     /// Check configured credentials and report what is missing.
     Doctor {
         /// Emit the report as JSON instead of a table.
@@ -334,6 +338,7 @@ fn main() -> Result<()> {
                     None => schema::run(),
                     Some(SchemaCmd::Init { path }) => schema::init(&path),
                 },
+                Cmd::Config(c) => config::run(c),
                 Cmd::Doctor { json } => doctor::run(json),
                 Cmd::Completions { shell, all } => {
                     let scripts = if all {

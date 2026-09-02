@@ -1,5 +1,4 @@
 mod baseline;
-mod config;
 
 use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
@@ -146,11 +145,6 @@ pub(crate) enum Cmd {
         #[arg(short = 'f', long)]
         follow: bool,
     },
-    /// Show the effective merged config, or list configured apps or tasks.
-    Config {
-        #[command(subcommand)]
-        cmd: ConfigCmd,
-    },
     /// Print a shell-completion script (bash, zsh, fish, ...) to stdout.
     Completions {
         /// Shell to emit the script for.
@@ -170,31 +164,6 @@ pub(crate) enum Cmd {
         /// Print the rendered plan (cwd, argv, env, resolved ports) without executing.
         #[arg(long)]
         dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum ConfigCmd {
-    /// Print the effective merged config (TOML by default).
-    Show {
-        /// Annotate each value with the file it was resolved from.
-        #[arg(long)]
-        origin: bool,
-        /// Emit JSON instead of TOML.
-        #[arg(long)]
-        json: bool,
-    },
-    /// List the configured apps from the merged config.
-    Apps {
-        /// Emit JSON instead of a table.
-        #[arg(long)]
-        json: bool,
-    },
-    /// List the configured tasks from the merged config.
-    Tasks {
-        /// Emit JSON instead of a table.
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -488,11 +457,6 @@ pub fn run(cli: RunCli) -> Result<()> {
         Cmd::Logs { app, role, follow } => {
             cmd_logs(&cwd, app, role.and_then(RoleSelector::filter), *follow)
         }
-        Cmd::Config { cmd } => match cmd {
-            ConfigCmd::Show { origin, json } => config::show(&cli, &cwd, *origin, *json),
-            ConfigCmd::Apps { json } => config::apps(&cli, &cwd, *json),
-            ConfigCmd::Tasks { json } => config::tasks(&cli, &cwd, *json),
-        },
         Cmd::Completions { shell } => crate::emit_completions(*shell, "run", "devrun"),
         Cmd::Task {
             name,

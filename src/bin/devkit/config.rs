@@ -1,5 +1,5 @@
-use super::RunCli;
 use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
 use devkit_common::ui;
 use devkit_config::{self as config, Config, Provenance};
 use devkit_ports::apps::App;
@@ -8,9 +8,71 @@ use devkit_ports::task::{self, TaskRow};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-/// `devrun config show [--origin] [--json]`
-pub fn show(cli: &RunCli, cwd: &str, origin: bool, json: bool) -> Result<()> {
-    let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
+/// Show the resolved config, or list configured apps or tasks.
+#[derive(Parser)]
+pub struct ConfigCli {
+    #[command(subcommand)]
+    cmd: Option<ConfigCmd>,
+    /// Run as if this command had started in DIR instead of the current directory.
+    #[arg(short = 'C', long = "dir", global = true)]
+    dir: Option<String>,
+    /// devkit.toml to load instead of the one discovered from the start directory.
+    #[arg(long, global = true)]
+    config: Option<String>,
+    /// Annotate each value with the file it was resolved from.
+    #[arg(long)]
+    origin: bool,
+    /// Emit JSON instead of TOML.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Print the effective merged config (TOML by default).
+    Show {
+        /// Annotate each value with the file it was resolved from.
+        #[arg(long)]
+        origin: bool,
+        /// Emit JSON instead of TOML.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the configured apps from the merged config.
+    Apps {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the configured tasks from the merged config.
+    Tasks {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Bare `devkit config` is `devkit config show`: the resolved config is what
+/// people reach for, and making them name the subcommand buys nothing.
+///
+/// A flag may be spelled before or after the subcommand, so each one is the
+/// union of the two positions.
+pub fn run(cli: ConfigCli) -> Result<()> {
+    let explicit = cli.config.as_deref().map(Path::new);
+    let cwd = cli.dir.as_deref().unwrap_or(".");
+    match cli.cmd {
+        None => show(explicit, cwd, cli.origin, cli.json),
+        Some(ConfigCmd::Show { origin, json }) => {
+            show(explicit, cwd, cli.origin || origin, cli.json || json)
+        }
+        Some(ConfigCmd::Apps { json }) => apps(explicit, cwd, cli.json || json),
+        Some(ConfigCmd::Tasks { json }) => tasks(explicit, cwd, cli.json || json),
+    }
+}
+
+/// `devkit config show [--origin] [--json]`
+fn show(explicit: Option<&Path>, cwd: &str, origin: bool, json: bool) -> Result<()> {
+    let loaded = load::load(explicit, Path::new(cwd))?;
     let cfg = &loaded.config;
     let prov = &loaded.provenance;
     match (origin, json) {
@@ -31,9 +93,9 @@ pub fn show(cli: &RunCli, cwd: &str, origin: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// `devrun config apps [--json]` — a pure readout of the merged app catalog.
-pub fn apps(cli: &RunCli, cwd: &str, json: bool) -> Result<()> {
-    let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
+/// `devkit config apps [--json]` — a pure readout of the merged app catalog.
+fn apps(explicit: Option<&Path>, cwd: &str, json: bool) -> Result<()> {
+    let loaded = load::load(explicit, Path::new(cwd))?;
     if json {
         println!(
             "{}",
@@ -45,9 +107,9 @@ pub fn apps(cli: &RunCli, cwd: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// `devrun config tasks [--json]` — a pure readout of the merged `[tasks]`.
-pub fn tasks(cli: &RunCli, cwd: &str, json: bool) -> Result<()> {
-    let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
+/// `devkit config tasks [--json]` — a pure readout of the merged `[tasks]`.
+fn tasks(explicit: Option<&Path>, cwd: &str, json: bool) -> Result<()> {
+    let loaded = load::load(explicit, Path::new(cwd))?;
     let rows = task::list(&loaded.config);
     if json {
         println!("{}", serde_json::to_string_pretty(&tasks_json(&rows))?);
