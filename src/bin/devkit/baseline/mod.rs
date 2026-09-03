@@ -1641,6 +1641,12 @@ mod tests {
     /// Counting itself against itself would make the state `Slot::Rebuild`
     /// exists to repair the one state it can never repair, and the refusal
     /// would name the tree being rebuilt as a foreign worktree.
+    ///
+    /// Unix only: the state needs a marker read that fails with something other
+    /// than "not found", and the way to arrange one is a non-directory where
+    /// `.devkit` belongs. Windows answers a read under such a path with
+    /// `NotFound`, the one kind that reads as "no marker".
+    #[cfg(unix)]
     #[test]
     fn a_baseline_whose_marker_cannot_be_read_is_still_rebuilt_by_its_own_worktree() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1667,7 +1673,8 @@ mod tests {
 
         // `.devkit` as a regular file: every read under it fails with a kind
         // that is neither "found" nor "not found", which is what separates this
-        // from a marker that merely does not parse.
+        // from a marker that merely does not parse, and what makes the tree
+        // undecidable to the referencer scan.
         std::fs::remove_dir_all(path.join(".devkit")).unwrap();
         std::fs::write(path.join(".devkit"), "not a directory").unwrap();
         assert!(matches!(read_marker(&path), MarkerState::Unusable));
@@ -2768,8 +2775,11 @@ mod tests {
     /// path that cannot round-trip through `&str` must stop the call rather
     /// than reach it as something else — and it must stop a dry run too, or the
     /// sweep reports a removal it then refuses on the same input.
+    ///
+    /// Linux only: the fixture needs a filename that is not UTF-8 on disk, and
+    /// macOS filesystems reject the byte sequence outright.
     #[test]
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn a_non_utf8_baseline_path_is_refused_before_the_removal() {
         use std::os::unix::ffi::OsStrExt;
 
