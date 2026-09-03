@@ -1,7 +1,9 @@
 //! Coding-agent harness glue shared by every devkit hook: the deny envelope,
 //! and the per-checkout activation gate over the `[harness]` table.
 
+use devkit_config::{AppMatch, CommandRule};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The Claude Code / Codex `PreToolUse` deny envelope. `reason` reaches the agent.
@@ -98,6 +100,112 @@ pub fn enforcement_enabled(cwd: &Path, flag: &str, env_var: &str) -> bool {
         || harness_enabled(cwd, flag),
         || global_harness_enabled(flag),
     )
+}
+
+/// The merged `[harness]` tables the command guard reads. The two enforcement
+/// flags are not here: they ratchet on with `any` across layers rather than
+/// merging by precedence, and `enforcement_enabled` already owns that.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct HarnessRules {
+    pub commands: BTreeMap<String, CommandRule>,
+    pub app_match: AppMatch,
+}
+
+/// Merge the `[harness]` tables of parsed layers, lowest precedence first, and
+/// deserialize each merged rule.
+///
+/// Routed through `devkit_config::merge_layers` rather than a hand-rolled
+/// merge, so these inherit exactly the way every other config table does: a
+/// child adds names, and a same-named rule overrides only the keys it sets.
+/// Returns what survived alongside a warning per piece that did not.
+pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<String>) {
+    let projected: Vec<_> = layers
+        .iter()
+        .map(|(p, t)| {
+            let harness = t
+                .get("harness")
+                .and_then(toml::Value::as_table)
+                .cloned()
+                .unwrap_or_default();
+            (p.clone(), harness)
+        })
+        .collect();
+    let (merged, _, _) = devkit_config::merge_layers(&projected);
+    let mut warnings = Vec::new();
+
+    // Each key is deserialized on its own, so one that will not parse costs
+    // only itself. A bad `app_match` degrades to the defaults rather than
+    // failing the command: the guard is fail-open throughout.
+    let app_match = match merged.get("app_match") {
+        None => AppMatch::default(),
+        Some(v) => v.clone().try_into::<AppMatch>().unwrap_or_else(|e| {
+            warnings.push(format!("ignoring `[harness.app_match]`: {e}"));
+            AppMatch::default()
+        }),
+    };
+
+    let mut commands = BTreeMap::new();
+    if let Some(table) = merged.get("commands").and_then(toml::Value::as_table) {
+        for (name, value) in table {
+            match value.clone().try_into::<CommandRule>() {
+                Ok(rule) if rule.programs.is_empty() && !value_names_programs(value) => {
+                    warnings.push(format!(
+                        "skipping `[harness.commands.{name}]`: no `programs`"
+                    ));
+                }
+                Ok(rule) => {
+                    commands.insert(name.clone(), rule);
+                }
+                Err(e) => warnings.push(format!("skipping `[harness.commands.{name}]`: {e}")),
+            }
+        }
+    }
+    (
+        HarnessRules {
+            commands,
+            app_match,
+        },
+        warnings,
+    )
+}
+
+/// Whether a merged rule table set `programs` at all. An explicit empty list is
+/// a deliberate exemption and is kept; an absent key is an incomplete rule and
+/// is skipped.
+fn value_names_programs(v: &toml::Value) -> bool {
+    v.as_table().is_some_and(|t| t.contains_key("programs"))
+}
+
+/// The merged `[harness]` command-guard tables applying at `cwd`, lowest
+/// precedence first: the global config, then every project layer.
+///
+/// Warnings are returned rather than printed. This runs inside the shared gate,
+/// which `lockm hook pretooluse` also calls, and a rule warning printed here
+/// would fire on every `Edit` as well as every `Bash`.
+pub fn resolve_rules(cwd: &Path) -> (HarnessRules, Vec<String>) {
+    let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
+    if let Some(p) = global_config_path()
+        && let Ok(body) = std::fs::read_to_string(&p)
+        && let Ok(t) = toml::from_str::<toml::Table>(&body)
+    {
+        layers.push((p, t));
+    }
+    let main = crate::git::main_checkout(cwd).ok().flatten();
+    if let Ok(project) = devkit_config::project_layers(cwd, main.as_deref()) {
+        for layer in project {
+            if let Ok(body) = std::fs::read_to_string(&layer.path)
+                && let Ok(t) = toml::from_str::<toml::Table>(&body)
+            {
+                layers.push((layer.path, t));
+            }
+        }
+    }
+    merge_rules(&layers)
+}
+
+/// Whether the command guard is active for a command originating at `cwd`.
+pub fn commands_enabled(cwd: &Path) -> bool {
+    enforcement_enabled(cwd, "enforce_commands", "DEVKIT_ENFORCE_COMMANDS")
 }
 
 #[cfg(test)]
@@ -289,5 +397,114 @@ programs = "node"
             "[defaults]\napps_dir = \"apps\"\n",
             "enforce_writes"
         ));
+    }
+
+    fn layer(name: &str, body: &str) -> (PathBuf, toml::Table) {
+        (
+            PathBuf::from(name),
+            toml::from_str(body).expect("layer parses"),
+        )
+    }
+
+    #[test]
+    fn a_child_layer_adds_a_rule_and_keeps_the_parents() {
+        let (h, warns) = merge_rules(&[
+            layer(
+                "root",
+                "[harness.commands.bun-only]\nprograms = [\"node\"]\nreason = \"use bun\"\n",
+            ),
+            layer(
+                "child",
+                "[harness.commands.no-curl]\nprograms = [\"curl\"]\nreason = \"use ureq\"\n",
+            ),
+        ]);
+        assert_eq!(h.commands.len(), 2);
+        assert!(warns.is_empty());
+        assert_eq!(h.commands["bun-only"].reason, "use bun");
+        assert_eq!(h.commands["no-curl"].programs, vec!["curl"]);
+    }
+
+    #[test]
+    fn a_same_named_child_rule_overrides_only_the_keys_it_sets() {
+        let (h, _) = merge_rules(&[
+            layer(
+                "root",
+                "[harness.commands.bun-only]\nprograms = [\"node\"]\nreason = \"use bun\"\n",
+            ),
+            layer("child", "[harness.commands.bun-only]\nprograms = []\n"),
+        ]);
+        assert!(h.commands["bun-only"].programs.is_empty());
+        assert_eq!(h.commands["bun-only"].reason, "use bun");
+    }
+
+    #[test]
+    fn a_rule_with_no_programs_after_merging_is_skipped_with_a_warning() {
+        let (h, warns) =
+            merge_rules(&[layer("root", "[harness.commands.oops]\nreason = \"hi\"\n")]);
+        assert!(h.commands.is_empty());
+        assert_eq!(warns.len(), 1);
+        assert!(
+            warns[0].contains("oops"),
+            "warning names the rule: {}",
+            warns[0]
+        );
+    }
+
+    #[test]
+    fn a_malformed_rule_is_skipped_and_its_siblings_survive() {
+        let (h, warns) = merge_rules(&[layer(
+            "root",
+            "[harness.commands.bad]\nprograms = \"node\"\n\
+             [harness.commands.good]\nprograms = [\"curl\"]\nreason = \"use ureq\"\n",
+        )]);
+        assert_eq!(h.commands.len(), 1);
+        assert!(h.commands.contains_key("good"));
+        assert_eq!(warns.len(), 1);
+        assert!(warns[0].contains("bad"));
+    }
+
+    #[test]
+    fn an_absent_app_match_is_the_default() {
+        let (h, warns) = merge_rules(&[layer("root", "[harness]\nenforce_commands = true\n")]);
+        assert!(warns.is_empty());
+        assert_eq!(h.app_match, devkit_config::AppMatch::default());
+    }
+
+    #[test]
+    fn app_match_merges_key_by_key_across_layers() {
+        let (h, warns) = merge_rules(&[
+            layer(
+                "root",
+                "[harness.app_match]\nmax_typos = 2\nmin_score = 40\n",
+            ),
+            layer("child", "[harness.app_match]\nmin_score = 80\n"),
+        ]);
+        assert!(warns.is_empty());
+        assert_eq!(h.app_match.max_typos, 2, "inherited from the parent layer");
+        assert_eq!(h.app_match.min_score, 80, "the child's own value wins");
+        assert!(
+            h.app_match.fuzzy,
+            "a key neither layer sets keeps its default"
+        );
+    }
+
+    #[test]
+    fn a_malformed_app_match_falls_back_to_the_defaults_with_a_warning() {
+        let (h, warns) = merge_rules(&[layer(
+            "root",
+            "[harness.app_match]\nmax_typos = \"lots\"\n\
+             [harness.commands.good]\nprograms = [\"curl\"]\nreason = \"use ureq\"\n",
+        )]);
+        assert_eq!(h.app_match, devkit_config::AppMatch::default());
+        assert!(
+            h.commands.contains_key("good"),
+            "a bad app_match spares its siblings"
+        );
+        assert_eq!(warns.len(), 1);
+        assert!(
+            warns[0].contains("app_match"),
+            "warning names the table: {}",
+            warns[0]
+        );
     }
 }

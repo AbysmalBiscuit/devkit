@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 mod layers;
 pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
 pub mod harness;
-pub use harness::HarnessSection;
+pub use harness::{AppMatch, CommandRule, HarnessSection};
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Config {

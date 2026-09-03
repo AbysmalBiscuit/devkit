@@ -80,6 +80,33 @@
       ],
       "type": "object"
     },
+    "AppMatch": {
+      "description": "`[harness.app_match]`: how the guard turns a hint into an app name.\n\nExact-name, exact-path and path-under-path matching are unconditional and\ntake no configuration. This table tunes only the fuzzy rung that runs when\nnone of those resolve, which is the one place the guard guesses.\n\n`#[serde(default)]` sits on the container so a layer naming one key inherits\nthe other two rather than zeroing them.",
+      "properties": {
+        "fuzzy": {
+          "default": true,
+          "description": "Run the fuzzy matcher at all. `false` stops after exact and path\nmatching, so an unrecognised hint names no app and the guard falls back\nto `devkit config apps`.",
+          "type": "boolean"
+        },
+        "max_typos": {
+          "default": 1,
+          "description": "Substitutions, insertions and deletions the matcher forgives.\n\nOne is what separates `lab-tools` from an app declared `lab_tools`.\n`frizbee::Config::default()` allows zero, which filters exactly that\ncase, so this default is devkit's rather than the library's. Raising it\nbuys confidently wrong app names.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_score": {
+          "default": 60,
+          "description": "Below this score no app is named. Pointing an agent at another app's\nserver is worse than naming none.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "BriefConfig": {
       "description": "What `devkit brief` emits. All default on: the hooks ship enabled and\nconfig decides whether they produce anything, so turning the output off is\none line rather than a hook-wiring task. A section with nothing to report\nis omitted whatever its switch says; a switch turned off suppresses the\nsection even when the checkout has something to put in it.",
       "properties": {
@@ -107,6 +134,33 @@
           "default": true,
           "description": "The task table and the `devrun task` bullet.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "CommandRule": {
+      "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Splitting the command into segments, stripping\nrunner prefixes, and anchoring the command word are devkit's job; a rule\nthat had to restate them would get them wrong.",
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Arguments that must appear, in order, at the head of the typed\narguments for the rule to fire. Empty matches any arguments.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "programs": {
+          "default": [],
+          "description": "Program names this rule refuses, matched against the segment's command\nword by basename. An empty list matches nothing, which is how a child\nlayer exempts a subtree from a rule its parent declared.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "default": "",
+          "description": "Shown to the agent verbatim when the rule denies. Name the replacement\ncommand; the agent retries from this text.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -328,6 +382,22 @@
     "HarnessSection": {
       "description": "The `[harness]` table of a checkout's `devkit.toml`.\n\nThis is the shape `devkit schema` renders. Nothing at runtime deserializes\nthe table through it: the probe reads each key independently so one bad key\ncannot take the others down with it.",
       "properties": {
+        "app_match": {
+          "$ref": "#/$defs/AppMatch",
+          "description": "How the guard resolves a guarded command to one of `[apps]`."
+        },
+        "commands": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CommandRule"
+          },
+          "description": "Extra refusals beyond the ones devkit derives from `[apps]` and\n`[tasks]`. Merged across config layers like every other table.",
+          "type": "object"
+        },
+        "enforce_commands": {
+          "default": false,
+          "description": "Refuse shell commands devkit already has a wired-up path for.",
+          "type": "boolean"
+        },
         "enforce_writes": {
           "default": false,
           "description": "Refuse writes to paths this checkout has not claimed with `lockm`.",
