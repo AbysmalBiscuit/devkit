@@ -428,6 +428,20 @@ fn parse_input(resolved: &Resolved, input: &str) -> Result<IssueRef> {
     }
 }
 
+/// The directory worktrees are placed under. Empty means devkit derived none
+/// — a bare main worktree has no checkout to derive a sibling of — and joining
+/// a name onto an empty root yields a bare relative path. `git -C <primary>
+/// worktree add` resolves that against the primary checkout, so the worktree
+/// and its branch would be created *inside* it. Refuse instead, naming the key
+/// that settles it.
+pub fn worktree_root(cfg: &devkit_config::Config) -> Result<std::path::PathBuf> {
+    anyhow::ensure!(
+        !cfg.defaults.worktree_root.is_empty(),
+        "set `defaults.worktree_root`: devkit cannot derive one for a bare main worktree"
+    );
+    Ok(expand_tilde(&cfg.defaults.worktree_root))
+}
+
 pub fn run(args: SetupArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
@@ -451,7 +465,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let slug = resolve_slug(t, &issue_ref, args.slug.clone(), budget, details.as_ref())?;
     let dir_slug = short_slug(cfg, vars, &issue, &args.apps, &slug)?;
 
-    let wt_root = expand_tilde(&cfg.defaults.worktree_root);
+    let wt_root = worktree_root(cfg)?;
     let ctx = serde_json::json!({
         "prefix": cfg.defaults.branch_prefix,
         "issue": issue,
@@ -613,6 +627,28 @@ mod tests {
     use devkit_common::tracker::fake;
     use devkit_config::Templates;
     use serde_json::json;
+
+    /// An empty root joins to a bare relative path, which `git -C <primary>`
+    /// resolves inside the primary checkout — the one placement that corrupts
+    /// every other session's view of it.
+    #[test]
+    fn an_underivable_worktree_root_is_refused_by_name() {
+        let cfg = devkit_config::Config::default();
+        assert!(cfg.defaults.worktree_root.is_empty());
+        let err = worktree_root(&cfg).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("defaults.worktree_root"), "{msg}");
+    }
+
+    #[test]
+    fn a_configured_worktree_root_expands() {
+        let mut cfg = devkit_config::Config::default();
+        cfg.defaults.worktree_root = "/w/trees".into();
+        assert_eq!(
+            worktree_root(&cfg).unwrap(),
+            std::path::PathBuf::from("/w/trees")
+        );
+    }
 
     #[test]
     fn setup_takes_its_slug_from_the_tracker() {

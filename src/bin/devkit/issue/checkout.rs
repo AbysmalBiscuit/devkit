@@ -364,7 +364,6 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         anyhow::ensure!(catalog.contains_key(a), "unknown app `{a}`");
     }
 
-    let wt_root = expand_tilde(&cfg.defaults.worktree_root);
     let primary = devkit_common::git::primary_checkout(Path::new(&start))?;
     let primary_s = primary
         .to_str()
@@ -385,9 +384,13 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         .with_context(|| format!("fetching PR #{}", resolved.loc.number))?;
 
     let linear_id = resolved.linear_id.clone().unwrap_or_default();
+    // The root is required only where a name is joined onto it: an explicit
+    // worktree path places the worktree itself, and is the way to check a PR
+    // out in a project devkit can derive no root for.
     let worktree = match &args.worktree_path {
         Some(p) => expand_tilde(p),
         None => {
+            let wt_root = crate::issue::setup::worktree_root(cfg)?;
             let ctx = dir_ctx(
                 &cfg.templates,
                 meta.number,
