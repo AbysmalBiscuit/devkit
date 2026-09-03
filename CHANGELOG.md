@@ -1,5 +1,115 @@
 # Changelog
 
+## [0.14.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.6...v0.14.0) (2026-09-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** defaults.baseline_path is removed. Set defaults.baseline_dir to the directory baselines are created under, and remove the old baseline checkout with git worktree remove --force. A baseline_path in a project config is now an error; one in the personal config warns and is ignored.
+* **config:** defaults.pr_base defaults to main instead of staging. Projects that target staging must set it explicitly.
+* **config:** `devrun config` is removed. Use `devkit config`.
+* **issue:** `issue review request` no longer opens PRs. Use `issue pr create` first. The flags --base, --pr-title and --pr-body moved to that command.
+
+### Features
+
+* **config:** add defaults.baseline_dir ([dcc61c9](https://github.com/AbysmalBiscuit/devkit/commit/dcc61c99de990a50070b3f89516950d635698dc9))
+* **config:** add defaults.pr_create_state ([271ad01](https://github.com/AbysmalBiscuit/devkit/commit/271ad01476dddcdb6ea31ddb6ae967a24c7ffc8a))
+* **config:** add the issue end hook keys ([be423a4](https://github.com/AbysmalBiscuit/devkit/commit/be423a4ec522df863a821d51056216e516c5b7ff))
+* **config:** default pr_base to main ([93f8ef7](https://github.com/AbysmalBiscuit/devkit/commit/93f8ef736563bef28c6d01ec9c54c3c8967753ea))
+* **config:** derive worktree_root from the primary checkout ([a8c2720](https://github.com/AbysmalBiscuit/devkit/commit/a8c2720ee7dc8509c06ccd6982987281eb56ad2e))
+* **config:** make every [defaults] key optional ([e81a45c](https://github.com/AbysmalBiscuit/devkit/commit/e81a45c0f02875fe61fc283abeca3f1111984f4b))
+* **config:** replace baseline_path with baseline_dir ([c610452](https://github.com/AbysmalBiscuit/devkit/commit/c6104524fb7e47cac04b3eaa134c391d9d4e660c))
+* **config:** report the layers and what each value overrides ([8accac7](https://github.com/AbysmalBiscuit/devkit/commit/8accac7100fb1883e69b29b15731b3a1a280475b))
+* **devrun:** add a clickable url column to devrun status ([61d8727](https://github.com/AbysmalBiscuit/devkit/commit/61d8727a98d5e2d6b3fbb2a3cafdfb8943846ce6))
+* **devrun:** name configured apps when up has none ([65c4889](https://github.com/AbysmalBiscuit/devkit/commit/65c4889808c2a0ca64fd9641006c7bf0012cc79c))
+* **doctor:** report unreferenced baselines ([c8bf010](https://github.com/AbysmalBiscuit/devkit/commit/c8bf01056fc38817bbfd9083008399d5bc6124ec))
+* **github:** carry is_draft on PrBrief ([b660940](https://github.com/AbysmalBiscuit/devkit/commit/b660940a3352561599b526d4d42f36da78d49bb2))
+* **help:** add the verbosity decision ([753fd6f](https://github.com/AbysmalBiscuit/devkit/commit/753fd6f73274f26bf7cdf35c27f903ad47039145))
+* **help:** print the command tree when stdout is not a tty ([e18651f](https://github.com/AbysmalBiscuit/devkit/commit/e18651f2ad4053c60b4cc7bf9e0be43f764aa1c8))
+* **help:** render the command tree ([f945591](https://github.com/AbysmalBiscuit/devkit/commit/f945591915ce7df1f6c97492854d5c7e4452c350))
+* **help:** resolve the target node through clap ([2d52296](https://github.com/AbysmalBiscuit/devkit/commit/2d5229654d061acbff6e599242285c8ae9142d9c))
+* **issue:** add pr create ([8d884b9](https://github.com/AbysmalBiscuit/devkit/commit/8d884b97d18b1c4de861adef83648cd24d7ab868))
+* **issue:** add pr ready with the reviewer gate ([8d52785](https://github.com/AbysmalBiscuit/devkit/commit/8d52785d689a507bec125db55d96b557faf71766))
+* **issue:** add the pr command group ([69a952a](https://github.com/AbysmalBiscuit/devkit/commit/69a952af64dd86998e35f1f1f854997c5b142a7b))
+* **issue:** keep baselines out of worktree discovery ([a71478f](https://github.com/AbysmalBiscuit/devkit/commit/a71478f0f859f4326fa534990e1c42a7122dbf7b))
+* **issue:** reclaim a baseline when its last referencer ends ([0c22e2d](https://github.com/AbysmalBiscuit/devkit/commit/0c22e2dfad14e0d394563be91dcb66c2f4288148))
+* **issue:** record the baseline a worktree compares against ([bb21e0b](https://github.com/AbysmalBiscuit/devkit/commit/bb21e0b3a0d785260ed9387f0bb67b1d4f39958a))
+* **issue:** render drafts in triage and the reviewer queue ([ebf7eb9](https://github.com/AbysmalBiscuit/devkit/commit/ebf7eb9541802b1bc5488af93dd78666ccb07503))
+* **issue:** require an existing PR in review request ([6e65a2d](https://github.com/AbysmalBiscuit/devkit/commit/6e65a2d3bd510e200796f5eb4db11c8b1ad5fd03))
+* **issue:** resolve the baseline target from origin/HEAD ([1869d1c](https://github.com/AbysmalBiscuit/devkit/commit/1869d1cf29515ee6a404909c4a7e503cf205a8c0))
+* **issue:** run after_end hooks once per end run ([31552f1](https://github.com/AbysmalBiscuit/devkit/commit/31552f1f314769f1e6d137985183d9dbebd376f8))
+* **issue:** run after_worktree_remove hooks on end ([5abf11a](https://github.com/AbysmalBiscuit/devkit/commit/5abf11a2e859f983e4e425cca1ae2fd214981ccc))
+* **issue:** tag PrStatus::Unique with is_draft ([4f7ffc4](https://github.com/AbysmalBiscuit/devkit/commit/4f7ffc4ed6d189ef71d2261ab086add4264494b8))
+* **run:** add baseline slot and directory locks ([8babb56](https://github.com/AbysmalBiscuit/devkit/commit/8babb569e79b19b76651e1c3be062d08aad7f5f6))
+* **run:** add devrun baseline list and prune ([d5516a1](https://github.com/AbysmalBiscuit/devkit/commit/d5516a162a865cfef51d53a6de6257f6695fde11))
+* **run:** add the baseline marker file ([0ffb50f](https://github.com/AbysmalBiscuit/devkit/commit/0ffb50fc54b55c51812d4c9b2c470e89947fdb13))
+* **run:** bootstrap a baseline worktree lazily ([f44538d](https://github.com/AbysmalBiscuit/devkit/commit/f44538df111f515b04fd4e562d089f6d8c1bc673))
+* **run:** create baselines lazily instead of resetting one ([9bca405](https://github.com/AbysmalBiscuit/devkit/commit/9bca405b267edc5694b69898fa382634535f4379))
+* **run:** let a sole referencer stop its own baseline ([c10b71c](https://github.com/AbysmalBiscuit/devkit/commit/c10b71c7a97828c77e982a95f430248dd4da66c9))
+* **run:** pin the baseline to the worktree's fork point ([038acd6](https://github.com/AbysmalBiscuit/devkit/commit/038acd6b404a3a9cec2d2609fd8a2e787a3f9c64))
+* **run:** resolve a baseline's slot from its marker ([4216d99](https://github.com/AbysmalBiscuit/devkit/commit/4216d9963fd0f989f77d129c41620ec4b13770e8))
+
+
+### Bug Fixes
+
+* **baseline:** keep the whitespace git keeps in a gitdir ([a3364b8](https://github.com/AbysmalBiscuit/devkit/commit/a3364b867f64774fb216b16da607aa8272b074d9))
+* **baseline:** let a worktree repair a baseline it cannot read ([7a86947](https://github.com/AbysmalBiscuit/devkit/commit/7a8694726d8a6da584e7647d2ff9bf67849b4998))
+* **baseline:** make the sweep agree with itself ([155cf63](https://github.com/AbysmalBiscuit/devkit/commit/155cf63747be14fed58eb889d86b4467adcc5357))
+* **baseline:** match a baseline by identity, not by spelling ([ff6d384](https://github.com/AbysmalBiscuit/devkit/commit/ff6d384a340704e6f98e04053d13c4398f98f6d3))
+* **baseline:** pin the baseline under the lock that built it ([5aca2b7](https://github.com/AbysmalBiscuit/devkit/commit/5aca2b7161c0646229a26117b9d68a089416c2ea))
+* **baseline:** refuse a git directory it cannot classify ([02b4898](https://github.com/AbysmalBiscuit/devkit/commit/02b4898992c194a2e58cc1bf803d0bfb787dc1de))
+* **baseline:** refuse a pin over a record it cannot read ([661db89](https://github.com/AbysmalBiscuit/devkit/commit/661db8916a8e4852b60d316d4fd6ef07ba7d1720))
+* **baseline:** refuse a rebuild of a tree another worktree pins ([b50bda5](https://github.com/AbysmalBiscuit/devkit/commit/b50bda5fe718f2c485718930a51cad18c34d5f34))
+* **baseline:** refuse a tree whose classification failed ([60920d7](https://github.com/AbysmalBiscuit/devkit/commit/60920d7fe9d93adc80ac5768793263fa31b10a3d))
+* **baseline:** refuse to delete a path that is not a baseline ([524a76e](https://github.com/AbysmalBiscuit/devkit/commit/524a76eae8e864702cbd8ce47b51e073d418a2ec))
+* **baseline:** tighten the sole-referencer exemption ([1bb4a55](https://github.com/AbysmalBiscuit/devkit/commit/1bb4a559ffd4e7ee54649915724fa89191867a90))
+* **cli:** drop issue's misleading partial about ([74fc5bb](https://github.com/AbysmalBiscuit/devkit/commit/74fc5bbf8eac29ce29f96c2e8a0d785b58e911e0))
+* close the remaining unvalidated-input gaps ([6ad50bb](https://github.com/AbysmalBiscuit/devkit/commit/6ad50bb76e88a88c5ecd79eb7f581804d452224d))
+* **completions:** stop declaring the help subtree ([399807b](https://github.com/AbysmalBiscuit/devkit/commit/399807bbdddabdf90d9e99a51cc0e4fb19a3ac25))
+* **devkit-config:** stop double-escaping paths in TOML literal fixtures ([d1a004e](https://github.com/AbysmalBiscuit/devkit/commit/d1a004e8b5dc2c763af38f65b76a4a1cb47d1bf8))
+* **devrun:** resolve each status row's url against its own holder's config ([c6dd519](https://github.com/AbysmalBiscuit/devkit/commit/c6dd519d6dbc7036743a3dadaf94c1a5837378e3))
+* **devrun:** reuse the loaded config on status --all ([f6e5d7f](https://github.com/AbysmalBiscuit/devkit/commit/f6e5d7f3fd28b5369dc2b90fb8d71ddf117b4078))
+* **doctor:** stop counting baselines a sweep will not remove ([0602859](https://github.com/AbysmalBiscuit/devkit/commit/0602859682136afd526e7d33f14a9de293615d7c))
+* **doctor:** treat unreadable worktrees as blocking orphan detection ([847df99](https://github.com/AbysmalBiscuit/devkit/commit/847df9922637c90370d543e9b97a2f24dbbcc520))
+* **help:** decline on an unrecognized help path ([af951ed](https://github.com/AbysmalBiscuit/devkit/commit/af951ed3cddeb5835edd1c8cd9b4d1f132162a21))
+* **help:** hand the help node itself back to clap ([5a18ab0](https://github.com/AbysmalBiscuit/devkit/commit/5a18ab0a822e6c0dc6bc39cc5cbe9e1cf5181a2b))
+* **help:** replace non-ascii ellipsis in doc comment with ascii ([e9aa79c](https://github.com/AbysmalBiscuit/devkit/commit/e9aa79c48220707020c6de3c0c3629e4386a4275))
+* **issue:** anchor an explicit worktree path to the caller ([185a026](https://github.com/AbysmalBiscuit/devkit/commit/185a02630b160e2b8cedd8c980f33a989024081b))
+* **issue:** exclude the PR author from the reviewer gate ([767c146](https://github.com/AbysmalBiscuit/devkit/commit/767c146b8d1f73f5729a5a50baa6c59cfb4b8cb8))
+* **issue:** gate pr ready only on a real transition ([2a683c4](https://github.com/AbysmalBiscuit/devkit/commit/2a683c4f16bd19d0cf5b79fb648190b1361f12fe))
+* **issue:** name only configured hook keys in skip warning ([6c9edf2](https://github.com/AbysmalBiscuit/devkit/commit/6c9edf206025b6755af272e9e7fa380e5976e9fe))
+* **issue:** record the PR before the ready flip ([79e8784](https://github.com/AbysmalBiscuit/devkit/commit/79e8784cad1cfc51ece81eacda9ae68961e0c596))
+* **issue:** refuse a removal whose working directory will not resolve ([4fd5561](https://github.com/AbysmalBiscuit/devkit/commit/4fd5561b2b65b8ebec154259c674ae55ff3cd9f6))
+* **issue:** refuse a worktree placement devkit cannot derive ([9747d24](https://github.com/AbysmalBiscuit/devkit/commit/9747d24ace8ee1d9543b700ff7438d49fac54407))
+* **issue:** refuse to end a worktree whose record cannot be read ([b08a7a8](https://github.com/AbysmalBiscuit/devkit/commit/b08a7a8af74e9a6aac1d71682bfc722e84bc0428))
+* **issue:** render a closed draft as closed ([a70243e](https://github.com/AbysmalBiscuit/devkit/commit/a70243e6a2e2456dc90281b183deb7bdd47a4d8e))
+* **issue:** render the pr body only when creating ([79fe77b](https://github.com/AbysmalBiscuit/devkit/commit/79fe77b6ad780e14693e033c043680870ed1573b))
+* **issue:** resolve recipients before the ready flip ([e378a65](https://github.com/AbysmalBiscuit/devkit/commit/e378a658aabd68973b4ec2ba3d18dc6d7beb8fe8))
+* **issue:** select a worktree by path identity ([37d2ae8](https://github.com/AbysmalBiscuit/devkit/commit/37d2ae85b3b223af6d92add44db656049f4e9df5))
+* **issue:** stop a baseline's servers before end removes the worktree ([7d73461](https://github.com/AbysmalBiscuit/devkit/commit/7d73461e0ac867195d6ccd2cf576b961e22494b6))
+* **mcp:** scope devrun.down to the server's own worktree ([2ff3d4c](https://github.com/AbysmalBiscuit/devkit/commit/2ff3d4c8bde164d0aabd252eeb4f1321224ebf18))
+* **run:** give baseline bootstrap the prefix and worktree keys ([2de3ed7](https://github.com/AbysmalBiscuit/devkit/commit/2de3ed7b2b0679928f4a1c0221c22eb2b6de38ee))
+* **run:** keep another worktree's config notes off this terminal ([2eecc8c](https://github.com/AbysmalBiscuit/devkit/commit/2eecc8c4eaccace31c0d70b2b13f52ecd48dfcc9))
+* **run:** make a baseline dry run read-only ([e05754b](https://github.com/AbysmalBiscuit/devkit/commit/e05754b14bc74253101896b117b5f3e084f02a25))
+* **run:** spare a shared baseline's servers ([38874cb](https://github.com/AbysmalBiscuit/devkit/commit/38874cb37ff5e19304dd7698d9be96e91d345d2f))
+* **run:** treat an unreadable baseline marker as unusable ([7c7ab1b](https://github.com/AbysmalBiscuit/devkit/commit/7c7ab1b44cd2179322934f9e607784473011fe53))
+* **sys:** count a process this user cannot signal as alive ([1c93e70](https://github.com/AbysmalBiscuit/devkit/commit/1c93e70069fc7d8bf10aa4df9e099632e861af82))
+* **test:** move the fixtures onto baseline_dir ([a46ac7a](https://github.com/AbysmalBiscuit/devkit/commit/a46ac7ab1acb44e9f1f7ca2726f265d45bfc0c8b))
+* **ui:** only pin and link a url column when there is room for it ([355d429](https://github.com/AbysmalBiscuit/devkit/commit/355d42963a3c05b6763159a4efc2f5a139495f08))
+* **ui:** pin and truncate linked url cells so they never split ([bd068e8](https://github.com/AbysmalBiscuit/devkit/commit/bd068e89eaa8886ea083058b6fe19fa947497692))
+* **ui:** stop a wide plain column from suppressing the link ([ae0a5a1](https://github.com/AbysmalBiscuit/devkit/commit/ae0a5a141c5bee0c41ea0be0d16d8c44456fd6b4))
+
+
+### Performance Improvements
+
+* **config:** parse each layer once, not twice ([9750ac6](https://github.com/AbysmalBiscuit/devkit/commit/9750ac6d5eb07e09fa1626790cfd7f07cf262a9e))
+* **config:** resolve the checkout root once ([8097014](https://github.com/AbysmalBiscuit/devkit/commit/809701453f90963e124294bf00ac71928fef3992))
+
+
+### Code Refactoring
+
+* **config:** move config off run and onto devkit ([32fdac6](https://github.com/AbysmalBiscuit/devkit/commit/32fdac67ffbceeeee612cea727878bb014ac0bfc))
+
 ## [0.13.6](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.5...v0.13.6) (2026-08-31)
 
 
