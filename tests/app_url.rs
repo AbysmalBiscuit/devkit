@@ -92,7 +92,7 @@ fn setup_with_web_app(base_port: u16, url: &str) -> tempfile::TempDir {
 worktree_root = "wts"
 branch_prefix = "x/"
 baseline_ref = "origin/main"
-baseline_path = "b"
+baseline_dir = "b"
 
 [apps.web]
 base_port = {base_port}

@@ -1548,7 +1548,6 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
 worktree_root = "/w"
 branch_prefix = "you/"
 baseline_ref = "origin/main"
-baseline_path = "/b"
 pr_create_state = "ready"
 "#;
         let c = Config::parse(src).unwrap();
@@ -1562,7 +1561,6 @@ pr_create_state = "ready"
 worktree_root = "/w"
 branch_prefix = "you/"
 baseline_ref = "origin/main"
-baseline_path = "/b"
 pr_create_state = "wip"
 "#;
         assert!(Config::parse(src).is_err());

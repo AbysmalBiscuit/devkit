@@ -1,4 +1,3 @@
-
 use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
 use devkit::completions::Shell;

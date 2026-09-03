@@ -74,7 +74,7 @@ impl Fake {
 worktree_root = "wts"
 branch_prefix = "lev/"
 baseline_ref = "origin/main"
-baseline_path = "b"
+baseline_dir = "b"
 {extra_defaults}
 
 [github]
