@@ -276,18 +276,26 @@ pub fn planned_path(cfg: &Config, sha: &str) -> Result<PathBuf> {
     }
 }
 
-/// The baseline directory for `sha`, created if needed. Reuse preps only what
-/// has drifted; a new or interrupted tree is built from scratch.
+/// The baseline directory for `sha`, created if needed, with `worktree`'s
+/// record pinned to it. Reuse preps only what has drifted; a new or
+/// interrupted tree is built from scratch.
 ///
 /// Runs before the caller resolves ports, so a long bootstrap cannot outlive a
 /// reservation taken alongside it.
 ///
 /// Takes the slot lock and never the directory lock, which is the half of the
 /// fixed order (directory, then slot) that belongs here.
+///
+/// The pin is written under that same lock, after the build and before the
+/// lock is released. A complete, marker-carrying baseline that no record names
+/// is one a concurrent sweep reclaims — its referencer scan cannot see a pin
+/// that has not been written — so that state never exists outside the lock the
+/// sweep blocks on.
 pub fn ensure(
     cfg: &Config,
     catalog: &HashMap<String, App>,
     primary: &Path,
+    worktree: &Path,
     sha: &str,
     apps: &[String],
     steps: &Steps,
@@ -389,6 +397,7 @@ pub fn ensure(
         } else {
             build()?;
         }
+        write_pin(worktree, sha, &path)?;
         Ok(path)
     })
 }
@@ -583,13 +592,15 @@ pub fn with_slot_lock<T>(baseline: &Path, f: impl FnOnce() -> Result<T>) -> Resu
 /// to confirm with, which is exactly what the cross-worktree gate on `devrun
 /// down` exists to prevent.
 ///
-/// The referencer scan and `down` both run under `previous`'s slot lock, which
-/// narrows the time-of-check race the reuse path makes reachable: between the
-/// two, another worktree's `up` adopts this baseline and — `up` being
-/// idempotent for a live pid — reports these very servers as its own running
-/// baseline, moments before they are stopped. The window is narrowed rather
-/// than closed, because `up` writes its record after `ensure` has returned and
-/// released this lock; closing it needs that pin write to move inside `ensure`.
+/// The referencer scan and `down` both run under `previous`'s slot lock, and
+/// `up` adopts a baseline by writing its pin under that same lock, so a
+/// worktree that takes this baseline over is either already in the scan or
+/// still waiting for the lock this call holds.
+///
+/// Called after the caller's pin has already moved off `previous`, so an empty
+/// referencer list is the expected reading rather than a scan that came up
+/// short: `shared_with_others` asks only whether some *other* worktree still
+/// names it.
 pub fn release_abandoned(
     repo: &str,
     worktree: &Path,
@@ -995,10 +1006,10 @@ fn remove_if_unreferenced(
         let Some(removal) = decide(baseline, refs, registered, gates, ports)? else {
             return Ok(false);
         };
-        // The caller's scan predates this lock and `up` writes its pin after
-        // `ensure` has released the same lock, so a baseline built while this
-        // call waited has a referencer that scan cannot show. Re-read for the
-        // tree actually about to go, rather than for every candidate.
+        // The caller's scan predates this lock, and `up` writes its pin under
+        // the same lock, so a baseline built while this call waited has a
+        // referencer that scan cannot show. Re-read for the tree actually about
+        // to go, rather than for every candidate.
         if !unreferenced(&referencers(repo)?, baseline) {
             return Ok(false);
         }
@@ -1415,6 +1426,7 @@ mod tests {
             &Config::default(),
             &HashMap::new(),
             Path::new("/nonexistent"),
+            Path::new("/nonexistent"),
             SHA,
             &[],
             &Steps::persistent(),
@@ -1423,6 +1435,41 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("worktree_root"), "{msg}");
         assert!(msg.contains("baseline_dir"), "{msg}");
+    }
+
+    /// A finished baseline no record names is one a sweep reclaims out from
+    /// under the worktree that just built it, so the pin must already be in
+    /// place when the tree becomes visible as complete — not written by the
+    /// caller afterwards.
+    #[test]
+    fn a_baseline_is_referenced_by_the_time_ensure_returns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let wt = tmp.path().join("issue");
+        fixture_git(
+            &primary,
+            &["worktree", "add", "-b", "issue", wt.to_str().unwrap()],
+        );
+        let root = tmp.path().join("baselines");
+
+        let path = ensure(
+            &cfg_rooted_at(&root),
+            &HashMap::new(),
+            &primary,
+            &wt,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .unwrap();
+
+        let refs = referencers(primary.to_str().unwrap()).unwrap();
+        assert!(
+            !unreferenced(&refs, &path),
+            "the built baseline is unreferenced: {:?}",
+            refs.by_baseline
+        );
     }
 
     #[test]
@@ -1434,7 +1481,16 @@ mod tests {
         let cfg = cfg_rooted_at(&root);
         let catalog = HashMap::new();
 
-        let path = ensure(&cfg, &catalog, &primary, &sha, &[], &Steps::persistent()).unwrap();
+        let path = ensure(
+            &cfg,
+            &catalog,
+            &primary,
+            &primary,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .unwrap();
         assert_eq!(path, root.join(short(&sha)));
         assert!(matches!(read_marker(&path), MarkerState::Ok(m) if m.sha == sha));
         assert!(
@@ -1445,7 +1501,16 @@ mod tests {
             "a baseline must occupy no branch name"
         );
 
-        let again = ensure(&cfg, &catalog, &primary, &sha, &[], &Steps::persistent()).unwrap();
+        let again = ensure(
+            &cfg,
+            &catalog,
+            &primary,
+            &primary,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .unwrap();
         assert_eq!(again, path, "a complete baseline is reused, not rebuilt");
     }
 
@@ -1468,6 +1533,7 @@ mod tests {
         let path = ensure(
             &cfg,
             &catalog,
+            &primary,
             &primary,
             &sha,
             &["api".to_string()],
@@ -1502,6 +1568,7 @@ mod tests {
             &cfg,
             &HashMap::new(),
             &primary,
+            &primary,
             &sha,
             &[],
             &Steps::persistent(),
@@ -1531,6 +1598,7 @@ mod tests {
             &cfg_rooted_at(&root),
             &HashMap::new(),
             &primary,
+            &primary,
             &sha,
             &[],
             &Steps::persistent(),
@@ -1558,6 +1626,7 @@ mod tests {
             &cfg_rooted_at(&root),
             &catalog,
             &primary,
+            &primary,
             &sha,
             &["api".to_string()],
             &Steps::persistent(),
@@ -1583,6 +1652,7 @@ mod tests {
             ensure(
                 &cfg_rooted_at(&root),
                 &HashMap::new(),
+                tmp.path(),
                 tmp.path(),
                 "",
                 &[],
@@ -1610,6 +1680,7 @@ mod tests {
             &cfg,
             &catalog_of(app_with(vec![prep(".env", "A=1")], vec![])),
             &primary,
+            &primary,
             &sha,
             &apps,
             &Steps::persistent(),
@@ -1629,6 +1700,7 @@ mod tests {
             ensure(
                 &cfg,
                 &catalog_of(broken),
+                &primary,
                 &primary,
                 &sha,
                 &apps,
@@ -1669,6 +1741,7 @@ mod tests {
             &cfg,
             &catalog_with("A=1"),
             &primary,
+            &primary,
             &sha,
             &apps,
             &Steps::persistent(),
@@ -1684,6 +1757,7 @@ mod tests {
             &cfg,
             &catalog_with("A=1"),
             &primary,
+            &primary,
             &sha,
             &apps,
             &Steps::persistent(),
@@ -1694,6 +1768,7 @@ mod tests {
         ensure(
             &cfg,
             &catalog_with("A=2"),
+            &primary,
             &primary,
             &sha,
             &apps,

@@ -800,24 +800,37 @@ fn cmd_up(
                         g.push((Role::Baseline, path.to_string_lossy().into_owned(), path));
                         continue;
                     }
+                    // Read before `ensure`, which moves the pin onto the
+                    // baseline it built.
                     let previous = devkit_common::record::read(wt).and_then(|r| r.baseline);
                     let primary = devkit_common::git::primary_checkout(Path::new(cwd))?;
                     let path =
-                        crate::baseline::ensure(cfg, catalog, &primary, &sha, &apps, &steps)?;
+                        crate::baseline::ensure(cfg, catalog, &primary, wt, &sha, &apps, &steps)?;
                     // A rebase repoints this worktree at a different baseline.
                     // The servers it started there stay alive under a holder
-                    // this worktree no longer reaches, so they come down before
-                    // the pin moves — unless another worktree is pinned to the
-                    // same baseline, in which case they are still its.
-                    if let Some(prev) = previous.filter(|p| Path::new(&p.path) != path) {
-                        crate::baseline::release_abandoned(
+                    // this worktree no longer reaches, so they come down once
+                    // the pin has moved — unless another worktree is pinned to
+                    // the same baseline, in which case they are still its.
+                    //
+                    // A failure here is warned about rather than propagated:
+                    // the pin already names the new baseline, so a later run
+                    // reads `previous` as the current baseline and never
+                    // reaches this call again. Failing the run would leave the
+                    // old servers orphaned with nothing left to notice them.
+                    if let Some(prev) = previous.filter(|p| Path::new(&p.path) != path)
+                        && let Err(e) = crate::baseline::release_abandoned(
                             &issue_holder,
                             wt,
                             Path::new(&prev.path),
                             |rows| run::bring_down_ports(rows).map(|_| ()),
-                        )?;
+                        )
+                    {
+                        eprintln!(
+                            "warning: the servers under {} were left running: {e:#}\n\
+                             reclaim that baseline with `devrun baseline prune --force`",
+                            prev.path
+                        );
                     }
-                    crate::baseline::write_pin(wt, &sha, &path)?;
                     g.push((Role::Baseline, path.to_string_lossy().into_owned(), path));
                 }
             }
@@ -1012,12 +1025,11 @@ fn report_down(out: &run::DownOutcome) {
 /// baseline directory; and the exemption changes nothing about the prompting
 /// path, where every row is offered by holder and confirmed one by one.
 ///
-/// The lock narrows, but does not close, the window between deciding who
-/// references the baseline and stopping its servers: `up` takes this lock
-/// across `baseline::ensure` and writes its record after releasing it, so a
-/// worktree that adopts this baseline in that gap can still be told its
-/// baseline is ready moments before these servers die. Closing it needs the pin
-/// write to move inside `ensure`'s lock.
+/// The lock is what closes the window between deciding who references the
+/// baseline and stopping its servers: `up` takes this same lock across
+/// `baseline::ensure` and writes its record under it, so a worktree adopting
+/// this baseline either appears in the scan or waits for the lock this run
+/// holds.
 ///
 /// Anything that leaves the baseline unresolved leaves the cross-worktree gate
 /// exactly where it was, so a repository that cannot be located and a record
