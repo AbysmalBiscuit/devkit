@@ -1,6 +1,7 @@
-//! Claude Code hook glue: holder derivation, payload parsing, decision envelope,
-//! and per-checkout activation. Agent-specific shapes live here; the registry
-//! decision logic stays in `model`/`store`.
+//! Claude Code hook glue: holder derivation and payload parsing. Agent-specific
+//! shapes live here; the deny envelope and per-checkout activation gate are
+//! `devkit_common::harness`, re-exported below; the registry decision logic
+//! stays in `model`/`store`.
 
 use serde_json::Value;
 use std::path::Path;

@@ -22,6 +22,10 @@ struct Probe {
     harness: devkit_config::HarnessSection,
 }
 
+/// Read the named `[harness]` flag from a devkit-config TOML body. Parses
+/// leniently — only the `[harness]` table is consulted, so a full project
+/// config and a bare `[harness]`-only file both work; unparseable input reads
+/// as off.
 fn harness_flag_in(body: &str, flag: &str) -> bool {
     let Ok(p) = toml::from_str::<Probe>(body) else {
         return false;
@@ -43,6 +47,8 @@ pub fn parse_env_override(val: Option<&str>) -> Option<bool> {
 }
 
 /// The global devkit config file: `$DEVKIT_CONFIG`, else `~/.config/devkit/config.toml`.
+/// Mirrors the `~/.config/devkit/config.toml` base layer the resolver loads, so the
+/// harness reads the same global config the other binaries do.
 pub fn global_config_path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
         return Some(PathBuf::from(p));
@@ -126,6 +132,23 @@ mod tests {
         assert_eq!(parse_env_override(Some("0")), Some(false));
         assert_eq!(parse_env_override(Some("maybe")), None);
         assert_eq!(parse_env_override(None), None);
+    }
+
+    /// An explicit override must answer without evaluating either opt-in
+    /// source: neither thunk may run once `env` is `Some`, or an enforcement
+    /// check pays for a layer walk and a git spawn it has no need of.
+    #[test]
+    fn resolve_enforcement_short_circuits_on_an_explicit_override() {
+        assert!(resolve_enforcement(
+            Some(true),
+            || panic!("checkout thunk ran despite an explicit override"),
+            || panic!("global thunk ran despite an explicit override")
+        ));
+        assert!(!resolve_enforcement(
+            Some(false),
+            || panic!("checkout thunk ran despite an explicit override"),
+            || panic!("global thunk ran despite an explicit override")
+        ));
     }
 
     #[test]
