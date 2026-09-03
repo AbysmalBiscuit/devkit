@@ -887,17 +887,22 @@ fn discover(
         return Ok(vec![read_layer(&PathBuf::from(p))?]);
     }
 
-    let (project, rooted) = layers::project_layers_rooted(start, main_checkout)?;
+    let found = layers::project_layers_rooted(start, main_checkout)?;
 
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
-    if !rooted
+    if !found.rooted
         && let Some(h) = home
         && h.is_file()
     {
         layers.push(read_layer(h)?);
     }
-    for layer in &project {
-        layers.push(read_layer(&layer.path)?);
+    // The root-barrier scan already parsed every layer it reached; reuse those
+    // bodies rather than reading and parsing the same files a second time.
+    for (layer, parsed) in found.layers.into_iter().zip(found.parsed) {
+        match parsed {
+            Some(table) => layers.push((absolutize(&layer.path)?, table)),
+            None => layers.push(read_layer(&layer.path)?),
+        }
     }
 
     if layers.is_empty() {

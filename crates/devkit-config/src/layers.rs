@@ -33,11 +33,22 @@ pub struct Layer {
     pub kind: LayerKind,
 }
 
+/// What a discovery pass found: the surviving layers, whether a
+/// `[config] root = true` barrier fired, and the bodies the barrier scan
+/// already parsed. `parsed` is aligned with `layers` and holds `None` only
+/// where the scan stopped before reaching that layer, so a caller that needs
+/// every body reads just those back rather than re-reading the whole stack.
+pub(crate) struct Discovery {
+    pub layers: Vec<Layer>,
+    pub rooted: bool,
+    pub parsed: Vec<Option<toml::Table>>,
+}
+
 /// Project config layers applying at `start`, lowest precedence first.
 /// Excludes the home config and any `--config` / `$DEVKIT_CONFIG` override:
 /// those differ per reader, so each composes its own.
 pub fn project_layers(start: &Path, main_checkout: Option<&Path>) -> Result<Vec<Layer>> {
-    Ok(project_layers_rooted(start, main_checkout)?.0)
+    Ok(project_layers_rooted(start, main_checkout)?.layers)
 }
 
 /// `project_layers`, plus whether a `[config] root = true` marker fired and
@@ -47,7 +58,7 @@ pub fn project_layers(start: &Path, main_checkout: Option<&Path>) -> Result<Vec<
 pub(crate) fn project_layers_rooted(
     start: &Path,
     main_checkout: Option<&Path>,
-) -> Result<(Vec<Layer>, bool)> {
+) -> Result<Discovery> {
     let root = start
         .ancestors()
         .find(|d| d.join(CONFIG_FILE).is_file() || d.join(LOCAL_CONFIG_FILE).is_file())
@@ -77,8 +88,12 @@ pub(crate) fn project_layers_rooted(
     ordered.extend(files_in(root, LayerKind::Checkout));
 
     dedupe(&mut ordered);
-    let rooted = apply_cutoff(&mut ordered)?;
-    Ok((ordered, rooted))
+    let (rooted, parsed) = apply_cutoff(&mut ordered)?;
+    Ok(Discovery {
+        layers: ordered,
+        rooted,
+        parsed,
+    })
 }
 
 /// The config files present in one directory, tracked first so the untracked
@@ -111,13 +126,11 @@ fn dedupe(layers: &mut Vec<Layer>) {
     layers.retain(|_| iter.next().unwrap_or(true));
 }
 
-/// Whether a layer file declares `[config] root = true`.
-fn declares_root(path: &Path) -> Result<bool> {
+/// One layer file's parsed body.
+fn read_table(path: &Path) -> Result<toml::Table> {
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("reading config layer {}", path.display()))?;
-    let table: toml::Table = toml::from_str(&body)
-        .with_context(|| format!("parsing config layer {}", path.display()))?;
-    Ok(crate::is_root_layer(&table))
+    toml::from_str(&body).with_context(|| format!("parsing config layer {}", path.display()))
 }
 
 /// `[config] root = true` drops every layer lower in precedence than the
@@ -128,24 +141,31 @@ fn declares_root(path: &Path) -> Result<bool> {
 /// dropped. Scans from the nearest-to-`start` layer backward and stops at
 /// the first (i.e. last in precedence order) match, so nothing below the
 /// barrier is ever read — a malformed or unreadable ancestor layer the
-/// barrier was meant to hide never gets parsed. Returns whether a barrier
-/// was found.
-fn apply_cutoff(layers: &mut Vec<Layer>) -> Result<bool> {
+/// barrier was meant to hide never gets parsed. Returns whether a barrier was
+/// found, and the bodies parsed along the way so the caller need not read the
+/// surviving layers a second time; those below the scan's stopping point stay
+/// `None`.
+fn apply_cutoff(layers: &mut Vec<Layer>) -> Result<(bool, Vec<Option<toml::Table>>)> {
+    let mut parsed: Vec<Option<toml::Table>> = vec![None; layers.len()];
     let mut barrier = None;
-    for (i, layer) in layers.iter().enumerate().rev() {
-        if declares_root(&layer.path)? {
+    for i in (0..layers.len()).rev() {
+        let table = read_table(&layers[i].path)?;
+        let is_root = crate::is_root_layer(&table);
+        parsed[i] = Some(table);
+        if is_root {
             barrier = Some(i);
             break;
         }
     }
     let Some(mut cut) = barrier else {
-        return Ok(false);
+        return Ok((false, parsed));
     };
     while cut > 0 && layers[cut - 1].path.parent() == layers[cut].path.parent() {
         cut -= 1;
     }
     layers.drain(..cut);
-    Ok(true)
+    parsed.drain(..cut);
+    Ok((true, parsed))
 }
 
 #[cfg(test)]
