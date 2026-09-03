@@ -420,15 +420,19 @@ pub fn ensure(
 ///
 /// A scan that could not read every worktree proves nothing about who
 /// references this one, so it refuses too, the way every other consumer of the
-/// scan does.
+/// scan does. The tree being rebuilt is excluded from that list: a baseline
+/// whose own marker cannot be read is undecidable to the scan, and counting it
+/// against itself would make the one state `Slot::Rebuild` exists to repair the
+/// one state it can never repair.
 fn assert_rebuildable(repo: &str, path: &Path, worktree: &Path) -> Result<()> {
     let refs = referencers(repo)?;
-    if !refs.unreadable.is_empty() {
+    let blind = refs.unreadable_other_than(path);
+    if !blind.is_empty() {
         anyhow::bail!(
             "refusing to rebuild {}: these worktrees could not be read, and any of them \
              could reference it: {}",
             path.display(),
-            refs.unreadable_names()
+            References::names(&blind)
         );
     }
     let others = refs.others_naming(path, worktree);
@@ -524,13 +528,33 @@ impl References {
             .collect()
     }
 
-    /// The worktrees this scan could not read, as a list to print.
-    fn unreadable_names(&self) -> String {
+    /// The worktrees this scan could not read, other than `tree` itself.
+    fn unreadable_other_than(&self, tree: &Path) -> Vec<&Path> {
         self.unreadable
+            .iter()
+            .map(PathBuf::as_path)
+            .filter(|p| !devkit_common::git::same_path(p, tree))
+            .collect()
+    }
+
+    /// Paths as a list to print.
+    fn names(paths: &[&Path]) -> String {
+        paths
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    /// The worktrees this scan could not read, as a list to print.
+    fn unreadable_names(&self) -> String {
+        Self::names(
+            &self
+                .unreadable
+                .iter()
+                .map(PathBuf::as_path)
+                .collect::<Vec<_>>(),
+        )
     }
 
     /// Why this scan can prove nothing, naming the worktrees to repair. A scan
@@ -1595,6 +1619,58 @@ mod tests {
             &Steps::persistent(),
         )
         .expect("the pinning worktree repairs its own baseline");
+        assert!(matches!(read_marker(&path), MarkerState::Ok(_)));
+    }
+
+    /// A marker that cannot be read at all makes the baseline undecidable to
+    /// the referencer scan, so the tree lands in the scan's unreadable list.
+    /// Counting itself against itself would make the state `Slot::Rebuild`
+    /// exists to repair the one state it can never repair, and the refusal
+    /// would name the tree being rebuilt as a foreign worktree.
+    #[test]
+    fn a_baseline_whose_marker_cannot_be_read_is_still_rebuilt_by_its_own_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let wt = tmp.path().join("a");
+        fixture_git(&primary, &["worktree", "add", "-b", "a", wt.to_str().unwrap()]);
+        let root = tmp.path().join("baselines");
+        let cfg = cfg_rooted_at(&root);
+
+        let path = ensure(
+            &cfg,
+            &HashMap::new(),
+            &primary,
+            &wt,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .unwrap();
+
+        // `.devkit` as a regular file: every read under it fails with a kind
+        // that is neither "found" nor "not found", which is what separates this
+        // from a marker that merely does not parse.
+        std::fs::remove_dir_all(path.join(".devkit")).unwrap();
+        std::fs::write(path.join(".devkit"), "not a directory").unwrap();
+        assert!(matches!(read_marker(&path), MarkerState::Unusable));
+        let refs = referencers(primary.to_str().unwrap()).unwrap();
+        assert!(
+            refs.unreadable.iter().any(|p| p == &path),
+            "the fixture must put the baseline in the unreadable list: {:?}",
+            refs.unreadable
+        );
+
+        ensure(
+            &cfg,
+            &HashMap::new(),
+            &primary,
+            &wt,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .expect("a baseline whose marker cannot be read is repairable");
         assert!(matches!(read_marker(&path), MarkerState::Ok(_)));
     }
 
