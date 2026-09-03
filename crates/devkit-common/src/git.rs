@@ -424,18 +424,112 @@ pub fn default_remote_branch(repo: &Path) -> Result<String> {
     Ok(s.to_string())
 }
 
-/// Compare two paths by identity where the filesystem can answer, falling back
-/// to a lexical comparison when either does not exist.
-pub fn same_path(a: &Path, b: &Path) -> bool {
+/// Whether two paths name one directory, and whether that could be decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathIdentity {
+    Same,
+    Different,
+    /// Neither answer is established: a resolution failed for a reason other
+    /// than the path being absent, so the two may or may not be one directory.
+    Unknown,
+}
+
+/// Compare two paths by identity, keeping "cannot tell" apart from "not the
+/// same".
+///
+/// A path that is absent is decidably not the path that resolved, so only a
+/// resolution that fails for another reason — a permission on some parent, an
+/// I/O error — is `Unknown`. When neither path exists there is nothing to
+/// resolve and a lexical comparison is the whole of the available answer.
+///
+/// [`same_path`] folds `Unknown` into `false`, which is the safe reading
+/// wherever a mismatch costs a permission. It is the wrong reading wherever a
+/// mismatch *grants* one — deciding that no live server holds a directory
+/// about to be deleted, most of all — and those callers match on this instead.
+pub fn path_identity(a: &Path, b: &Path) -> PathIdentity {
+    let decide = |x: &Path, y: &Path| {
+        if x == y {
+            PathIdentity::Same
+        } else {
+            PathIdentity::Different
+        }
+    };
+    let missing = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
+        (Ok(ra), Ok(rb)) => decide(&ra, &rb),
+        (Err(e), Ok(_)) | (Ok(_), Err(e)) if missing(&e) => PathIdentity::Different,
+        (Err(ea), Err(eb)) if missing(&ea) && missing(&eb) => decide(a, b),
+        _ => PathIdentity::Unknown,
     }
+}
+
+/// Whether two paths name one directory, reading "cannot tell" as "no".
+///
+/// Correct wherever a mismatch costs a permission rather than granting one. A
+/// caller for which an undecided answer is dangerous uses [`path_identity`].
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    path_identity(a, b) == PathIdentity::Same
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_spellings_of_one_directory_are_the_same_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let indirect = tmp.path().join("real/./../real");
+        assert_eq!(path_identity(&real, &indirect), PathIdentity::Same);
+    }
+
+    #[test]
+    fn a_path_that_is_absent_is_decidably_not_one_that_resolves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let gone = tmp.path().join("gone");
+        assert_eq!(path_identity(&real, &gone), PathIdentity::Different);
+        assert_eq!(path_identity(&gone, &real), PathIdentity::Different);
+    }
+
+    #[test]
+    fn two_absent_paths_fall_back_to_a_lexical_answer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("gone-a");
+        let b = tmp.path().join("gone-b");
+        assert_eq!(path_identity(&a, &a), PathIdentity::Same);
+        assert_eq!(path_identity(&a, &b), PathIdentity::Different);
+    }
+
+    /// A resolution that fails for a reason other than absence establishes
+    /// nothing. Folding it into "different" is what lets a deletion past the
+    /// live-server refusal that reads this.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_cannot_be_resolved_is_unknown_rather_than_different() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let locked = tmp.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let inside = locked.join("tree");
+        std::fs::create_dir(&inside).unwrap();
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&other).unwrap();
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let verdict = path_identity(&inside, &other);
+        // Restored before the assert so a failure cannot leave the tempdir
+        // undeletable.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(verdict, PathIdentity::Unknown);
+        assert!(
+            !same_path(&inside, &other),
+            "same_path still reads Unknown as no"
+        );
+    }
     use std::io::Write;
 
     #[test]

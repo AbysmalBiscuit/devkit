@@ -621,10 +621,20 @@ pub fn referencers(repo: &str) -> Result<References> {
 /// the worktree's config resolved. A text compare reads two spellings of one
 /// directory as two holders and lets a tree with running servers past the one
 /// refusal that exists to protect it.
+///
+/// A comparison that cannot be decided counts as holding. This is the one
+/// caller whose answer *grants* a deletion rather than costing a permission,
+/// so `same_path`'s reading of an undecided pair as "different" is the wrong
+/// way round here: it would report no live rows for a live server whose holder
+/// merely could not be resolved.
 pub fn live_rows_hold(baseline: &Path, ports: &registry::Data) -> bool {
+    use devkit_common::git::PathIdentity;
     ports.entries.values().any(|e| {
         e.pid.is_some_and(registry::pid_alive)
-            && devkit_common::git::same_path(Path::new(&e.holder), baseline)
+            && matches!(
+                devkit_common::git::path_identity(Path::new(&e.holder), baseline),
+                PathIdentity::Same | PathIdentity::Unknown
+            )
     })
 }
 

@@ -744,14 +744,27 @@ fn a_failed_pass_is_partial_and_retries_once_the_cooldown_elapses() {
         })
     };
 
+    // The mode is restored twice over: explicitly, because the rest of the test
+    // needs the directory writable, and by a guard that also runs when a panic
+    // unwinds out of the window between. Files under an unwritable directory
+    // cannot be unlinked, so a leak there defeats `TempDir`'s own cleanup and
+    // survives `cargo clean` — it has to be removed by hand.
+    struct RestoreMode<'a>(&'a std::path::Path);
+    impl Drop for RestoreMode<'_> {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    let restore = RestoreMode(dir.path());
+
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555))
         .expect("make the install dir unwritable");
     doctor(state.path());
     let portm = shim_path(dir.path(), "portm");
     let unwritable_left_it_unlinked = !portm.exists();
     let (identity, status) = read_stamp(state.path());
-    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
-        .expect("restore the install dir");
+    drop(restore);
     assert!(
         unwritable_left_it_unlinked,
         "an unwritable install dir should have failed every link"

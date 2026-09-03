@@ -187,6 +187,21 @@ mod tests {
         assert!(text.contains("outside a repository"), "{text}");
     }
 
+    /// `up` spawns servers and writes port rows under the holder it is given,
+    /// so it is checked the same way `down` is. `drive` carries no worktree,
+    /// and the guard has to run before the config load reached by `root`.
+    #[test]
+    fn devrun_up_refuses_a_root_this_server_is_not_scoped_to() {
+        let resps = drive(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":\
+             {\"name\":\"devkit_call\",\"arguments\":{\"action\":\"devrun.up\",\
+             \"args\":{\"root\":\"/nonexistent/other-worktree\",\"apps\":[\"api\"]}}}}\n",
+        );
+        assert_eq!(resps.len(), 1);
+        let text = serde_json::to_string(&resps[0]).unwrap();
+        assert!(text.contains("outside a repository"), "{text}");
+    }
+
     #[test]
     fn unknown_method_returns_method_not_found() {
         let resps = drive("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"bogus\"}\n");

@@ -28,17 +28,9 @@ fn pick_index(
             .position(|r| crate::issue::select::matches(r, sel)),
         None => {
             let top = current_top?;
-            rows.iter().position(|r| same_path(&r.worktree, top))
+            rows.iter()
+                .position(|r| devkit_common::git::same_path(Path::new(&r.worktree), Path::new(top)))
         }
-    }
-}
-
-/// Path equality that tolerates symlinks/normalization by canonicalizing both
-/// sides; falls back to a string compare when a path cannot be canonicalized.
-fn same_path(a: &str, b: &str) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(ca), Ok(cb)) => ca == cb,
-        _ => a == b,
     }
 }
 
