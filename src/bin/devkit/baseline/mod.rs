@@ -1145,7 +1145,8 @@ pub fn list(baseline_dir: &Path, repo: &str) -> Result<Listing> {
 /// `referencers` could not read; per its own invariant, no baseline is
 /// provably orphaned while any of those exist, so `count` and `bytes` are 0
 /// whenever it is nonzero rather than a guess that a later `prune` would
-/// refuse.
+/// refuse. A directory carrying no marker is skipped for the same reason a
+/// sweep leaves it alone: devkit cannot prove it created it.
 ///
 /// `list` sizes every slot with `dir_size` — a parallel walk of a full
 /// repository checkout, prep files and all — because its table shows a size
@@ -1160,6 +1161,12 @@ pub fn orphaned(baseline_dir: &Path, repo: &str) -> Result<(usize, u64, usize)> 
     let mut count = 0;
     let mut bytes = 0;
     for path in slots_in(baseline_dir)? {
+        // No marker means devkit cannot prove it created this tree, and a sweep
+        // names it rather than removing it. Counting it here would point an
+        // operator at a command that refuses the very directory it reported.
+        if matches!(read_marker(&path), MarkerState::Absent) {
+            continue;
+        }
         if !refs.naming(&path).is_empty() {
             continue;
         }
@@ -2178,6 +2185,23 @@ mod tests {
             count, 0,
             "nothing is provably orphaned while a tree can't be read"
         );
+        assert_eq!(bytes, 0);
+    }
+
+    /// A sweep leaves an unmarked directory where it is, so counting it as
+    /// reclaimable would send an operator to a command that refuses it and a
+    /// listing that calls it not devkit's to touch.
+    #[test]
+    fn an_unmarked_directory_is_not_reclaimable() {
+        let f = two_worktrees_sharing_one_baseline();
+        let baseline_dir = f.baseline.parent().unwrap();
+        let stray = baseline_dir.join("notabaseline");
+        std::fs::create_dir_all(&stray).unwrap();
+        std::fs::write(stray.join("payload"), vec![b'x'; 4096]).unwrap();
+
+        let (count, bytes, unreadable) = orphaned(baseline_dir, &f.repo).unwrap();
+        assert_eq!(unreadable, 0);
+        assert_eq!(count, 0, "a directory with no marker was counted");
         assert_eq!(bytes, 0);
     }
 
