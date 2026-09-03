@@ -145,20 +145,34 @@ pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<Stri
     };
 
     let mut commands = BTreeMap::new();
-    if let Some(table) = merged.get("commands").and_then(toml::Value::as_table) {
-        for (name, value) in table {
-            match value.clone().try_into::<CommandRule>() {
-                Ok(rule) if rule.programs.is_empty() && !value_names_programs(value) => {
-                    warnings.push(format!(
-                        "skipping `[harness.commands.{name}]`: no `programs`"
-                    ));
+    match merged.get("commands") {
+        None => {}
+        Some(v) => match v.as_table() {
+            Some(table) => {
+                for (name, value) in table {
+                    match value.clone().try_into::<CommandRule>() {
+                        Ok(rule) if rule.programs.is_empty() && !value_names_programs(value) => {
+                            warnings.push(format!(
+                                "skipping `[harness.commands.{name}]`: no `programs`"
+                            ));
+                        }
+                        Ok(rule) => {
+                            commands.insert(name.clone(), rule);
+                        }
+                        Err(e) => {
+                            warnings.push(format!("skipping `[harness.commands.{name}]`: {e}"))
+                        }
+                    }
                 }
-                Ok(rule) => {
-                    commands.insert(name.clone(), rule);
-                }
-                Err(e) => warnings.push(format!("skipping `[harness.commands.{name}]`: {e}")),
             }
-        }
+            // Not a table at all: every inherited rule is lost, so this must
+            // warn rather than silently empty the map, the same way a
+            // malformed `app_match` does above.
+            None => warnings.push(format!(
+                "ignoring `[harness.commands]`: expected a table, found {}",
+                v.type_str()
+            )),
+        },
     }
     (
         HarnessRules {
@@ -446,6 +460,18 @@ programs = "node"
         assert!(
             warns[0].contains("oops"),
             "warning names the rule: {}",
+            warns[0]
+        );
+    }
+
+    #[test]
+    fn a_non_table_commands_value_is_ignored_with_a_warning() {
+        let (h, warns) = merge_rules(&[layer("root", "[harness]\ncommands = \"oops\"\n")]);
+        assert!(h.commands.is_empty());
+        assert_eq!(warns.len(), 1);
+        assert!(
+            warns[0].contains("commands"),
+            "warning names the table: {}",
             warns[0]
         );
     }
