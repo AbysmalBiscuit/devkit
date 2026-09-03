@@ -8,8 +8,15 @@ use std::io::{BufReader, Write};
 pub struct McpCli {}
 
 pub fn run(_cli: McpCli) -> Result<()> {
+    // Resolved once, from where the server was started: it is the identity every
+    // mutating action is checked against, so it must not be re-derived per call
+    // from anything the caller supplies.
+    let own_worktree = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| devkit_common::git::checkout_root(&cwd).ok());
     let ctx = devkit_mcp::ServerCtx {
         default_holder: devkit_mcp::mint_holder(),
+        own_worktree,
     };
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());

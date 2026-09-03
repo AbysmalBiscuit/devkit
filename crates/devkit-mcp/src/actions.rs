@@ -96,6 +96,7 @@ mod tests {
     fn call_unknown_action_errors() {
         let ctx = ServerCtx {
             default_holder: "t".to_string(),
+            own_worktree: None,
         };
         assert!(call(&ctx, serde_json::json!({ "action": "nope.nope" })).is_err());
     }

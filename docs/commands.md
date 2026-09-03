@@ -331,7 +331,7 @@ A 0.12.x `meta.toml` is not migrated. Three of the five tag patterns 0.12.x coul
 
 The gates differ from the CLI's on purpose: `devrun reap` is never exposed, and `devrun.down` takes one holder and stops that holder's servers, with none of the CLI's cross-worktree prompts. `ports.strays` is the read-only half of stray handling.
 
-That holder is the `root` the caller passes, and the handler does not check it against the calling session, so `devrun.down` stops whatever holder it is given — including a baseline directory, whose path `devrun.status` with `all` reports. The CLI's terminal gate is not a property of the MCP surface, and an agent host that needs one enforces it by not granting `devrun.down`.
+That holder is the `root` the caller passes, and it must be the worktree the server itself was started in — resolved once at startup from the server's working directory, never per call from anything the caller sends. Any other path is refused, so naming another worktree cannot substitute for the CLI's terminal gate, and a server started outside a repository stops nothing at all. The own-baseline exception the CLI's default scope carries is deliberately absent here: `devrun.up` over MCP runs the issue role only, so a session that reaches this surface never starts baseline servers to begin with. Read-only actions are unaffected — `devrun.status` still reports every worktree under `all`.
 
 ## Timing
 

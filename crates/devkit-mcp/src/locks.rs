@@ -225,6 +225,7 @@ mod tests {
     fn ctx() -> ServerCtx {
         ServerCtx {
             default_holder: format!("mcp-locks-test-{}", std::process::id()),
+            own_worktree: None,
         }
     }
 

@@ -16,6 +16,11 @@ use jsonrpc::{METHOD_NOT_FOUND, PARSE_ERROR, Request, Response};
 /// so `default_holder` is stable for the process lifetime.
 pub struct ServerCtx {
     pub default_holder: String,
+    /// The checkout this server was started in, or `None` when it was started
+    /// outside a repository. Mutating actions are scoped to it: the caller
+    /// names the worktree it wants, and an agent naming somebody else's is
+    /// refused here rather than trusted.
+    pub own_worktree: Option<std::path::PathBuf>,
 }
 
 /// `$DEVKIT_SESSION` if set and non-empty, else a stable per-process id.
@@ -154,6 +159,7 @@ mod tests {
     fn drive(input: &str) -> Vec<Value> {
         let ctx = ServerCtx {
             default_holder: "test-session".to_string(),
+            own_worktree: None,
         };
         let mut out = Vec::new();
         run(&mut input.as_bytes(), &mut out, &ctx).unwrap();
@@ -163,6 +169,22 @@ mod tests {
             .filter(|l| !l.trim().is_empty())
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
+    }
+
+    /// The guard has to sit in the dispatched handler, not merely exist:
+    /// `drive` carries no worktree, so a `devrun.down` reaching `bring_down`
+    /// would be acting on a caller-named holder. The holder here matches no
+    /// row, so a regression fails this test rather than stopping real servers.
+    #[test]
+    fn devrun_down_refuses_a_root_this_server_is_not_scoped_to() {
+        let resps = drive(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":\
+             {\"name\":\"devkit_call\",\"arguments\":{\"action\":\"devrun.down\",\
+             \"args\":{\"root\":\"/nonexistent/other-worktree\"}}}}\n",
+        );
+        assert_eq!(resps.len(), 1);
+        let text = serde_json::to_string(&resps[0]).unwrap();
+        assert!(text.contains("outside a repository"), "{text}");
     }
 
     #[test]
