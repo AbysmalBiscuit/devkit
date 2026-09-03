@@ -9,7 +9,6 @@
 /// Characters that end a segment when unquoted.
 const BREAKS: [char; 6] = ['|', '&', ';', '(', ')', '\n'];
 
-#[derive(PartialEq)]
 enum Tok {
     Word(String),
     Break,
@@ -32,7 +31,7 @@ pub fn segments(command: &str) -> Vec<Vec<String>> {
 
     let mut out = Vec::new();
     let mut current: Vec<String> = Vec::new();
-    let mut iter = toks.into_iter().peekable();
+    let mut iter = toks.into_iter();
     while let Some(tok) = iter.next() {
         match tok {
             Tok::Break => {
@@ -79,8 +78,10 @@ fn tokenize(command: &str) -> Option<Vec<Tok>> {
         }
         match c {
             '\\' => {
-                let escaped = chars.next()?;
-                word.push(escaped);
+                // A backslash with nothing after it is not an unterminated
+                // escape: the shell has nothing left to escape and takes it
+                // as a literal character, so `vite dev\` still execs `vite`.
+                word.push(chars.next().unwrap_or('\\'));
                 has_word = true;
             }
             '\'' => {
@@ -112,6 +113,21 @@ fn tokenize(command: &str) -> Option<Vec<Tok>> {
                 flush!();
                 toks.push(Tok::Break);
             }
+            // A backtick is the older command-substitution syntax `$(...)`
+            // replaced: both the opening and the closing backtick delimit a
+            // command position, exactly as `$(` and its matching `)` do.
+            '`' => {
+                flush!();
+                toks.push(Tok::Break);
+            }
+            '<' if chars.peek() == Some(&'(') => {
+                // `<(cmd)` process substitution: `cmd` runs as its own
+                // process, its output read through a pathname. It is a
+                // command position, not a redirection target.
+                chars.next();
+                flush!();
+                toks.push(Tok::Break);
+            }
             '<' => {
                 flush!();
                 if chars.peek() == Some(&'<') {
@@ -133,6 +149,14 @@ fn tokenize(command: &str) -> Option<Vec<Tok>> {
                 // already sits in `word` and is not a command.
                 word.clear();
                 has_word = false;
+                if chars.peek() == Some(&'(') {
+                    // `>(cmd)` process substitution: `cmd` runs as its own
+                    // process, fed through the write end of a pipe. Same
+                    // command position as `<(cmd)`, mirrored.
+                    chars.next();
+                    toks.push(Tok::Break);
+                    continue;
+                }
                 if chars.peek() == Some(&'>') {
                     chars.next();
                 }
@@ -306,5 +330,24 @@ mod tests {
     #[test]
     fn an_unterminated_quote_yields_no_segments() {
         assert!(segments("echo \"unterminated").is_empty());
+    }
+
+    #[test]
+    fn a_backtick_substitution_starts_a_new_segment() {
+        assert_eq!(heads("echo `vite dev`"), vec!["echo", "vite"]);
+    }
+
+    #[test]
+    fn process_substitution_spawns_its_own_segment() {
+        assert_eq!(
+            heads("diff <(vite dev) <(true)"),
+            vec!["diff", "vite", "true"]
+        );
+        assert_eq!(heads("echo hi >(cat)"), vec!["echo", "cat"]);
+    }
+
+    #[test]
+    fn a_trailing_backslash_is_a_literal_character() {
+        assert_eq!(segments("vite dev\\"), vec![vec!["vite", "dev\\"]]);
     }
 }
