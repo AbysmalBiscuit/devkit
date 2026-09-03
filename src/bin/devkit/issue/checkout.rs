@@ -9,7 +9,7 @@ use devkit_common::tracker::{IssueRef, Tracker, TrackerKind};
 use devkit_config::expand_tilde;
 use devkit_ports::load;
 use std::io::{IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct CheckoutArgs {
     pub target: String,
@@ -355,6 +355,19 @@ fn dir_ctx(
     }))
 }
 
+/// A path `git -C <primary> worktree add` will read as the caller meant it.
+/// That command resolves a relative path against the primary checkout, so a
+/// worktree named relative to the caller's own directory would be created
+/// inside it — the placement that moves a branch under every other session
+/// sharing the repository.
+fn absolute(p: PathBuf) -> Result<PathBuf> {
+    if p.is_absolute() {
+        return Ok(p);
+    }
+    let cwd = std::env::current_dir().context("resolving the current directory")?;
+    Ok(cwd.join(p))
+}
+
 pub fn run(args: CheckoutArgs) -> Result<()> {
     let start = args.dir.clone().unwrap_or_else(|| ".".to_string());
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
@@ -388,7 +401,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     // worktree path places the worktree itself, and is the way to check a PR
     // out in a project devkit can derive no root for.
     let worktree = match &args.worktree_path {
-        Some(p) => expand_tilde(p),
+        Some(p) => absolute(expand_tilde(p))?,
         None => {
             let wt_root = crate::issue::setup::worktree_root(cfg)?;
             let ctx = dir_ctx(
@@ -552,6 +565,24 @@ fn report(pr: u64, branch: &str, worktree: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    /// `git -C <primary> worktree add` resolves a relative path against the
+    /// primary checkout, so an explicit worktree path must be anchored to the
+    /// caller's directory before it ever reaches that command.
+    #[test]
+    fn an_explicit_worktree_path_is_anchored_to_the_callers_directory() {
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            absolute(std::path::PathBuf::from("trees/pr-7")).unwrap(),
+            cwd.join("trees/pr-7")
+        );
+        let already = if cfg!(windows) { r"C:\trees\pr-7" } else { "/trees/pr-7" };
+        assert_eq!(
+            absolute(std::path::PathBuf::from(already)).unwrap(),
+            std::path::PathBuf::from(already)
+        );
+    }
+
     use super::*;
 
     fn git_cmd(args: &[&str], cwd: &std::path::Path) {
