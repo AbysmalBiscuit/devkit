@@ -62,10 +62,17 @@ pub struct Marker {
     pub apps: BTreeMap<String, AppMark>,
 }
 
-/// The result of reading a baseline's marker. `Absent` and `Unusable` are
-/// both "no marker to trust", but only `Absent` means a fresh baseline may be
-/// built here — `Unusable` means something occupies the path already and
-/// must be dealt with before a rebuild can proceed.
+/// The result of reading a baseline's marker. `Absent` and `Unusable` are both
+/// "no marker to trust", and both route to a rebuild in place: an interrupted
+/// bootstrap leaves no marker, and one interrupted around the marker write
+/// leaves one that does not parse. What separates them is reuse — only `Ok`
+/// names a sha a slot can be reused for — and reclamation, where a sweep leaves
+/// an `Absent` slot alone because devkit cannot prove it created the directory.
+///
+/// Neither is what refuses a deletion. That is
+/// [`devkit_common::worktree::BaselineState::Unknown`], a marker that can be
+/// neither read nor ruled out; the rebuild's own refusal is the referencer scan
+/// in [`assert_rebuildable`].
 pub enum MarkerState {
     Ok(Marker),
     Unusable,
