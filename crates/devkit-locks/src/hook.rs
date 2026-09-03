@@ -2,9 +2,16 @@
 //! and per-checkout activation. Agent-specific shapes live here; the registry
 //! decision logic stays in `model`/`store`.
 
-use serde::Deserialize;
-use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use serde_json::Value;
+use std::path::Path;
+
+pub use devkit_common::harness::deny_json;
+pub use devkit_config::HarnessSection;
+
+/// Whether write enforcement is active for a write originating at `cwd`.
+pub fn enforcement_enabled(cwd: &Path) -> bool {
+    devkit_common::harness::enforcement_enabled(cwd, "enforce_writes", "DEVKIT_ENFORCE_WRITES")
+}
 
 /// Tool names whose writes the harness governs. The Claude Code names carry one
 /// target in `tool_input.file_path`; Codex's `apply_patch` carries a whole patch
@@ -104,120 +111,6 @@ pub fn parse_event(event: &str, p: &Value) -> HookEvent {
         "session-end" => HookEvent::ReleaseSession { holder },
         _ => HookEvent::Ignore,
     }
-}
-
-/// The current PreToolUse deny envelope. `reason` is surfaced to the agent.
-pub fn deny_json(reason: &str) -> Value {
-    json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason
-        }
-    })
-}
-
-/// The `[harness]` table of a checkout's `devkit.toml`.
-#[derive(Deserialize, Default, schemars::JsonSchema)]
-pub struct HarnessSection {
-    /// Refuse writes to paths this checkout has not claimed with `lockm`.
-    #[serde(default)]
-    pub enforce_writes: bool,
-}
-
-#[derive(Deserialize, Default)]
-struct HarnessProbe {
-    #[serde(default)]
-    harness: HarnessSection,
-}
-
-/// Read `enforce_writes` from a devkit-config TOML body. Parses leniently — only
-/// the `[harness]` table is consulted, so a full project config and a bare
-/// `[harness]`-only file both work; unparseable input reads as off.
-fn harness_flag_in(body: &str) -> bool {
-    toml::from_str::<HarnessProbe>(body)
-        .map(|p| p.harness.enforce_writes)
-        .unwrap_or(false)
-}
-
-/// True iff any project layer applying at `cwd` sets `[harness] enforce_writes`.
-/// Checked with `any` rather than by precedence: enforcement ratchets on, and
-/// only `DEVKIT_ENFORCE_WRITES=0` turns it off, so one layer opting in must win
-/// even if a lower-precedence layer (or the same directory's other file)
-/// leaves the flag unset or false. Resolving by precedence instead would let a
-/// closer, silent layer mask an explicit opt-in further out.
-fn harness_enabled(cwd: &Path) -> bool {
-    let main = devkit_common::git::main_checkout(cwd).ok().flatten();
-    let Ok(layers) = devkit_config::project_layers(cwd, main.as_deref()) else {
-        return false;
-    };
-    layers.iter().any(|layer| {
-        std::fs::read_to_string(&layer.path)
-            .map(|b| harness_flag_in(&b))
-            .unwrap_or(false)
-    })
-}
-
-/// Parse the `DEVKIT_ENFORCE_WRITES` override into an explicit on/off, or `None`
-/// when unset/blank/unrecognized — in which case callers fall back to the
-/// file-based opt-ins. Case- and whitespace-insensitive.
-fn parse_env_override(val: Option<&str>) -> Option<bool> {
-    match val.map(|v| v.trim().to_ascii_lowercase()) {
-        Some(v) if matches!(v.as_str(), "1" | "true" | "yes" | "on") => Some(true),
-        Some(v) if matches!(v.as_str(), "0" | "false" | "no" | "off") => Some(false),
-        _ => None,
-    }
-}
-
-/// The global devkit config file: `$DEVKIT_CONFIG`, else `~/.config/devkit/config.toml`.
-/// Mirrors the `~/.config/devkit/config.toml` base layer the resolver loads, so the
-/// harness reads the same global config the other binaries do.
-fn global_config_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
-        return Some(PathBuf::from(p));
-    }
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".config/devkit/config.toml"))
-}
-
-/// True iff the global devkit config opts every checkout into write enforcement.
-fn global_harness_enabled() -> bool {
-    global_config_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|b| harness_flag_in(&b))
-        .unwrap_or(false)
-}
-
-/// Combine the enforcement opt-in sources. The env override is an explicit
-/// on/off master switch; without it, enforcement is on when either the checkout's
-/// own `devkit.toml` or the global config sets `[harness] enforce_writes = true`.
-/// `checkout` and `global` are thunks rather than plain `bool`s because each
-/// walks project layers or reads a config file — real filesystem and, for
-/// `checkout`, git work — and an explicit `env` override must answer without
-/// paying for either.
-fn resolve_enforcement(
-    env: Option<bool>,
-    checkout: impl FnOnce() -> bool,
-    global: impl FnOnce() -> bool,
-) -> bool {
-    match env {
-        Some(v) => v,
-        None => checkout() || global(),
-    }
-}
-
-/// Whether write enforcement is active for a write originating at `cwd`, across
-/// all opt-in sources: the `DEVKIT_ENFORCE_WRITES` env var (explicit override),
-/// the project layers applying at `cwd`, and the global devkit config — see
-/// [`resolve_enforcement`] for precedence. Takes the working directory rather
-/// than a pre-resolved checkout root, so a declaration in a directory between
-/// the root and the write is part of the answer.
-pub fn enforcement_enabled(cwd: &Path) -> bool {
-    resolve_enforcement(
-        parse_env_override(std::env::var("DEVKIT_ENFORCE_WRITES").ok().as_deref()),
-        || harness_enabled(cwd),
-        global_harness_enabled,
-    )
 }
 
 #[cfg(test)]
@@ -382,156 +275,6 @@ mod tests {
         assert!(matches!(
             parse_event("subagent-stop", &p3),
             HookEvent::Ignore
-        ));
-    }
-
-    #[test]
-    fn harness_enabled_reads_flag() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("devkit.toml"),
-            "[harness]\nenforce_writes = true\n",
-        )
-        .unwrap();
-        assert!(harness_enabled(dir.path()));
-        std::fs::write(
-            dir.path().join("devkit.toml"),
-            "[harness]\nenforce_writes = false\n",
-        )
-        .unwrap();
-        assert!(!harness_enabled(dir.path()));
-        std::fs::write(
-            dir.path().join("devkit.toml"),
-            "[defaults]\nworktree_root = \"x\"\n",
-        )
-        .unwrap();
-        assert!(!harness_enabled(dir.path())); // missing section → off, despite unrelated keys
-        let _ = std::fs::remove_file(dir.path().join("devkit.toml"));
-        assert!(!harness_enabled(dir.path())); // no devkit.toml → off
-    }
-
-    #[test]
-    fn env_override_parses_truthy_falsy_and_unknown() {
-        for on in ["1", "true", "TRUE", "yes", "On", "  true  "] {
-            assert_eq!(parse_env_override(Some(on)), Some(true), "{on:?}");
-        }
-        for off in ["0", "false", "No", "off", " OFF "] {
-            assert_eq!(parse_env_override(Some(off)), Some(false), "{off:?}");
-        }
-        // unset / blank / unrecognized → no opinion, fall back to files
-        assert_eq!(parse_env_override(None), None);
-        assert_eq!(parse_env_override(Some("")), None);
-        assert_eq!(parse_env_override(Some("maybe")), None);
-    }
-
-    #[test]
-    fn harness_flag_in_reads_section_leniently() {
-        assert!(harness_flag_in("[harness]\nenforce_writes = true\n"));
-        assert!(!harness_flag_in("[harness]\nenforce_writes = false\n"));
-        // full project config carrying the flag still reads true
-        assert!(harness_flag_in(
-            "[defaults]\nworktree_root = \"x\"\n[harness]\nenforce_writes = true\n"
-        ));
-        // no [harness] section, or junk → off (never panics)
-        assert!(!harness_flag_in("[defaults]\nworktree_root = \"x\"\n"));
-        assert!(!harness_flag_in("not even toml ["));
-    }
-
-    /// A directory between the checkout root and the write is part of the
-    /// layer stack: a harness declaration there must be seen.
-    #[test]
-    fn harness_declared_in_a_nested_directory_is_honored() {
-        let repo = tempfile::tempdir().unwrap();
-        devkit_common::git::Git::fixture(repo.path())
-            .args(["init", "-q", "-b", "main"])
-            .output()
-            .unwrap();
-        std::fs::write(repo.path().join("devkit.toml"), "").unwrap();
-        let nested = repo.path().join("packages/thing");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(
-            nested.join("devkit.local.toml"),
-            "[harness]\nenforce_writes = true\n",
-        )
-        .unwrap();
-
-        assert!(harness_enabled(&nested));
-        assert!(!harness_enabled(repo.path()));
-    }
-
-    /// A linked worktree inherits its main checkout's `[harness]` declaration:
-    /// `harness_enabled` must see it even though the worktree itself carries
-    /// no `devkit.toml` of its own. The config is written into the main
-    /// checkout only after the worktree exists, and is never committed, so
-    /// nothing about `git worktree add` could have copied it into the
-    /// worktree — a pass here can only come from inheritance.
-    #[test]
-    fn harness_is_inherited_from_the_main_checkout() {
-        let main = tempfile::tempdir().unwrap();
-        devkit_common::git::Git::fixture(main.path())
-            .args(["init", "-q", "-b", "main"])
-            .output()
-            .unwrap();
-        std::fs::write(main.path().join("f.txt"), "x\n").unwrap();
-        devkit_common::git::Git::fixture(main.path())
-            .args(["add", "."])
-            .output()
-            .unwrap();
-        devkit_common::git::Git::fixture(main.path())
-            .args(["commit", "-qm", "init"])
-            .output()
-            .unwrap();
-
-        let holder = tempfile::tempdir().unwrap();
-        let linked = holder.path().join("wt");
-        devkit_common::git::Git::fixture(main.path())
-            .args([
-                "worktree",
-                "add",
-                "-q",
-                linked.to_str().unwrap(),
-                "-b",
-                "side",
-            ])
-            .output()
-            .unwrap();
-
-        std::fs::write(
-            main.path().join("devkit.toml"),
-            "[harness]\nenforce_writes = true\n",
-        )
-        .unwrap();
-
-        assert!(harness_enabled(&linked));
-    }
-
-    #[test]
-    fn enforcement_precedence_env_then_files() {
-        // env is an explicit master switch, wins over both files
-        assert!(resolve_enforcement(Some(true), || false, || false));
-        assert!(!resolve_enforcement(Some(false), || true, || true));
-        // no env → enforce if either the checkout file or the global config opts in
-        assert!(resolve_enforcement(None, || true, || false));
-        assert!(resolve_enforcement(None, || false, || true));
-        assert!(resolve_enforcement(None, || true, || true));
-        assert!(!resolve_enforcement(None, || false, || false));
-    }
-
-    /// An explicit `DEVKIT_ENFORCE_WRITES` override must answer without
-    /// evaluating either opt-in source: neither thunk may run once `env` is
-    /// `Some`, or a write-hook invocation pays for a layer walk and a git
-    /// spawn it has no need of.
-    #[test]
-    fn resolve_enforcement_short_circuits_on_an_explicit_override() {
-        assert!(resolve_enforcement(
-            Some(true),
-            || panic!("checkout thunk ran despite an explicit override"),
-            || panic!("global thunk ran despite an explicit override")
-        ));
-        assert!(!resolve_enforcement(
-            Some(false),
-            || panic!("checkout thunk ran despite an explicit override"),
-            || panic!("global thunk ran despite an explicit override")
         ));
     }
 }

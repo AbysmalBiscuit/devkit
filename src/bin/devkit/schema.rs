@@ -6,7 +6,7 @@
 //! This lives in the `devkit` binary rather than a library crate because it is
 //! the only unit that sees every crate owning a table: `[defaults]`/`[apps]`/…
 //! come from `devkit-ports`, `[docs]` from `devkit-docs`, `[harness]` from
-//! `devkit-locks`. Those three are read straight off the raw TOML by their own
+//! `devkit-config`. Those three are read straight off the raw TOML by their own
 //! crates rather than through `Config`, so they are spliced on here — a
 //! document type with a flattened `Config` keeps `Config`'s field list in one
 //! place while still describing the whole file.
@@ -46,7 +46,7 @@ struct Document {
     docs: devkit_docs::manifest::DocsManifest,
     /// Write-enforcement opt-in for this checkout.
     #[serde(default)]
-    harness: devkit_locks::hook::HarnessSection,
+    harness: devkit_config::HarnessSection,
 }
 
 /// The schema document, pretty-printed with a trailing newline.

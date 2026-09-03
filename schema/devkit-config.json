@@ -326,7 +326,7 @@
       "type": "object"
     },
     "HarnessSection": {
-      "description": "The `[harness]` table of a checkout's `devkit.toml`.",
+      "description": "The `[harness]` table of a checkout's `devkit.toml`.\n\nThis is the shape `devkit schema` renders. Nothing at runtime deserializes\nthe table through it: the probe reads each key independently so one bad key\ncannot take the others down with it.",
       "properties": {
         "enforce_writes": {
           "default": false,

@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 mod layers;
 pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
+pub mod harness;
+pub use harness::HarnessSection;
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Config {
@@ -735,7 +737,11 @@ pub struct Shadow {
 /// Deep-merge parsed layers given lowest→highest precedence. Tables merge key by
 /// key; every non-table value (scalar or array) is replaced wholesale by a higher
 /// layer. Records, per leaf dotted-path, the highest layer that set it.
-pub(crate) fn merge_layers(
+///
+/// Public because the `[harness]` probe merges that one table across the same
+/// layer files without resolving the whole config, and must not carry a second
+/// copy of these semantics.
+pub fn merge_layers(
     layers: &[(PathBuf, toml::Table)],
 ) -> (
     toml::Table,

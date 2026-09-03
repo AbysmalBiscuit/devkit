@@ -6,6 +6,7 @@ pub mod git;
 pub mod gitfetch;
 pub mod github;
 pub mod gitignore;
+pub mod harness;
 pub mod livetable;
 pub mod paths;
 pub mod pool;
