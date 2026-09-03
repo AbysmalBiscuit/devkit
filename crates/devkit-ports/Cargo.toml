@@ -15,6 +15,7 @@ fd-lock.workspace = true
 interprocess = { workspace = true, optional = true }
 devkit-common.workspace = true
 devkit-config.workspace = true
+frizbee.workspace = true
 
 [features]
 daemon = ["dep:interprocess", "devkit-common/daemon"]

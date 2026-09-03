@@ -1,3 +1,4 @@
+pub mod appname;
 pub mod catalog;
 pub mod lex;
 pub mod norm;
