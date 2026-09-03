@@ -321,6 +321,7 @@ pub fn ensure(
         let (path, mut marker, built_here) = match slot(&root, sha) {
             Slot::Reuse(path, marker) => (path, marker, false),
             Slot::Rebuild(path) => {
+                assert_rebuildable(primary_s, &path, worktree)?;
                 let path_s = baseline_path_str(&path)?;
                 // Always `--force`: the tree may hold rendered prep files and
                 // include copies that a plain remove would refuse over.
@@ -402,6 +403,41 @@ pub fn ensure(
     })
 }
 
+/// Refuse a rebuild of a tree some other worktree's record names. A rebuild is
+/// a deletion, and the slot lock that serializes it against another bootstrap
+/// or a sweep says nothing about who *references* the tree: a marker that goes
+/// unreadable under a baseline several worktrees share would otherwise take
+/// their installed dependencies — and whatever is running out of them — with
+/// it. The caller's own reference is excluded, or a worktree could never
+/// rebuild the baseline it pins itself.
+///
+/// A scan that could not read every worktree proves nothing about who
+/// references this one, so it refuses too, the way every other consumer of the
+/// scan does.
+fn assert_rebuildable(repo: &str, path: &Path, worktree: &Path) -> Result<()> {
+    let refs = referencers(repo)?;
+    if !refs.unreadable.is_empty() {
+        anyhow::bail!(
+            "refusing to rebuild {}: these worktrees could not be read, and any of them \
+             could reference it: {}",
+            path.display(),
+            refs.unreadable_names()
+        );
+    }
+    let others = refs.others_naming(path, worktree);
+    anyhow::ensure!(
+        others.is_empty(),
+        "refusing to rebuild {}: it is referenced by {}",
+        path.display(),
+        others
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Ok(())
+}
+
 fn fresh_marker(sha: &str) -> Marker {
     Marker {
         sha: sha.to_string(),
@@ -469,6 +505,15 @@ impl References {
             .iter()
             .filter(|(spelling, _)| devkit_common::git::same_path(spelling, baseline))
             .flat_map(|(_, holders)| holders.iter().map(PathBuf::as_path))
+            .collect()
+    }
+
+    /// The worktrees naming `baseline` other than `worktree` itself, compared
+    /// by identity for the reason [`References::naming`] is.
+    fn others_naming(&self, baseline: &Path, worktree: &Path) -> Vec<&Path> {
+        self.naming(baseline)
+            .into_iter()
+            .filter(|w| !devkit_common::git::same_path(w, worktree))
             .collect()
     }
 
@@ -568,9 +613,7 @@ pub fn rows_for_holder(holder: &str, ports: &registry::Data) -> Vec<u16> {
 /// `rev-parse`, and the baseline each record spells is whatever that worktree's
 /// config resolved. Any of those can spell one directory two ways.
 pub fn shared_with_others(refs: &References, baseline: &Path, worktree: &Path) -> bool {
-    refs.naming(baseline)
-        .iter()
-        .any(|w| !devkit_common::git::same_path(w, worktree))
+    !refs.others_naming(baseline, worktree).is_empty()
 }
 
 /// Run `f` while holding `baseline`'s slot lock, which is what serializes a
@@ -1477,6 +1520,75 @@ mod tests {
             "the built baseline is unreferenced: {:?}",
             refs.by_baseline
         );
+    }
+
+    /// A rebuild is a deletion, and an unreadable marker is reachable on a tree
+    /// other worktrees depend on. The worktree that pins it may still rebuild
+    /// it — otherwise a corrupted baseline could never be repaired — but a
+    /// second one at the same fork point is refused, and told who to ask.
+    #[test]
+    fn a_rebuild_is_refused_while_another_worktree_pins_the_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("repo");
+        let sha = primary_with_one_commit(&primary);
+        let make = |name: &str| {
+            let wt = tmp.path().join(name);
+            fixture_git(
+                &primary,
+                &["worktree", "add", "-b", name, wt.to_str().unwrap()],
+            );
+            wt
+        };
+        let a = make("a");
+        let b = make("b");
+        let root = tmp.path().join("baselines");
+        let cfg = cfg_rooted_at(&root);
+
+        let path = ensure(
+            &cfg,
+            &HashMap::new(),
+            &primary,
+            &a,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .unwrap();
+        std::fs::write(path.join("installed"), "deps").unwrap();
+        std::fs::write(path.join(BASELINE_MARKER), "sha = ").unwrap();
+
+        let err = ensure(
+            &cfg,
+            &HashMap::new(),
+            &primary,
+            &b,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        let named = msg
+            .split("referenced by ")
+            .nth(1)
+            .unwrap_or_else(|| panic!("the refusal must name the pinning worktrees: {msg}"));
+        assert_eq!(Path::new(named.trim()).file_name().unwrap(), "a", "{msg}");
+        assert!(
+            path.join("installed").exists(),
+            "a referenced tree was rebuilt out from under its worktree"
+        );
+
+        ensure(
+            &cfg,
+            &HashMap::new(),
+            &primary,
+            &a,
+            &sha,
+            &[],
+            &Steps::persistent(),
+        )
+        .expect("the pinning worktree repairs its own baseline");
+        assert!(matches!(read_marker(&path), MarkerState::Ok(_)));
     }
 
     #[test]
