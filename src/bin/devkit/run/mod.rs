@@ -827,8 +827,10 @@ fn cmd_up(
                     {
                         eprintln!(
                             "warning: the servers under {} were left running: {e:#}\n\
-                             reclaim that baseline with `devrun baseline prune --force`",
-                            prev.path
+                             stop them with `devrun down --holder {}` (needs a terminal); \
+                             `devrun baseline prune --force` reclaims the directory and \
+                             leaves them running",
+                            prev.path, prev.path
                         );
                     }
                     g.push((Role::Baseline, path.to_string_lossy().into_owned(), path));

@@ -576,7 +576,11 @@ mod tests {
             absolute(std::path::PathBuf::from("trees/pr-7")).unwrap(),
             cwd.join("trees/pr-7")
         );
-        let already = if cfg!(windows) { r"C:\trees\pr-7" } else { "/trees/pr-7" };
+        let already = if cfg!(windows) {
+            r"C:\trees\pr-7"
+        } else {
+            "/trees/pr-7"
+        };
         assert_eq!(
             absolute(std::path::PathBuf::from(already)).unwrap(),
             std::path::PathBuf::from(already)

@@ -192,8 +192,10 @@ fn cleanup(
         && let Err(e) = release_baseline_servers(&main, &wt, pin)
     {
         eprintln!(
-            "warning: the servers under baseline {} were left running: {e:#}",
-            pin.path
+            "warning: the servers under baseline {} were left running: {e:#}\n\
+             stop them with `devrun down --holder {}` while a worktree still \
+             references it",
+            pin.path, pin.path
         );
     }
 
@@ -216,7 +218,8 @@ fn cleanup(
     {
         eprintln!(
             "warning: baseline {} not reclaimed: {e:#}\n\
-             reclaim it with `devrun baseline prune --force`",
+             `devrun baseline prune --force` reclaims the directory; it does not \
+             stop anything still running there",
             pin.path
         );
     }
@@ -678,7 +681,10 @@ mod tests {
         )
         .unwrap();
 
-        let found = recorded_leftovers(&wt, false).unwrap().0.expect("record names the summary");
+        let found = recorded_leftovers(&wt, false)
+            .unwrap()
+            .0
+            .expect("record names the summary");
         std::fs::remove_file(&found).unwrap();
         assert!(!summary.exists());
     }

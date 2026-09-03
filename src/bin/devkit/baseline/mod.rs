@@ -63,16 +63,18 @@ pub struct Marker {
 }
 
 /// The result of reading a baseline's marker. `Absent` and `Unusable` are both
-/// "no marker to trust", and both route to a rebuild in place: an interrupted
-/// bootstrap leaves no marker, and one interrupted around the marker write
-/// leaves one that does not parse. What separates them is reuse — only `Ok`
-/// names a sha a slot can be reused for — and reclamation, where a sweep leaves
-/// an `Absent` slot alone because devkit cannot prove it created the directory.
+/// "no marker to trust" and both route to a rebuild in place. `Absent` is an
+/// interrupted bootstrap, since [`write_marker`] runs last. `Unusable` is a
+/// read that failed or a marker from another schema — not a torn write, which
+/// [`write_marker`]'s temp-and-rename rules out.
 ///
-/// Neither is what refuses a deletion. That is
-/// [`devkit_common::worktree::BaselineState::Unknown`], a marker that can be
-/// neither read nor ruled out; the rebuild's own refusal is the referencer scan
-/// in [`assert_rebuildable`].
+/// What separates them is reuse — only `Ok` names a sha a slot can be reused
+/// for — and reclamation, where a sweep leaves an `Absent` slot alone because
+/// devkit cannot prove it created the directory.
+///
+/// Neither state refuses the rebuild by itself. [`assert_rebuildable`]'s
+/// referencer scan is what does, and a marker no read can classify reaches it
+/// as an undecidable tree rather than as a marker state.
 pub enum MarkerState {
     Ok(Marker),
     Unusable,
@@ -296,8 +298,10 @@ pub fn planned_path(cfg: &Config, sha: &str) -> Result<PathBuf> {
 /// The pin is written under that same lock, after the build and before the
 /// lock is released. A complete, marker-carrying baseline that no record names
 /// is one a concurrent sweep reclaims — its referencer scan cannot see a pin
-/// that has not been written — so that state never exists outside the lock the
-/// sweep blocks on.
+/// that has not been written — so a successful call never leaves that state
+/// outside the lock the sweep blocks on. A refused pin does leave it, and that
+/// is the intended reading: nothing references the tree and nothing runs from
+/// it, so a sweep reclaiming it is correct.
 pub fn ensure(
     cfg: &Config,
     catalog: &HashMap<String, App>,
@@ -1633,7 +1637,10 @@ mod tests {
         let primary = tmp.path().join("repo");
         let sha = primary_with_one_commit(&primary);
         let wt = tmp.path().join("a");
-        fixture_git(&primary, &["worktree", "add", "-b", "a", wt.to_str().unwrap()]);
+        fixture_git(
+            &primary,
+            &["worktree", "add", "-b", "a", wt.to_str().unwrap()],
+        );
         let root = tmp.path().join("baselines");
         let cfg = cfg_rooted_at(&root);
 
