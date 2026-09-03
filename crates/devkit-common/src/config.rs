@@ -14,8 +14,14 @@ use std::path::Path;
 /// handed back untouched, so a caller can still classify it with
 /// `devkit_config::Health::of`.
 pub fn resolve(explicit: Option<&Path>, start: &Path) -> Result<(Config, Provenance)> {
-    let main_checkout = crate::git::main_checkout(start).ok().flatten();
+    // One `rev-parse --show-toplevel` answers both: `main_checkout_from` takes
+    // the root rather than resolving its own. Outside a repository the failed
+    // root settles the main checkout too, since `worktree list` cannot report
+    // a checkout where `rev-parse` found none.
     let checkout_root = crate::git::checkout_root(start).ok();
+    let main_checkout = checkout_root
+        .as_deref()
+        .and_then(|here| crate::git::main_checkout_from(start, here).ok().flatten());
     let resolved = devkit_config::resolve(
         explicit,
         start,

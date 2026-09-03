@@ -334,6 +334,21 @@ pub fn main_checkout(start: &Path) -> Result<Option<PathBuf>> {
     Ok((!same_path(&main.path, &here)).then(|| main.path.clone()))
 }
 
+/// [`main_checkout`] for a caller that already knows `start`'s checkout root.
+/// `rev-parse --show-toplevel` is a subprocess, so a caller needing both the
+/// root and the main checkout resolves the root once and passes it here
+/// instead of paying for a second one.
+pub fn main_checkout_from(start: &Path, here: &Path) -> Result<Option<PathBuf>> {
+    let all = worktrees(start)?;
+    let Some(main) = all.first() else {
+        return Ok(None);
+    };
+    if main.bare {
+        return Ok(None);
+    }
+    Ok((!same_path(&main.path, here)).then(|| main.path.clone()))
+}
+
 /// The repository's primary checkout as seen from `start`: its main worktree
 /// when `start` is a linked worktree, else `start`'s own checkout root. This
 /// is the directory `worktree add`/`remove`, `fetch`, and the include backfill
