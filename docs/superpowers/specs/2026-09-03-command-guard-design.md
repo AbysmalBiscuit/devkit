@@ -77,6 +77,11 @@ reason   = "This workspace is bun-only. Use bun / bunx / bun run."
 programs = ["docker-compose"]
 args     = ["up"]
 reason   = "Use `docker compose up`, not docker-compose."
+
+[harness.app_match]
+fuzzy     = true
+max_typos = 1
+min_score = 60
 ```
 
 `enforce_commands` resolves exactly as `enforce_writes` does: the `DEVKIT_ENFORCE_COMMANDS` env override wins, else any project layer opting in turns it on, else the global config.
@@ -84,6 +89,8 @@ reason   = "Use `docker compose up`, not docker-compose."
 A rule names `programs` and optionally `args`. It never names a regex. The command parsing below is devkit's job, and a rule that had to restate it would get it wrong. `args` matches as a prefix of the typed arguments.
 
 Rules inherit down the layer stack the way every other config table does, and by the same code: the probe merges the `[harness]` tables it reads through `devkit_config::merge_layers`, which becomes `pub`. Tables merge key by key, so a child layer adds rule names to what its parents declared; arrays replace wholesale, so a child that redefines a parent's rule *by the same name* overrides exactly the keys it sets and inherits the rest. That override is the only off switch, and it is the same one every config value has. There is no bespoke suppression mechanism, and no second copy of the merge semantics.
+
+`[harness.app_match]` tunes the last rung of app-name resolution, described under "Naming the app" below. It is an ordinary table under `[harness]`, so it merges the same way the rules do: a layer setting only `max_typos` inherits the other two.
 
 The global config participates. It is the lowest-precedence layer for rules exactly as it is for the gate, so a machine-wide `[harness.commands.*]` applies everywhere and any project layer can override it by name.
 
@@ -111,7 +118,7 @@ toml::from_str::<HarnessProbe>(body).map(|p| p.harness.enforce_writes).unwrap_or
 
 Adding `commands` to that struct would make a mistyped rule (`programs = "node"` instead of `programs = ["node"]`) fail the whole probe, so the same file's `enforce_writes = true` would read as false. A typo in the fail-open feature would silently disable the fail-closed one.
 
-So the probe parses the body as a `toml::Table`, takes `harness`, and reads `enforce_writes`, `enforce_commands` and `commands` separately, deserializing each rule on its own and skipping a rule that will not parse. `HarnessSection` stays a typed struct so `devkit schema` describes the table, but nothing at runtime deserializes the table through it.
+So the probe parses the body as a `toml::Table`, takes `harness`, and reads `enforce_writes`, `enforce_commands`, `commands` and `app_match` separately, deserializing each rule on its own and skipping a rule that will not parse. An `app_match` that will not parse falls back to the defaults with a warning rather than taking its siblings down. `HarnessSection` stays a typed struct so `devkit schema` describes the table, but nothing at runtime deserializes the table through it.
 
 Skipped rules are *returned* to the caller, not printed. `enforcement_enabled` is shared with `lockm hook pretooluse`, and a rule warning printed from inside it would fire on every `Edit` as well as every `Bash`. Only `devkit harness shell` prints them.
 
@@ -179,25 +186,27 @@ Sources 3 through 5 need the resolved config, so they are reached only after the
 
 Sources 3 and 4 compare the typed segment against an argv vector from config, and those vectors carry minijinja (`{{ port }}`, `ports['api']`, `[templates.variables]`) and their own `doppler run` wrappers.
 
-Reduce the config argv to a **signature**:
+Both sides are normalized first: a `run` or `launch` goes through the same assignment, process-wrapper and runner-prefix stripping the typed segment does, so `bun run dev` in config and `bun run dev` typed reduce to the same thing.
 
-1. Strip runner prefixes from the config side too.
-2. Truncate at the first template-bearing token **or the first flag token** (`-`-prefixed), whichever comes first, dropping it and everything after. What survives is the command word plus its leading positional arguments, which is the part a human retypes.
-3. A signature of one token matches only a config argv that was one token to begin with. Otherwise it matches nothing.
+Reduce the normalized config argv to a **signature**:
 
-Match when the typed argv starts with the signature.
+1. Truncate at the first template-bearing token or the first flag token (`-`-prefixed), whichever comes first, dropping it and everything after. What survives is the command word plus its leading positionals, which is the part a human retypes.
+2. Reject the signature when a bare positional survives *after* the cut, meaning a token that is neither a flag nor a template. Such a launch carries a verb the signature does not, so matching on the prefix would deny every sibling verb.
+3. Reject a one-token signature whose token is a generic interpreter or multiplexer: `python`, `python3`, `node`, `bun`, `deno`, `docker`, `cargo`, `go`, `uv`, `sh`, `bash`. Everything they run looks alike from the outside.
 
-Rule 2 exists because truncating at the template alone assumes the template sits last, and it usually does not:
+Match when the typed argv starts with the surviving signature.
 
-| Config argv | Template-only signature | Would falsely deny |
+Rule 1 exists because truncating at the template alone assumes the template sits last, and it usually does not. Rules 2 and 3 keep rule 1 from over-firing in the other direction:
+
+| Normalized config argv | Signature | Because |
 |---|---|---|
-| `["vite", "--port", "{{ port }}"]` | `["vite"]` | `vite build` |
-| `["python", "-m", "{{ module }}"]` | `["python", "-m"]` | `python -m pytest` |
-| `["docker", "compose", "-p", "{{ p }}", "up"]` | `["docker", "compose", "-p"]` | `docker compose -p x down` |
+| `["nitro", "dev", "--port", "{{ port }}"]` | `["nitro", "dev"]` | nothing bare after the cut |
+| `["uvicorn", "app:app", "--reload", "--port", "{{ p }}"]` | `["uvicorn", "app:app"]` | same |
+| `["dev", "--", "--port", "{{ port }}"]` | `["dev"]` | an app's `bun run dev`, after runner stripping |
+| `["docker", "compose", "-p", "{{ p }}", "up"]` | none (rule 2) | `up` survives the cut, so `docker compose down` would be denied |
+| `["python", "-m", "{{ module }}"]` | none (rule 3) | `["python"]` would deny `python -m pytest` |
 
-Rule 3 is what keeps rule 2 from over-firing in the other direction. `["vite", "--port", "{{ port }}"]` reduces to `["vite"]`, a one-token signature from a longer argv, so it matches nothing at source 4 and `vite` is left to the catalog, which knows `build` is not a server. Meanwhile a task whose `run` is literally `["dev"]` keeps its one-token signature and still matches.
-
-**The catalog outranks a launch prefix.** When the command word is a catalog program, the catalog's verb rules decide whether it is a server and source 4 only supplies the app name. Otherwise a launch of `["vite", "--port", "{{ port }}"]` would make `vite build` a denial through source 4 before source 5 ever got to say that `build` is not a server.
+**The catalog outranks a launch prefix.** When the command word is a catalog program, the catalog's verb rules decide whether the command starts a server, and the launch match only supplies the app name. Without that ordering, an app launching `["vite", "--port", "{{ port }}"]` would make `vite build` a denial through source 4 before source 5 got to say that `build` is not a server.
 
 **Longest signature wins.** Two tasks `["bun", "test"]` and `["bun", "test", "--watch"]` both match `bun test --watch`; `cfg.tasks` is a `HashMap`, so without an order the deny message names a different task on each run. Rank matches by signature length, break a tie by hint resolution, then by name. Sort before comparing so the answer is the same every time.
 
@@ -238,7 +247,9 @@ A const table of ecosystem facts, extended by pull request rather than by config
 | `next`, `nitro`, `wrangler`, `mintlify` | `<prog> dev` |
 | `uvicorn` | bare |
 | `flask` | `flask […] run` |
-| `vite` | bare, `dev`, `serve`; never `build`, `preview`, `optimize`, or an info flag |
+| `vite` | bare, `dev`, `serve`; never `build`, `preview`, `optimize`, or an info flag (`--version`, `-v`, `--help`, `-h`) |
+
+A flag the table does not name leaves the verdict to the verb, so `vite --port 3000` is a server and `vite build --minify` is not. Only the info flags override a missing verb.
 
 `bun run dev` is deliberately absent. It is caught by source 4, because it is literally what such an app's `launch` says. Deriving from `[apps]` is what makes the catalog small.
 
@@ -246,13 +257,25 @@ A const table of ecosystem facts, extended by pull request rather than by config
 
 Source 5 knows a command is a dev server without knowing which app it belongs to, and source 4 has the same problem whenever several apps share one `launch` (three apps that all launch `bun run dev`, typed from the repo root). Both use the same resolution.
 
-The candidate set is app names and app paths, from the resolved catalog. The hint is, in order:
+The candidate set narrows before the hint is consulted: when the launch match produced any apps, only those are candidates, and a single one is named without needing a hint at all. Only a catalog hit with no launch match searches the whole catalog. Naming the wrong app sends the agent to the wrong server, which is worse than naming none.
+
+The hint is, in order:
 
 1. The first `(apps|packages)/<name>` path anywhere in the segment.
 2. The value of a `--filter`, `-F`, `--dir`, `-C` or `--cwd` argument, if the segment has one.
-3. The hook's `cwd`, relative to the project root.
+3. The hook's `cwd`, relative to the checkout root. That is the checkout the command runs in, not the repository's main checkout: in the primary clone the two are the same, and in a linked worktree the cwd is under the worktree, never under main.
 
-Exact and prefix matches win outright. `frizbee` only breaks ties and rescues near-misses, so `--filter lab-tools` still resolves against an app declared `lab_tools`. Below a score threshold no app is named at all and the message falls back to `devkit config apps`. A wrong app name sends the agent to the wrong server, which is worse than not naming one.
+A hint matches an app when it equals the app's name, equals its path, or is a path *under* its path, so `apps/web/src` names `web`. `frizbee` then rescues near-misses, so `--filter lab-tools` still resolves against an app declared `lab_tools`. Below a score threshold no app is named and the message falls back to `devkit config apps`.
+
+That last rung is the only place the guard guesses, so it is the only part of app naming a project can tune:
+
+| `[harness.app_match]` | default | effect |
+|---|---|---|
+| `fuzzy` | `true` | `false` stops after exact and path matching, so an unrecognised hint names no app |
+| `max_typos` | `1` | substitutions, insertions and deletions the matcher forgives |
+| `min_score` | `60` | below this, name no app |
+
+The one-typo default is devkit's, not the library's. `frizbee::Config::default()` allows zero, which filters exactly the `lab-tools` against `lab_tools` case the rung exists for. Raising `max_typos` buys confidently wrong app names, and a wrong name points the agent at another app's server; a project that would rather see `devkit config apps` than a guess sets `fuzzy = false`. None of the three is clamped: the numbers are the project's call.
 
 Hint resolution answers "which app", never "which match". When several apps match with signatures of *different* lengths, the longest wins outright and the hint is not consulted. The hint breaks ties only among equal-length matches, and when it resolves none of them the message names each candidate (`devrun up web` or `devrun up admin`) rather than picking one.
 
@@ -307,13 +330,15 @@ The registration carries `"timeout": 10`, matching the `devkit brief` entries in
 - Lexing: every row of the parsing table above. The quoted `git commit -m "…; …"`, `cargo run -- next dev`, and the heredoc body are the false-deny regression tests; `nohup bun run dev … &` is the miss regression test.
 - Stripping across all four matching sources: `doppler run -c local --`, `env FOO=1 vite`, `timeout 30 vite`.
 - Basename matching: `./node_modules/.bin/vite` denies.
-- Signature reduction: each row of the template-only table (`vite --port`, `python -m`, `docker compose -p`) passes the command that a template-only truncation would have denied. Each row of the `nitro` table. A one-token signature reduced from a longer argv matches nothing; a genuinely one-token `run` still matches.
+- Signature reduction: every row of the signature table. `docker compose down` and `python -m pytest` pass, which is rules 2 and 3 doing their job. An app launching `bun run dev -- --port {{ port }}` still denies typed `bun run dev`, which is rule 3 *not* over-firing. Both sides normalize, so a task `run = ["bun", "run", "lint"]` matches typed `bun run lint`.
+- The doppler term: a task `run = ["doppler", "run", "-c", "dev", "--", "bun", "test"]` denies typed `doppler run -c prd -- bun test` and allows the same command with `-c dev`. This is the test that fails if either side skips normalization.
 - Catalog outranks launch: an app whose `launch` is `["vite", "--port", "{{ port }}"]` still lets `vite build` through.
 - Determinism: tasks `["bun","test"]` and `["bun","test","--watch"]` against `bun test --watch` name the longer one, on every run of a loop.
 - Catalog: `vite build`, `vite preview`, and `vite --version` pass; bare `vite`, `vite dev`, and `vite serve` deny.
 - Task derivation: `app`, `env`, and a port template each deny on their own; `-c prd` against a task's `-c dev` denies; `--config dev` against `-c dev` passes; a bare `run` with a matching wrapper passes; `guard` overrides both ways.
 - Rule merge: a child layer's `programs = []` exempts a subtree while inheriting the parent's `reason`; a global-config rule applies in a project that declares none; a rule with no `programs` after merging is skipped.
-- App naming: exact beats fuzzy; a below-threshold hint names no app and falls back to `devkit config apps`; several apps sharing a `launch` with no resolving hint names each.
+- App naming: exact beats fuzzy; a cwd *inside* an app (`apps/web/src`) names it; `lab-tools` resolves `lab_tools`; a below-threshold hint names no app and falls back to `devkit config apps`; several apps sharing a `launch` with no resolving hint names each; a catalog hit with exactly one matching launch names that app without any hint at all. Every case that exercises the fuzzy rung needs two or more candidates, or the single-candidate short circuit answers before the matcher runs and the test proves nothing.
+- `[harness.app_match]`: `fuzzy = false` drops `lab-tools` while still resolving `apps/web`; an impossible `min_score` drops it too; `max_typos = 0` drops it, which pins why devkit does not inherit frizbee's default. The table merges key by key across layers, and one that will not parse falls back to the defaults with a warning while its sibling rules survive.
 - Payload shapes: a Claude Code payload and a Cursor payload over the same command produce the same decision in their own envelopes, with the Cursor reason in `agent_message`.
 - **Cross-feature**: a `[harness]` table carrying `enforce_writes = true` beside a malformed `[harness.commands.*]` rule still enforces writes, and the bad rule is skipped. A rule warning is *not* printed by `lockm hook pretooluse`. And a layer with a TOML syntax error turns both flags off, which is today's behaviour, pinned so nobody reports it as new.
 - Gate off exits 0 and reads no `[apps]`, `[tasks]` or catalog. It does parse each layer's `[harness]`, since that is how the gate is answered.
@@ -323,7 +348,7 @@ The registration carries `"timeout": 10`, matching the `devkit brief` entries in
 
 ## Docs to update
 
-- `docs/configuration.md` `[harness]`: `enforce_commands` and `[harness.commands.*]` alongside `enforce_writes`. The line stating that `Bash` is outside the harness's scope becomes narrower — the harness now intercepts `Bash` for *commands*; shell-level *writes* remain uncovered.
+- `docs/configuration.md` `[harness]`: `enforce_commands`, `[harness.commands.*]` and `[harness.app_match]` alongside `enforce_writes`. The line stating that `Bash` is outside the harness's scope becomes narrower, since the harness now intercepts `Bash` for *commands*; shell-level *writes* remain uncovered.
 - `docs/configuration.md` "Activation requires `lockm` on `PATH`": `devkit` becomes a second requirement. It is already needed for `devkit brief`, so this is a doc line, not a behaviour change.
 - `docs/commands.md`: no hook subcommand is documented there today, so `devkit harness shell` establishes the pattern.
 - `schema/devkit-config.json` is regenerated (`DEVKIT_UPDATE_SCHEMA=1`).
