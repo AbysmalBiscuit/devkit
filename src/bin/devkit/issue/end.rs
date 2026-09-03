@@ -801,6 +801,10 @@ mod tests {
         );
         std::fs::create_dir_all(wt.join(".devkit")).unwrap();
         std::fs::write(wt.join(".devkit").join("issue.toml"), "issue = \n").unwrap();
+        // The self-ignore every real record write drops beside the record.
+        // Without it the directory is untracked, the dirty gate answers first,
+        // and the refusal under test never runs.
+        devkit_common::gitignore::write_self_ignore(&wt.join(".devkit"));
 
         let err = cleanup(wt.to_str().unwrap(), "ENG-3", false, &Mutex::new(())).unwrap_err();
         let msg = format!("{err:#}");
