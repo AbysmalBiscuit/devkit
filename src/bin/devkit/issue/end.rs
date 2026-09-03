@@ -136,8 +136,15 @@ fn cleanup(
 ) -> Result<()> {
     let wt = std::fs::canonicalize(worktree_path)?;
     let wt_s = wt.to_string_lossy().into_owned();
-    let cwd = std::env::current_dir()?;
-    let cwd_c = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    // Both sides resolve or the guard refuses. A side that fell back to its
+    // unresolved spelling would be compared against a resolved one, and on
+    // Windows the two can never match at all — `canonicalize` returns a
+    // `\\?\`-prefixed path and `current_dir` does not — so a fallback here
+    // silently disarms the one check standing between the removal and the
+    // caller's own directory.
+    let cwd = std::env::current_dir().context("resolving the current directory")?;
+    let cwd_c = std::fs::canonicalize(&cwd)
+        .with_context(|| format!("resolving the current directory {}", cwd.display()))?;
     if cwd_c == wt || cwd_c.starts_with(&wt) {
         anyhow::bail!("cd out of {wt_s} before removing it");
     }
