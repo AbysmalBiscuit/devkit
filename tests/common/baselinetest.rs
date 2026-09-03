@@ -18,7 +18,9 @@ pub fn git(cwd: &Path, args: &[&str]) {
 
 /// `HOME`, `XDG_STATE_HOME` and `XDG_CONFIG_HOME` all point at the run's own
 /// tempdir, so the developer's port registry and personal `config.toml` take no
-/// part in the run.
+/// part in the run. The tracker credentials go with them: a token in the
+/// ambient environment is what turns a PR or issue lookup from "unavailable"
+/// into a live request against a repository these fixtures invent.
 pub fn devkit(cwd: &Path, state: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_devkit"))
         .args(args)
@@ -28,6 +30,9 @@ pub fn devkit(cwd: &Path, state: &Path, args: &[&str]) -> Output {
         .env("XDG_CONFIG_HOME", state.join("config"))
         .env_remove("DEVKIT_CONFIG")
         .env_remove("DEVKIT_SESSION")
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("LINEAR_API_KEY")
         .output()
         .unwrap_or_else(|e| panic!("spawn devkit {args:?}: {e}"))
 }

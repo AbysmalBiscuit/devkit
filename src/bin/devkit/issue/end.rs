@@ -64,6 +64,26 @@ fn drop_baseline_reference(main: &Path, pin: &devkit_common::record::BaselinePin
     Ok(())
 }
 
+/// Stop the servers under the baseline this worktree is about to stop
+/// referencing, while it is still the referencer that entitles the run to stop
+/// them. Afterwards there is no way back: the record goes with the worktree, so
+/// `devrun down`'s sole-referencer exemption is gone, and `devrun reap` is
+/// terminal-gated with no bypass, leaving a session without one unable to reach
+/// them at all.
+///
+/// A baseline other worktrees still name is nobody's to stop, which is the
+/// question `release_abandoned` already answers.
+fn release_baseline_servers(
+    main: &Path,
+    worktree: &Path,
+    pin: &devkit_common::record::BaselinePin,
+) -> Result<()> {
+    let repo = main.to_str().context("primary checkout path not UTF-8")?;
+    crate::baseline::release_abandoned(repo, worktree, Path::new(&pin.path), |rows| {
+        devkit_ports::run::bring_down_ports(rows).map(|_| ())
+    })
+}
+
 /// Whether `name` is an `ISSUE_*.md` file belonging to `issue_id`, for records
 /// written before they carried an exact summary path. The filename spells the
 /// tracker's canonical id while the record spells whatever setup was given, so
@@ -135,6 +155,18 @@ fn cleanup(
     let parent = main.parent().context("main repo has no parent")?;
     let branch = devkit_common::git::branch(&wt)?;
 
+    // Before the removal, while this worktree is still the referencer that
+    // entitles the run to stop these servers. Best-effort, like the reclaim
+    // below it.
+    if let Some(pin) = &baseline
+        && let Err(e) = release_baseline_servers(&main, &wt, pin)
+    {
+        eprintln!(
+            "warning: the servers under baseline {} were left running: {e:#}",
+            pin.path
+        );
+    }
+
     let mut rm: Vec<&str> = vec!["worktree", "remove"];
     if force {
         rm.push("--force");
@@ -146,11 +178,17 @@ fn cleanup(
         .output()?;
 
     // Best-effort: `devrun baseline prune` is the guarantee, so a baseline left
-    // standing must not fail an otherwise-complete removal.
+    // standing must not fail an otherwise-complete removal. The suggestion is
+    // that command's own `--force`; `issue end --force` waives uncommitted
+    // changes in the worktree and nothing here.
     if let Some(pin) = &baseline
         && let Err(e) = drop_baseline_reference(&main, pin)
     {
-        eprintln!("warning: baseline {} not reclaimed: {e:#}", pin.path);
+        eprintln!(
+            "warning: baseline {} not reclaimed: {e:#}\n\
+             reclaim it with `devrun baseline prune --force`",
+            pin.path
+        );
     }
 
     // Ref deletion can rewrite packed-refs, so concurrent branch deletes contend
