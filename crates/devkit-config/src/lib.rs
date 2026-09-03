@@ -484,6 +484,12 @@ pub struct TaskConfig {
     /// a user `--env` override of every referencing value waives the check.
     #[serde(default)]
     pub require_live: Vec<String>,
+    /// Force the command guard's decision for this task instead of deriving it.
+    /// `true` always redirects a matching command to `devrun task <name>`;
+    /// `false` never does. Absent derives from whether devkit changes the
+    /// process at all.
+    #[serde(default)]
+    pub guard: Option<bool>,
 }
 
 /// Longest branch `issue setup` renders before it shortens the slug to fit,

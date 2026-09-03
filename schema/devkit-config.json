@@ -693,6 +693,14 @@
           "description": "Env vars set for this task, layered over the app's `static_env` and\nunder the CLI's `--env-file` and `--env`.",
           "type": "object"
         },
+        "guard": {
+          "default": null,
+          "description": "Force the command guard's decision for this task instead of deriving it.\n`true` always redirects a matching command to `devrun task <name>`;\n`false` never does. Absent derives from whether devkit changes the\nprocess at all.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "require_live": {
           "default": [],
           "description": "Apps whose server must be live in this worktree when the task executes.\nEach name must be referenced by the task's templates via `ports[...]`;\na user `--env` override of every referencing value waives the check.",
