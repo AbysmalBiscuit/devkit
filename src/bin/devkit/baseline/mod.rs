@@ -1259,13 +1259,24 @@ fn dir_size(path: &Path) -> u64 {
 
 /// Point a worktree's record at a baseline, leaving its other fields alone.
 ///
-/// Writes a record when there is none. A worktree made by hand rather than by
+/// A worktree with no record gets one: a worktree made by hand rather than by
 /// `issue setup` still holds a reference, and skipping the write there would
 /// let prune reclaim a baseline that worktree is serving from.
+///
+/// A record that exists and cannot be read is a refusal, not a worktree
+/// without one. Synthesizing over it would replace the issue id, slug, apps,
+/// summary path and PR with values derived from the branch name, and the write
+/// is the only chance to notice. Refusing costs this run its pin, which the
+/// caller propagates rather than starting servers under a baseline no record
+/// names.
 pub fn write_pin(worktree: &Path, sha: &str, path: &Path) -> Result<()> {
-    let mut rec = match devkit_common::record::read(worktree) {
-        Some(rec) => rec,
-        None => {
+    let mut rec = match devkit_common::record::read_state(worktree) {
+        RecordState::Ok(rec) => rec,
+        RecordState::Unusable => anyhow::bail!(
+            "{} can be neither read nor ruled out; repair or remove it before pinning a baseline",
+            devkit_common::record::path(worktree).display()
+        ),
+        RecordState::Absent => {
             let branch = devkit_common::git::branch(worktree)?;
             devkit_common::record::IssueRecord {
                 issue: branch.clone(),
@@ -2398,6 +2409,27 @@ mod tests {
         assert!(
             refs.by_baseline[&f.baseline].contains(&bare),
             "the new record counts"
+        );
+    }
+
+    /// A record that exists and does not parse is not a worktree without one.
+    /// Synthesizing over it would discard the issue id, slug, app list, summary
+    /// path and PR the file still holds, so the pin refuses and leaves the file
+    /// exactly as it found it.
+    #[test]
+    fn an_unparseable_record_refuses_the_pin_and_keeps_the_file() {
+        let f = two_worktrees_sharing_one_baseline();
+        let rec = f.a.join(".devkit").join("issue.toml");
+        let body = "issue = \"ENG-42\"\nslug = \"important\"\napps = [\"api\"]\nnot toml\n";
+        std::fs::write(&rec, body).unwrap();
+
+        let err = write_pin(&f.a, "d13d90b724bf8a3c", &f.baseline).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("issue.toml"), "{msg}");
+        assert_eq!(
+            std::fs::read_to_string(&rec).unwrap(),
+            body,
+            "the refused record was rewritten"
         );
     }
 

@@ -52,8 +52,10 @@ pub enum RecordState {
     Absent,
 }
 
-/// `<worktree>/.devkit/issue.toml`.
-fn path(worktree: &Path) -> std::path::PathBuf {
+/// `<worktree>/.devkit/issue.toml`, the one spelling of the record path, so a
+/// caller reporting a record it refused to touch names the same file the
+/// readers and the writer use.
+pub fn path(worktree: &Path) -> std::path::PathBuf {
     worktree.join(".devkit").join("issue.toml")
 }
 
