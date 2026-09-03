@@ -158,23 +158,27 @@ mod tests {
 
     #[test]
     fn capture_env_reaches_the_child_without_touching_this_process() {
-        let out = if cfg!(windows) {
-            capture_env(
-                "cmd",
-                &["/C", "echo %DEVKIT_TEST_ENV%"],
-                None,
-                &[("DEVKIT_TEST_ENV", "on")],
+        // `set` prints the child's environment block, so the Windows arm does
+        // not rest on cmd expanding a `%VAR%` inside an argument Rust quoted
+        // for it — which comes back empty.
+        let (out, want) = if cfg!(windows) {
+            (
+                capture_env("cmd", &["/C", "set"], None, &[("DEVKIT_TEST_ENV", "on")]),
+                "DEVKIT_TEST_ENV=on",
             )
         } else {
-            capture_env(
-                "sh",
-                &["-c", "printf %s \"$DEVKIT_TEST_ENV\""],
-                None,
-                &[("DEVKIT_TEST_ENV", "on")],
+            (
+                capture_env(
+                    "sh",
+                    &["-c", "printf %s \"$DEVKIT_TEST_ENV\""],
+                    None,
+                    &[("DEVKIT_TEST_ENV", "on")],
+                ),
+                "on",
             )
-        }
-        .unwrap();
-        assert_eq!(out.trim(), "on");
+        };
+        let out = out.unwrap();
+        assert!(out.lines().any(|l| l.trim() == want), "{out}");
         // Setting a variable for a child must not mutate this process: `set_var` is
         // `unsafe` in edition 2024 precisely because other threads read the
         // environment concurrently, and devkit runs progress threads.
