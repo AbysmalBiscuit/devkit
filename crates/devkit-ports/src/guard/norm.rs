@@ -15,6 +15,15 @@ const RUNNERS: [&[&str]; 7] = [
     &["uvx"],
 ];
 
+/// Bounds how many `doppler run --command=…` wrappers get unwrapped inside
+/// one another. Each level re-lexes and recursively normalizes its value, so
+/// a payload that nests this wrapper inside itself grows the call stack by
+/// one frame per level; unlike a panic, a stack overflow cannot be caught, so
+/// the recursion has to stop on its own before that point regardless of how
+/// long the input command string is. The cap sits far above any real doppler
+/// wrapping and far below anything that could exhaust the stack.
+const MAX_DOPPLER_COMMAND_DEPTH: usize = 8;
+
 /// A doppler wrapper's identity, normalized so `-c dev` and `--config dev`
 /// compare equal.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -41,6 +50,10 @@ pub fn basename(prog: &str) -> &str {
 /// Strip assignments and wrappers from a lexed segment. `None` when nothing
 /// executable remains.
 pub fn normalize(words: &[String]) -> Option<Normalized> {
+    normalize_at_depth(words, 0)
+}
+
+fn normalize_at_depth(words: &[String], depth: usize) -> Option<Normalized> {
     let mut argv: Vec<String> = words.to_vec();
     let mut doppler = None;
 
@@ -48,7 +61,7 @@ pub fn normalize(words: &[String]) -> Option<Normalized> {
         let before = argv.len();
         strip_assignments(&mut argv);
         strip_process_wrappers(&mut argv);
-        if let Some(d) = strip_doppler(&mut argv) {
+        if let Some(d) = strip_doppler(&mut argv, depth) {
             doppler = Some(d);
         }
         strip_runner(&mut argv);
@@ -151,9 +164,12 @@ fn parse_doppler_flags(words: &[String]) -> Doppler {
 /// / `--command <cmd>` wrapper, and report its `(config, project)`. A
 /// `--command` value is itself a shell command string; only its first segment
 /// is normalized, so a value chaining several commands together reduces to
-/// just the first of them. A `doppler run` with neither form present is left
-/// in place: it names no inner command, so there is nothing to unwrap.
-fn strip_doppler(argv: &mut Vec<String>) -> Option<Doppler> {
+/// just the first of them. Past `MAX_DOPPLER_COMMAND_DEPTH` levels of nested
+/// `--command` wrappers, the value is left unnormalized: the wrapper reaches
+/// the guard as an ordinary word list, matches no rule, and is allowed. A
+/// `doppler run` with neither form present is left in place: it names no
+/// inner command, so there is nothing to unwrap.
+fn strip_doppler(argv: &mut Vec<String>, depth: usize) -> Option<Doppler> {
     if argv.len() < 2 || basename(&argv[0]) != "doppler" || argv[1] != "run" {
         return None;
     }
@@ -166,7 +182,7 @@ fn strip_doppler(argv: &mut Vec<String>) -> Option<Doppler> {
     let cmd_idx = argv
         .iter()
         .position(|w| w == "--command" || w.starts_with("--command="))?;
-    if cmd_idx < 2 {
+    if cmd_idx < 2 || depth >= MAX_DOPPLER_COMMAND_DEPTH {
         return None;
     }
     let value = match argv[cmd_idx].strip_prefix("--command=") {
@@ -175,7 +191,7 @@ fn strip_doppler(argv: &mut Vec<String>) -> Option<Doppler> {
     };
     let d = parse_doppler_flags(&argv[2..cmd_idx]);
     let inner = crate::guard::lex::segments(&value).into_iter().next()?;
-    let normalized = normalize(&inner)?;
+    let normalized = normalize_at_depth(&inner, depth + 1)?;
     *argv = normalized.argv;
     Some(d)
 }
@@ -294,5 +310,41 @@ mod tests {
 
         let dangling = crate::guard::lex::segments("doppler run -c -- vite").remove(0);
         assert_eq!(normalize(&dangling).unwrap().doppler.unwrap().config, None);
+    }
+
+    /// Double-quotes `s` for embedding as one shell word, escaping the
+    /// characters the lexer's double-quote handling unescapes on the way
+    /// back in.
+    fn dquote(s: &str) -> String {
+        let mut out = String::from("\"");
+        for c in s.chars() {
+            if c == '"' || c == '\\' {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out.push('"');
+        out
+    }
+
+    /// A command string nesting `doppler run --command=…` inside itself
+    /// `levels` deep around a plain `vite` at the center.
+    fn nested_doppler_command(levels: usize) -> String {
+        let mut cmd = "vite".to_string();
+        for _ in 0..levels {
+            cmd = format!("doppler run --command={}", dquote(&cmd));
+        }
+        cmd
+    }
+
+    #[test]
+    fn doppler_command_nesting_past_the_depth_cap_terminates_unnormalized() {
+        let seg =
+            crate::guard::lex::segments(&nested_doppler_command(MAX_DOPPLER_COMMAND_DEPTH + 3))
+                .remove(0);
+        let n = normalize(&seg).expect("the outermost wrapper still normalizes");
+        assert_eq!(n.argv[0], "doppler");
+        assert_eq!(n.argv[1], "run");
+        assert!(n.argv[2].starts_with("--command="));
     }
 }
