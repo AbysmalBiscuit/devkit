@@ -47,22 +47,43 @@ fn workspace_member(word: &str) -> Option<String> {
     None
 }
 
+/// Where a candidate set came from, which is what decides whether a lone
+/// candidate has to earn its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// A launch match picked these apps out of the catalog, so the command is
+    /// already known to be one of them.
+    Narrowed,
+    /// Nothing narrowed the set: these are every app the project declares, and
+    /// the command may belong to none of them.
+    Catalog,
+}
+
 /// Which of `candidates` the hint names.
 ///
-/// A single candidate needs no hint: the caller already narrowed to it, and
-/// asking a fuzzy matcher to confirm a set of one only adds a way to fail.
-/// Otherwise an exact name or path wins, then a hint that is a path *under* an
-/// app's path (a cwd of `apps/web/src` names `web`), then frizbee rescues a
-/// near-miss such as `lab-tools` against an app declared `lab_tools`.
+/// A single *narrowed* candidate needs no hint: the launch match already tied
+/// the command to it, and asking a fuzzy matcher to confirm a set of one only
+/// adds a way to fail. A single candidate in a whole-catalog search has earned
+/// nothing — the command matched no launch, so a project that happens to
+/// declare one app must not have it named on that basis alone.
+///
+/// Past that rung an exact name or path wins, then a hint that is a path
+/// *under* an app's path (a cwd of `apps/web/src` names `web`), then frizbee
+/// rescues a near-miss such as `lab-tools` against an app declared `lab_tools`.
 ///
 /// The fuzzy rung is the only guesswork here, and `cfg` is what a project tunes
 /// it with. `frizbee::Config::default()` allows zero typos, which filters the
 /// `lab-tools` case outright, so `cfg.max_typos` is always passed rather than
 /// left to the library.
-pub fn resolve(hint: Option<&str>, candidates: &[&App], cfg: &AppMatch) -> Option<String> {
-    match candidates {
-        [] => return None,
-        [only] => return Some(only.name.clone()),
+pub fn resolve(
+    hint: Option<&str>,
+    candidates: &[&App],
+    cfg: &AppMatch,
+    scope: Scope,
+) -> Option<String> {
+    match (candidates, scope) {
+        ([], _) => return None,
+        ([only], Scope::Narrowed) => return Some(only.name.clone()),
         _ => {}
     }
     let needle = hint?.trim_matches('/');
@@ -161,7 +182,7 @@ mod tests {
         let apps = [app("web", "apps/web"), app("website", "apps/website")];
         let refs: Vec<&App> = apps.iter().collect();
         assert_eq!(
-            resolve(Some("web"), &refs, &AppMatch::default()).as_deref(),
+            resolve(Some("web"), &refs, &AppMatch::default(), Scope::Narrowed).as_deref(),
             Some("web")
         );
     }
@@ -171,7 +192,13 @@ mod tests {
         let apps = [app("web", "apps/web"), app("admin", "apps/admin")];
         let refs: Vec<&App> = apps.iter().collect();
         assert_eq!(
-            resolve(Some("apps/web"), &refs, &AppMatch::default()).as_deref(),
+            resolve(
+                Some("apps/web"),
+                &refs,
+                &AppMatch::default(),
+                Scope::Narrowed
+            )
+            .as_deref(),
             Some("web")
         );
     }
@@ -181,17 +208,49 @@ mod tests {
         let apps = [app("web", "apps/web"), app("admin", "apps/admin")];
         let refs: Vec<&App> = apps.iter().collect();
         assert_eq!(
-            resolve(Some("apps/web/src/routes"), &refs, &AppMatch::default()).as_deref(),
+            resolve(
+                Some("apps/web/src/routes"),
+                &refs,
+                &AppMatch::default(),
+                Scope::Narrowed
+            )
+            .as_deref(),
             Some("web")
         );
     }
 
     #[test]
-    fn a_single_candidate_is_named_without_a_hint() {
+    fn a_single_narrowed_candidate_is_named_without_a_hint() {
         let apps = [app("web", "apps/web")];
         let refs: Vec<&App> = apps.iter().collect();
         assert_eq!(
-            resolve(None, &refs, &AppMatch::default()).as_deref(),
+            resolve(None, &refs, &AppMatch::default(), Scope::Narrowed).as_deref(),
+            Some("web")
+        );
+    }
+
+    /// A whole-catalog search reaches a lone app the same way it reaches one of
+    /// twenty: through the hint. Nothing tied the command to it, so a project
+    /// that declares a single app must not have it named on that basis.
+    #[test]
+    fn a_single_catalog_candidate_still_has_to_be_named_by_the_hint() {
+        let apps = [app("web", "apps/web")];
+        let refs: Vec<&App> = apps.iter().collect();
+        assert_eq!(
+            resolve(None, &refs, &AppMatch::default(), Scope::Catalog),
+            None
+        );
+        assert_eq!(
+            resolve(
+                Some("zzzzzzzz"),
+                &refs,
+                &AppMatch::default(),
+                Scope::Catalog
+            ),
+            None
+        );
+        assert_eq!(
+            resolve(Some("web"), &refs, &AppMatch::default(), Scope::Catalog).as_deref(),
             Some("web")
         );
     }
@@ -201,7 +260,13 @@ mod tests {
         let apps = pair();
         let refs: Vec<&App> = apps.iter().collect();
         assert_eq!(
-            resolve(Some("lab-tools"), &refs, &AppMatch::default()).as_deref(),
+            resolve(
+                Some("lab-tools"),
+                &refs,
+                &AppMatch::default(),
+                Scope::Narrowed
+            )
+            .as_deref(),
             Some("lab_tools")
         );
     }
@@ -210,8 +275,19 @@ mod tests {
     fn an_unrelated_hint_names_no_app() {
         let apps = [app("web", "apps/web"), app("admin", "apps/admin")];
         let refs: Vec<&App> = apps.iter().collect();
-        assert_eq!(resolve(Some("zzzzzzzz"), &refs, &AppMatch::default()), None);
-        assert_eq!(resolve(None, &refs, &AppMatch::default()), None);
+        assert_eq!(
+            resolve(
+                Some("zzzzzzzz"),
+                &refs,
+                &AppMatch::default(),
+                Scope::Narrowed
+            ),
+            None
+        );
+        assert_eq!(
+            resolve(None, &refs, &AppMatch::default(), Scope::Narrowed),
+            None
+        );
     }
 
     #[test]
@@ -222,9 +298,12 @@ mod tests {
             fuzzy: false,
             ..Default::default()
         };
-        assert_eq!(resolve(Some("lab-tools"), &refs, &strict), None);
         assert_eq!(
-            resolve(Some("apps/web"), &refs, &strict).as_deref(),
+            resolve(Some("lab-tools"), &refs, &strict, Scope::Narrowed),
+            None
+        );
+        assert_eq!(
+            resolve(Some("apps/web"), &refs, &strict, Scope::Narrowed).as_deref(),
             Some("web")
         );
     }
@@ -237,7 +316,10 @@ mod tests {
             min_score: u16::MAX,
             ..Default::default()
         };
-        assert_eq!(resolve(Some("lab-tools"), &refs, &picky), None);
+        assert_eq!(
+            resolve(Some("lab-tools"), &refs, &picky, Scope::Narrowed),
+            None
+        );
     }
 
     /// Pins the reason devkit does not inherit `frizbee::Config::default()`:
@@ -250,6 +332,9 @@ mod tests {
             max_typos: 0,
             ..Default::default()
         };
-        assert_eq!(resolve(Some("lab-tools"), &refs, &zero), None);
+        assert_eq!(
+            resolve(Some("lab-tools"), &refs, &zero, Scope::Narrowed),
+            None
+        );
     }
 }
