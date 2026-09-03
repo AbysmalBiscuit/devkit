@@ -5,6 +5,13 @@ use std::path::Path;
 /// full path, all compared case-insensitively. This is the half of the matcher
 /// that needs nothing but local git facts, so callers that never fetch PR or
 /// tracker state can select without paying for the network.
+///
+/// A path selector is compared by identity once the spellings differ: the rows
+/// carry the path git reports, and the shell hands over whatever the caller
+/// typed. The two are routinely different names for one directory — a symlinked
+/// parent, macOS resolving `/var` to `/private/var`, Windows handing back an
+/// 8.3 short component — and a selector that misses leaves the caller no
+/// spelling to reach their own worktree by.
 pub fn matches_parts(worktree_path: &str, branch: &str, issue_id: &str, sel: &str) -> bool {
     let s = sel.to_lowercase();
     let base = Path::new(worktree_path)
@@ -12,13 +19,17 @@ pub fn matches_parts(worktree_path: &str, branch: &str, issue_id: &str, sel: &st
         .and_then(|x| x.to_str())
         .unwrap_or("")
         .to_lowercase();
-    [
+    if [
         issue_id.to_lowercase(),
         branch.to_lowercase(),
         base,
         worktree_path.to_lowercase(),
     ]
     .contains(&s)
+    {
+        return true;
+    }
+    devkit_common::git::same_path(Path::new(worktree_path), Path::new(sel))
 }
 
 /// True when `sel` names this worktree by any of `matches_parts`' names or by
@@ -59,6 +70,25 @@ mod tests {
         assert!(matches(&r, "lev/eng-7-fix"));
         assert!(matches(&r, "eng-7-fix"));
         assert!(matches(&r, "/home/u/wt/eng-7-fix"));
+    }
+
+    /// The rows carry the spelling git reports and the caller types their own.
+    /// Two names for one directory must still select it.
+    #[test]
+    fn a_path_selector_matches_another_spelling_of_one_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("wt").join("eng-7-fix");
+        std::fs::create_dir_all(&real).unwrap();
+        let indirect = tmp.path().join("wt").join(".").join("..").join("wt");
+        let r = IssueWorktree {
+            worktree: real.to_string_lossy().into_owned(),
+            ..row()
+        };
+        assert!(matches(&r, &indirect.join("eng-7-fix").to_string_lossy()));
+        assert!(!matches(
+            &r,
+            &indirect.join("eng-8-other").to_string_lossy()
+        ));
     }
 
     #[test]
