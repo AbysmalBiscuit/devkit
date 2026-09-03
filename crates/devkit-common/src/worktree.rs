@@ -1330,9 +1330,15 @@ mod tests {
         std::fs::create_dir_all(bl.join(".devkit")).unwrap();
         std::fs::write(bl.join(BASELINE_MARKER), "sha = 'abc'\n").unwrap();
 
+        // By identity: git reports its own spelling of the path, which is not
+        // the one the fixture built (macOS resolves the temp dir under
+        // `/private`, Windows can hand back an 8.3 component).
         let (_, others) = discover(main.to_str().unwrap()).unwrap();
         let names: Vec<_> = others.iter().map(|w| w.path.clone()).collect();
-        assert_eq!(names, vec![issue], "baseline still listed: {names:?}");
+        assert!(
+            matches!(&names[..], [only] if crate::git::same_path(only, &issue)),
+            "baseline still listed: {names:?}"
+        );
     }
 
     /// A marker that resolves to nothing decidable — here a symlink loop, in
@@ -1379,9 +1385,15 @@ mod tests {
         let marker = issue.join(BASELINE_MARKER);
         std::os::unix::fs::symlink(&marker, &marker).unwrap();
 
+        // By identity, for the reason the sibling discover test compares that
+        // way: git's spelling of a path is not the fixture's.
         let w = discover_all(main.to_str().unwrap()).unwrap();
         assert!(w.linked.is_empty(), "{:?}", w.linked);
-        assert_eq!(w.undecidable, vec![issue]);
+        assert!(
+            matches!(&w.undecidable[..], [only] if crate::git::same_path(only, &issue)),
+            "{:?}",
+            w.undecidable
+        );
     }
 
     /// `walk_and_classify` must evaluate `crate::pool::jwalk_parallelism()`

@@ -1673,7 +1673,9 @@ mod tests {
         assert!(matches!(read_marker(&path), MarkerState::Unusable));
         let refs = referencers(primary.to_str().unwrap()).unwrap();
         assert!(
-            refs.unreadable.iter().any(|p| p == &path),
+            refs.unreadable
+                .iter()
+                .any(|p| devkit_common::git::same_path(p, &path)),
             "the fixture must put the baseline in the unreadable list: {:?}",
             refs.unreadable
         );
@@ -2716,10 +2718,16 @@ mod tests {
         assert_eq!(rec.baseline.unwrap().path, f.baseline.to_string_lossy());
         assert_eq!(rec.issue, "c", "identity falls back to the branch");
 
+        // Through `naming`, which matches the baseline by identity the way
+        // every caller of the scan does: the record spells the path the test
+        // built and the scan reports git's spelling of the worktrees under it.
         let refs = referencers(&f.repo).unwrap();
         assert!(
-            refs.by_baseline[&f.baseline].contains(&bare),
-            "the new record counts"
+            refs.naming(&f.baseline)
+                .iter()
+                .any(|p| devkit_common::git::same_path(p, &bare)),
+            "the new record counts: {:?}",
+            refs.by_baseline
         );
     }
 
