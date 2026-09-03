@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use devkit_common::progress::Steps;
+use devkit_common::record::RecordState;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Mutex;
@@ -42,12 +43,34 @@ fn confirm(label: &str) -> bool {
 /// baseline this worktree compared against. The summary comes from the record
 /// rather than being re-derived, so a `issue_summary_path` template edited
 /// since setup cannot leave the old file behind.
+/// A record that exists and cannot be read is a refusal, not a worktree
+/// without one. Reading it as "pins nothing" would remove the worktree without
+/// stopping the servers under its baseline, and the record is the last thing
+/// that could have named them: afterwards `devrun down`'s sole-referencer
+/// exemption is gone with it and `devrun reap` is terminal-gated, so a session
+/// without a terminal can never reach them again. `--force` waives it the way
+/// it waives a dirty tree, since both trade something unrecoverable for the
+/// removal.
 fn recorded_leftovers(
     worktree: &Path,
-) -> (Option<String>, Option<devkit_common::record::BaselinePin>) {
-    match devkit_common::record::read(worktree) {
-        Some(rec) => (rec.summary, rec.baseline),
-        None => (None, None),
+    force: bool,
+) -> Result<(Option<String>, Option<devkit_common::record::BaselinePin>)> {
+    match devkit_common::record::read_state(worktree) {
+        RecordState::Ok(rec) => Ok((rec.summary, rec.baseline)),
+        RecordState::Absent => Ok((None, None)),
+        RecordState::Unusable if force => {
+            eprintln!(
+                "warning: {} could not be read; any servers under its baseline are left \
+                 running and unreachable",
+                devkit_common::record::path(worktree).display()
+            );
+            Ok((None, None))
+        }
+        RecordState::Unusable => anyhow::bail!(
+            "{} could not be read: repair or delete it, or rerun with --force to remove \
+             the worktree anyway",
+            devkit_common::record::path(worktree).display()
+        ),
     }
 }
 
@@ -156,7 +179,7 @@ fn cleanup(
     if dirty && !force {
         return Err(Dirty.into());
     }
-    let (summary, baseline) = recorded_leftovers(&wt);
+    let (summary, baseline) = recorded_leftovers(&wt, force)?;
 
     let main = devkit_common::git::primary_checkout(&wt)?;
     let parent = main.parent().context("main repo has no parent")?;
@@ -655,7 +678,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = recorded_leftovers(&wt).0.expect("record names the summary");
+        let found = recorded_leftovers(&wt, false).unwrap().0.expect("record names the summary");
         std::fs::remove_file(&found).unwrap();
         assert!(!summary.exists());
     }
@@ -675,7 +698,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(recorded_leftovers(dir.path()).0.is_none());
+        assert!(recorded_leftovers(dir.path(), false).unwrap().0.is_none());
     }
 
     #[test]
@@ -755,6 +778,32 @@ mod tests {
 
         cleanup(wt.to_str().unwrap(), "ENG-2", true, &Mutex::new(())).unwrap();
         assert!(other.exists(), "another issue's summary is untouched");
+    }
+
+    /// The record is what names the baseline whose servers this run is still
+    /// entitled to stop. Reading a corrupt one as "pins nothing" removes the
+    /// worktree and strands them: the exemption on `devrun down` goes with the
+    /// record and `devrun reap` needs a terminal.
+    #[test]
+    fn cleanup_refuses_a_record_it_cannot_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = repo_with_one_commit(dir.path());
+        let wt = dir.path().join("wt-eng-3");
+        fixture_git(
+            &main,
+            &["worktree", "add", "-q", "-b", "eng-3", wt.to_str().unwrap()],
+        );
+        std::fs::create_dir_all(wt.join(".devkit")).unwrap();
+        std::fs::write(wt.join(".devkit").join("issue.toml"), "issue = \n").unwrap();
+
+        let err = cleanup(wt.to_str().unwrap(), "ENG-3", false, &Mutex::new(())).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("issue.toml"), "{msg}");
+        assert!(wt.exists(), "the worktree survives a refusal");
+
+        cleanup(wt.to_str().unwrap(), "ENG-3", true, &Mutex::new(()))
+            .expect("--force waives it the way it waives a dirty tree");
+        assert!(!wt.exists(), "worktree removed");
     }
 
     /// A primary checkout at `dir/main` with one commit, ready for worktrees to
@@ -933,7 +982,7 @@ mod tests {
     #[test]
     fn a_worktree_with_no_record_has_nothing_to_remove() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(recorded_leftovers(dir.path()).0.is_none());
+        assert!(recorded_leftovers(dir.path(), false).unwrap().0.is_none());
     }
 
     /// `run_for` never deletes: a required entry that fails reports the reason
