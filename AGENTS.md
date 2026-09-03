@@ -69,6 +69,30 @@ Every completion script goes out through `completions::emit`, which runs `Genera
   walk, not from inside `pool::install`: called from inside the pool it sees
   itself as already nested and returns `Serial`, silently making the whole walk
   single-threaded.
+- **A baseline is deleted only after the caller's own reference is gone.** `issue
+  end` removes the worktree first, then counts references, because a scan that
+  ran while the departing worktree still existed would always find at least one
+  and never reclaim anything. The reference is the `baseline` field in each
+  worktree's `.devkit/issue.toml`.
+- **Nothing is provably unreferenced while any worktree is unreadable.**
+  `References::unreadable` collects worktrees whose record does not parse and
+  trees `discover_all` could not classify. Which baseline each names is unknown,
+  so every consumer — the prune sweep, the `doctor` row — reports that state
+  rather than treating the baselines as abandoned. A three-valued classification
+  guards every one of these paths (`BaselineState`, `MarkerState`,
+  `GitdirState`); a two-valued bool that folds an I/O error into yes or no is
+  the recurring defect here, and on the deletion path it deletes somebody else's
+  checkout.
+- **The directory lock always precedes a slot lock, never the reverse.** Both
+  waits are deliberately unbounded: a bootstrap can take minutes and the caller
+  wants the tree, not a timeout. Taking them in the other order deadlocks a
+  sweep against a bootstrap. Two opens of one lock file are two open file
+  descriptions, so these block *within* a single process too — which is why the
+  locked wrapper and the unlocked body are separate functions rather than one.
+- **A directory carrying no marker is rebuilt in place, not skipped.** A slot
+  whose `.devkit/baseline.toml` is absent is not devkit's to reclaim, but it is
+  devkit's to rebuild when that fork point is needed again. A marker that exists
+  and cannot be read is refused instead.
 
 ## Conventions
 

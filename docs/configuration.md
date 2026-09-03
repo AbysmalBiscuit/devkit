@@ -113,7 +113,7 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 | `worktree_root` | no | Directory under which issue worktrees are created. `~` is expanded. Defaults to the primary checkout's `_worktrees` sibling, e.g. `~/git/example_worktrees` beside `~/git/example`. |
 | `branch_prefix` | no | Prefix for branches created by `issue setup` (e.g. `you/`). |
 | `baseline_ref` | no | Git ref the baseline server tracks (e.g. `origin/staging`). Defaults to the remote's default branch, read from `origin/HEAD`. When neither resolves, the error names both fixes: set `defaults.baseline_ref`, or run `git remote set-head origin -a`. |
-| `baseline_path` | no | Checkout path for the baseline server. `~` is expanded. |
+| `baseline_dir` | no | Directory the per-fork-point baseline worktrees are created under, one per merge-base commit. `~` is expanded. Defaults to `_baselines` beside the issue worktrees, under `worktree_root`. |
 | `doppler_yaml` | no | Path to the repo's `doppler.yaml`; its `setup` paths seed app **path inference**. `~` is expanded. Absent → apps need an explicit `path`. |
 | `pr_base` | no (default `"main"`) | Default base branch for PRs opened by `issue pr create`. |
 | `pr_create_state` | no (default `"draft"`) | State `issue pr create` opens a PR in when neither `--draft` nor `--ready` is given: `"draft"` or `"ready"`. |
@@ -126,12 +126,12 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 
 ### Path values
 
-`worktree_root`, `baseline_path`, and `doppler_yaml` are resolved once when the config loads, in this order:
+`worktree_root`, `baseline_dir`, and `doppler_yaml` are resolved once when the config loads, in this order:
 
 1. `${VAR}` is replaced with that environment variable. An unset variable is an error naming both the config key and the variable. `$$` is a literal `$`; a `$` followed by anything else is left alone.
 2. A leading `~/` expands to `$HOME`.
 3. A path that is still relative is anchored by what it names, never by the working directory, and `.` / `..` are folded out either way:
-   - `worktree_root` and `baseline_path` name a location **on this machine**, so they resolve against the directory of the config file that declared them — including when that file is a linked worktree's main checkout.
+   - `worktree_root` and `baseline_dir` name a location **on this machine**, so they resolve against the directory of the config file that declared them — including when that file is a linked worktree's main checkout.
    - `doppler_yaml` names a file **inside the repository being worked on**, so it resolves against the checkout reading the config instead: each worktree resolves its own copy, and a branch that edits it takes effect without merging first.
 
 `branch_prefix` gets step 1 only.
@@ -141,11 +141,31 @@ Step 3 is what lets a project commit its `devkit.toml`:
 ```toml
 [defaults]
 worktree_root = "../myproject_worktrees"
-baseline_path = "../myproject_worktrees/_baseline"
+baseline_dir  = "../myproject_worktrees/_baselines"
 baseline_ref  = "origin/main"
 ```
 
 That is correct on every machine and for every developer. Only `branch_prefix` is personal — put it in `devkit.local.toml`, or write `"${USER}/"`.
+
+### Baselines
+
+A baseline is a worktree checked out at the merge base between the branch being
+worked on and the baseline ref, so two worktrees that branched from the same
+commit share one. `baseline_dir` is where they live; each one's directory is
+named from that commit, and devkit creates it on demand the first time a
+`--role baseline` server is asked for rather than up front.
+
+Every baseline devkit created carries a marker file, `.devkit/baseline.toml`,
+recording the commit it was cut from. The marker is what makes a baseline
+devkit's to manage: `devrun baseline prune` reclaims only marked directories,
+so anything else found under `baseline_dir` is reported and left where it is.
+A directory whose marker is missing is rebuilt in place the next time that
+fork point is needed; one whose marker exists but cannot be read is refused
+rather than guessed at.
+
+Which baseline a worktree uses is recorded in its own `.devkit/issue.toml`,
+which is what lets `issue end` and the prune sweep count references. A baseline
+is removed once no worktree names it any more.
 
 ### `[apps.<name>]`
 
@@ -544,7 +564,7 @@ issue_summary_path = "{{ worktree }}/.devkit/issue.md"   # or "notes/{{ issue }}
 team = "platform"
 ```
 
-`role` and `sha` are reserved: devkit supplies both to every render context, so a `[templates.variables]` entry of either name could never be read and is rejected when the config resolves. The names that were already context keys — `issue`, `slug`, `branch`, `apps`, `prefix` — stay shadowable.
+`role` and `sha` are reserved: devkit supplies them when it renders a worktree's templates and hooks — `role` for every worktree it creates, `sha` for a baseline, whose fork-point commit it names — so a `[templates.variables]` entry of either name could never be read there, and is rejected when the config resolves rather than silently ignored at render time. The names that were already context keys — `issue`, `slug`, `branch`, `apps`, `prefix` — stay shadowable.
 
 | Key | Default | Context |
 |---|---|---|
@@ -573,7 +593,7 @@ Review base context for `review_request`: `branch`, `issue`/`slug`/`apps` from t
 worktree_root  = "~/git/acme_worktrees"
 branch_prefix  = "you/"
 baseline_ref   = "origin/staging"
-baseline_path  = "~/git/acme_worktrees/_baseline"
+baseline_dir   = "~/git/acme_worktrees/_baselines"
 doppler_yaml   = "~/git/acme/app/doppler.yaml"
 pr_base        = "staging"
 

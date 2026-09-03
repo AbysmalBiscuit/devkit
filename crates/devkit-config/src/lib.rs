@@ -527,9 +527,11 @@ pub const DEFAULT_ISSUE_SUMMARY: &str = "\
 pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
     "{{ pr_number }}-{{ pr_title }}{% if linear_id %}_[{{ linear_id }}]{% endif %}";
 
-/// Names devkit puts in every render context. A `[templates.variables]` entry
-/// of the same name would be shadowed silently, because `template::render`
-/// merges variables underneath the context.
+/// Names devkit supplies when it renders a worktree's templates and hooks:
+/// `role` for every worktree it creates, `sha` for a baseline, whose fork-point
+/// commit it names. A `[templates.variables]` entry of the same name would be
+/// shadowed silently there, because `template::render` merges variables
+/// underneath the context.
 ///
 /// Only these two. `issue`, `slug`, `branch`, `apps` and `prefix` have been
 /// context keys from the start, so a project may already shadow one on
