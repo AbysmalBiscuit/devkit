@@ -1,7 +1,6 @@
 //! Coding-agent harness glue shared by every devkit hook: the deny envelope,
 //! and the per-checkout activation gate over the `[harness]` table.
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -16,24 +15,16 @@ pub fn deny_json(reason: &str) -> Value {
     })
 }
 
-#[derive(Deserialize, Default)]
-struct Probe {
-    #[serde(default)]
-    harness: devkit_config::HarnessSection,
-}
-
-/// Read the named `[harness]` flag from a devkit-config TOML body. Parses
-/// leniently — only the `[harness]` table is consulted, so a full project
-/// config and a bare `[harness]`-only file both work; unparseable input reads
-/// as off.
-fn harness_flag_in(body: &str, flag: &str) -> bool {
-    let Ok(p) = toml::from_str::<Probe>(body) else {
-        return false;
-    };
-    match flag {
-        "enforce_writes" => p.harness.enforce_writes,
-        _ => false,
-    }
+/// Read one `[harness]` flag from a config body.
+///
+/// Parses to a `toml::Table` and reads the single key, so a malformed or
+/// unrelated sibling key cannot change this answer. A body that is not valid
+/// TOML, a missing table, and a key of the wrong type all read as off.
+pub fn harness_flag_in(body: &str, flag: &str) -> bool {
+    toml::from_str::<toml::Table>(body)
+        .ok()
+        .and_then(|t| t.get("harness")?.get(flag)?.as_bool())
+        .unwrap_or(false)
 }
 
 /// Parse an enforcement env override into an explicit on/off, or `None` when
@@ -265,5 +256,38 @@ mod tests {
         .unwrap();
 
         assert!(harness_enabled(&linked, "enforce_writes"));
+    }
+
+    #[test]
+    fn a_malformed_sibling_key_does_not_disable_the_flag() {
+        let body = r#"
+[harness]
+enforce_writes = true
+
+[harness.commands.bun-only]
+programs = "node"
+"#;
+        assert!(harness_flag_in(body, "enforce_writes"));
+    }
+
+    #[test]
+    fn a_wrong_typed_flag_reads_as_off() {
+        assert!(!harness_flag_in(
+            "[harness]\nenforce_writes = \"yes\"\n",
+            "enforce_writes"
+        ));
+    }
+
+    #[test]
+    fn a_syntax_error_reads_as_off() {
+        assert!(!harness_flag_in("[[[", "enforce_writes"));
+    }
+
+    #[test]
+    fn an_absent_table_reads_as_off() {
+        assert!(!harness_flag_in(
+            "[defaults]\napps_dir = \"apps\"\n",
+            "enforce_writes"
+        ));
     }
 }
