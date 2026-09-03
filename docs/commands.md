@@ -53,7 +53,7 @@ portm prune                                      # remove stale reservations
 
 ## `devrun`: supervised dev servers
 
-Launches and supervises dev servers for one or more apps. Apps not explicitly named are auto-detected by diffing `git diff <baseline_ref>...HEAD`. When any webapp is selected, `api` is added automatically and `FOUNDRY_API_BASE_URL` is wired to the local api port. Each app's `launch` command is run verbatim with `{{ port }}` substituted; wrap it in `doppler run` in the config if the app needs Doppler-injected secrets. `--role both` runs the issue branch and its baseline side-by-side on separate ports for direct A/B comparison. That baseline is the worktree at the merge base between this branch and `baseline_ref`, shared with every other worktree cut from the same commit and created on demand the first time it is asked for.
+Launches and supervises dev servers for one or more apps. Apps not explicitly named are auto-detected by diffing `git diff <baseline target>...HEAD`, where the baseline target is `defaults.baseline_ref` when set and the remote's default branch (`origin/HEAD`) otherwise. When any webapp is selected, `api` is added automatically and `FOUNDRY_API_BASE_URL` is wired to the local api port. Each app's `launch` command is run verbatim with `{{ port }}` substituted; wrap it in `doppler run` in the config if the app needs Doppler-injected secrets. `--role both` runs the issue branch and its baseline side-by-side on separate ports for direct A/B comparison. That baseline is the worktree at the merge base between this branch and that same target, shared with every other worktree cut from the same commit and created on demand the first time it is asked for.
 
 ```
 devrun up [apps…] [--role issue|baseline|both] [--env K=V] [--env-file F] [--supervise] [--dry-run]
@@ -112,7 +112,7 @@ issue review finish  [<body>] [--pr <number>] [--to <alias|#channel>] [--arg k=v
 
 ### `setup`
 
-Mechanical start of an issue. Creates a worktree off the baseline ref, symlinks env files, runs `bun install`, and prints the issue, worktree, and branch — as a labelled table when stdout is a terminal, so the path can be double-clicked out of the line, and as JSON otherwise for a script or an agent to parse.
+Mechanical start of an issue. Creates a worktree off the baseline target — `defaults.baseline_ref` when set, else the remote's default branch — symlinks env files, runs `bun install`, and prints the issue, worktree, and branch — as a labelled table when stdout is a terminal, so the path can be double-clicked out of the line, and as JSON otherwise for a script or an agent to parse.
 
 The issue is whatever this project's tracker recognises: a Linear id (`ENG-1234`) or Linear URL, a GitHub issue number or a GitHub issue URL in the project's issues repository.
 

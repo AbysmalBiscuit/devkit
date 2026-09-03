@@ -2850,8 +2850,8 @@ mod tests {
     }
 
     /// A `.git` this process may unlink but not read, and a `gitdir:` target it
-    /// cannot stat. Both are ordinary field states — another user's checkout,
-    /// a private parent directory — and both used to read as "nothing here".
+    /// cannot stat. Both are ordinary field states — another user's checkout, a
+    /// private parent directory — and neither proves the directory is unowned.
     #[cfg(unix)]
     #[test]
     fn a_dot_git_that_cannot_be_read_or_stated_is_unknown() {
