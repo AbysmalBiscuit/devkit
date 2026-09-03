@@ -137,6 +137,17 @@ mod tests {
         assert!(!process_alive(0));
     }
 
+    /// Callers ask this to decide whether a port row is live and whether a
+    /// tree is safe to delete, so a process the caller may not signal has to
+    /// read as alive. Pid 1 is the reachable case: `kill(1, None)` from an
+    /// unprivileged process is `EPERM`, not `ESRCH`. Running as root takes the
+    /// `Ok` arm instead and the answer is the same.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_this_user_cannot_signal_is_alive() {
+        assert!(process_alive(1));
+    }
+
     #[test]
     fn tree_rss_of_self_is_nonzero() {
         assert!(tree_rss_bytes(std::process::id()) > 0);

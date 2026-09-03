@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 pub(super) fn process_alive(pid: u32) -> bool {
+    use nix::errno::Errno;
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
     // Pids that do not fit in a positive i32 are invalid on Linux/macOS.
@@ -15,7 +16,14 @@ pub(super) fn process_alive(pid: u32) -> bool {
     if signed <= 0 {
         return false;
     }
-    kill(Pid::from_raw(signed), None).is_ok()
+    match kill(Pid::from_raw(signed), None) {
+        Ok(()) => true,
+        // The process exists; it belongs to another user. Callers ask this to
+        // decide whether a port row is live and whether a tree is safe to
+        // delete, so a process this one may not signal is still a process.
+        Err(Errno::EPERM) => true,
+        Err(_) => false,
+    }
 }
 
 pub(super) fn terminate(pid: u32) {
