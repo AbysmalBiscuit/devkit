@@ -290,6 +290,36 @@ mod tests {
         assert!(Doc::salvage(r#"{"something":"else"}"#).is_none());
     }
 
+    /// A crash between truncating a file and writing it leaves an empty one.
+    /// That is the first-run shape, not corruption: both readers answer with
+    /// the default, and `read` must not back the file up as unparseable.
+    #[test]
+    fn an_empty_document_reads_as_the_default_without_a_backup() {
+        let (_guard, p) = scratch("empty.json");
+        let backup = p.with_extension("json.bak");
+        for body in ["", "  \n\t "] {
+            fs::write(&p, body).unwrap();
+            assert_eq!(load::<Doc>(&p), Doc::default(), "load {body:?}");
+            assert!(
+                !backup.exists(),
+                "an empty file is not corruption: {body:?}"
+            );
+            assert_eq!(
+                try_load::<Doc>(&p).unwrap(),
+                Doc::default(),
+                "try_load {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_empty_tracks_the_entry_count() {
+        let mut d = Doc::default();
+        assert!(d.is_empty());
+        d.items.insert(8080, "api".into());
+        assert!(!d.is_empty());
+    }
+
     #[test]
     fn load_save_roundtrip_and_missing_default() {
         let (_guard, p) = scratch("loadsave.json");
