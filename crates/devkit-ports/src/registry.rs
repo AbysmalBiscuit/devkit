@@ -1062,6 +1062,89 @@ mod ops_tests {
         assert_eq!(d.dead_ports(), vec![9100]);
     }
 
+    /// The grace is exclusive at its boundary: a reservation that has reached
+    /// `RESERVATION_GRACE_SECS` without anything listening has expired. An
+    /// inclusive reading keeps a dead reservation holding its port for a whole
+    /// extra second of every prune.
+    #[test]
+    fn a_reservation_expires_the_moment_it_reaches_the_grace_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut d = Data::default();
+        d.entries.insert(
+            47360,
+            Entry {
+                app: "api".into(),
+                holder: dir.path().to_string_lossy().into_owned(),
+                role: Role::Issue,
+                pid: None,
+                logfile: None,
+                ts: now().saturating_sub(RESERVATION_GRACE_SECS),
+            },
+        );
+        assert_eq!(d.dead_ports(), vec![47360]);
+
+        // Comfortably inside the grace, so a second of clock drift between
+        // this `now()` and the one `dead_ports` takes cannot flip the answer.
+        d.entries.get_mut(&47360).unwrap().ts = now().saturating_sub(RESERVATION_GRACE_SECS - 5);
+        assert!(d.dead_ports().is_empty(), "still inside the grace");
+    }
+
+    /// A concurrent allocation can take the pre-scanned port between the
+    /// snapshot and the commit. The commit re-allocates from the requesting
+    /// app's own base, not from whichever base another request in the same
+    /// call happened to carry.
+    #[test]
+    fn a_lost_race_reallocates_from_the_requesting_apps_own_base() {
+        struct Racing {
+            seen: Data,
+            real: std::cell::RefCell<Data>,
+        }
+        impl Store for Racing {
+            fn snapshot(&self) -> Result<Data> {
+                Ok(self.seen.clone())
+            }
+            fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
+                f(&mut self.real.borrow_mut())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut real = Data::default();
+        real.entries.insert(
+            47500,
+            Entry {
+                app: "other".into(),
+                holder: "/gone".into(),
+                role: Role::Issue,
+                pid: None,
+                logfile: None,
+                ts: now(),
+            },
+        );
+        let store = Racing {
+            seen: Data::default(),
+            real: std::cell::RefCell::new(real),
+        };
+
+        let out = alloc_with(
+            &store,
+            &dir.path().to_string_lossy(),
+            &[("api".into(), 47400), ("web".into(), 47500)],
+            Role::Issue,
+        )
+        .unwrap();
+
+        let web = out
+            .iter()
+            .find(|(app, _)| app.as_str() == "web")
+            .expect("web allocated")
+            .1;
+        assert!(
+            web >= 47500,
+            "web re-allocated from api's base rather than its own: {web}"
+        );
+    }
+
     #[test]
     fn live_port_requires_matching_live_row() {
         let mut d = Data::default();
