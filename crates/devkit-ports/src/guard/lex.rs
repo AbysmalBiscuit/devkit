@@ -22,8 +22,9 @@ enum Tok {
 /// entirely — an agent writing `cat > notes.md <<EOF` with "next dev" in the
 /// body is writing a file, not launching a server.
 ///
-/// An unterminated quote yields no segments: the string cannot be read as a
-/// command, and guessing risks a denial on text nobody will execute.
+/// An unterminated quote, or a heredoc whose `<<` names no delimiter, yields no
+/// segments: the string cannot be read as a command, and guessing risks a
+/// denial on text nobody will execute.
 pub fn segments(command: &str) -> Vec<Vec<String>> {
     let Some(toks) = tokenize(command) else {
         return Vec::new();
@@ -51,8 +52,8 @@ pub fn segments(command: &str) -> Vec<Vec<String>> {
     out
 }
 
-/// Scan into words, breaks and redirections. `None` on an unterminated quote,
-/// escape, or heredoc-delimiter line.
+/// Scan into words, breaks and redirections. `None` on an unterminated quote or
+/// a heredoc with no delimiter.
 fn tokenize(command: &str) -> Option<Vec<Tok>> {
     let mut toks = Vec::new();
     let mut word = String::new();
@@ -77,6 +78,15 @@ fn tokenize(command: &str) -> Option<Vec<Tok>> {
             continue;
         }
         match c {
+            // An unquoted `#` that begins a word opens a comment running to the
+            // end of the line. The newline is left in the stream so it still
+            // breaks the segment and still releases any pending heredoc body.
+            // A `#` inside a word (`echo foo#bar`) is an ordinary character.
+            '#' if !has_word => {
+                while chars.peek().is_some_and(|n| *n != '\n') {
+                    chars.next();
+                }
+            }
             '\\' => {
                 // A backslash with nothing after it is not an unterminated
                 // escape: the shell has nothing left to escape and takes it
@@ -344,6 +354,37 @@ mod tests {
             vec!["diff", "vite", "true"]
         );
         assert_eq!(heads("echo hi >(cat)"), vec!["echo", "cat"]);
+    }
+
+    #[test]
+    fn a_comment_is_not_command_text() {
+        assert_eq!(
+            segments("cargo build   # TODO(next dev)"),
+            vec![vec!["cargo", "build"]]
+        );
+        assert_eq!(heads("ls # build && next dev"), vec!["ls"]);
+        assert_eq!(heads("ls # then run: cd x; uvicorn app"), vec!["ls"]);
+    }
+
+    #[test]
+    fn a_comment_ends_at_the_newline() {
+        assert_eq!(
+            heads("ls # build && next dev\nuvicorn app"),
+            vec!["ls", "uvicorn"]
+        );
+    }
+
+    #[test]
+    fn a_hash_inside_a_word_is_an_ordinary_character() {
+        assert_eq!(segments("echo foo#bar"), vec![vec!["echo", "foo#bar"]]);
+    }
+
+    #[test]
+    fn a_quoted_hash_is_not_a_comment() {
+        assert_eq!(
+            segments(r##"echo "# not a comment""##),
+            vec![vec!["echo", "# not a comment"]]
+        );
     }
 
     #[test]

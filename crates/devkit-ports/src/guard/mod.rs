@@ -600,6 +600,26 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_comment_is_not_a_command() {
+        let p = project(|_| {});
+        assert!(!denies(&decide_with(
+            "cargo build   # TODO(next dev)",
+            &BTreeMap::new(),
+            Some(&p)
+        )));
+        assert!(!denies(&decide_with(
+            "ls # build && next dev",
+            &BTreeMap::new(),
+            Some(&p)
+        )));
+        assert!(!denies(&decide_with(
+            "ls # then run: cd x; uvicorn app",
+            &BTreeMap::new(),
+            Some(&p)
+        )));
+    }
+
+    #[test]
     fn a_catalog_verb_that_does_not_serve_is_allowed_with_no_apps_at_all() {
         let p = project(|_| {});
         assert!(!denies(&decide_with(
