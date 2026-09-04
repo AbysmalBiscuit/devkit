@@ -121,7 +121,6 @@ debug = "line-tables-only"
 opt-level = 3        # tools do little compute; keep the registry/diff hot paths fast
 lto = "thin"         # cross-crate inlining across the workspace libs
 codegen-units = 1    # better optimization at the cost of compile time
-panic = "abort"      # no bin catches panics; drops unwind tables, shrinks the binary
 strip = true
 
 # The profile that 'dist' will build with

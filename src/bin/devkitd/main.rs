@@ -115,7 +115,7 @@ impl Daemon {
 }
 
 fn main() -> Result<()> {
-    devkit_common::report::install_panic_hook("devkitd");
+    devkit_common::report::install_abort_hook("devkitd");
     match std::env::args().nth(1).as_deref() {
         Some("install-service") => return service::install(),
         Some("uninstall-service") => return service::uninstall(),
@@ -415,7 +415,7 @@ fn main() -> Result<()> {
         }
         let Ok(stream) = stream else { continue };
         let d = Arc::clone(&daemon);
-        // A panicking handler would abort the whole daemon (panic=abort), so handlers
+        // `install_abort_hook` aborts the whole daemon on any panic, so handlers
         // return Result and we only log failures here.
         std::thread::spawn(move || {
             d.active_conns.fetch_add(1, Ordering::SeqCst);

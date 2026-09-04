@@ -10,6 +10,14 @@ use devkit_common::harness::{self, ShellPayload};
 use devkit_ports::guard::{self, Decision, Project};
 use std::io::{Read, Write};
 
+// The fail-open contract below is `catch_unwind`, which catches nothing under an
+// aborting panic strategy. Nothing else ties the compile profile to this file, so
+// the dependency is stated where it is relied on.
+#[cfg(panic = "abort")]
+compile_error!(
+    "`devkit harness shell` fails open through catch_unwind; the release profile must unwind"
+);
+
 #[derive(Args)]
 pub struct HarnessCli {
     #[command(subcommand)]

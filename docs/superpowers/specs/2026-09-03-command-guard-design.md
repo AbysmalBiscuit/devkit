@@ -281,7 +281,7 @@ Hint resolution answers "which app", never "which match". When several apps matc
 
 ### Failure is silence
 
-Any failure — a config that will not load, a malformed rule, an unexpected panic — warns on stderr and exits 0, letting the command run. The guard body runs inside `catch_unwind`; it does not install `report::install_panic_hook`, which exits non-zero.
+Any failure — a config that will not load, a malformed rule, an unexpected panic — warns on stderr and exits 0, letting the command run. The guard body runs inside `catch_unwind`. `devkit`'s `main` installs `report::install_panic_hook` for every subcommand, and that hook prints its bug report and returns rather than exiting, so a panic on the guard path writes the report to stderr, then the guard's own allow message, and still exits 0. `catch_unwind` catches nothing under an aborting panic strategy, so `harness.rs` carries a `#[cfg(panic = "abort")] compile_error!` that fails the build if the release profile ever stops unwinding.
 
 This is the opposite of `enforce_writes`, deliberately. A missed write lock corrupts another session's work, so that hook fails closed. A missed nudge costs nothing, while a false denial blocks legitimate work on every Bash call until someone finds the malformed key. The `prd` safety net is `run::assert_not_prd` at launch time, which this path does not touch.
 
