@@ -10,6 +10,7 @@ mod brief;
 mod config;
 mod docs;
 mod doctor;
+mod harness;
 mod issue;
 mod links;
 mod locks;
@@ -128,6 +129,9 @@ enum Cmd {
     /// Serve the devkit MCP tools over stdio.
     #[command(display_name = "devkit mcp")]
     Mcp(mcp::McpCli),
+    /// Coding-agent harness hooks.
+    #[command(display_name = "devkit harness")]
+    Harness(harness::HarnessCli),
     /// Install the old command names as hardlinks beside this binary.
     ///
     /// Creates hardlinks such as `issue` and `devrun` beside this
@@ -355,6 +359,7 @@ fn main() -> Result<()> {
                 Cmd::Run(c) => run::run(c),
                 Cmd::Issue(c) => issue::run(c),
                 Cmd::Mcp(c) => mcp::run(c),
+                Cmd::Harness(c) => harness::run(c),
                 Cmd::InstallLinks(a) => links::run(a),
             }
         }
