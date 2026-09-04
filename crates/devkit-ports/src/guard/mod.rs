@@ -14,7 +14,19 @@ use std::collections::{BTreeMap, HashMap};
 
 /// The devkit commands a user types directly. Never gate them: the guard's
 /// whole purpose is to route work to them.
-const SHIMS: [&str; 5] = ["devkit", "devrun", "lockm", "portm", "docm"];
+///
+/// `devkit` plus every entry of `SHIMS` in `src/bin/devkit/shim.rs`. That list
+/// lives in the binary and this crate cannot see it, so a shim added there has
+/// to be added here by hand.
+const SHIMS: [&str; 7] = [
+    "devkit",
+    "devrun",
+    "lockm",
+    "portm",
+    "docm",
+    "issue",
+    "devkit-mcp",
+];
 
 /// The resolved half of the answer, absent when only the `[harness]` probe ran.
 pub struct Project {
@@ -362,6 +374,15 @@ mod tests {
         let r = rules(&["node"], "use bun");
         assert!(!denies(&decide_with("devrun up web", &r, None)));
         assert!(!denies(&decide_with("devkit config apps", &r, None)));
+    }
+
+    /// `issue` and `devkit-mcp` are shims too, and both read like ordinary
+    /// words a project might write a rule about.
+    #[test]
+    fn a_rule_naming_a_shim_does_not_fire() {
+        let r = rules(&["issue", "devkit-mcp"], "unreachable");
+        assert!(!denies(&decide_with("issue setup ENG-1", &r, None)));
+        assert!(!denies(&decide_with("devkit-mcp", &r, None)));
     }
 
     #[test]

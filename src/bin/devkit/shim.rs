@@ -52,6 +52,10 @@ pub struct Shim {
     pub sub: Sub,
 }
 
+/// The command guard keeps its own copy of these names, plus `devkit` itself,
+/// in `crates/devkit-ports/src/guard/mod.rs`: a library crate cannot read this
+/// binary's list, and a name missing there is a shim the guard gates. Add to
+/// both.
 pub const SHIMS: &[Shim] = &[
     Shim {
         name: "issue",
