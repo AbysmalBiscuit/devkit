@@ -71,33 +71,32 @@ pub fn issue_id_of(worktree: &std::path::Path, branch: &str) -> String {
 /// skipped in favour of a real id later in the string (e.g. the trailing
 /// `swe-8603` in `pr-3255-…-swe-8603`).
 pub fn find_id(s: &str) -> Option<String> {
-    // first run of letters-dash-digits, e.g. eng-1234
     let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_alphabetic() {
-            let start = i;
-            while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
-                i += 1;
-            }
-            if i < bytes.len() && bytes[i] == b'-' {
-                let dash = i;
-                i += 1;
-                let ds = i;
-                while i < bytes.len() && bytes[i].is_ascii_digit() {
-                    i += 1;
-                }
-                if i > ds {
-                    let key = &s[start..dash];
-                    if key.eq_ignore_ascii_case("pr") {
-                        continue; // PR-number marker, keep scanning for the id
-                    }
-                    return Some(format!("{}-{}", key, &s[ds..i]));
-                }
-            }
-        } else {
-            i += 1;
+    let alphabetic = |b: &u8| b.is_ascii_alphabetic();
+    for start in 0..bytes.len() {
+        // Each letter run is examined once, from its first letter: an index
+        // whose predecessor is also a letter is the middle of a run already
+        // considered. Scanning by index rather than by a cursor the body
+        // advances is what makes the walk terminate structurally.
+        if !alphabetic(&bytes[start]) || (start > 0 && alphabetic(&bytes[start - 1])) {
+            continue;
         }
+        let dash = start + bytes[start..].iter().take_while(|b| alphabetic(b)).count();
+        if bytes.get(dash) != Some(&b'-') {
+            continue;
+        }
+        let digits = dash + 1;
+        let end = digits
+            + bytes[digits..]
+                .iter()
+                .take_while(|b| b.is_ascii_digit())
+                .count();
+        let key = &s[start..dash];
+        // A `pr-<number>` marker is the PR number, not an id: keep scanning.
+        if end == digits || key.eq_ignore_ascii_case("pr") {
+            continue;
+        }
+        return Some(format!("{key}-{}", &s[digits..end]));
     }
     None
 }
