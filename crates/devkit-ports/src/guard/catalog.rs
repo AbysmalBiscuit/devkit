@@ -13,9 +13,9 @@ const DEV_SUBCOMMAND: [&str; 4] = ["next", "nitro", "wrangler", "mintlify"];
 /// happens to equal one of these words makes the guard allow rather than deny.
 const VITE_NON_SERVER: [&str; 3] = ["build", "preview", "optimize"];
 
-/// Flags that make a verbless invocation print and exit rather than serve.
-/// Any other flag leaves the verdict to the verb, so `vite --port 3000` is a
-/// server.
+/// Flags that make an invocation print and exit rather than serve, whichever
+/// catalog program carries them. Any other flag leaves the verdict to the verb,
+/// so `vite --port 3000` is a server.
 const INFO_FLAGS: [&str; 4] = ["--version", "-v", "--help", "-h"];
 
 /// Whether the guard has an opinion about this program at all.
@@ -30,6 +30,9 @@ pub fn is_dev_server(argv: &[String]) -> bool {
         return false;
     };
     let rest: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
+    if rest.iter().any(|a| INFO_FLAGS.contains(a)) {
+        return false;
+    }
     let first_verb = rest.iter().find(|a| !a.starts_with('-'));
 
     if DEV_SUBCOMMAND.contains(&prog) {
@@ -38,12 +41,7 @@ pub fn is_dev_server(argv: &[String]) -> bool {
     match prog {
         "uvicorn" => true,
         "flask" => rest.contains(&"run"),
-        "vite" => {
-            if rest.iter().any(|a| INFO_FLAGS.contains(a)) {
-                return false;
-            }
-            !rest.iter().any(|a| VITE_NON_SERVER.contains(a))
-        }
+        "vite" => !rest.iter().any(|a| VITE_NON_SERVER.contains(a)),
         _ => false,
     }
 }
@@ -94,6 +92,15 @@ mod tests {
         assert!(server("vite --port 3000"));
         assert!(!server("vite build --minify"));
         assert!(!server("vite --config vite.config.ts build"));
+    }
+
+    #[test]
+    fn an_info_flag_prints_and_exits_for_every_catalog_program() {
+        assert!(!server("uvicorn --version"));
+        assert!(!server("uvicorn --help"));
+        assert!(!server("uvicorn -v"));
+        assert!(!server("flask --help run"));
+        assert!(!server("next dev --help"));
     }
 
     #[test]

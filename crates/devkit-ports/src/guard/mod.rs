@@ -84,10 +84,21 @@ fn rule_hit(n: &Normalized, prog: &str, rules: &BTreeMap<String, CommandRule>) -
 ///
 /// `typed` is the segment as lexed and `n` the same segment with its wrappers
 /// stripped. Every match runs on `n`; every message quotes `typed`, so the
-/// agent reads back a command it recognises rather than one runner-prefix
-/// stripping invented.
+/// message names the words the agent typed rather than the shorter command
+/// runner-prefix stripping leaves behind. Lexing has already resolved quoting,
+/// so a quoted argument comes back unquoted.
 fn project_hit(typed: &[String], n: &Normalized, prog: &str, p: &Project) -> Option<String> {
-    if let Some(name) = best_task(n, p) {
+    // The catalog knows which verbs of the programs it covers start a server,
+    // and a claim resting on the program word alone does not: a task
+    // `run = ["vite"]` would otherwise deny `vite build`. A task that names the
+    // verb itself still claims the command.
+    let min_sig = if catalog::is_known_program(prog) && !catalog::is_dev_server(&n.argv) {
+        2
+    } else {
+        1
+    };
+
+    if let Some(name) = best_task(n, p, min_sig) {
         return Some(format!(
             "`{}` is the `{name}` task. Run `devrun task {name}` so it gets its app directory, \
              layered env and allocated ports.",
@@ -177,7 +188,11 @@ struct TaskHit<'a> {
 /// several tasks retype the same command and only the app the agent is working
 /// in says which was meant; name last so a `HashMap`'s iteration order cannot
 /// make the message name a different task from one call to the next.
-fn best_task(n: &Normalized, p: &Project) -> Option<String> {
+///
+/// `min_sig` is the shortest signature allowed to claim this segment; the
+/// caller raises it to exclude a bare-program task from a command the catalog
+/// has already read as something other than a server.
+fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
     let mut hits: Vec<TaskHit<'_>> = p
         .config
         .tasks
@@ -187,7 +202,7 @@ fn best_task(n: &Normalized, p: &Project) -> Option<String> {
             // wrapper make it unmatchable against the stripped typed side.
             let cfg = norm::normalize(&task.run)?;
             let s = sig::signature(&cfg.argv)?;
-            if !sig::matches(&s, &n.argv) {
+            if s.len() < min_sig || !sig::matches(&s, &n.argv) {
                 return None;
             }
             tasks::redirect_worth_it(
@@ -597,6 +612,43 @@ mod tests {
             Some(&p)
         )));
         assert!(denies(&decide_with("vite", &BTreeMap::new(), Some(&p))));
+    }
+
+    fn vite_task(name: &str, run: &[&str]) -> Project {
+        project(|c| {
+            c.tasks.insert(
+                name.into(),
+                TaskConfig {
+                    run: run.iter().map(|s| s.to_string()).collect(),
+                    app: Some("storefront".into()),
+                    ..Default::default()
+                },
+            );
+        })
+    }
+
+    #[test]
+    fn the_catalog_outranks_a_bare_program_task() {
+        let p = vite_task("dev-sf", &["vite"]);
+        assert!(!denies(&decide_with(
+            "vite build",
+            &BTreeMap::new(),
+            Some(&p)
+        )));
+    }
+
+    #[test]
+    fn a_bare_program_task_still_claims_the_serving_invocation() {
+        let p = vite_task("dev-sf", &["vite"]);
+        let d = decide_with("vite", &BTreeMap::new(), Some(&p));
+        assert!(reason(&d).contains("devrun task dev-sf"), "{}", reason(&d));
+    }
+
+    #[test]
+    fn a_task_naming_the_verb_claims_it_from_the_catalog() {
+        let p = vite_task("bundle", &["vite", "build"]);
+        let d = decide_with("vite build", &BTreeMap::new(), Some(&p));
+        assert!(reason(&d).contains("devrun task bundle"), "{}", reason(&d));
     }
 
     #[test]
