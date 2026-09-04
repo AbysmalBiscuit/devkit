@@ -1089,6 +1089,29 @@ mod ops_tests {
         assert!(d.dead_ports().is_empty(), "still inside the grace");
     }
 
+    /// The pre-scan is the only place a port an untracked process is listening
+    /// on gets skipped: the commit re-check consults the registry alone, which
+    /// says nothing about a stray. Allocating over one hands two processes the
+    /// same port.
+    #[test]
+    fn allocation_skips_a_port_a_stray_process_is_listening_on() {
+        // Bound on the wildcard address, as a real server is, so the loopback
+        // probe in `listening` sees it.
+        let stray = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let busy = stray.local_addr().unwrap().port();
+        let dir = tempfile::tempdir().unwrap();
+
+        let out = alloc_with(
+            &FlockStore::at(dir.path()),
+            &dir.path().to_string_lossy(),
+            &[("api".into(), busy)],
+            Role::Issue,
+        )
+        .unwrap();
+
+        assert_ne!(out[0].1, busy, "allocated over a listening stray");
+    }
+
     /// A concurrent allocation can take the pre-scanned port between the
     /// snapshot and the commit. The commit re-allocates from the requesting
     /// app's own base, not from whichever base another request in the same
