@@ -222,6 +222,72 @@ pub fn commands_enabled(cwd: &Path) -> bool {
     enforcement_enabled(cwd, "enforce_commands", "DEVKIT_ENFORCE_COMMANDS")
 }
 
+/// Which harness sent a payload, and therefore which envelope answers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Harness {
+    /// Claude Code and Codex, which share `PreToolUse` and its envelope.
+    ClaudeCode,
+    Cursor,
+}
+
+/// A pre-execution shell payload, normalized across the harnesses.
+#[derive(Debug, Clone)]
+pub struct ShellPayload {
+    pub harness: Harness,
+    pub command: String,
+    pub cwd: Option<PathBuf>,
+}
+
+/// Read a pre-execution shell payload. `None` when the event is not about a
+/// shell command, which is not a failure: harnesses send events this hook does
+/// not model.
+///
+/// The harness is told apart by `hook_event_name`, which Claude Code and Codex
+/// send and Cursor does not. The presence of `tool_input` cannot be the
+/// discriminator: Cursor's generic `preToolUse` carries that key too, so
+/// testing it would answer a Cursor session in Claude Code's envelope.
+pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
+    let harness = match p.get("hook_event_name").and_then(Value::as_str) {
+        Some(_) => Harness::ClaudeCode,
+        None => Harness::Cursor,
+    };
+    if harness == Harness::ClaudeCode && p.get("tool_name").and_then(Value::as_str) != Some("Bash")
+    {
+        return None;
+    }
+    let command = p
+        .get("command")
+        .and_then(Value::as_str)
+        .or_else(|| p.get("tool_input")?.get("command")?.as_str())
+        .filter(|s| !s.trim().is_empty())?
+        .to_string();
+    let cwd = p
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    Some(ShellPayload {
+        harness,
+        command,
+        cwd,
+    })
+}
+
+/// The deny envelope this harness reads. Cursor's reason goes in
+/// `agent_message`: `user_message` is shown to the human, and only the agent
+/// message reaches the agent, which is the whole point of handing back a
+/// command it can retry.
+pub fn deny_shell_json(harness: Harness, reason: &str) -> Value {
+    match harness {
+        Harness::ClaudeCode => deny_json(reason),
+        Harness::Cursor => json!({
+            "permission": "deny",
+            "agent_message": reason,
+            "continue": true
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,5 +598,64 @@ programs = "node"
             "warning names the table: {}",
             warns[0]
         );
+    }
+
+    #[test]
+    fn a_claude_code_payload_carries_its_command_under_tool_input() {
+        let p = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": "vite dev" },
+            "cwd": "/repo"
+        });
+        let parsed = parse_shell_payload(&p).expect("a Bash payload parses");
+        assert_eq!(parsed.harness, Harness::ClaudeCode);
+        assert_eq!(parsed.command, "vite dev");
+        assert_eq!(parsed.cwd.unwrap(), std::path::Path::new("/repo"));
+    }
+
+    #[test]
+    fn a_cursor_payload_carries_its_command_at_the_top_level() {
+        let p = serde_json::json!({ "command": "vite dev", "cwd": "/repo" });
+        let parsed = parse_shell_payload(&p).expect("a Cursor payload parses");
+        assert_eq!(parsed.harness, Harness::Cursor);
+        assert_eq!(parsed.command, "vite dev");
+    }
+
+    #[test]
+    fn a_cursor_generic_tool_payload_is_still_cursor() {
+        // Cursor's generic preToolUse also carries tool_input, so the presence of
+        // that key cannot be the discriminator.
+        let p = serde_json::json!({ "tool_name": "Shell", "tool_input": { "command": "vite" } });
+        assert_eq!(parse_shell_payload(&p).unwrap().harness, Harness::Cursor);
+    }
+
+    #[test]
+    fn a_non_bash_tool_is_not_a_shell_payload() {
+        let p = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Edit",
+            "tool_input": { "file_path": "/repo/a.rs" }
+        });
+        assert!(parse_shell_payload(&p).is_none());
+    }
+
+    #[test]
+    fn a_payload_with_no_command_is_not_a_shell_payload() {
+        assert!(parse_shell_payload(&serde_json::json!({ "cwd": "/repo" })).is_none());
+    }
+
+    #[test]
+    fn each_harness_gets_its_own_deny_envelope() {
+        let cc = deny_shell_json(Harness::ClaudeCode, "use devrun");
+        assert_eq!(cc["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(
+            cc["hookSpecificOutput"]["permissionDecisionReason"],
+            "use devrun"
+        );
+
+        let cur = deny_shell_json(Harness::Cursor, "use devrun");
+        assert_eq!(cur["permission"], "deny");
+        assert_eq!(cur["agent_message"], "use devrun");
     }
 }
