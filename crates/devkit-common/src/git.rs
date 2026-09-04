@@ -530,6 +530,40 @@ mod tests {
             "same_path still reads Unknown as no"
         );
     }
+
+    /// When both resolutions fail, only *absence* on both sides decides
+    /// anything; a failure for any other reason leaves the pair undecided
+    /// however the other side failed. Reading either of these as the lexical
+    /// answer is what lets a deletion past the live-server refusal.
+    #[cfg(unix)]
+    #[test]
+    fn a_double_failure_is_unknown_unless_both_paths_are_merely_absent() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let locked = tmp.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let a = locked.join("a");
+        let b = locked.join("b");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        let absent = tmp.path().join("gone");
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let verdicts = [
+            path_identity(&a, &b),
+            path_identity(&a, &absent),
+            path_identity(&absent, &a),
+        ];
+        // Restored before the asserts so a failure cannot leave the tempdir
+        // undeletable.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            verdicts,
+            [PathIdentity::Unknown; 3],
+            "unreadable/unreadable and unreadable/absent are both undecided"
+        );
+    }
     use std::io::Write;
 
     #[test]
