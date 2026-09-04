@@ -1,6 +1,6 @@
 {
   "name": "devkit",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle",
   "author": {
     "name": "Lev Velykoivanenko"

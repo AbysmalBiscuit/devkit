@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.14.1](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.0...v0.14.1) (2026-09-04)
+
+
+### Features
+
+* **guard:** add the built-in dev-server catalog ([6454499](https://github.com/AbysmalBiscuit/devkit/commit/64544999bb211ed996e97631f4c3ab002a023e20))
+* **guard:** decide a command against rules, tasks and apps ([261a942](https://github.com/AbysmalBiscuit/devkit/commit/261a94206ec72a2c73562873e28e52a4313451f3))
+* **guard:** derive whether a task redirect is worth it ([2352f84](https://github.com/AbysmalBiscuit/devkit/commit/2352f8435580a90314867facbb819f29d5acc703))
+* **guard:** lex a shell command into segments ([2f72231](https://github.com/AbysmalBiscuit/devkit/commit/2f72231cdb10e190f3abcd9204654fb92d80a6f8))
+* **guard:** normalize a segment to its real argv ([ce40375](https://github.com/AbysmalBiscuit/devkit/commit/ce40375e65aa90b3695c63e8d83fd3df9eaeb34f))
+* **guard:** reduce a config argv to a match signature ([f44ffb1](https://github.com/AbysmalBiscuit/devkit/commit/f44ffb11adc99724b7a6033bc6316324de4dd545))
+* **guard:** resolve a command to the app it belongs to ([326defe](https://github.com/AbysmalBiscuit/devkit/commit/326defe4223b6d56ddd987e931960bc4d04e5dfe))
+* **harness:** add [harness.commands] rules and [harness.app_match] ([d39aef2](https://github.com/AbysmalBiscuit/devkit/commit/d39aef2642dda3cb3596a0528ed72b267634a838))
+* **harness:** add the devkit harness shell command guard ([44753b9](https://github.com/AbysmalBiscuit/devkit/commit/44753b960d5eb03b921eae3442071c7a8a7d8052))
+* **harness:** parse and answer both shell payload shapes ([331817f](https://github.com/AbysmalBiscuit/devkit/commit/331817fdeecf150138269c7a7d582b0c31d0afb3))
+
+
+### Bug Fixes
+
+* **devkitd:** release a connection through a guard ([131184a](https://github.com/AbysmalBiscuit/devkit/commit/131184a2327fae2be84b356bc352f0ffdb1a9eb9))
+* **guard:** cap doppler --command unwrap recursion depth ([f788856](https://github.com/AbysmalBiscuit/devkit/commit/f78885656908cbd9c147f06f4037dc9f4a786a11))
+* **guard:** exempt the issue and mcp shims ([aa7215f](https://github.com/AbysmalBiscuit/devkit/commit/aa7215f9607da01dd35deeadb4ceb76206f0ad44))
+* **guard:** honour an explicit guard and flask's host flag ([98225a3](https://github.com/AbysmalBiscuit/devkit/commit/98225a3edf61670670d7b92d678f0fe99ef038e0))
+* **guard:** let the catalog rule on every verb ([f61b332](https://github.com/AbysmalBiscuit/devkit/commit/f61b332fd68b3ae5bdd61f3a6553241101f611a2))
+* **guard:** recognize backtick, process subst, trailing backslash ([8e7df2a](https://github.com/AbysmalBiscuit/devkit/commit/8e7df2a703d1c4afc645d2df15509d1e78e3a589))
+* **guard:** stop wrappers and flags from hiding the real argv ([3e6c2ac](https://github.com/AbysmalBiscuit/devkit/commit/3e6c2ac6591420dbe53909aa8352d7212cc769bc))
+* **guard:** treat an unquoted # as a comment ([a4b57c1](https://github.com/AbysmalBiscuit/devkit/commit/a4b57c1ef59bacbf33cc32e344df8c4ad24e1a4f))
+* **harness:** read each gate flag independently ([ea806e2](https://github.com/AbysmalBiscuit/devkit/commit/ea806e277688b86f04b5a34c50ff467760f157f1))
+* **harness:** restore short-circuit test and doc comments ([e2c0f78](https://github.com/AbysmalBiscuit/devkit/commit/e2c0f78a6db43bd08e34ba616b27901a065d2b6e))
+* **harness:** warn on a non-table [harness.commands] ([bf81cc4](https://github.com/AbysmalBiscuit/devkit/commit/bf81cc48a7a008f238b147f3091c3317826232b6))
+* keep unwinding so the guard fails open ([cb06096](https://github.com/AbysmalBiscuit/devkit/commit/cb060964427272a3da291c3958b8094bd543abbc))
+
 ## [0.14.0](https://github.com/AbysmalBiscuit/devkit/compare/v0.13.6...v0.14.0) (2026-09-03)
 
 
