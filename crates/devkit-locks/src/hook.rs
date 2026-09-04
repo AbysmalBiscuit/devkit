@@ -7,7 +7,6 @@ use serde_json::Value;
 use std::path::Path;
 
 pub use devkit_common::harness::deny_json;
-pub use devkit_config::HarnessSection;
 
 /// Whether write enforcement is active for a write originating at `cwd`.
 pub fn enforcement_enabled(cwd: &Path) -> bool {

@@ -242,10 +242,11 @@ pub struct ShellPayload {
 /// shell command, which is not a failure: harnesses send events this hook does
 /// not model.
 ///
-/// The harness is told apart by `hook_event_name`, which Claude Code and Codex
-/// send and Cursor does not. The presence of `tool_input` cannot be the
-/// discriminator: Cursor's generic `preToolUse` carries that key too, so
-/// testing it would answer a Cursor session in Claude Code's envelope.
+/// The harness is told apart by a string-valued `hook_event_name`, which Claude
+/// Code and Codex send and Cursor does not; a payload carrying that key with any
+/// other type reads as Cursor. `tool_input` cannot be the discriminator:
+/// Cursor's generic `preToolUse` carries that key too, so testing it would
+/// answer a Cursor session in Claude Code's envelope.
 pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
     let harness = match p.get("hook_event_name").and_then(Value::as_str) {
         Some(_) => Harness::ClaudeCode,

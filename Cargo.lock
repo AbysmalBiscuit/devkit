@@ -413,7 +413,6 @@ version = "0.14.0"
 dependencies = [
  "anyhow",
  "devkit-common",
- "devkit-config",
  "fd-lock",
  "interprocess",
  "schemars",
