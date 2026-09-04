@@ -10,6 +10,13 @@
         "type": "command",
         "command": "devkit brief --additional-context"
       }
+    ],
+    "beforeShellExecution": [
+      {
+        "type": "command",
+        "command": "devkit harness shell",
+        "timeout": 10
+      }
     ]
   }
 }

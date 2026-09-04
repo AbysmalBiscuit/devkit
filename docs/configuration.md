@@ -319,6 +319,7 @@ Opt-in for the agent write-access harness.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `enforce_writes` | bool | `false` | When `true`, the devkit plugin's `PreToolUse` hook enforces write locks automatically. When absent or `false`, the hook exits immediately with no effect. |
+| `enforce_commands` | bool | `false` | When `true`, the devkit plugin's pre-execution hook refuses shell commands devkit already has a wired-up path for, naming the replacement. Resolves through the same three sources as `enforce_writes`, with `DEVKIT_ENFORCE_COMMANDS` as the override. |
 
 **Three opt-in sources, with precedence.** The hook resolves whether to enforce for a given checkout from, in order:
 
@@ -328,9 +329,15 @@ Opt-in for the agent write-access harness.
 
 With the env var unset, enforcement is on when **either** a project layer **or** the global config opts in. Set `enforce_writes = true` in the global config for a machine-wide default; drop a per-checkout `devkit.toml` only when you want to opt a single checkout in (or, with the global default on, set the env var to `off` to opt a session out). The global-config and env routes need **no** per-worktree file — so they avoid shadowing the global config in `devrun`/`portm` discovery.
 
-**What enforcement gates.** The hook intercepts `Edit`, `MultiEdit`, `Write`, and `NotebookEdit` — the structured write tools. Shell-level writes made via `Bash` are outside the harness's scope (a documented gap; coordinate those manually with `lockm acquire`).
+**What enforcement gates.** The hook intercepts `Edit`, `MultiEdit`, `Write`, and `NotebookEdit` — the structured write tools. Shell-level *writes* made via `Bash` are outside the harness's scope (a documented gap; coordinate those manually with `lockm acquire`).
 
-**Activation requires `lockm` on `PATH`.** The hooks invoke bare `lockm hook <event>` — the same command as `devkit locks hook <event>`. Install `devkit` via `cargo install --path .`; its first run creates the `lockm` link automatically (or run `devkit install-links` directly). The resolved name must be reachable from the shell that runs hook commands.
+**What the command guard gates.** `Bash` (Claude Code and Codex) and `beforeShellExecution` (Cursor). A command is refused when it matches a `[harness.commands.*]` rule, retypes a `[tasks]` entry that devkit would run differently, launches an app the way its `[apps] launch` does, or starts a dev server devkit knows by name. devkit's own commands — `devkit`, `devrun`, `lockm`, `portm`, `docm` — are never refused, even by a rule that names one, because they are what a refusal redirects to. Everything else runs. Unlike write enforcement, the guard fails **open**: a config it cannot read, a rule it cannot parse, or an internal error warns on stderr and lets the command through. `DEVKIT_ENFORCE_COMMANDS=0` turns it off for a session.
+
+**Rules.** `[harness.commands.<name>]` takes `programs` (the program names to refuse, matched by basename), an optional `args` prefix, and the `reason` shown to the agent. Rules merge across config layers like every other table: a child layer adds names, and redefining a rule by the same name overrides only the keys it sets. An empty `programs` matches nothing, which is how a subtree opts out of a rule its parent declared.
+
+**Naming the app.** When the guard refuses a dev-server command it names the app to run instead, resolving the app from a workspace path in the command, a `--filter`/`--dir`/`-C` value, or the shell's directory. Exact names and paths resolve first; a fuzzy match then rescues near-misses such as `lab-tools` against an app declared `lab_tools`. `[harness.app_match]` tunes that last step: `fuzzy` (default `true`) turns it off, `max_typos` (default `1`) is how many character differences it forgives, and `min_score` (default `60`) is the score below which no app is named and the message falls back to `devkit config apps`. Raising `max_typos` buys wrong app names; a project that would rather see the listing than a guess sets `fuzzy = false`.
+
+**Activation requires `lockm` and `devkit` on `PATH`.** The hooks invoke bare `lockm hook <event>` — the same command as `devkit locks hook <event>` — and bare `devkit harness shell`. Install `devkit` via `cargo install --path .`; its first run creates the `lockm` link automatically (or run `devkit install-links` directly). The resolved names must be reachable from the shell that runs hook commands.
 
 **Fail-open / fail-closed behaviour.**
 

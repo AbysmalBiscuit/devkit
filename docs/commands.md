@@ -280,6 +280,10 @@ The library table answers for the directory it runs in. At a workspace root — 
 
 `--pins-only` emits just the library table. `--if-changed` prints nothing when this session already received the same brief, keyed on the `session_id` in the hook's stdin JSON. A full brief records itself against that key, so the first `--if-changed` after one stays silent. `--pins-only` does not record: it carries only the library table, and a full brief is still owed. The plugin runs all three: `SessionStart` (full), `PostCompact` (`--pins-only`), and `CwdChanged` (`--if-changed`). `--additional-context` wraps whichever of those a run emits in the JSON envelope Codex and Cursor read a hook's context from; Claude Code injects plain stdout and takes the brief without it.
 
+## `harness`: command guard
+
+`devkit harness shell` is the pre-execution hook entry point for the command guard: it reads a shell command's hook payload on stdin, decides whether devkit already has a wired-up path for that command, and answers on stdout. It never mutates state — no lock taken, no registry row written — and always exits 0, whether it denies, allows, or hits an internal error along the way. Wired into the plugin's `PreToolUse` (Claude Code and Codex) and `beforeShellExecution` (Cursor) hooks; see [configuration.md](configuration.md#harness) for what it gates, how rules are declared, and how enforcement is turned on.
+
 ## `docm`: library docs
 
 Version-correct local library checkouts backing the `devkit:docs` skill. Register a library once; every lookup resolves the version the requesting workspace's own manifest and lockfile pin and materializes a checkout for it under `~/.local/share/devkit/docs/`, named for the exact ref it holds rather than a bare version (`h3/v1.15.11`, `openapi-ts/@hey-api~client-fetch@0.13.1` — `/` encodes as `~`). `docm info`'s `commit` field is the proof of what a checkout actually has, not the printed `version` string.

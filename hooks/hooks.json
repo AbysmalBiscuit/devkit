@@ -45,6 +45,16 @@
         "hooks": [
           { "type": "command", "command": "lockm hook pretooluse" }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit harness shell",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SubagentStop": [
