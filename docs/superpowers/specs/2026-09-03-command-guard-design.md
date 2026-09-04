@@ -247,9 +247,9 @@ A const table of ecosystem facts, extended by pull request rather than by config
 | `next`, `nitro`, `wrangler`, `mintlify` | `<prog> dev` |
 | `uvicorn` | bare |
 | `flask` | `flask […] run` |
-| `vite` | bare, `dev`, `serve`; never `build`, `preview`, `optimize`, or an info flag (`--version`, `-v`, `--help`, `-h`) |
+| `vite` | bare, `dev`, `serve`; never `build`, `preview`, `optimize` |
 
-A flag the table does not name leaves the verdict to the verb, so `vite --port 3000` is a server and `vite build --minify` is not. Only the info flags override a missing verb.
+An info flag prints and exits, so it overrides the verb for every program in the table whether or not a verb is present: neither `uvicorn --version` nor `next dev --help` is a server. The long spellings `--version` and `--help` always read that way; the short `-v` and `-h` read that way everywhere except `flask`, whose `run` spends `-h` on the bind host, so `flask run -h 0.0.0.0` is a server. A flag the table does not name leaves the verdict to the verb, so `vite --port 3000` is a server and `vite build --minify` is not.
 
 `bun run dev` is deliberately absent. It is caught by source 4, because it is literally what such an app's `launch` says. Deriving from `[apps]` is what makes the catalog small.
 

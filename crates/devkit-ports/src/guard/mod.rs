@@ -214,7 +214,13 @@ fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
             // wrapper make it unmatchable against the stripped typed side.
             let cfg = norm::normalize(&task.run)?;
             let s = sig::signature(&cfg.argv)?;
-            if s.len() < min_sig || !sig::matches(&s, &n.argv) {
+            // The floor is a heuristic about bare-program tasks. A task that
+            // states its own `guard` answer has already settled the question,
+            // so it is never filtered out before that answer is read.
+            if task.guard.is_none() && s.len() < min_sig {
+                return None;
+            }
+            if !sig::matches(&s, &n.argv) {
                 return None;
             }
             tasks::redirect_worth_it(
@@ -427,6 +433,37 @@ mod tests {
         });
         let d = decide_with("bun test", &BTreeMap::new(), Some(&p));
         assert!(reason(&d).contains("devrun task check"), "{}", reason(&d));
+    }
+
+    /// A bare-program task is normally held back from a command the catalog
+    /// reads as something other than a server. An explicit `guard = true` is the
+    /// project overruling that, and it has to reach the decision to do so.
+    #[test]
+    fn an_explicit_guard_outranks_the_bare_program_floor() {
+        let forced = |guard| {
+            project(move |c| {
+                c.tasks.insert(
+                    "bundle".into(),
+                    TaskConfig {
+                        run: vec!["vite".into()],
+                        guard,
+                        ..Default::default()
+                    },
+                );
+            })
+        };
+        let d = decide_with("vite build", &BTreeMap::new(), Some(&forced(Some(true))));
+        assert!(reason(&d).contains("devrun task bundle"), "{}", reason(&d));
+        assert!(!denies(&decide_with(
+            "vite build",
+            &BTreeMap::new(),
+            Some(&forced(None))
+        )));
+        assert!(!denies(&decide_with(
+            "vite build",
+            &BTreeMap::new(),
+            Some(&forced(Some(false)))
+        )));
     }
 
     #[test]

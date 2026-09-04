@@ -16,7 +16,12 @@ const VITE_NON_SERVER: [&str; 3] = ["build", "preview", "optimize"];
 /// Flags that make an invocation print and exit rather than serve, whichever
 /// catalog program carries them. Any other flag leaves the verdict to the verb,
 /// so `vite --port 3000` is a server.
-const INFO_FLAGS: [&str; 4] = ["--version", "-v", "--help", "-h"];
+const INFO_FLAGS: [&str; 2] = ["--version", "--help"];
+
+/// The short spellings of those flags, which only most catalog programs read
+/// that way: `flask run` spends `-h` on the bind host, so `flask run -h 0.0.0.0`
+/// starts a server.
+const SHORT_INFO_FLAGS: [&str; 2] = ["-v", "-h"];
 
 /// Whether the guard has an opinion about this program at all.
 pub fn is_known_program(prog: &str) -> bool {
@@ -30,7 +35,9 @@ pub fn is_dev_server(argv: &[String]) -> bool {
         return false;
     };
     let rest: Vec<&str> = argv[1..].iter().map(String::as_str).collect();
-    if rest.iter().any(|a| INFO_FLAGS.contains(a)) {
+    let prints_and_exits =
+        |a: &&str| INFO_FLAGS.contains(a) || (prog != "flask" && SHORT_INFO_FLAGS.contains(a));
+    if rest.iter().any(prints_and_exits) {
         return false;
     }
     let first_verb = rest.iter().find(|a| !a.starts_with('-'));
@@ -101,6 +108,18 @@ mod tests {
         assert!(!server("uvicorn -v"));
         assert!(!server("flask --help run"));
         assert!(!server("next dev --help"));
+    }
+
+    /// `flask run` reads `-h` as the bind host, so it starts a server where the
+    /// same flag on any other catalog program prints help and exits.
+    #[test]
+    fn flask_spends_the_short_host_flag_on_binding() {
+        assert!(server("flask run -h 0.0.0.0"));
+        assert!(server("flask run -h 0.0.0.0 -p 5000"));
+        assert!(!server("flask run --help"));
+        assert!(!server("flask --version"));
+        assert!(!server("next dev -h"));
+        assert!(!server("vite -h"));
     }
 
     #[test]
