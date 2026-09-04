@@ -18,12 +18,11 @@ pub fn install_panic_hook(bin: &'static str) {
 /// [`install_panic_hook`], plus an unconditional `abort` once the report is out.
 ///
 /// For a process whose state is unsafe to keep running after any panic. `devkitd`
-/// is the case: it holds `devkitd.lock` exclusive for its whole life, and a
-/// connection thread that unwinds past its `active_conns` decrement leaves the
-/// daemon permanently non-idle, alive and holding the lock, with every client
-/// failing `DaemonHoldsLock` rather than falling back to the direct path. Dying
-/// is the recoverable outcome: the OS releases the lock and the next caller takes
-/// over.
+/// is the case: it holds `devkitd.lock` exclusive for its whole life and serves
+/// both registries from memory, so a thread that unwinds mid-mutation leaves a
+/// live daemon answering from a half-written registry while every client fails
+/// `DaemonHoldsLock` rather than falling back to the direct path. Dying is the
+/// recoverable outcome: the OS releases the lock and the next caller takes over.
 ///
 /// Aborting from the hook rather than relying on `panic = "abort"` makes the
 /// policy the same in every profile, and independent of a workspace-wide setting

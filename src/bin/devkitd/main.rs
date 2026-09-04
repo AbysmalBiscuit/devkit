@@ -48,6 +48,29 @@ pub(crate) struct Daemon {
     pub(crate) cgroup_cap: Option<CgroupCap>,
 }
 
+/// Counts one live connection for as long as it is held.
+///
+/// The count has to come back down however the handler leaves, because
+/// `is_idle` reads it: a decrement that a `?` or an unwind can skip leaves the
+/// daemon permanently non-idle, alive and holding `devkitd.lock`, with every
+/// client failing `DaemonHoldsLock` instead of taking the direct path.
+struct ConnGuard<'a>(&'a Daemon);
+
+impl<'a> ConnGuard<'a> {
+    fn new(d: &'a Daemon) -> Self {
+        d.active_conns.fetch_add(1, Ordering::SeqCst);
+        d.touch();
+        Self(d)
+    }
+}
+
+impl Drop for ConnGuard<'_> {
+    fn drop(&mut self) {
+        self.0.active_conns.fetch_sub(1, Ordering::SeqCst);
+        self.0.touch();
+    }
+}
+
 impl Daemon {
     fn touch(&self) {
         *self.last_activity.lock().unwrap() = Instant::now();
@@ -397,13 +420,10 @@ fn main() -> Result<()> {
                 let Ok(stream) = stream else { continue };
                 let d2 = Arc::clone(&d);
                 std::thread::spawn(move || {
-                    d2.active_conns.fetch_add(1, Ordering::SeqCst);
-                    d2.touch();
+                    let _conn = ConnGuard::new(&d2);
                     if let Err(e) = handle_lock_conn(&d2, stream) {
                         log_line(&format!("lock connection error: {e:#}"));
                     }
-                    d2.active_conns.fetch_sub(1, Ordering::SeqCst);
-                    d2.touch();
                 });
             }
         });
@@ -418,13 +438,10 @@ fn main() -> Result<()> {
         // `install_abort_hook` aborts the whole daemon on any panic, so handlers
         // return Result and we only log failures here.
         std::thread::spawn(move || {
-            d.active_conns.fetch_add(1, Ordering::SeqCst);
-            d.touch();
+            let _conn = ConnGuard::new(&d);
             if let Err(e) = handle_conn(&d, stream) {
                 log_line(&format!("connection error: {e:#}"));
             }
-            d.active_conns.fetch_sub(1, Ordering::SeqCst);
-            d.touch();
         });
     }
 
@@ -563,6 +580,44 @@ pub(crate) fn test_daemon_with_base(base: std::path::PathBuf, max_bytes: u64) ->
 #[cfg(test)]
 mod tests {
     use super::cap_below_soft_limit;
+    use super::*;
+
+    fn bare_daemon() -> Daemon {
+        Daemon {
+            last_activity: Mutex::new(Instant::now()),
+            active_conns: AtomicUsize::new(0),
+            shutdown: AtomicBool::new(false),
+            idle_timeout: Duration::from_secs(0),
+            sup: Mutex::new(supervisor::Supervisor::new(
+                5,
+                Duration::from_secs(60),
+                0,
+                0,
+            )),
+            ports: std::sync::Arc::new(std::sync::Mutex::new(registry::Data::default())),
+            locks: std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::model::Data::default())),
+            cgroup_cap: None,
+        }
+    }
+
+    /// A handler that unwinds must still give its connection back. Losing the
+    /// decrement pins `active_conns` above zero for the life of the process, and
+    /// `is_idle` then never fires, so the daemon holds `devkitd.lock` forever.
+    #[test]
+    fn a_connection_is_released_even_when_its_handler_unwinds() {
+        let d = bare_daemon();
+        assert!(d.is_idle());
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _conn = ConnGuard::new(&d);
+            assert_eq!(d.active_conns.load(Ordering::SeqCst), 1);
+            panic!("handler blew up");
+        }));
+
+        assert!(panicked.is_err(), "the closure was supposed to panic");
+        assert_eq!(d.active_conns.load(Ordering::SeqCst), 0);
+        assert!(d.is_idle(), "a released connection leaves the daemon idle");
+    }
 
     #[test]
     fn cap_below_soft_limit_predicate() {
