@@ -21,6 +21,19 @@ running them one after another. Install it with `cargo install cargo-nextest
 
 Run all three before committing: CI runs them on every push and PR, and a push to `main` also drives release-please. Format with `cargo fmt --all` (the `--check` above only verifies) using the stable toolchain CI uses, so formatting matches.
 
+### Mutation testing
+
+`cargo mutants` is an occasional audit, not part of the gate. Always pass
+`--workspace --test-workspace=true`: the defaults mutate the root package alone
+and score each mutant against only its own package's tests, so every library
+crate whose behaviour the binary's integration tests cover reads as uncovered.
+A mutant that times out instead of surviving names a loop that stopped
+terminating under the mutation. Read the loop, not the tests.
+
+```sh
+cargo mutants --workspace --test-workspace=true --test-tool nextest
+```
+
 ## Layout
 
 The workspace root is the `devkit` binary package; it and `devkitd` install together via `cargo install --path .`. The library crates are members.
