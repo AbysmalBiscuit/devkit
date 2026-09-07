@@ -47,6 +47,11 @@ pub enum HookEvent {
     ReleaseSession {
         holder: String,
     },
+    /// A write this hook cannot evaluate. Denied rather than allowed: the write
+    /// path fails closed, so an unreadable payload must not open the window.
+    Unusable {
+        reason: String,
+    },
     Ignore,
 }
 
@@ -75,17 +80,19 @@ pub fn apply_patch_paths(command: &str) -> Vec<String> {
 /// Classify a hook payload. `event` is the subcommand arg
 /// (`pretooluse` | `subagent-stop` | `session-end`).
 pub fn parse_event(event: &str, p: &Value) -> HookEvent {
-    let Some(session) = str_field(p, "session_id") else {
-        return HookEvent::Ignore;
-    };
+    let session = str_field(p, "session_id");
     let agent = str_field(p, "agent_id");
-    let holder = holder_from_fields(session, agent);
     match event {
         "pretooluse" => {
             let tool = str_field(p, "tool_name").unwrap_or("");
             if !WRITE_TOOLS.contains(&tool) {
                 return HookEvent::Ignore;
             }
+            let Some(session) = session else {
+                return HookEvent::Unusable {
+                    reason: "write payload carries no session_id".into(),
+                };
+            };
             let input = p.get("tool_input");
             let file_paths = if tool == APPLY_PATCH {
                 input
@@ -99,23 +106,30 @@ pub fn parse_event(event: &str, p: &Value) -> HookEvent {
                     .unwrap_or_default()
             };
             if file_paths.is_empty() {
-                return HookEvent::Ignore;
+                return HookEvent::Unusable {
+                    reason: format!("write payload for {tool} names no target"),
+                };
             }
             HookEvent::Write {
                 tool_name: tool.to_string(),
                 file_paths,
-                holder,
+                holder: holder_from_fields(session, agent),
             }
         }
-        "subagent-stop" => match agent {
+        "subagent-stop" => match (session, agent) {
             // Releasing the bare session holder here would free the parent's and
             // every sibling's locks, so an unattributable stop releases nothing.
-            Some(a) => HookEvent::ReleaseSubagent {
-                holder: holder_from_fields(session, Some(a)),
+            (Some(s), Some(a)) => HookEvent::ReleaseSubagent {
+                holder: holder_from_fields(s, Some(a)),
+            },
+            (None, _) | (Some(_), None) => HookEvent::Ignore,
+        },
+        "session-end" => match session {
+            Some(s) => HookEvent::ReleaseSession {
+                holder: s.to_string(),
             },
             None => HookEvent::Ignore,
         },
-        "session-end" => HookEvent::ReleaseSession { holder },
         _ => HookEvent::Ignore,
     }
 }
@@ -176,8 +190,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_write_event_ignores_missing_file_path() {
+    fn write_without_session_id_is_unusable_not_ignored() {
+        let p = json!({
+            "tool_name": "Edit",
+            "tool_input": { "file_path": "/repo/src/a.rs" }
+        });
+        match parse_event("pretooluse", &p) {
+            HookEvent::Unusable { reason } => assert!(reason.contains("session_id")),
+            other => panic!("expected Unusable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_with_no_extractable_target_is_unusable() {
         let p = json!({ "session_id": "S", "tool_name": "Edit", "tool_input": {} });
+        match parse_event("pretooluse", &p) {
+            HookEvent::Unusable { reason } => assert!(reason.contains("target")),
+            other => panic!("expected Unusable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_write_tool_without_session_id_is_still_ignored() {
+        let p = json!({ "tool_name": "Bash", "tool_input": { "command": "ls" } });
         assert!(matches!(parse_event("pretooluse", &p), HookEvent::Ignore));
     }
 
@@ -231,16 +266,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_apply_patch_event_ignores_a_patch_naming_no_file() {
-        let p = json!({
-            "session_id": "S",
-            "tool_name": "apply_patch",
-            "tool_input": { "command": "*** Begin Patch\n*** End Patch\n" }
-        });
-        assert!(matches!(parse_event("pretooluse", &p), HookEvent::Ignore));
-    }
-
-    #[test]
     fn parse_subagent_stop_releases_subagent_holder() {
         let p = json!({ "session_id": "S", "agent_id": "a1" });
         match parse_event("subagent-stop", &p) {
@@ -289,16 +314,10 @@ mod tests {
 
     #[test]
     fn parse_event_ignores_missing_session_id() {
-        // Write payload with no session_id → Ignore (cannot establish a holder)
-        let p = json!({ "tool_name": "Edit", "tool_input": { "file_path": "/repo/x" } });
-        assert!(matches!(parse_event("pretooluse", &p), HookEvent::Ignore));
-        // Empty session_id is treated as absent
-        let p2 = json!({ "session_id": "", "tool_name": "Write", "tool_input": { "file_path": "/repo/x" } });
-        assert!(matches!(parse_event("pretooluse", &p2), HookEvent::Ignore));
-        // A release event without session_id is also ignored
-        let p3 = json!({ "agent_id": "a1" });
+        // A release event without session_id is ignored
+        let p = json!({ "agent_id": "a1" });
         assert!(matches!(
-            parse_event("subagent-stop", &p3),
+            parse_event("subagent-stop", &p),
             HookEvent::Ignore
         ));
     }

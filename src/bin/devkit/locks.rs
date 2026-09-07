@@ -196,6 +196,14 @@ fn run_hook(event: &str) {
         HookEvent::ReleaseSubagent { holder } | HookEvent::ReleaseSession { holder } => {
             let _ = devkit_locks::release_prefix(&holder);
         }
+        HookEvent::Unusable { reason } => {
+            if hook::enforcement_enabled(&cwd) {
+                println!(
+                    "{}",
+                    hook::deny_json(&format!("devkit write-harness: {reason} (fail-closed)"))
+                );
+            }
+        }
         HookEvent::Ignore => {}
     }
 }
