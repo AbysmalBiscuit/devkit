@@ -324,6 +324,30 @@ fn shim_rows() -> Vec<Row> {
         .collect()
 }
 
+/// Report the session identity `lockm` will hold locks under. `id` is `None` when
+/// no `HARNESS_SESSION_VARS` entry is set; `harness_env` says whether any variable
+/// carries a known harness prefix. The two together are the rename signature: a
+/// harness is present, but the variable naming its session is not one devkit knows.
+fn harness_identity_check(id: Option<devkit_locks::ident::Identity>, harness_env: bool) -> Check {
+    use devkit_locks::ident::{HARNESS_ENV_PREFIXES, Identity};
+    match (id, harness_env) {
+        (Some(Identity::Resolved(s)), _) => Check::Ok(s),
+        (Some(Identity::Ambiguous(c)), _) => {
+            let shown: Vec<String> = c.iter().map(|c| c.to_string()).collect();
+            Check::Warn(format!(
+                "{} disagree; `lockm acquire` and `lockm release` need an explicit --as",
+                shown.join(" and ")
+            ))
+        }
+        (None, true) => Check::Warn(format!(
+            "a harness is present ({}) but sets no session variable devkit knows; \
+             locks will be held under the parent pid and will not match the write hook",
+            HARNESS_ENV_PREFIXES.join("*, ") + "*"
+        )),
+        (None, false) => Check::Unset("not running under a known coding agent"),
+    }
+}
+
 fn gather(steps: &Steps) -> Vec<Row> {
     let mut rows = vec![
         Row {
@@ -374,6 +398,16 @@ fn gather(steps: &Steps) -> Vec<Row> {
             key: "devrun_strays",
             source: Source::Unset,
             check: stray_check(count_strays()),
+        },
+        Row {
+            key: "harness_identity",
+            source: Source::Unset,
+            check: {
+                let present = devkit_locks::ident::harness_env_present();
+                let id = (!devkit_locks::ident::harness_candidates().is_empty())
+                    .then(|| devkit_locks::ident::identity(None));
+                harness_identity_check(id, present)
+            },
         },
         Row {
             key: "baseline_orphans",
@@ -662,5 +696,45 @@ mod tests {
             row(Check::Ok("ok".into())),
         ];
         assert_eq!(worst_exit(&rows), 0);
+    }
+
+    #[test]
+    fn harness_identity_reports_a_detected_session() {
+        let id = Some(devkit_locks::ident::Identity::Resolved("S".into()));
+        assert!(matches!(harness_identity_check(id, true), Check::Ok(_)));
+    }
+
+    #[test]
+    fn harness_identity_is_silent_outside_a_harness() {
+        assert!(matches!(
+            harness_identity_check(None, false),
+            Check::Unset(_)
+        ));
+    }
+
+    #[test]
+    fn harness_identity_warns_when_a_harness_names_no_session_variable() {
+        match harness_identity_check(None, true) {
+            Check::Warn(m) => assert!(m.contains("CLAUDE_CODE_"), "names the prefixes: {m}"),
+            other => panic!("expected Warn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn harness_identity_warns_on_an_ambiguous_environment() {
+        let id = Some(devkit_locks::ident::Identity::Ambiguous(vec![
+            devkit_locks::ident::Candidate {
+                var: "CLAUDE_CODE_SESSION_ID",
+                value: "a".into(),
+            },
+            devkit_locks::ident::Candidate {
+                var: "CODEX_SESSION_ID",
+                value: "b".into(),
+            },
+        ]));
+        match harness_identity_check(id, true) {
+            Check::Warn(m) => assert!(m.contains("CODEX_SESSION_ID=b"), "names both: {m}"),
+            other => panic!("expected Warn, got {other:?}"),
+        }
     }
 }
