@@ -107,7 +107,14 @@ pub fn parse_event(event: &str, p: &Value) -> HookEvent {
                 holder,
             }
         }
-        "subagent-stop" => HookEvent::ReleaseSubagent { holder },
+        "subagent-stop" => match agent {
+            // Releasing the bare session holder here would free the parent's and
+            // every sibling's locks, so an unattributable stop releases nothing.
+            Some(a) => HookEvent::ReleaseSubagent {
+                holder: holder_from_fields(session, Some(a)),
+            },
+            None => HookEvent::Ignore,
+        },
         "session-end" => HookEvent::ReleaseSession { holder },
         _ => HookEvent::Ignore,
     }
@@ -235,6 +242,24 @@ mod tests {
 
     #[test]
     fn parse_subagent_stop_releases_subagent_holder() {
+        let p = json!({ "session_id": "S", "agent_id": "a1" });
+        match parse_event("subagent-stop", &p) {
+            HookEvent::ReleaseSubagent { holder } => assert_eq!(holder, "S/a1"),
+            other => panic!("expected ReleaseSubagent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subagent_stop_without_agent_id_releases_nothing() {
+        let p = json!({ "session_id": "S" });
+        assert!(matches!(
+            parse_event("subagent-stop", &p),
+            HookEvent::Ignore
+        ));
+    }
+
+    #[test]
+    fn subagent_stop_with_agent_id_releases_that_subagent() {
         let p = json!({ "session_id": "S", "agent_id": "a1" });
         match parse_event("subagent-stop", &p) {
             HookEvent::ReleaseSubagent { holder } => assert_eq!(holder, "S/a1"),
