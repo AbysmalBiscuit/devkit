@@ -230,8 +230,11 @@ pub fn run(cli: LocksCli) -> Result<()> {
                 let payload = serde_json::json!({ "ok": ok, "acquired": out.acquired, "already_held": out.already_held, "conflicts": out.conflicts });
                 println!("{}", serde_json::to_string(&payload)?);
             } else if out.conflicts.is_empty() {
-                for p in &out.already_held {
-                    println!("already held on this session line: {p}");
+                for h in &out.already_held {
+                    println!(
+                        "already held on this session line: {} (ttl {}s in force)",
+                        h.path, h.ttl_secs
+                    );
                 }
                 for a in &out.acquired {
                     println!("locked {} (ttl {}s)", a.path, a.ttl_secs);

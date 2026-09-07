@@ -70,6 +70,14 @@ pub struct Acquired {
     pub ttl_secs: u64,
 }
 
+/// A requested path a live row on the caller's own session line already covers.
+/// `ttl_secs` is that row's own lease, which the request does not reshape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlreadyHeld {
+    pub path: String,
+    pub ttl_secs: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
     pub path: String,
@@ -95,7 +103,7 @@ pub struct AcquireOutcome {
     /// Paths a live row on this holder's own session line already covers. The
     /// caller may write them; releasing them needs the row's own holder.
     #[serde(default)]
-    pub already_held: Vec<String>,
+    pub already_held: Vec<AlreadyHeld>,
     pub conflicts: Vec<Conflict>,
 }
 
@@ -180,7 +188,16 @@ impl Data {
                 .locks
                 .get(&key)
                 .is_some_and(|e| e.holder != holder && !entry_dead(e, now));
-            if !keep {
+            if keep {
+                let e = self.locks.get_mut(&key).expect("kept row still present");
+                // The caller is on this row's session line, so its request renews
+                // the row; the lease stays the row holder's to set.
+                e.ts = now;
+                already_held.push(AlreadyHeld {
+                    path: req.clone(),
+                    ttl_secs: e.ttl,
+                });
+            } else {
                 self.locks.insert(
                     key,
                     LockEntry {
@@ -193,10 +210,6 @@ impl Data {
                         ttl,
                     },
                 );
-            }
-            if keep {
-                already_held.push(req.clone());
-            } else {
                 acquired.push(Acquired {
                     path: req.clone(),
                     ttl_secs: ttl,
@@ -593,7 +606,7 @@ mod tests {
         d.decide_write("/repo", "src", "S", None, None, 1800, 100);
         let r = d.decide_write("/repo", "src/a.rs", "S/a1", None, None, 1800, 120);
         assert_eq!(r, WriteDecision::AllowedByOwnership);
-        // the parent's lock is untouched; no new row inserted for the child
+        // no row is inserted for the child, and the parent keeps the row's holder
         assert_eq!(d.locks.len(), 1);
         assert_eq!(d.locks[&key_for("/repo", "src")].holder, "S");
     }
@@ -602,12 +615,15 @@ mod tests {
     fn decide_write_renews_an_ancestor_directory_lock() {
         let mut d = Data::default();
         d.locks
-            .extend([entry("/repo", "src/auth", "S", 1, 0, None)]);
-        let r = d.decide_write("/repo", "src/auth/mod.rs", "S/a1", None, None, 1800, 900);
+            .extend([entry("/repo", "src/auth", "S", 1, 600, None)]);
+        let r = d.decide_write("/repo", "src/auth/mod.rs", "S/a1", None, None, 1800, 500);
         assert_eq!(r, WriteDecision::AllowedByOwnership);
         let e = &d.locks[&key_for("/repo", "src/auth")];
-        assert_eq!(e.ts, 900, "the directory lock's timestamp is bumped");
         assert_eq!(e.holder, "S", "the ancestor's holder is never rewritten");
+        assert!(
+            !entry_dead(e, 900),
+            "the write carries the directory lock past its original lease"
+        );
     }
 
     #[test]
@@ -693,6 +709,28 @@ mod tests {
             1,
             "other sessions stay blocked"
         );
+    }
+
+    #[test]
+    fn acquire_renews_a_kept_row_without_reshaping_its_ttl() {
+        let mut d = Data::default();
+        d.locks
+            .extend([entry("/repo", "a", "S/a1", 100, 600, None)]);
+        let out = d.try_acquire("/repo", &["a".to_string()], "S", None, None, 0, 400);
+        assert!(out.conflicts.is_empty(), "permitted by ancestry");
+        assert!(out.acquired.is_empty(), "no row of the caller's own");
+        assert_eq!(
+            out.already_held,
+            vec![AlreadyHeld {
+                path: "a".into(),
+                ttl_secs: 600
+            }],
+            "the ttl in force is the row's, not the request's"
+        );
+        let e = &d.locks[&key_for("/repo", "a")];
+        assert_eq!(e.ts, 400, "the kept row is renewed");
+        assert_eq!(e.ttl, 600, "the request's ttl never reshapes the row");
+        assert_eq!(e.holder, "S/a1", "the narrower claim survives");
     }
 
     #[test]

@@ -145,13 +145,29 @@ fn same_holder_reacquire_is_ok() {
 /// `DEVKIT_ENFORCE_WRITES` stripped so an inherited override cannot decide
 /// the result instead of the layer stack.
 fn run_hook(exe: &Path, cwd: &Path, state: &Path, holder: &str, target: &Path) -> Output {
+    run_hook_as(exe, cwd, state, holder, None, target)
+}
+
+/// `run_hook` with an optional `agent_id`, which the harness sends for a
+/// sub-agent's write and which the hook folds into a `session/agent` holder.
+fn run_hook_as(
+    exe: &Path,
+    cwd: &Path,
+    state: &Path,
+    session: &str,
+    agent: Option<&str>,
+    target: &Path,
+) -> Output {
     use std::io::Write;
-    let payload = serde_json::json!({
-        "session_id": holder,
+    let mut payload = serde_json::json!({
+        "session_id": session,
         "cwd": cwd.to_string_lossy(),
         "tool_name": "Write",
         "tool_input": { "file_path": target.to_string_lossy() },
     });
+    if let Some(a) = agent {
+        payload["agent_id"] = serde_json::json!(a);
+    }
     let mut cmd = Command::new(exe);
     cmd.args(["hook", "pretooluse"])
         .env("XDG_STATE_HOME", state)
@@ -369,6 +385,47 @@ fn a_cli_held_lock_does_not_deny_its_own_sessions_write() {
     assert!(
         !is_deny("own write", &h),
         "a session must not be denied a write to the path it claimed by hand"
+    );
+}
+
+/// A sub-agent's hook row (`S/a1`) and a hand claim by the session that spawned
+/// it (`S`) are one session line: the claim must be permitted, and it reports
+/// the lease already in force rather than the one it asked for.
+#[test]
+fn a_subagent_hook_row_does_not_block_its_sessions_claim() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let state = tempfile::tempdir().unwrap();
+    let (proj, target) = enforced_project();
+
+    let h = run_hook_as(
+        &link,
+        proj.path(),
+        state.path(),
+        "sess-fanout",
+        Some("a1"),
+        &target,
+    );
+    assert!(
+        !is_deny("subagent write", &h),
+        "the sub-agent's own first write is allowed"
+    );
+
+    let a = run_as_session(
+        &link,
+        proj.path(),
+        state.path(),
+        "sess-fanout",
+        &["acquire", "src/a.rs", "--ttl", "60"],
+    );
+    assert!(
+        a.status.success(),
+        "a session must not conflict with the row its own sub-agent's write hook took; stderr: {}",
+        String::from_utf8_lossy(&a.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&a.stdout);
+    assert!(
+        stdout.contains("already held on this session line") && stdout.contains("ttl 1800s"),
+        "the row's own lease is reported, not the requested 60s: {stdout}"
     );
 }
 
