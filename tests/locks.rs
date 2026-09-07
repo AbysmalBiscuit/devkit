@@ -238,3 +238,46 @@ fn hook_honors_a_harness_declaration_in_a_nested_directory() {
         "root has no opt-in: {fourth:?}"
     );
 }
+
+#[test]
+fn session_end_releases_even_when_enforcement_is_off() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let proj = project();
+    let state = tempfile::tempdir().unwrap();
+
+    let a = run(
+        &link,
+        proj.path(),
+        state.path(),
+        &["acquire", "src/a.rs", "--as", "S"],
+    );
+    assert!(a.status.success(), "S should acquire");
+
+    let payload = r#"{"session_id":"S","hook_event_name":"SessionEnd"}"#;
+    let out = Command::new(&link)
+        .args(["hook", "session-end"])
+        .current_dir(proj.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("HOME", state.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env("DEVKIT_ENFORCE_WRITES", "0")
+        .env_remove("DEVKIT_SESSION")
+        .env_remove("TMUX_PANE")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            use std::io::Write;
+            c.stdin.as_mut().unwrap().write_all(payload.as_bytes())?;
+            c.wait_with_output()
+        })
+        .expect("run session-end hook");
+    assert!(out.status.success(), "hook exits 0");
+
+    let s = run(&link, proj.path(), state.path(), &["status", "--json"]);
+    let text = String::from_utf8_lossy(&s.stdout);
+    assert!(
+        !text.contains("\"S\""),
+        "S's locks are released even with enforcement off: {text}"
+    );
+}

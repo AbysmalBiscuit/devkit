@@ -162,14 +162,14 @@ fn run_hook(event: &str) {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    if !hook::enforcement_enabled(&cwd) {
-        return; // no opt-in (env, project layers, or global config) → no enforcement
-    }
-
-    match hook::parse_event(event, &payload) {
+    let event = hook::parse_event(event, &payload);
+    match event {
         HookEvent::Write {
             file_paths, holder, ..
         } => {
+            if !hook::enforcement_enabled(&cwd) {
+                return; // no opt-in (env, project layers, or global config) → no enforcement
+            }
             let mut conflicts = Vec::new();
             let mut resolver = devkit_locks::WriteResolver::new();
             for path in &file_paths {
