@@ -429,6 +429,44 @@ fn a_subagent_hook_row_does_not_block_its_sessions_claim() {
     );
 }
 
+/// The same-line row a session may acquire over, it may not release: the row is
+/// its sub-agent's and the lifecycle hook frees it. The refusal must say that
+/// rather than blame another session and offer `--force`.
+#[test]
+fn releasing_a_subagent_row_by_hand_is_refused_as_a_same_line_row() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let state = tempfile::tempdir().unwrap();
+    let (proj, target) = enforced_project();
+
+    let h = run_hook_as(
+        &link,
+        proj.path(),
+        state.path(),
+        "sess-release",
+        Some("a1"),
+        &target,
+    );
+    assert!(!is_deny("subagent write", &h));
+
+    let r = run_as_session(
+        &link,
+        proj.path(),
+        state.path(),
+        "sess-release",
+        &["release", "src/a.rs"],
+    );
+    assert_eq!(r.status.code(), Some(1), "the release is still refused");
+    let text = String::from_utf8_lossy(&r.stderr);
+    assert!(
+        text.contains("this session line") && text.contains("sess-release/a1"),
+        "the refusal names the session line and the holder: {text}"
+    );
+    assert!(
+        !text.contains("--force"),
+        "forcing past your own sub-agent is not the remedy: {text}"
+    );
+}
+
 #[test]
 fn nested_harness_refuses_to_guess_on_acquire_and_release() {
     let (_dir, link) = shimtest::linked("lockm");

@@ -1,11 +1,11 @@
 //! Lock-registry wire protocol. Payloads carry context the daemon cannot resolve
 //! itself (project root, holder, anchor pid); the daemon stamps `now`.
 
-use crate::model::{AcquireOutcome, Conflict, LockEntry};
+use crate::model::{AcquireOutcome, Conflict, LockEntry, Refusal};
 use serde::{Deserialize, Serialize};
 
 /// Wire-format version, independent of the port proto. Bump on any incompatible change.
-pub const PROTO: u32 = 1;
+pub const PROTO: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -63,7 +63,7 @@ pub enum Response {
     Conflicts(Vec<Conflict>),
     Released {
         released: Vec<String>,
-        refused: Vec<String>,
+        refused: Vec<Refusal>,
     },
     Freed(Vec<String>),
     Locks(Vec<LockEntry>),

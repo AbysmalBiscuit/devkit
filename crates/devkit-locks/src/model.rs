@@ -78,6 +78,23 @@ pub struct AlreadyHeld {
     pub ttl_secs: u64,
 }
 
+/// Why a release left a row alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefusedBecause {
+    /// Another holder on the caller's own session line, whose rows the harness
+    /// lifecycle releases.
+    SameSessionLine,
+    /// A holder on another session line, which `--force` takes the row from.
+    OtherSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Refusal {
+    pub path: String,
+    pub held_by: String,
+    pub reason: RefusedBecause,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
     pub path: String,
@@ -224,14 +241,15 @@ impl Data {
     }
 
     /// Release named paths held by `holder` in `root`. Without `force`, a path held
-    /// by another holder is refused (not freed). Returns (released, refused).
+    /// by another holder is refused (not freed), and the refusal says whether that
+    /// holder is on the caller's own session line. Returns (released, refused).
     pub fn do_release(
         &mut self,
         root: &str,
         paths: &[String],
         holder: &str,
         force: bool,
-    ) -> (Vec<String>, Vec<String>) {
+    ) -> (Vec<String>, Vec<Refusal>) {
         let mut released = Vec::new();
         let mut refused = Vec::new();
         for req in paths {
@@ -241,7 +259,15 @@ impl Data {
                     self.locks.remove(&key);
                     released.push(req.clone());
                 }
-                Some(_) => refused.push(req.clone()),
+                Some(e) => refused.push(Refusal {
+                    path: req.clone(),
+                    held_by: e.holder.clone(),
+                    reason: if on_one_ancestry_line(&e.holder, holder) {
+                        RefusedBecause::SameSessionLine
+                    } else {
+                        RefusedBecause::OtherSession
+                    },
+                }),
                 None => {}
             }
         }
@@ -524,12 +550,45 @@ mod tests {
         ]);
         let (rel, refused) = d.do_release("/repo", &["b".into()], "alice", false);
         assert!(rel.is_empty());
-        assert_eq!(refused, vec!["b".to_string()]);
+        assert_eq!(
+            refused,
+            vec![Refusal {
+                path: "b".into(),
+                held_by: "bob".into(),
+                reason: RefusedBecause::OtherSession,
+            }]
+        );
         let (rel, _) = d.do_release("/repo", &["a".into()], "alice", false);
         assert_eq!(rel, vec!["a".to_string()]);
         let (rel, _) = d.do_release("/repo", &["b".into()], "alice", true);
         assert_eq!(rel, vec!["b".to_string()]);
         assert!(d.locks.is_empty());
+    }
+
+    #[test]
+    fn release_refusal_separates_the_session_line_from_a_stranger() {
+        let mut d = Data::default();
+        d.locks.extend([
+            entry("/repo", "a", "S/a1", 1, 0, None),
+            entry("/repo", "b", "T", 1, 0, None),
+        ]);
+        let (rel, refused) = d.do_release("/repo", &["a".into(), "b".into()], "S", false);
+        assert!(rel.is_empty(), "neither row is the caller's own");
+        assert_eq!(
+            refused,
+            vec![
+                Refusal {
+                    path: "a".into(),
+                    held_by: "S/a1".into(),
+                    reason: RefusedBecause::SameSessionLine,
+                },
+                Refusal {
+                    path: "b".into(),
+                    held_by: "T".into(),
+                    reason: RefusedBecause::OtherSession,
+                },
+            ]
+        );
     }
 
     #[test]

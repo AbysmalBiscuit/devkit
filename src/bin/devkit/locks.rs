@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use devkit::completions::Shell;
 use devkit_locks::hook::{self, HookEvent};
-use devkit_locks::model::{Conflict, LockEntry, WriteDecision};
+use devkit_locks::model::{Conflict, LockEntry, Refusal, RefusedBecause, WriteDecision};
 
 #[derive(clap::Args)]
 pub struct LocksCli {
@@ -110,6 +110,32 @@ fn print_conflicts(conflicts: &[Conflict]) {
         eprintln!(
             "  {} held by {} ({}s ago){}",
             c.path, c.held_by, c.age_secs, note
+        );
+    }
+}
+
+fn print_refusals(refused: &[Refusal]) {
+    let mut same_line = Vec::new();
+    let mut foreign = Vec::new();
+    for r in refused {
+        match r.reason {
+            RefusedBecause::SameSessionLine => {
+                same_line.push(format!("{} (held by {})", r.path, r.held_by))
+            }
+            RefusedBecause::OtherSession => foreign.push(r.path.clone()),
+        }
+    }
+    if !same_line.is_empty() {
+        eprintln!(
+            "refused (held by another holder on this session line; \
+             released by the write hook, not by hand): {}",
+            same_line.join(", ")
+        );
+    }
+    if !foreign.is_empty() {
+        eprintln!(
+            "refused (held by another session; use --force): {}",
+            foreign.join(", ")
         );
     }
 }
@@ -282,10 +308,7 @@ pub fn run(cli: LocksCli) -> Result<()> {
                     .map_err(exit_on_ambiguity)?;
                 println!("released {} lock(s)", released.len());
                 if !refused.is_empty() {
-                    eprintln!(
-                        "refused (held by another session; use --force): {}",
-                        refused.join(", ")
-                    );
+                    print_refusals(&refused);
                     std::process::exit(1);
                 }
             }

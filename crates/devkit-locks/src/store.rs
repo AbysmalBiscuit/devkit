@@ -1,4 +1,6 @@
-use crate::model::{AcquireOutcome, Conflict, Data, LockEntry, SCHEMA_VERSION, WriteDecision};
+use crate::model::{
+    AcquireOutcome, Conflict, Data, LockEntry, Refusal, SCHEMA_VERSION, WriteDecision,
+};
 use anyhow::Result;
 use devkit_common::paths;
 use devkit_common::store::{self, Document, salvage_map};
@@ -184,7 +186,7 @@ pub fn release_with(
     holder: &str,
     paths: &[String],
     force: bool,
-) -> Result<(Vec<String>, Vec<String>)> {
+) -> Result<(Vec<String>, Vec<Refusal>)> {
     s.commit(|d| Ok(d.do_release(root, paths, holder, force)))
 }
 

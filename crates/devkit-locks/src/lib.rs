@@ -7,7 +7,7 @@ pub mod store;
 pub mod daemon;
 
 use anyhow::{Context, Result};
-use model::{AcquireOutcome, Conflict, LockEntry};
+use model::{AcquireOutcome, Conflict, LockEntry, Refusal};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -275,7 +275,7 @@ pub fn release(
     paths_in: &[String],
     as_flag: Option<&str>,
     force: bool,
-) -> Result<(Vec<String>, Vec<String>)> {
+) -> Result<(Vec<String>, Vec<Refusal>)> {
     let c = ctx(paths_in, as_flag, true)?;
     release_resolved(&c.root, &c.holder, &c.paths, force)
 }
@@ -287,7 +287,7 @@ pub fn release_resolved(
     holder: &str,
     paths: &[String],
     force: bool,
-) -> Result<(Vec<String>, Vec<String>)> {
+) -> Result<(Vec<String>, Vec<Refusal>)> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::Release {
         root: root.to_string(),
