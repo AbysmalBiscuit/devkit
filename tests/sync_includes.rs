@@ -5,6 +5,8 @@
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
+#[path = "common/testenv.rs"]
+mod testenv;
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -65,17 +67,15 @@ fn run_in(project: &Path, cwd: &str, state: &Path, args: &[&str]) -> Output {
     // The link's guard lives to the end of this function, which is safe because
     // `output()` waits for the child before returning.
     let (_dir, exe) = shimtest::linked("issue");
-    Command::new(&exe)
-        .args(args)
+    let mut cmd = Command::new(&exe);
+    cmd.args(args)
         .current_dir(project.join(cwd))
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
         .env("XDG_CONFIG_HOME", state.join("config"))
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .env_remove("DEVKIT_SESSION")
-        .env_remove("TMUX_PANE")
-        .output()
-        .unwrap_or_else(|e| panic!("spawn issue: {e}"))
+        .env("DEVKIT_SKIP_AUTOLINK", "1");
+    testenv::scrub_identity(&mut cmd);
+    cmd.output().unwrap_or_else(|e| panic!("spawn issue: {e}"))
 }
 
 fn env_local(project: &Path, worktree: &str) -> Option<String> {

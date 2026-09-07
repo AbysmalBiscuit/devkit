@@ -7,6 +7,8 @@
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
+#[path = "common/testenv.rs"]
+mod testenv;
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -55,18 +57,16 @@ fn project() -> tempfile::TempDir {
 
 fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
     let (_dir, exe) = shimtest::linked("issue");
-    Command::new(&exe)
-        .args(args)
+    let mut cmd = Command::new(&exe);
+    cmd.args(args)
         .current_dir(project.join("wt"))
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
         .env("XDG_CONFIG_HOME", state.join("config"))
         .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .env_remove("DEVKIT_SESSION")
-        .env_remove("TMUX_PANE")
-        .env_remove("LINEAR_API_KEY")
-        .output()
-        .unwrap_or_else(|e| panic!("spawn issue: {e}"))
+        .env_remove("LINEAR_API_KEY");
+    testenv::scrub_identity(&mut cmd);
+    cmd.output().unwrap_or_else(|e| panic!("spawn issue: {e}"))
 }
 
 /// The refusal comes before the plan: a dry run that printed a placement it

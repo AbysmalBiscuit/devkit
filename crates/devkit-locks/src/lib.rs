@@ -168,7 +168,7 @@ fn ctx(paths_in: &[String], as_flag: Option<&str>) -> Result<Ctx> {
     }
     Ok(Ctx {
         root: root.to_string_lossy().into_owned(),
-        holder: ident::identity(as_flag),
+        holder: ident::identity(as_flag).or_first(),
         paths,
     })
 }

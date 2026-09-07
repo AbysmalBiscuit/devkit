@@ -4,6 +4,8 @@
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
+#[path = "common/testenv.rs"]
+mod testenv;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -17,19 +19,17 @@ fn project() -> tempfile::TempDir {
 }
 
 fn run(exe: &Path, project: &Path, state: &Path, args: &[&str]) -> Output {
-    Command::new(exe)
-        .args(args)
+    let mut cmd = Command::new(exe);
+    cmd.args(args)
         .current_dir(project)
         .env("XDG_STATE_HOME", state)
         // Override HOME too: the binary runs migrate_legacy_state() at startup, which
         // reads $HOME/.claude/state/devkit. Pointing HOME at the throwaway temp dir
         // keeps the test from ever touching the developer's real state home.
         .env("HOME", state)
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .env_remove("DEVKIT_SESSION")
-        .env_remove("TMUX_PANE")
-        .output()
-        .expect("spawn lockm")
+        .env("DEVKIT_SKIP_AUTOLINK", "1");
+    testenv::scrub_identity(&mut cmd);
+    cmd.output().expect("spawn lockm")
 }
 
 #[test]
@@ -152,15 +152,15 @@ fn run_hook(exe: &Path, cwd: &Path, state: &Path, holder: &str, target: &Path) -
         "tool_name": "Write",
         "tool_input": { "file_path": target.to_string_lossy() },
     });
-    let mut child = Command::new(exe)
-        .args(["hook", "pretooluse"])
+    let mut cmd = Command::new(exe);
+    cmd.args(["hook", "pretooluse"])
         .env("XDG_STATE_HOME", state)
         .env("HOME", state)
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove("DEVKIT_ENFORCE_WRITES")
-        .env_remove("DEVKIT_CONFIG")
-        .env_remove("DEVKIT_SESSION")
-        .env_remove("TMUX_PANE")
+        .env_remove("DEVKIT_CONFIG");
+    testenv::scrub_identity(&mut cmd);
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -279,5 +279,95 @@ fn session_end_releases_even_when_enforcement_is_off() {
     assert!(
         !text.contains("\"S\""),
         "S's locks are released even with enforcement off: {text}"
+    );
+}
+
+/// Runs `lockm` as a harness session would: the vendor variable set, and every
+/// other identity source stripped so the resolved holder can only have come
+/// from detection.
+fn run_as_session(
+    exe: &Path,
+    project: &Path,
+    state: &Path,
+    session: &str,
+    args: &[&str],
+) -> Output {
+    Command::new(exe)
+        .args(args)
+        .current_dir(project)
+        .env("XDG_STATE_HOME", state)
+        .env("HOME", state)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env("CLAUDE_CODE_SESSION_ID", session)
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("DEVKIT_SESSION")
+        .env_remove("TMUX_PANE")
+        .output()
+        .expect("spawn lockm")
+}
+
+/// The enforced project both directions of this test need.
+fn enforced_project() -> (tempfile::TempDir, std::path::PathBuf) {
+    let proj = project();
+    std::fs::write(
+        proj.path().join("devkit.toml"),
+        "[harness]\nenforce_writes = true\n",
+    )
+    .unwrap();
+    let target = proj.path().join("src/a.rs");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    (proj, target)
+}
+
+#[test]
+fn a_hook_held_lock_is_not_a_conflict_for_its_own_session() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let state = tempfile::tempdir().unwrap();
+    let (proj, target) = enforced_project();
+
+    let h = run_hook(&link, proj.path(), state.path(), "sess-e2e", &target);
+    assert!(
+        !is_deny("hook claim", &h),
+        "the hook's own first write is allowed"
+    );
+
+    let a = run_as_session(
+        &link,
+        proj.path(),
+        state.path(),
+        "sess-e2e",
+        &["acquire", "src/a.rs"],
+    );
+    assert!(
+        a.status.success(),
+        "a session must not conflict with the lock its own write hook took; stdout: {} stderr: {}",
+        String::from_utf8_lossy(&a.stdout),
+        String::from_utf8_lossy(&a.stderr)
+    );
+}
+
+#[test]
+fn a_cli_held_lock_does_not_deny_its_own_sessions_write() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let state = tempfile::tempdir().unwrap();
+    let (proj, target) = enforced_project();
+
+    let a = run_as_session(
+        &link,
+        proj.path(),
+        state.path(),
+        "sess-e2e",
+        &["acquire", "src/a.rs"],
+    );
+    assert!(
+        a.status.success(),
+        "claim succeeds: {}",
+        String::from_utf8_lossy(&a.stderr)
+    );
+
+    let h = run_hook(&link, proj.path(), state.path(), "sess-e2e", &target);
+    assert!(
+        !is_deny("own write", &h),
+        "a session must not be denied a write to the path it claimed by hand"
     );
 }

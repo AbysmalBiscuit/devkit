@@ -4,6 +4,8 @@
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
+#[path = "common/testenv.rs"]
+mod testenv;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -38,16 +40,15 @@ launch = ["git", "version"]
 }
 
 fn run(exe: &Path, project: &Path, state: &Path, args: &[&str]) -> Output {
-    Command::new(exe)
-        .args(args)
+    let mut cmd = Command::new(exe);
+    cmd.args(args)
         .current_dir(project)
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
         .env("XDG_CONFIG_HOME", state.join("config"))
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .env_remove("DEVKIT_SESSION")
-        .env_remove("TMUX_PANE")
-        .output()
+        .env("DEVKIT_SKIP_AUTOLINK", "1");
+    testenv::scrub_identity(&mut cmd);
+    cmd.output()
         .unwrap_or_else(|e| panic!("spawn {}: {e}", exe.display()))
 }
 

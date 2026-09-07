@@ -4,6 +4,9 @@
 //! worktree's own upward walk never reaches it. Each covers a distinct
 //! caller of that threading, over one shared fixture shape.
 
+#[path = "common/testenv.rs"]
+mod testenv;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -52,16 +55,15 @@ fn project_with_main_config(body: &str) -> (tempfile::TempDir, PathBuf) {
 }
 
 fn devkit(args: &[&str], cwd: &Path, state: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .args(args)
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.args(args)
         .current_dir(cwd)
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
         .env("XDG_CONFIG_HOME", state.join("config"))
-        .env_remove("DEVKIT_CONFIG")
-        .env_remove("DEVKIT_SESSION")
-        .env_remove("TMUX_PANE")
-        .output()
+        .env_remove("DEVKIT_CONFIG");
+    testenv::scrub_identity(&mut cmd);
+    cmd.output()
         .unwrap_or_else(|e| panic!("spawn devkit {args:?}: {e}"))
 }
 
@@ -70,15 +72,15 @@ fn devkit(args: &[&str], cwd: &Path, state: &Path) -> Output {
 /// terminal check and its JSON read behave the same regardless of how the
 /// test itself was invoked.
 fn devkit_if_changed(cwd: &Path, state: &Path, session: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .args(["brief", "--if-changed"])
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.args(["brief", "--if-changed"])
         .current_dir(cwd)
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
         .env("XDG_CONFIG_HOME", state.join("config"))
-        .env_remove("DEVKIT_CONFIG")
-        .env_remove("DEVKIT_SESSION")
-        .env_remove("TMUX_PANE")
+        .env_remove("DEVKIT_CONFIG");
+    testenv::scrub_identity(&mut cmd);
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

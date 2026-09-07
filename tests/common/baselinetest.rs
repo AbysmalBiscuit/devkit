@@ -6,6 +6,9 @@
 //! this module via `#[path]` and use different subsets of it.
 #![allow(dead_code)]
 
+#[path = "testenv.rs"]
+mod testenv;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -22,18 +25,18 @@ pub fn git(cwd: &Path, args: &[&str]) {
 /// ambient environment is what turns a PR or issue lookup from "unavailable"
 /// into a live request against a repository these fixtures invent.
 pub fn devkit(cwd: &Path, state: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .args(args)
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.args(args)
         .current_dir(cwd)
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
         .env("XDG_CONFIG_HOME", state.join("config"))
         .env_remove("DEVKIT_CONFIG")
-        .env_remove("DEVKIT_SESSION")
         .env_remove("GH_TOKEN")
         .env_remove("GITHUB_TOKEN")
-        .env_remove("LINEAR_API_KEY")
-        .output()
+        .env_remove("LINEAR_API_KEY");
+    testenv::scrub_identity(&mut cmd);
+    cmd.output()
         .unwrap_or_else(|e| panic!("spawn devkit {args:?}: {e}"))
 }
 
