@@ -371,3 +371,45 @@ fn a_cli_held_lock_does_not_deny_its_own_sessions_write() {
         "a session must not be denied a write to the path it claimed by hand"
     );
 }
+
+#[test]
+fn nested_harness_refuses_to_guess_on_acquire_and_release() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let proj = project();
+    let state = tempfile::tempdir().unwrap();
+
+    let nested = |args: &[&str]| {
+        let mut cmd = Command::new(&link);
+        cmd.args(args)
+            .current_dir(proj.path())
+            .env("XDG_STATE_HOME", state.path())
+            .env("HOME", state.path())
+            .env("DEVKIT_SKIP_AUTOLINK", "1");
+        // Scrub first, then put back exactly the two variables under test.
+        testenv::scrub_identity(&mut cmd);
+        cmd.env("CLAUDE_CODE_SESSION_ID", "outer-session")
+            .env("CODEX_SESSION_ID", "inner-session");
+        cmd.output().expect("spawn lockm")
+    };
+
+    let a = nested(&["acquire", "src/a.rs"]);
+    assert_eq!(a.status.code(), Some(2), "acquire refuses to guess");
+    let text = String::from_utf8_lossy(&a.stderr);
+    assert!(
+        text.contains("CLAUDE_CODE_SESSION_ID=outer-session"),
+        "names the variable and its value: {text}"
+    );
+    assert!(
+        text.contains("CODEX_SESSION_ID=inner-session"),
+        "names the variable and its value: {text}"
+    );
+
+    let r = nested(&["release", "--all"]);
+    assert_eq!(r.status.code(), Some(2), "release refuses to guess");
+
+    let s = nested(&["status"]);
+    assert!(s.status.success(), "status is read-only and proceeds");
+
+    let ok = nested(&["acquire", "src/a.rs", "--as", "inner-session"]);
+    assert!(ok.status.success(), "--as resolves it");
+}

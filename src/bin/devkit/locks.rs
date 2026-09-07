@@ -90,6 +90,15 @@ pub(crate) enum Cmd {
     Hook { event: String },
 }
 
+/// Ambiguity is a usage error: exit 2, leaving 1 to mean a real conflict.
+fn exit_on_ambiguity(e: anyhow::Error) -> anyhow::Error {
+    if let Some(a) = e.downcast_ref::<devkit_locks::AmbiguousIdentity>() {
+        eprintln!("{a}");
+        std::process::exit(2);
+    }
+    e
+}
+
 fn print_conflicts(conflicts: &[Conflict]) {
     eprintln!(
         "conflict: {} path(s) held by another session:",
@@ -217,7 +226,8 @@ pub fn run(cli: LocksCli) -> Result<()> {
             ttl,
             json,
         } => {
-            let out = devkit_locks::acquire(&paths, holder.as_deref(), note.as_deref(), ttl)?;
+            let out = devkit_locks::acquire(&paths, holder.as_deref(), note.as_deref(), ttl)
+                .map_err(exit_on_ambiguity)?;
             if json {
                 let ok = out.conflicts.is_empty();
                 let payload = serde_json::json!({ "ok": ok, "acquired": out.acquired, "already_held": out.already_held, "conflicts": out.conflicts });
@@ -264,10 +274,12 @@ pub fn run(cli: LocksCli) -> Result<()> {
             force,
         } => {
             if all {
-                let freed = devkit_locks::release_all(holder.as_deref())?;
+                let freed =
+                    devkit_locks::release_all(holder.as_deref()).map_err(exit_on_ambiguity)?;
                 println!("released {} lock(s)", freed.len());
             } else {
-                let (released, refused) = devkit_locks::release(&paths, holder.as_deref(), force)?;
+                let (released, refused) = devkit_locks::release(&paths, holder.as_deref(), force)
+                    .map_err(exit_on_ambiguity)?;
                 println!("released {} lock(s)", released.len());
                 if !refused.is_empty() {
                     eprintln!(

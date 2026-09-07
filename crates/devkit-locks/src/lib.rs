@@ -159,16 +159,44 @@ struct Ctx {
     paths: Vec<String>,
 }
 
-fn ctx(paths_in: &[String], as_flag: Option<&str>) -> Result<Ctx> {
+/// Two harnesses are nested and expose different session ids. Refused rather than
+/// guessed: the wrong id claims rows the inner hook will not recognise, and
+/// `release --all` under it frees the outer session's rows while it is still live.
+#[derive(Debug)]
+pub struct AmbiguousIdentity {
+    pub candidates: Vec<ident::Candidate>,
+}
+
+impl std::fmt::Display for AmbiguousIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let shown: Vec<String> = self.candidates.iter().map(|c| c.to_string()).collect();
+        write!(
+            f,
+            "ambiguous session identity: {} disagree; pass --as <id> to choose one",
+            shown.join(" and ")
+        )
+    }
+}
+
+impl std::error::Error for AmbiguousIdentity {}
+
+fn ctx(paths_in: &[String], as_flag: Option<&str>, strict: bool) -> Result<Ctx> {
     let cwd = std::env::current_dir().context("getting current dir")?;
     let root = find_root_from(&cwd);
     let mut paths = Vec::with_capacity(paths_in.len());
     for a in paths_in {
         paths.push(normalize_arg(a, &cwd, &root)?);
     }
+    let holder = match (ident::identity(as_flag), strict) {
+        (ident::Identity::Resolved(s), _) => s,
+        (ident::Identity::Ambiguous(candidates), true) => {
+            return Err(AmbiguousIdentity { candidates }.into());
+        }
+        (id @ ident::Identity::Ambiguous(_), false) => id.or_first(),
+    };
     Ok(Ctx {
         root: root.to_string_lossy().into_owned(),
-        holder: ident::identity(as_flag).or_first(),
+        holder,
         paths,
     })
 }
@@ -179,7 +207,7 @@ pub fn acquire(
     note: Option<&str>,
     ttl: u64,
 ) -> Result<AcquireOutcome> {
-    let c = ctx(paths_in, as_flag)?;
+    let c = ctx(paths_in, as_flag, true)?;
     acquire_resolved(&c.root, &c.holder, &c.paths, ident::anchor_pid(), note, ttl)
 }
 
@@ -222,7 +250,7 @@ pub fn acquire_resolved(
 }
 
 pub fn check(paths_in: &[String], as_flag: Option<&str>) -> Result<Vec<Conflict>> {
-    let c = ctx(paths_in, as_flag)?;
+    let c = ctx(paths_in, as_flag, false)?;
     check_resolved(&c.root, &c.holder, &c.paths)
 }
 
@@ -248,7 +276,7 @@ pub fn release(
     as_flag: Option<&str>,
     force: bool,
 ) -> Result<(Vec<String>, Vec<String>)> {
-    let c = ctx(paths_in, as_flag)?;
+    let c = ctx(paths_in, as_flag, true)?;
     release_resolved(&c.root, &c.holder, &c.paths, force)
 }
 
@@ -277,7 +305,7 @@ pub fn release_resolved(
 }
 
 pub fn release_all(as_flag: Option<&str>) -> Result<Vec<String>> {
-    let c = ctx(&[], as_flag)?;
+    let c = ctx(&[], as_flag, true)?;
     release_all_resolved(&c.root, &c.holder)
 }
 
