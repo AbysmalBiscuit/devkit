@@ -733,7 +733,10 @@ mod tests {
             },
         ]));
         match harness_identity_check(id, true) {
-            Check::Warn(m) => assert!(m.contains("CODEX_SESSION_ID=b"), "names both: {m}"),
+            Check::Warn(m) => assert!(
+                m.contains("CLAUDE_CODE_SESSION_ID=a") && m.contains("CODEX_SESSION_ID=b"),
+                "names both: {m}"
+            ),
             other => panic!("expected Warn, got {other:?}"),
         }
     }

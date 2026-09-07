@@ -467,6 +467,55 @@ fn releasing_a_subagent_row_by_hand_is_refused_as_a_same_line_row() {
     );
 }
 
+/// A payload the hook cannot parse is the signature of a harness format change,
+/// so an enforced write is denied rather than let through. The release events
+/// carry no permission decision, so they stay silent.
+#[test]
+fn an_unparsable_write_payload_is_denied_under_enforcement() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let state = tempfile::tempdir().unwrap();
+    let (proj, _target) = enforced_project();
+
+    let feed = |event: &str| -> Output {
+        use std::io::Write;
+        let mut cmd = Command::new(&link);
+        cmd.args(["hook", event])
+            .current_dir(proj.path())
+            .env("XDG_STATE_HOME", state.path())
+            .env("HOME", state.path())
+            .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .env_remove("DEVKIT_ENFORCE_WRITES")
+            .env_remove("DEVKIT_CONFIG");
+        testenv::scrub_identity(&mut cmd);
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn lockm hook");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"{not json at all")
+            .unwrap();
+        child.wait_with_output().expect("lockm hook output")
+    };
+
+    let write = feed("pretooluse");
+    assert!(
+        is_deny("unparsable write payload", &write),
+        "an unevaluable write must not be allowed: {write:?}"
+    );
+
+    let end = feed("session-end");
+    assert!(end.status.success(), "the release hook still exits 0");
+    assert!(
+        end.stdout.is_empty(),
+        "a release event has no decision to emit: {:?}",
+        String::from_utf8_lossy(&end.stdout)
+    );
+}
+
 #[test]
 fn nested_harness_refuses_to_guess_on_acquire_and_release() {
     let (_dir, link) = shimtest::linked("lockm");

@@ -177,14 +177,35 @@ fn write_output(d: &WriteDecision) -> Option<serde_json::Value> {
     }
 }
 
+/// Deny a write whose payload would not parse. A payload devkit cannot read is
+/// the signature of a harness format change, and an unevaluable write fails
+/// closed; the release events carry no permission decision to emit.
+fn deny_unparsable(event: &str, err: &serde_json::Error) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if event == "pretooluse" && hook::enforcement_enabled(&cwd) {
+        println!(
+            "{}",
+            hook::deny_json(&format!(
+                "devkit write-harness: hook payload did not parse ({err}) (fail-closed)"
+            ))
+        );
+    }
+}
+
 fn run_hook(event: &str) {
     use std::io::Read;
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_err() {
-        return; // can't read payload → allow
+        // An unreadable pipe is a transport fault rather than a payload to judge,
+        // and denying every write in a session over one is the worse failure.
+        return;
     }
-    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&buf) else {
-        return; // malformed → allow
+    let payload = match serde_json::from_str::<serde_json::Value>(&buf) {
+        Ok(v) => v,
+        Err(e) => {
+            deny_unparsable(event, &e);
+            return;
+        }
     };
 
     let cwd = payload

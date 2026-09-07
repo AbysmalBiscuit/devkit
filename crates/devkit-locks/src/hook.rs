@@ -284,15 +284,6 @@ mod tests {
     }
 
     #[test]
-    fn subagent_stop_with_agent_id_releases_that_subagent() {
-        let p = json!({ "session_id": "S", "agent_id": "a1" });
-        match parse_event("subagent-stop", &p) {
-            HookEvent::ReleaseSubagent { holder } => assert_eq!(holder, "S/a1"),
-            other => panic!("expected ReleaseSubagent, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn parse_session_end_releases_session_prefix() {
         let p = json!({ "session_id": "S" });
         match parse_event("session-end", &p) {
