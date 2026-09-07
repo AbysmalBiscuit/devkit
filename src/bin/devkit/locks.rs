@@ -220,9 +220,12 @@ pub fn run(cli: LocksCli) -> Result<()> {
             let out = devkit_locks::acquire(&paths, holder.as_deref(), note.as_deref(), ttl)?;
             if json {
                 let ok = out.conflicts.is_empty();
-                let payload = serde_json::json!({ "ok": ok, "acquired": out.acquired, "conflicts": out.conflicts });
+                let payload = serde_json::json!({ "ok": ok, "acquired": out.acquired, "already_held": out.already_held, "conflicts": out.conflicts });
                 println!("{}", serde_json::to_string(&payload)?);
             } else if out.conflicts.is_empty() {
+                for p in &out.already_held {
+                    println!("already held on this session line: {p}");
+                }
                 for a in &out.acquired {
                     println!("locked {} (ttl {}s)", a.path, a.ttl_secs);
                 }

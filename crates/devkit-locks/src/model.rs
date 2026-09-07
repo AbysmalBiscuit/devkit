@@ -58,6 +58,12 @@ pub fn is_ancestor_or_self(existing: &str, writer: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// True when two holders are the same session line: equal, or one an ancestor of
+/// the other. Siblings (`S/a1` against `S/a2`) are not.
+pub fn on_one_ancestry_line(a: &str, b: &str) -> bool {
+    is_ancestor_or_self(a, b) || is_ancestor_or_self(b, a)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Acquired {
     pub path: String,
@@ -86,6 +92,10 @@ pub enum WriteDecision {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AcquireOutcome {
     pub acquired: Vec<Acquired>,
+    /// Paths a live row on this holder's own session line already covers. The
+    /// caller may write them; releasing them needs the row's own holder.
+    #[serde(default)]
+    pub already_held: Vec<String>,
     pub conflicts: Vec<Conflict>,
 }
 
@@ -113,14 +123,15 @@ impl Data {
         before - self.locks.len()
     }
 
-    /// Conflicts that would block acquiring `paths` for `holder` in `root`:
-    /// any live lock by a *different* holder whose path overlaps a requested path.
+    /// Conflicts that would block acquiring `paths` for `holder` in `root`: any
+    /// live lock on another session line whose path overlaps a requested path.
+    /// A holder's own line — itself, its parent, its sub-agents — never conflicts.
     pub fn check(&self, root: &str, paths: &[String], holder: &str, now: u64) -> Vec<Conflict> {
         let mut out = Vec::new();
         for req in paths {
             for e in self.locks.values() {
                 if e.root == root
-                    && e.holder != holder
+                    && !on_one_ancestry_line(&e.holder, holder)
                     && !entry_dead(e, now)
                     && paths_overlap(&e.path, req)
                 {
@@ -137,7 +148,9 @@ impl Data {
     }
 
     /// All-or-nothing acquire: if any requested path conflicts, acquire none and
-    /// return the conflicts. Otherwise insert (or renew, for the same holder+path).
+    /// return the conflicts. Otherwise insert, or renew when the row is this
+    /// holder's own. A live row held by another holder on the same session line
+    /// permits the acquire but is left alone.
     #[allow(clippy::too_many_arguments)]
     pub fn try_acquire(
         &mut self,
@@ -153,30 +166,46 @@ impl Data {
         if !conflicts.is_empty() {
             return AcquireOutcome {
                 acquired: Vec::new(),
+                already_held: Vec::new(),
                 conflicts,
             };
         }
         let mut acquired = Vec::with_capacity(paths.len());
+        let mut already_held = Vec::new();
         for req in paths {
-            self.locks.insert(
-                key_for(root, req),
-                LockEntry {
+            let key = key_for(root, req);
+            // An acquire permitted by ancestry must not widen somebody's narrower
+            // claim: only an exact holder match is rewritten.
+            let keep = self
+                .locks
+                .get(&key)
+                .is_some_and(|e| e.holder != holder && !entry_dead(e, now));
+            if !keep {
+                self.locks.insert(
+                    key,
+                    LockEntry {
+                        path: req.clone(),
+                        root: root.into(),
+                        holder: holder.into(),
+                        pid,
+                        note: note.map(str::to_string),
+                        ts: now,
+                        ttl,
+                    },
+                );
+            }
+            if keep {
+                already_held.push(req.clone());
+            } else {
+                acquired.push(Acquired {
                     path: req.clone(),
-                    root: root.into(),
-                    holder: holder.into(),
-                    pid,
-                    note: note.map(str::to_string),
-                    ts: now,
-                    ttl,
-                },
-            );
-            acquired.push(Acquired {
-                path: req.clone(),
-                ttl_secs: ttl,
-            });
+                    ttl_secs: ttl,
+                });
+            }
         }
         AcquireOutcome {
             acquired,
+            already_held,
             conflicts: Vec::new(),
         }
     }
@@ -635,5 +664,47 @@ mod tests {
         let freed = d.release_prefix("S"); // new root-agnostic signature
         assert_eq!(freed.len(), 2); // S in /repoA and S/a1 in /repoB
         assert!(d.locks.contains_key(&key_for("/repoA", "c"))); // T survives
+    }
+
+    #[test]
+    fn check_allows_both_directions_of_one_session() {
+        let mut d = Data::default();
+        d.locks.extend([entry("/repo", "a", "S/a1", 1, 0, None)]);
+        let parent = d.check("/repo", &["a".to_string()], "S", 5);
+        assert!(parent.is_empty(), "a parent may claim over its subagent");
+
+        let mut d2 = Data::default();
+        d2.locks.extend([entry("/repo", "a", "S", 1, 0, None)]);
+        let child = d2.check("/repo", &["a".to_string()], "S/a1", 5);
+        assert!(child.is_empty(), "a subagent may claim under its parent");
+    }
+
+    #[test]
+    fn check_still_blocks_siblings_and_other_sessions() {
+        let mut d = Data::default();
+        d.locks.extend([entry("/repo", "a", "S/a1", 1, 0, None)]);
+        assert_eq!(
+            d.check("/repo", &["a".to_string()], "S/a2", 5).len(),
+            1,
+            "siblings stay isolated"
+        );
+        assert_eq!(
+            d.check("/repo", &["a".to_string()], "S2", 5).len(),
+            1,
+            "other sessions stay blocked"
+        );
+    }
+
+    #[test]
+    fn acquire_permitted_by_ancestry_does_not_rewrite_the_holder() {
+        let mut d = Data::default();
+        d.locks.extend([entry("/repo", "a", "S/a1", 1, 0, None)]);
+        let out = d.try_acquire("/repo", &["a".to_string()], "S", None, None, 1800, 5);
+        assert!(out.conflicts.is_empty(), "permitted by ancestry");
+        assert_eq!(
+            d.locks[&key_for("/repo", "a")].holder,
+            "S/a1",
+            "the narrower claim survives; widening it would unblock siblings"
+        );
     }
 }
