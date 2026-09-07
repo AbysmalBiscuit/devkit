@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
+use devkit_locks::ident::Identity;
 use devkit_locks::rel_under_root;
 use devkit_locks::{
     acquire_resolved, check_resolved, release_all_resolved, release_resolved, status_resolved,
@@ -47,8 +48,18 @@ pub fn actions() -> Vec<Action> {
     ]
 }
 
-fn resolve_holder(ctx: &ServerCtx, given: Option<String>) -> String {
-    given.unwrap_or_else(|| ctx.default_holder.clone())
+fn resolve_holder(ctx: &ServerCtx, given: Option<String>) -> Result<String> {
+    match (given, &ctx.default_holder) {
+        (Some(h), _) => Ok(h),
+        (None, Identity::Resolved(s)) => Ok(s.clone()),
+        (None, Identity::Ambiguous(c)) => {
+            let shown: Vec<String> = c.iter().map(|c| c.to_string()).collect();
+            Err(anyhow::anyhow!(
+                "ambiguous session identity: {} disagree; pass an explicit `holder` on this call",
+                shown.join(" and ")
+            ))
+        }
+    }
 }
 
 /// Express each input path as a root-relative key. Inputs may be absolute or
@@ -101,7 +112,7 @@ fn acquire_schema() -> Value {
 
 fn acquire(ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: AcquireArgs = serde_json::from_value(args).context("invalid locks.acquire arguments")?;
-    let holder = resolve_holder(ctx, a.holder);
+    let holder = resolve_holder(ctx, a.holder)?;
     let paths = normalize(&a.root, &a.paths)?;
     let outcome = acquire_resolved(&a.root, &holder, &paths, None, a.note.as_deref(), a.ttl)?;
     Ok(serde_json::to_value(outcome)?)
@@ -130,7 +141,7 @@ fn check_schema() -> Value {
 
 fn check(ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: CheckArgs = serde_json::from_value(args).context("invalid locks.check arguments")?;
-    let holder = resolve_holder(ctx, a.holder);
+    let holder = resolve_holder(ctx, a.holder)?;
     let paths = normalize(&a.root, &a.paths)?;
     let conflicts = check_resolved(&a.root, &holder, &paths)?;
     Ok(serde_json::to_value(conflicts)?)
@@ -166,7 +177,7 @@ fn release_schema() -> Value {
 
 fn release(ctx: &ServerCtx, args: Value) -> Result<Value> {
     let a: ReleaseArgs = serde_json::from_value(args).context("invalid locks.release arguments")?;
-    let holder = resolve_holder(ctx, a.holder);
+    let holder = resolve_holder(ctx, a.holder)?;
     if a.all {
         let released = release_all_resolved(&a.root, &holder)?;
         return Ok(serde_json::json!({ "released": released, "refused": [] }));
@@ -224,7 +235,7 @@ mod tests {
 
     fn ctx() -> ServerCtx {
         ServerCtx {
-            default_holder: format!("mcp-locks-test-{}", std::process::id()),
+            default_holder: Identity::Resolved(format!("mcp-locks-test-{}", std::process::id())),
             own_worktree: None,
         }
     }
@@ -252,5 +263,53 @@ mod tests {
         let rel =
             release(&c, serde_json::json!({ "root": r, "paths": ["x.rs"] })).expect("release");
         assert_eq!(rel["released"], serde_json::json!(["x.rs"]));
+    }
+}
+
+#[cfg(test)]
+mod holder_tests {
+    use super::*;
+    use devkit_locks::ident::{Candidate, Identity};
+
+    fn candidates() -> Vec<Candidate> {
+        vec![
+            Candidate {
+                var: "CLAUDE_CODE_SESSION_ID",
+                value: "a".into(),
+            },
+            Candidate {
+                var: "CODEX_SESSION_ID",
+                value: "b".into(),
+            },
+        ]
+    }
+
+    fn ctx(id: Identity) -> ServerCtx {
+        ServerCtx {
+            default_holder: id,
+            own_worktree: None,
+        }
+    }
+
+    #[test]
+    fn an_explicit_holder_wins_over_an_ambiguous_default() {
+        let c = ctx(Identity::Ambiguous(candidates()));
+        assert_eq!(resolve_holder(&c, Some("mine".into())).unwrap(), "mine");
+    }
+
+    #[test]
+    fn an_ambiguous_default_fails_only_the_call_that_omits_holder() {
+        let c = ctx(Identity::Ambiguous(candidates()));
+        let e = resolve_holder(&c, None).unwrap_err().to_string();
+        assert!(
+            e.contains("CLAUDE_CODE_SESSION_ID=a") && e.contains("CODEX_SESSION_ID=b"),
+            "names both: {e}"
+        );
+    }
+
+    #[test]
+    fn a_resolved_default_is_used_when_no_holder_is_given() {
+        let c = ctx(Identity::Resolved("sess".into()));
+        assert_eq!(resolve_holder(&c, None).unwrap(), "sess");
     }
 }

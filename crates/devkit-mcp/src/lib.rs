@@ -15,7 +15,7 @@ use jsonrpc::{METHOD_NOT_FOUND, PARSE_ERROR, Request, Response};
 /// Per-session server context. One stdio server process == one agent session,
 /// so `default_holder` is stable for the process lifetime.
 pub struct ServerCtx {
-    pub default_holder: String,
+    pub default_holder: devkit_locks::ident::Identity,
     /// The checkout this server was started in, or `None` when it was started
     /// outside a repository. Mutating actions are scoped to it: the caller
     /// names the worktree it wants, and an agent naming somebody else's is
@@ -23,12 +23,11 @@ pub struct ServerCtx {
     pub own_worktree: Option<std::path::PathBuf>,
 }
 
-/// `$DEVKIT_SESSION` if set and non-empty, else a stable per-process id.
-pub fn mint_holder() -> String {
-    std::env::var("DEVKIT_SESSION")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("mcp-{}", std::process::id()))
+/// The identity every lock action is taken under, resolved once at startup.
+/// Stored unresolved so an ambiguous environment fails only the calls that omit
+/// an explicit holder, rather than the server's construction.
+pub fn mint_holder() -> devkit_locks::ident::Identity {
+    devkit_locks::ident::identity(None)
 }
 
 /// Run the stdio JSON-RPC loop until EOF.
@@ -158,7 +157,7 @@ mod tests {
 
     fn drive(input: &str) -> Vec<Value> {
         let ctx = ServerCtx {
-            default_holder: "test-session".to_string(),
+            default_holder: devkit_locks::ident::Identity::Resolved("test-session".into()),
             own_worktree: None,
         };
         let mut out = Vec::new();

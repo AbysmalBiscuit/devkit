@@ -62,6 +62,7 @@ pub fn call(ctx: &ServerCtx, args: Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devkit_locks::ident::Identity;
 
     #[test]
     fn describe_lists_the_ports_actions() {
@@ -95,7 +96,7 @@ mod tests {
     #[test]
     fn call_unknown_action_errors() {
         let ctx = ServerCtx {
-            default_holder: "t".to_string(),
+            default_holder: Identity::Resolved("t".into()),
             own_worktree: None,
         };
         assert!(call(&ctx, serde_json::json!({ "action": "nope.nope" })).is_err());

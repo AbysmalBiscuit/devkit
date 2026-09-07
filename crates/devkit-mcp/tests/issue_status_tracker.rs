@@ -1,6 +1,7 @@
 //! `issue.status` over the real JSON-RPC surface, against a project whose
 //! `devkit.toml` names a tracker.
 
+use devkit_locks::ident::Identity;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -47,7 +48,7 @@ fn call(action: &str, args: Value) -> Value {
         "params": { "name": "devkit_call", "arguments": { "action": action, "args": args } }
     });
     let ctx = devkit_mcp::ServerCtx {
-        default_holder: "test-session".to_string(),
+        default_holder: Identity::Resolved("test-session".into()),
         own_worktree: None,
     };
     let mut out = Vec::new();
