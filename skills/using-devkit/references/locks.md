@@ -19,12 +19,15 @@
 The holder id resolves in this order, first hit wins:
 
 1. `--as <id>` on the call
-2. `$DEVKIT_SESSION`
-3. `$TMUX_PANE`
-4. the controlling tty
-5. the parent pid
+2. the coding-agent session id (`$CLAUDE_CODE_SESSION_ID`, `$CODEX_SESSION_ID`)
+3. `$DEVKIT_SESSION`
+4. `$TMUX_PANE`
+5. the controlling tty
+6. the parent pid
 
-An agent has no stable tty and may spawn subprocesses, so export `DEVKIT_SESSION` once per session rather than relying on the fallbacks.
+Inside a coding-agent session this needs no setup: the detected id is the one the write hook holds locks under, so a manual claim and an automatic one are the same holder. `$DEVKIT_SESSION` still applies outside one. When two harnesses are nested and expose different ids, `acquire` and `release` refuse rather than guess, and name both so you can pass `--as`.
+
+A claim made by hand inside a sub-agent is recorded at session granularity, because no harness exposes a sub-agent id to a subprocess. It blocks every other session and does not block sibling sub-agents of your own; that isolation comes from the write hook, which does have sub-agent ids. For the same reason `lockm release --all` inside a sub-agent frees the whole session's manual claims.
 
 ## TTL
 

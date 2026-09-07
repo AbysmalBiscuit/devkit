@@ -243,7 +243,7 @@ lockm status  [--all] [--json]            # alias: list
 lockm prune
 ```
 
-Sessions identify themselves by (in priority order) `--as <id>`, `$DEVKIT_SESSION`, `$TMUX_PANE` (zero-config and unique per tmux pane), the controlling tty, or the parent pid. Conflicts fail fast: `acquire`/`check` exit `1` and report who holds the path. Locks expire after their TTL (default 30 min, `--ttl 0` disables) or when a recorded anchor pid dies; `release` frees them explicitly. For non-interactive agent sessions, pass a stable `--as`/`$DEVKIT_SESSION` so acquire and release agree.
+Sessions identify themselves by (in priority order) `--as <id>`, the coding-agent session id (`$CLAUDE_CODE_SESSION_ID`, `$CODEX_SESSION_ID`), `$DEVKIT_SESSION`, `$TMUX_PANE`, the controlling tty, or the parent pid. Inside a coding-agent session the detected id matches the one the write hook uses, so no setup is needed; when two harnesses are nested and disagree, `acquire` and `release` exit `2` naming both candidates. Conflicts fail fast: `acquire`/`check` exit `1` and report who holds the path. Locks expire after their TTL (default 30 min, `--ttl 0` disables) or when a recorded anchor pid dies; `release` frees them explicitly.
 
 ## `devkit`: setup and diagnostics
 

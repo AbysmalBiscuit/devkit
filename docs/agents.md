@@ -21,7 +21,7 @@ when you need its flags, arguments, and gates, which the tree does not carry.
 
 ### Actions
 
-`ports.{status,alloc,release,prune}` and `locks.{acquire,check,release,status,prune}`. Pass `root` (the project path) on every lock call and on `ports.alloc`/`ports.release`. For locks, `holder` is a session identity minted from `$DEVKIT_SESSION` (or a per-process id). For ports, `holder` defaults to `root`, the worktree path the registry uses to track liveness. Either can be overridden per call.
+`ports.{status,alloc,release,prune}` and `locks.{acquire,check,release,status,prune}`. Pass `root` (the project path) on every lock call and on `ports.alloc`/`ports.release`. For locks, `holder` is a session identity detected from the coding-agent session, falling back to `$DEVKIT_SESSION` or a per-process id. For ports, `holder` defaults to `root`, the worktree path the registry uses to track liveness. Either can be overridden per call.
 
 The `devrun` actions are `devrun.status` (tracked servers for a worktree, or `all`), `devrun.up` (start servers, **non-blocking**: returns each server `starting`, so poll `devrun.status` for readiness), `devrun.down` (stop and release a worktree's servers), and `devrun.logs` (tail a tracked app's log). All take `root` (the worktree); `up` is `issue`-role only and starts servers under a running `devkitd` when present, else detached.
 

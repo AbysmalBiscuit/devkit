@@ -34,13 +34,7 @@ Global flags go **before** the subcommand (`issue -C ~/git/acme/app status`): `-
 
 In a shared checkout, claim every file you will touch, then release when done. Locks are **advisory** — they coordinate cooperating sessions rather than enforcing at the filesystem level. Respect them.
 
-**1. Set one stable holder id per session.** `acquire` and `release` must use the *same* id, or you leak a lock that only clears on expiry. Export it once and every call picks it up:
-
-```sh
-export DEVKIT_SESSION="agent-<your-role>"   # e.g. agent-auth-refactor
-```
-
-**2. Look at the board, then claim everything in one call.** `acquire` is all-or-nothing: it claims every path, or if *any* is held it claims none and exits non-zero. Claiming a unit of work's files together avoids a partial hold that stalls you mid-edit.
+**1. Look at the board, then claim everything in one call.** Your holder id is detected from the coding-agent session you are running in, so acquire and release already agree with each other and with the write hook. `acquire` is all-or-nothing: it claims every path, or if *any* is held it claims none and exits non-zero.
 
 ```sh
 lockm status                                  # who holds what right now
@@ -50,12 +44,12 @@ echo $?                                       # 0 = you hold them; 1 = conflict
 
 Lock a directory (`src/auth/`) to claim a subtree, or individual files for finer-grained sharing.
 
-**3. Branch on the exit code.** It is a gate, not a formality.
+**2. Branch on the exit code.** It is a gate, not a formality.
 
 - **Exit 0** (`locked …`) — you hold the paths. Edit them.
 - **Exit 1** (`conflict: …`) — another session holds one. Edit something else.
 
-**4. Release once the edit *and* its verification are done.** Others may be waiting.
+**3. Release once the edit *and* its verification are done.** Others may be waiting.
 
 ```sh
 lockm release src/auth/session.rs src/auth/mod.rs
@@ -75,6 +69,6 @@ Work on an unblocked file first, then poll with `lockm check <paths>` (read-only
 
 ## Enforced checkouts
 
-Some checkouts turn on write enforcement, where the plugin's `PreToolUse` hook auto-locks each file on your first `Edit`/`Write` and releases at session end. Acquiring manually there is harmless and redundant, so the step above works in both modes.
+Some checkouts turn on write enforcement, where the plugin's `PreToolUse` hook auto-locks each file on your first `Edit`/`Write` and releases at session end. Acquiring manually there is redundant for `Edit`/`Write`, which the hook already covers, and it is safe: `lockm` resolves the same session id the hook does, so your own claims are recognised as your own. Claim by hand only for a `Bash` write the hook never sees.
 
 What changes is the failure: a blocked write comes back as a **deny** naming the holder. Treat that exactly like an `acquire` conflict — edit a different file, or wait. `Bash` writes are not covered, so a `sed` or heredoc edit slips past the hook; claim the path with `lockm acquire` before editing that way. `references/locks.md` has the full mechanism, including how a checkout turns enforcement on.

@@ -118,7 +118,7 @@ When multiple sessions share one checkout, claim files before editing them with 
 
 - `lockm acquire <paths…> --as <stable-session-id>` before editing; it exits `1` with the current holder if any path is taken — branch on that.
 - `lockm release <paths…> --as <same-id>` (or `lockm release --all --as <id>`) when done.
-- Always pass a consistent `--as <id>` (or set `$DEVKIT_SESSION`) so acquire and release refer to the same holder.
+- Inside a coding-agent session the holder is detected, so acquire and release already agree; pass `--as <id>` only outside one, or when devkit reports two nested harnesses disagreeing.
 
 ## Registry facade
 

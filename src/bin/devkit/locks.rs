@@ -18,9 +18,8 @@ pub(crate) enum Cmd {
     Acquire {
         /// Files or directories to claim.
         paths: Vec<String>,
-        /// Session identity to hold the claim under. Defaults to
-        /// $DEVKIT_SESSION, then $TMUX_PANE, then the controlling tty, then the
-        /// parent pid. Pass the same value to acquire and release.
+        /// Holder id. Defaults to the coding-agent session, then $DEVKIT_SESSION,
+        /// $TMUX_PANE, the controlling tty, the parent pid.
         #[arg(long = "as")]
         holder: Option<String>,
         /// Why you hold these paths; shown to whoever the claim blocks.
@@ -37,9 +36,8 @@ pub(crate) enum Cmd {
     Check {
         /// Files or directories to test.
         paths: Vec<String>,
-        /// Session identity to hold the claim under. Defaults to
-        /// $DEVKIT_SESSION, then $TMUX_PANE, then the controlling tty, then the
-        /// parent pid. Pass the same value to acquire and release.
+        /// Holder id. Defaults to the coding-agent session, then $DEVKIT_SESSION,
+        /// $TMUX_PANE, the controlling tty, the parent pid.
         #[arg(long = "as")]
         holder: Option<String>,
         /// Emit the result as JSON instead of a human-readable line.
@@ -50,9 +48,8 @@ pub(crate) enum Cmd {
     Release {
         /// Paths to release; ignored with --all.
         paths: Vec<String>,
-        /// Session identity to hold the claim under. Defaults to
-        /// $DEVKIT_SESSION, then $TMUX_PANE, then the controlling tty, then the
-        /// parent pid. Pass the same value to acquire and release.
+        /// Holder id. Defaults to the coding-agent session, then $DEVKIT_SESSION,
+        /// $TMUX_PANE, the controlling tty, the parent pid.
         #[arg(long = "as")]
         holder: Option<String>,
         /// Release every path this holder claims.
