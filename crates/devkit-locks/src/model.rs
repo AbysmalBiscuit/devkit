@@ -252,9 +252,8 @@ impl Data {
         out
     }
 
-    /// Decide a write and, only when the file is free, take a lock for `writer`.
-    /// Mutates self solely in the `Acquired` case (insert) or to renew the writer's
-    /// own exact-path lock; an ancestor's lock is never overwritten.
+    /// Decide one write, renewing the overlapping row that permits it: the
+    /// writer's own, or an ancestor's. The row's holder is never rewritten.
     #[allow(clippy::too_many_arguments)]
     pub fn decide_write(
         &mut self,
@@ -275,11 +274,14 @@ impl Data {
             .values()
             .any(|e| e.root == root && !entry_dead(e, now) && paths_overlap(&e.path, path));
         if overlaps {
-            // Held only by self or an ancestor. Renew the writer's own exact lock if present.
-            if let Some(e) = self.locks.get_mut(&key_for(root, path))
-                && e.holder == writer
-            {
-                e.ts = now;
+            for e in self.locks.values_mut() {
+                if e.root == root
+                    && !entry_dead(e, now)
+                    && paths_overlap(&e.path, path)
+                    && is_ancestor_or_self(&e.holder, writer)
+                {
+                    e.ts = now;
+                }
             }
             return WriteDecision::AllowedByOwnership;
         }
@@ -565,6 +567,18 @@ mod tests {
         // the parent's lock is untouched; no new row inserted for the child
         assert_eq!(d.locks.len(), 1);
         assert_eq!(d.locks[&key_for("/repo", "src")].holder, "S");
+    }
+
+    #[test]
+    fn decide_write_renews_an_ancestor_directory_lock() {
+        let mut d = Data::default();
+        d.locks
+            .extend([entry("/repo", "src/auth", "S", 1, 0, None)]);
+        let r = d.decide_write("/repo", "src/auth/mod.rs", "S/a1", None, None, 1800, 900);
+        assert_eq!(r, WriteDecision::AllowedByOwnership);
+        let e = &d.locks[&key_for("/repo", "src/auth")];
+        assert_eq!(e.ts, 900, "the directory lock's timestamp is bumped");
+        assert_eq!(e.holder, "S", "the ancestor's holder is never rewritten");
     }
 
     #[test]
