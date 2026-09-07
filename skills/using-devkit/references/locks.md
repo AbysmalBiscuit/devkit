@@ -25,9 +25,13 @@ The holder id resolves in this order, first hit wins:
 5. the controlling tty
 6. the parent pid
 
-Inside a coding-agent session this needs no setup: the detected id is the one the write hook holds locks under, so a manual claim and an automatic one are the same holder. `$DEVKIT_SESSION` still applies outside one. When two harnesses are nested and expose different ids, `acquire` and `release` refuse rather than guess, and name both so you can pass `--as`.
+Inside a coding-agent session this needs no setup: the detected id is the one the write hook holds locks under, so a manual claim and an automatic one are the same holder. `$DEVKIT_SESSION` still applies outside one. When two harnesses are nested and expose different ids, `acquire` and `release` refuse rather than guess (exit 2), and name both so you can pass `--as`.
 
-A claim made by hand inside a sub-agent is recorded at session granularity, because no harness exposes a sub-agent id to a subprocess. It blocks every other session and does not block sibling sub-agents of your own; that isolation comes from the write hook, which does have sub-agent ids. For the same reason `lockm release --all` inside a sub-agent frees the whole session's manual claims.
+A long-lived shell can outlive the session that seeded its environment: a `tmux` server started from inside an agent session keeps that `CLAUDE_CODE_SESSION_ID` for its lifetime, and a detected session id outranks `$TMUX_PANE`, so every pane resolves to one dead session's holder. devkit cannot tell a stale id from a live one; `--as <id>` is the way out.
+
+A claim made by hand inside a sub-agent is recorded at session granularity, because no harness exposes a sub-agent id to a subprocess. It blocks every other session and does not block sibling sub-agents of your own; that isolation comes from the write hook, which does have sub-agent ids. A path your own sub-agent's hook already holds is reported as `already held on this session line` and left as it is: yours to write, but released by the lifecycle hook rather than by a `release` of your own.
+
+`lockm release --all` frees every row this project holds under the bare session id — the session's manual claims and its top-level write-hook claims alike — whether you run it from the top level or from a sub-agent. Rows recorded as `session/agent`, which is how the hook records a sub-agent's writes, are left for `SubagentStop`.
 
 ## TTL
 

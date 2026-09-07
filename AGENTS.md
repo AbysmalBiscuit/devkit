@@ -116,8 +116,8 @@ The primary clone (`C:/Users/Lev/Git/lev/devkit`) stays on `main`. Feature work 
 
 When multiple sessions share one checkout, claim files before editing them with the `lockm` binary instead of writing ad-hoc `.lock` files:
 
-- `lockm acquire <paths…> --as <stable-session-id>` before editing; it exits `1` with the current holder if any path is taken — branch on that.
-- `lockm release <paths…> --as <same-id>` (or `lockm release --all --as <id>`) when done.
+- `lockm acquire <paths…>` before editing; it exits `1` with the current holder if any path is taken — branch on that.
+- `lockm release <paths…>` (or `lockm release --all`) when done.
 - Inside a coding-agent session the holder is detected, so acquire and release already agree; pass `--as <id>` only outside one, or when devkit reports two nested harnesses disagreeing.
 
 ## Registry facade

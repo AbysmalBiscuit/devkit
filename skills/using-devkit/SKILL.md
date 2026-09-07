@@ -46,8 +46,9 @@ Lock a directory (`src/auth/`) to claim a subtree, or individual files for finer
 
 **2. Branch on the exit code.** It is a gate, not a formality.
 
-- **Exit 0** (`locked …`) — you hold the paths. Edit them.
+- **Exit 0** (`locked …`, or `already held on this session line: …` where your own write hook or a sub-agent got there first) — you may edit the paths.
 - **Exit 1** (`conflict: …`) — another session holds one. Edit something else.
+- **Exit 2** (`ambiguous session identity: …`) — two nested harnesses expose different session ids, and devkit refuses to guess between them. Re-run with `--as <id>`, choosing the **inner** harness's id: that is the harness whose write hook evaluates your edits.
 
 **3. Release once the edit *and* its verification are done.** Others may be waiting.
 
@@ -55,6 +56,8 @@ Lock a directory (`src/auth/`) to claim a subtree, or individual files for finer
 lockm release src/auth/session.rs src/auth/mod.rs
 lockm release --all                           # or: drop everything you hold
 ```
+
+`release --all` also drops the write hook's automatic claims for this session, so it belongs at the end of a work unit rather than between edits.
 
 ### When a claim conflicts
 
