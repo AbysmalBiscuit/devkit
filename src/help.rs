@@ -1,7 +1,9 @@
 //! The two help views: clap's own rendering, and the full command tree.
 
-use std::ffi::OsString;
-use std::io::{self, Write};
+use std::{
+    ffi::OsString,
+    io::{self, Write},
+};
 
 /// Longest `about` the full-tree view can print without truncating, given the
 /// hundred-column line cap and the longest command path in the tree.
@@ -308,9 +310,10 @@ fn help_node() -> clap::Command {
 ///
 /// `required(false)` alone is not enough. `issue setup`'s positional is
 /// `required_unless_present = "issue"`, a separate condition clap evaluates on
-/// its own, so clearing it takes an explicit reset. `required_unless_present_all`,
-/// `required_if_eq*` and required `ArgGroup`s are unused in this CLI today; a
-/// future one needs the matching reset here, and the test that catches it is
+/// its own, so clearing it takes an explicit reset.
+/// `required_unless_present_all`, `required_if_eq*` and required `ArgGroup`s
+/// are unused in this CLI today; a future one needs the matching reset here,
+/// and the test that catches it is
 /// `a_required_option_does_not_block_a_help_request`.
 ///
 /// `--help`, `-h` and `--full` are reserved: a real command spelling one of
@@ -400,8 +403,9 @@ pub fn resolve(root: &clap::Command, args: &[OsString]) -> Option<Request> {
 
 #[cfg(test)]
 mod resolve_tests {
-    use super::*;
     use std::ffi::OsString;
+
+    use super::*;
 
     /// A stand-in for the real tree carrying the shapes that break a
     /// hand-written argv walker: a value-taking global flag, an alias, a
@@ -497,14 +501,11 @@ mod resolve_tests {
 
     #[test]
     fn the_help_subcommand_names_the_target() {
-        assert_eq!(
-            req(&["help"]).expect("help request").path,
-            [] as [String; 0]
-        );
-        assert_eq!(
-            req(&["help", "group"]).expect("help request").path,
-            ["group"]
-        );
+        assert_eq!(req(&["help"]).expect("help request").path, [] as [String;
+            0]);
+        assert_eq!(req(&["help", "group"]).expect("help request").path, [
+            "group"
+        ]);
         assert_eq!(
             req(&["help", "group", "status"])
                 .expect("help request")

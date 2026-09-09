@@ -19,10 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # rustfmt.toml sets unstable options; stable rustfmt warns and ignores
+      # them, so a stable check would pass on unformatted code.
+      - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - run: cargo +nightly fmt --all -- --check
 
   clippy:
     name: clippy (${{ matrix.os }})

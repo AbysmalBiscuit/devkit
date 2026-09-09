@@ -27,7 +27,7 @@
         },
         "prep_files": {
           "default": [],
-          "description": "Files written into the app's directory during `issue setup` (before `setup`).",
+          "description": "Files written into the app's directory during `issue setup` (before\n`setup`).",
           "items": {
             "$ref": "#/$defs/PrepFile"
           },
@@ -35,7 +35,7 @@
         },
         "provides_url": {
           "default": false,
-          "description": "This app serves the URL that consumer apps wire to via their `url_env`.\nExactly one app (the API) is normally marked; consumers reference it by role,\nnot by a hardcoded name.",
+          "description": "This app serves the URL that consumer apps wire to via their `url_env`.\nExactly one app (the API) is normally marked; consumers reference it by\nrole, not by a hardcoded name.",
           "type": "boolean"
         },
         "setup": {
@@ -170,7 +170,7 @@
       "properties": {
         "enabled": {
           "default": false,
-          "description": "Run gate: autostart the daemon only when true (or via DEVKIT_DAEMON=1 / --supervise).",
+          "description": "Run gate: autostart the daemon only when true (or via DEVKIT_DAEMON=1 /\n--supervise).",
           "type": "boolean"
         },
         "health_fail_threshold": {
@@ -189,7 +189,7 @@
         },
         "idle_timeout_secs": {
           "default": 1800,
-          "description": "Exit after this many idle seconds with zero clients AND zero supervised children.",
+          "description": "Exit after this many idle seconds with zero clients AND zero supervised\nchildren.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -203,7 +203,7 @@
         },
         "memory_action": {
           "default": "warn",
-          "description": "Action when tree-RSS crosses `memory_limit_mb`: \"warn\" (log a line) or\n\"restart\" (SIGTERM and let the crash path respawn). Any other value falls\nback to warn.",
+          "description": "Action when tree-RSS crosses `memory_limit_mb`: \"warn\" (log a line) or\n\"restart\" (SIGTERM and let the crash path respawn). Any other value\nfalls back to warn.",
           "type": "string"
         },
         "memory_limit_mb": {
@@ -254,7 +254,7 @@
         },
         "baseline_dir": {
           "default": "",
-          "description": "Directory baseline worktrees are created under, one per fork-point\ncommit. `~` is expanded. Names a location on this machine, so a relative\nvalue anchors to the directory of the layer that declared it. Defaults to\n`_baselines` under `worktree_root`.",
+          "description": "Directory baseline worktrees are created under, one per fork-point\ncommit. `~` is expanded. Names a location on this machine, so a relative\nvalue anchors to the directory of the layer that declared it. Defaults\nto `_baselines` under `worktree_root`.",
           "type": "string"
         },
         "baseline_ref": {
@@ -450,7 +450,7 @@
       "properties": {
         "root": {
           "default": false,
-          "description": "Stop walking upward at this file, and drop `~/.config/devkit/config.toml`\nfrom the layer stack.",
+          "description": "Stop walking upward at this file, and drop\n`~/.config/devkit/config.toml` from the layer stack.",
           "type": "boolean"
         }
       },
@@ -586,7 +586,7 @@
       ]
     },
     "PrepFile": {
-      "description": "A file written into an app's directory during `issue setup`, before the app's\n`setup` commands run. `content` is written verbatim — no format assembly or\nnewline injection. Parent directories are created. Existing files are left\nuntouched unless `overwrite` is set.",
+      "description": "A file written into an app's directory during `issue setup`, before the\napp's `setup` commands run. `content` is written verbatim — no format\nassembly or newline injection. Parent directories are created. Existing\nfiles are left untouched unless `overwrite` is set.",
       "properties": {
         "content": {
           "description": "File contents, written byte-for-byte.",
@@ -625,7 +625,7 @@
           "type": "boolean"
         },
         "to": {
-          "description": "Destination directory, rendered as minijinja. Must render to a non-empty\nabsolute path. It is created when the first file lands in it, so an entry\nthat matches nothing leaves no directory behind.",
+          "description": "Destination directory, rendered as minijinja. Must render to a non-empty\nabsolute path. It is created when the first file lands in it, so an\nentry that matches nothing leaves no directory behind.",
           "type": "string"
         }
       },

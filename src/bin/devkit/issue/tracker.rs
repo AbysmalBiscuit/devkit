@@ -1,14 +1,14 @@
 //! Which tracker and GitHub repositories this project's commands talk to.
 
-use devkit_common::github::Repos;
-use devkit_common::tracker::Resolved;
 use std::path::Path;
+
+use devkit_common::{github::Repos, tracker::Resolved};
 
 /// Everything one config load yields for an `issue` command: the tracker and
 /// repositories `select` returns, plus the config itself and how its load went.
-/// `issue end` needs the last two — its preserve entries live in the config, and
-/// acting on an empty table because the config is broken would remove a worktree
-/// having archived nothing.
+/// `issue end` needs the last two — its preserve entries live in the config,
+/// and acting on an empty table because the config is broken would remove a
+/// worktree having archived nothing.
 pub struct Selected {
     pub tracker: Resolved,
     pub repos: Repos,
@@ -59,8 +59,9 @@ pub fn select(config: Option<&str>, start: &str, pr_override: Option<&str>) -> (
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_common::tracker::TrackerKind;
+
+    use super::*;
 
     fn write_config(path: &Path, kind: &str) {
         std::fs::write(
@@ -99,8 +100,8 @@ mod tests {
         }
     }
 
-    /// A config that does not parse must be distinguishable from no config at all:
-    /// `issue end` refuses on the first and proceeds on the second.
+    /// A config that does not parse must be distinguishable from no config at
+    /// all: `issue end` refuses on the first and proceeds on the second.
     #[test]
     fn a_broken_config_reports_broken_and_yields_no_config() {
         let dir = tempfile::tempdir().unwrap();

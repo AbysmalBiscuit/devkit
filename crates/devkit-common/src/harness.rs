@@ -1,12 +1,16 @@
 //! Coding-agent harness glue shared by every devkit hook: the deny envelope,
 //! and the per-checkout activation gate over the `[harness]` table.
 
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
 use devkit_config::{AppMatch, CommandRule};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
-/// The Claude Code / Codex `PreToolUse` deny envelope. `reason` reaches the agent.
+/// The Claude Code / Codex `PreToolUse` deny envelope. `reason` reaches the
+/// agent.
 pub fn deny_json(reason: &str) -> Value {
     json!({
         "hookSpecificOutput": {
@@ -39,9 +43,10 @@ pub fn parse_env_override(val: Option<&str>) -> Option<bool> {
     }
 }
 
-/// The global devkit config file: `$DEVKIT_CONFIG`, else `~/.config/devkit/config.toml`.
-/// Mirrors the `~/.config/devkit/config.toml` base layer the resolver loads, so the
-/// harness reads the same global config the other binaries do.
+/// The global devkit config file: `$DEVKIT_CONFIG`, else
+/// `~/.config/devkit/config.toml`. Mirrors the `~/.config/devkit/config.toml`
+/// base layer the resolver loads, so the harness reads the same global config
+/// the other binaries do.
 pub fn global_config_path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("DEVKIT_CONFIG") {
         return Some(PathBuf::from(p));
@@ -130,7 +135,7 @@ pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<Stri
             (p.clone(), harness)
         })
         .collect();
-    let (merged, _, _) = devkit_config::merge_layers(&projected);
+    let (merged, ..) = devkit_config::merge_layers(&projected);
     let mut warnings = Vec::new();
 
     // Each key is deserialized on its own, so one that will not parse costs
@@ -243,8 +248,8 @@ pub struct ShellPayload {
 /// not model.
 ///
 /// The harness is told apart by a string-valued `hook_event_name`, which Claude
-/// Code and Codex send and Cursor does not; a payload carrying that key with any
-/// other type reads as Cursor. `tool_input` cannot be the discriminator:
+/// Code and Codex send and Cursor does not; a payload carrying that key with
+/// any other type reads as Cursor. `tool_input` cannot be the discriminator:
 /// Cursor's generic `preToolUse` carries that key too, so testing it would
 /// answer a Cursor session in Claude Code's envelope.
 pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
@@ -625,8 +630,8 @@ programs = "node"
 
     #[test]
     fn a_cursor_generic_tool_payload_is_still_cursor() {
-        // Cursor's generic preToolUse also carries tool_input, so the presence of
-        // that key cannot be the discriminator.
+        // Cursor's generic preToolUse also carries tool_input, so the presence
+        // of that key cannot be the discriminator.
         let p = serde_json::json!({ "tool_name": "Shell", "tool_input": { "command": "vite" } });
         assert_eq!(parse_shell_payload(&p).unwrap().harness, Harness::Cursor);
     }

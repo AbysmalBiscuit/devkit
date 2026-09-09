@@ -10,11 +10,10 @@
 //! Every function here is read-only. Mutating and git-level operations
 //! (`gh pr create`, `gh pr edit`, `gh pr checkout`) stay on `gh`.
 
+use std::{path::Path, sync::OnceLock, time::Duration};
+
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::path::Path;
-use std::sync::OnceLock;
-use std::time::Duration;
 
 const API: &str = "https://api.github.com";
 const UA: &str = "devkit";
@@ -50,10 +49,10 @@ fn resolve_token() -> (Option<String>, TokenSource) {
             }
         }
     }
-    // One `gh` spawn, cached for the process — amortized across every HTTP call.
-    // `--hostname` is explicit: with `GH_HOST` set, an unqualified call returns
-    // an enterprise token, which the callers below would then send to
-    // api.github.com.
+    // One `gh` spawn, cached for the process — amortized across every HTTP
+    // call. `--hostname` is explicit: with `GH_HOST` set, an unqualified
+    // call returns an enterprise token, which the callers below would then
+    // send to api.github.com.
     let gh = crate::cmd::capture("gh", &["auth", "token", "--hostname", "github.com"], None)
         .ok()
         .map(|s| s.trim().to_string())
@@ -72,8 +71,9 @@ fn resolved() -> &'static (Option<String>, TokenSource) {
     T.get_or_init(resolve_token)
 }
 
-/// The GitHub token, resolved once per process: env first, then `gh auth token`.
-/// `None` when neither is available — callers then use their `gh` fallback.
+/// The GitHub token, resolved once per process: env first, then `gh auth
+/// token`. `None` when neither is available — callers then use their `gh`
+/// fallback.
 pub fn token() -> Option<&'static str> {
     resolved().0.as_deref()
 }
@@ -153,7 +153,8 @@ pub fn graphql_partial(query: &str) -> Result<Value> {
 }
 
 /// GET `{API}{path}`. `Ok(Some(json))` on 2xx, `Ok(None)` on 404 (a clean
-/// "absent" the caller can act on), `Err` on any other status or transport error.
+/// "absent" the caller can act on), `Err` on any other status or transport
+/// error.
 pub fn rest_get_opt(path: &str) -> Result<Option<Value>> {
     let _span = crate::timing::io_span("github REST", path).entered();
     let resp = agent()
@@ -313,8 +314,8 @@ pub fn is_github_remote(url: &str) -> bool {
 
 /// Whether a git remote reaches github.com once `~/.ssh/config` has its say.
 /// A `Host` alias substitutes the hostname wholesale — `gh:owner/repo.git` is
-/// a github.com remote when ssh config maps `gh` to it — so the literal spelling
-/// of an ssh remote cannot settle the question on its own.
+/// a github.com remote when ssh config maps `gh` to it — so the literal
+/// spelling of an ssh remote cannot settle the question on its own.
 pub fn remote_reaches_github(url: &str) -> bool {
     reaches_github(url, &|alias| ssh_hostname(alias))
 }
@@ -433,8 +434,8 @@ pub struct Repos {
 }
 
 impl Repos {
-    /// Resolve from config plus the `origin` remote. `pr_override` is `issue prs
-    /// --repo`, one invocation's override of `pr_repo`.
+    /// Resolve from config plus the `origin` remote. `pr_override` is `issue
+    /// prs --repo`, one invocation's override of `pr_repo`.
     pub fn resolve(
         cfg: &devkit_config::GithubConfig,
         cwd: &str,
@@ -467,7 +468,8 @@ impl Repos {
         build(cfg, origin, pr_override, &missing_message)
     }
 
-    /// The issues repository, or the error explaining which key would supply it.
+    /// The issues repository, or the error explaining which key would supply
+    /// it.
     pub fn issues(&self) -> Result<&Repo> {
         self.issues.as_ref().map_err(|e| anyhow::anyhow!(e.clone()))
     }
@@ -991,8 +993,9 @@ pub fn pr_timeline(slug: &str, qualifier: &str, max: usize) -> Result<Vec<PrTime
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn accepts_partial_admits_an_errors_free_response() {
@@ -1250,14 +1253,11 @@ mod tests {
             "number": 7, "title": "Fix", "html_url": "u7",
             "head": { "ref": "br" }, "user": { "login": "bob" }
         });
-        assert_eq!(
-            parse_meta(&v).unwrap(),
-            PrMeta {
-                number: 7,
-                title: "Fix".into(),
-                head_ref_name: "br".into()
-            }
-        );
+        assert_eq!(parse_meta(&v).unwrap(), PrMeta {
+            number: 7,
+            title: "Fix".into(),
+            head_ref_name: "br".into()
+        });
         let f = parse_full(&v);
         assert_eq!(f.url, "u7");
         assert_eq!(f.title, "Fix");
@@ -1362,8 +1362,8 @@ mod tests {
 
     #[test]
     fn repos_resolve_each_key_independently() {
-        // Both configured: no origin is consulted at all, so a project whose code
-        // lives outside GitHub still resolves.
+        // Both configured: no origin is consulted at all, so a project whose
+        // code lives outside GitHub still resolves.
         let r = Repos::from_parts(&cfg(Some("org/planning"), Some("up/app")), None, None);
         assert_eq!(r.issues().unwrap().slug, "org/planning");
         assert_eq!(r.prs().unwrap().slug, "up/app");
@@ -1503,7 +1503,8 @@ mod tests {
     #[test]
     fn a_total_count_beyond_the_window_is_ambiguous_not_unique() {
         // One node returned but the server says there are three: ranking a
-        // truncated set is exactly the false-unique this type exists to prevent.
+        // truncated set is exactly the false-unique this type exists to
+        // prevent.
         assert!(matches!(
             parse_head_lookup(&head_resp(NODE_A, 3)),
             HeadLookup::Ambiguous(_)

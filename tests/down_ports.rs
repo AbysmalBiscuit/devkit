@@ -2,15 +2,18 @@
 mod common;
 
 use common::Harness;
-use devkit_ports::daemon::proto::{Request, Response};
-use devkit_ports::registry::Role;
+use devkit_ports::{
+    daemon::proto::{Request, Response},
+    registry::Role,
+};
 
 #[test]
 fn down_ports_releases_listed_reservations() {
     let mut h = Harness::start();
 
-    // The holder must be an existing directory so liveness probes (`holder_alive`)
-    // do not prune these pidless reservations before the assertions observe them.
+    // The holder must be an existing directory so liveness probes
+    // (`holder_alive`) do not prune these pidless reservations before the
+    // assertions observe them.
     let holder = h.home.path().to_str().unwrap().to_string();
 
     // Two pidless reservations under one holder.

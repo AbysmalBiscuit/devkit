@@ -1,5 +1,5 @@
-//! Derive a dev-server signature from an app's `launch` argv, and test whether a
-//! running process's command line matches it. Config-driven — no hardcoded
+//! Derive a dev-server signature from an app's `launch` argv, and test whether
+//! a running process's command line matches it. Config-driven — no hardcoded
 //! framework list beyond the runtime launchers we strip.
 
 /// Runtime launchers stripped from the front of the server command.
@@ -7,13 +7,14 @@ const RUNTIMES: &[&str] = &[
     "bun", "bunx", "node", "uv", "uvx", "run", "python", "python3", "poetry", "pipenv",
 ];
 
-/// Generic script/subcommand names. When one of these is all that survives runtime
-/// stripping (e.g. `bun run dev`), the launch carries no framework word — too broad
-/// to match a process safely, so the signature is empty.
+/// Generic script/subcommand names. When one of these is all that survives
+/// runtime stripping (e.g. `bun run dev`), the launch carries no framework word
+/// — too broad to match a process safely, so the signature is empty.
 const GENERIC: &[&str] = &["dev", "start", "serve", "develop", "watch"];
 
 /// The signature tokens for a launch command: the framework word, plus an
-/// optional bare subcommand (`dev`/`run`). Empty when nothing meaningful remains.
+/// optional bare subcommand (`dev`/`run`). Empty when nothing meaningful
+/// remains.
 ///
 /// Drops the doppler wrapper (everything up to and including the last `--`),
 /// then flags, the `{port}` placeholder, minijinja `{{ ... }}` placeholders,
@@ -143,9 +144,10 @@ mod tests {
 
     #[test]
     fn generic_only_launch_yields_no_signature() {
-        // After stripping runtime launchers, only the generic script name is left
-        // (`bun run dev` → `dev`, `node start` → `start`) — too broad to match
-        // safely, so no signature. Port-band detection still covers these.
+        // After stripping runtime launchers, only the generic script name is
+        // left (`bun run dev` → `dev`, `node start` → `start`) — too
+        // broad to match safely, so no signature. Port-band detection
+        // still covers these.
         assert_eq!(signature(&v(&["bun", "run", "dev"])), Vec::<String>::new());
         assert_eq!(signature(&v(&["node", "start"])), Vec::<String>::new());
     }

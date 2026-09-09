@@ -9,8 +9,10 @@
 //! from it, falling back to an empty answer when the file is absent, and every
 //! argument vector is appended to `gh.log` there.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 /// The file a verb answers from, and what to say when the test did not write
 /// one. `None` means the verb answers nothing and only reports an exit status.

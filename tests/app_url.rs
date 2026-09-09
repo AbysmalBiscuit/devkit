@@ -1,10 +1,9 @@
-//! `devkit run up` surfaces an app's configured URL template: the summary table's
-//! URL column and the `url_env` wired into consumers. Drives `devkit run`
-//! directly (not the `devrun` shim). Uses an isolated HOME/XDG_STATE_HOME so
-//! the port registry never touches the real one.
+//! `devkit run up` surfaces an app's configured URL template: the summary
+//! table's URL column and the `url_env` wired into consumers. Drives `devkit
+//! run` directly (not the `devrun` shim). Uses an isolated HOME/XDG_STATE_HOME
+//! so the port registry never touches the real one.
 
-use std::path::Path;
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 fn devkit_run() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
@@ -12,8 +11,8 @@ fn devkit_run() -> Command {
     cmd
 }
 
-/// A temp dir that is a git repo with a devkit.toml defining a URL provider with
-/// a custom `url`, a consumer on the default `url`, and an app whose `url`
+/// A temp dir that is a git repo with a devkit.toml defining a URL provider
+/// with a custom `url`, a consumer on the default `url`, and an app whose `url`
 /// references another app's port.
 fn setup() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -139,7 +138,8 @@ fn a_url_may_reference_another_apps_port() {
 fn status_shows_each_apps_rendered_url() {
     let dir = setup();
     // `resolve_ports` allocates the registry rows before `--dry-run` skips the
-    // spawn, so a dry-run `up` already persists the reservations `status` reads.
+    // spawn, so a dry-run `up` already persists the reservations `status`
+    // reads.
     let up = run_in(dir.path(), &["up", "front", "web", "--dry-run"]);
     assert!(up.status.success(), "{up:?}");
 

@@ -1,7 +1,8 @@
-use crate::registry::{Data, Role};
+use std::{collections::BTreeMap, path::PathBuf};
+
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+
+use crate::registry::{Data, Role};
 
 /// Wire-format version. Bump on any incompatible change to these types.
 pub const PROTO: u32 = 3;
@@ -52,8 +53,9 @@ pub enum Request {
         holder: String,
         role: Option<Role>,
     },
-    /// Stop + release exactly these ports (precise cross-worktree down). The daemon
-    /// resolves each port to its supervised key and stops it intentionally.
+    /// Stop + release exactly these ports (precise cross-worktree down). The
+    /// daemon resolves each port to its supervised key and stops it
+    /// intentionally.
     DownPorts {
         ports: Vec<u16>,
     },

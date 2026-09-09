@@ -1,10 +1,16 @@
-use crate::issue::select::matches_parts;
+use std::{
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
+
 use anyhow::Result;
-use devkit_common::git::Worktree;
-use devkit_common::worktree::{self, IncludePlan};
+use devkit_common::{
+    git::Worktree,
+    worktree::{self, IncludePlan},
+};
 use devkit_ports::load;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+
+use crate::issue::select::matches_parts;
 
 fn confirm(label: &str) -> bool {
     print!("  Overwrite in {label}? [y/N] ");
@@ -194,8 +200,8 @@ pub struct Flags {
 /// `overwrite`,
 /// which prompts once per worktree with the list it would clobber; declining
 /// that prompt falls back to the default behaviour for that worktree.
-/// `overwrite` replaces untracked files git cannot restore, so it needs a scope:
-/// `selectors`, or `all` for every worktree.
+/// `overwrite` replaces untracked files git cannot restore, so it needs a
+/// scope: `selectors`, or `all` for every worktree.
 pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>) -> Result<()> {
     let Flags {
         overwrite,

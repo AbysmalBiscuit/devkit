@@ -8,13 +8,16 @@
 //! caller finish it with `output()`, which has no timeout — and this runs on
 //! the write path.
 
+use std::{
+    ffi::OsStr,
+    io::Read,
+    path::{Path, PathBuf},
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
 use anyhow::{Context, Result, bail};
-use std::ffi::OsStr;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
 
 /// Default backstop for a git that never returns. Long enough that no healthy
 /// call reaches it, short enough that a wedged one fails instead of hanging a
@@ -284,7 +287,8 @@ pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
         } else if line.trim() == "bare" {
             bare = true;
         } else if line.trim() == "locked" || line.starts_with("locked ") {
-            // The reason is optional and free text, so only its presence is read.
+            // The reason is optional and free text, so only its presence is
+            // read.
             locked = true;
         }
     }
@@ -879,25 +883,25 @@ mod tests {
         std::fs::write(seed.join("f"), "x").unwrap();
         git(&seed, &["add", "."]);
         git(&seed, &["commit", "-qm", "init"]);
-        git(
-            tmp.path(),
-            &[
-                "clone",
-                "-q",
-                "--bare",
-                seed.to_str().unwrap(),
-                bare.to_str().unwrap(),
-            ],
-        );
+        git(tmp.path(), &[
+            "clone",
+            "-q",
+            "--bare",
+            seed.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ]);
 
         // A linked worktree of a bare repository: `checkout_root` succeeds and
-        // names this worktree, so deriving from it would give every worktree its
-        // own root. `non_bare_main` is the value that must stay empty.
+        // names this worktree, so deriving from it would give every worktree
+        // its own root. `non_bare_main` is the value that must stay
+        // empty.
         let wt = tmp.path().join("wt");
-        git(
-            &bare,
-            &["worktree", "add", "--detach", wt.to_str().unwrap()],
-        );
+        git(&bare, &[
+            "worktree",
+            "add",
+            "--detach",
+            wt.to_str().unwrap(),
+        ]);
         assert_eq!(non_bare_main(&wt).unwrap(), None);
     }
 

@@ -1,16 +1,15 @@
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::{Context, Result, anyhow};
+use devkit_ports::{
+    load,
+    registry::{self, Role},
+    run,
+};
 use serde::Deserialize;
 use serde_json::Value;
 
-use devkit_ports::load;
-use devkit_ports::registry::{self, Role};
-use devkit_ports::run;
-
-use crate::ServerCtx;
-use crate::actions::Action;
+use crate::{ServerCtx, actions::Action};
 
 pub fn actions() -> Vec<Action> {
     vec![

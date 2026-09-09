@@ -8,13 +8,14 @@
 //! refetched; `issue dashboard --no-cache` bypasses the cache for a fully live
 //! render. A cache miss or write failure is never fatal: the fetch just runs.
 
-use devkit_common::paths;
-use devkit_common::tracker::TrackerKind;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use devkit_common::{paths, tracker::TrackerKind};
+use serde::{Serialize, de::DeserializeOwned};
 
 fn now_secs() -> u64 {
     SystemTime::now()
@@ -165,9 +166,9 @@ mod tests {
     #[test]
     fn two_projects_do_not_share_a_cache_entry() {
         // A cache entry belongs to one (tracker, repo, viewer). Every key this
-        // module stores — `issues`, `pr-timeline-mine`, `pr-timeline-all` — is a
-        // fixed literal, so the scope is the only thing keeping one project's
-        // timelines out of another's dashboard.
+        // module stores — `issues`, `pr-timeline-mine`, `pr-timeline-all` — is
+        // a fixed literal, so the scope is the only thing keeping one
+        // project's timelines out of another's dashboard.
         let a = path_for(&scope(TrackerKind::Linear, "acme", "me"), "issues");
         let b = path_for(&scope(TrackerKind::Github, "o/r", "me"), "issues");
         let c = path_for(&scope(TrackerKind::Github, "o/r", "someone"), "issues");
@@ -177,10 +178,10 @@ mod tests {
 
     #[test]
     fn a_scope_component_cannot_escape_the_cache_directory() {
-        // `issues_repo` reaches the scope from `devkit.toml`, which travels with a
-        // checkout, so a cache path is built partly from a value the checkout
-        // chose. Hashing every component is what keeps a `..` in one inside the
-        // cache directory.
+        // `issues_repo` reaches the scope from `devkit.toml`, which travels
+        // with a checkout, so a cache path is built partly from a value
+        // the checkout chose. Hashing every component is what keeps a
+        // `..` in one inside the cache directory.
         let root = paths::cache_dir().join("dashboard");
         let p = path_for(&scope(TrackerKind::Github, "../../../etc", "me"), "issues");
         assert!(

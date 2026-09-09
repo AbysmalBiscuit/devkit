@@ -2,12 +2,16 @@
 mod shimtest;
 #[path = "common/testenv.rs"]
 mod testenv;
-use serde_json::{Value, json};
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::{
+    io::Write,
+    path::Path,
+    process::{Command, Stdio},
+};
 
-/// A project dir that is a real git repository so `find_root_from`/normalization resolve.
+use serde_json::{Value, json};
+
+/// A project dir that is a real git repository so
+/// `find_root_from`/normalization resolve.
 fn project() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
     devkit_common::git::Git::fixture(p.path())
@@ -47,7 +51,8 @@ fn git_repo() -> tempfile::TempDir {
     p
 }
 
-/// Spawn the server, feed the requests as NDJSON, return parsed responses in order.
+/// Spawn the server, feed the requests as NDJSON, return parsed responses in
+/// order.
 fn mcp(project: &Path, state: &Path, requests: &[Value]) -> Vec<Value> {
     let (_dir, link) = shimtest::linked("devkit-mcp");
     let mut cmd = Command::new(&link);
@@ -83,7 +88,8 @@ fn call_req(id: u32, action: &str, args: Value) -> Value {
     })
 }
 
-/// Parse the JSON payload out of a tools/call result, asserting isError == expected.
+/// Parse the JSON payload out of a tools/call result, asserting isError ==
+/// expected.
 fn tool_json(resp: &Value, expect_error: bool) -> Value {
     assert_eq!(resp["result"]["isError"], expect_error, "isError on {resp}");
     let text = resp["result"]["content"][0]["text"].as_str().unwrap();
@@ -95,15 +101,11 @@ fn ports_alloc_status_release_roundtrip() {
     let proj = project_with_config();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[
-            call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
-            call_req(2, "ports.status", json!({})),
-            call_req(3, "ports.release", json!({ "root": root })),
-        ],
-    );
+    let resps = mcp(proj.path(), state.path(), &[
+        call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
+        call_req(2, "ports.status", json!({})),
+        call_req(3, "ports.release", json!({ "root": root })),
+    ]);
     let alloc = tool_json(&resps[0], false);
     let port = alloc["web"].as_u64().expect("web port");
     assert!(port >= 3000, "allocated port {port} >= base 3000");
@@ -124,15 +126,11 @@ fn ports_alloc_unknown_app_is_an_error() {
     let proj = project_with_config();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[call_req(
-            1,
-            "ports.alloc",
-            json!({ "root": root, "apps": ["ghost"] }),
-        )],
-    );
+    let resps = mcp(proj.path(), state.path(), &[call_req(
+        1,
+        "ports.alloc",
+        json!({ "root": root, "apps": ["ghost"] }),
+    )]);
     let payload = tool_json(&resps[0], true);
     assert!(
         payload.as_str().unwrap().contains("ghost"),
@@ -145,22 +143,18 @@ fn locks_acquire_then_other_holder_sees_conflict() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[
-            call_req(
-                1,
-                "locks.acquire",
-                json!({ "root": root, "paths": ["src/a.rs"], "holder": "alice" }),
-            ),
-            call_req(
-                2,
-                "locks.check",
-                json!({ "root": root, "paths": ["src/a.rs"], "holder": "bob" }),
-            ),
-        ],
-    );
+    let resps = mcp(proj.path(), state.path(), &[
+        call_req(
+            1,
+            "locks.acquire",
+            json!({ "root": root, "paths": ["src/a.rs"], "holder": "alice" }),
+        ),
+        call_req(
+            2,
+            "locks.check",
+            json!({ "root": root, "paths": ["src/a.rs"], "holder": "bob" }),
+        ),
+    ]);
     let acq = tool_json(&resps[0], false);
     assert_eq!(acq["acquired"].as_array().unwrap().len(), 1);
     assert!(acq["conflicts"].as_array().unwrap().is_empty());
@@ -176,23 +170,19 @@ fn locks_acquire_then_release_clears_the_lock() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[
-            call_req(
-                1,
-                "locks.acquire",
-                json!({ "root": root, "paths": ["x.txt"], "holder": "alice" }),
-            ),
-            call_req(
-                2,
-                "locks.release",
-                json!({ "root": root, "paths": ["x.txt"], "holder": "alice" }),
-            ),
-            call_req(3, "locks.status", json!({ "root": root })),
-        ],
-    );
+    let resps = mcp(proj.path(), state.path(), &[
+        call_req(
+            1,
+            "locks.acquire",
+            json!({ "root": root, "paths": ["x.txt"], "holder": "alice" }),
+        ),
+        call_req(
+            2,
+            "locks.release",
+            json!({ "root": root, "paths": ["x.txt"], "holder": "alice" }),
+        ),
+        call_req(3, "locks.status", json!({ "root": root })),
+    ]);
     tool_json(&resps[0], false);
     let released = tool_json(&resps[1], false);
     assert_eq!(released["released"].as_array().unwrap().len(), 1);
@@ -205,15 +195,11 @@ fn locks_release_without_paths_or_all_is_an_error() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[call_req(
-            1,
-            "locks.release",
-            json!({ "root": root, "holder": "alice" }),
-        )],
-    );
+    let resps = mcp(proj.path(), state.path(), &[call_req(
+        1,
+        "locks.release",
+        json!({ "root": root, "holder": "alice" }),
+    )]);
     let payload = tool_json(&resps[0], true);
     assert!(payload.as_str().unwrap().contains("paths"));
 }
@@ -223,24 +209,21 @@ fn locks_acquire_on_held_path_returns_conflicts_not_error() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[
-            call_req(
-                1,
-                "locks.acquire",
-                json!({ "root": root, "paths": ["shared.rs"], "holder": "alice" }),
-            ),
-            call_req(
-                2,
-                "locks.acquire",
-                json!({ "root": root, "paths": ["shared.rs"], "holder": "bob" }),
-            ),
-        ],
-    );
+    let resps = mcp(proj.path(), state.path(), &[
+        call_req(
+            1,
+            "locks.acquire",
+            json!({ "root": root, "paths": ["shared.rs"], "holder": "alice" }),
+        ),
+        call_req(
+            2,
+            "locks.acquire",
+            json!({ "root": root, "paths": ["shared.rs"], "holder": "bob" }),
+        ),
+    ]);
     tool_json(&resps[0], false);
-    // A conflict is data the agent branches on, not an error: isError stays false.
+    // A conflict is data the agent branches on, not an error: isError stays
+    // false.
     let outcome = tool_json(&resps[1], false);
     assert!(
         outcome["acquired"].as_array().unwrap().is_empty(),
@@ -256,16 +239,12 @@ fn devrun_status_lists_tracked_servers_for_root() {
     let proj = project_with_config();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[
-            // Reserve a port so there is something to report.
-            call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
-            call_req(2, "devrun.status", json!({ "root": root })),
-            call_req(3, "devrun.status", json!({ "all": true })),
-        ],
-    );
+    let resps = mcp(proj.path(), state.path(), &[
+        // Reserve a port so there is something to report.
+        call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
+        call_req(2, "devrun.status", json!({ "root": root })),
+        call_req(3, "devrun.status", json!({ "all": true })),
+    ]);
     tool_json(&resps[0], false);
 
     let rows = tool_json(&resps[1], false);
@@ -283,11 +262,11 @@ fn devrun_status_lists_tracked_servers_for_root() {
 fn devrun_status_without_root_or_all_is_an_error() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[call_req(1, "devrun.status", json!({}))],
-    );
+    let resps = mcp(proj.path(), state.path(), &[call_req(
+        1,
+        "devrun.status",
+        json!({}),
+    )]);
     let payload = tool_json(&resps[0], true);
     assert!(payload.as_str().unwrap().contains("root"));
 }
@@ -297,15 +276,11 @@ fn devrun_logs_unknown_app_is_an_error() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[call_req(
-            1,
-            "devrun.logs",
-            json!({ "root": root, "app": "ghost" }),
-        )],
-    );
+    let resps = mcp(proj.path(), state.path(), &[call_req(
+        1,
+        "devrun.logs",
+        json!({ "root": root, "app": "ghost" }),
+    )]);
     let payload = tool_json(&resps[0], true);
     assert!(payload.as_str().unwrap().contains("ghost"));
 }
@@ -315,15 +290,11 @@ fn devrun_down_releases_reserved_ports() {
     let proj = project_with_config();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[
-            call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
-            call_req(2, "devrun.down", json!({ "root": root })),
-            call_req(3, "devrun.status", json!({ "root": root })),
-        ],
-    );
+    let resps = mcp(proj.path(), state.path(), &[
+        call_req(1, "ports.alloc", json!({ "root": root, "apps": ["web"] })),
+        call_req(2, "devrun.down", json!({ "root": root })),
+        call_req(3, "devrun.status", json!({ "root": root })),
+    ]);
     tool_json(&resps[0], false);
 
     let down = tool_json(&resps[1], false);
@@ -342,15 +313,11 @@ fn devrun_up_unknown_app_is_an_error() {
     let proj = project_with_config();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[call_req(
-            1,
-            "devrun.up",
-            json!({ "root": root, "apps": ["ghost"] }),
-        )],
-    );
+    let resps = mcp(proj.path(), state.path(), &[call_req(
+        1,
+        "devrun.up",
+        json!({ "root": root, "apps": ["ghost"] }),
+    )]);
     let payload = tool_json(&resps[0], true);
     assert!(payload.as_str().unwrap().contains("ghost"));
 }
@@ -360,15 +327,11 @@ fn devrun_up_requires_at_least_one_app() {
     let proj = project_with_config();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[call_req(
-            1,
-            "devrun.up",
-            json!({ "root": root, "apps": [] }),
-        )],
-    );
+    let resps = mcp(proj.path(), state.path(), &[call_req(
+        1,
+        "devrun.up",
+        json!({ "root": root, "apps": [] }),
+    )]);
     let payload = tool_json(&resps[0], true);
     assert!(payload.as_str().unwrap().contains("at least one app"));
 }
@@ -377,14 +340,10 @@ fn devrun_up_requires_at_least_one_app() {
 fn issue_actions_are_described() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[json!({
-            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": { "name": "devkit_describe", "arguments": {} }
-        })],
-    );
+    let resps = mcp(proj.path(), state.path(), &[json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": { "name": "devkit_describe", "arguments": {} }
+    })]);
     let text = resps[0]["result"]["content"][0]["text"].as_str().unwrap();
     let list: Value = serde_json::from_str(text).unwrap();
     let names: Vec<&str> = list
@@ -402,11 +361,11 @@ fn issue_status_empty_for_repo_with_no_worktrees() {
     let proj = git_repo();
     let state = tempfile::tempdir().unwrap();
     let root = proj.path().to_str().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[call_req(1, "issue.status", json!({ "root": root }))],
-    );
+    let resps = mcp(proj.path(), state.path(), &[call_req(
+        1,
+        "issue.status",
+        json!({ "root": root }),
+    )]);
     let report = tool_json(&resps[0], false);
     assert!(
         report["worktrees"].as_array().unwrap().is_empty(),
@@ -423,22 +382,18 @@ fn issue_status_empty_for_repo_with_no_worktrees() {
 fn handshake_lifecycle_initialize_notification_tools_list() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let resps = mcp(
-        proj.path(),
-        state.path(),
-        &[
-            json!({
-                "jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": { "name": "test-client", "version": "0" }
-                }
-            }),
-            json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
-            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
-        ],
-    );
+    let resps = mcp(proj.path(), state.path(), &[
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "test-client", "version": "0" }
+            }
+        }),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    ]);
 
     // Three requests, but the notification (no `id`) draws no response.
     assert_eq!(resps.len(), 2, "notification must not produce a response");

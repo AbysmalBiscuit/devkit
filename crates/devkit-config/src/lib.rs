@@ -1,8 +1,11 @@
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result, bail};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
 mod layers;
 pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
@@ -65,9 +68,11 @@ pub struct Config {
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DaemonConfig {
-    /// Run gate: autostart the daemon only when true (or via DEVKIT_DAEMON=1 / --supervise).
+    /// Run gate: autostart the daemon only when true (or via DEVKIT_DAEMON=1 /
+    /// --supervise).
     pub enabled: bool,
-    /// Exit after this many idle seconds with zero clients AND zero supervised children.
+    /// Exit after this many idle seconds with zero clients AND zero supervised
+    /// children.
     pub idle_timeout_secs: u64,
     /// Crash-loop guard: restarts allowed within `restart_window_secs`.
     pub max_restarts: u32,
@@ -78,8 +83,8 @@ pub struct DaemonConfig {
     /// Take `memory_action` past this tree-RSS in MB (0 = off).
     pub memory_limit_mb: u64,
     /// Action when tree-RSS crosses `memory_limit_mb`: "warn" (log a line) or
-    /// "restart" (SIGTERM and let the crash path respawn). Any other value falls
-    /// back to warn.
+    /// "restart" (SIGTERM and let the crash path respawn). Any other value
+    /// falls back to warn.
     pub memory_action: String,
     /// Consecutive supervision ticks at or over `memory_limit_mb` before the
     /// restart action fires (debounces transient allocation spikes).
@@ -201,8 +206,8 @@ pub struct PreserveConfig {
     /// matches nothing is not a failure.
     pub from: Vec<String>,
     /// Destination directory, rendered as minijinja. Must render to a non-empty
-    /// absolute path. It is created when the first file lands in it, so an entry
-    /// that matches nothing leaves no directory behind.
+    /// absolute path. It is created when the first file lands in it, so an
+    /// entry that matches nothing leaves no directory behind.
     pub to: String,
     /// Keep the worktree instead of removing it when this entry warns.
     #[serde(default)]
@@ -324,8 +329,8 @@ pub struct Defaults {
     pub baseline_ref: String,
     /// Directory baseline worktrees are created under, one per fork-point
     /// commit. `~` is expanded. Names a location on this machine, so a relative
-    /// value anchors to the directory of the layer that declared it. Defaults to
-    /// `_baselines` under `worktree_root`.
+    /// value anchors to the directory of the layer that declared it. Defaults
+    /// to `_baselines` under `worktree_root`.
     #[serde(default)]
     pub baseline_dir: String,
     /// Path to the repo's `doppler.yaml`; its `setup` paths seed app path
@@ -426,10 +431,10 @@ pub struct Person {
     pub github: Option<String>,
 }
 
-/// A file written into an app's directory during `issue setup`, before the app's
-/// `setup` commands run. `content` is written verbatim — no format assembly or
-/// newline injection. Parent directories are created. Existing files are left
-/// untouched unless `overwrite` is set.
+/// A file written into an app's directory during `issue setup`, before the
+/// app's `setup` commands run. `content` is written verbatim — no format
+/// assembly or newline injection. Parent directories are created. Existing
+/// files are left untouched unless `overwrite` is set.
 #[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
 pub struct PrepFile {
     /// Target path, relative to the app's directory.
@@ -614,45 +619,56 @@ impl Templates {
     pub fn branch(&self) -> &str {
         self.branch.as_deref().unwrap_or(DEFAULT_BRANCH)
     }
+
     pub fn branch_max(&self) -> usize {
         self.branch_max.unwrap_or(DEFAULT_BRANCH_MAX)
     }
+
     pub fn worktree_dir(&self) -> &str {
         self.worktree_dir.as_deref().unwrap_or(DEFAULT_WORKTREE_DIR)
     }
+
     pub fn worktree_dir_max(&self) -> usize {
         self.worktree_dir_max.unwrap_or(DEFAULT_WORKTREE_DIR_MAX)
     }
+
     pub fn checkout_worktree_dir(&self) -> &str {
         self.checkout_worktree_dir
             .as_deref()
             .unwrap_or(DEFAULT_CHECKOUT_WORKTREE_DIR)
     }
+
     pub fn checkout_worktree_dir_max(&self) -> usize {
         self.checkout_worktree_dir_max
             .unwrap_or(DEFAULT_CHECKOUT_WORKTREE_DIR_MAX)
     }
+
     pub fn pr_title(&self) -> &str {
         self.pr_title.as_deref().unwrap_or(DEFAULT_PR_TITLE)
     }
+
     pub fn pr_body(&self) -> &str {
         self.pr_body.as_deref().unwrap_or(DEFAULT_PR_BODY)
     }
+
     pub fn review_request(&self) -> &str {
         self.review_request
             .as_deref()
             .unwrap_or(DEFAULT_REVIEW_REQUEST)
     }
+
     pub fn issue_summary_path(&self) -> &str {
         self.issue_summary_path
             .as_deref()
             .unwrap_or(DEFAULT_ISSUE_SUMMARY_PATH)
     }
+
     pub fn issue_summary(&self) -> &str {
         self.issue_summary
             .as_deref()
             .unwrap_or(DEFAULT_ISSUE_SUMMARY)
     }
+
     pub fn review_finish(&self) -> &str {
         self.review_finish
             .as_deref()
@@ -685,8 +701,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub url_env: Option<String>,
     /// This app serves the URL that consumer apps wire to via their `url_env`.
-    /// Exactly one app (the API) is normally marked; consumers reference it by role,
-    /// not by a hardcoded name.
+    /// Exactly one app (the API) is normally marked; consumers reference it by
+    /// role, not by a hardcoded name.
     #[serde(default)]
     pub provides_url: bool,
     /// Commands run in the app's directory during `issue setup`, in order. Each
@@ -707,7 +723,8 @@ pub struct AppConfig {
     /// `--env` both win over it.
     #[serde(default)]
     pub static_env: HashMap<String, String>,
-    /// Files written into the app's directory during `issue setup` (before `setup`).
+    /// Files written into the app's directory during `issue setup` (before
+    /// `setup`).
     #[serde(default)]
     pub prep_files: Vec<PrepFile>,
 }
@@ -740,9 +757,9 @@ pub struct Shadow {
     pub value: toml::Value,
 }
 
-/// Deep-merge parsed layers given lowest→highest precedence. Tables merge key by
-/// key; every non-table value (scalar or array) is replaced wholesale by a higher
-/// layer. Records, per leaf dotted-path, the highest layer that set it.
+/// Deep-merge parsed layers given lowest→highest precedence. Tables merge key
+/// by key; every non-table value (scalar or array) is replaced wholesale by a
+/// higher layer. Records, per leaf dotted-path, the highest layer that set it.
 ///
 /// Public because the `[harness]` probe merges that one table across the same
 /// layer files without resolving the whole config, and must not carry a second
@@ -794,8 +811,8 @@ fn deep_merge(
     }
 }
 
-/// Record the source file for every scalar/array leaf reachable from `v`. A table
-/// recurses into its keys; everything else is a single leaf.
+/// Record the source file for every scalar/array leaf reachable from `v`. A
+/// table recurses into its keys; everything else is a single leaf.
 fn record_origin(path: &str, v: &toml::Value, src: &Path, seen: &mut Seen) {
     match v {
         toml::Value::Table(t) => {
@@ -816,9 +833,9 @@ fn record_origin(path: &str, v: &toml::Value, src: &Path, seen: &mut Seen) {
     }
 }
 
-/// Flatten a serialized config `Value` into `(dotted-path, leaf-value)` pairs. Tables
-/// recurse; scalars and arrays are leaves. Mirrors `record_origin`'s leaf model so
-/// every emitted path can be looked up in `Provenance::origin`.
+/// Flatten a serialized config `Value` into `(dotted-path, leaf-value)` pairs.
+/// Tables recurse; scalars and arrays are leaves. Mirrors `record_origin`'s
+/// leaf model so every emitted path can be looked up in `Provenance::origin`.
 pub fn flatten(v: &toml::Value, prefix: &str, out: &mut Vec<(String, toml::Value)>) {
     match v {
         toml::Value::Table(t) => {
@@ -837,8 +854,9 @@ pub fn flatten(v: &toml::Value, prefix: &str, out: &mut Vec<(String, toml::Value
 
 fn read_layer(p: &Path) -> Result<(PathBuf, toml::Table)> {
     // The recorded path is what `layer_dir` anchors this layer's relative
-    // `[defaults]` paths to, so it has to be absolute however the caller spelled
-    // it — an explicit `--config` and `$DEVKIT_CONFIG` both arrive verbatim.
+    // `[defaults]` paths to, so it has to be absolute however the caller
+    // spelled it — an explicit `--config` and `$DEVKIT_CONFIG` both arrive
+    // verbatim.
     let path = absolutize(p)?;
     let body = std::fs::read_to_string(&path)
         .with_context(|| format!("reading config layer {}", path.display()))?;
@@ -881,8 +899,8 @@ pub fn home_config_path() -> Option<PathBuf> {
 /// JSON Schema can still describe it.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct LayerMarker {
-    /// Stop walking upward at this file, and drop `~/.config/devkit/config.toml`
-    /// from the layer stack.
+    /// Stop walking upward at this file, and drop
+    /// `~/.config/devkit/config.toml` from the layer stack.
     #[serde(default)]
     pub root: bool,
 }
@@ -896,9 +914,10 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
         .unwrap_or(false)
 }
 
-/// Build the ordered layer list (lowest→highest precedence): the home config (unless
-/// a `root = true` marker cuts it off), then the project layers `project_layers`
-/// finds for `start`. An explicit path or `$DEVKIT_CONFIG` is the sole layer.
+/// Build the ordered layer list (lowest→highest precedence): the home config
+/// (unless a `root = true` marker cuts it off), then the project layers
+/// `project_layers` finds for `start`. An explicit path or `$DEVKIT_CONFIG` is
+/// the sole layer.
 fn discover(
     explicit: Option<&Path>,
     start: &Path,
@@ -1035,8 +1054,8 @@ pub fn resolve(
     )
 }
 
-/// `resolve` with an injectable home-config path (tests pass a controlled path or
-/// `None` so the real `~/.config/devkit/config.toml` never participates).
+/// `resolve` with an injectable home-config path (tests pass a controlled path
+/// or `None` so the real `~/.config/devkit/config.toml` never participates).
 pub(crate) fn resolve_with_home(
     explicit: Option<&Path>,
     start: &Path,
@@ -1062,14 +1081,11 @@ pub(crate) fn resolve_with_home(
         .context("deserializing merged devkit config")?;
     reject_reserved_variables(&cfg, &origin)?;
     resolve_defaults(&mut cfg, &origin, checkout_root, default_worktree_root)?;
-    Ok((
-        cfg,
-        Provenance {
-            layers: order,
-            origin,
-            shadowed,
-        },
-    ))
+    Ok((cfg, Provenance {
+        layers: order,
+        origin,
+        shadowed,
+    }))
 }
 
 /// Check a leftover `defaults.baseline_path`: baselines are now per-fork-point
@@ -1160,10 +1176,10 @@ fn expand_vars(raw: &str, key: &str) -> Result<String> {
 
 /// Resolve `.` and `..` without touching the filesystem, so one directory has
 /// one spelling. `fs::canonicalize` cannot stand in: a
-/// `worktree_root`, or a `[preserve]` destination, is routinely a directory that
-/// does not exist yet, and on Windows canonicalizing yields a verbatim `\\?\`
-/// prefix that compares unequal to every other spelling of the same path.
-/// Symlinks are therefore not followed, and neither is case folded — the
+/// `worktree_root`, or a `[preserve]` destination, is routinely a directory
+/// that does not exist yet, and on Windows canonicalizing yields a verbatim
+/// `\\?\` prefix that compares unequal to every other spelling of the same
+/// path. Symlinks are therefore not followed, and neither is case folded — the
 /// result names the path the components spell, not the one the filesystem
 /// would resolve. A caller that needs those resolved canonicalizes the deepest
 /// ancestor that exists and compares that, keeping this for the paths where
@@ -1318,8 +1334,9 @@ pub fn tests_sample() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write as _;
+
+    use super::*;
     pub(crate) const SAMPLE: &str = r#"
 [defaults]
 worktree_root = "~/git/example"
@@ -1346,13 +1363,10 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             "#,
         )
         .unwrap();
-        assert_eq!(
-            cfg.defaults.worktree_include,
-            vec![
-                "apps/*/.env.local".to_string(),
-                ".tool-versions".to_string()
-            ]
-        );
+        assert_eq!(cfg.defaults.worktree_include, vec![
+            "apps/*/.env.local".to_string(),
+            ".tool-versions".to_string()
+        ]);
 
         let bare: Config = toml::from_str(
             r#"
@@ -1583,18 +1597,15 @@ pr_create_state = "wip"
             "{SAMPLE}setup = [[\"doppler\", \"run\", \"-c\", \"local\", \"--\", \"bun\", \"install\"]]\n"
         );
         let c = Config::parse(&src).unwrap();
-        assert_eq!(
-            c.apps["api"].setup,
-            vec![vec![
-                "doppler".to_string(),
-                "run".to_string(),
-                "-c".to_string(),
-                "local".to_string(),
-                "--".to_string(),
-                "bun".to_string(),
-                "install".to_string(),
-            ]]
-        );
+        assert_eq!(c.apps["api"].setup, vec![vec![
+            "doppler".to_string(),
+            "run".to_string(),
+            "-c".to_string(),
+            "local".to_string(),
+            "--".to_string(),
+            "bun".to_string(),
+            "install".to_string(),
+        ]]);
     }
     #[test]
     fn setup_defaults_empty() {
@@ -1789,13 +1800,10 @@ content = \"key = 1\\n\"\n"
         assert_eq!(origin["defaults.branch_prefix"], PathBuf::from("/top"));
         assert_eq!(origin["defaults.worktree_root"], PathBuf::from("/base"));
         // the overridden value is kept alongside the layer that held it
-        assert_eq!(
-            shadowed["defaults.branch_prefix"],
-            vec![Shadow {
-                file: PathBuf::from("/base"),
-                value: toml::Value::String("x/".into()),
-            }]
-        );
+        assert_eq!(shadowed["defaults.branch_prefix"], vec![Shadow {
+            file: PathBuf::from("/base"),
+            value: toml::Value::String("x/".into()),
+        }]);
         // a leaf only one layer sets is not recorded as shadowing anything
         assert!(!shadowed.contains_key("defaults.worktree_root"));
     }
@@ -1826,10 +1834,11 @@ content = \"key = 1\\n\"\n"
         assert_eq!(origin["apps.api.static_env.A"], PathBuf::from("/b"));
     }
 
-    /// An absolute path, spelled the way the host spells one. `resolve_path_key`
-    /// anchors anything `Path::is_absolute` rejects to its declaring layer, and a
-    /// leading `/` is not absolute on Windows, so a fixture that spelled one
-    /// there would move with the layer instead of standing still.
+    /// An absolute path, spelled the way the host spells one.
+    /// `resolve_path_key` anchors anything `Path::is_absolute` rejects to
+    /// its declaring layer, and a leading `/` is not absolute on Windows,
+    /// so a fixture that spelled one there would move with the layer
+    /// instead of standing still.
     #[cfg(not(windows))]
     const ABS_W: &str = "/w";
     #[cfg(windows)]
@@ -2018,10 +2027,10 @@ content = \"key = 1\\n\"\n"
         let (cfg, prov) = resolve_with_home(None, &child, None, None, Some(&home), None).unwrap();
         assert_eq!(cfg.defaults.worktree_root, ABS_W); // parent's /PARENT dropped
         assert_eq!(cfg.defaults.branch_prefix, "x/"); // home's HOME/ dropped
-        assert_eq!(
-            prov.layers,
-            vec![child.join("devkit.toml"), child.join("devkit.local.toml")]
-        );
+        assert_eq!(prov.layers, vec![
+            child.join("devkit.toml"),
+            child.join("devkit.local.toml")
+        ]);
     }
 
     #[test]
@@ -2192,13 +2201,10 @@ steps = [
         assert_eq!(t.env["NITRO_PRESET"], "node-server");
         assert!(t.steps.is_empty());
         let s = &c.tasks["profile-lab-os"];
-        assert_eq!(
-            s.steps,
-            vec![
-                Step::Task("api-prod-build".to_string()),
-                Step::Up("api-prod".to_string())
-            ]
-        );
+        assert_eq!(s.steps, vec![
+            Step::Task("api-prod-build".to_string()),
+            Step::Up("api-prod".to_string())
+        ]);
         assert!(s.run.is_empty());
     }
 
@@ -2225,7 +2231,7 @@ steps = [
     fn tasks_merge_across_layers() {
         let base = tbl("[tasks.build]\nrun = ['git', 'version']\n[tasks.build.env]\nA = '1'\n");
         let top = tbl("[tasks.build.env]\nA = '9'\nB = '2'\n");
-        let (m, _, _) = merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
+        let (m, ..) = merge_layers(&[(PathBuf::from("/b"), base), (PathBuf::from("/t"), top)]);
         let t = &m["tasks"]["build"];
         assert_eq!(t["run"][0].as_str(), Some("git"));
         assert_eq!(t["env"]["A"].as_str(), Some("9"));
@@ -2413,7 +2419,8 @@ steps = [
 
     #[test]
     fn expand_vars_passes_a_bare_dollar_through() {
-        // A `$` not followed by `{` or `$` is a legal path character, so it stays.
+        // A `$` not followed by `{` or `$` is a legal path character, so it
+        // stays.
         let got = expand_vars("/opt/a$b/c", "defaults.baseline_dir").unwrap();
         assert_eq!(got, "/opt/a$b/c");
     }
@@ -2738,8 +2745,8 @@ steps = [
 
     /// A typo in `required` is the one config mistake that produces no signal
     /// without `deny_unknown_fields`: serde consumes the unknown key as
-    /// `IgnoredAny`, the entry stays fail-open, and files the user believed were
-    /// protected are removed with the worktree.
+    /// `IgnoredAny`, the entry stays fail-open, and files the user believed
+    /// were protected are removed with the worktree.
     #[test]
     fn a_misspelled_preserve_key_is_rejected() {
         let err = toml::from_str::<Config>(
@@ -2779,9 +2786,9 @@ steps = [
         assert_eq!(health_with_home(&project, None, None, None), Health::Ok);
     }
 
-    /// `ThreadPoolBuilder::num_threads(0)` means one thread per core, so zero is
-    /// the opposite of what it looks like. `NonZeroUsize` refuses it at parse time
-    /// instead of leaving a runtime clamp to remember.
+    /// `ThreadPoolBuilder::num_threads(0)` means one thread per core, so zero
+    /// is the opposite of what it looks like. `NonZeroUsize` refuses it at
+    /// parse time instead of leaving a runtime clamp to remember.
     #[test]
     fn a_zero_thread_count_is_refused() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2818,10 +2825,11 @@ steps = [
         )
         .unwrap();
         assert_eq!(cfg.hooks.after_worktree_remove.len(), 1);
-        assert_eq!(
-            cfg.hooks.after_worktree_remove[0],
-            ["zoxide", "remove", "{{ worktree }}"]
-        );
+        assert_eq!(cfg.hooks.after_worktree_remove[0], [
+            "zoxide",
+            "remove",
+            "{{ worktree }}"
+        ]);
         assert_eq!(cfg.hooks.after_end.len(), 1);
         assert_eq!(cfg.hooks.after_end[0], ["alacritree", "project", "refresh"]);
     }

@@ -9,8 +9,10 @@
 #[path = "testenv.rs"]
 mod testenv;
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::{
+    path::{Path, PathBuf},
+    process::{Command, Output},
+};
 
 pub fn git(cwd: &Path, args: &[&str]) {
     devkit_common::git::Git::fixture(cwd)
@@ -98,7 +100,8 @@ pub fn up(wt: &Path, state: &Path) {
     );
 }
 
-/// The baseline slots under `root`. `.locks` sits alongside them and is not one.
+/// The baseline slots under `root`. `.locks` sits alongside them and is not
+/// one.
 pub fn slots(root: &Path) -> Vec<PathBuf> {
     let Ok(dir) = std::fs::read_dir(root) else {
         return Vec::new();

@@ -1,10 +1,16 @@
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use devkit::completions::Shell;
-use devkit_docs::manifest::{self, Discovered, Ecosystem, LibEntry};
-use devkit_docs::{ManifestTarget, cache, lookup, refs, resolve, upgrade};
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use devkit_docs::{
+    ManifestTarget, cache, lookup,
+    manifest::{self, Discovered, Ecosystem, LibEntry},
+    refs, resolve, upgrade,
+};
 
 #[derive(clap::Args)]
 pub struct DocsCli {
@@ -27,7 +33,8 @@ pub(crate) enum Cmd {
         /// Ecosystem. Omitted probes crates.io, npm, PyPI in order.
         #[arg(long)]
         eco: Option<Ecosystem>,
-        /// Registry package name when it differs from the lib name (e.g. @types/node).
+        /// Registry package name when it differs from the lib name (e.g.
+        /// @types/node).
         #[arg(long)]
         package: Option<String>,
         /// Repo URL override (skips the registry lookup).
@@ -45,7 +52,8 @@ pub(crate) enum Cmd {
         /// Freeform notes surfaced by `info`.
         #[arg(long)]
         notes: Option<String>,
-        /// Write to the nearest devkit.toml [docs] section instead of the global manifest.
+        /// Write to the nearest devkit.toml [docs] section instead of the
+        /// global manifest.
         #[arg(long)]
         project: bool,
     },

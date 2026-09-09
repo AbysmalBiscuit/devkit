@@ -1,17 +1,20 @@
-//! Whether redirecting a typed command to `devrun task <name>` changes anything.
+//! Whether redirecting a typed command to `devrun task <name>` changes
+//! anything.
+
+use std::collections::BTreeMap;
+
+use devkit_config::TaskConfig;
 
 use super::norm::Doppler;
-use devkit_config::TaskConfig;
-use std::collections::BTreeMap;
 
 /// Whether `devrun task <name>` launches a different process than the argv the
 /// agent typed.
 ///
-/// True when the task sets `app` (a different cwd plus that app's `static_env`),
-/// sets `env`, references a port the registry has to supply, or carries a
-/// different doppler wrapper than the typed command. A task with none of those
-/// resolves to the identical process in the same directory, and blocking it
-/// buys nothing.
+/// True when the task sets `app` (a different cwd plus that app's
+/// `static_env`), sets `env`, references a port the registry has to supply, or
+/// carries a different doppler wrapper than the typed command. A task with none
+/// of those resolves to the identical process in the same directory, and
+/// blocking it buys nothing.
 ///
 /// `steps` is deliberately not among them: `run` and `steps` are mutually
 /// exclusive, so a sequence task has no `run` for a typed command to match.
@@ -42,9 +45,11 @@ fn references_a_port(task: &TaskConfig, vars: &BTreeMap<String, String>) -> bool
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use devkit_config::TaskConfig;
     use std::collections::BTreeMap;
+
+    use devkit_config::TaskConfig;
+
+    use super::*;
 
     fn task(run: &[&str]) -> TaskConfig {
         TaskConfig {

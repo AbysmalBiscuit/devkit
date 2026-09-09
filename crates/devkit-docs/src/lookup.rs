@@ -2,8 +2,9 @@
 //! `docm add` time and stored in the manifest. HTTP sits behind a trait so
 //! tests stub it and nothing else ever touches the network.
 
-use crate::manifest::Ecosystem;
 use anyhow::{Context, Result, bail};
+
+use crate::manifest::Ecosystem;
 
 pub trait Registry {
     fn repo_url(&self, eco: Ecosystem, package: &str) -> Result<String>;
@@ -111,9 +112,10 @@ pub fn name_from_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::manifest::Ecosystem;
-    use serde_json::json;
 
     #[test]
     fn extract_per_registry_shapes() {

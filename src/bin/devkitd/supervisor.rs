@@ -1,8 +1,11 @@
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+
 use devkit_common::supervise::tree_rss_bytes;
 use devkit_ports::registry::{self, Role};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 /// Identity of a supervised server, matching its `ports.json` row.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -13,8 +16,8 @@ pub(crate) struct Key {
 }
 
 /// Everything needed to respawn a process after a crash. Owned children store
-/// this; adopted survivors carry `None` and are dropped when they exit, since the
-/// daemon never captured how to launch them.
+/// this; adopted survivors carry `None` and are dropped when they exit, since
+/// the daemon never captured how to launch them.
 #[derive(Clone)]
 pub(crate) struct Launch {
     pub(crate) argv: Vec<String>,
@@ -22,8 +25,9 @@ pub(crate) struct Launch {
     pub(crate) env: std::collections::BTreeMap<String, String>,
 }
 
-/// How the daemon watches a process: `Owned` children are reaped with `waitpid`;
-/// `Adopted` survivors (from a previous daemon) are polled with `pid_alive`.
+/// How the daemon watches a process: `Owned` children are reaped with
+/// `waitpid`; `Adopted` survivors (from a previous daemon) are polled with
+/// `pid_alive`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Watch {
     Owned,
@@ -38,8 +42,9 @@ struct Child {
     restarts: Vec<Instant>,
     warned_mem: bool,
     launch: Option<Launch>,
-    /// Has this process accepted a health probe at least once? Until it has, probe
-    /// failures are ignored, so a slow-starting server is never judged hung.
+    /// Has this process accepted a health probe at least once? Until it has,
+    /// probe failures are ignored, so a slow-starting server is never
+    /// judged hung.
     armed: bool,
     /// Consecutive failed probes since arming or the last success.
     probe_failures: u32,
@@ -93,41 +98,35 @@ impl Supervisor {
         logfile: PathBuf,
         launch: Launch,
     ) {
-        self.children.insert(
-            key,
-            Child {
-                pid,
-                port,
-                logfile,
-                watch: Watch::Owned,
-                restarts: Vec::new(),
-                warned_mem: false,
-                launch: Some(launch),
-                armed: false,
-                probe_failures: 0,
-                mem_over: 0,
-                mem_gave_up: false,
-            },
-        );
+        self.children.insert(key, Child {
+            pid,
+            port,
+            logfile,
+            watch: Watch::Owned,
+            restarts: Vec::new(),
+            warned_mem: false,
+            launch: Some(launch),
+            armed: false,
+            probe_failures: 0,
+            mem_over: 0,
+            mem_gave_up: false,
+        });
     }
 
     pub(crate) fn insert_adopted(&mut self, key: Key, pid: u32, port: u16, logfile: PathBuf) {
-        self.children.insert(
-            key,
-            Child {
-                pid,
-                port,
-                logfile,
-                watch: Watch::Adopted,
-                restarts: Vec::new(),
-                warned_mem: false,
-                launch: None,
-                armed: false,
-                probe_failures: 0,
-                mem_over: 0,
-                mem_gave_up: false,
-            },
-        );
+        self.children.insert(key, Child {
+            pid,
+            port,
+            logfile,
+            watch: Watch::Adopted,
+            restarts: Vec::new(),
+            warned_mem: false,
+            launch: None,
+            armed: false,
+            probe_failures: 0,
+            mem_over: 0,
+            mem_gave_up: false,
+        });
     }
 
     pub(crate) fn remove(&mut self, key: &Key) -> Option<u32> {
@@ -152,9 +151,9 @@ impl Supervisor {
         Some((c.launch.clone()?, c.logfile.clone(), c.port))
     }
 
-    /// Update a key's pid after a successful respawn; marks the child as owned and
-    /// disarms its health probe — a fresh process must re-prove readiness before it
-    /// can be judged hung.
+    /// Update a key's pid after a successful respawn; marks the child as owned
+    /// and disarms its health probe — a fresh process must re-prove
+    /// readiness before it can be judged hung.
     pub(crate) fn set_pid(&mut self, key: &Key, pid: u32) {
         if let Some(c) = self.children.get_mut(key) {
             c.pid = pid;
@@ -166,10 +165,11 @@ impl Supervisor {
         }
     }
 
-    /// Record a restart attempt against the crash-loop budget; returns whether one
-    /// is still allowed in the current window. Shared by crash- and memory-triggered
-    /// restarts so a server can't be restart-looped forever. Only a supervised child
-    /// has a budget — an unknown key returns `false` rather than creating phantom state.
+    /// Record a restart attempt against the crash-loop budget; returns whether
+    /// one is still allowed in the current window. Shared by crash- and
+    /// memory-triggered restarts so a server can't be restart-looped
+    /// forever. Only a supervised child has a budget — an unknown key
+    /// returns `false` rather than creating phantom state.
     pub(crate) fn may_restart(&mut self, holder: &str, app: &str, role: Role) -> bool {
         let key = Key {
             holder: holder.into(),
@@ -191,11 +191,12 @@ impl Supervisor {
     }
 
     /// Whether a restart is currently allowed for the given child under the
-    /// crash-loop budget, WITHOUT recording one. Prunes timestamps outside the window
-    /// (an idempotent cleanup) but never pushes. An unknown key returns `false`, like
-    /// `may_restart`. The recording counterpart is `may_restart`, called from the reap
-    /// path; this peek lets the memory path decide whether to kill before `restart`
-    /// charges the budget, so a restart is counted exactly once.
+    /// crash-loop budget, WITHOUT recording one. Prunes timestamps outside the
+    /// window (an idempotent cleanup) but never pushes. An unknown key
+    /// returns `false`, like `may_restart`. The recording counterpart is
+    /// `may_restart`, called from the reap path; this peek lets the memory
+    /// path decide whether to kill before `restart` charges the budget, so
+    /// a restart is counted exactly once.
     pub(crate) fn can_restart(&mut self, holder: &str, app: &str, role: Role) -> bool {
         let key = Key {
             holder: holder.into(),
@@ -211,10 +212,10 @@ impl Supervisor {
         (entry.restarts.len() as u32) < self.max_restarts
     }
 
-    /// Reap any exited `Owned` children and detect any dead `Adopted` ones. Returns
-    /// the keys whose process is now gone. Every returned key is a crash: an intentional
-    /// `Down` removes the key from the table before signalling its child, so a stopped
-    /// server is never reaped here.
+    /// Reap any exited `Owned` children and detect any dead `Adopted` ones.
+    /// Returns the keys whose process is now gone. Every returned key is a
+    /// crash: an intentional `Down` removes the key from the table before
+    /// signalling its child, so a stopped server is never reaped here.
     pub(crate) fn reap_once(&mut self) -> Vec<Key> {
         let mut dead = Vec::new();
         for (key, child) in self.children.iter() {
@@ -232,9 +233,9 @@ impl Supervisor {
         dead
     }
 
-    /// Owned children eligible for health probing: respawnable (a launch spec) and
-    /// with a live pid. Adopted survivors and pid-less reservations are excluded — a
-    /// probe restart needs a launch spec to respawn from.
+    /// Owned children eligible for health probing: respawnable (a launch spec)
+    /// and with a live pid. Adopted survivors and pid-less reservations are
+    /// excluded — a probe restart needs a launch spec to respawn from.
     pub(crate) fn probe_targets(&self) -> Vec<(Key, u16)> {
         self.children
             .iter()
@@ -243,12 +244,13 @@ impl Supervisor {
             .collect()
     }
 
-    /// Fold one probe result into a child's health state. A successful connect arms
-    /// the child and clears its failure run; a failure on an armed child grows the
-    /// consecutive-failure count. Returns the pid to SIGTERM once that count reaches
-    /// `threshold` — resetting the count in the same call, so a hung child is
-    /// signalled once per K-failure run rather than every cycle. Returns `None` for a
-    /// child below threshold, an unarmed child, or a key removed since the snapshot.
+    /// Fold one probe result into a child's health state. A successful connect
+    /// arms the child and clears its failure run; a failure on an armed
+    /// child grows the consecutive-failure count. Returns the pid to
+    /// SIGTERM once that count reaches `threshold` — resetting the count in
+    /// the same call, so a hung child is signalled once per K-failure run
+    /// rather than every cycle. Returns `None` for a child below threshold,
+    /// an unarmed child, or a key removed since the snapshot.
     pub(crate) fn record_probe(&mut self, key: &Key, ok: bool, threshold: u32) -> Option<u32> {
         let c = self.children.get_mut(key)?;
         if ok {
@@ -268,9 +270,10 @@ impl Supervisor {
         }
     }
 
-    /// Memory breaches to act on this tick: returns `(Key, bytes)` for each child
-    /// whose supervised process-tree RSS crosses `mem_warn`. Each child warns once
-    /// per breach (re-armed when it drops back below the threshold).
+    /// Memory breaches to act on this tick: returns `(Key, bytes)` for each
+    /// child whose supervised process-tree RSS crosses `mem_warn`. Each
+    /// child warns once per breach (re-armed when it drops back below the
+    /// threshold).
     pub(crate) fn memory_breaches(&mut self) -> Vec<(Key, u64)> {
         if self.mem_warn == 0 {
             return Vec::new();
@@ -294,17 +297,18 @@ impl Supervisor {
     }
 
     /// Advance every owned, live child's consecutive-breach counter against
-    /// `mem_limit` and return the memory actions to take this tick. Each child's
-    /// tree-RSS is read once. A child below `mem_limit` (or any child when
-    /// `mem_limit == 0`) has its counter and give-up flag cleared and yields no
-    /// action. A child at or over the limit for `limit_ticks` consecutive ticks
-    /// yields exactly one action: `Restart` when `can_restart` allows, else
-    /// `GiveUp` the first time per episode (suppressed by `mem_gave_up`
-    /// afterwards). The counter resets on any decision, so it re-checks roughly
-    /// every `limit_ticks` ticks while still over the limit — picking the server
-    /// back up once the crash-loop window cools down. Owned children only:
-    /// adopted survivors and pid-less reservations have no launch spec to
-    /// respawn from and are skipped, like `probe_targets`.
+    /// `mem_limit` and return the memory actions to take this tick. Each
+    /// child's tree-RSS is read once. A child below `mem_limit` (or any
+    /// child when `mem_limit == 0`) has its counter and give-up flag
+    /// cleared and yields no action. A child at or over the limit for
+    /// `limit_ticks` consecutive ticks yields exactly one action: `Restart`
+    /// when `can_restart` allows, else `GiveUp` the first time per episode
+    /// (suppressed by `mem_gave_up` afterwards). The counter resets on any
+    /// decision, so it re-checks roughly every `limit_ticks` ticks while
+    /// still over the limit — picking the server back up once the
+    /// crash-loop window cools down. Owned children only: adopted survivors
+    /// and pid-less reservations have no launch spec to respawn from and
+    /// are skipped, like `probe_targets`.
     pub(crate) fn mem_limit_actions(&mut self, limit_ticks: u32) -> Vec<MemAction> {
         if self.mem_limit == 0 {
             return Vec::new();
@@ -356,8 +360,8 @@ impl Supervisor {
         self.mem_limit
     }
 
-    /// All currently tracked keys — used after the adopt loop to reconcile orphan
-    /// cgroup leaves against the set of live supervised servers.
+    /// All currently tracked keys — used after the adopt loop to reconcile
+    /// orphan cgroup leaves against the set of live supervised servers.
     pub(crate) fn adopted_keys(&self) -> Vec<Key> {
         self.children.keys().cloned().collect()
     }
@@ -365,8 +369,9 @@ impl Supervisor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
 
     fn sup() -> Supervisor {
         Supervisor::new(2, Duration::from_secs(60), 0, 0)
@@ -378,17 +383,11 @@ mod tests {
             app: app.into(),
             role: Role::Issue,
         };
-        s.insert_owned(
-            key,
-            pid,
-            port,
-            PathBuf::new(),
-            Launch {
-                argv: vec!["true".into()],
-                cwd: ".".into(),
-                env: std::collections::BTreeMap::new(),
-            },
-        );
+        s.insert_owned(key, pid, port, PathBuf::new(), Launch {
+            argv: vec!["true".into()],
+            cwd: ".".into(),
+            env: std::collections::BTreeMap::new(),
+        });
     }
 
     #[test]
@@ -533,20 +532,15 @@ mod tests {
             None,
         )
         .unwrap();
-        s.insert_owned(
-            key.clone(),
-            pid,
-            9100,
-            log.clone(),
-            Launch {
-                argv: argv.clone(),
-                cwd: ".".into(),
-                env: std::collections::BTreeMap::new(),
-            },
-        );
-        // Poll for the exit: a real `true` can take longer than a fixed sleep to
-        // start and exit on a loaded CI runner. `reap_once` is non-mutating, so
-        // repeating it until the child is gone is safe.
+        s.insert_owned(key.clone(), pid, 9100, log.clone(), Launch {
+            argv: argv.clone(),
+            cwd: ".".into(),
+            env: std::collections::BTreeMap::new(),
+        });
+        // Poll for the exit: a real `true` can take longer than a fixed sleep
+        // to start and exit on a loaded CI runner. `reap_once` is
+        // non-mutating, so repeating it until the child is gone is
+        // safe.
         let start = std::time::Instant::now();
         let reaped = loop {
             if s.reap_once().iter().any(|k| k == &key) {
@@ -565,8 +559,9 @@ mod tests {
         Supervisor::new(max_restarts, Duration::from_secs(60), 0, 1)
     }
 
-    /// Register an owned child whose pid is this test process, so `tree_rss_bytes`
-    /// returns a real, non-zero RSS that exceeds the 1-byte limit every tick.
+    /// Register an owned child whose pid is this test process, so
+    /// `tree_rss_bytes` returns a real, non-zero RSS that exceeds the
+    /// 1-byte limit every tick.
     fn live_self(s: &mut Supervisor, app: &str) {
         live(s, app, std::process::id(), 9100);
     }
@@ -617,10 +612,11 @@ mod tests {
             s.mem_limit_actions(2).is_empty(),
             "GiveUp must not repeat every breach"
         );
-        // A respawn re-arms the warning: `set_pid` clears the give-up flag, so a
-        // fresh over-limit episode warns again rather than staying silent. The
-        // respawn does not refund the crash-loop budget, so the next threshold
-        // breach is still a `GiveUp` (not a `Restart`).
+        // A respawn re-arms the warning: `set_pid` clears the give-up flag, so
+        // a fresh over-limit episode warns again rather than staying
+        // silent. The respawn does not refund the crash-loop budget, so
+        // the next threshold breach is still a `GiveUp` (not a
+        // `Restart`).
         s.set_pid(&k, std::process::id());
         s.mem_limit_actions(2); // re-armed tick 1
         let rearmed = s.mem_limit_actions(2); // tick 2 → GiveUp again

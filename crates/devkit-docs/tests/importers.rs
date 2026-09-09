@@ -1,5 +1,4 @@
-use devkit_docs::importers;
-use devkit_docs::manifest::Ecosystem;
+use devkit_docs::{importers, manifest::Ecosystem};
 
 #[allow(dead_code)]
 mod common;

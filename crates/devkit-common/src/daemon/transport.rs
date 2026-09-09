@@ -2,8 +2,9 @@
 //! platform socket form is chosen, so the rest of the daemon stays
 //! transport-agnostic.
 
-use interprocess::local_socket::Name;
 use std::path::Path;
+
+use interprocess::local_socket::Name;
 
 /// Build the local-socket name for the daemon endpoint backed by `path`.
 ///

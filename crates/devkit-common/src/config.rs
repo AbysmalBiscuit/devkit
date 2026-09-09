@@ -1,8 +1,9 @@
 //! The one door every subcommand's config resolution passes through.
 
+use std::path::Path;
+
 use anyhow::Result;
 use devkit_config::{Config, Provenance};
-use std::path::Path;
 
 /// Resolve the `devkit.toml` layers discovered from `start` — or the single
 /// file `explicit` names — and size the shared worker pool from the result.

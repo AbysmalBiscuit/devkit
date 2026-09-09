@@ -1,12 +1,13 @@
-use anyhow::{Context, Result};
-use devkit_common::cmd::gh_capture;
-use devkit_common::git::Git;
-use devkit_common::github;
-use devkit_common::progress::Steps;
 use std::path::Path;
 
-use super::resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing};
-use super::{add_reviewers, gate_ready, require_existing_pr, reviewer_logins};
+use anyhow::{Context, Result};
+use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
+
+use super::{
+    add_reviewers, gate_ready, require_existing_pr,
+    resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing},
+    reviewer_logins,
+};
 use crate::issue::review::{self, Target, guard_branch, resolve_target};
 
 pub struct Args {

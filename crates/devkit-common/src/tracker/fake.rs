@@ -2,9 +2,11 @@
 //! whole gather path — discovery, state attachment, finished verdict — with no
 //! network and no credentials.
 
-use super::{AssignedIssue, IssueDetails, IssueRef, PrRef, State, Tracker, TrackerKind};
-use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+
+use anyhow::Result;
+
+use super::{AssignedIssue, IssueDetails, IssueRef, PrRef, State, Tracker, TrackerKind};
 
 pub struct FakeTracker {
     pub states: HashMap<String, State>,
@@ -84,13 +86,10 @@ impl FakeTracker {
 
     /// `issue_pr(id)` answers with this PR.
     pub fn with_pr(mut self, id: &str, url: &str, number: u64) -> Self {
-        self.prs.insert(
-            id.to_string(),
-            PrRef {
-                url: url.to_string(),
-                number,
-            },
-        );
+        self.prs.insert(id.to_string(), PrRef {
+            url: url.to_string(),
+            number,
+        });
         self
     }
 
@@ -117,9 +116,11 @@ impl Tracker for FakeTracker {
     fn kind(&self) -> TrackerKind {
         self.kind
     }
+
     fn ready(&self) -> bool {
         self.ready
     }
+
     fn issue_ref(&self, input: &str) -> Result<IssueRef> {
         let trimmed = input.trim();
         anyhow::ensure!(
@@ -131,23 +132,28 @@ impl Tracker for FakeTracker {
             slug: None,
         })
     }
+
     fn title(&self, id: &str) -> Result<Option<String>> {
         if let Some(t) = self.titles.get(id) {
             return Ok(Some(t.clone()));
         }
         Ok(self.states.get(id).map(|s| s.name.clone()))
     }
+
     fn details(&self, _id: &str) -> Result<Option<IssueDetails>> {
         Ok(None)
     }
+
     fn states(&self, ids: &[String]) -> HashMap<String, State> {
         ids.iter()
             .filter_map(|i| self.states.get(i).map(|s| (i.clone(), s.clone())))
             .collect()
     }
+
     fn issue_pr(&self, id: &str) -> Result<Option<PrRef>> {
         Ok(self.prs.get(id).cloned())
     }
+
     fn candidates(&self, n: u64) -> Result<Vec<IssueRef>> {
         Ok(self
             .by_number
@@ -162,20 +168,25 @@ impl Tracker for FakeTracker {
             })
             .unwrap_or_default())
     }
+
     fn issues_for_prs(&self, urls: &[String]) -> HashMap<String, Vec<String>> {
         urls.iter()
             .filter_map(|u| self.links.get(u).map(|ids| (u.clone(), ids.clone())))
             .collect()
     }
+
     fn assigned_history(&self, _on_page: &mut dyn FnMut(usize)) -> Result<Vec<AssignedIssue>> {
         Ok(self.assigned.clone())
     }
+
     fn timeline_origin(&self) -> Result<Option<String>> {
         Ok(self.timeline_origin.clone())
     }
+
     fn issue_url(&self, id: &str) -> Option<String> {
         Some(format!("https://example.test/issue/{id}"))
     }
+
     fn check(&self) -> Result<String> {
         Ok("fake tracker".to_string())
     }

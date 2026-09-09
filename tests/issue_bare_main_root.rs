@@ -10,8 +10,10 @@ mod shimtest;
 #[path = "common/testenv.rs"]
 mod testenv;
 
-use std::path::Path;
-use std::process::{Command, Output};
+use std::{
+    path::Path,
+    process::{Command, Output},
+};
 
 fn git(args: &[&str], cwd: &Path) {
     devkit_common::git::Git::fixture(cwd)
@@ -75,11 +77,13 @@ fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
 fn setup_refuses_a_placement_it_cannot_derive() {
     let t = project();
     let state = tempfile::tempdir().unwrap();
-    let out = run(
-        t.path(),
-        state.path(),
-        &["setup", "ENG-1", "--slug", "demo", "--dry-run"],
-    );
+    let out = run(t.path(), state.path(), &[
+        "setup",
+        "ENG-1",
+        "--slug",
+        "demo",
+        "--dry-run",
+    ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "setup should refuse: {stderr}");
     assert!(
@@ -101,11 +105,11 @@ fn checkout_with_an_explicit_path_needs_no_root() {
     let t = project();
     let state = tempfile::tempdir().unwrap();
     let target = t.path().join("elsewhere");
-    let out = run(
-        t.path(),
-        state.path(),
-        &["checkout-pr", "1", target.to_str().unwrap()],
-    );
+    let out = run(t.path(), state.path(), &[
+        "checkout-pr",
+        "1",
+        target.to_str().unwrap(),
+    ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("defaults.worktree_root"),

@@ -1,9 +1,11 @@
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
 use anyhow::Result;
-use devkit_common::tracker::Tracker;
-use devkit_common::{paths, ui};
+use devkit_common::{paths, tracker::Tracker, ui};
 use devkit_issue::prs::{MinePrView, ReviewPrView};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 // rendering ---------------------------------------------------------------------
 
@@ -29,7 +31,8 @@ fn paint_action(action: &str, s: &str) -> String {
 }
 
 /// Render `cur` through `paint`. When it differs from the cached `prev`, prefix
-/// the struck-through old value and a dim arrow so the change reads at a glance.
+/// the struck-through old value and a dim arrow so the change reads at a
+/// glance.
 fn diff_cell(prev: Option<&str>, cur: &str, paint: impl Fn(&str) -> String) -> String {
     match prev {
         Some(p) if p != cur => format!("{}{}{}", ui::dim_strike(p), ui::dim(" → "), paint(cur)),
@@ -58,11 +61,13 @@ fn issue_cell(issue_ids: &[String], t: Option<&dyn Tracker>) -> String {
     cells.join(" ")
 }
 
-// snapshot cache -----------------------------------------------------------------
+// snapshot cache
+// -----------------------------------------------------------------
 // One file per repo: the previous run's full rows (for the stale-while-
 // revalidate render) plus the per-PR diff values (for `old → new` cells).
 
-/// Per-section `pr-number -> field -> value` maps backing the `old → new` cells.
+/// Per-section `pr-number -> field -> value` maps backing the `old → new`
+/// cells.
 type DiffMap = BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -293,7 +298,8 @@ fn stale_body(
     out
 }
 
-// Entry point -------------------------------------------------------------------
+// Entry point
+// -------------------------------------------------------------------
 
 pub fn run(
     mine: bool,
@@ -409,8 +415,9 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_common::tracker::fake;
+
+    use super::*;
 
     fn mine_view(n: u64, action: &str) -> MinePrView {
         MinePrView {

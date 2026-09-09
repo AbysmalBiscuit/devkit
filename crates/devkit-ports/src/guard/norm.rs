@@ -256,10 +256,9 @@ mod tests {
 
     #[test]
     fn a_doppler_run_without_a_separator_is_left_alone() {
-        assert_eq!(
-            argv("doppler run -c dev"),
-            vec!["doppler", "run", "-c", "dev"]
-        );
+        assert_eq!(argv("doppler run -c dev"), vec![
+            "doppler", "run", "-c", "dev"
+        ]);
     }
 
     #[test]

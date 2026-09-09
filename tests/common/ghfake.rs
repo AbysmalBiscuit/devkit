@@ -9,8 +9,7 @@
 //! this module via `#[path]` and use different subsets of it.
 #![allow(dead_code)]
 
-use std::path::Path;
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 /// A project the PR commands can run in, wired to a `gh` that answers from
 /// fixtures and logs every argument vector it is handed.

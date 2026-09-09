@@ -2,9 +2,11 @@
 //! Detected once per worktree at materialization time, cached in meta.toml;
 //! manifest `src_dir`/`docs_dir` overrides always win.
 
-use crate::manifest::LibEntry;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::manifest::LibEntry;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Layout {

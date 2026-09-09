@@ -4,8 +4,9 @@
 //! binary, and every mutation below happens inside one `#[test]` function, so
 //! no other thread can be reading the environment while it is set.
 
-use devkit_common::git::Git;
 use std::path::Path;
+
+use devkit_common::git::Git;
 
 /// Every variable in `REDIRECTING_VARS` that could repoint a git call at
 /// another repository, or inject config into it, must have no effect on what

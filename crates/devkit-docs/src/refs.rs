@@ -5,15 +5,16 @@
 //! file. A holder is live iff its project root path still exists (the same
 //! model as the ports registry).
 
-use crate::cache;
-use crate::lockfiles;
-use crate::locks;
-use crate::manifest;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result};
 use devkit_common::store::{self, Document};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+
+use crate::{cache, lockfiles, locks, manifest};
 
 pub const SCHEMA: u32 = 1;
 
@@ -27,7 +28,8 @@ pub struct RefRow {
     #[serde(default)]
     pub git_ref: String,
     /// Empty in a row written before checkouts carried an identity. Such a row
-    /// keeps protecting its directory until a workspace-keyed row supersedes it.
+    /// keeps protecting its directory until a workspace-keyed row supersedes
+    /// it.
     #[serde(default)]
     pub commit: String,
     pub resolved_at: u64,
@@ -47,12 +49,15 @@ impl Document for Data {
     fn stamp_version(&mut self) {
         self.version = SCHEMA;
     }
+
     fn salvage(_raw: &str) -> Option<Self> {
         None
     }
+
     fn label() -> &'static str {
         "docs registry"
     }
+
     fn len(&self) -> usize {
         self.rows.len()
     }
@@ -451,7 +456,8 @@ fn prune_library_locked(
 
 /// Apply a prune plan to the freshly-locked registry without clobbering rows a
 /// concurrent resolve added or retargeted after `snapshot` was taken. Drops
-/// unchanged snapshot rows absent from `keep` and leaves fresher rows untouched.
+/// unchanged snapshot rows absent from `keep` and leaves fresher rows
+/// untouched.
 pub fn reconcile(current: &mut Data, snapshot: &Data, keep: &[RefRow]) {
     use std::collections::{HashMap, HashSet};
     let key = |r: &RefRow| (r.project.clone(), r.lib.clone());
@@ -470,8 +476,9 @@ pub fn reconcile(current: &mut Data, snapshot: &Data, keep: &[RefRow]) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+
+    use super::*;
 
     #[test]
     fn record_upserts_by_project_and_lib() {
@@ -597,15 +604,12 @@ mod tests {
         data.record(live.to_str().unwrap(), "serde", "2.0.0", "v2.0.0", "ccc"); // no longer in lockfile → drop
 
         let mut worktrees = BTreeMap::new();
-        worktrees.insert(
-            "tokio".to_string(),
-            vec![
-                "1.0.0".into(),
-                "0.9.0".into(),
-                "1.1.0".into(),
-                "default".into(),
-            ],
-        );
+        worktrees.insert("tokio".to_string(), vec![
+            "1.0.0".into(),
+            "0.9.0".into(),
+            "1.1.0".into(),
+            "default".into(),
+        ]);
         worktrees.insert("legacy".to_string(), vec!["3.0.0".into(), "default".into()]);
         let manifest_libs: BTreeSet<String> =
             ["tokio", "serde"].iter().map(|s| s.to_string()).collect();
@@ -617,16 +621,13 @@ mod tests {
         assert_eq!(p.keep[0].version, "1.0.0");
         let mut del = p.delete.clone();
         del.sort();
-        assert_eq!(
-            del,
-            vec![
-                ("legacy".to_string(), "3.0.0".to_string()),
-                ("legacy".to_string(), "default".to_string()),
-                ("tokio".to_string(), "0.9.0".to_string()),
-                ("tokio".to_string(), "1.1.0".to_string()),
-                ("tokio".to_string(), "default".to_string()),
-            ]
-        ); // an unreferenced checkout goes, `default` included; 1.0.0 is the recorded checkout
+        assert_eq!(del, vec![
+            ("legacy".to_string(), "3.0.0".to_string()),
+            ("legacy".to_string(), "default".to_string()),
+            ("tokio".to_string(), "0.9.0".to_string()),
+            ("tokio".to_string(), "1.1.0".to_string()),
+            ("tokio".to_string(), "default".to_string()),
+        ]); // an unreferenced checkout goes, `default` included; 1.0.0 is the recorded checkout
         assert_eq!(p.removable_libs, vec!["legacy".to_string()]);
     }
 

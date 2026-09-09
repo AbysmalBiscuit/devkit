@@ -1,7 +1,8 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::Subcommand;
 use devkit::completions::Shell;
-use std::path::PathBuf;
 
 pub(crate) mod checkout;
 mod dashboard;
@@ -30,7 +31,8 @@ pub(crate) enum TimingFlag {
     Trace,
 }
 
-/// Resolve the timing mode: the flag wins; otherwise fall back to `DEVKIT_TIMING`.
+/// Resolve the timing mode: the flag wins; otherwise fall back to
+/// `DEVKIT_TIMING`.
 fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
     use devkit_common::timing::Mode;
     match flag {
@@ -42,13 +44,16 @@ fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
 
 #[derive(clap::Args)]
 pub struct IssueCli {
-    /// Run as if this command had started in DIR instead of the current directory.
+    /// Run as if this command had started in DIR instead of the current
+    /// directory.
     #[arg(short = 'C', long = "dir", global = true)]
     pub dir: Option<String>,
-    /// devkit.toml to load instead of the one discovered from the start directory.
+    /// devkit.toml to load instead of the one discovered from the start
+    /// directory.
     #[arg(long, global = true)]
     pub config: Option<String>,
-    /// Print IO timing to stderr. `--timing` = summary, `--timing=trace` = per-op.
+    /// Print IO timing to stderr. `--timing` = summary, `--timing=trace` =
+    /// per-op.
     #[arg(long, global = true, value_name = "MODE", num_args = 0..=1, default_missing_value = "summary")]
     pub timing: Option<TimingFlag>,
     /// Write one JSON record per timed IO op to FILE.
@@ -72,9 +77,10 @@ pub(crate) enum Cmd {
         /// Linear issue id or issue URL (equivalent to the positional ISSUE).
         #[arg(long)]
         issue: Option<String>,
-        /// Short kebab title, without the issue id, rendered into the branch and
-        /// worktree names (e.g. `fix-bli-export`). Omit to take the slug a
-        /// pasted issue URL already spells out, else the Linear title.
+        /// Short kebab title, without the issue id, rendered into the branch
+        /// and worktree names (e.g. `fix-bli-export`). Omit to take the
+        /// slug a pasted issue URL already spells out, else the Linear
+        /// title.
         #[arg(long)]
         slug: Option<String>,
         /// Apps to bootstrap: writes each one's prep files and runs its setup
@@ -107,7 +113,8 @@ pub(crate) enum Cmd {
     /// `issue pr checkout`, which is where this lives now.
     #[command(hide = true)]
     CheckoutPr {
-        /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue URL.
+        /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue
+        /// URL.
         target: String,
         /// Worktree path; defaults to the config-resolved placement.
         worktree_path: Option<String>,
@@ -131,7 +138,8 @@ pub(crate) enum Cmd {
     },
     /// Show one worktree's PR + issue id (current worktree, or a SELECTOR).
     ///
-    /// Compatibility alias for `issue pr status`, which is where this lives now.
+    /// Compatibility alias for `issue pr status`, which is where this lives
+    /// now.
     #[command(hide = true)]
     Info {
         /// Issue id, branch, worktree basename, or path. Defaults to cwd.
@@ -201,7 +209,8 @@ pub(crate) enum Cmd {
         /// Show only your open PRs. Neither flag prints both sections.
         #[arg(short = 'm', long)]
         mine: bool,
-        /// Show only PRs awaiting your review. Neither flag prints both sections.
+        /// Show only PRs awaiting your review. Neither flag prints both
+        /// sections.
         #[arg(short = 'r', long)]
         reviews: bool,
         /// owner/repo to triage instead of the current repository.
@@ -289,7 +298,8 @@ pub(crate) enum PrCmd {
         /// `pr_repo`). Replaces a wrong recorded binding.
         #[arg(long)]
         pr: Option<String>,
-        /// Override a declared template variable: `--arg key=value`. Repeatable.
+        /// Override a declared template variable: `--arg key=value`.
+        /// Repeatable.
         #[arg(long = "arg")]
         args: Vec<String>,
     },
@@ -328,7 +338,8 @@ pub(crate) enum PrCmd {
     ///
     /// Accepts a PR number, issue id, or URL.
     Checkout {
-        /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue URL.
+        /// `#3340` | `3340` | `PREFIX-3340` | github PR URL | tracker issue
+        /// URL.
         target: String,
         /// Worktree path; defaults to the config-resolved placement.
         worktree_path: Option<String>,
@@ -362,7 +373,8 @@ pub(crate) enum ReviewCmd {
         /// `pr_repo`). Replaces a wrong recorded binding.
         #[arg(long)]
         pr: Option<String>,
-        /// Override a declared template variable: `--arg key=value`. Repeatable.
+        /// Override a declared template variable: `--arg key=value`.
+        /// Repeatable.
         #[arg(long = "arg")]
         args: Vec<String>,
     },
@@ -372,13 +384,15 @@ pub(crate) enum ReviewCmd {
     Finish {
         /// Slack body; fills the `review_finish` template's `{{ input }}`.
         body: Option<String>,
-        /// Recipient: a `[people]` alias or `#channel`. Repeatable. Defaults to the PR author.
+        /// Recipient: a `[people]` alias or `#channel`. Repeatable. Defaults to
+        /// the PR author.
         #[arg(long = "to")]
         to: Vec<String>,
         /// PR number; required when not run inside the PR's worktree.
         #[arg(long)]
         pr: Option<u64>,
-        /// Override a declared template variable: `--arg key=value`. Repeatable.
+        /// Override a declared template variable: `--arg key=value`.
+        /// Repeatable.
         #[arg(long = "arg")]
         args: Vec<String>,
     },

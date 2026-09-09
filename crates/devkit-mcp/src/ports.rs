@@ -1,11 +1,9 @@
 use anyhow::{Context, Result, anyhow};
+use devkit_ports::registry::{self, Role};
 use serde::Deserialize;
 use serde_json::Value;
 
-use devkit_ports::registry::{self, Role};
-
-use crate::ServerCtx;
-use crate::actions::Action;
+use crate::{ServerCtx, actions::Action};
 
 pub fn actions() -> Vec<Action> {
     vec![

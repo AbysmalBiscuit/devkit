@@ -4,13 +4,11 @@
 //! push the branch, then resolve the PR from `--pr`, the worktree's record, or
 //! the branch. Opening one is `create`'s job alone.
 
-use anyhow::{Context, Result};
-use devkit_common::cmd::gh_json_in;
-use devkit_common::git::Git;
-use devkit_common::github;
-use devkit_common::progress::Steps;
-use serde::Deserialize;
 use std::path::Path;
+
+use anyhow::{Context, Result};
+use devkit_common::{cmd::gh_json_in, git::Git, github, progress::Steps};
+use serde::Deserialize;
 
 use crate::issue::review::finish;
 

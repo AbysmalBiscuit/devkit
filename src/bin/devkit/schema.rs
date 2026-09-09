@@ -11,9 +11,10 @@
 //! document type with a flattened `Config` keeps `Config`'s field list in one
 //! place while still describing the whole file.
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use schemars::JsonSchema;
-use std::path::Path;
 
 /// The published id. The release workflow attaches this file to every GitHub
 /// Release, so `releases/latest/download` always resolves to the newest

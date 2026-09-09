@@ -3,13 +3,15 @@
 //! those leaves. All operations are best-effort and fail-open — a cgroup error
 //! degrades to an uncapped server, never a failed spawn.
 
-use crate::supervisor::Key;
-use crate::{CgroupCap, Daemon};
-use devkit_ports::registry::Role;
 use std::path::PathBuf;
 
+use devkit_ports::registry::Role;
+
+use crate::{CgroupCap, Daemon, supervisor::Key};
+
 /// FNV-1a 64-bit hash — stable across Rust versions and runs, unlike
-/// `DefaultHasher`. Used to make leaf names collision-free without a dependency.
+/// `DefaultHasher`. Used to make leaf names collision-free without a
+/// dependency.
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for &b in bytes {
@@ -19,13 +21,13 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     h
 }
 
-/// A filesystem-safe leaf directory name for a supervised key. cgroup leaf names
-/// may not contain `/`; holders are worktree paths, so every `/`, `\`, and `.` is
-/// escaped to `_` and the role appended. The sanitized prefix is for readability;
-/// the trailing 16-hex-digit FNV-1a hash of the raw key fields (separated by NUL)
-/// guarantees that distinct keys always produce distinct names even when their
-/// sanitized prefixes collide (e.g. holders `/a/b` and `/a_b` both sanitize to
-/// `_a_b` but carry different hashes).
+/// A filesystem-safe leaf directory name for a supervised key. cgroup leaf
+/// names may not contain `/`; holders are worktree paths, so every `/`, `\`,
+/// and `.` is escaped to `_` and the role appended. The sanitized prefix is for
+/// readability; the trailing 16-hex-digit FNV-1a hash of the raw key fields
+/// (separated by NUL) guarantees that distinct keys always produce distinct
+/// names even when their sanitized prefixes collide (e.g. holders `/a/b` and
+/// `/a_b` both sanitize to `_a_b` but carry different hashes).
 pub(crate) fn leaf_name(key: &Key) -> String {
     let san = |s: &str| {
         s.chars()
@@ -67,8 +69,8 @@ impl Daemon {
 }
 
 /// Create (or reuse) the cgroup leaf for `key` and return its path. `None` when
-/// hard caps are inactive, or when leaf creation fails (logged once) — the caller
-/// then spawns uncapped.
+/// hard caps are inactive, or when leaf creation fails (logged once) — the
+/// caller then spawns uncapped.
 pub(crate) fn leaf_for(daemon: &Daemon, key: &Key) -> Option<PathBuf> {
     let cap = daemon.cap()?;
     let name = leaf_name(key);
@@ -84,8 +86,8 @@ pub(crate) fn leaf_for(daemon: &Daemon, key: &Key) -> Option<PathBuf> {
     }
 }
 
-/// Remove the cgroup leaf for `key` (best-effort; a non-empty or missing leaf is
-/// ignored). Called when a server leaves supervision for good.
+/// Remove the cgroup leaf for `key` (best-effort; a non-empty or missing leaf
+/// is ignored). Called when a server leaves supervision for good.
 pub(crate) fn remove_leaf(daemon: &Daemon, key: &Key) {
     let Some(cap) = daemon.cap() else { return };
     let leaf = cap.base.join("servers").join(leaf_name(key));
@@ -141,10 +143,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn reconcile_removes_orphan_leaves() {
-        // A temp dir standing in for a delegated cgroup base. Leaves are created
-        // as empty dirs, modeling a process-free orphan cgroup — which is exactly
-        // the removable state reconcile expects (rmdir succeeds; a real cgroup's
-        // memory.* pseudo-files do not block rmdir, and a tmpfs dir has none).
+        // A temp dir standing in for a delegated cgroup base. Leaves are
+        // created as empty dirs, modeling a process-free orphan cgroup
+        // — which is exactly the removable state reconcile expects
+        // (rmdir succeeds; a real cgroup's memory.* pseudo-files do not
+        // block rmdir, and a tmpfs dir has none).
         let base = tempfile::tempdir().unwrap();
         let servers = base.path().join("servers");
         let live = key("/w", "api", Role::Issue);

@@ -5,18 +5,21 @@
 //! fetch can't simply be backgrounded without racing that follow-up. Instead
 //! each fetch target (a repo path + remote) records when it last fetched under
 //! `~/.cache/devkit/fetch/`; a fetch requested again within the TTL is skipped,
-//! reusing the refs already on disk. The window is short, so the ref a branch is
-//! cut from is at most `TTL` seconds stale.
+//! reusing the refs already on disk. The window is short, so the ref a branch
+//! is cut from is at most `TTL` seconds stale.
 //!
 //! `DEVKIT_FETCH_TTL_SECS` overrides the window; `0` disables the gate (always
 //! fetch). A fetch failure never stamps the marker, so the next call retries.
 
-use crate::git::Git;
-use crate::paths;
+use std::{
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use anyhow::Result;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::{git::Git, paths};
 
 const DEFAULT_TTL_SECS: u64 = 60;
 
@@ -72,10 +75,10 @@ fn stamp(path: &Path, now: u64) {
     let _ = std::fs::write(path, now.to_string());
 }
 
-/// The gate, with the marker path, clock, and fetch action injected so it can be
-/// unit-tested without a network or the real cache dir. Returns `Ok(true)` if it
-/// fetched, `Ok(false)` if it skipped a still-fresh target. A failing `do_fetch`
-/// propagates and leaves the marker untouched.
+/// The gate, with the marker path, clock, and fetch action injected so it can
+/// be unit-tested without a network or the real cache dir. Returns `Ok(true)`
+/// if it fetched, `Ok(false)` if it skipped a still-fresh target. A failing
+/// `do_fetch` propagates and leaves the marker untouched.
 fn fetch_gated(
     marker: &Path,
     ttl: u64,
@@ -106,12 +109,14 @@ pub fn fetch(remote: &str, cwd: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::Cell;
+
+    use super::*;
 
     /// A marker path that does not exist yet: `fetch_gated` stamps it, and the
     /// tests turn on whether it is there and how old it is. The guard comes
-    /// back with it: dropping the guard removes the directory around the marker.
+    /// back with it: dropping the guard removes the directory around the
+    /// marker.
     fn scratch(tag: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(tag);

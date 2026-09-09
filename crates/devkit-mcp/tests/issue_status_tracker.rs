@@ -1,9 +1,10 @@
 //! `issue.status` over the real JSON-RPC surface, against a project whose
 //! `devkit.toml` names a tracker.
 
+use std::path::Path;
+
 use devkit_locks::ident::Identity;
 use serde_json::{Value, json};
-use std::path::Path;
 
 fn git(args: &[&str], cwd: &Path) {
     devkit_common::git::Git::fixture(cwd)
@@ -60,18 +61,19 @@ fn call(action: &str, args: Value) -> Value {
 }
 
 /// Two repos alike but for the kind their config names, and the report follows
-/// the config both times. Detection cannot tell the two apart — same shape, same
-/// environment — so only the config can account for the difference.
+/// the config both times. Detection cannot tell the two apart — same shape,
+/// same environment — so only the config can account for the difference.
 #[test]
 fn the_status_action_reports_the_configured_tracker_kind() {
-    // A `DEVKIT_CONFIG` in the environment is the sole config layer, which would
-    // hide the fixture's own file. This test binary holds one test, so clearing
-    // it races no other thread.
+    // A `DEVKIT_CONFIG` in the environment is the sole config layer, which
+    // would hide the fixture's own file. This test binary holds one test,
+    // so clearing it races no other thread.
     unsafe { std::env::remove_var("DEVKIT_CONFIG") };
 
     for kind in ["linear", "none"] {
         let dir = fixture(Some(kind));
-        // No worktree matches the filter, so nothing is fetched over the network.
+        // No worktree matches the filter, so nothing is fetched over the
+        // network.
         let report = call(
             "issue.status",
             json!({ "root": dir.path().to_str().unwrap(), "ids": ["NOPE-1"] }),

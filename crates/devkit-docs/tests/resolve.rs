@@ -1,9 +1,11 @@
 mod common;
 
 use common::fixture_repo;
-use devkit_docs::manifest::{Ecosystem, LibEntry};
-use devkit_docs::refs::RefStore;
-use devkit_docs::resolve::{Options, resolve};
+use devkit_docs::{
+    manifest::{Ecosystem, LibEntry},
+    refs::RefStore,
+    resolve::{Options, resolve},
+};
 
 /// A follow-up git operation against an already-built `fixture_repo`.
 fn git(args: &[&str], cwd: &str) -> String {
@@ -99,14 +101,9 @@ fn ref_pin_wins_and_no_lockfile_falls_back_to_default_branch_when_allowed() {
         repo: Some(repo),
         ..Default::default()
     };
-    let r2 = resolve(
-        &unpinned,
-        &project,
-        &cache2,
-        &Options {
-            allow_default_branch: true,
-        },
-    )
+    let r2 = resolve(&unpinned, &project, &cache2, &Options {
+        allow_default_branch: true,
+    })
     .unwrap();
     assert_eq!(r2.worktree, "main");
     assert_eq!(r2.version, "main");
@@ -148,14 +145,9 @@ fn git_ecosystem_without_ref_falls_back_to_default_when_allowed() {
         repo: Some(repo),
         ..Default::default()
     };
-    let r = resolve(
-        &entry,
-        &project,
-        &cache_root,
-        &Options {
-            allow_default_branch: true,
-        },
-    )
+    let r = resolve(&entry, &project, &cache_root, &Options {
+        allow_default_branch: true,
+    })
     .unwrap();
     assert_eq!(r.worktree, "main");
     assert_eq!(r.version, "main");

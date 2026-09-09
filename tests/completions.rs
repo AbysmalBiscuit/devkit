@@ -1,4 +1,5 @@
-//! Each user-facing CLI emits a shell-completion script via `<bin> completions <shell>`.
+//! Each user-facing CLI emits a shell-completion script via `<bin> completions
+//! <shell>`.
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
@@ -132,8 +133,8 @@ fn all_hoists_the_powershell_using_statements() {
 }
 
 /// `devkit-mcp` takes no subcommands, so it has no `completions` of its own and
-/// `--all` has nothing to emit for it. Derived from the command tree rather than
-/// listed, so a future `devkit mcp` subcommand surface would be picked up.
+/// `--all` has nothing to emit for it. Derived from the command tree rather
+/// than listed, so a future `devkit mcp` subcommand surface would be picked up.
 #[test]
 fn all_skips_the_name_with_no_completions() {
     let script = all_shells_script("zsh");

@@ -1,11 +1,15 @@
-use anyhow::Result;
-use devkit_common::cmd::gh_json;
-use devkit_common::github;
-use devkit_common::tracker::{Tracker, TrackerKind};
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-// GraphQL response shapes ---------------------------------------------------------
+use anyhow::Result;
+use devkit_common::{
+    cmd::gh_json,
+    github,
+    tracker::{Tracker, TrackerKind},
+};
+use serde::{Deserialize, Serialize};
+
+// GraphQL response shapes
+// ---------------------------------------------------------
 
 /// The shape of the old single-request response. Sections are now fetched and
 /// paged separately, so this survives only as the fixture wrapper that lets the
@@ -125,8 +129,9 @@ struct ContextsConn {
 
 /// One status-check entry under a commit's rollup. GitHub returns a union of
 /// `CheckRun` (Actions etc., carrying `name` + `conclusion` + `status`) and
-/// `StatusContext` (external statuses, carrying `context` + `state`); both shapes
-/// deserialize into this flattened node, with empty fields for the absent half.
+/// `StatusContext` (external statuses, carrying `context` + `state`); both
+/// shapes deserialize into this flattened node, with empty fields for the
+/// absent half.
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct RollupContext {
@@ -135,7 +140,8 @@ struct RollupContext {
     conclusion: Option<String>,
     /// When this CheckRun attempt began. Used to pick the latest attempt among
     /// re-runs of the same name; absent on external StatusContexts (which carry
-    /// no duplicate names). RFC 3339 UTC, so lexicographic order is chronological.
+    /// no duplicate names). RFC 3339 UTC, so lexicographic order is
+    /// chronological.
     #[serde(rename = "startedAt")]
     started_at: Option<String>,
     context: String,
@@ -169,7 +175,8 @@ impl RollupContext {
         }
         match self.conclusion.as_deref() {
             Some("SUCCESS" | "NEUTRAL" | "SKIPPED") => "ok",
-            Some(_) => "fail", // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE, STALE
+            // FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE, STALE
+            Some(_) => "fail",
             None => "run",
         }
     }
@@ -225,7 +232,8 @@ impl PrNode {
     }
 }
 
-// pure logic --------------------------------------------------------------------
+// pure logic
+// --------------------------------------------------------------------
 
 const FAIL: [&str; 4] = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED"];
 #[allow(dead_code)]
@@ -312,14 +320,15 @@ fn name_ignored(name: &str, ignored: &[String]) -> bool {
 /// The CHECK verdict for a PR, with `ignored` check-name globs discounted. When
 /// the rollup carries per-check contexts, the verdict is recomputed from the
 /// non-ignored checks so a single known-broken check (e.g. a deploy left red by
-/// an unfinished PR) no longer fails the column; ignored failures are counted so
-/// they can still be surfaced. Falls back to the aggregate rollup state when no
-/// contexts are present.
+/// an unfinished PR) no longer fails the column; ignored failures are counted
+/// so they can still be surfaced. Falls back to the aggregate rollup state when
+/// no contexts are present.
 enum Checks {
     /// No rollup at all.
     None,
     /// All non-ignored checks green; `masked` is the count of ignored checks
-    /// that were themselves failing (so the green can be flagged as masking them).
+    /// that were themselves failing (so the green can be flagged as masking
+    /// them).
     Ok { masked: usize },
     /// A non-ignored check is still running.
     Run,
@@ -351,7 +360,8 @@ fn check_verdict(pr: &PrNode, ignored: &[String]) -> Checks {
     // CheckRun, so a stale CANCELLED or FAILURE run lingers beside the latest
     // green one and would otherwise fail the column. Keep only the most recent
     // attempt per name (by `startedAt`); external StatusContexts carry no
-    // timestamp but are already unique per name, so they pass through untouched.
+    // timestamp but are already unique per name, so they pass through
+    // untouched.
     let mut latest: Vec<&RollupContext> = Vec::new();
     for c in contexts {
         match latest.iter_mut().find(|e| e.name() == c.name()) {
@@ -456,15 +466,17 @@ fn change_requesters(pr: &PrNode) -> Vec<&str> {
 
 /// True when the PR carries a standing change request. Driven by the per-author
 /// effective review state so any actor (human or bot, required or not) counts;
-/// falls back to GitHub's `reviewDecision` in case the review list was truncated.
+/// falls back to GitHub's `reviewDecision` in case the review list was
+/// truncated.
 fn changes_requested(pr: &PrNode) -> bool {
     !change_requesters(pr).is_empty() || pr.review_decision.as_deref() == Some("CHANGES_REQUESTED")
 }
 
 /// True when the PR carries a standing approval and no standing change request.
-/// `reviewDecision` is empty when the repo requires no review, so an approval on
-/// such a PR shows only in the per-author review state — derived symmetrically to
-/// [`changes_requested`] so a non-required approval still reads as approved.
+/// `reviewDecision` is empty when the repo requires no review, so an approval
+/// on such a PR shows only in the per-author review state — derived
+/// symmetrically to [`changes_requested`] so a non-required approval still
+/// reads as approved.
 fn approved(pr: &PrNode) -> bool {
     if changes_requested(pr) {
         return false;
@@ -475,7 +487,8 @@ fn approved(pr: &PrNode) -> bool {
 
 /// True when a reviewer who requested changes is back in the pending
 /// review-request list. GitHub drops a reviewer from `reviewRequests` once they
-/// submit a review, so their reappearance means re-review was requested of them.
+/// submit a review, so their reappearance means re-review was requested of
+/// them.
 fn re_review_requested(pr: &PrNode) -> bool {
     let requesters = change_requesters(pr);
     pr.review_requests
@@ -588,7 +601,8 @@ fn reviewer_state(pr: &PrNode, me: &str) -> (String, String) {
     (vote_label, action)
 }
 
-// GraphQL fetch -----------------------------------------------------------------
+// GraphQL fetch
+// -----------------------------------------------------------------
 
 const PR_FIELDS: &str = "number url title headRefName isDraft reviewDecision mergeable \
 author { login } \
@@ -600,10 +614,10 @@ __typename \
 reviews(last: 100) { nodes { author { login } state submittedAt } } \
 reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }";
 
-/// One of the three PR searches the report is built from. Each is fetched as its
-/// own paginated query: a single request carrying all three at `first: 100` asks
-/// GitHub to resolve ~90k nodes before it can answer, which times out (HTTP 504)
-/// on a repo with many open PRs.
+/// One of the three PR searches the report is built from. Each is fetched as
+/// its own paginated query: a single request carrying all three at `first: 100`
+/// asks GitHub to resolve ~90k nodes before it can answer, which times out
+/// (HTTP 504) on a repo with many open PRs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Section {
     Mine,
@@ -715,7 +729,8 @@ fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[Strin
     }
 }
 
-// views + gather ----------------------------------------------------------------
+// views + gather
+// ----------------------------------------------------------------
 
 /// Persisted in the CLI's pr-status snapshot cache; a new field needs
 /// `#[serde(default)]` or old caches read as empty.
@@ -770,8 +785,8 @@ fn backoff(attempt: u32) -> std::time::Duration {
 }
 
 /// One page, retried up to `retries` times. Both transports are tried on every
-/// attempt (`fetch_graphql` already falls back HTTP → `gh`), so a retry covers a
-/// 504 from either. The last error is what surfaces.
+/// attempt (`fetch_graphql` already falls back HTTP → `gh`), so a retry covers
+/// a 504 from either. The last error is what surfaces.
 fn fetch_page(query: &str, root: &str, retries: u32) -> Result<PageResp> {
     let mut attempt = 0;
     loop {
@@ -911,8 +926,9 @@ pub(crate) fn apply_tracker_links(report: &mut PrsReport, t: &dyn Tracker, resol
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_common::tracker::{TrackerKind, fake};
+
+    use super::*;
 
     fn report_with_pr(url: &str) -> PrsReport {
         PrsReport {
@@ -931,8 +947,8 @@ mod tests {
     #[test]
     fn pr_rows_get_their_closing_issues_from_the_tracker() {
         // issues_for_prs had no caller anywhere: prs::gather called
-        // linear::issues_for_prs directly, so a GitHub PR row's issue column would
-        // simply stay empty.
+        // linear::issues_for_prs directly, so a GitHub PR row's issue column
+        // would simply stay empty.
         let t = fake::FakeTracker::new()
             .with_links("https://github.com/o/r/pull/7", vec!["ENG-1", "ENG-2"]);
         let mut report = report_with_pr("https://github.com/o/r/pull/7");
@@ -1036,10 +1052,11 @@ mod tests {
         assert_eq!(login, "me");
         let got: Vec<u64> = nodes.iter().map(|n| n.number).collect();
         assert_eq!(got, vec![1, 2, 3, 4, 5]);
-        assert_eq!(
-            seen_cursors,
-            vec![None, Some("c1".to_string()), Some("c2".to_string())]
-        );
+        assert_eq!(seen_cursors, vec![
+            None,
+            Some("c1".to_string()),
+            Some("c2".to_string())
+        ]);
     }
 
     // `hasNextPage: true` with a null `endCursor` must terminate rather than
@@ -1050,16 +1067,13 @@ mod tests {
         let (_, nodes) = paginate(|_| {
             calls += 1;
             assert!(calls < 10, "paginate looped on a null cursor");
-            Ok((
-                "me".into(),
-                SearchPage {
-                    nodes: vec![node(serde_json::json!({ "number": 1 }))],
-                    page_info: PageInfo {
-                        has_next_page: true,
-                        end_cursor: None,
-                    },
+            Ok(("me".into(), SearchPage {
+                nodes: vec![node(serde_json::json!({ "number": 1 }))],
+                page_info: PageInfo {
+                    has_next_page: true,
+                    end_cursor: None,
                 },
-            ))
+            }))
         })
         .unwrap();
         assert_eq!(calls, 1);
@@ -1083,9 +1097,9 @@ mod tests {
         assert_eq!(calls, 2);
     }
 
-    // The per-section query carries the batch size, the section's qualifier, and
-    // the cursor — and keeps the nested selections at 100 (the verdict logic
-    // reduces over the full review/check set).
+    // The per-section query carries the batch size, the section's qualifier,
+    // and the cursor — and keeps the nested selections at 100 (the verdict
+    // logic reduces over the full review/check set).
     #[test]
     fn page_query_shape() {
         let first = build_page_query("o/r", Section::Mine, 25, None);
@@ -1186,8 +1200,8 @@ mod tests {
     }
 
     // A rollup that GitHub reports as FAILURE, but whose only failing check is
-    // ignored, reads green — flagged as masking one ignored failure — and the PR
-    // becomes mergeable rather than "fix CI".
+    // ignored, reads green — flagged as masking one ignored failure — and the
+    // PR becomes mergeable rather than "fix CI".
     #[test]
     fn ignored_check_masks_rollup_failure() {
         let pr = pr_with_contexts(
@@ -1221,10 +1235,11 @@ mod tests {
         assert_eq!(mine_action(&pr, &ignored), "fix CI -> merge");
     }
 
-    // GitHub's rollup returns every attempt of a re-run check. A stale CANCELLED
-    // attempt superseded by a later SUCCESS of the same name must not poison the
-    // verdict: only the most recent attempt per name is judged. Here the lone
-    // genuine failure is an ignored Vercel deploy, so the PR reads mergeable.
+    // GitHub's rollup returns every attempt of a re-run check. A stale
+    // CANCELLED attempt superseded by a later SUCCESS of the same name must
+    // not poison the verdict: only the most recent attempt per name is
+    // judged. Here the lone genuine failure is an ignored Vercel deploy, so
+    // the PR reads mergeable.
     #[test]
     fn rerun_supersedes_cancelled_attempt() {
         let pr = pr_with_contexts(
@@ -1242,8 +1257,8 @@ mod tests {
         assert_eq!(mine_action(&pr, &ignored), "MERGE");
     }
 
-    // The latest attempt wins even when it regresses: a check that passed and was
-    // then re-run to failure reads red, not green.
+    // The latest attempt wins even when it regresses: a check that passed and
+    // was then re-run to failure reads red, not green.
     #[test]
     fn rerun_regression_reads_red() {
         let pr = pr_with_contexts(
@@ -1258,8 +1273,8 @@ mod tests {
         assert_eq!(checks_cell(&check_verdict(&pr, &[])), "fail: test");
     }
 
-    // A StatusContext (external status) shape is classified by its `state`, and a
-    // non-terminal CheckRun status reads as still running.
+    // A StatusContext (external status) shape is classified by its `state`, and
+    // a non-terminal CheckRun status reads as still running.
     #[test]
     fn status_context_and_running_check() {
         let pr = pr_with_contexts(
@@ -1272,7 +1287,8 @@ mod tests {
         assert_eq!(checks_cell(&check_verdict(&pr, &[])), "run");
     }
 
-    // With no per-check contexts the verdict falls back to the aggregate rollup.
+    // With no per-check contexts the verdict falls back to the aggregate
+    // rollup.
     #[test]
     fn check_verdict_falls_back_to_rollup() {
         let pr = mine_node(Some("APPROVED"), "MERGEABLE", false, Some("FAILURE"));
@@ -1322,7 +1338,8 @@ mod tests {
 
     /// A node addressing a change request: the human's `CHANGES_REQUESTED`
     /// followed by my own `COMMENTED` replies (e.g. answering a bot's inline
-    /// threads), with `requested` controlling whether the human is re-requested.
+    /// threads), with `requested` controlling whether the human is
+    /// re-requested.
     fn change_request_node(requested: bool) -> PrNode {
         let reviews = serde_json::json!({"nodes": [
             {"author": {"login": "human"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-06-23T11:00:00Z"},
@@ -1352,8 +1369,8 @@ mod tests {
         );
     }
 
-    // Once the change-requester is re-requested they are back in reviewRequests,
-    // so the action flips to "await re-review".
+    // Once the change-requester is re-requested they are back in
+    // reviewRequests, so the action flips to "await re-review".
     #[test]
     fn re_requested_awaits_re_review() {
         assert_eq!(
@@ -1468,8 +1485,9 @@ mod tests {
         assert_eq!(mine_action(&pr, &[]), "awaiting review");
     }
 
-    // A change request from a non-required reviewer (or bot) that GitHub does not
-    // surface in `reviewDecision` still shows as "changes" / "address changes".
+    // A change request from a non-required reviewer (or bot) that GitHub does
+    // not surface in `reviewDecision` still shows as "changes" / "address
+    // changes".
     #[test]
     fn non_required_change_request_counts() {
         let pr = node(serde_json::json!({
@@ -1485,7 +1503,8 @@ mod tests {
         assert_eq!(mine_action(&pr, &[]), "address changes");
     }
 
-    // A later APPROVED clears a standing change request; a later COMMENTED does not.
+    // A later APPROVED clears a standing change request; a later COMMENTED does
+    // not.
     #[test]
     fn approval_clears_changes_comment_does_not() {
         let with = |last: &str, ts: &str| {
@@ -1510,9 +1529,10 @@ mod tests {
         )));
     }
     // A PR approved when the repo requires no reviews: GitHub returns an empty
-    // `reviewDecision`, so approval must be derived from the standing per-author
-    // review. An earlier CHANGES_REQUESTED superseded by a later APPROVED, plus a
-    // third party's COMMENTED reviews, still reads as approved.
+    // `reviewDecision`, so approval must be derived from the standing
+    // per-author review. An earlier CHANGES_REQUESTED superseded by a later
+    // APPROVED, plus a third party's COMMENTED reviews, still reads as
+    // approved.
     #[test]
     fn empty_decision_with_standing_approval_reads_approved() {
         let pr = node(serde_json::json!({
@@ -1557,8 +1577,9 @@ mod tests {
         assert_eq!(vote, "-");
         assert_eq!(action, "REVIEW NEEDED");
     }
-    // A later COMMENTED reply (e.g. answering a thread) does not clear a standing
-    // CHANGES_REQUESTED: the effective vote stays "changes" / "awaiting author fixes".
+    // A later COMMENTED reply (e.g. answering a thread) does not clear a
+    // standing CHANGES_REQUESTED: the effective vote stays "changes" /
+    // "awaiting author fixes".
     #[test]
     fn reviewer_state_comment_does_not_supersede_changes() {
         let pr = node(serde_json::json!({
@@ -1594,7 +1615,8 @@ mod tests {
         assert_eq!(action, "commented; decide");
     }
 
-    // A later APPROVED supersedes an earlier CHANGES_REQUESTED (real decision change).
+    // A later APPROVED supersedes an earlier CHANGES_REQUESTED (real decision
+    // change).
     #[test]
     fn reviewer_state_approval_supersedes_changes() {
         let pr = node(serde_json::json!({
@@ -1700,10 +1722,10 @@ mod tests {
             }],
         };
         let linked = HashMap::from([
-            (
-                "u1".to_string(),
-                vec!["ENG-1".to_string(), "SWE-6".to_string()],
-            ),
+            ("u1".to_string(), vec![
+                "ENG-1".to_string(),
+                "SWE-6".to_string(),
+            ]),
             ("u2".to_string(), vec!["SWE-7".to_string()]),
         ]);
         apply_linked(&mut report, &linked);

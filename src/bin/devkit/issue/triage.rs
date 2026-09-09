@@ -1,5 +1,4 @@
-use devkit_common::tracker::StateKind;
-use devkit_common::ui;
+use devkit_common::{tracker::StateKind, ui};
 use devkit_issue::status::{IssueWorktree, PrStatus, StatusReport};
 
 fn pr_label(row: &IssueWorktree) -> String {
@@ -149,8 +148,9 @@ pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_issue::status::IssueWorktree;
+
+    use super::*;
 
     fn row_with(pr: PrStatus) -> IssueWorktree {
         IssueWorktree {
@@ -191,7 +191,8 @@ mod tests {
     // and hold whether or not the ambient environment enables ANSI output.
     #[test]
     fn pr_cell_colors_by_state() {
-        // Every `Unique` PR carries a url, so its cell is linked; `NO_PR` isn't.
+        // Every `Unique` PR carries a url, so its cell is linked; `NO_PR`
+        // isn't.
         for (state, paint) in [
             ("MERGED", ui::green as fn(&str) -> String),
             ("OPEN", ui::yellow),
@@ -267,7 +268,8 @@ mod tests {
         let mut r = row("OPEN");
         r.issue_id = "UNKNOWN".into();
         assert_eq!(issue_cell(&r, None), ui::dim("UNKNOWN"));
-        // The tracker never answered for this row, so the link base goes unused.
+        // The tracker never answered for this row, so the link base goes
+        // unused.
         assert_eq!(
             issue_cell(&row("OPEN"), Some("https://linear.app/acme/issue/")),
             ui::cyan("ENG-1")

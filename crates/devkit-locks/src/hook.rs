@@ -3,10 +3,10 @@
 //! `devkit_common::harness`, re-exported below; the registry decision logic
 //! stays in `model`/`store`.
 
-use serde_json::Value;
 use std::path::Path;
 
 pub use devkit_common::harness::deny_json;
+use serde_json::Value;
 
 /// Whether write enforcement is active for a write originating at `cwd`.
 pub fn enforcement_enabled(cwd: &Path) -> bool {
@@ -14,8 +14,8 @@ pub fn enforcement_enabled(cwd: &Path) -> bool {
 }
 
 /// Tool names whose writes the harness governs. The Claude Code names carry one
-/// target in `tool_input.file_path`; Codex's `apply_patch` carries a whole patch
-/// envelope in `tool_input.command` and may name several.
+/// target in `tool_input.file_path`; Codex's `apply_patch` carries a whole
+/// patch envelope in `tool_input.command` and may name several.
 const WRITE_TOOLS: [&str; 5] = ["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"];
 
 /// Codex's `apply_patch` tool name, whose payload needs the envelope parser.
@@ -59,9 +59,9 @@ fn str_field<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
     p.get(k).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
-/// Every file an `apply_patch` envelope writes, in the order it names them. Paths
-/// are taken verbatim — they are relative to the invoking session's cwd, which the
-/// caller supplies; this parser does not resolve them.
+/// Every file an `apply_patch` envelope writes, in the order it names them.
+/// Paths are taken verbatim — they are relative to the invoking session's cwd,
+/// which the caller supplies; this parser does not resolve them.
 pub fn apply_patch_paths(command: &str) -> Vec<String> {
     command
         .lines()
@@ -136,8 +136,9 @@ pub fn parse_event(event: &str, p: &Value) -> HookEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn holder_top_level_is_session() {
@@ -227,10 +228,11 @@ mod tests {
                      +b\n\
                      *** Delete File: src/gone.rs\n\
                      *** End Patch\n";
-        assert_eq!(
-            apply_patch_paths(patch),
-            vec!["src/new.rs", "src/old.rs", "src/gone.rs"]
-        );
+        assert_eq!(apply_patch_paths(patch), vec![
+            "src/new.rs",
+            "src/old.rs",
+            "src/gone.rs"
+        ]);
     }
 
     #[test]

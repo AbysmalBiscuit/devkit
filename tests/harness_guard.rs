@@ -2,9 +2,11 @@
 //! and the fail-open contract. Each test runs in a private temp project with a
 //! private HOME so it never reads the developer's real global config.
 
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::{
+    io::Write,
+    path::Path,
+    process::{Command, Output, Stdio},
+};
 
 fn project(config: &str) -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();

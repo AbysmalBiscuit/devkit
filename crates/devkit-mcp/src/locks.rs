@@ -1,17 +1,14 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use devkit_locks::{
+    acquire_resolved, check_resolved, ident::Identity, rel_under_root, release_all_resolved,
+    release_resolved, status_resolved,
+};
 use serde::Deserialize;
 use serde_json::Value;
 
-use devkit_locks::ident::Identity;
-use devkit_locks::rel_under_root;
-use devkit_locks::{
-    acquire_resolved, check_resolved, release_all_resolved, release_resolved, status_resolved,
-};
-
-use crate::ServerCtx;
-use crate::actions::Action;
+use crate::{ServerCtx, actions::Action};
 
 pub fn actions() -> Vec<Action> {
     vec![
@@ -268,8 +265,9 @@ mod tests {
 
 #[cfg(test)]
 mod holder_tests {
-    use super::*;
     use devkit_locks::ident::{Candidate, Identity};
+
+    use super::*;
 
     fn candidates() -> Vec<Candidate> {
         vec![

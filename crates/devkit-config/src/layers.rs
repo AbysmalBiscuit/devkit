@@ -3,8 +3,9 @@
 //! the lock harness, and the docs manifest, each of which composes its own
 //! global inputs on top.
 
-use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
 
 /// Tracked, committed config: the project's own settings.
 pub const CONFIG_FILE: &str = "devkit.toml";

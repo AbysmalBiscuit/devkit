@@ -9,9 +9,11 @@
 //! jwalk's default parallelism directly. Both of those reach rayon's global
 //! pool, which has its own width and is the collision this module prevents.
 
-use std::num::NonZeroUsize;
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::{
+    num::NonZeroUsize,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 /// Threads when neither the environment nor the config says otherwise. The
 /// measured throughput knee for file copying.
@@ -51,11 +53,11 @@ pub fn configure(threads: Option<NonZeroUsize>) {
 /// the width it will be built at until then. Where the pool could not be built
 /// at all this reports the width that was asked for, while [`install`] runs
 /// the work on the calling thread: the requested width is the honest answer
-/// to what was configured, and there is no pool whose count could be read. `DEVKIT_THREADS` wins over
-/// [`configure`], which wins over [`DEFAULT_THREADS`]. An unparseable or zero
-/// env value is ignored rather than treated as a request, because
-/// `ThreadPoolBuilder::num_threads(0)` means one thread per core: the opposite
-/// of what someone capping threads intends.
+/// to what was configured, and there is no pool whose count could be read.
+/// `DEVKIT_THREADS` wins over [`configure`], which wins over
+/// [`DEFAULT_THREADS`]. An unparseable or zero env value is ignored rather than
+/// treated as a request, because `ThreadPoolBuilder::num_threads(0)` means one
+/// thread per core: the opposite of what someone capping threads intends.
 pub fn width() -> usize {
     if let Some(Some(p)) = POOL.get() {
         return p.current_num_threads();

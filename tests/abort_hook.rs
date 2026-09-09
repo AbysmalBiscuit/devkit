@@ -1,9 +1,12 @@
 //! `install_abort_hook` is why a panicking `devkitd` dies instead of living on
 //! holding `devkitd.lock`. It cannot be tested in-process — it would abort the
-//! test runner — so these drive the `panicker` example and read its exit status.
+//! test runner — so these drive the `panicker` example and read its exit
+//! status.
 
-use std::path::Path;
-use std::process::{Command, Output};
+use std::{
+    path::Path,
+    process::{Command, Output},
+};
 
 /// Run the `panicker` example under one hook. Examples build beside the binary,
 /// which is how `CARGO_BIN_EXE_devkit` locates it without a path of its own.
@@ -43,8 +46,8 @@ fn only_the_abort_hook_kills_the_process() {
     assert!(!aborted.success(), "abort hook: {aborted:?}");
     assert_ne!(aborted.code(), Some(101), "abort hook unwound: {aborted:?}");
 
-    // Windows has no signals; an abort surfaces there as an exit code, which the
-    // assertions above already cover.
+    // Windows has no signals; an abort surfaces there as an exit code, which
+    // the assertions above already cover.
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;

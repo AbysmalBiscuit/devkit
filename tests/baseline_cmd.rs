@@ -1,12 +1,13 @@
 //! `devrun baseline list` and `devrun baseline prune` over the real binary: the
-//! operator's view of the baseline directory, what a sweep reclaims, and what it
-//! refuses to touch.
+//! operator's view of the baseline directory, what a sweep reclaims, and what
+//! it refuses to touch.
 
 #[path = "common/baselinetest.rs"]
 mod baselinetest;
 
-use baselinetest::{devkit, devkit_ok, git, project, up};
 use std::path::{Path, PathBuf};
+
+use baselinetest::{devkit, devkit_ok, git, project, up};
 
 struct Fx {
     _tmp: tempfile::TempDir,
@@ -58,23 +59,19 @@ fn name_of(baseline: &Path) -> String {
     baseline.file_name().unwrap().to_string_lossy().into_owned()
 }
 
-/// Give `baseline` a port row with a live pid: this test process, which is alive
-/// by definition. A reservation `up` wrote carries no pid, and a row without one
-/// is not a running server.
+/// Give `baseline` a port row with a live pid: this test process, which is
+/// alive by definition. A reservation `up` wrote carries no pid, and a row
+/// without one is not a running server.
 fn seed_live_row(state: &Path, baseline: &Path) {
-    devkit_ok(
-        baseline,
-        state,
-        &[
-            "ports",
-            "alloc",
-            "--holder",
-            baseline.to_str().unwrap(),
-            "--role",
-            "baseline",
-            "api",
-        ],
-    );
+    devkit_ok(baseline, state, &[
+        "ports",
+        "alloc",
+        "--holder",
+        baseline.to_str().unwrap(),
+        "--role",
+        "baseline",
+        "api",
+    ]);
     let path = state.join("devkit").join("ports.json");
     let body = std::fs::read_to_string(&path).unwrap();
     let mut doc: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -95,10 +92,12 @@ fn seed_live_row(state: &Path, baseline: &Path) {
 #[test]
 fn prune_removes_an_unreferenced_baseline_and_reports_a_markerless_directory() {
     let f = fixture();
-    git(
-        &f.repo,
-        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
-    );
+    git(&f.repo, &[
+        "worktree",
+        "remove",
+        "--force",
+        f.wt.to_str().unwrap(),
+    ]);
 
     let out = devkit_ok(&f.repo, &f.state, &["run", "baseline", "prune"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -133,16 +132,19 @@ fn prune_leaves_a_referenced_baseline_alone() {
 #[test]
 fn dry_run_removes_nothing_and_still_reports() {
     let f = fixture();
-    git(
-        &f.repo,
-        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
-    );
+    git(&f.repo, &[
+        "worktree",
+        "remove",
+        "--force",
+        f.wt.to_str().unwrap(),
+    ]);
 
-    let out = devkit_ok(
-        &f.repo,
-        &f.state,
-        &["run", "baseline", "prune", "--dry-run"],
-    );
+    let out = devkit_ok(&f.repo, &f.state, &[
+        "run",
+        "baseline",
+        "prune",
+        "--dry-run",
+    ]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(f.baseline.exists(), "dry run deleted a baseline:\n{stdout}");
     assert!(f.stray.exists());
@@ -160,16 +162,19 @@ fn dry_run_removes_nothing_and_still_reports() {
 fn a_dry_run_promises_no_removal_a_real_prune_refuses() {
     let f = fixture();
     seed_live_row(&f.state, &f.baseline);
-    git(
-        &f.repo,
-        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
-    );
+    git(&f.repo, &[
+        "worktree",
+        "remove",
+        "--force",
+        f.wt.to_str().unwrap(),
+    ]);
 
-    let dry = devkit(
-        &f.repo,
-        &f.state,
-        &["run", "baseline", "prune", "--dry-run"],
-    );
+    let dry = devkit(&f.repo, &f.state, &[
+        "run",
+        "baseline",
+        "prune",
+        "--dry-run",
+    ]);
     let stdout = String::from_utf8_lossy(&dry.stdout);
     assert!(
         !stdout.contains(&name_of(&f.baseline)),
@@ -193,10 +198,12 @@ fn a_dry_run_promises_no_removal_a_real_prune_refuses() {
 #[test]
 fn an_orphaned_baseline_is_reclaimed_and_the_dry_run_agrees() {
     let f = fixture();
-    git(
-        &f.repo,
-        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
-    );
+    git(&f.repo, &[
+        "worktree",
+        "remove",
+        "--force",
+        f.wt.to_str().unwrap(),
+    ]);
     let orphan = f.baselines.join("000000000000");
     std::fs::create_dir_all(orphan.join(".devkit")).unwrap();
     std::fs::write(
@@ -205,11 +212,12 @@ fn an_orphaned_baseline_is_reclaimed_and_the_dry_run_agrees() {
     )
     .unwrap();
 
-    let dry = devkit_ok(
-        &f.repo,
-        &f.state,
-        &["run", "baseline", "prune", "--dry-run"],
-    );
+    let dry = devkit_ok(&f.repo, &f.state, &[
+        "run",
+        "baseline",
+        "prune",
+        "--dry-run",
+    ]);
     let stdout = String::from_utf8_lossy(&dry.stdout);
     assert!(
         stdout.contains("000000000000"),
@@ -231,10 +239,12 @@ fn an_orphaned_baseline_is_reclaimed_and_the_dry_run_agrees() {
 #[test]
 fn prune_refuses_the_baseline_it_is_standing_in() {
     let f = fixture();
-    git(
-        &f.repo,
-        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
-    );
+    git(&f.repo, &[
+        "worktree",
+        "remove",
+        "--force",
+        f.wt.to_str().unwrap(),
+    ]);
 
     let out = devkit(&f.baseline, &f.state, &["run", "baseline", "prune"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -256,10 +266,12 @@ fn prune_refuses_the_baseline_it_is_standing_in() {
 #[test]
 fn prune_refuses_a_baseline_somebody_edited_until_the_edits_are_discarded() {
     let f = fixture();
-    git(
-        &f.repo,
-        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
-    );
+    git(&f.repo, &[
+        "worktree",
+        "remove",
+        "--force",
+        f.wt.to_str().unwrap(),
+    ]);
     std::fs::write(f.baseline.join("devkit.toml"), "# edited by hand\n").unwrap();
 
     let out = devkit(&f.repo, &f.state, &["run", "baseline", "prune"]);
@@ -278,11 +290,12 @@ fn prune_refuses_a_baseline_somebody_edited_until_the_edits_are_discarded() {
     );
     assert!(!forced.status.success(), "the refusal exited 0");
 
-    devkit_ok(
-        &f.repo,
-        &f.state,
-        &["run", "baseline", "prune", "--discard-edits"],
-    );
+    devkit_ok(&f.repo, &f.state, &[
+        "run",
+        "baseline",
+        "prune",
+        "--discard-edits",
+    ]);
     assert!(
         !f.baseline.exists(),
         "--discard-edits did not waive the edit"
@@ -297,10 +310,12 @@ fn prune_refuses_a_baseline_somebody_edited_until_the_edits_are_discarded() {
 #[test]
 fn prune_leaves_another_repositorys_tree_alone() {
     let f = fixture();
-    git(
-        &f.repo,
-        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
-    );
+    git(&f.repo, &[
+        "worktree",
+        "remove",
+        "--force",
+        f.wt.to_str().unwrap(),
+    ]);
     // Marked, so it is a candidate; unregistered here, so it takes the orphan
     // path; standing on a git directory that resolves, so it is somebody's.
     let stranger = f.baselines.join("aaaaaaaaaaaa");
@@ -317,11 +332,12 @@ fn prune_leaves_another_repositorys_tree_alone() {
     )
     .unwrap();
 
-    let dry = devkit(
-        &f.repo,
-        &f.state,
-        &["run", "baseline", "prune", "--dry-run"],
-    );
+    let dry = devkit(&f.repo, &f.state, &[
+        "run",
+        "baseline",
+        "prune",
+        "--dry-run",
+    ]);
     let stdout = String::from_utf8_lossy(&dry.stdout);
     assert!(
         !stdout.contains("aaaaaaaaaaaa"),
@@ -347,17 +363,20 @@ fn prune_leaves_another_repositorys_tree_alone() {
 #[test]
 fn prune_refuses_a_locked_baseline_in_both_modes() {
     let f = fixture();
-    git(
-        &f.repo,
-        &["worktree", "remove", "--force", f.wt.to_str().unwrap()],
-    );
+    git(&f.repo, &[
+        "worktree",
+        "remove",
+        "--force",
+        f.wt.to_str().unwrap(),
+    ]);
     git(&f.repo, &["worktree", "lock", f.baseline.to_str().unwrap()]);
 
-    let dry = devkit(
-        &f.repo,
-        &f.state,
-        &["run", "baseline", "prune", "--dry-run"],
-    );
+    let dry = devkit(&f.repo, &f.state, &[
+        "run",
+        "baseline",
+        "prune",
+        "--dry-run",
+    ]);
     let stdout = String::from_utf8_lossy(&dry.stdout);
     assert!(
         !stdout.contains(&name_of(&f.baseline)),

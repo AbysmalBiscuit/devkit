@@ -1,6 +1,7 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use serde::Deserialize;
-use std::collections::HashMap;
 
 #[derive(Deserialize)]
 struct DopplerFile {

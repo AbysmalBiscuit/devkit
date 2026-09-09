@@ -1,18 +1,26 @@
 //! Windows implementations of the primitives declared in `super`, via the
 //! Win32 API (`windows-sys`).
 
-use std::collections::{HashMap, HashSet};
-use std::mem::size_of;
-
-use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+use std::{
+    collections::{HashMap, HashSet},
+    mem::size_of,
 };
-use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
-use windows_sys::Win32::System::Threading::{
-    GetCurrentProcessId, GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_TERMINATE, PROCESS_VM_READ, TerminateProcess,
+
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+    System::{
+        Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent},
+        Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+            TH32CS_SNAPPROCESS,
+        },
+        ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+        Threading::{
+            GetCurrentProcessId, GetExitCodeProcess, OpenProcess,
+            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
+            TerminateProcess,
+        },
+    },
 };
 
 /// `GetExitCodeProcess` reports this code while a process is still running.
@@ -44,8 +52,8 @@ pub(super) fn terminate(pid: u32) {
     if pid == 0 {
         return;
     }
-    // SAFETY: each opened handle is null-checked and closed; the console-control
-    // call takes no handle.
+    // SAFETY: each opened handle is null-checked and closed; the
+    // console-control call takes no handle.
     unsafe {
         // CTRL_BREAK reaches a child started in its own process group (see
         // `detach`) and gives it a chance to shut down cleanly.

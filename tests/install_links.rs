@@ -3,8 +3,10 @@ mod shimtest;
 
 #[cfg(unix)]
 use std::process::Stdio;
-use std::process::{Command, Output};
-use std::time::Duration;
+use std::{
+    process::{Command, Output},
+    time::Duration,
+};
 
 /// Retry `attempt` briefly on a transient `ExecutableFileBusy`. `staged()`
 /// just finished writing the binary `attempt` executes moments earlier, and
@@ -448,7 +450,8 @@ fn first_run_links_automatically() {
     );
 }
 
-/// A foreign name is not claimed by the automatic path, whatever the stamp says.
+/// A foreign name is not claimed by the automatic path, whatever the stamp
+/// says.
 #[test]
 fn automatic_linking_never_claims_a_foreign_name() {
     let (dir, exe) = staged();

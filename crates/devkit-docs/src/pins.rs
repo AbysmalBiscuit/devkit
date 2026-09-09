@@ -4,12 +4,18 @@
 //! importer graph consults. No clone, no fetch, no worktree, no cache lock —
 //! so a session-start hook can call this on a cold machine.
 
-use crate::importers::{Evidence, Inspection, Selector, Undeclared};
-use crate::manifest::{self, Ecosystem, LibEntry};
-use crate::names;
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::{Path, PathBuf},
+};
+
 use anyhow::Result;
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+
+use crate::{
+    importers::{Evidence, Inspection, Selector, Undeclared},
+    manifest::{self, Ecosystem, LibEntry},
+    names,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -31,7 +37,8 @@ pub enum Outcome {
     },
     /// A manual `ref` pin in the manifest. No lockfile is consulted.
     Ref(String),
-    /// Nothing this readout can state. One line, already short enough to render.
+    /// Nothing this readout can state. One line, already short enough to
+    /// render.
     Unresolved(String),
     /// This workspace does not depend on the library.
     Undeclared,
@@ -312,7 +319,8 @@ fn relative_workspace(workspace: &Path, project_root: Option<&Path>, lock_dir: &
 /// importer to ask, so it lands here permanently and by design — a machine-wide
 /// `docm add <git-url> --ref <tag>` shows up in every checkout on the machine.
 /// A registration whose ecosystem does have an importer lands here only when
-/// that importer could not run: no manifest, or a lockfile that would not parse.
+/// that importer could not run: no manifest, or a lockfile that would not
+/// parse.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Dropped {
     pub undeclared: usize,

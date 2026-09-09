@@ -1,11 +1,13 @@
-use crate::issue::triage::render;
+use std::{collections::HashMap, path::Path, sync::mpsc};
+
 use anyhow::Result;
-use devkit_common::livetable::{Cell, LiveTable};
-use devkit_common::tracker::{Resolved, State};
+use devkit_common::{
+    livetable::{Cell, LiveTable},
+    tracker::{Resolved, State},
+};
 use devkit_issue::status::{self as st, IssueWorktree, PrStatus, StatusReport, TrackerInfo};
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::mpsc;
+
+use crate::issue::triage::render;
 
 /// One source's report to the live-table event loop: the row's PRs, its
 /// tracker state, or the tracker's issue-link base.
@@ -418,15 +420,12 @@ mod tests {
     fn cache_overlay_sets_pr_and_clears_verdict() {
         let mut r = row("/a", "lev/eng-1-x", "ENG-1");
         r.reason_not_finished = Some("no PR, tracker state unknown".into());
-        apply_cached_pr(
-            &mut r,
-            crate::issue::info_cache::CachedPr {
-                number: 123,
-                state: "OPEN".into(),
-                url: "https://x/pr/123".into(),
-                is_draft: false,
-            },
-        );
+        apply_cached_pr(&mut r, crate::issue::info_cache::CachedPr {
+            number: 123,
+            state: "OPEN".into(),
+            url: "https://x/pr/123".into(),
+            is_draft: false,
+        });
         assert_eq!(r.pr.number(), Some(123));
         assert_eq!(r.pr.state_label(), "OPEN");
         assert_eq!(r.pr.url(), Some("https://x/pr/123"));
@@ -445,15 +444,12 @@ mod tests {
     #[test]
     fn a_cached_unique_pr_yields_to_a_live_ambiguous_lookup() {
         let mut r = row("/a", "lev/eng-1-x", "ENG-1");
-        apply_cached_pr(
-            &mut r,
-            crate::issue::info_cache::CachedPr {
-                number: 7,
-                state: "OPEN".into(),
-                url: "https://github.com/o/r/pull/7".into(),
-                is_draft: false,
-            },
-        );
+        apply_cached_pr(&mut r, crate::issue::info_cache::CachedPr {
+            number: 7,
+            state: "OPEN".into(),
+            url: "https://github.com/o/r/pull/7".into(),
+            is_draft: false,
+        });
         assert!(matches!(r.pr, PrStatus::Unique { number: 7, .. }));
 
         let live = PrStatus::Ambiguous {
@@ -480,15 +476,12 @@ mod tests {
     #[test]
     fn a_cached_unique_pr_survives_a_live_unique_lookup() {
         let mut r = row("/a", "lev/eng-1-x", "ENG-1");
-        apply_cached_pr(
-            &mut r,
-            crate::issue::info_cache::CachedPr {
-                number: 7,
-                state: "OPEN".into(),
-                url: "https://github.com/o/r/pull/7".into(),
-                is_draft: false,
-            },
-        );
+        apply_cached_pr(&mut r, crate::issue::info_cache::CachedPr {
+            number: 7,
+            state: "OPEN".into(),
+            url: "https://github.com/o/r/pull/7".into(),
+            is_draft: false,
+        });
         let live = PrStatus::Unique {
             number: 7,
             state: "OPEN".into(),
@@ -502,15 +495,12 @@ mod tests {
     #[test]
     fn a_cached_unique_pr_survives_an_unavailable_live_lookup() {
         let mut r = row("/a", "lev/eng-1-x", "ENG-1");
-        apply_cached_pr(
-            &mut r,
-            crate::issue::info_cache::CachedPr {
-                number: 7,
-                state: "OPEN".into(),
-                url: "https://github.com/o/r/pull/7".into(),
-                is_draft: false,
-            },
-        );
+        apply_cached_pr(&mut r, crate::issue::info_cache::CachedPr {
+            number: 7,
+            state: "OPEN".into(),
+            url: "https://github.com/o/r/pull/7".into(),
+            is_draft: false,
+        });
         let live = PrStatus::Unknown {
             reason: "GitHub unreachable".into(),
         };

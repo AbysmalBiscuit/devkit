@@ -1,15 +1,17 @@
 //! Per-library store: one bare (ideally blobless) clone plus detached
-//! worktrees per resolved version, all under `~/.local/share/devkit/docs/<name>/`.
+//! worktrees per resolved version, all under
+//! `~/.local/share/devkit/docs/<name>/`.
 
-use crate::layout::Layout;
-use crate::locks;
-use crate::refs::RefStore;
-use crate::tags::TagPattern;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result, bail};
 use devkit_common::git::{Git, SLOW_TIMEOUT};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+
+use crate::{layout::Layout, locks, refs::RefStore, tags::TagPattern};
 
 /// `~/.local/share/devkit/docs` (or `$XDG_DATA_HOME/devkit/docs`).
 ///
@@ -472,8 +474,9 @@ impl LibCache {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io;
+
+    use super::*;
 
     #[test]
     fn legacy_store_moves_to_new_root_once() {

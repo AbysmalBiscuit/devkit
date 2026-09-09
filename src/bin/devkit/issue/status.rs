@@ -1,11 +1,14 @@
-use crate::issue::triage::{self, render};
+use std::{collections::HashMap, sync::mpsc};
+
 use anyhow::Result;
-use devkit_common::livetable::{Cell, LiveTable};
-use devkit_common::tracker::{State, TrackerKind};
-use devkit_common::ui;
+use devkit_common::{
+    livetable::{Cell, LiveTable},
+    tracker::{State, TrackerKind},
+    ui,
+};
 use devkit_issue::status::{self as st, IssueWorktree, StatusReport, TrackerInfo};
-use std::collections::HashMap;
-use std::sync::mpsc;
+
+use crate::issue::triage::{self, render};
 
 pub(crate) const COL_TREE: usize = 2;
 pub(crate) const COL_PR: usize = 3;
@@ -308,9 +311,10 @@ pub fn run(start: &str, ids: &[String], config: Option<&str>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_common::tracker::StateKind;
     use devkit_issue::status::{IssueWorktree, PrStatus};
+
+    use super::*;
 
     const LINK_BASE: &str = "https://linear.app/acme/issue/";
 
@@ -365,8 +369,8 @@ mod tests {
     }
 
     /// Every tracker that cannot answer keeps a merged, clean worktree off
-    /// FINISHED, so its hint has to say the gate is closed rather than skipped —
-    /// the reader is looking for why nothing finished.
+    /// FINISHED, so its hint has to say the gate is closed rather than skipped
+    /// — the reader is looking for why nothing finished.
     #[test]
     fn a_tracker_that_holds_the_gate_says_so() {
         for (kind, declared) in [
@@ -385,8 +389,8 @@ mod tests {
         }
     }
 
-    /// Only a project that declared it has no tracker really skips the gate, and
-    /// that is what it asked for — nothing to report.
+    /// Only a project that declared it has no tracker really skips the gate,
+    /// and that is what it asked for — nothing to report.
     #[test]
     fn a_declared_absence_of_a_tracker_gets_no_hint() {
         let t = info(TrackerKind::None, false, true);
@@ -527,22 +531,16 @@ mod tests {
         let rows = vec![row("ENG-1"), row("ENG-2"), row("ENG-3")];
         let dirty = vec![false, false, true];
         let mut states = std::collections::HashMap::new();
-        states.insert(
-            "ENG-1".to_string(),
-            State {
-                kind: StateKind::Completed,
-                name: "Done".into(),
-                color: None,
-            },
-        );
-        states.insert(
-            "ENG-3".to_string(),
-            State {
-                kind: StateKind::Started,
-                name: "In Progress".into(),
-                color: None,
-            },
-        );
+        states.insert("ENG-1".to_string(), State {
+            kind: StateKind::Completed,
+            name: "Done".into(),
+            color: None,
+        });
+        states.insert("ENG-3".to_string(), State {
+            kind: StateKind::Started,
+            name: "In Progress".into(),
+            color: None,
+        });
 
         let mut state = LiveState::new(rows.clone(), tracker(true));
         for (i, &dt) in dirty.iter().enumerate() {
@@ -553,16 +551,10 @@ mod tests {
 
         let ids = vec!["ENG-1".into(), "ENG-2".into(), "ENG-3".into()];
         let d = st::Discovered::from_parts(rows, ids);
-        let report = st::assemble(
-            d,
-            dirty,
-            st::Prs::empty(),
-            states,
-            TrackerInfo {
-                link_base: Some(LINK_BASE.into()),
-                ..tracker(true)
-            },
-        );
+        let report = st::assemble(d, dirty, st::Prs::empty(), states, TrackerInfo {
+            link_base: Some(LINK_BASE.into()),
+            ..tracker(true)
+        });
 
         assert_eq!(state.rows.len(), report.worktrees.len());
         for (live, assembled) in state.rows.iter().zip(&report.worktrees) {

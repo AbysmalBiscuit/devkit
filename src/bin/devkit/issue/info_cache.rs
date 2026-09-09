@@ -1,6 +1,7 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 
 /// The cached PR for a worktree: written after a live `issue info`, read by
 /// `issue info --cache-only`. A PR number is immutable once assigned, so this
@@ -27,9 +28,9 @@ pub fn read(worktree: &Path) -> Option<CachedPr> {
     serde_json::from_str(&body).ok()
 }
 
-/// Write the PR cache atomically (temp file + rename) under `<worktree>/.devkit/`,
-/// creating the directory. Best-effort: callers may ignore the error since a
-/// cache miss is never fatal.
+/// Write the PR cache atomically (temp file + rename) under
+/// `<worktree>/.devkit/`, creating the directory. Best-effort: callers may
+/// ignore the error since a cache miss is never fatal.
 pub fn write(worktree: &Path, pr: &CachedPr) -> Result<()> {
     let p = path(worktree);
     let dir = p.parent().expect("pr.json path has a parent");
@@ -75,15 +76,12 @@ mod tests {
     #[test]
     fn write_leaves_no_temp_file() {
         let wt = tempfile::tempdir().unwrap();
-        write(
-            wt.path(),
-            &CachedPr {
-                number: 1,
-                state: "MERGED".into(),
-                url: "u".into(),
-                is_draft: false,
-            },
-        )
+        write(wt.path(), &CachedPr {
+            number: 1,
+            state: "MERGED".into(),
+            url: "u".into(),
+            is_draft: false,
+        })
         .unwrap();
         let leftover: Vec<_> = std::fs::read_dir(wt.path().join(".devkit"))
             .unwrap()

@@ -4,10 +4,14 @@
 //! when stderr is not a terminal — pipes, MCP, and tests see nothing — and the
 //! final table is the caller's job (printed to stdout after `finish`).
 
-use crate::progress::{add_bar, add_spinner, tty_multi};
-use crate::ui;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle, WeakProgressBar};
 use std::cell::RefCell;
+
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle, WeakProgressBar};
+
+use crate::{
+    progress::{add_bar, add_spinner, tty_multi},
+    ui,
+};
 
 /// Braille spinner frames for pending cells; index with `frame % FRAMES.len()`.
 pub const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -229,8 +233,10 @@ impl LiveTable {
         rx: &std::sync::mpsc::Receiver<M>,
         mut on_msg: impl FnMut(&mut LiveTable, M) -> anyhow::Result<bool>,
     ) -> anyhow::Result<()> {
-        use std::sync::mpsc::RecvTimeoutError;
-        use std::time::{Duration, Instant};
+        use std::{
+            sync::mpsc::RecvTimeoutError,
+            time::{Duration, Instant},
+        };
 
         let mut last_tick = Instant::now();
         loop {

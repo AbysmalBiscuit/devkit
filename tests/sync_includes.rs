@@ -8,8 +8,10 @@ mod shimtest;
 #[path = "common/testenv.rs"]
 mod testenv;
 
-use std::path::Path;
-use std::process::{Command, Output};
+use std::{
+    path::Path,
+    process::{Command, Output},
+};
 
 fn git(args: &[&str], cwd: &Path) {
     devkit_common::git::Git::fixture(cwd)
@@ -18,11 +20,11 @@ fn git(args: &[&str], cwd: &Path) {
         .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
 }
 
-/// A monorepo at `main/` with two worktrees beside it, a committed `devkit.toml`
-/// whose `worktree_include` is `include` verbatim, and untracked `.env.local`
-/// and `.tool-versions` files present only in the monorepo. The guard owns the
-/// whole tree, so callers must hold it for as long as they read the paths under
-/// it.
+/// A monorepo at `main/` with two worktrees beside it, a committed
+/// `devkit.toml` whose `worktree_include` is `include` verbatim, and untracked
+/// `.env.local` and `.tool-versions` files present only in the monorepo. The
+/// guard owns the whole tree, so callers must hold it for as long as they read
+/// the paths under it.
 fn project(include: &str) -> tempfile::TempDir {
     let t = tempfile::tempdir().unwrap();
     let main = t.path().join("main");
@@ -204,11 +206,11 @@ fn dry_run_partitions_links_by_occupied_destination() {
     std::fs::write(wt1_inc.join("occupied.txt"), "already here").unwrap();
 
     let state = tempfile::tempdir().unwrap();
-    let out = run(
-        t.path(),
-        state.path(),
-        &["sync-includes", "--dry-run", "eng-1"],
-    );
+    let out = run(t.path(), state.path(), &[
+        "sync-includes",
+        "--dry-run",
+        "eng-1",
+    ]);
     ok(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let split = stdout
@@ -239,11 +241,12 @@ fn overwrite_with_all_and_yes_replaces_an_existing_file() {
     let state = tempfile::tempdir().unwrap();
     std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
 
-    let out = run(
-        t.path(),
-        state.path(),
-        &["sync-includes", "--overwrite", "--all", "--yes"],
-    );
+    let out = run(t.path(), state.path(), &[
+        "sync-includes",
+        "--overwrite",
+        "--all",
+        "--yes",
+    ]);
     ok(&out);
     assert_eq!(
         env_local(t.path(), "wt-eng-1").as_deref(),
@@ -263,11 +266,11 @@ fn overwrite_without_a_scope_is_refused() {
     let state = tempfile::tempdir().unwrap();
     std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
 
-    let out = run(
-        t.path(),
-        state.path(),
-        &["sync-includes", "--overwrite", "--yes"],
-    );
+    let out = run(t.path(), state.path(), &[
+        "sync-includes",
+        "--overwrite",
+        "--yes",
+    ]);
     assert!(!out.status.success(), "an unscoped --overwrite must fail");
     assert_eq!(env_local(t.path(), "wt-eng-1").as_deref(), Some("OLD=1\n"));
     assert_eq!(env_local(t.path(), "wt-eng-2"), None);
@@ -286,11 +289,11 @@ fn an_unscoped_overwrite_dry_run_is_allowed() {
     let state = tempfile::tempdir().unwrap();
     std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
 
-    let out = run(
-        t.path(),
-        state.path(),
-        &["sync-includes", "--overwrite", "--dry-run"],
-    );
+    let out = run(t.path(), state.path(), &[
+        "sync-includes",
+        "--overwrite",
+        "--dry-run",
+    ]);
     assert!(
         out.status.success(),
         "a dry run writes nothing and needs no scope: {}",
@@ -311,11 +314,12 @@ fn a_selector_scopes_an_overwrite() {
     let state = tempfile::tempdir().unwrap();
     std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
 
-    let out = run(
-        t.path(),
-        state.path(),
-        &["sync-includes", "--overwrite", "--yes", "eng-1"],
-    );
+    let out = run(t.path(), state.path(), &[
+        "sync-includes",
+        "--overwrite",
+        "--yes",
+        "eng-1",
+    ]);
     ok(&out);
     assert_eq!(
         env_local(t.path(), "wt-eng-1").as_deref(),
@@ -332,11 +336,11 @@ fn overwrite_without_yes_leaves_an_unconfirmed_file_alone() {
     let state = tempfile::tempdir().unwrap();
     std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
 
-    let out = run(
-        t.path(),
-        state.path(),
-        &["sync-includes", "--overwrite", "--all"],
-    );
+    let out = run(t.path(), state.path(), &[
+        "sync-includes",
+        "--overwrite",
+        "--all",
+    ]);
     ok(&out);
     assert_eq!(env_local(t.path(), "wt-eng-1").as_deref(), Some("OLD=1\n"));
     assert_eq!(
@@ -353,11 +357,11 @@ fn declining_the_overwrite_still_copies_what_is_missing() {
     let state = tempfile::tempdir().unwrap();
     std::fs::write(t.path().join("wt-eng-1").join(".env.local"), "OLD=1\n").unwrap();
 
-    let out = run(
-        t.path(),
-        state.path(),
-        &["sync-includes", "--overwrite", "eng-1"],
-    );
+    let out = run(t.path(), state.path(), &[
+        "sync-includes",
+        "--overwrite",
+        "eng-1",
+    ]);
     ok(&out);
     assert_eq!(env_local(t.path(), "wt-eng-1").as_deref(), Some("OLD=1\n"));
     assert_eq!(

@@ -1,8 +1,13 @@
+use std::{
+    io::IsTerminal,
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use std::io::IsTerminal;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 /// A `MultiProgress` drawing to stderr, or fully hidden when stderr is not a
 /// terminal — so pipes, redirects, MCP, and tests produce no live output.
@@ -56,9 +61,9 @@ pub(crate) fn add_bar(mp: &MultiProgress, msg: &str, len: u64) -> ProgressBar {
 ///   `[i/total]`.
 /// - Persistence: by default steps are transient — each step's spinner is
 ///   cleared when it settles, leaving no trace. [`Steps::persistent`] /
-///   [`Steps::persistent_with_total`] instead leave each settled step on
-///   screen as a numbered `✓`/`✗` line, so a multi-step command keeps a
-///   scrollback record of what it did.
+///   [`Steps::persistent_with_total`] instead leave each settled step on screen
+///   as a numbered `✓`/`✗` line, so a multi-step command keeps a scrollback
+///   record of what it did.
 pub struct Steps {
     mp: MultiProgress,
     total: Option<usize>,
@@ -107,7 +112,8 @@ impl Step<'_> {
     /// `MultiProgress` prints above its live bars and this step's bar is still
     /// live, so sub-steps land above the step's own settled line. A transient
     /// group never persists sub-steps: this returns without drawing anything
-    /// when the group is not [`Steps::persistent`] / [`Steps::persistent_with_total`].
+    /// when the group is not [`Steps::persistent`] /
+    /// [`Steps::persistent_with_total`].
     pub fn substep(&self, msg: &str) {
         if !self.steps.persist {
             return;
@@ -311,8 +317,8 @@ impl Steps {
     }
 
     /// Run `f` with every bar in the group hidden, then redraw them. Use around
-    /// a stdin prompt or any stdout write that would otherwise be torn by a live
-    /// bar redrawing on stderr.
+    /// a stdin prompt or any stdout write that would otherwise be torn by a
+    /// live bar redrawing on stderr.
     pub fn suspend<T>(&self, f: impl FnOnce() -> T) -> T {
         self.mp.suspend(f)
     }
@@ -463,8 +469,8 @@ mod tests {
             }
         });
         assert_eq!(done.load(std::sync::atomic::Ordering::Relaxed), 8);
-        // The ordinal advanced exactly once per step regardless of interleaving:
-        // 8 steps ran, so the next label is the 9th.
+        // The ordinal advanced exactly once per step regardless of
+        // interleaving: 8 steps ran, so the next label is the 9th.
         assert_eq!(steps.label("next"), "9. next");
         steps.clear();
     }
@@ -502,8 +508,8 @@ mod tests {
         assert_eq!(steps.started(), 2);
     }
 
-    /// The handle's methods take &self so a Fn callback can drive them, which is
-    /// what a parallel producer needs.
+    /// The handle's methods take &self so a Fn callback can drive them, which
+    /// is what a parallel producer needs.
     #[test]
     fn a_step_handle_is_usable_from_a_shared_reference() {
         fn assert_sync<T: Sync>(_: &T) {}

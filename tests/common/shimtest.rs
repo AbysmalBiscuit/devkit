@@ -1,4 +1,5 @@
-//! Run the built `devkit` under a shim name, the way an installed hardlink does.
+//! Run the built `devkit` under a shim name, the way an installed hardlink
+//! does.
 //!
 //! Compile-time unused helpers are expected: different test binaries include
 //! this module via `#[path]` and use different subsets of it.

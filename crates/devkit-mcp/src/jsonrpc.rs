@@ -41,6 +41,7 @@ impl Response {
             error: None,
         }
     }
+
     pub fn err(id: Value, code: i64, message: impl Into<String>) -> Self {
         Response {
             jsonrpc: "2.0",

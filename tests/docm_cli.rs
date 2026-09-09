@@ -5,9 +5,11 @@
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::{
+    path::{Path, PathBuf},
+    process::{Child, Command, Output, Stdio},
+    time::{Duration, Instant},
+};
 
 const READY: Duration = Duration::from_secs(60);
 const CONTENTION: Duration = Duration::from_secs(30);

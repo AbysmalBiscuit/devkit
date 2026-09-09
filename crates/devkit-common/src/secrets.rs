@@ -4,9 +4,10 @@
 //! Doppler-injected var always wins and behavior is unchanged when nothing is
 //! stored. The file is written `0600` and lives beside `config.toml`.
 
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Secrets {
@@ -130,7 +131,8 @@ fn cached() -> &'static Secrets {
     CACHE.get_or_init(|| load().unwrap_or_default())
 }
 
-/// Resolve a credential: `$<env_key>` → `secrets.toml[<lowercased key>]` → `None`.
+/// Resolve a credential: `$<env_key>` → `secrets.toml[<lowercased key>]` →
+/// `None`.
 pub fn resolve(env_key: &str) -> Option<String> {
     let env_val = std::env::var(env_key).ok();
     let file_val = cached()

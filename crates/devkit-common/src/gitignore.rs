@@ -1,6 +1,7 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result};
 use devkit_config::expand_tilde;
-use std::path::{Path, PathBuf};
 
 /// Resolve git's global excludes file. A configured `core.excludesfile` wins
 /// (tilde-expanded); otherwise `$XDG_CONFIG_HOME/git/ignore`, else

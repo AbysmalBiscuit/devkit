@@ -3,8 +3,9 @@
 //! The catalog knows a command starts a server without knowing whose it is, and
 //! several apps can share one `launch`. Both problems resolve the same way.
 
-use crate::apps::App;
 use devkit_config::AppMatch;
+
+use crate::apps::App;
 
 /// Flags whose value names a workspace member.
 const DIR_FLAGS: [&str; 5] = ["--filter", "-F", "--dir", "-C", "--cwd"];
@@ -116,9 +117,10 @@ pub fn resolve(
 
 #[cfg(test)]
 mod tests {
+    use devkit_config::AppMatch;
+
     use super::*;
     use crate::apps::App;
-    use devkit_config::AppMatch;
 
     fn app(name: &str, path: &str) -> App {
         App {

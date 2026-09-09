@@ -4,12 +4,15 @@
 //! indirection, and no symlink privilege requirement on Windows. It also keeps
 //! `argv[0]` reporting the name the caller typed, which is what dispatch reads.
 
+use std::{
+    io::Read,
+    path::Path,
+    process::{Command, Output, Stdio},
+    sync::mpsc,
+    time::{Duration, Instant},
+};
+
 use anyhow::{Context, Result};
-use std::io::Read;
-use std::path::Path;
-use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
 
 use crate::shim::{PROBE_FLAG, PROBE_MARKER, SHIMS, Shim};
 

@@ -66,13 +66,16 @@ fn read_ppid(stat: &std::path::Path) -> Option<u32> {
     rest.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// SIGTERM every pid in each root's subtree, then SIGKILL survivors after a grace.
-/// Unix-only; a no-op returning 0 elsewhere.
+/// SIGTERM every pid in each root's subtree, then SIGKILL survivors after a
+/// grace. Unix-only; a no-op returning 0 elsewhere.
 #[cfg(unix)]
 pub fn kill_tree(roots: &[u32], procs: &[Proc]) -> usize {
-    use nix::sys::signal::{Signal, kill};
-    use nix::unistd::Pid;
     use std::collections::BTreeMap;
+
+    use nix::{
+        sys::signal::{Signal, kill},
+        unistd::Pid,
+    };
 
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for p in procs {

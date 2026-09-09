@@ -1,8 +1,8 @@
-use anyhow::{Context, Result, bail};
-use devkit_common::progress::Steps;
-use devkit_common::slack;
-use devkit_config::Person;
 use std::collections::{BTreeMap, HashMap};
+
+use anyhow::{Context, Result, bail};
+use devkit_common::{progress::Steps, slack};
+use devkit_config::Person;
 
 pub(crate) mod finish;
 pub(crate) mod request;
@@ -78,7 +78,8 @@ pub(crate) fn resolve_target(value: &str, people: &HashMap<String, Person>) -> R
     Ok(target_from_person(value, p))
 }
 
-/// Find the `[people]` alias + entry whose github login matches (case-insensitive).
+/// Find the `[people]` alias + entry whose github login matches
+/// (case-insensitive).
 pub(crate) fn person_by_login<'a>(
     login: &str,
     people: &'a HashMap<String, Person>,
@@ -143,20 +144,18 @@ pub(crate) fn base_ctx(
 
 /// Per-recipient context: `name` + `slack_id` bound on top of `base`.
 pub(crate) fn recipient_ctx(base: &serde_json::Value, t: &Target) -> serde_json::Value {
-    with_fields(
-        base,
-        &[
-            ("name", serde_json::json!(t.name)),
-            (
-                "slack_id",
-                serde_json::json!(t.slack_id.clone().unwrap_or_default()),
-            ),
-        ],
-    )
+    with_fields(base, &[
+        ("name", serde_json::json!(t.name)),
+        (
+            "slack_id",
+            serde_json::json!(t.slack_id.clone().unwrap_or_default()),
+        ),
+    ])
 }
 
 /// Render a review template, attaching the template key and, when the setup
-/// record is absent, a hint that an `{{ issue }}`/`{{ slug }}` reference needs it.
+/// record is absent, a hint that an `{{ issue }}`/`{{ slug }}` reference needs
+/// it.
 pub(crate) fn render_review(
     tmpl: &str,
     key: &str,
@@ -208,9 +207,11 @@ pub(crate) fn deliver(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use devkit_config::Person;
     use std::collections::{BTreeMap, HashMap};
+
+    use devkit_config::Person;
+
+    use super::*;
 
     fn person(slack: &str, gh: Option<&str>) -> Person {
         Person {

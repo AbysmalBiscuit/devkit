@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, bail};
-use devkit_common::cmd::{gh_capture, gh_json_in};
-use devkit_common::github;
-use devkit_common::progress::Steps;
+use devkit_common::{
+    cmd::{gh_capture, gh_json_in},
+    github,
+    progress::Steps,
+};
 use serde::Deserialize;
 
 use crate::issue::review::{PrAction, Target, action_for, is_human_login};
@@ -10,8 +12,9 @@ pub(crate) mod create;
 pub(crate) mod ready;
 pub(crate) mod resolve;
 
-/// GitHub logins among targets that can be requested as reviewers, plus warnings
-/// for people that have no github handle. Channels are silently Slack-only.
+/// GitHub logins among targets that can be requested as reviewers, plus
+/// warnings for people that have no github handle. Channels are silently
+/// Slack-only.
 pub(crate) fn reviewer_logins(targets: &[Target]) -> (Vec<String>, Vec<String>) {
     let mut logins = Vec::new();
     let mut warnings = Vec::new();
@@ -262,9 +265,9 @@ mod tests {
         assert!(warnings[0].contains("igor"));
     }
 
-    /// `require_pr_reviewer` is satisfied by what `--to` contributes as a GitHub
-    /// reviewer, so a `#channel` and a person with no handle both leave a PR
-    /// with nobody to review it.
+    /// `require_pr_reviewer` is satisfied by what `--to` contributes as a
+    /// GitHub reviewer, so a `#channel` and a person with no handle both
+    /// leave a PR with nobody to review it.
     #[test]
     fn the_reviewer_gate_reads_handles_not_slack_recipients() {
         let (logins, _) = reviewer_logins(&[chan("#eng"), person("igor", None)]);

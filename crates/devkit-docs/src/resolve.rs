@@ -5,17 +5,21 @@
 //! pin that fails to resolve is always a hard error. Every success records a
 //! reference row.
 
-use crate::cache::{self, LibCache};
-use crate::importers;
-use crate::layout::{self, Layout};
-use crate::locks;
-use crate::manifest::{Ecosystem, LibEntry};
-use crate::names;
-use crate::refs::RefStore;
-use crate::tags;
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+
+use crate::{
+    cache::{self, LibCache},
+    importers,
+    layout::{self, Layout},
+    locks,
+    manifest::{Ecosystem, LibEntry},
+    names,
+    refs::RefStore,
+    tags,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -45,7 +49,8 @@ pub struct Options {
 #[derive(Debug, Serialize)]
 pub struct Resolved {
     pub name: String,
-    /// Human-facing version: lockfile version, the pinned ref, or the branch name.
+    /// Human-facing version: lockfile version, the pinned ref, or the branch
+    /// name.
     pub version: String,
     /// Where `version` came from — which workspace installs the library, and
     /// from which lockfile. `None` when a ref pin or the default branch
@@ -214,14 +219,12 @@ pub fn resolve_locked(
             "tag {git_ref} moved {previous_commit} → {commit} upstream; {worktree} re-pointed"
         ));
     }
-    meta.worktrees.insert(
-        worktree.clone(),
-        cache::WorktreeMeta {
+    meta.worktrees
+        .insert(worktree.clone(), cache::WorktreeMeta {
             raw_ref: git_ref.clone(),
             resolved_ref: canonical,
             commit: commit.clone(),
-        },
-    );
+        });
     let status = if repaired {
         Status::Repaired
     } else {

@@ -6,8 +6,10 @@
 mod shimtest;
 #[path = "common/testenv.rs"]
 mod testenv;
-use std::path::Path;
-use std::process::{Command, Output};
+use std::{
+    path::Path,
+    process::{Command, Output},
+};
 
 /// A real git repo (so `--show-toplevel` resolves) with a two-app devkit.toml.
 fn project() -> tempfile::TempDir {
@@ -79,12 +81,10 @@ fn lockm_status_with_paths_points_at_check() {
     let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let out = run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["status", "src/some/file.rs"],
-    );
+    let out = run(&link, proj.path(), state.path(), &[
+        "status",
+        "src/some/file.rs",
+    ]);
     assert!(!out.status.success(), "status with paths is an error");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -190,12 +190,13 @@ fn issue_setup_accepts_positional_issue_id() {
     let state = tempfile::tempdir().unwrap();
     // No full config here — the point is only that clap accepts the shape
     // (a later config/network error exits 1, never clap's usage error 2).
-    let out = run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["setup", "ABC-123", "--slug", "s", "--dry-run"],
-    );
+    let out = run(&link, proj.path(), state.path(), &[
+        "setup",
+        "ABC-123",
+        "--slug",
+        "s",
+        "--dry-run",
+    ]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert_ne!(
         out.status.code(),
@@ -213,12 +214,9 @@ fn issue_setup_rejects_both_positional_and_flag() {
     let (_dir, link) = shimtest::linked("issue");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let out = run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["setup", "ABC-123", "--issue", "ABC-999", "--slug", "s"],
-    );
+    let out = run(&link, proj.path(), state.path(), &[
+        "setup", "ABC-123", "--issue", "ABC-999", "--slug", "s",
+    ]);
     assert_eq!(
         out.status.code(),
         Some(2),

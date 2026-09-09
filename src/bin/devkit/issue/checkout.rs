@@ -1,15 +1,20 @@
-use crate::issue::slug::{budget, cap, slugify};
+use std::{
+    io::{IsTerminal, Write},
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result};
-use devkit_common::cmd::{gh_capture, gh_json_in};
-use devkit_common::git::Git;
-use devkit_common::gitfetch;
-use devkit_common::github;
-use devkit_common::progress::Steps;
-use devkit_common::tracker::{IssueRef, Tracker, TrackerKind};
+use devkit_common::{
+    cmd::{gh_capture, gh_json_in},
+    git::Git,
+    gitfetch, github,
+    progress::Steps,
+    tracker::{IssueRef, Tracker, TrackerKind},
+};
 use devkit_config::expand_tilde;
 use devkit_ports::load;
-use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
+
+use crate::issue::slug::{budget, cap, slugify};
 
 pub struct CheckoutArgs {
     pub target: String,
@@ -111,12 +116,14 @@ struct PrMeta {
     head_ref_name: String,
 }
 
-/// Whether GitHub PR `n` exists in `repo`. A clean "not found" from `gh pr view`
-/// is `Ok(false)`; a real tool failure (gh missing, unauthenticated, network
-/// down, bad cwd) propagates as `Err` rather than masquerading as absence.
+/// Whether GitHub PR `n` exists in `repo`. A clean "not found" from `gh pr
+/// view` is `Ok(false)`; a real tool failure (gh missing, unauthenticated,
+/// network down, bad cwd) propagates as `Err` rather than masquerading as
+/// absence.
 fn pr_exists(n: u64, cwd: &str, repo: &github::Repo) -> Result<bool> {
-    // Direct HTTP resolves existence from a 200/404; a clean 404 is `Ok(false)`.
-    // Any HTTP failure (no token, transport) yields `None` → fall back to `gh`.
+    // Direct HTTP resolves existence from a 200/404; a clean 404 is
+    // `Ok(false)`. Any HTTP failure (no token, transport) yields `None` →
+    // fall back to `gh`.
     if let Ok(exists) = github::pr_exists(&repo.slug, n) {
         return Ok(exists);
     }
@@ -128,7 +135,8 @@ fn pr_exists(n: u64, cwd: &str, repo: &github::Repo) -> Result<bool> {
         Ok(_) => Ok(true),
         Err(e) => {
             // `gh_capture` embeds the command's stderr in its error message, so
-            // the not-found signal is recoverable from the rendered error chain.
+            // the not-found signal is recoverable from the rendered error
+            // chain.
             let msg = format!("{e:#}").to_lowercase();
             if msg.contains("no pull requests found")
                 || msg.contains("could not resolve to a pullrequest")
@@ -204,8 +212,8 @@ fn resolve(
         Ident::Issue(r) => {
             anyhow::ensure!(t.ready(), "issue id given but no tracker is configured");
             // A pasted issue URL spells the title slug out, and the worktree
-            // template slugifies whatever it is given, so the slug stands in for
-            // the title and spares a lookup.
+            // template slugifies whatever it is given, so the slug stands in
+            // for the title and spares a lookup.
             steps.during_result(&format!("Resolving issue {}…", r.id), || {
                 resolve_issue(&r.id, r.slug.clone(), t)
             })
@@ -468,26 +476,23 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         crate::issue::review::finish::assert_belongs(&checked_out, &head)?;
 
         let issue = record_issue_id(resolved.linear_id.as_deref(), &meta.head_ref_name);
-        devkit_common::record::write(
-            &worktree,
-            &devkit_common::record::IssueRecord {
-                issue: issue.clone(),
-                slug: slugify(&meta.title),
-                apps: if args.setup {
-                    args.apps.clone()
-                } else {
-                    vec![]
-                },
-                // A PR checkout reviews someone else's work; there is no issue
-                // to scaffold notes for.
-                summary: None,
-                pr: Some(github::PrLocator {
-                    repo: Some(pr_repo.slug.clone()),
-                    number: meta.number,
-                }),
-                baseline: None,
+        devkit_common::record::write(&worktree, &devkit_common::record::IssueRecord {
+            issue: issue.clone(),
+            slug: slugify(&meta.title),
+            apps: if args.setup {
+                args.apps.clone()
+            } else {
+                vec![]
             },
-        )?;
+            // A PR checkout reviews someone else's work; there is no issue
+            // to scaffold notes for.
+            summary: None,
+            pr: Some(github::PrLocator {
+                repo: Some(pr_repo.slug.clone()),
+                number: meta.number,
+            }),
+            baseline: None,
+        })?;
         Ok(issue)
     })?;
 
@@ -741,9 +746,10 @@ mod tests {
     #[test]
     fn a_pasted_pr_url_keeps_its_repository() {
         // With one resolved repository the loss was invisible. With issues_repo
-        // and pr_repo configured separately, pasting other/repo/pull/42 resolved
-        // pr_repo#42 — a different pull request that happens to share a number —
-        // and built a worktree from it without a word.
+        // and pr_repo configured separately, pasting other/repo/pull/42
+        // resolved pr_repo#42 — a different pull request that happens
+        // to share a number — and built a worktree from it without a
+        // word.
         let Ident::Pr(loc) = classify("https://github.com/other/repo/pull/42", &tracker()).unwrap()
         else {
             panic!("expected a PR")
@@ -837,9 +843,9 @@ mod tests {
 
     #[test]
     fn a_bare_number_asks_the_tracker_not_the_environment() {
-        // The exported LINEAR_API_KEY of one project decided what a number meant in
-        // another: the arm read the ambient key directly, so declaring
-        // kind = "github" did not stop it.
+        // The exported LINEAR_API_KEY of one project decided what a number
+        // meant in another: the arm read the ambient key directly, so
+        // declaring kind = "github" did not stop it.
         use devkit_common::tracker::fake;
         let gh = fake::FakeTracker::new().with_kind(TrackerKind::Github); // candidates() empty
         assert_eq!(

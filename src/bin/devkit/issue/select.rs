@@ -1,5 +1,6 @@
-use devkit_issue::status::IssueWorktree;
 use std::path::Path;
+
+use devkit_issue::status::IssueWorktree;
 
 /// True when `sel` names a worktree by issue id, branch, worktree basename, or
 /// full path, all compared case-insensitively. This is the half of the matcher
@@ -46,8 +47,9 @@ pub fn matches(row: &IssueWorktree, sel: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_issue::status::PrStatus;
+
+    use super::*;
 
     fn row() -> IssueWorktree {
         IssueWorktree {

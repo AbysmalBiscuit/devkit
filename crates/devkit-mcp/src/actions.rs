@@ -61,8 +61,9 @@ pub fn call(ctx: &ServerCtx, args: Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_locks::ident::Identity;
+
+    use super::*;
 
     #[test]
     fn describe_lists_the_ports_actions() {

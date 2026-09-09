@@ -1,11 +1,9 @@
 use anyhow::{Context, Result};
+use devkit_issue::{prs, status};
 use serde::Deserialize;
 use serde_json::Value;
 
-use devkit_issue::{prs, status};
-
-use crate::ServerCtx;
-use crate::actions::Action;
+use crate::{ServerCtx, actions::Action};
 
 pub fn actions() -> Vec<Action> {
     vec![

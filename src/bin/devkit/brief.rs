@@ -36,16 +36,17 @@
 //! it out of a JSON field, so those two ask for the envelope and every emission
 //! mode above is available under either.
 
+use std::{
+    collections::{HashMap, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+    io::{IsTerminal, Read},
+    path::{Path, PathBuf},
+};
+
 use anyhow::Result;
 use devkit_config as config;
 use devkit_config::BriefConfig;
-use devkit_ports::apps::App;
-use devkit_ports::{load, registry, task};
-use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::io::{IsTerminal, Read};
-use std::path::{Path, PathBuf};
+use devkit_ports::{apps::App, load, registry, task};
 
 /// How the brief reaches the session. Claude Code injects a hook's plain
 /// stdout; Codex and Cursor read it out of a JSON field instead, and spell that
@@ -531,7 +532,7 @@ fn render(cwd: &Path, settings: &BriefConfig, main_checkout: Option<&Path>) -> O
     // content is the fault gets neither claim: what it has is a broken config,
     // which the block above already stated.
     let intro = match (&devrun, &pins, &fault) {
-        (Some(sections), _, _) => Some(devrun_intro(&root, sections.facilities())),
+        (Some(sections), ..) => Some(devrun_intro(&root, sections.facilities())),
         (None, Some(_), _) => Some(
             "This checkout has libraries registered with devkit; the table below is \
              what its lockfiles pin."

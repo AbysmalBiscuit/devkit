@@ -1,20 +1,27 @@
+#[cfg(test)]
+use std::path::Path;
+use std::{
+    fs::OpenOptions,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+
+use anyhow::Result;
+use devkit_common::{
+    paths,
+    store::{self, Document, salvage_map},
+};
+use fd_lock::RwLock;
+
 use crate::model::{
     AcquireOutcome, Conflict, Data, LockEntry, Refusal, SCHEMA_VERSION, WriteDecision,
 };
-use anyhow::Result;
-use devkit_common::paths;
-use devkit_common::store::{self, Document, salvage_map};
-use fd_lock::RwLock;
-use std::fs::OpenOptions;
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 impl Document for Data {
     fn stamp_version(&mut self) {
         self.version = SCHEMA_VERSION;
     }
+
     /// Recover whatever locks still deserialize from a registry whose top-level
     /// schema has drifted; `None` only if there's no `locks` object. Keys are
     /// preserved verbatim (they already carry the `root\0path` composite).
@@ -24,16 +31,19 @@ impl Document for Data {
             locks: salvage_map::<String, LockEntry>(raw, "locks", |k| Some(k.to_string()))?,
         })
     }
+
     fn label() -> &'static str {
         "lock registry"
     }
+
     fn len(&self) -> usize {
         self.locks.len()
     }
 }
 
-/// A driver for the lock-registry read-modify-write cycle. `FlockStore` backs the
-/// direct path; the daemon's `MemoryStore` (added later) backs in-memory state.
+/// A driver for the lock-registry read-modify-write cycle. `FlockStore` backs
+/// the direct path; the daemon's `MemoryStore` (added later) backs in-memory
+/// state.
 pub trait Store {
     /// Current registry state — a cheap read, no mutation.
     fn snapshot(&self) -> Result<Data>;
@@ -41,8 +51,9 @@ pub trait Store {
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T>;
 }
 
-/// Error marker: a live `devkitd` holds the registry write gate (`devkitd.lock`).
-/// Carried via `anyhow` so callers can distinguish it (e.g. a best-effort prune).
+/// Error marker: a live `devkitd` holds the registry write gate
+/// (`devkitd.lock`). Carried via `anyhow` so callers can distinguish it (e.g. a
+/// best-effort prune).
 #[derive(Debug)]
 pub struct DaemonHoldsLock;
 
@@ -57,8 +68,8 @@ impl std::fmt::Display for DaemonHoldsLock {
 impl std::error::Error for DaemonHoldsLock {}
 
 /// Direct file driver. Reads load the file ungated. Writes take a shared,
-/// non-blocking lock on `devkitd.lock` — the gate — and refuse if a daemon holds
-/// it exclusive, then run the data-flock RMW.
+/// non-blocking lock on `devkitd.lock` — the gate — and refuse if a daemon
+/// holds it exclusive, then run the data-flock RMW.
 pub struct FlockStore {
     gate_path: PathBuf,
     lock_path: PathBuf,
@@ -73,6 +84,7 @@ impl FlockStore {
             data_path: paths::locks_file(),
         }
     }
+
     #[cfg(test)]
     fn at(dir: &Path) -> Self {
         Self {
@@ -93,11 +105,13 @@ impl Store for FlockStore {
     fn snapshot(&self) -> Result<Data> {
         Ok(store::load(&self.data_path))
     }
+
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
-        // Every direct writer holds the shared gate for its entire RMW. The daemon
-        // holds devkitd.lock exclusive for its whole life (via MemoryStore, never
-        // FlockStore), so a concurrent try_read failure here means a live daemon
-        // owns the registry — surface the typed refusal rather than writing behind it.
+        // Every direct writer holds the shared gate for its entire RMW. The
+        // daemon holds devkitd.lock exclusive for its whole life (via
+        // MemoryStore, never FlockStore), so a concurrent try_read
+        // failure here means a live daemon owns the registry — surface
+        // the typed refusal rather than writing behind it.
         if let Some(parent) = self.gate_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -107,7 +121,8 @@ impl Store for FlockStore {
             .truncate(false)
             .open(&self.gate_path)?;
         let gate = RwLock::new(file);
-        // `anyhow::Error::new` (not `anyhow!`) so the type survives for `downcast_ref`.
+        // `anyhow::Error::new` (not `anyhow!`) so the type survives for
+        // `downcast_ref`.
         let _shared = gate
             .try_read()
             .map_err(|_| anyhow::Error::new(DaemonHoldsLock))?;
@@ -151,16 +166,16 @@ pub fn write_decide_with(
     })
 }
 
-/// Hook release path: free every lock held by `prefix` or its descendants, across
-/// all roots. Holder ids are globally unique, so root-scoping the release leaks
-/// locks when the hook process cwd resolves to a different root.
+/// Hook release path: free every lock held by `prefix` or its descendants,
+/// across all roots. Holder ids are globally unique, so root-scoping the
+/// release leaks locks when the hook process cwd resolves to a different root.
 pub fn release_prefix_with(s: &impl Store, prefix: &str) -> Result<Vec<String>> {
     s.commit(|d| Ok(d.release_prefix(prefix)))
 }
 
-/// Check (ungated read): conflicts that would block `holder`, with a best-effort
-/// prune of dead rows. A blocked prune (a daemon owns the gate) is swallowed —
-/// a read must never hard-fail because cleanup couldn't persist.
+/// Check (ungated read): conflicts that would block `holder`, with a
+/// best-effort prune of dead rows. A blocked prune (a daemon owns the gate) is
+/// swallowed — a read must never hard-fail because cleanup couldn't persist.
 pub fn check_with(
     s: &impl Store,
     root: &str,
@@ -228,19 +243,19 @@ pub fn prune_with(s: &impl Store, now: u64) -> Result<usize> {
     s.commit(|d| Ok(d.prune_dead(now)))
 }
 
-/// Run `f` while holding the exclusive lock-registry file lock; persists the result.
-/// Liveness probes here are cheap, non-blocking syscalls (`kill(0)`) and TTL
-/// arithmetic, so — unlike the port registry's TCP probes — pruning runs inside the
-/// lock without risk of holding it across a blocking call.
+/// Run `f` while holding the exclusive lock-registry file lock; persists the
+/// result. Liveness probes here are cheap, non-blocking syscalls (`kill(0)`)
+/// and TTL arithmetic, so — unlike the port registry's TCP probes — pruning
+/// runs inside the lock without risk of holding it across a blocking call.
 #[allow(dead_code)] // gated direct RMW entry point retained for parity with the port registry
 pub fn with_lock<T>(f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
     FlockStore::new().commit(f)
 }
 
 /// The daemon's authoritative in-memory lock registry. Reads serve from memory;
-/// a mutation writes the file through (atomic rename) and updates memory only if
-/// that write succeeded — the file is the commit point, so memory and file never
-/// diverge.
+/// a mutation writes the file through (atomic rename) and updates memory only
+/// if that write succeeded — the file is the commit point, so memory and file
+/// never diverge.
 pub struct MemoryStore {
     state: Arc<Mutex<Data>>,
     data_path: PathBuf,
@@ -260,6 +275,7 @@ impl Store for MemoryStore {
             .expect("lock registry mutex poisoned")
             .clone())
     }
+
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
         let mut guard = self.state.lock().expect("lock registry mutex poisoned");
         let mut next = guard.clone();
@@ -271,8 +287,8 @@ impl Store for MemoryStore {
     }
 }
 
-/// Load the lock-registry file into a `Data` for an owner with its own exclusion
-/// (the daemon, holding `devkitd.lock` exclusive, at startup).
+/// Load the lock-registry file into a `Data` for an owner with its own
+/// exclusion (the daemon, holding `devkitd.lock` exclusive, at startup).
 pub fn load() -> Data {
     store::load(&paths::locks_file())
 }
@@ -285,18 +301,15 @@ mod tests {
     #[test]
     fn serde_roundtrips_a_lock() {
         let mut d = Data::default();
-        d.locks.insert(
-            key_for("/repo", "scenes"),
-            LockEntry {
-                path: "scenes".into(),
-                root: "/repo".into(),
-                holder: "alice".into(),
-                pid: None,
-                note: None,
-                ts: 7,
-                ttl: 1800,
-            },
-        );
+        d.locks.insert(key_for("/repo", "scenes"), LockEntry {
+            path: "scenes".into(),
+            root: "/repo".into(),
+            holder: "alice".into(),
+            pid: None,
+            note: None,
+            ts: 7,
+            ttl: 1800,
+        });
         let s = serde_json::to_string(&d).unwrap();
         let back: Data = serde_json::from_str(&s).unwrap();
         assert_eq!(back.locks[&key_for("/repo", "scenes")].holder, "alice");
@@ -306,7 +319,8 @@ mod tests {
     fn salvage_recovers_locks_from_drifted_schema() {
         // "version" is a string rather than u32 to force a top-level Data
         // deserialization failure. The key uses the JSON \u0000 escape so that
-        // after parsing the key contains a NUL byte, matching key_for's separator.
+        // after parsing the key contains a NUL byte, matching key_for's
+        // separator.
         let json = "{\"version\":\"oops\",\"locks\":{\"/repo\\u0000scenes\":{\"path\":\"scenes\",\"root\":\"/repo\",\"holder\":\"alice\",\"pid\":null,\"note\":null,\"ts\":7,\"ttl\":1800}}}";
         assert!(serde_json::from_str::<Data>(json).is_err());
         let d = Data::salvage(json).expect("locks object present");
@@ -433,7 +447,8 @@ mod seam_tests {
             .unwrap();
         let mut excl = fd_lock::RwLock::new(f);
         let _held = excl.try_write().unwrap();
-        // ungated read must still succeed (and best-effort prune must not error out)
+        // ungated read must still succeed (and best-effort prune must not error
+        // out)
         let conflicts = check_with(&s, "/repo", "bob", &["scenes".into()], 120)
             .expect("read must not fail under held gate");
         assert_eq!(conflicts.len(), 1);

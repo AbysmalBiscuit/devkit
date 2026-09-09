@@ -1,16 +1,17 @@
 //! The stdio MCP server. `.mcp.json` starts it as `devkit-mcp`, so the shim
 //! name stays even though the code now lives in `devkit`.
 
-use anyhow::Result;
 use std::io::{BufReader, Write};
+
+use anyhow::Result;
 
 #[derive(clap::Args)]
 pub struct McpCli {}
 
 pub fn run(_cli: McpCli) -> Result<()> {
-    // Resolved once, from where the server was started: it is the identity every
-    // mutating action is checked against, so it must not be re-derived per call
-    // from anything the caller supplies.
+    // Resolved once, from where the server was started: it is the identity
+    // every mutating action is checked against, so it must not be
+    // re-derived per call from anything the caller supplies.
     let own_worktree = std::env::current_dir()
         .ok()
         .and_then(|cwd| devkit_common::git::checkout_root(&cwd).ok());

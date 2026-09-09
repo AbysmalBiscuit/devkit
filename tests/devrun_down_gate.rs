@@ -1,7 +1,6 @@
 //! `down --all` refuses to touch another worktree without a terminal, driven
 //! through `devkit run` directly (not the `devrun` shim).
-use std::path::Path;
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 #[test]
 fn down_all_without_tty_refuses() {
@@ -11,11 +10,13 @@ fn down_all_without_tty_refuses() {
     let devkit_dir = xdg_state.join("devkit");
     std::fs::create_dir_all(devkit_dir.join("logs")).unwrap();
 
-    // A foreign holder dir that exists on disk (so snapshot() does not prune it).
+    // A foreign holder dir that exists on disk (so snapshot() does not prune
+    // it).
     let foreign = home.path().join("foreign-wt");
     std::fs::create_dir_all(&foreign).unwrap();
 
-    // A current worktree that is a real git repo (toplevel resolves), distinct from foreign.
+    // A current worktree that is a real git repo (toplevel resolves), distinct
+    // from foreign.
     let cur = home.path().join("cur-wt");
     std::fs::create_dir_all(&cur).unwrap();
     run_git(&cur, &["init", "-q"]);

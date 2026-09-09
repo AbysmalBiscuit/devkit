@@ -1,10 +1,12 @@
 //! `pins` turns the merged docs manifest into per-library outcomes using
 //! manifest and lockfile reads only.
 
-use devkit_docs::importers::Evidence;
-use devkit_docs::importers::Evidence as Ev;
-use devkit_docs::pins::{self, Dropped, Outcome, Pin};
 use std::path::Path;
+
+use devkit_docs::{
+    importers::{Evidence, Evidence as Ev},
+    pins::{self, Dropped, Outcome, Pin},
+};
 
 fn write(path: &Path, body: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -328,13 +330,10 @@ fn a_machine_wide_undeclared_pin_is_dropped_and_counted() {
     let (rows, dropped) = pins::relevant(&all);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].name, "kysely");
-    assert_eq!(
-        dropped,
-        Dropped {
-            undeclared: 1,
-            unknown: 1
-        }
-    );
+    assert_eq!(dropped, Dropped {
+        undeclared: 1,
+        unknown: 1
+    });
 
     let text = pins::render(&all);
     assert!(text.contains("kysely"), "{text}");
@@ -717,13 +716,10 @@ fn a_workspace_root_rolls_up_its_members() {
     match &out[0].outcome {
         Outcome::Rollup { versions, lockfile } => {
             assert_eq!(lockfile, "bun.lock");
-            assert_eq!(
-                versions,
-                &vec![
-                    ("1.15.11".to_string(), vec!["apps/api".to_string()]),
-                    ("2.0.1".to_string(), vec!["apps/web".to_string()]),
-                ]
-            );
+            assert_eq!(versions, &vec![
+                ("1.15.11".to_string(), vec!["apps/api".to_string()]),
+                ("2.0.1".to_string(), vec!["apps/web".to_string()]),
+            ]);
         }
         other => panic!("expected a rollup, got {other:?}"),
     }

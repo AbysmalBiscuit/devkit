@@ -1,8 +1,9 @@
 mod common;
 
+use std::time::Duration;
+
 use common::Harness;
 use devkit_locks::daemon::proto::{Request, Response};
-use std::time::Duration;
 
 /// A lock acquired through the daemon is held in memory and visible to a later
 /// `check` from a different holder.
@@ -40,7 +41,8 @@ fn acquire_through_daemon_is_visible_to_check() {
 }
 
 /// A write decision through the daemon acquires a free file, then denies a
-/// non-ancestor holder; a prefix release frees the subtree, written through to file.
+/// non-ancestor holder; a prefix release frees the subtree, written through to
+/// file.
 #[test]
 fn write_decide_and_release_prefix_through_daemon() {
     let mut h = Harness::start();
@@ -86,8 +88,8 @@ fn write_decide_and_release_prefix_through_daemon() {
     h.shutdown();
 }
 
-/// A lock acquired through the daemon is written through to locks.json, so after
-/// the daemon exits the flock fallback still sees it.
+/// A lock acquired through the daemon is written through to locks.json, so
+/// after the daemon exits the flock fallback still sees it.
 #[test]
 fn acquired_lock_persists_to_file_after_daemon_exits() {
     let mut h = Harness::start();

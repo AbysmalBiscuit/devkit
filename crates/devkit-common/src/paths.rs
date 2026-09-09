@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
 
-/// Agent-neutral state home: `$XDG_STATE_HOME/devkit` (default `~/.local/state/devkit`).
+/// Agent-neutral state home: `$XDG_STATE_HOME/devkit` (default
+/// `~/.local/state/devkit`).
 ///
-/// Pure resolution (stat only, never writes): prefer the XDG path when it exists;
-/// otherwise fall back to the legacy `~/.claude/state/devkit` in place when it exists
-/// (so live state is never orphaned before `migrate_legacy_state` runs); otherwise the
-/// XDG path. Run `migrate_legacy_state()` once at process startup to move the data.
+/// Pure resolution (stat only, never writes): prefer the XDG path when it
+/// exists; otherwise fall back to the legacy `~/.claude/state/devkit` in place
+/// when it exists (so live state is never orphaned before
+/// `migrate_legacy_state` runs); otherwise the XDG path. Run
+/// `migrate_legacy_state()` once at process startup to move the data.
 pub fn state_dir() -> PathBuf {
     let new = xdg_state_home().join("devkit");
     let legacy = home().join(".claude/state/devkit");
@@ -44,10 +46,10 @@ fn default_state_home() -> PathBuf {
     home().join(".local/state")
 }
 
-/// One-time best-effort migration of the legacy `~/.claude/state/devkit` home to the
-/// XDG state dir. No-op if the new home already exists or the legacy one is absent.
-/// On rename failure (cross-device, permissions) the legacy dir is left in place and
-/// `state_dir()` keeps resolving to it.
+/// One-time best-effort migration of the legacy `~/.claude/state/devkit` home
+/// to the XDG state dir. No-op if the new home already exists or the legacy one
+/// is absent. On rename failure (cross-device, permissions) the legacy dir is
+/// left in place and `state_dir()` keeps resolving to it.
 pub fn migrate_legacy_state() {
     migrate_state_between(
         &xdg_state_home().join("devkit"),
@@ -88,7 +90,8 @@ pub fn port_socket_file() -> PathBuf {
 pub fn lock_socket_file() -> PathBuf {
     state_dir().join("locks.sock")
 }
-/// Single-instance lock for the daemon — separate from the registry's `ports.lock`.
+/// Single-instance lock for the daemon — separate from the registry's
+/// `ports.lock`.
 pub fn devkitd_lock() -> PathBuf {
     state_dir().join("devkitd.lock")
 }
@@ -125,8 +128,9 @@ fn home() -> PathBuf {
     panic!("HOME must be set");
 }
 
-/// The `systemd --user` unit path for the daemon: `~/.config/systemd/user/devkitd.service`.
-/// Honors `$XDG_CONFIG_HOME`, else `$HOME/.config`.
+/// The `systemd --user` unit path for the daemon:
+/// `~/.config/systemd/user/devkitd.service`. Honors `$XDG_CONFIG_HOME`, else
+/// `$HOME/.config`.
 pub fn systemd_user_unit() -> PathBuf {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)

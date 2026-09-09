@@ -19,8 +19,8 @@ const VITE_NON_SERVER: [&str; 3] = ["build", "preview", "optimize"];
 const INFO_FLAGS: [&str; 2] = ["--version", "--help"];
 
 /// The short spellings of those flags, which only most catalog programs read
-/// that way: `flask run` spends `-h` on the bind host, so `flask run -h 0.0.0.0`
-/// starts a server.
+/// that way: `flask run` spends `-h` on the bind host, so `flask run -h
+/// 0.0.0.0` starts a server.
 const SHORT_INFO_FLAGS: [&str; 2] = ["-v", "-h"];
 
 /// Whether the guard has an opinion about this program at all.
@@ -95,7 +95,8 @@ mod tests {
         assert!(!server("vite optimize"));
         assert!(!server("vite --version"));
         assert!(!server("vite -h"));
-        // A non-info flag and its value carry no non-server word, so the invocation serves.
+        // A non-info flag and its value carry no non-server word, so the
+        // invocation serves.
         assert!(server("vite --port 3000"));
         assert!(!server("vite build --minify"));
         assert!(!server("vite --config vite.config.ts build"));

@@ -3,16 +3,20 @@
 //! plans in the foreground. Shared seam for the `devrun task` CLI (and any
 //! future MCP surface).
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use devkit_common::template;
-
-use crate::apps::App;
-use crate::registry::{self, Role};
-use crate::run;
 use devkit_config::{Config, Step, TaskConfig};
+
+use crate::{
+    apps::App,
+    registry::{self, Role},
+    run,
+};
 
 /// A command task resolved to a runnable process: rendered argv, cwd, env.
 #[derive(Debug, Clone)]
@@ -376,8 +380,9 @@ pub fn exec(plan: &CommandPlan) -> Result<std::process::ExitStatus> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_config::{Config, Step, TaskConfig};
+
+    use super::*;
 
     #[test]
     fn tasks_text_renders_rows_or_hint() {
@@ -424,31 +429,26 @@ mod tests {
 
     fn api_catalog() -> HashMap<String, App> {
         let mut m = HashMap::new();
-        m.insert(
-            "api-prod".to_string(),
-            App {
-                name: "api-prod".into(),
-                base_port: 9101,
-                path: "apps/api".into(),
-                launch: vec![],
-                url: None,
-                url_env: None,
-                provides_url: false,
-                static_env: [("FROM_APP".to_string(), "static".to_string())].into(),
-                prep_files: vec![],
-                setup: vec![],
-            },
-        );
+        m.insert("api-prod".to_string(), App {
+            name: "api-prod".into(),
+            base_port: 9101,
+            path: "apps/api".into(),
+            launch: vec![],
+            url: None,
+            url_env: None,
+            provides_url: false,
+            static_env: [("FROM_APP".to_string(), "static".to_string())].into(),
+            prep_files: vec![],
+            setup: vec![],
+        });
         m
     }
 
     #[test]
     fn command_env_layering_static_then_task_then_user() {
-        let t = command_task(
-            Some("api-prod"),
-            &["git", "version"],
-            &[("FROM_APP", "task")],
-        );
+        let t = command_task(Some("api-prod"), &["git", "version"], &[(
+            "FROM_APP", "task",
+        )]);
         let user: BTreeMap<String, String> = [("FROM_APP".to_string(), "user".to_string())].into();
         let cat = api_catalog();
         let env_templates = effective_env(&cat["api-prod"].static_env, &t, &user);
@@ -629,11 +629,10 @@ mod tests {
     fn overridden_env_key_is_not_rendered() {
         // BASE references a port that is NOT in the ports map; rendering it
         // would error. The user override must make that value irrelevant.
-        let t = command_task(
-            None,
-            &["git"],
-            &[("BASE", "http://localhost:{{ ports['api-prod'] }}")],
-        );
+        let t = command_task(None, &["git"], &[(
+            "BASE",
+            "http://localhost:{{ ports['api-prod'] }}",
+        )]);
         let user: BTreeMap<String, String> =
             [("BASE".to_string(), "https://preview".to_string())].into();
         let no_static = HashMap::new();
@@ -657,14 +656,11 @@ mod tests {
     fn list_reports_kind_and_sorts() {
         let cfg = cfg_with(&[
             ("b-cmd", command_task(None, &["git"], &[])),
-            (
-                "a-seq",
-                TaskConfig {
-                    description: Some("d".into()),
-                    steps: vec![Step::Up("api-prod".into())],
-                    ..TaskConfig::default()
-                },
-            ),
+            ("a-seq", TaskConfig {
+                description: Some("d".into()),
+                steps: vec![Step::Up("api-prod".into())],
+                ..TaskConfig::default()
+            }),
         ]);
         let rows = list(&cfg);
         assert_eq!(rows[0].name, "a-seq");
