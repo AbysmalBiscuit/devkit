@@ -35,7 +35,7 @@ args = ["pr", "create"]
 reason = """Use devkit to open PRs: `issue pr create`. It pushes the branch, renders the title and body from the config templates, opens it ready for review, and records the PR on the worktree.
 Supply:
   --pr-title "type(scope): subject"   conventional-commit title, no trailing period
-  --pr-body "<markdown>"              the body; the template appends the closing line, so leave the issue reference out
+  --pr-body "<markdown>"              the body; the template heads it with `## TL;DR` and adds the closing line above it, so leave the issue reference out
   --arg issue_magic_word=Closes       closing keyword: Closes, Fixes, or Resolves
   --arg also_closes="12 13"           further issue numbers to close, space- or comma-separated
   --base <branch>                     only when the base is not `defaults.pr_base`
