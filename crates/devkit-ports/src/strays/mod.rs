@@ -6,8 +6,9 @@ pub use signature::{argv_matches, signature};
 
 pub mod os;
 
-use crate::registry::Data;
 use devkit_config::Config;
+
+use crate::registry::Data;
 
 /// Which signal(s) flagged a stray.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -19,8 +20,8 @@ pub enum Source {
 }
 
 impl Source {
-    /// Snake_case label, identical to the serialized form, so the `devrun status`
-    /// table and the MCP JSON name a source the same way.
+    /// Snake_case label, identical to the serialized form, so the `devrun
+    /// status` table and the MCP JSON name a source the same way.
     pub fn as_str(self) -> &'static str {
         match self {
             Source::PortBand => "port_band",
@@ -116,7 +117,8 @@ pub fn scan_with(
 }
 
 /// Fold the two passes together: a port hit and a process hit on the same port
-/// collapse into one `Source::Both` row carrying the process's pid/holder/command.
+/// collapse into one `Source::Both` row carrying the process's
+/// pid/holder/command.
 fn merge(band: Vec<Stray>, proc: Vec<Stray>) -> Vec<Stray> {
     use std::collections::BTreeMap;
     let mut by_port: BTreeMap<u16, Stray> = BTreeMap::new();
@@ -145,7 +147,8 @@ const WRAPPERS: &[&str] = &[
     "doppler", "bun", "bunx", "node", "uv", "uvx", "python", "python3",
 ];
 
-/// Index procs by pid, and compute the set of pids in any tracked server's tree.
+/// Index procs by pid, and compute the set of pids in any tracked server's
+/// tree.
 #[cfg(unix)]
 fn tracked_tree(data: &Data, procs: &[Proc]) -> std::collections::BTreeSet<u32> {
     use std::collections::{BTreeMap, BTreeSet};
@@ -308,12 +311,13 @@ fn process_pass(cfg: &Config, data: &Data, procs: &dyn ProcTable) -> Vec<Stray> 
         let Some((app, sig)) = sigs.iter().find(|(_, s)| argv_matches(&p.argv, s)) else {
             continue;
         };
-        // A wrapper-launched process (doppler/bun/node/uv/…) climbs to its launch
-        // root. A non-wrapper match is attributed only when the process's *own*
-        // program is the signature's launch target — a bare binary launched
-        // directly (e.g. chrome, whose signature is its absolute path). This still
-        // drops the two spurious cases: a shell whose `-c "…"` argv merely embeds
-        // the server command, and any process that only mentions the signature
+        // A wrapper-launched process (doppler/bun/node/uv/…) climbs to its
+        // launch root. A non-wrapper match is attributed only when the
+        // process's *own* program is the signature's launch target — a
+        // bare binary launched directly (e.g. chrome, whose signature
+        // is its absolute path). This still drops the two spurious
+        // cases: a shell whose `-c "…"` argv merely embeds the server
+        // command, and any process that only mentions the signature
         // words downstream — in both, the first argv word is not the framework
         // binary, so `argv_matches(prog, …)` fails.
         let prog = p.argv.split_whitespace().next().unwrap_or("");
@@ -322,9 +326,10 @@ fn process_pass(cfg: &Config, data: &Data, procs: &dyn ProcTable) -> Vec<Stray> 
         if !is_wrapper && !argv_matches(prog, &sig[..1]) {
             continue;
         }
-        // Wrapper: climb runtime ancestors to the launch root. Bare binary: climb
-        // same-binary ancestors to the top of the process tree (a renderer leaf
-        // resolves up to the main browser), so the reaped subtree is the whole app.
+        // Wrapper: climb runtime ancestors to the launch root. Bare binary:
+        // climb same-binary ancestors to the top of the process tree (a
+        // renderer leaf resolves up to the main browser), so the reaped
+        // subtree is the whole app.
         let root = if is_wrapper {
             launch_root(p.pid, &by_pid)
         } else {
@@ -374,9 +379,10 @@ fn port_from_argv(argv: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
+    use devkit_config::{AppConfig, Config};
+
     use super::*;
     use crate::registry::{Data, Entry, Role};
-    use devkit_config::{AppConfig, Config};
 
     struct NoPorts;
     impl PortProbe for NoPorts {
@@ -423,10 +429,11 @@ mod tests {
         }
     }
 
-    /// `baseline_dir` defaults to `<worktree_root>/_baselines`, so `worktree_root`
-    /// is a prefix of it. First-match over the root list would attribute a stray
-    /// inside a baseline to `<worktree_root>/_baselines` — the container, not the
-    /// baseline — and `devrun down` would then address a holder no row uses.
+    /// `baseline_dir` defaults to `<worktree_root>/_baselines`, so
+    /// `worktree_root` is a prefix of it. First-match over the root list
+    /// would attribute a stray inside a baseline to
+    /// `<worktree_root>/_baselines` — the container, not the baseline — and
+    /// `devrun down` would then address a holder no row uses.
     #[cfg(unix)]
     #[test]
     fn a_stray_inside_a_baseline_is_attributed_to_that_baseline() {
@@ -478,17 +485,14 @@ mod tests {
         cfg.defaults.stray_scan_width = 64;
         cfg.apps.insert("api".into(), app(9100));
         let mut data = Data::default();
-        data.entries.insert(
-            9105,
-            Entry {
-                app: "api".into(),
-                holder: "/w".into(),
-                role: Role::Issue,
-                pid: Some(42),
-                logfile: None,
-                ts: 0,
-            },
-        );
+        data.entries.insert(9105, Entry {
+            app: "api".into(),
+            holder: "/w".into(),
+            role: Role::Issue,
+            pid: Some(42),
+            logfile: None,
+            ts: 0,
+        });
         let strays = scan_with(&cfg, &data, &Listening(vec![9105]), &NoProcs);
         assert!(strays.is_empty());
     }
@@ -557,18 +561,16 @@ mod tests {
     fn reaps_a_bare_binary_launch_climbing_to_the_tree_top() {
         // An app whose launch is a bare binary (no wrapper, e.g. chrome) is not
         // reachable through the doppler/bun/node climb. Its own process is the
-        // launch target: attribute it and climb through same-binary ancestors so
-        // the reaped root is the top of the browser tree, not a renderer leaf.
+        // launch target: attribute it and climb through same-binary ancestors
+        // so the reaped root is the top of the browser tree, not a
+        // renderer leaf.
         let mut cfg = Config::default();
         cfg.defaults.worktree_root = "/home/u/Git/x".into();
-        cfg.apps.insert(
-            "chrome".into(),
-            AppConfig {
-                base_port: 5000,
-                launch: vec!["/opt/google/chrome/chrome".into()],
-                ..AppConfig::default()
-            },
-        );
+        cfg.apps.insert("chrome".into(), AppConfig {
+            base_port: 5000,
+            launch: vec!["/opt/google/chrome/chrome".into()],
+            ..AppConfig::default()
+        });
         let data = Data::default();
         let wt = "/home/u/Git/x/swe-1";
         let table = Table(vec![
@@ -606,17 +608,14 @@ mod tests {
         cfg.defaults.worktree_root = "/home/u/Git/x".into();
         cfg.apps.insert("api".into(), app(9100));
         let mut data = Data::default();
-        data.entries.insert(
-            9100,
-            Entry {
-                app: "api".into(),
-                holder: "/home/u/Git/x/swe-1".into(),
-                role: Role::Issue,
-                pid: Some(300),
-                logfile: None,
-                ts: 0,
-            },
-        );
+        data.entries.insert(9100, Entry {
+            app: "api".into(),
+            holder: "/home/u/Git/x/swe-1".into(),
+            role: Role::Issue,
+            pid: Some(300),
+            logfile: None,
+            ts: 0,
+        });
         let wt = "/home/u/Git/x/swe-1/apps/api";
         let table = Table(vec![
             proc(300, 1, "doppler run -- bun nitro dev --port 9100", wt),

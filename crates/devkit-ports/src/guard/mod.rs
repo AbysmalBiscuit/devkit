@@ -7,10 +7,12 @@ pub mod norm;
 pub mod sig;
 pub mod tasks;
 
-use crate::apps::App;
+use std::collections::{BTreeMap, HashMap};
+
 use devkit_config::{AppMatch, CommandRule, Config};
 use norm::{Normalized, basename};
-use std::collections::{BTreeMap, HashMap};
+
+use crate::apps::App;
 
 /// The devkit commands a user types directly. Never gate them: the guard's
 /// whole purpose is to route work to them.
@@ -121,8 +123,9 @@ fn project_hit(typed: &[String], n: &Normalized, prog: &str, p: &Project) -> Opt
     let hits = matching_apps(n, p);
 
     // The catalog outranks an app's `launch` prefix: it knows which verbs start
-    // a server, and a launch signature does not. The launch match still supplies
-    // the app name, so the candidate set narrows to it when there was one.
+    // a server, and a launch signature does not. The launch match still
+    // supplies the app name, so the candidate set narrows to it when there
+    // was one.
     if catalog::is_known_program(prog) {
         if !catalog::is_dev_server(&n.argv) {
             return None;
@@ -318,18 +321,16 @@ fn catalog_message(typed: &[String], app: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_config::{AppConfig, AppMatch, CommandRule, TaskConfig};
 
+    use super::*;
+
     fn rules(programs: &[&str], reason: &str) -> BTreeMap<String, CommandRule> {
-        BTreeMap::from([(
-            "test-rule".to_string(),
-            CommandRule {
-                programs: programs.iter().map(|s| s.to_string()).collect(),
-                args: Vec::new(),
-                reason: reason.into(),
-            },
-        )])
+        BTreeMap::from([("test-rule".to_string(), CommandRule {
+            programs: programs.iter().map(|s| s.to_string()).collect(),
+            args: Vec::new(),
+            reason: reason.into(),
+        })])
     }
 
     fn project(build: impl FnOnce(&mut Config)) -> Project {
@@ -339,21 +340,18 @@ mod tests {
             .apps
             .iter()
             .map(|(name, a)| {
-                (
-                    name.clone(),
-                    App {
-                        name: name.clone(),
-                        base_port: a.base_port,
-                        path: a.path.clone().unwrap_or_else(|| format!("apps/{name}")),
-                        launch: a.launch.clone(),
-                        url: None,
-                        url_env: None,
-                        provides_url: false,
-                        static_env: Default::default(),
-                        prep_files: Vec::new(),
-                        setup: Vec::new(),
-                    },
-                )
+                (name.clone(), App {
+                    name: name.clone(),
+                    base_port: a.base_port,
+                    path: a.path.clone().unwrap_or_else(|| format!("apps/{name}")),
+                    launch: a.launch.clone(),
+                    url: None,
+                    url_env: None,
+                    provides_url: false,
+                    static_env: Default::default(),
+                    prep_files: Vec::new(),
+                    setup: Vec::new(),
+                })
             })
             .collect();
         Project {
@@ -422,34 +420,29 @@ mod tests {
     #[test]
     fn a_task_redirect_names_the_task() {
         let p = project(|c| {
-            c.tasks.insert(
-                "check".into(),
-                TaskConfig {
-                    run: vec!["bun".into(), "test".into()],
-                    app: Some("web".into()),
-                    ..Default::default()
-                },
-            );
+            c.tasks.insert("check".into(), TaskConfig {
+                run: vec!["bun".into(), "test".into()],
+                app: Some("web".into()),
+                ..Default::default()
+            });
         });
         let d = decide_with("bun test", &BTreeMap::new(), Some(&p));
         assert!(reason(&d).contains("devrun task check"), "{}", reason(&d));
     }
 
     /// A bare-program task is normally held back from a command the catalog
-    /// reads as something other than a server. An explicit `guard = true` is the
-    /// project overruling that, and it has to reach the decision to do so.
+    /// reads as something other than a server. An explicit `guard = true` is
+    /// the project overruling that, and it has to reach the decision to do
+    /// so.
     #[test]
     fn an_explicit_guard_outranks_the_bare_program_floor() {
         let forced = |guard| {
             project(move |c| {
-                c.tasks.insert(
-                    "bundle".into(),
-                    TaskConfig {
-                        run: vec!["vite".into()],
-                        guard,
-                        ..Default::default()
-                    },
-                );
+                c.tasks.insert("bundle".into(), TaskConfig {
+                    run: vec!["vite".into()],
+                    guard,
+                    ..Default::default()
+                });
             })
         };
         let d = decide_with("vite build", &BTreeMap::new(), Some(&forced(Some(true))));
@@ -469,14 +462,11 @@ mod tests {
     #[test]
     fn a_task_with_its_own_runner_prefix_still_matches() {
         let p = project(|c| {
-            c.tasks.insert(
-                "lint".into(),
-                TaskConfig {
-                    run: vec!["bun".into(), "run".into(), "lint".into()],
-                    app: Some("web".into()),
-                    ..Default::default()
-                },
-            );
+            c.tasks.insert("lint".into(), TaskConfig {
+                run: vec!["bun".into(), "run".into(), "lint".into()],
+                app: Some("web".into()),
+                ..Default::default()
+            });
         });
         let d = decide_with("bun run lint", &BTreeMap::new(), Some(&p));
         assert!(reason(&d).contains("devrun task lint"), "{}", reason(&d));
@@ -485,16 +475,13 @@ mod tests {
     #[test]
     fn a_differing_doppler_config_denies_and_a_matching_one_does_not() {
         let p = project(|c| {
-            c.tasks.insert(
-                "check".into(),
-                TaskConfig {
-                    run: ["doppler", "run", "-c", "dev", "--", "bun", "test"]
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect(),
-                    ..Default::default()
-                },
-            );
+            c.tasks.insert("check".into(), TaskConfig {
+                run: ["doppler", "run", "-c", "dev", "--", "bun", "test"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                ..Default::default()
+            });
         });
         let denied = decide_with("doppler run -c prd -- bun test", &BTreeMap::new(), Some(&p));
         assert!(
@@ -512,13 +499,10 @@ mod tests {
     #[test]
     fn an_identical_task_is_allowed_through() {
         let p = project(|c| {
-            c.tasks.insert(
-                "check".into(),
-                TaskConfig {
-                    run: vec!["bun".into(), "test".into()],
-                    ..Default::default()
-                },
-            );
+            c.tasks.insert("check".into(), TaskConfig {
+                run: vec!["bun".into(), "test".into()],
+                ..Default::default()
+            });
         });
         assert!(!denies(&decide_with(
             "bun test",
@@ -534,14 +518,11 @@ mod tests {
                 ("short", vec!["bun", "test"]),
                 ("long", vec!["bun", "test", "unit"]),
             ] {
-                c.tasks.insert(
-                    name.into(),
-                    TaskConfig {
-                        run: run.iter().map(|s| s.to_string()).collect(),
-                        app: Some("web".into()),
-                        ..Default::default()
-                    },
-                );
+                c.tasks.insert(name.into(), TaskConfig {
+                    run: run.iter().map(|s| s.to_string()).collect(),
+                    app: Some("web".into()),
+                    ..Default::default()
+                });
             }
         });
         for _ in 0..20 {
@@ -554,22 +535,16 @@ mod tests {
     fn two_tasks_tied_on_one_command(cwd_rel: Option<&str>) -> Project {
         let mut p = project(|c| {
             for (task, app) in [("admin-test", "admin"), ("web-test", "web")] {
-                c.apps.insert(
-                    app.into(),
-                    AppConfig {
-                        base_port: 3000,
-                        path: Some(format!("apps/{app}")),
-                        ..Default::default()
-                    },
-                );
-                c.tasks.insert(
-                    task.into(),
-                    TaskConfig {
-                        run: vec!["bun".into(), "test".into()],
-                        app: Some(app.into()),
-                        ..Default::default()
-                    },
-                );
+                c.apps.insert(app.into(), AppConfig {
+                    base_port: 3000,
+                    path: Some(format!("apps/{app}")),
+                    ..Default::default()
+                });
+                c.tasks.insert(task.into(), TaskConfig {
+                    run: vec!["bun".into(), "test".into()],
+                    app: Some(app.into()),
+                    ..Default::default()
+                });
             }
         });
         p.cwd_rel = cwd_rel.map(str::to_string);
@@ -601,20 +576,17 @@ mod tests {
     #[test]
     fn a_catalog_search_names_an_app_without_calling_the_command_its_launch() {
         let mut p = project(|c| {
-            c.apps.insert(
-                "web".into(),
-                AppConfig {
-                    base_port: 3000,
-                    launch: vec![
-                        "nitro".into(),
-                        "dev".into(),
-                        "--port".into(),
-                        "{{ port }}".into(),
-                    ],
-                    path: Some("apps/web".into()),
-                    ..Default::default()
-                },
-            );
+            c.apps.insert("web".into(), AppConfig {
+                base_port: 3000,
+                launch: vec![
+                    "nitro".into(),
+                    "dev".into(),
+                    "--port".into(),
+                    "{{ port }}".into(),
+                ],
+                path: Some("apps/web".into()),
+                ..Default::default()
+            });
         });
         p.cwd_rel = Some("apps/web".into());
         let d = decide_with("uvicorn app:app", &BTreeMap::new(), Some(&p));
@@ -634,19 +606,16 @@ mod tests {
     #[test]
     fn an_app_launch_redirects_to_devrun_up() {
         let p = project(|c| {
-            c.apps.insert(
-                "web".into(),
-                AppConfig {
-                    base_port: 3000,
-                    launch: vec![
-                        "nitro".into(),
-                        "dev".into(),
-                        "--port".into(),
-                        "{{ port }}".into(),
-                    ],
-                    ..Default::default()
-                },
-            );
+            c.apps.insert("web".into(), AppConfig {
+                base_port: 3000,
+                launch: vec![
+                    "nitro".into(),
+                    "dev".into(),
+                    "--port".into(),
+                    "{{ port }}".into(),
+                ],
+                ..Default::default()
+            });
         });
         let d = decide_with("nitro dev", &BTreeMap::new(), Some(&p));
         assert!(reason(&d).contains("devrun up web"), "{}", reason(&d));
@@ -655,14 +624,11 @@ mod tests {
     #[test]
     fn the_catalog_outranks_a_launch_prefix() {
         let p = project(|c| {
-            c.apps.insert(
-                "web".into(),
-                AppConfig {
-                    base_port: 3000,
-                    launch: vec!["vite".into(), "--port".into(), "{{ port }}".into()],
-                    ..Default::default()
-                },
-            );
+            c.apps.insert("web".into(), AppConfig {
+                base_port: 3000,
+                launch: vec!["vite".into(), "--port".into(), "{{ port }}".into()],
+                ..Default::default()
+            });
         });
         assert!(!denies(&decide_with(
             "vite build",
@@ -674,14 +640,11 @@ mod tests {
 
     fn vite_task(name: &str, run: &[&str]) -> Project {
         project(|c| {
-            c.tasks.insert(
-                name.into(),
-                TaskConfig {
-                    run: run.iter().map(|s| s.to_string()).collect(),
-                    app: Some("storefront".into()),
-                    ..Default::default()
-                },
-            );
+            c.tasks.insert(name.into(), TaskConfig {
+                run: run.iter().map(|s| s.to_string()).collect(),
+                app: Some("storefront".into()),
+                ..Default::default()
+            });
         })
     }
 
@@ -742,19 +705,16 @@ mod tests {
     #[test]
     fn a_launch_prefix_outside_the_catalog_still_denies() {
         let p = project(|c| {
-            c.apps.insert(
-                "api".into(),
-                AppConfig {
-                    base_port: 4000,
-                    launch: vec![
-                        "hypercorn".into(),
-                        "app:app".into(),
-                        "--bind".into(),
-                        "0.0.0.0:{{ port }}".into(),
-                    ],
-                    ..Default::default()
-                },
-            );
+            c.apps.insert("api".into(), AppConfig {
+                base_port: 4000,
+                launch: vec![
+                    "hypercorn".into(),
+                    "app:app".into(),
+                    "--bind".into(),
+                    "0.0.0.0:{{ port }}".into(),
+                ],
+                ..Default::default()
+            });
         });
         let d = decide_with("hypercorn app:app", &BTreeMap::new(), Some(&p));
         assert!(reason(&d).contains("devrun up api"), "{}", reason(&d));
@@ -773,19 +733,16 @@ mod tests {
     #[test]
     fn a_catalog_hit_matching_no_launch_names_no_app_in_a_one_app_project() {
         let p = project(|c| {
-            c.apps.insert(
-                "web".into(),
-                AppConfig {
-                    base_port: 3000,
-                    launch: vec![
-                        "nitro".into(),
-                        "dev".into(),
-                        "--port".into(),
-                        "{{ port }}".into(),
-                    ],
-                    ..Default::default()
-                },
-            );
+            c.apps.insert("web".into(), AppConfig {
+                base_port: 3000,
+                launch: vec![
+                    "nitro".into(),
+                    "dev".into(),
+                    "--port".into(),
+                    "{{ port }}".into(),
+                ],
+                ..Default::default()
+            });
         });
         let d = decide_with("uvicorn app:app", &BTreeMap::new(), Some(&p));
         assert!(reason(&d).contains("devkit config apps"), "{}", reason(&d));
@@ -795,22 +752,19 @@ mod tests {
     fn three_apps_sharing_one_launch(cwd_rel: Option<&str>) -> Project {
         let mut p = project(|c| {
             for name in ["admin", "storefront", "web"] {
-                c.apps.insert(
-                    name.into(),
-                    AppConfig {
-                        base_port: 3000,
-                        launch: vec![
-                            "bun".into(),
-                            "run".into(),
-                            "dev".into(),
-                            "--".into(),
-                            "--port".into(),
-                            "{{ port }}".into(),
-                        ],
-                        path: Some(format!("apps/{name}")),
-                        ..Default::default()
-                    },
-                );
+                c.apps.insert(name.into(), AppConfig {
+                    base_port: 3000,
+                    launch: vec![
+                        "bun".into(),
+                        "run".into(),
+                        "dev".into(),
+                        "--".into(),
+                        "--port".into(),
+                        "{{ port }}".into(),
+                    ],
+                    path: Some(format!("apps/{name}")),
+                    ..Default::default()
+                });
             }
         });
         p.cwd_rel = cwd_rel.map(str::to_string);
@@ -849,14 +803,11 @@ mod tests {
         assert!(reason(&d).starts_with("`bun run dev` is"), "{}", reason(&d));
 
         let t = project(|c| {
-            c.tasks.insert(
-                "lint".into(),
-                TaskConfig {
-                    run: vec!["bun".into(), "run".into(), "lint".into()],
-                    app: Some("web".into()),
-                    ..Default::default()
-                },
-            );
+            c.tasks.insert("lint".into(), TaskConfig {
+                run: vec!["bun".into(), "run".into(), "lint".into()],
+                app: Some("web".into()),
+                ..Default::default()
+            });
         });
         let d = decide_with("bun run lint", &BTreeMap::new(), Some(&t));
         assert!(

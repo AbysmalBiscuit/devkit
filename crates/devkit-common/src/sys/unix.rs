@@ -1,14 +1,11 @@
 //! Unix implementations of the primitives declared in `super`.
 
 use std::collections::{HashMap, HashSet};
-
 #[cfg(target_os = "linux")]
 use std::fs;
 
 pub(super) fn process_alive(pid: u32) -> bool {
-    use nix::errno::Errno;
-    use nix::sys::signal::kill;
-    use nix::unistd::Pid;
+    use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
     // Pids that do not fit in a positive i32 are invalid on Linux/macOS.
     let Ok(signed) = i32::try_from(pid) else {
         return false;
@@ -27,8 +24,10 @@ pub(super) fn process_alive(pid: u32) -> bool {
 }
 
 pub(super) fn terminate(pid: u32) {
-    use nix::sys::signal::{Signal, kill};
-    use nix::unistd::Pid;
+    use nix::{
+        sys::signal::{Signal, kill},
+        unistd::Pid,
+    };
     let _ = kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
 }
 
@@ -36,16 +35,20 @@ pub(super) fn detach(cmd: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
     // Start a new session so the child outlives the launching shell and is
     // insulated from its controlling terminal's signals.
-    // SAFETY: setsid only mutates the child after fork; it is async-signal-safe.
+    // SAFETY: setsid only mutates the child after fork; it is
+    // async-signal-safe.
     unsafe {
         cmd.pre_exec(|| nix::unistd::setsid().map(|_| ()).map_err(|e| e.into()));
     }
 }
 
 pub(super) fn reap_owned(pid: u32) -> bool {
-    use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-    use nix::unistd::Pid;
-    // A pid of 0 would make waitpid(0) reap any process-group member; never probe it.
+    use nix::{
+        sys::wait::{WaitPidFlag, WaitStatus, waitpid},
+        unistd::Pid,
+    };
+    // A pid of 0 would make waitpid(0) reap any process-group member; never
+    // probe it.
     if pid == 0 {
         return false;
     }
@@ -145,8 +148,9 @@ pub(super) fn controlling_tty() -> Option<String> {
 #[cfg(target_os = "linux")]
 pub(super) fn cgroup_caps() -> super::CgroupCaps {
     use super::CgroupCaps;
-    // Optional manual override (also used by integration tests): a pre-delegated,
-    // writable cgroup-v2 base the daemon should use instead of auto-detecting.
+    // Optional manual override (also used by integration tests): a
+    // pre-delegated, writable cgroup-v2 base the daemon should use instead
+    // of auto-detecting.
     if let Some(root) = std::env::var_os("DEVKIT_DAEMON_CGROUP_ROOT") {
         let base = std::path::PathBuf::from(root);
         return match prepare_base(&base) {
@@ -191,9 +195,11 @@ pub(super) fn cgroup_caps() -> super::CgroupCaps {
 /// beside it under `<base>/servers/`. Idempotent.
 #[cfg(target_os = "linux")]
 fn prepare_base(base: &std::path::Path) -> anyhow::Result<()> {
-    use anyhow::Context as _;
     use std::os::unix::fs::PermissionsExt as _;
-    // Writability probe: the base dir must be writable by this user (delegation).
+
+    use anyhow::Context as _;
+    // Writability probe: the base dir must be writable by this user
+    // (delegation).
     let meta =
         fs::metadata(base).with_context(|| format!("cgroup base {} missing", base.display()))?;
     if meta.permissions().mode() & 0o200 == 0 {
@@ -241,7 +247,8 @@ pub(super) fn cgroup_create_leaf(
     fs::create_dir_all(&leaf).with_context(|| format!("mkdir {}", leaf.display()))?;
     fs::write(leaf.join("memory.max"), format!("{max_bytes}\n"))
         .with_context(|| format!("set memory.max on {}", leaf.display()))?;
-    // Kill the whole leaf together on breach so the daemon sees a clean tree exit.
+    // Kill the whole leaf together on breach so the daemon sees a clean tree
+    // exit.
     let _ = fs::write(leaf.join("memory.oom.group"), "1\n");
     Ok(leaf)
 }
@@ -269,10 +276,13 @@ pub(super) fn cgroup_list_leaves(base: &std::path::Path) -> Vec<String> {
 
 #[cfg(target_os = "linux")]
 pub(super) fn join_cgroup(cmd: &mut std::process::Command, leaf: &std::path::Path) {
-    use std::os::fd::{AsRawFd, OwnedFd};
-    use std::os::unix::process::CommandExt as _;
-    // Open the leaf's cgroup.procs in the parent (write, close-on-exec). A failure
-    // here leaves the child uncapped — fail-open, never block the spawn.
+    use std::os::{
+        fd::{AsRawFd, OwnedFd},
+        unix::process::CommandExt as _,
+    };
+    // Open the leaf's cgroup.procs in the parent (write, close-on-exec). A
+    // failure here leaves the child uncapped — fail-open, never block the
+    // spawn.
     let path = leaf.join("cgroup.procs");
     let Ok(file) = fs::OpenOptions::new().write(true).open(&path) else {
         return;
@@ -280,9 +290,10 @@ pub(super) fn join_cgroup(cmd: &mut std::process::Command, leaf: &std::path::Pat
     let fd: OwnedFd = file.into();
     // SAFETY: the closure runs in the forked child before `exec` and calls only
     // async-signal-safe primitives — getpid(), arithmetic via fmt_pid, and a
-    // single write() to a pre-opened fd. Writing the pid to cgroup.procs moves the
-    // child (and every descendant it later forks) into the leaf. The write error
-    // is ignored: an unplaced child runs uncapped rather than failing the spawn.
+    // single write() to a pre-opened fd. Writing the pid to cgroup.procs moves
+    // the child (and every descendant it later forks) into the leaf. The
+    // write error is ignored: an unplaced child runs uncapped rather than
+    // failing the spawn.
     unsafe {
         cmd.pre_exec(move || {
             let mut buf = [0u8; 20];

@@ -1,5 +1,6 @@
-use crate::issue::{prs, triage};
 use anyhow::{Context, Result};
+
+use crate::issue::{prs, triage};
 
 mod bucket;
 mod cache;
@@ -42,8 +43,9 @@ pub fn run(args: DashboardArgs) -> Result<()> {
         return Ok(());
     }
 
-    use chrono::Utc;
     use std::collections::HashMap;
+
+    use chrono::Utc;
     let now: chrono::DateTime<Utc> = std::time::SystemTime::now().into();
     let width = devkit_common::ui::term_width();
 

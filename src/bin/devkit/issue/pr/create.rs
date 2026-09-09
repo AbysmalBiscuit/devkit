@@ -1,13 +1,14 @@
-use anyhow::{Context, Result, bail};
-use devkit_common::cmd::gh_capture;
-use devkit_common::git::Git;
-use devkit_common::github;
-use devkit_common::progress::Steps;
-use devkit_config::PrCreateState;
 use std::path::Path;
 
-use super::resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing, verify_created};
-use super::{add_reviewers, require_reviewer_for_ready, reviewer_logins};
+use anyhow::{Context, Result, bail};
+use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
+use devkit_config::PrCreateState;
+
+use super::{
+    add_reviewers, require_reviewer_for_ready,
+    resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing, verify_created},
+    reviewer_logins,
+};
 use crate::issue::review::{
     PrAction, Target, action_for, base_ctx, finish, guard_branch, parse_args, render_review,
     resolve_target, with_fields,
@@ -273,13 +274,10 @@ pub fn run(args: Args) -> Result<()> {
             render_review(tmpls.pr_title(), "pr_title", &ctx, &vars, missing_at)
         }),
         pr_body: Box::new(|title| {
-            let ctx = with_fields(
-                &ctx,
-                &[
-                    ("input", body_input),
-                    ("pr_title", serde_json::json!(title)),
-                ],
-            );
+            let ctx = with_fields(&ctx, &[
+                ("input", body_input),
+                ("pr_title", serde_json::json!(title)),
+            ]);
             render_review(tmpls.pr_body(), "pr_body", &ctx, &vars, missing_at)
         }),
         reviewers,
@@ -329,7 +327,8 @@ mod tests {
     fn reuse_reports_a_state_flag_it_did_not_apply() {
         let note = reuse_note(
             123,
-            /* pr_is_draft */ false,
+            // pr_is_draft
+            false,
             Some(PrCreateState::Draft),
         );
         let note = note.expect("a contradicted flag is reported");

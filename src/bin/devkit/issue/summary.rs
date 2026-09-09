@@ -1,10 +1,13 @@
 //! The issue summary file `issue setup --summary` leaves behind: the tracker
 //! facts and description as a scaffold, with the sections an agent fills in.
 
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result};
 use devkit_common::tracker::IssueDetails;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 /// Render context for both `issue_summary_path` and `issue_summary`. Every
 /// field the tracker left empty renders as the empty string, so a template
@@ -124,9 +127,12 @@ pub(crate) fn write(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::BTreeMap,
+        path::{Path, PathBuf},
+    };
+
     use super::*;
-    use std::collections::BTreeMap;
-    use std::path::{Path, PathBuf};
 
     fn details() -> devkit_common::tracker::IssueDetails {
         devkit_common::tracker::IssueDetails {

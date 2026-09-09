@@ -1,13 +1,13 @@
 //! Session identity resolution and anchor-PID policy.
 
-/// Environment variables carrying the harness's own session id, one per harness.
-/// `CODEX_THREAD_ID` is excluded deliberately: it holds the same value as
-/// `CODEX_SESSION_ID`, so listing it would manufacture a false ambiguity.
+/// Environment variables carrying the harness's own session id, one per
+/// harness. `CODEX_THREAD_ID` is excluded deliberately: it holds the same value
+/// as `CODEX_SESSION_ID`, so listing it would manufacture a false ambiguity.
 pub const HARNESS_SESSION_VARS: [&str; 2] = ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID"];
 
-/// One harness's answer to "which session is this": the variable it came from and
-/// the value it held. The variable name travels with the value so a refusal can
-/// tell the reader which harness contributed which id.
+/// One harness's answer to "which session is this": the variable it came from
+/// and the value it held. The variable name travels with the value so a refusal
+/// can tell the reader which harness contributed which id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub var: &'static str,
@@ -30,7 +30,8 @@ pub enum Identity {
 }
 
 impl Identity {
-    /// The id to label read-only output with; the first candidate under ambiguity.
+    /// The id to label read-only output with; the first candidate under
+    /// ambiguity.
     pub fn or_first(self) -> String {
         match self {
             Identity::Resolved(s) => s,
@@ -43,7 +44,8 @@ impl Identity {
     }
 }
 
-/// Environment inputs for identity resolution, captured so the logic is pure/testable.
+/// Environment inputs for identity resolution, captured so the logic is
+/// pure/testable.
 pub struct Env {
     pub harness_sessions: Vec<Candidate>,
     pub devkit_session: Option<String>,
@@ -68,10 +70,10 @@ impl Env {
 /// Resolve the holder identity by precedence: `--as` > a harness session id >
 /// `$DEVKIT_SESSION` > `$TMUX_PANE` > controlling tty > parent pid.
 ///
-/// The harness id outranks `$DEVKIT_SESSION` because the write hook ignores that
-/// variable outright, so any value visible under a harness already disagrees with
-/// what enforcement decided; it outranks tmux and the tty because those name a
-/// terminal rather than a session.
+/// The harness id outranks `$DEVKIT_SESSION` because the write hook ignores
+/// that variable outright, so any value visible under a harness already
+/// disagrees with what enforcement decided; it outranks tmux and the tty
+/// because those name a terminal rather than a session.
 pub fn resolve_identity(as_flag: Option<&str>, env: &Env) -> Identity {
     if let Some(f) = as_flag {
         return Identity::Resolved(f.to_string());
@@ -102,8 +104,8 @@ pub fn identity(as_flag: Option<&str>) -> Identity {
 }
 
 /// A durable anchor pid, recorded only when one can be trusted: the tmux pane's
-/// process, else a parent pid when attached to a tty. Agent-via-Bash sessions (no
-/// tmux, no tty) get None and rely on TTL + explicit release.
+/// process, else a parent pid when attached to a tty. Agent-via-Bash sessions
+/// (no tmux, no tty) get None and rely on TTL + explicit release.
 pub fn decide_anchor_pid(tmux_pid: Option<u32>, is_tty: bool, ppid: u32) -> Option<u32> {
     if let Some(p) = tmux_pid {
         return Some(p);
@@ -293,13 +295,10 @@ mod tests {
         match resolve_identity(None, &e) {
             Identity::Ambiguous(c) => {
                 let shown: Vec<String> = c.iter().map(|c| c.to_string()).collect();
-                assert_eq!(
-                    shown,
-                    vec![
-                        "CLAUDE_CODE_SESSION_ID=outer".to_string(),
-                        "CODEX_SESSION_ID=inner".to_string()
-                    ]
-                );
+                assert_eq!(shown, vec![
+                    "CLAUDE_CODE_SESSION_ID=outer".to_string(),
+                    "CODEX_SESSION_ID=inner".to_string()
+                ]);
             }
             other => panic!("expected Ambiguous, got {other:?}"),
         }

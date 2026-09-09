@@ -1,8 +1,11 @@
+use std::{
+    io::Read,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
 use anyhow::{Context, Result, bail};
-use std::io::Read;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
 
 /// Run a command with extra environment variables, capture stdout; the error
 /// includes stderr on non-zero exit. The variables reach the child only:
@@ -168,20 +171,19 @@ mod tests {
             )
         } else {
             (
-                capture_env(
-                    "sh",
-                    &["-c", "printf %s \"$DEVKIT_TEST_ENV\""],
-                    None,
-                    &[("DEVKIT_TEST_ENV", "on")],
-                ),
+                capture_env("sh", &["-c", "printf %s \"$DEVKIT_TEST_ENV\""], None, &[(
+                    "DEVKIT_TEST_ENV",
+                    "on",
+                )]),
                 "on",
             )
         };
         let out = out.unwrap();
         assert!(out.lines().any(|l| l.trim() == want), "{out}");
-        // Setting a variable for a child must not mutate this process: `set_var` is
-        // `unsafe` in edition 2024 precisely because other threads read the
-        // environment concurrently, and devkit runs progress threads.
+        // Setting a variable for a child must not mutate this process:
+        // `set_var` is `unsafe` in edition 2024 precisely because other
+        // threads read the environment concurrently, and devkit runs
+        // progress threads.
         assert!(std::env::var("DEVKIT_TEST_ENV").is_err());
     }
 
@@ -225,9 +227,11 @@ mod tests {
         // Asserted on the argument vector, not on behavior: the point is that
         // neither GH_REPO nor GH_HOST can redirect the call, and behavior alone
         // cannot distinguish "no ambient variable set" from "flag present".
-        assert_eq!(
-            gh_args(&["pr", "list"], &repo),
-            vec!["pr", "list", "--repo", "github.com/o/r"]
-        );
+        assert_eq!(gh_args(&["pr", "list"], &repo), vec![
+            "pr",
+            "list",
+            "--repo",
+            "github.com/o/r"
+        ]);
     }
 }

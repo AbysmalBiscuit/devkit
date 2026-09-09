@@ -1,8 +1,10 @@
 use anyhow::Result;
 use clap::Subcommand;
 use devkit::completions::Shell;
-use devkit_locks::hook::{self, HookEvent};
-use devkit_locks::model::{Conflict, LockEntry, Refusal, RefusedBecause, WriteDecision};
+use devkit_locks::{
+    hook::{self, HookEvent},
+    model::{Conflict, LockEntry, Refusal, RefusedBecause, WriteDecision},
+};
 
 #[derive(clap::Args)]
 pub struct LocksCli {
@@ -18,8 +20,9 @@ pub(crate) enum Cmd {
     Acquire {
         /// Files or directories to claim.
         paths: Vec<String>,
-        /// Holder id. Defaults to the coding-agent session, then $DEVKIT_SESSION,
-        /// $TMUX_PANE, the controlling tty, the parent pid.
+        /// Holder id. Defaults to the coding-agent session, then
+        /// $DEVKIT_SESSION, $TMUX_PANE, the controlling tty, the parent
+        /// pid.
         #[arg(long = "as")]
         holder: Option<String>,
         /// Why you hold these paths; shown to whoever the claim blocks.
@@ -36,8 +39,9 @@ pub(crate) enum Cmd {
     Check {
         /// Files or directories to test.
         paths: Vec<String>,
-        /// Holder id. Defaults to the coding-agent session, then $DEVKIT_SESSION,
-        /// $TMUX_PANE, the controlling tty, the parent pid.
+        /// Holder id. Defaults to the coding-agent session, then
+        /// $DEVKIT_SESSION, $TMUX_PANE, the controlling tty, the parent
+        /// pid.
         #[arg(long = "as")]
         holder: Option<String>,
         /// Emit the result as JSON instead of a human-readable line.
@@ -48,8 +52,9 @@ pub(crate) enum Cmd {
     Release {
         /// Paths to release; ignored with --all.
         paths: Vec<String>,
-        /// Holder id. Defaults to the coding-agent session, then $DEVKIT_SESSION,
-        /// $TMUX_PANE, the controlling tty, the parent pid.
+        /// Holder id. Defaults to the coding-agent session, then
+        /// $DEVKIT_SESSION, $TMUX_PANE, the controlling tty, the parent
+        /// pid.
         #[arg(long = "as")]
         holder: Option<String>,
         /// Release every path this holder claims.
@@ -68,7 +73,8 @@ pub(crate) enum Cmd {
         /// Emit the rows as JSON instead of a table.
         #[arg(long)]
         json: bool,
-        /// Not accepted. `status` lists everything; `check <paths...>` tests paths.
+        /// Not accepted. `status` lists everything; `check <paths...>` tests
+        /// paths.
         #[arg(hide = true)]
         paths: Vec<String>,
     },
@@ -141,7 +147,8 @@ fn print_refusals(refused: &[Refusal]) {
 }
 
 /// Anchor a write target to the session's own cwd. `apply_patch` names paths
-/// relative to the session, not to wherever the harness spawned the hook process.
+/// relative to the session, not to wherever the harness spawned the hook
+/// process.
 fn resolve_against(payload: &serde_json::Value, path: &str) -> String {
     let p = std::path::Path::new(path);
     if p.is_absolute() {
@@ -159,7 +166,8 @@ fn resolve_against(payload: &serde_json::Value, path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Map a write decision to the optional stdout envelope. `None` = allow silently.
+/// Map a write decision to the optional stdout envelope. `None` = allow
+/// silently.
 fn write_output(d: &WriteDecision) -> Option<serde_json::Value> {
     match d {
         WriteDecision::Acquired | WriteDecision::AllowedByOwnership => None,
@@ -196,8 +204,9 @@ fn run_hook(event: &str) {
     use std::io::Read;
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_err() {
-        // An unreadable pipe is a transport fault rather than a payload to judge,
-        // and denying every write in a session over one is the worse failure.
+        // An unreadable pipe is a transport fault rather than a payload to
+        // judge, and denying every write in a session over one is the
+        // worse failure.
         return;
     }
     let payload = match serde_json::from_str::<serde_json::Value>(&buf) {
@@ -231,7 +240,8 @@ fn run_hook(event: &str) {
                     Ok(WriteDecision::Denied(c)) => conflicts.extend(c),
                     Ok(_) => {}
                     Err(e) => {
-                        // fail closed: a registry error must not silently reopen the window
+                        // fail closed: a registry error must not silently
+                        // reopen the window
                         let out = hook::deny_json(&format!(
                             "devkit write-harness: registry error (fail-closed): {e:#}"
                         ));
@@ -410,8 +420,9 @@ fn status_table(locks: &[LockEntry], all: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_locks::model::{Conflict, WriteDecision};
+
+    use super::*;
 
     #[test]
     fn allowed_decisions_emit_nothing() {

@@ -1,10 +1,11 @@
 //! Linear behind the tracker seam: the GraphQL free functions, plus the
 //! [`LinearTracker`] adapter that presents them as a [`Tracker`].
 
-use super::{AssignedIssue, IssueRef, PrRef, State, Tracker, TrackerKind};
+use std::{collections::HashMap, sync::OnceLock};
+
 use anyhow::{Context, Result};
-use std::collections::HashMap;
-use std::sync::OnceLock;
+
+use super::{AssignedIssue, IssueRef, PrRef, State, Tracker, TrackerKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinearIdentity {
@@ -58,7 +59,8 @@ pub fn issue_pr_query(id: &str) -> Option<String> {
     ))
 }
 
-/// From an `issue_pr_query` response, the first GitHub PR attachment + the title.
+/// From an `issue_pr_query` response, the first GitHub PR attachment + the
+/// title.
 pub fn parse_issue_pr(resp: &serde_json::Value) -> (Option<LinearPr>, String) {
     let node = &resp["data"]["issues"]["nodes"][0];
     let title = node["title"].as_str().unwrap_or("").to_string();
@@ -166,7 +168,8 @@ pub fn parse_issue_details(resp: &serde_json::Value) -> Option<IssueDetails> {
         assignee: text(&n["assignee"], "name"),
         priority: text(n, "priorityLabel"),
         estimate: n["estimate"].as_f64().map(|e| {
-            // Linear returns points as a float; whole points read better unsuffixed.
+            // Linear returns points as a float; whole points read better
+            // unsuffixed.
             if e.fract() == 0.0 {
                 format!("{}", e as i64)
             } else {
@@ -227,11 +230,11 @@ pub fn issues_by_number(n: u64, key: &str) -> Result<Vec<LinearIssueRef>> {
     Ok(parse_number_candidates(&resp))
 }
 
-/// The single transport for every Linear GraphQL call: POST the body, decode the
-/// JSON envelope. `detail` labels the call for timing (see [`crate::timing`]).
-/// GraphQL-level error interpretation stays with each caller — this preserves
-/// the raw `ureq` error so `validate` can downcast to distinguish an unreachable
-/// host from a rejected key.
+/// The single transport for every Linear GraphQL call: POST the body, decode
+/// the JSON envelope. `detail` labels the call for timing (see
+/// [`crate::timing`]). GraphQL-level error interpretation stays with each
+/// caller — this preserves the raw `ureq` error so `validate` can downcast to
+/// distinguish an unreachable host from a rejected key.
 fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value> {
     let _span = crate::timing::io_span("linear graphql", detail).entered();
     let v: serde_json::Value = ureq::post("https://api.linear.app/graphql")
@@ -289,11 +292,13 @@ fn parse_identity(resp: &serde_json::Value) -> Result<LinearIdentity> {
     })
 }
 
-/// Build the batched GraphQL query for the given `ENG-1234` ids. Pure → testable.
+/// Build the batched GraphQL query for the given `ENG-1234` ids. Pure →
+/// testable.
 ///
-/// Ids that are not Linear ids (see [`parse_id`]) are dropped: every alias rides
-/// in one request, so one malformed alias would cost the states of all the others.
-/// A dropped id simply has no entry in the response map — its state is unknown.
+/// Ids that are not Linear ids (see [`parse_id`]) are dropped: every alias
+/// rides in one request, so one malformed alias would cost the states of all
+/// the others. A dropped id simply has no entry in the response map — its state
+/// is unknown.
 pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> {
     let mut aliases = HashMap::new();
     let mut parts = Vec::new();
@@ -313,7 +318,8 @@ pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> 
     Some((format!("query {{ {} }}", parts.join(" ")), aliases))
 }
 
-/// Query Linear; returns id → state. Empty map if no key/ids or on network error.
+/// Query Linear; returns id → state. Empty map if no key/ids or on network
+/// error.
 pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, State> {
     let (Some(key), Some((query, aliases))) = (key, build_query(ids)) else {
         return HashMap::new();
@@ -412,8 +418,8 @@ pub fn issues_for_prs(urls: &[String], key: Option<&str>) -> HashMap<String, Vec
 /// The workspace url slug for building `linear.app/<slug>/issue/<id>` links.
 ///
 /// Prefers `$LINEAR_WORKSPACE` (no network); otherwise asks the Linear API with
-/// `$LINEAR_API_KEY`. Returns None when neither is available or the lookup fails
-/// — issue ids then render as plain, unlinked text.
+/// `$LINEAR_API_KEY`. Returns None when neither is available or the lookup
+/// fails — issue ids then render as plain, unlinked text.
 pub fn workspace_url_key() -> Option<String> {
     if let Some(slug) = crate::secrets::resolve("LINEAR_WORKSPACE") {
         return Some(slug);
@@ -453,7 +459,8 @@ fn fetch(
     Ok(out)
 }
 
-/// GraphQL for one page of issues assigned to me, with state + transition history.
+/// GraphQL for one page of issues assigned to me, with state + transition
+/// history.
 fn assigned_query(after: Option<&str>) -> String {
     let cursor = match after {
         Some(c) => format!(", after: \"{c}\""),
@@ -502,8 +509,9 @@ pub fn assigned_issue_history(key: &str) -> Result<Vec<AssignedIssue>> {
     assigned_issue_history_with_progress(key, |_| {})
 }
 
-/// As [`assigned_issue_history`], calling `on_page` with the running total after
-/// each fetched page — lets a caller show a rising count while pages stream in.
+/// As [`assigned_issue_history`], calling `on_page` with the running total
+/// after each fetched page — lets a caller show a rising count while pages
+/// stream in.
 pub fn assigned_issue_history_with_progress(
     key: &str,
     mut on_page: impl FnMut(usize),
@@ -605,8 +613,9 @@ impl From<IssueDetails> for super::IssueDetails {
 }
 
 /// Linear behind the tracker seam. Holds the API key resolved once at
-/// construction; `None` means every call degrades to empty rather than erroring,
-/// which is what keeps `issue status` useful on a machine with no key.
+/// construction; `None` means every call degrades to empty rather than
+/// erroring, which is what keeps `issue status` useful on a machine with no
+/// key.
 pub struct LinearTracker {
     key: Option<String>,
     /// The workspace url slug, fetched at most once per tracker instance —

@@ -5,8 +5,7 @@
 //! started. Uses an isolated HOME/XDG_STATE_HOME so the port registry never
 //! touches the real one.
 
-use std::path::Path;
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 /// A temp dir that is a git repo (`cmd_up` resolves the worktree root) with a
 /// devkit.toml defining two apps and no tasks. `baseline_ref` names a ref that

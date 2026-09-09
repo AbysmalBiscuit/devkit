@@ -1,25 +1,29 @@
+use std::{
+    collections::BTreeMap,
+    fs::{self, File},
+    net::TcpStream,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
+
 use anyhow::{Context, Result};
-use std::collections::BTreeMap;
-use std::fs::{self, File};
-use std::net::TcpStream;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 pub use crate::sys::tree_rss_bytes;
 
 /// Configure a `Command` the same way `spawn_detached` does, minus the stdio
-/// attachment (which requires a real logfile). Extracted so tests can inspect the
-/// resulting env without spawning a real process.
+/// attachment (which requires a real logfile). Extracted so tests can inspect
+/// the resulting env without spawning a real process.
 fn configure_child<'a>(
     c: &'a mut Command,
     rest: &[String],
     cwd: &str,
     env: &BTreeMap<String, String>,
 ) -> &'a mut Command {
-    // The daemon marker must not cross into supervised children: a devkit subprocess
-    // of a child would see it, skip the devkitd.lock gate, and write ports.json directly
-    // behind the live daemon, causing silent registry desync.
+    // The daemon marker must not cross into supervised children: a devkit
+    // subprocess of a child would see it, skip the devkitd.lock gate, and
+    // write ports.json directly behind the live daemon, causing silent
+    // registry desync.
     c.args(rest)
         .current_dir(cwd)
         .envs(env)
@@ -27,8 +31,8 @@ fn configure_child<'a>(
 }
 
 /// Spawn `argv` detached (own session), env-augmented, stdout+stderr → logfile.
-/// When `cgroup_leaf` is `Some`, the child joins that cgroup in `pre_exec` before
-/// `exec` (Linux only; a no-op elsewhere). Returns the child pid.
+/// When `cgroup_leaf` is `Some`, the child joins that cgroup in `pre_exec`
+/// before `exec` (Linux only; a no-op elsewhere). Returns the child pid.
 pub fn spawn_detached(
     argv: &[String],
     cwd: &str,
@@ -53,9 +57,10 @@ pub fn spawn_detached(
     Ok(child.id())
 }
 
-/// One-shot TCP liveness check: does `127.0.0.1:port` accept a connection within
-/// 300 ms? This is the single attempt `wait_ready` polls and the health-probe
-/// thread fires once per cycle, so both judge "accepting connections" identically.
+/// One-shot TCP liveness check: does `127.0.0.1:port` accept a connection
+/// within 300 ms? This is the single attempt `wait_ready` polls and the
+/// health-probe thread fires once per cycle, so both judge "accepting
+/// connections" identically.
 pub fn probe_port(port: u16) -> bool {
     TcpStream::connect_timeout(
         &(std::net::Ipv4Addr::LOCALHOST, port).into(),
@@ -95,14 +100,16 @@ pub fn tail(logfile: &PathBuf, lines: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::ffi::OsStr;
 
+    use super::*;
+
     /// `configure_child` must remove `DEVKITD_SELF` from the child's env so a
-    /// devkit subprocess of a supervised server cannot write the registry behind the
-    /// live daemon. `env_remove` records the removal as `(key, None)` in `get_envs`
-    /// on every platform, so anything other than an explicit removal means the child
-    /// would inherit the marker — the regression this test guards against.
+    /// devkit subprocess of a supervised server cannot write the registry
+    /// behind the live daemon. `env_remove` records the removal as `(key,
+    /// None)` in `get_envs` on every platform, so anything other than an
+    /// explicit removal means the child would inherit the marker — the
+    /// regression this test guards against.
     #[test]
     fn spawn_detached_does_not_leak_daemon_marker() {
         let env = BTreeMap::new();
@@ -120,12 +127,13 @@ mod tests {
         }
     }
 
-    /// Command prefix that runs a *real* python interpreter, or `None`. The prefix
-    /// is `["python3"]`-style for a direct interpreter, or a uv invocation when the
-    /// only bare `python` is the Windows Store app-execution alias — a shim that
-    /// answers `--version` with "Python was not found …" instead of a version.
-    /// `None` when nothing real is found, in which case the dependent test skips
-    /// rather than failing on a missing or fake tool.
+    /// Command prefix that runs a *real* python interpreter, or `None`. The
+    /// prefix is `["python3"]`-style for a direct interpreter, or a uv
+    /// invocation when the only bare `python` is the Windows Store
+    /// app-execution alias — a shim that answers `--version` with "Python
+    /// was not found …" instead of a version. `None` when nothing real is
+    /// found, in which case the dependent test skips rather than failing on
+    /// a missing or fake tool.
     fn python_cmd() -> Option<Vec<String>> {
         // Direct interpreters first.
         for cand in ["python3", "python", "py"] {
@@ -134,9 +142,9 @@ mod tests {
                 return Some(prefix);
             }
         }
-        // uv fallbacks: a uv-managed interpreter. `uv python find` yields a bare
-        // interpreter path (no wrapper process, so `stop` reaches it directly);
-        // `uv run python` is the last resort.
+        // uv fallbacks: a uv-managed interpreter. `uv python find` yields a
+        // bare interpreter path (no wrapper process, so `stop` reaches
+        // it directly); `uv run python` is the last resort.
         if let Some(path) = uv_python_path() {
             let prefix = vec![path];
             if is_real_python(&prefix) {
@@ -169,10 +177,10 @@ mod tests {
     }
 
     /// True when running `prefix --version` exits successfully and prints
-    /// `Python <digit>…`. A real interpreter writes its version (to stdout on 3.4+,
-    /// stderr on older); the Store shim writes "Python was not found …", so
-    /// requiring a digit right after "Python " rejects the shim even though it
-    /// borrows the "Python" prefix.
+    /// `Python <digit>…`. A real interpreter writes its version (to stdout on
+    /// 3.4+, stderr on older); the Store shim writes "Python was not found
+    /// …", so requiring a digit right after "Python " rejects the shim even
+    /// though it borrows the "Python" prefix.
     fn is_real_python(prefix: &[String]) -> bool {
         let Some((prog, rest)) = prefix.split_first() else {
             return false;
@@ -210,10 +218,11 @@ mod tests {
         assert!(probe_port(port), "connects to a bound listener");
         drop(l);
 
-        // Negative: a port with nothing listening refuses the probe. A just-freed
-        // ephemeral port can be re-bound by a concurrent test in this binary, so
-        // derive a fresh free port each attempt and accept the first one observed
-        // closed rather than asserting a specific port stays free.
+        // Negative: a port with nothing listening refuses the probe. A
+        // just-freed ephemeral port can be re-bound by a concurrent
+        // test in this binary, so derive a fresh free port each attempt
+        // and accept the first one observed closed rather than
+        // asserting a specific port stays free.
         for _ in 0..100 {
             let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
             let free = l.local_addr().unwrap().port();
@@ -258,9 +267,9 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         drop(l);
         let mut argv = py;
-        // `-u` unbuffers stdout so the readiness line (or any error) reaches the
-        // log before the process is killed, instead of dying in a block buffer
-        // and leaving the failure diagnostic empty.
+        // `-u` unbuffers stdout so the readiness line (or any error) reaches
+        // the log before the process is killed, instead of dying in a
+        // block buffer and leaving the failure diagnostic empty.
         argv.extend([
             "-u".to_string(),
             "-c".to_string(),
@@ -269,9 +278,10 @@ mod tests {
         let env = BTreeMap::new();
         let pid = spawn_detached(&argv, ".", &env, &tmp, None).unwrap();
         let ready = wait_ready(port, Duration::from_secs(10));
-        // On failure the interpreter and its captured stdout+stderr are the only
-        // clue to why it never bound (missing module, port conflict, a slow uv
-        // cold-start); the bare assertion discarded both.
+        // On failure the interpreter and its captured stdout+stderr are the
+        // only clue to why it never bound (missing module, port
+        // conflict, a slow uv cold-start); the bare assertion discarded
+        // both.
         if !ready {
             let log = tail(&tmp, 50);
             stop(pid);

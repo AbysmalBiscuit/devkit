@@ -7,9 +7,11 @@
 #[path = "common/testenv.rs"]
 mod testenv;
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    process::{Command, Output, Stdio},
+};
 
 fn git(args: &[&str], cwd: &Path) {
     devkit_common::git::Git::fixture(cwd)

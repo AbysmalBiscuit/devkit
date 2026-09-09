@@ -5,8 +5,7 @@
 //! isolated HOME/XDG_STATE_HOME so the port registry never touches the real
 //! one.
 
-use std::path::Path;
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 fn devkit_run() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));

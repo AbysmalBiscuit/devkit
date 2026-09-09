@@ -33,8 +33,8 @@ pub fn cgroup_caps() -> CgroupCaps {
 }
 
 /// Create `<base>/servers/<name>/`, set `memory.max` and `memory.oom.group=1`.
-/// Reuses the leaf if it already exists (rewriting `memory.max`). Off-Linux this
-/// errors (`Unsupported` callers never reach it).
+/// Reuses the leaf if it already exists (rewriting `memory.max`). Off-Linux
+/// this errors (`Unsupported` callers never reach it).
 pub fn cgroup_create_leaf(base: &Path, name: &str, max_bytes: u64) -> anyhow::Result<PathBuf> {
     imp::cgroup_create_leaf(base, name, max_bytes)
 }
@@ -44,7 +44,8 @@ pub fn cgroup_remove_leaf(leaf: &Path) -> anyhow::Result<()> {
     imp::cgroup_remove_leaf(leaf)
 }
 
-/// Leaf directory names under `<base>/servers/`. Empty on any error or off-Linux.
+/// Leaf directory names under `<base>/servers/`. Empty on any error or
+/// off-Linux.
 pub fn cgroup_list_leaves(base: &Path) -> Vec<String> {
     imp::cgroup_list_leaves(base)
 }
@@ -56,8 +57,8 @@ pub fn join_cgroup(cmd: &mut std::process::Command, leaf: &Path) {
 }
 
 /// Format a non-negative pid into `buf` as decimal ASCII, returning the written
-/// slice. Async-signal-safe: pure arithmetic into a caller buffer, no allocation,
-/// so it is safe to call from a post-fork `pre_exec` closure.
+/// slice. Async-signal-safe: pure arithmetic into a caller buffer, no
+/// allocation, so it is safe to call from a post-fork `pre_exec` closure.
 #[allow(dead_code)]
 fn fmt_pid(pid: i64, buf: &mut [u8; 20]) -> &[u8] {
     let mut n = pid.max(0) as u64;

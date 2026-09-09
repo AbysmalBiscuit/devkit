@@ -1,11 +1,10 @@
 //! The tracker seam: one contract over Linear, GitHub Issues, or no tracker.
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
+use anyhow::Result;
 pub use devkit_config::TrackerKind;
+use serde::{Deserialize, Serialize};
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;
@@ -163,9 +162,10 @@ pub struct Resolved {
 impl Resolved {
     /// The reason a stand-in is standing in for a tracker the project named and
     /// devkit could not build, or `None` when the project named nothing and
-    /// detection came up empty. Both cases are an undeclared `TrackerKind::None`
-    /// and only the reason separates them, which is what keeps a project that
-    /// named a tracker from being told to name one.
+    /// detection came up empty. Both cases are an undeclared
+    /// `TrackerKind::None` and only the reason separates them, which is
+    /// what keeps a project that named a tracker from being told to name
+    /// one.
     pub fn unbuilt_reason(&self) -> Option<&str> {
         unbuilt_reason(self.tracker.kind(), self.declared, &self.reason)
     }
@@ -184,13 +184,14 @@ pub const DETECTED: &str = "detected: ";
 
 /// The tracker for this project. An explicit `kind` wins over detection, except
 /// that `Github` needs an issues repository to talk to: without one it falls
-/// back to no tracker, undeclared, with the failure in `reason`. Detection order
-/// is a resolvable Linear key, then a GitHub `origin` remote, then no tracker.
+/// back to no tracker, undeclared, with the failure in `reason`. Detection
+/// order is a resolvable Linear key, then a GitHub `origin` remote, then no
+/// tracker.
 ///
 /// Detection is a floor, not a convenience: a globally exported
-/// `LINEAR_API_KEY` resolves to Linear for every project, so a GitHub project on
-/// such a machine must set `kind` explicitly. What detection buys is that every
-/// config predating `[tracker]` keeps behaving exactly as it did.
+/// `LINEAR_API_KEY` resolves to Linear for every project, so a GitHub project
+/// on such a machine must set `kind` explicitly. What detection buys is that
+/// every config predating `[tracker]` keeps behaving exactly as it did.
 pub fn resolve(kind: Option<TrackerKind>, cwd: &Path, repos: &crate::github::Repos) -> Resolved {
     resolve_with_key(kind, cwd, repos, crate::secrets::resolve("LINEAR_API_KEY"))
 }

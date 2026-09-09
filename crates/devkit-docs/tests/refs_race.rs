@@ -1,5 +1,6 @@
-use devkit_docs::refs::RefStore;
 use std::process::Command;
+
+use devkit_docs::refs::RefStore;
 
 #[test]
 fn concurrent_records_never_lose_rows() {

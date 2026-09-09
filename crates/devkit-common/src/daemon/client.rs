@@ -2,15 +2,16 @@
 //! connect/spawn helpers. Handshake (Ping/Pong/proto) is registry-specific and
 //! lives in each consumer's thin wrapper.
 
-use crate::daemon::framing;
-use crate::daemon::transport;
+use std::{
+    io::{BufReader, BufWriter},
+    path::Path,
+};
+
 use anyhow::{Context, Result, anyhow};
-use interprocess::local_socket::traits::Stream as _;
-use interprocess::local_socket::{RecvHalf, SendHalf, Stream};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use std::io::{BufReader, BufWriter};
-use std::path::Path;
+use interprocess::local_socket::{RecvHalf, SendHalf, Stream, traits::Stream as _};
+use serde::{Serialize, de::DeserializeOwned};
+
+use crate::daemon::{framing, transport};
 
 /// A live connection to a daemon. Reusable across requests.
 pub struct Client {
@@ -38,8 +39,8 @@ pub fn connect(path: &Path) -> Option<Client> {
     })
 }
 
-/// Spawn the daemon binary at `bin` (it backgrounds itself by taking its lock and
-/// binding sockets). Callers poll `connect` until it answers.
+/// Spawn the daemon binary at `bin` (it backgrounds itself by taking its lock
+/// and binding sockets). Callers poll `connect` until it answers.
 pub fn spawn(bin: &Path) -> Result<()> {
     std::process::Command::new(bin)
         .spawn()

@@ -1,16 +1,18 @@
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    io::{IsTerminal, Write},
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
 use devkit::completions::Shell;
-use devkit_common::git::Git;
-use devkit_common::progress::Steps;
-use devkit_common::supervise;
-use devkit_common::ui;
-use devkit_ports::load;
-use devkit_ports::registry::{self, Role};
-use devkit_ports::run;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use devkit_common::{git::Git, progress::Steps, supervise, ui};
+use devkit_ports::{
+    load,
+    registry::{self, Role},
+    run,
+};
 
 /// `--timing` verbosity, parsed by clap. `--timing` alone = summary,
 /// `--timing=trace` = per-op detail.
@@ -20,7 +22,8 @@ pub(crate) enum TimingFlag {
     Trace,
 }
 
-/// Resolve the timing mode: the flag wins; otherwise fall back to `DEVKIT_TIMING`.
+/// Resolve the timing mode: the flag wins; otherwise fall back to
+/// `DEVKIT_TIMING`.
 fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
     use devkit_common::timing::Mode;
     match flag {
@@ -32,13 +35,16 @@ fn timing_mode(flag: Option<TimingFlag>) -> devkit_common::timing::Mode {
 
 #[derive(clap::Args)]
 pub struct RunCli {
-    /// Run as if this command had started in DIR instead of the current directory.
+    /// Run as if this command had started in DIR instead of the current
+    /// directory.
     #[arg(short = 'C', long = "dir", global = true)]
     pub dir: Option<String>,
-    /// devkit.toml to load instead of the one discovered from the start directory.
+    /// devkit.toml to load instead of the one discovered from the start
+    /// directory.
     #[arg(long, global = true)]
     pub config: Option<String>,
-    /// Print IO timing to stderr. `--timing` = summary, `--timing=trace` = per-op.
+    /// Print IO timing to stderr. `--timing` = summary, `--timing=trace` =
+    /// per-op.
     #[arg(long, global = true, value_name = "MODE", num_args = 0..=1, default_missing_value = "summary")]
     pub timing: Option<TimingFlag>,
     /// Write one JSON record per timed IO op to FILE.
@@ -69,7 +75,8 @@ pub(crate) enum Cmd {
         /// Print the launch plan without starting anything.
         #[arg(long)]
         dry_run: bool,
-        /// Hand servers to the supervisor daemon (autostarting it) so they restart on crash.
+        /// Hand servers to the supervisor daemon (autostarting it) so they
+        /// restart on crash.
         #[arg(long)]
         supervise: bool,
     },
@@ -79,8 +86,8 @@ pub(crate) enum Cmd {
     /// another worktree, or a shared baseline, needs
     /// --all/--others/--holder and prompts (requires a terminal).
     Down {
-        /// Fuzzy selectors matched (substring) across columns. Mutually exclusive
-        /// with the column filters below.
+        /// Fuzzy selectors matched (substring) across columns. Mutually
+        /// exclusive with the column filters below.
         #[arg(conflicts_with_all = ["app", "port", "role", "pid", "listening", "not_listening", "older_than"])]
         selectors: Vec<String>,
         /// Every holder, including this worktree.
@@ -164,7 +171,8 @@ pub(crate) enum Cmd {
         /// skipped). A key also passed with --env wins.
         #[arg(long = "env-file")]
         env_file: Option<String>,
-        /// Print the rendered plan (cwd, argv, env, resolved ports) without executing.
+        /// Print the rendered plan (cwd, argv, env, resolved ports) without
+        /// executing.
         #[arg(long)]
         dry_run: bool,
     },
@@ -232,7 +240,8 @@ fn toplevel(cwd: &str) -> Result<String> {
         .into_owned())
 }
 
-/// Pick known apps whose files appear in a `git diff --stat` against the baseline.
+/// Pick known apps whose files appear in a `git diff --stat` against the
+/// baseline.
 pub fn apps_from_diff(diff_stat: &str, known: &[String], apps_dir: &str) -> Vec<String> {
     let prefix = format!("{apps_dir}/");
     let mut found = Vec::new();
@@ -283,7 +292,8 @@ fn parse_user_env(pairs: &[String], file: Option<&str>) -> Result<BTreeMap<Strin
     Ok(m)
 }
 
-/// Parse an age threshold like `90s`, `30m`, `2h`, `1d` (bare number = seconds) to seconds.
+/// Parse an age threshold like `90s`, `30m`, `2h`, `1d` (bare number = seconds)
+/// to seconds.
 fn parse_age(s: &str) -> Result<u64> {
     let s = s.trim();
     let (num, mult) = if let Some(n) = s.strip_suffix('s') {
@@ -307,9 +317,9 @@ fn parse_age(s: &str) -> Result<u64> {
     Ok(secs)
 }
 
-/// CLI inputs for `down`, normalized (role already collapsed to a registry `Role`,
-/// `--older-than` already parsed to seconds). Kept separate from the clap variant so
-/// the selector builder is unit-testable.
+/// CLI inputs for `down`, normalized (role already collapsed to a registry
+/// `Role`, `--older-than` already parsed to seconds). Kept separate from the
+/// clap variant so the selector builder is unit-testable.
 #[derive(Default)]
 struct DownArgs {
     selectors: Vec<String>,
@@ -326,8 +336,8 @@ struct DownArgs {
     older_than_secs: Option<u64>,
 }
 
-/// Build the registry selector from CLI args. `--holder` paths resolve to their git
-/// toplevel when possible, else are used verbatim.
+/// Build the registry selector from CLI args. `--holder` paths resolve to their
+/// git toplevel when possible, else are used verbatim.
 fn build_selector(
     a: &DownArgs,
     current: &str,
@@ -434,18 +444,10 @@ pub fn run(cli: RunCli) -> Result<()> {
             env_file,
             dry_run,
             supervise,
-        } => cmd_up(
-            &cli,
-            &cwd,
-            apps,
-            *role,
-            env,
-            env_file.as_deref(),
-            UpFlags {
-                dry_run: *dry_run,
-                supervise: *supervise,
-            },
-        ),
+        } => cmd_up(&cli, &cwd, apps, *role, env, env_file.as_deref(), UpFlags {
+            dry_run: *dry_run,
+            supervise: *supervise,
+        }),
         Cmd::Down {
             selectors,
             all,
@@ -789,8 +791,9 @@ fn cmd_up(
                     }
                     let baseline_target = crate::baseline::target(cfg, Path::new(cwd))?;
                     let sha = crate::baseline::pin(wt, &baseline_target)?;
-                    // A dry run reports the baseline it would use and leaves the
-                    // world as it found it. Bootstrapping runs the project's
+                    // A dry run reports the baseline it would use and leaves
+                    // the world as it found it.
+                    // Bootstrapping runs the project's
                     // `setup` commands and `after_worktree_create` hooks, and
                     // repinning stops the servers under the pin it replaces —
                     // effects nobody asking for a plan has consented to.
@@ -1128,7 +1131,8 @@ fn down_selection(current: &str, args: &DownArgs) -> Result<()> {
             chosen = ports.clone();
         }
     } else {
-        // Per-worktree prompts for foreign holders; current worktree stops silently.
+        // Per-worktree prompts for foreign holders; current worktree stops
+        // silently.
         for holder in foreign_holders(&matched, current) {
             let group: Vec<u16> = matched
                 .iter()
@@ -1265,7 +1269,8 @@ fn status_urls(
 /// `ports.json` is machine-global, so `--all` lists rows from unrelated
 /// projects where an app name like `web` collides. Rendering a foreign row
 /// through the caller's own templates would produce a link to a host that does
-/// not serve that port. A holder whose config will not load contributes no URLs.
+/// not serve that port. A holder whose config will not load contributes no
+/// URLs.
 fn status_urls_by_holder(
     data: &registry::Data,
     only_holder: Option<&str>,
@@ -1413,10 +1418,14 @@ fn cmd_logs(cwd: &str, app: &str, role: Option<Role>, follow: bool) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{apps_from_diff, available_apps};
+    use std::{
+        collections::{BTreeMap, HashMap},
+        path::{Path, PathBuf},
+    };
+
     use devkit_ports::registry;
-    use std::collections::{BTreeMap, HashMap};
-    use std::path::{Path, PathBuf};
+
+    use super::{apps_from_diff, available_apps};
 
     #[test]
     fn reap_refused_without_tty() {
@@ -1427,8 +1436,9 @@ mod tests {
 
     #[test]
     fn reap_roots_are_resolved_pids_only() {
-        use super::reap_roots;
         use devkit_ports::strays::{Source, Stray};
+
+        use super::reap_roots;
         let mk = |port: u16, pid: Option<u32>| Stray {
             port: Some(port),
             pid,
@@ -1446,8 +1456,9 @@ mod tests {
 
     #[test]
     fn render_strays_names_source_in_snake_case() {
-        use super::render_strays;
         use devkit_ports::strays::{Source, Stray};
+
+        use super::render_strays;
         let out = render_strays(&[Stray {
             port: Some(9200),
             pid: Some(1),
@@ -1462,8 +1473,9 @@ mod tests {
 
     #[test]
     fn scope_all_shows_every_stray() {
-        use super::strays_in_scope;
         use devkit_ports::strays::{Source, Stray};
+
+        use super::strays_in_scope;
         let stray = |port: u16, holder: Option<&str>| Stray {
             port: Some(port),
             pid: Some(1),
@@ -1478,8 +1490,9 @@ mod tests {
 
     #[test]
     fn scope_current_filters_to_this_worktree_plus_unknown() {
-        use super::strays_in_scope;
         use devkit_ports::strays::{Source, Stray};
+
+        use super::strays_in_scope;
         let stray = |port: u16, holder: Option<&str>| Stray {
             port: Some(port),
             pid: Some(1),
@@ -1524,8 +1537,9 @@ mod tests {
 
     #[test]
     fn build_selector_maps_scope_and_filter() {
-        use super::{DownArgs, build_selector};
         use devkit_ports::registry::{Filter, Scope};
+
+        use super::{DownArgs, build_selector};
 
         // Default: current worktree, no filter.
         let a = DownArgs::default();
@@ -1652,20 +1666,17 @@ mod tests {
     }
 
     fn pin(worktree: &Path, baseline: &Path) {
-        devkit_common::record::write(
-            worktree,
-            &devkit_common::record::IssueRecord {
-                issue: "i-1".into(),
-                slug: "i-1".into(),
-                apps: vec![],
-                summary: None,
-                pr: None,
-                baseline: Some(devkit_common::record::BaselinePin {
-                    sha: "d13d90b724bf8a3c".into(),
-                    path: baseline.to_string_lossy().into_owned(),
-                }),
-            },
-        )
+        devkit_common::record::write(worktree, &devkit_common::record::IssueRecord {
+            issue: "i-1".into(),
+            slug: "i-1".into(),
+            apps: vec![],
+            summary: None,
+            pr: None,
+            baseline: Some(devkit_common::record::BaselinePin {
+                sha: "d13d90b724bf8a3c".into(),
+                path: baseline.to_string_lossy().into_owned(),
+            }),
+        })
         .unwrap();
     }
 
@@ -1698,10 +1709,13 @@ mod tests {
 
         let make = |name: &str| {
             let wt = tmp.path().join(name);
-            fixture_git(
-                &repo,
-                &["worktree", "add", "-b", name, wt.to_str().unwrap()],
-            );
+            fixture_git(&repo, &[
+                "worktree",
+                "add",
+                "-b",
+                name,
+                wt.to_str().unwrap(),
+            ]);
             pin(&wt, &baseline);
             wt
         };

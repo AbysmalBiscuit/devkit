@@ -8,9 +8,8 @@ mod ports;
 use std::io::{BufRead, Write};
 
 use anyhow::Result;
-use serde_json::Value;
-
 use jsonrpc::{METHOD_NOT_FOUND, PARSE_ERROR, Request, Response};
+use serde_json::Value;
 
 /// Per-session server context. One stdio server process == one agent session,
 /// so `default_holder` is stable for the process lifetime.
@@ -102,8 +101,9 @@ fn tool_result(payload: &Value, is_error: bool) -> Value {
     })
 }
 
-/// The client's requested MCP protocol version from `initialize` params, when it is
-/// a non-empty string. The server is version-agnostic, so this is echoed back.
+/// The client's requested MCP protocol version from `initialize` params, when
+/// it is a non-empty string. The server is version-agnostic, so this is echoed
+/// back.
 fn client_protocol_version(params: &Value) -> Option<&str> {
     params
         .get("protocolVersion")
@@ -152,8 +152,9 @@ fn tools_list_result() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::Value;
+
+    use super::*;
 
     fn drive(input: &str) -> Vec<Value> {
         let ctx = ServerCtx {

@@ -6,15 +6,19 @@ pub mod store;
 #[cfg(feature = "daemon")]
 pub mod daemon;
 
+use std::{
+    path::{Component, Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use anyhow::{Context, Result};
 use model::{AcquireOutcome, Conflict, LockEntry, Refusal};
-use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Try a running daemon over `locks.sock`. `Ok(None)` = no daemon (caller uses
-/// the flock path). `Ok(Some(resp))` = the daemon answered. `Err` = a live daemon
-/// failed mid-request — surfaced rather than written behind its back. Inside the
-/// daemon itself (`DEVKITD_SELF`) returns `Ok(None)` so its own ops stay local.
+/// the flock path). `Ok(Some(resp))` = the daemon answered. `Err` = a live
+/// daemon failed mid-request — surfaced rather than written behind its back.
+/// Inside the daemon itself (`DEVKITD_SELF`) returns `Ok(None)` so its own ops
+/// stay local.
 #[cfg(feature = "daemon")]
 fn daemon_request(req: daemon::proto::Request) -> Result<Option<daemon::proto::Response>> {
     if std::env::var_os("DEVKITD_SELF").is_some() {
@@ -63,8 +67,8 @@ fn find_root() -> Result<PathBuf> {
     Ok(find_root_from(&cwd))
 }
 
-/// Lexically clean `abs` and express it relative to `root` ('/'-separated; the root
-/// itself becomes "."). Errors if `abs` is not under `root`.
+/// Lexically clean `abs` and express it relative to `root` ('/'-separated; the
+/// root itself becomes "."). Errors if `abs` is not under `root`.
 pub fn normalize_under_root(abs: &Path, root: &Path) -> Result<String> {
     let rel = abs
         .strip_prefix(root)
@@ -142,7 +146,8 @@ pub fn rel_under_root(abs: &Path, root: &Path) -> Result<String> {
     }
 }
 
-/// Resolve a CLI path argument (absolute or cwd-relative) to a root-relative key.
+/// Resolve a CLI path argument (absolute or cwd-relative) to a root-relative
+/// key.
 fn normalize_arg(arg: &str, cwd: &Path, root: &Path) -> Result<String> {
     let p = Path::new(arg);
     let abs = if p.is_absolute() {
@@ -159,9 +164,10 @@ struct Ctx {
     paths: Vec<String>,
 }
 
-/// Two harnesses are nested and expose different session ids. Refused rather than
-/// guessed: the wrong id claims rows the inner hook will not recognise, and
-/// `release --all` under it frees the outer session's rows while it is still live.
+/// Two harnesses are nested and expose different session ids. Refused rather
+/// than guessed: the wrong id claims rows the inner hook will not recognise,
+/// and `release --all` under it frees the outer session's rows while it is
+/// still live.
 #[derive(Debug)]
 pub struct AmbiguousIdentity {
     pub candidates: Vec<ident::Candidate>,
@@ -211,9 +217,9 @@ pub fn acquire(
     acquire_resolved(&c.root, &c.holder, &c.paths, ident::anchor_pid(), note, ttl)
 }
 
-/// Acquire `paths` for `holder` under `root` with a pre-resolved context (no CWD
-/// or identity derivation). Routes through a live daemon when one is up, else the
-/// flock store. The CWD-deriving `acquire` delegates here.
+/// Acquire `paths` for `holder` under `root` with a pre-resolved context (no
+/// CWD or identity derivation). Routes through a live daemon when one is up,
+/// else the flock store. The CWD-deriving `acquire` delegates here.
 pub fn acquire_resolved(
     root: &str,
     holder: &str,
@@ -254,7 +260,8 @@ pub fn check(paths_in: &[String], as_flag: Option<&str>) -> Result<Vec<Conflict>
     check_resolved(&c.root, &c.holder, &c.paths)
 }
 
-/// Conflicts that would block `holder` from `paths` under `root` (pre-resolved).
+/// Conflicts that would block `holder` from `paths` under `root`
+/// (pre-resolved).
 pub fn check_resolved(root: &str, holder: &str, paths: &[String]) -> Result<Vec<Conflict>> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::Check {
@@ -359,10 +366,11 @@ pub fn prune() -> Result<usize> {
     store::prune_with(&store::FlockStore::new(), now())
 }
 
-/// Resolve a write target (absolute, or cwd-relative) to (project_root, root-relative
-/// path). The root is git's checkout root for the file's own directory, not the
-/// process's cwd, so the decision does not depend on where the hook process was
-/// spawned; outside a repository the root falls back to that directory itself.
+/// Resolve a write target (absolute, or cwd-relative) to (project_root,
+/// root-relative path). The root is git's checkout root for the file's own
+/// directory, not the process's cwd, so the decision does not depend on where
+/// the hook process was spawned; outside a repository the root falls back to
+/// that directory itself.
 fn write_ctx(path_in: &str) -> Result<(String, String)> {
     WriteResolver::new().ctx(path_in)
 }
@@ -406,11 +414,12 @@ fn decide_write_at(
     )
 }
 
-/// Enforced-write decision for `path_in` by an explicit `holder` (the hook derives
-/// the holder from the agent payload; identity is not resolved here). Free → acquire;
-/// self/ancestor → allow; otherwise deny. Resolves its own checkout root on every
-/// call; a caller deciding several paths in one batch should use
-/// [`WriteResolver`] instead so paths sharing a directory share one resolution.
+/// Enforced-write decision for `path_in` by an explicit `holder` (the hook
+/// derives the holder from the agent payload; identity is not resolved here).
+/// Free → acquire; self/ancestor → allow; otherwise deny. Resolves its own
+/// checkout root on every call; a caller deciding several paths in one batch
+/// should use [`WriteResolver`] instead so paths sharing a directory share one
+/// resolution.
 pub fn decide_write(
     path_in: &str,
     holder: &str,
@@ -476,8 +485,9 @@ impl WriteResolver {
     }
 }
 
-/// Release every lock held by `holder_prefix` or its descendants, across all roots.
-/// Holder ids are globally unique per session/sub-agent, so no root filter is needed.
+/// Release every lock held by `holder_prefix` or its descendants, across all
+/// roots. Holder ids are globally unique per session/sub-agent, so no root
+/// filter is needed.
 pub fn release_prefix(holder_prefix: &str) -> Result<Vec<String>> {
     #[cfg(feature = "daemon")]
     if let Some(resp) = daemon_request(daemon::proto::Request::ReleasePrefix {
@@ -494,22 +504,24 @@ pub fn release_prefix(holder_prefix: &str) -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::Path;
+
+    use super::*;
 
     #[test]
     fn facade_without_daemon_uses_flock_path() {
-        // No daemon is running in unit tests, so daemon_request returns Ok(None) and
-        // the call falls through to the FlockStore path — proving the split's fallback
-        // stays wired.
+        // No daemon is running in unit tests, so daemon_request returns
+        // Ok(None) and the call falls through to the FlockStore path —
+        // proving the split's fallback stays wired.
         let n = prune().expect("prune via flock path");
         let _ = n; // count depends on ambient registry; success is the assertion
     }
 
     #[test]
     fn resolved_fns_roundtrip_via_flock_path() {
-        // No daemon runs in unit tests, so the `_resolved` fns fall through to the
-        // FlockStore path. A unique root namespaces these lock rows.
+        // No daemon runs in unit tests, so the `_resolved` fns fall through to
+        // the FlockStore path. A unique root namespaces these lock
+        // rows.
         let root = tempfile::tempdir().unwrap();
         devkit_common::git::Git::fixture(root.path())
             .args(["init", "-q", "-b", "main"])
@@ -628,10 +640,11 @@ mod tests {
         }
     }
 
-    /// git reports the checkout root with links resolved, so a path reaching the
-    /// repository through one spells its root differently than a path that does
-    /// not. Both must land on the same lock key: two sessions naming one file by
-    /// different spellings have to collide, not sit on separate keys.
+    /// git reports the checkout root with links resolved, so a path reaching
+    /// the repository through one spells its root differently than a path
+    /// that does not. Both must land on the same lock key: two sessions
+    /// naming one file by different spellings have to collide, not sit on
+    /// separate keys.
     #[test]
     fn write_ctx_agrees_on_a_path_reaching_the_repo_through_a_link() {
         let tmp = tempfile::tempdir().unwrap();

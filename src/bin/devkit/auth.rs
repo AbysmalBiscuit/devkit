@@ -1,10 +1,15 @@
+use std::{
+    io::{IsTerminal, Read},
+    path::Path,
+};
+
 use anyhow::{Context, Result};
-use devkit_common::github::{self, TokenSource};
-use devkit_common::progress::Steps;
-use devkit_common::tracker::linear;
-use devkit_common::{secrets, slack};
-use std::io::{IsTerminal, Read};
-use std::path::Path;
+use devkit_common::{
+    github::{self, TokenSource},
+    progress::Steps,
+    secrets, slack,
+    tracker::linear,
+};
 
 use crate::Provider;
 
@@ -204,19 +209,16 @@ mod tests {
 
     #[test]
     fn the_identity_comes_from_the_token_not_the_active_gh_account() {
-        // resolve_token reads GH_TOKEN, then GITHUB_TOKEN, and only then falls back
-        // to `gh auth token`. With either variable set, the active gh account is
-        // not the identity devkit uses, and reporting it as such would mislead
-        // precisely the user who most needs the answer.
-        let out = github_report(
-            TokenSource::Env("GH_TOKEN"),
-            Some("ci-bot"),
-            &[GhHost {
-                login: "a-human".into(),
-                host: "github.com".into(),
-                active: true,
-            }],
-        );
+        // resolve_token reads GH_TOKEN, then GITHUB_TOKEN, and only then falls
+        // back to `gh auth token`. With either variable set, the active
+        // gh account is not the identity devkit uses, and reporting it
+        // as such would mislead precisely the user who most needs the
+        // answer.
+        let out = github_report(TokenSource::Env("GH_TOKEN"), Some("ci-bot"), &[GhHost {
+            login: "a-human".into(),
+            host: "github.com".into(),
+            active: true,
+        }]);
         assert!(out.contains("ci-bot"), "{out}");
         assert!(out.contains("GH_TOKEN"), "{out}");
         // The gh accounts are secondary diagnostics, below the identity line.

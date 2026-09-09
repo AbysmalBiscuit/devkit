@@ -1,9 +1,12 @@
 //! Lock daemon client: connect over `locks.sock` with the lock-proto handshake.
 //! `try_existing` only — `lockm` never autostarts the daemon.
 
+use devkit_common::{
+    daemon::{self, Client},
+    paths,
+};
+
 use crate::daemon::proto::{PROTO, Request, Response};
-use devkit_common::daemon::{self, Client};
-use devkit_common::paths;
 
 pub fn handshake_ok(server_proto: u32) -> bool {
     server_proto == PROTO

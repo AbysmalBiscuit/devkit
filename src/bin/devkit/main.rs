@@ -1,8 +1,8 @@
+use std::{ffi::OsString, path::PathBuf};
+
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use devkit::completions::{self, Shell};
-use std::ffi::OsString;
-use std::path::PathBuf;
 
 mod auth;
 mod baseline;
@@ -169,8 +169,9 @@ impl Provider {
     }
 }
 
-/// Build a tool's `Command` as a root command under `shim_name`, so an installed
-/// hardlink of that name reports its own name and version instead of `devkit`'s.
+/// Build a tool's `Command` as a root command under `shim_name`, so an
+/// installed hardlink of that name reports its own name and version instead of
+/// `devkit`'s.
 pub(crate) fn shim_command(subcommand: &str, shim_name: &'static str) -> clap::Command {
     Cli::command()
         .find_subcommand(subcommand)

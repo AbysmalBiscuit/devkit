@@ -1,23 +1,30 @@
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::Write,
+    path::Path,
+};
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use devkit_common::ui;
 use devkit_config::{self as config, Config, Provenance};
-use devkit_ports::apps::App;
-use devkit_ports::load;
-use devkit_ports::task::{self, TaskRow};
-use std::collections::{BTreeMap, HashMap};
-use std::io::Write;
-use std::path::Path;
+use devkit_ports::{
+    apps::App,
+    load,
+    task::{self, TaskRow},
+};
 
 /// Show the resolved config, or list configured apps or tasks.
 #[derive(Parser)]
 pub struct ConfigCli {
     #[command(subcommand)]
     cmd: Option<ConfigCmd>,
-    /// Run as if this command had started in DIR instead of the current directory.
+    /// Run as if this command had started in DIR instead of the current
+    /// directory.
     #[arg(short = 'C', long = "dir", global = true)]
     dir: Option<String>,
-    /// devkit.toml to load instead of the one discovered from the start directory.
+    /// devkit.toml to load instead of the one discovered from the start
+    /// directory.
     #[arg(long, global = true)]
     config: Option<String>,
     /// Annotate each value with the file it was resolved from.
@@ -185,10 +192,11 @@ fn apps_table(catalog: &HashMap<String, App>) -> String {
     t.to_string()
 }
 
-/// Flattened `path = value  # from <file>` (or `# (default)`) lines, sorted by path.
-/// Print `lines`, treating a reader that closed early (`devkit config | head`)
-/// as done rather than a crash: `println!` panics on a broken pipe, and this
-/// output is long enough that piping it into a pager or `head` is the norm.
+/// Flattened `path = value  # from <file>` (or `# (default)`) lines, sorted by
+/// path. Print `lines`, treating a reader that closed early (`devkit config |
+/// head`) as done rather than a crash: `println!` panics on a broken pipe, and
+/// this output is long enough that piping it into a pager or `head` is the
+/// norm.
 fn print_lines(lines: impl IntoIterator<Item = String>) -> Result<()> {
     let mut out = std::io::stdout().lock();
     for line in lines {
@@ -247,7 +255,8 @@ fn overrides_clause(prov: &Provenance, path: &str) -> String {
     }
 }
 
-/// `{ "config": <cfg>, "origins": { dotted-path: file } }` for `--origin --json`.
+/// `{ "config": <cfg>, "origins": { dotted-path: file } }` for `--origin
+/// --json`.
 fn origin_json(cfg: &Config, prov: &Provenance) -> Result<serde_json::Value> {
     let origins: BTreeMap<String, String> = prov
         .origin
@@ -280,11 +289,12 @@ fn origin_json(cfg: &Config, prov: &Provenance) -> Result<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{collections::HashMap, path::PathBuf};
+
     use devkit_config::{Config, Provenance};
     use devkit_ports::apps::App;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
+
+    use super::*;
 
     // Build the sample inline: `config::tests_sample()` is `#[cfg(test)]` in
     // devkit-config, so it is NOT compiled into the crate when the devrun
@@ -358,13 +368,12 @@ mod tests {
             "defaults.worktree_root".into(),
             PathBuf::from("/r/local.toml"),
         );
-        prov.shadowed.insert(
-            "defaults.worktree_root".into(),
-            vec![devkit_config::Shadow {
+        prov.shadowed.insert("defaults.worktree_root".into(), vec![
+            devkit_config::Shadow {
                 file: PathBuf::from("/r/devkit.toml"),
                 value: toml::Value::String("wts".into()),
-            }],
-        );
+            },
+        ]);
         let lines = origin_lines(&cfg, &prov).unwrap();
         let line = lines
             .iter()
@@ -398,28 +407,26 @@ mod tests {
             v["origins"]["defaults.worktree_root"].as_str(),
             Some("/x/devkit.toml")
         );
-        // the layer list travels with the JSON so a consumer need not re-resolve it
+        // the layer list travels with the JSON so a consumer need not
+        // re-resolve it
         assert_eq!(v["layers"].as_array().unwrap().len(), 0);
         assert!(v.get("overrides").is_some());
     }
 
     fn sample_catalog() -> HashMap<String, App> {
         let mut m = HashMap::new();
-        m.insert(
-            "api".to_string(),
-            App {
-                name: "api".into(),
-                base_port: 9100,
-                path: "apps/api".into(),
-                launch: vec!["nitro".into(), "dev".into()],
-                url: Some("https://localhost:{{ port }}/x".into()),
-                url_env: Some("FOUNDRY_API_BASE_URL".into()),
-                provides_url: true,
-                static_env: HashMap::new(),
-                prep_files: vec![],
-                setup: Vec::new(),
-            },
-        );
+        m.insert("api".to_string(), App {
+            name: "api".into(),
+            base_port: 9100,
+            path: "apps/api".into(),
+            launch: vec!["nitro".into(), "dev".into()],
+            url: Some("https://localhost:{{ port }}/x".into()),
+            url_env: Some("FOUNDRY_API_BASE_URL".into()),
+            provides_url: true,
+            static_env: HashMap::new(),
+            prep_files: vec![],
+            setup: Vec::new(),
+        });
         m
     }
 
@@ -470,21 +477,18 @@ mod tests {
     #[test]
     fn apps_table_renders_sorted_names() {
         let mut cat = sample_catalog();
-        cat.insert(
-            "lab-os".to_string(),
-            App {
-                name: "lab-os".into(),
-                base_port: 9200,
-                path: "apps/lab-os".into(),
-                launch: vec!["next".into()],
-                url: None,
-                url_env: None,
-                provides_url: false,
-                static_env: HashMap::new(),
-                prep_files: vec![],
-                setup: Vec::new(),
-            },
-        );
+        cat.insert("lab-os".to_string(), App {
+            name: "lab-os".into(),
+            base_port: 9200,
+            path: "apps/lab-os".into(),
+            launch: vec!["next".into()],
+            url: None,
+            url_env: None,
+            provides_url: false,
+            static_env: HashMap::new(),
+            prep_files: vec![],
+            setup: Vec::new(),
+        });
         let t = apps_table(&cat);
         let api_at = t.find("api").unwrap();
         let lab_at = t.find("lab-os").unwrap();

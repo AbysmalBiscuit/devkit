@@ -1,5 +1,6 @@
-use devkit_ports::registry::{self, MemoryStore, Role};
 use std::sync::{Arc, Mutex};
+
+use devkit_ports::registry::{self, MemoryStore, Role};
 
 #[test]
 fn memory_store_serves_reads_from_memory_after_alloc() {

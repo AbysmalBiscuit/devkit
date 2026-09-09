@@ -3,9 +3,11 @@
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
-use std::ffi::OsStr;
-use std::path::Path;
-use std::process::{Command, Output};
+use std::{
+    ffi::OsStr,
+    path::Path,
+    process::{Command, Output},
+};
 
 fn git(cwd: &Path, args: &[&str]) {
     devkit_common::git::Git::fixture(cwd)

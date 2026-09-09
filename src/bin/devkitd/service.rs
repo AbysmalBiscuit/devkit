@@ -1,11 +1,12 @@
-//! `devkitd install-service`: writes a `systemd --user` unit with `Delegate=yes`
-//! so a systemd-launched daemon lands in a delegated cgroup-v2 subtree (no sudo).
-//! Linux + systemd only; other platforms reject the subcommand.
+//! `devkitd install-service`: writes a `systemd --user` unit with
+//! `Delegate=yes` so a systemd-launched daemon lands in a delegated cgroup-v2
+//! subtree (no sudo). Linux + systemd only; other platforms reject the
+//! subcommand.
 
 use anyhow::Result;
 
-/// The `systemd --user` unit text for `devkitd`. `Restart=on-failure` lets a clean
-/// idle-exit (exit 0) stay down rather than being fought by systemd.
+/// The `systemd --user` unit text for `devkitd`. `Restart=on-failure` lets a
+/// clean idle-exit (exit 0) stay down rather than being fought by systemd.
 // Only called from the Linux install() path; test-only usage does not suppress dead_code.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn unit_file_contents(exec_path: &str) -> String {
@@ -34,8 +35,8 @@ pub(crate) fn install() -> Result<()> {
     std::fs::write(&unit, unit_file_contents(&exe.to_string_lossy()))
         .with_context(|| format!("writing {}", unit.display()))?;
     run_systemctl(&["daemon-reload"])?;
-    // Stop any running ad-hoc daemon so the systemd-launched one can take the lock.
-    // Shutdown is best-effort: there may be no daemon running.
+    // Stop any running ad-hoc daemon so the systemd-launched one can take the
+    // lock. Shutdown is best-effort: there may be no daemon running.
     let _ = devkit_ports::daemon::client::try_existing().map(|mut c| {
         c.request::<devkit_ports::daemon::proto::Request, devkit_ports::daemon::proto::Response>(
             &devkit_ports::daemon::proto::Request::Shutdown,

@@ -1,5 +1,6 @@
-use devkit_ports::registry::{self, Role};
 use std::process::Command;
+
+use devkit_ports::registry::{self, Role};
 
 fn main_like() {}
 

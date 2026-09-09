@@ -7,12 +7,16 @@
 //! known to be safe, and every state a crash can leave is one the next run
 //! finishes, so re-running is the whole recovery story.
 
-use crate::{cache, locks, names};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result, bail};
 use devkit_common::git::{Git, SLOW_TIMEOUT};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+
+use crate::{cache, locks, names};
 
 const JOURNAL_SUFFIX: &str = ".migration.json";
 

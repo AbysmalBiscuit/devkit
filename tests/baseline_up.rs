@@ -19,10 +19,13 @@ fn two_worktrees_at_one_fork_point_share_a_baseline() {
 
     for name in ["a", "b"] {
         let wt = tmp.path().join("proj_worktrees").join(name);
-        git(
-            &repo,
-            &["worktree", "add", "-b", name, wt.to_str().unwrap()],
-        );
+        git(&repo, &[
+            "worktree",
+            "add",
+            "-b",
+            name,
+            wt.to_str().unwrap(),
+        ]);
         up(&wt, &state);
     }
 
@@ -49,13 +52,9 @@ fn repinning_stops_the_abandoned_baselines_servers() {
     // A pid-less reservation is what `ports alloc` writes before anything
     // binds, so the repin's teardown releases the row instead of signalling a
     // process — no child to spawn, and nothing to poll for.
-    devkit_ok(
-        &wt,
-        &state,
-        &[
-            "ports", "alloc", "--holder", &first, "--role", "baseline", "api",
-        ],
-    );
+    devkit_ok(&wt, &state, &[
+        "ports", "alloc", "--holder", &first, "--role", "baseline", "api",
+    ]);
     assert!(holders(&state).contains(&first), "reservation not seeded");
 
     git(&repo, &["commit", "-qm", "second", "--allow-empty"]);
@@ -84,22 +83,21 @@ fn repinning_leaves_a_shared_baselines_servers_alone() {
     let a = tmp.path().join("proj_worktrees").join("a");
     let b = tmp.path().join("proj_worktrees").join("b");
     for (name, wt) in [("a", &a), ("b", &b)] {
-        git(
-            &repo,
-            &["worktree", "add", "-b", name, wt.to_str().unwrap()],
-        );
+        git(&repo, &[
+            "worktree",
+            "add",
+            "-b",
+            name,
+            wt.to_str().unwrap(),
+        ]);
         up(wt, &state);
     }
     let shared = baseline_of(&a);
     assert_eq!(shared, baseline_of(&b), "one fork point, one baseline");
 
-    devkit_ok(
-        &a,
-        &state,
-        &[
-            "ports", "alloc", "--holder", &shared, "--role", "baseline", "api",
-        ],
-    );
+    devkit_ok(&a, &state, &[
+        "ports", "alloc", "--holder", &shared, "--role", "baseline", "api",
+    ]);
     assert!(holders(&state).contains(&shared), "reservation not seeded");
 
     git(&repo, &["commit", "-qm", "second", "--allow-empty"]);
@@ -153,11 +151,14 @@ fn a_baseline_dry_run_builds_nothing() {
 
     let wt = tmp.path().join("proj_worktrees").join("a");
     git(&repo, &["worktree", "add", "-b", "a", wt.to_str().unwrap()]);
-    let out = devkit_ok(
-        &wt,
-        &state,
-        &["run", "up", "--role", "baseline", "--dry-run", "api"],
-    );
+    let out = devkit_ok(&wt, &state, &[
+        "run",
+        "up",
+        "--role",
+        "baseline",
+        "--dry-run",
+        "api",
+    ]);
 
     let root = tmp.path().join("proj_worktrees").join("_baselines");
     assert!(!root.exists(), "a dry run created {}", root.display());
@@ -187,22 +188,21 @@ fn a_baseline_dry_run_stops_no_servers() {
     git(&repo, &["worktree", "add", "-b", "a", wt.to_str().unwrap()]);
     up(&wt, &state);
     let first = baseline_of(&wt);
-    devkit_ok(
-        &wt,
-        &state,
-        &[
-            "ports", "alloc", "--holder", &first, "--role", "baseline", "api",
-        ],
-    );
+    devkit_ok(&wt, &state, &[
+        "ports", "alloc", "--holder", &first, "--role", "baseline", "api",
+    ]);
     assert!(holders(&state).contains(&first), "reservation not seeded");
 
     git(&repo, &["commit", "-qm", "second", "--allow-empty"]);
     git(&wt, &["rebase", "-q", "main"]);
-    devkit_ok(
-        &wt,
-        &state,
-        &["run", "up", "--role", "baseline", "--dry-run", "api"],
-    );
+    devkit_ok(&wt, &state, &[
+        "run",
+        "up",
+        "--role",
+        "baseline",
+        "--dry-run",
+        "api",
+    ]);
 
     assert_eq!(baseline_of(&wt), first, "a dry run moved the pin");
     assert!(

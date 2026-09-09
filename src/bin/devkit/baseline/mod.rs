@@ -4,19 +4,26 @@
 
 mod locks;
 
-use crate::issue::checkout::with_cleanup;
-use crate::issue::setup::{backfill_includes, prep_apps, run_after_worktree_create};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result};
-use devkit_common::git::Git;
-use devkit_common::progress::Steps;
-use devkit_common::record::RecordState;
-use devkit_common::worktree::{BASELINE_MARKER, BaselineState};
+use devkit_common::{
+    git::Git,
+    progress::Steps,
+    record::RecordState,
+    worktree::{BASELINE_MARKER, BaselineState},
+};
 use devkit_config::{Config, expand_tilde};
-use devkit_ports::apps::App;
-use devkit_ports::registry;
+use devkit_ports::{apps::App, registry};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+
+use crate::issue::{
+    checkout::with_cleanup,
+    setup::{backfill_includes, prep_apps, run_after_worktree_create},
+};
 
 /// The ref a worktree's baseline is measured against: the configured
 /// `baseline_ref`, else the remote's default branch.
@@ -386,12 +393,9 @@ pub fn ensure(
             );
             for a in apps {
                 if let Some(app) = catalog.get(a) {
-                    marker.apps.insert(
-                        a.clone(),
-                        AppMark {
-                            fingerprint: fingerprint(app, includes),
-                        },
-                    );
+                    marker.apps.insert(a.clone(), AppMark {
+                        fingerprint: fingerprint(app, includes),
+                    });
                 }
             }
             // Last, so an interrupted bootstrap leaves no marker and the probe
@@ -481,8 +485,8 @@ fn baseline_path_str(path: &Path) -> Result<&str> {
         .with_context(|| format!("baseline path not UTF-8: {}", path.display()))
 }
 
-/// The lock key for a slot: its directory name, which is what `locks::with_slot`
-/// takes.
+/// The lock key for a slot: its directory name, which is what
+/// `locks::with_slot` takes.
 fn slot_name(path: &Path) -> Result<String> {
     Ok(path
         .file_name()
@@ -799,8 +803,9 @@ pub struct Gates {
 }
 
 impl Gates {
-    /// The operator's sweep: `--force` waives running servers, `--discard-edits`
-    /// waives a tree somebody edited, and neither waives the other.
+    /// The operator's sweep: `--force` waives running servers,
+    /// `--discard-edits` waives a tree somebody edited, and neither waives
+    /// the other.
     pub fn sweep(force: bool, discard_edits: bool) -> Self {
         Gates {
             force,
@@ -1064,8 +1069,8 @@ fn has_local_edits(baseline: &Path) -> Result<bool> {
 /// the same file even within one process, so a locked function must never call
 /// another locked function.
 ///
-/// `Ok(true)` means the baseline was removed, or under [`Sweep::Report`] that it
-/// would have been; `Err` is a refusal either way.
+/// `Ok(true)` means the baseline was removed, or under [`Sweep::Report`] that
+/// it would have been; `Err` is a refusal either way.
 fn remove_if_unreferenced(
     repo: &str,
     baseline: &Path,
@@ -1103,9 +1108,9 @@ fn remove_if_unreferenced(
         }
         match removal {
             Removal::Worktree => {
-                // Always `--force`: a baseline holds include copies and rendered
-                // prep files, and any untracked file would otherwise refuse the
-                // removal.
+                // Always `--force`: a baseline holds include copies and
+                // rendered prep files, and any untracked file
+                // would otherwise refuse the removal.
                 Git::at(Path::new(repo))
                     .args(["worktree", "remove", "--force", path_s])
                     .timeout(devkit_common::git::SLOW_TIMEOUT)
@@ -1174,7 +1179,8 @@ impl std::fmt::Display for SlotState {
 /// One baseline directory as an operator sees it.
 pub struct Listed {
     pub path: PathBuf,
-    /// The fork point its marker names, absent when there is no marker to trust.
+    /// The fork point its marker names, absent when there is no marker to
+    /// trust.
     pub sha: Option<String>,
     pub state: SlotState,
     pub referencers: Vec<PathBuf>,
@@ -1429,10 +1435,10 @@ mod tests {
     }
 
     /// The FNV-1a offset basis, which an app with nothing to hash must produce.
-    /// This pins the algorithm: a fingerprint is stored in the marker and compared
-    /// on a later run, possibly under a different toolchain, so a hash that shifts
-    /// between Rust releases would either re-prep every baseline forever or stop
-    /// noticing a real change.
+    /// This pins the algorithm: a fingerprint is stored in the marker and
+    /// compared on a later run, possibly under a different toolchain, so a
+    /// hash that shifts between Rust releases would either re-prep every
+    /// baseline forever or stop noticing a real change.
     #[test]
     fn an_app_with_nothing_to_hash_is_the_fnv_offset_basis() {
         assert_eq!(
@@ -1477,9 +1483,9 @@ mod tests {
         assert_eq!(ctx["sha"], "d13d90b724bf8a3c");
     }
 
-    /// A `prep_files` template naming `{{ issue }}` must render inside a baseline
-    /// rather than hard-failing: `template::render` is strict and `prep_apps`
-    /// propagates a render error with `?`.
+    /// A `prep_files` template naming `{{ issue }}` must render inside a
+    /// baseline rather than hard-failing: `template::render` is strict and
+    /// `prep_apps` propagates a render error with `?`.
     #[test]
     fn a_prep_template_naming_the_issue_renders_in_a_baseline() {
         let ctx = bootstrap_context("d13d90b724bf8a3c", &["api".to_string()], "lev/");
@@ -1542,10 +1548,13 @@ mod tests {
         let primary = tmp.path().join("repo");
         let sha = primary_with_one_commit(&primary);
         let wt = tmp.path().join("issue");
-        fixture_git(
-            &primary,
-            &["worktree", "add", "-b", "issue", wt.to_str().unwrap()],
-        );
+        fixture_git(&primary, &[
+            "worktree",
+            "add",
+            "-b",
+            "issue",
+            wt.to_str().unwrap(),
+        ]);
         let root = tmp.path().join("baselines");
 
         let path = ensure(
@@ -1578,10 +1587,13 @@ mod tests {
         let sha = primary_with_one_commit(&primary);
         let make = |name: &str| {
             let wt = tmp.path().join(name);
-            fixture_git(
-                &primary,
-                &["worktree", "add", "-b", name, wt.to_str().unwrap()],
-            );
+            fixture_git(&primary, &[
+                "worktree",
+                "add",
+                "-b",
+                name,
+                wt.to_str().unwrap(),
+            ]);
             wt
         };
         let a = make("a");
@@ -1653,10 +1665,13 @@ mod tests {
         let primary = tmp.path().join("repo");
         let sha = primary_with_one_commit(&primary);
         let wt = tmp.path().join("a");
-        fixture_git(
-            &primary,
-            &["worktree", "add", "-b", "a", wt.to_str().unwrap()],
-        );
+        fixture_git(&primary, &[
+            "worktree",
+            "add",
+            "-b",
+            "a",
+            wt.to_str().unwrap(),
+        ]);
         let root = tmp.path().join("baselines");
         let cfg = cfg_rooted_at(&root);
 
@@ -1919,11 +1934,11 @@ mod tests {
             _ => panic!("the first bootstrap must leave a readable marker"),
         };
 
-        // Drifted prep, so the app is stale, plus a setup command that cannot run.
-        let broken = app_with(
-            vec![prep(".env", "A=2")],
-            vec![vec!["devkit-no-such-program-xyz".into()]],
-        );
+        // Drifted prep, so the app is stale, plus a setup command that cannot
+        // run.
+        let broken = app_with(vec![prep(".env", "A=2")], vec![vec![
+            "devkit-no-such-program-xyz".into(),
+        ]]);
         assert!(
             ensure(
                 &cfg,
@@ -2010,12 +2025,9 @@ mod tests {
     fn a_marker_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let mut apps = std::collections::BTreeMap::new();
-        apps.insert(
-            "api".to_string(),
-            AppMark {
-                fingerprint: "9f2c".into(),
-            },
-        );
+        apps.insert("api".to_string(), AppMark {
+            fingerprint: "9f2c".into(),
+        });
         let m = Marker {
             sha: "d13d90b724bf".into(),
             apps,
@@ -2063,13 +2075,10 @@ mod tests {
     fn place(root: &std::path::Path, name: &str, sha: &str) {
         let d = root.join(name);
         std::fs::create_dir_all(&d).unwrap();
-        write_marker(
-            &d,
-            &Marker {
-                sha: sha.into(),
-                apps: Default::default(),
-            },
-        )
+        write_marker(&d, &Marker {
+            sha: sha.into(),
+            apps: Default::default(),
+        })
         .unwrap();
     }
 
@@ -2158,8 +2167,8 @@ mod tests {
     fn a_configured_ref_wins_over_detection() {
         let mut cfg = devkit_config::Config::default();
         cfg.defaults.baseline_ref = "origin/release".into();
-        // Detection would fail in a non-repo path; the configured ref means it is
-        // never consulted.
+        // Detection would fail in a non-repo path; the configured ref means it
+        // is never consulted.
         let got = target(&cfg, std::path::Path::new("/nonexistent")).unwrap();
         assert_eq!(got, "origin/release");
     }
@@ -2286,32 +2295,34 @@ mod tests {
 
         let baseline = tmp.path().join("_baselines").join(short(&sha));
         std::fs::create_dir_all(baseline.parent().unwrap()).unwrap();
-        fixture_git(
-            &repo,
-            &["worktree", "add", "--detach", baseline.to_str().unwrap()],
-        );
+        fixture_git(&repo, &[
+            "worktree",
+            "add",
+            "--detach",
+            baseline.to_str().unwrap(),
+        ]);
         write_marker(&baseline, &fresh_marker(&sha)).unwrap();
 
         let make = |name: &str| {
             let wt = tmp.path().join(name);
-            fixture_git(
-                &repo,
-                &["worktree", "add", "-b", name, wt.to_str().unwrap()],
-            );
-            devkit_common::record::write(
-                &wt,
-                &devkit_common::record::IssueRecord {
-                    issue: name.to_string(),
-                    slug: name.to_string(),
-                    apps: vec![],
-                    summary: None,
-                    pr: None,
-                    baseline: Some(devkit_common::record::BaselinePin {
-                        sha: sha.clone(),
-                        path: baseline.to_string_lossy().into_owned(),
-                    }),
-                },
-            )
+            fixture_git(&repo, &[
+                "worktree",
+                "add",
+                "-b",
+                name,
+                wt.to_str().unwrap(),
+            ]);
+            devkit_common::record::write(&wt, &devkit_common::record::IssueRecord {
+                issue: name.to_string(),
+                slug: name.to_string(),
+                apps: vec![],
+                summary: None,
+                pr: None,
+                baseline: Some(devkit_common::record::BaselinePin {
+                    sha: sha.clone(),
+                    path: baseline.to_string_lossy().into_owned(),
+                }),
+            })
             .unwrap();
             wt
         };
@@ -2327,10 +2338,12 @@ mod tests {
     }
 
     fn remove_worktree(repo: &str, wt: &Path) {
-        fixture_git(
-            Path::new(repo),
-            &["worktree", "remove", "--force", wt.to_str().unwrap()],
-        );
+        fixture_git(Path::new(repo), &[
+            "worktree",
+            "remove",
+            "--force",
+            wt.to_str().unwrap(),
+        ]);
     }
 
     /// Leave a directory's baseline marker unresolvable — a symlink loop here,
@@ -2392,10 +2405,12 @@ mod tests {
             .trim()
             .to_string();
         let orphan = baseline_dir.join(short(&sha2));
-        fixture_git(
-            Path::new(&f.repo),
-            &["worktree", "add", "--detach", orphan.to_str().unwrap()],
-        );
+        fixture_git(Path::new(&f.repo), &[
+            "worktree",
+            "add",
+            "--detach",
+            orphan.to_str().unwrap(),
+        ]);
         write_marker(&orphan, &fresh_marker(&sha2)).unwrap();
 
         corrupt_record(&f.a);
@@ -2686,17 +2701,14 @@ mod tests {
         remove_worktree(&f.repo, &f.a);
         remove_worktree(&f.repo, &f.b);
         let mut ports = registry::Data::default();
-        ports.entries.insert(
-            3000,
-            registry::Entry {
-                app: "api".into(),
-                holder: f.baseline.to_string_lossy().into_owned(),
-                role: registry::Role::Baseline,
-                pid: Some(std::process::id()),
-                logfile: None,
-                ts: registry::now(),
-            },
-        );
+        ports.entries.insert(3000, registry::Entry {
+            app: "api".into(),
+            holder: f.baseline.to_string_lossy().into_owned(),
+            role: registry::Role::Baseline,
+            pid: Some(std::process::id()),
+            logfile: None,
+            ts: registry::now(),
+        });
         let err = drop_reference(&f.repo, &f.baseline, &ports, false).unwrap_err();
         assert!(format!("{err:#}").contains("running servers"), "{err:#}");
         assert!(
@@ -2711,10 +2723,13 @@ mod tests {
     fn pinning_a_worktree_with_no_record_creates_one() {
         let f = two_worktrees_sharing_one_baseline();
         let bare = f.baseline.parent().unwrap().parent().unwrap().join("c");
-        fixture_git(
-            Path::new(&f.repo),
-            &["worktree", "add", "-b", "c", bare.to_str().unwrap()],
-        );
+        fixture_git(Path::new(&f.repo), &[
+            "worktree",
+            "add",
+            "-b",
+            "c",
+            bare.to_str().unwrap(),
+        ]);
         assert!(
             devkit_common::record::read(&bare).is_none(),
             "fixture must start recordless"
@@ -2819,10 +2834,10 @@ mod tests {
         assert_eq!(dir_size(dir.path()), 100);
 
         std::fs::create_dir_all(dir.path().join(".venv").join("lib")).unwrap();
-        std::fs::write(
-            dir.path().join(".venv").join("lib").join("f"),
-            vec![b'x'; 500],
-        )
+        std::fs::write(dir.path().join(".venv").join("lib").join("f"), vec![
+            b'x';
+            500
+        ])
         .unwrap();
         std::fs::write(dir.path().join(".dotfile"), vec![b'x'; 7]).unwrap();
 
@@ -2842,10 +2857,10 @@ mod tests {
         std::fs::create_dir_all(root.join("aaaaaaaaaaaa")).unwrap();
         std::fs::write(root.join("loose-file"), "x").unwrap();
 
-        assert_eq!(
-            slots_in(&root).unwrap(),
-            vec![root.join("aaaaaaaaaaaa"), root.join("bbbbbbbbbbbb")]
-        );
+        assert_eq!(slots_in(&root).unwrap(), vec![
+            root.join("aaaaaaaaaaaa"),
+            root.join("bbbbbbbbbbbb")
+        ]);
     }
 
     /// A marked tree this repository has no registration for is reclaimed as a

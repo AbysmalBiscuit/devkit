@@ -1,11 +1,13 @@
+use std::{collections::HashMap, path::Path};
+
 use anyhow::Result;
-use devkit_common::git::Git;
-use devkit_common::github;
-use devkit_common::tracker::{Resolved, State, StateKind, TrackerKind};
-use devkit_common::worktree;
+use devkit_common::{
+    git::Git,
+    github,
+    tracker::{Resolved, State, StateKind, TrackerKind},
+    worktree,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::Path;
 
 /// A worktree's pull request, as the report knows it. The row carries the tag
 /// rather than a state string plus two nullable fields, because an ambiguous
@@ -19,9 +21,9 @@ pub enum PrStatus {
         number: u64,
         state: String,
         url: String,
-        /// A draft's `state` is `OPEN`, so `state_label` cannot express this and
-        /// deliberately does not try: consumers read `pr_state` and a changed
-        /// string there breaks them.
+        /// A draft's `state` is `OPEN`, so `state_label` cannot express this
+        /// and deliberately does not try: consumers read `pr_state` and
+        /// a changed string there breaks them.
         is_draft: bool,
     },
     /// Several PRs share this head branch. The verdict stays closed: `issue
@@ -163,15 +165,19 @@ impl Discovered {
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+
     pub fn len(&self) -> usize {
         self.rows.len()
     }
+
     pub fn worktree_paths(&self) -> Vec<String> {
         self.rows.iter().map(|r| r.worktree.clone()).collect()
     }
+
     pub fn issue_ids(&self) -> &[String] {
         &self.issue_ids
     }
+
     /// The discovered worktree rows, with dirty/PR/state still unfilled. Lets a
     /// single-worktree caller (`issue info`) pick its target without paying the
     /// per-worktree enrichment cost of a full gather.
@@ -237,8 +243,8 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
     let mut rows = Vec::new();
     for wt in &others {
         let iid = worktree::issue_id_of(&wt.path, &wt.branch);
-        // An issue id is case-insensitive in every tracker that has one, and the
-        // record holds whichever spelling the tracker was given.
+        // An issue id is case-insensitive in every tracker that has one, and
+        // the record holds whichever spelling the tracker was given.
         if !ids.is_empty() && !ids.iter().any(|w| w.eq_ignore_ascii_case(&iid)) {
             continue;
         }
@@ -316,8 +322,8 @@ pub fn dirty_stream(paths: &[String], report: impl Fn(usize, bool) + Send + Clon
 /// `linear::build_query` aliases its state queries.
 ///
 /// This replaces a `gh pr list --limit 500` over the whole repository. The
-/// branch count is the worktree count, which is small; the repository's total PR
-/// count — what the 500 cap was fighting — stops mattering.
+/// branch count is the worktree count, which is small; the repository's total
+/// PR count — what the 500 cap was fighting — stops mattering.
 pub fn heads_query(slug: &str, branches: &[String]) -> String {
     let (owner, name) = slug.split_once('/').unwrap_or((slug, ""));
     let fields = "totalCount nodes { number state url headRefName headRefOid isDraft \
@@ -656,13 +662,10 @@ pub fn gather_with(
         let (states, link_base) = tt.join().expect("tracker thread panicked");
         Ok::<_, anyhow::Error>((dirty, prs, states, link_base))
     })?;
-    Ok(assemble(
-        d,
-        dirty,
-        prs,
-        states,
-        TrackerInfo { link_base, ..info },
-    ))
+    Ok(assemble(d, dirty, prs, states, TrackerInfo {
+        link_base,
+        ..info
+    }))
 }
 
 /// Local-only status: discovery + dirty checks, with no `gh`/tracker network.
@@ -690,10 +693,11 @@ pub fn gather_local(start: &str, ids: &[String]) -> Result<StatusReport> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use devkit_common::tracker::fake::FakeTracker;
-    use devkit_common::tracker::{StateKind, Tracker, TrackerKind};
     use std::collections::HashMap;
+
+    use devkit_common::tracker::{StateKind, Tracker, TrackerKind, fake::FakeTracker};
+
+    use super::*;
 
     fn done(name: &str) -> State {
         State {
@@ -971,10 +975,10 @@ mod tests {
     #[test]
     fn a_batched_answer_is_keyed_by_the_branch_it_was_recorded_for() {
         let pending = vec![("feat/x".to_string(), 12), ("feat/y".to_string(), 13)];
-        let got = recorded_answers(
-            pending.clone(),
-            vec![Ok(Some(pr(12, "MERGED", "someone/else"))), Ok(None)],
-        );
+        let got = recorded_answers(pending.clone(), vec![
+            Ok(Some(pr(12, "MERGED", "someone/else"))),
+            Ok(None),
+        ]);
         assert!(matches!(&got["feat/x"], github::HeadLookup::Unique(p) if p.number == 12));
         assert!(
             matches!(&got["feat/y"], github::HeadLookup::Unavailable(r) if r.contains("13")),
@@ -1211,9 +1215,10 @@ mod tests {
         assert_eq!(PrStatus::None.state_label(), "NO_PR");
         assert_eq!(PrStatus::None.number(), None);
 
-        // The shape that used to render as `AMBIGUOUS #0`: a state string with no
-        // number, formatted with unwrap_or(0), printing a PR that does not exist in
-        // the column a human reads before deleting a worktree.
+        // The shape that used to render as `AMBIGUOUS #0`: a state string with
+        // no number, formatted with unwrap_or(0), printing a PR that
+        // does not exist in the column a human reads before deleting a
+        // worktree.
         let a = PrStatus::Ambiguous {
             candidates: vec![pr_ref(7), pr_ref(8)],
         };
@@ -1262,8 +1267,9 @@ mod tests {
 
     #[test]
     fn a_repository_with_more_prs_than_any_window_still_resolves_each_branch() {
-        // The `--limit 500` listing this replaces could not promise this: a branch
-        // whose PR sat beyond the window read as NO_PR, with no signal.
+        // The `--limit 500` listing this replaces could not promise this: a
+        // branch whose PR sat beyond the window read as NO_PR, with no
+        // signal.
         let resp: serde_json::Value = serde_json::from_str(
             r#"{"data":{"repository":{
                  "b0":{"totalCount":1,"nodes":[{"number":900,"state":"OPEN",
@@ -1374,15 +1380,12 @@ mod tests {
             author_login: None,
         };
         let status = pr_status_of(&github::HeadLookup::Unique(pr));
-        assert_eq!(
-            status,
-            PrStatus::Unique {
-                number: 7,
-                state: "OPEN".into(),
-                url: "u7".into(),
-                is_draft: true,
-            }
-        );
+        assert_eq!(status, PrStatus::Unique {
+            number: 7,
+            state: "OPEN".into(),
+            url: "u7".into(),
+            is_draft: true,
+        });
     }
 
     #[test]

@@ -1,22 +1,24 @@
 //! A flock-guarded JSON document store.
 //!
 //! The port registry and the lock registry are the same machine over different
-//! schemas: an exclusive advisory file lock guards a read-modify-write against a
-//! JSON file, with schema-drift salvage and crash-safe atomic replacement. This
-//! module is that machine, parameterized over the payload type.
+//! schemas: an exclusive advisory file lock guards a read-modify-write against
+//! a JSON file, with schema-drift salvage and crash-safe atomic replacement.
+//! This module is that machine, parameterized over the payload type.
 //!
 //! A payload implements [`Document`]; callers drive it through [`with_lock`],
 //! passing the lock-file and data-file paths. Both files live in the same
 //! directory, which is created on demand.
 
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::ErrorKind,
+    path::Path,
+};
+
 use anyhow::{Context, Result};
 use fd_lock::RwLock;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::ErrorKind;
-use std::path::Path;
+use serde::{Serialize, de::DeserializeOwned};
 
 /// A JSON payload persisted under an advisory file lock.
 ///
@@ -24,7 +26,8 @@ use std::path::Path;
 /// as still parse from a document whose top-level shape has drifted across a
 /// schema change — discarding the whole file would orphan live state.
 pub trait Document: Default + Serialize + DeserializeOwned {
-    /// Stamp the current schema version into the document before it is persisted.
+    /// Stamp the current schema version into the document before it is
+    /// persisted.
     fn stamp_version(&mut self);
 
     /// Best-effort recovery from a document that no longer deserializes whole.
@@ -64,9 +67,10 @@ pub fn salvage_map<K: Ord, V: DeserializeOwned>(
     Some(out)
 }
 
-/// Load a document, salvaging on schema drift exactly as `with_lock` does on read.
-/// A missing or empty file yields the default. Never takes a lock — intended for a
-/// one-shot read by an owner that has its own exclusion (e.g. the daemon at startup).
+/// Load a document, salvaging on schema drift exactly as `with_lock` does on
+/// read. A missing or empty file yields the default. Never takes a lock —
+/// intended for a one-shot read by an owner that has its own exclusion (e.g.
+/// the daemon at startup).
 pub fn load<D: Document>(path: &Path) -> D {
     read(path)
 }
@@ -106,16 +110,16 @@ pub fn try_load<D: Document>(path: &Path) -> Result<D> {
     }
 }
 
-/// Persist a document with a crash-safe atomic rename. Takes no lock and does not
-/// stamp the version — a caller that mutated the document should call
+/// Persist a document with a crash-safe atomic rename. Takes no lock and does
+/// not stamp the version — a caller that mutated the document should call
 /// `Document::stamp_version` first (as `with_lock` does).
 pub fn save<D: Document>(path: &Path, data: &D) -> Result<()> {
     write(path, data)
 }
 
-/// Load a document, salvaging on schema drift and backing up on true corruption.
-/// A missing or empty file yields the default. Never fails: an unreadable file
-/// is renamed to `*.json.bak` and replaced by a fresh default.
+/// Load a document, salvaging on schema drift and backing up on true
+/// corruption. A missing or empty file yields the default. Never fails: an
+/// unreadable file is renamed to `*.json.bak` and replaced by a fresh default.
 fn read<D: Document>(path: &Path) -> D {
     let s = match fs::read_to_string(path) {
         Ok(s) if !s.trim().is_empty() => s,
@@ -149,7 +153,8 @@ fn read<D: Document>(path: &Path) -> D {
 }
 
 /// Persist a document by writing a sibling temp file and renaming it over the
-/// target — atomic on POSIX and Windows, so a crash mid-write can't truncate it.
+/// target — atomic on POSIX and Windows, so a crash mid-write can't truncate
+/// it.
 fn write<D: Document>(path: &Path, data: &D) -> Result<()> {
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, serde_json::to_vec_pretty(data)?)?;
@@ -184,8 +189,8 @@ fn with_lock_via<D: Document, T>(
     Ok(out)
 }
 
-/// Run `f` while holding the exclusive advisory lock at `lock_path`, against the
-/// JSON document at `data_path`; persists the (version-stamped) result. The
+/// Run `f` while holding the exclusive advisory lock at `lock_path`, against
+/// the JSON document at `data_path`; persists the (version-stamped) result. The
 /// parent directory is created on demand. Keep the work inside `f` minimal —
 /// the lock is held for its whole duration.
 pub fn with_lock<D: Document, T>(
@@ -210,9 +215,11 @@ pub fn with_lock_strict<D: Document, T>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde::Deserialize;
     use std::path::PathBuf;
+
+    use serde::Deserialize;
+
+    use super::*;
 
     const VERSION: u32 = 3;
 
@@ -228,15 +235,18 @@ mod tests {
         fn stamp_version(&mut self) {
             self.version = VERSION;
         }
+
         fn salvage(raw: &str) -> Option<Self> {
             Some(Doc {
                 version: 0,
                 items: salvage_map(raw, "items", |k| k.parse::<u16>().ok())?,
             })
         }
+
         fn label() -> &'static str {
             "test store"
         }
+
         fn len(&self) -> usize {
             self.items.len()
         }
@@ -275,8 +285,8 @@ mod tests {
 
     #[test]
     fn salvage_recovers_entries_from_drifted_schema() {
-        // A string `version` forces whole-document deserialization to fail while
-        // the per-entry values still parse.
+        // A string `version` forces whole-document deserialization to fail
+        // while the per-entry values still parse.
         let raw = r#"{"version":"oops","items":{"8080":"api","9090":"web"}}"#;
         assert!(serde_json::from_str::<Doc>(raw).is_err());
         let d = Doc::salvage(raw).expect("items object present");

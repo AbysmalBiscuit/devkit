@@ -2,8 +2,8 @@
 //!
 //! When enabled, every subprocess spawn ([`crate::cmd::capture`]) and HTTP
 //! request (GitHub / Linear / Slack) is wrapped in a `tracing` span tagged with
-//! an `op` group and a `detail` string. A custom [`Layer`] collects each span as
-//! it closes; on process exit the collected ops are summarised to stderr:
+//! an `op` group and a `detail` string. A custom [`Layer`] collects each span
+//! as it closes; on process exit the collected ops are summarised to stderr:
 //!
 //! ```text
 //! timing — wall 1.31s, IO busy 0.95s over 16 ops (serial 2.85s, 3.0× overlap)
@@ -14,25 +14,33 @@
 //!   github REST             1   0.21s   0.21s   0.21s
 //! ```
 //!
-//! [`Mode::Trace`] additionally lists every op with its start offset and thread,
-//! and a log path streams one JSON record per op for cross-run comparison.
+//! [`Mode::Trace`] additionally lists every op with its start offset and
+//! thread, and a log path streams one JSON record per op for cross-run
+//! comparison.
 //!
 //! Spans are kept flat — no parent/child nesting. The layer is installed as the
 //! global default, so a span opened on any `std::thread::scope` worker is
-//! collected identically, and the overlap metric is derived from each op's start
-//! offset and duration. This sidesteps tracing's rule that a span context does
-//! not follow `std::thread::spawn`.
+//! collected identically, and the overlap metric is derived from each op's
+//! start offset and duration. This sidesteps tracing's rule that a span context
+//! does not follow `std::thread::spawn`.
 
-use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id};
-use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-use tracing_subscriber::registry::LookupSpan;
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io::Write,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+use tracing::{
+    field::{Field, Visit},
+    span::{Attributes, Id},
+};
+use tracing_subscriber::{
+    layer::{Context, Layer, SubscriberExt},
+    registry::LookupSpan,
+};
 
 /// All timing spans share this name; the layer ignores anything else.
 const SPAN_NAME: &str = "devkit_io";
@@ -57,7 +65,8 @@ pub fn parse_env_mode(v: Option<&str>) -> Mode {
     }
 }
 
-/// The mode requested by the `DEVKIT_TIMING` env var (the flag-absent fallback).
+/// The mode requested by the `DEVKIT_TIMING` env var (the flag-absent
+/// fallback).
 pub fn mode_from_env() -> Mode {
     parse_env_mode(std::env::var("DEVKIT_TIMING").ok().as_deref())
 }
@@ -331,6 +340,7 @@ impl Visit for FieldVisitor {
             _ => {}
         }
     }
+
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         let v = format!("{value:?}");
         let v = v.trim_matches('"');

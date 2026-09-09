@@ -1,10 +1,10 @@
 //! Branch/worktree slug derivation, shared by `setup` and `pr checkout`.
 
-use anyhow::{Context, Result};
-use devkit_common::tracker::IssueRef;
 use std::collections::BTreeMap;
 
+use anyhow::{Context, Result};
 pub(crate) use devkit_common::slug::slugify;
+use devkit_common::tracker::IssueRef;
 
 /// Slug for `issue`, taken from its tracker title. The issue id is stripped
 /// from the front so the branch template's `<issue>-<slug>` does not repeat it.
@@ -155,9 +155,11 @@ pub(crate) fn budget(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
     use std::collections::BTreeMap;
+
+    use serde_json::json;
+
+    use super::*;
 
     fn novars() -> BTreeMap<String, String> {
         BTreeMap::new()
@@ -269,7 +271,8 @@ mod tests {
     #[test]
     fn budget_clamps_up_to_a_floor() {
         let ctx = json!({"prefix": "a-very-long-branch-prefix-indeed/", "slug": ""});
-        // 33 characters of prefix against a limit of 36 leaves 3, below the floor.
+        // 33 characters of prefix against a limit of 36 leaves 3, below the
+        // floor.
         let b = budget(
             "{{ prefix }}{{ slug }}",
             &ctx,
@@ -416,8 +419,9 @@ mod tests {
         }
     }
 
-    /// A workspace whose name ends in `-<digits>` looks exactly like an issue id,
-    /// so the id has to come from the path position, not the first match.
+    /// A workspace whose name ends in `-<digits>` looks exactly like an issue
+    /// id, so the id has to come from the path position, not the first
+    /// match.
     #[test]
     fn parse_issue_ref_is_not_fooled_by_a_workspace_named_like_an_id() {
         let r = parse_issue_ref("https://linear.app/acme-2/issue/ENG-1234/fix-bli-export");

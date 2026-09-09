@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 
 /// On-disk schema version. Bump when the layout changes incompatibly.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -32,13 +33,15 @@ pub struct Data {
     pub locks: BTreeMap<String, LockEntry>,
 }
 
-/// Registry key for a claim: root and path joined by a NUL (never valid in a path).
+/// Registry key for a claim: root and path joined by a NUL (never valid in a
+/// path).
 pub fn key_for(root: &str, path: &str) -> String {
     format!("{root}\u{0}{path}")
 }
 
 /// True if two root-relative normalized paths overlap: equal, or one is a
-/// path-component ancestor of the other. "." (the project root) overlaps everything.
+/// path-component ancestor of the other. "." (the project root) overlaps
+/// everything.
 pub fn paths_overlap(a: &str, b: &str) -> bool {
     if a == b || a == "." || b == "." {
         return true;
@@ -48,9 +51,10 @@ pub fn paths_overlap(a: &str, b: &str) -> bool {
         .is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// True if `existing` is the same holder as `writer`, or an ancestor of it in the
-/// agent tree. Holder ids are '/'-separated segments (`session`, `session/agent`);
-/// `existing` is an ancestor of `writer` when it is a leading segment-boundary prefix.
+/// True if `existing` is the same holder as `writer`, or an ancestor of it in
+/// the agent tree. Holder ids are '/'-separated segments (`session`,
+/// `session/agent`); `existing` is an ancestor of `writer` when it is a leading
+/// segment-boundary prefix.
 pub fn is_ancestor_or_self(existing: &str, writer: &str) -> bool {
     existing == writer
         || writer
@@ -58,8 +62,8 @@ pub fn is_ancestor_or_self(existing: &str, writer: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// True when two holders are the same session line: equal, or one an ancestor of
-/// the other. Siblings (`S/a1` against `S/a2`) are not.
+/// True when two holders are the same session line: equal, or one an ancestor
+/// of the other. Siblings (`S/a1` against `S/a2`) are not.
 pub fn on_one_ancestry_line(a: &str, b: &str) -> bool {
     is_ancestor_or_self(a, b) || is_ancestor_or_self(b, a)
 }
@@ -108,7 +112,8 @@ pub struct Conflict {
 pub enum WriteDecision {
     /// File was free; a fresh lock was taken for the writer.
     Acquired,
-    /// Writer already owns the file (self or an ancestor holds an overlapping lock).
+    /// Writer already owns the file (self or an ancestor holds an overlapping
+    /// lock).
     AllowedByOwnership,
     /// Blocked: live overlapping locks held by non-ancestors.
     Denied(Vec<Conflict>),
@@ -150,7 +155,8 @@ impl Data {
 
     /// Conflicts that would block acquiring `paths` for `holder` in `root`: any
     /// live lock on another session line whose path overlaps a requested path.
-    /// A holder's own line — itself, its parent, its sub-agents — never conflicts.
+    /// A holder's own line — itself, its parent, its sub-agents — never
+    /// conflicts.
     pub fn check(&self, root: &str, paths: &[String], holder: &str, now: u64) -> Vec<Conflict> {
         let mut out = Vec::new();
         for req in paths {
@@ -172,10 +178,10 @@ impl Data {
         out
     }
 
-    /// All-or-nothing acquire: if any requested path conflicts, acquire none and
-    /// return the conflicts. Otherwise insert, or renew when the row is this
-    /// holder's own. A live row held by another holder on the same session line
-    /// permits the acquire but is left alone.
+    /// All-or-nothing acquire: if any requested path conflicts, acquire none
+    /// and return the conflicts. Otherwise insert, or renew when the row is
+    /// this holder's own. A live row held by another holder on the same
+    /// session line permits the acquire but is left alone.
     #[allow(clippy::too_many_arguments)]
     pub fn try_acquire(
         &mut self,
@@ -199,34 +205,33 @@ impl Data {
         let mut already_held = Vec::new();
         for req in paths {
             let key = key_for(root, req);
-            // An acquire permitted by ancestry must not widen somebody's narrower
-            // claim: only an exact holder match is rewritten.
+            // An acquire permitted by ancestry must not widen somebody's
+            // narrower claim: only an exact holder match is
+            // rewritten.
             let keep = self
                 .locks
                 .get(&key)
                 .is_some_and(|e| e.holder != holder && !entry_dead(e, now));
             if keep {
                 let e = self.locks.get_mut(&key).expect("kept row still present");
-                // The caller is on this row's session line, so its request renews
-                // the row; the lease stays the row holder's to set.
+                // The caller is on this row's session line, so its request
+                // renews the row; the lease stays the row
+                // holder's to set.
                 e.ts = now;
                 already_held.push(AlreadyHeld {
                     path: req.clone(),
                     ttl_secs: e.ttl,
                 });
             } else {
-                self.locks.insert(
-                    key,
-                    LockEntry {
-                        path: req.clone(),
-                        root: root.into(),
-                        holder: holder.into(),
-                        pid,
-                        note: note.map(str::to_string),
-                        ts: now,
-                        ttl,
-                    },
-                );
+                self.locks.insert(key, LockEntry {
+                    path: req.clone(),
+                    root: root.into(),
+                    holder: holder.into(),
+                    pid,
+                    note: note.map(str::to_string),
+                    ts: now,
+                    ttl,
+                });
                 acquired.push(Acquired {
                     path: req.clone(),
                     ttl_secs: ttl,
@@ -240,9 +245,10 @@ impl Data {
         }
     }
 
-    /// Release named paths held by `holder` in `root`. Without `force`, a path held
-    /// by another holder is refused (not freed), and the refusal says whether that
-    /// holder is on the caller's own session line. Returns (released, refused).
+    /// Release named paths held by `holder` in `root`. Without `force`, a path
+    /// held by another holder is refused (not freed), and the refusal says
+    /// whether that holder is on the caller's own session line. Returns
+    /// (released, refused).
     pub fn do_release(
         &mut self,
         root: &str,
@@ -275,8 +281,8 @@ impl Data {
     }
 
     /// Keys of every dead lock (TTL lapsed, or anchor pid known-gone), without
-    /// mutating. Callers persist removals separately so liveness probes stay out
-    /// of the write path's critical section.
+    /// mutating. Callers persist removals separately so liveness probes stay
+    /// out of the write path's critical section.
     pub fn dead_keys(&self, now: u64) -> Vec<String> {
         self.locks
             .iter()
@@ -353,25 +359,23 @@ impl Data {
             }
             return WriteDecision::AllowedByOwnership;
         }
-        self.locks.insert(
-            key_for(root, path),
-            LockEntry {
-                path: path.to_string(),
-                root: root.to_string(),
-                holder: writer.to_string(),
-                pid,
-                note: note.map(str::to_string),
-                ts: now,
-                ttl,
-            },
-        );
+        self.locks.insert(key_for(root, path), LockEntry {
+            path: path.to_string(),
+            root: root.to_string(),
+            holder: writer.to_string(),
+            pid,
+            note: note.map(str::to_string),
+            ts: now,
+            ttl,
+        });
         WriteDecision::Acquired
     }
 
-    /// Release every lock whose holder is `prefix` or a descendant (`prefix/…`),
-    /// across all roots. Holder ids are globally unique per session/sub-agent, so
-    /// root-scoping the release is unnecessary and causes leaks when the hook
-    /// process cwd resolves to a different root than the edited file's repo root.
+    /// Release every lock whose holder is `prefix` or a descendant
+    /// (`prefix/…`), across all roots. Holder ids are globally unique per
+    /// session/sub-agent, so root-scoping the release is unnecessary and
+    /// causes leaks when the hook process cwd resolves to a different root
+    /// than the edited file's repo root.
     pub fn release_prefix(&mut self, prefix: &str) -> Vec<String> {
         let matching: Vec<(String, String)> = self
             .locks
@@ -419,18 +423,15 @@ mod tests {
     #[test]
     fn roundtrip_serde() {
         let mut d = Data::default();
-        d.locks.insert(
-            key_for("/repo", "scenes"),
-            LockEntry {
-                path: "scenes".into(),
-                root: "/repo".into(),
-                holder: "alice".into(),
-                pid: None,
-                note: Some("refactor".into()),
-                ts: 5,
-                ttl: 1800,
-            },
-        );
+        d.locks.insert(key_for("/repo", "scenes"), LockEntry {
+            path: "scenes".into(),
+            root: "/repo".into(),
+            holder: "alice".into(),
+            pid: None,
+            note: Some("refactor".into()),
+            ts: 5,
+            ttl: 1800,
+        });
         let s = serde_json::to_string(&d).unwrap();
         let back: Data = serde_json::from_str(&s).unwrap();
         assert_eq!(back.locks[&key_for("/repo", "scenes")].holder, "alice");
@@ -444,18 +445,15 @@ mod tests {
         ttl: u64,
         pid: Option<u32>,
     ) -> (String, LockEntry) {
-        (
-            key_for(root, path),
-            LockEntry {
-                path: path.into(),
-                root: root.into(),
-                holder: holder.into(),
-                pid,
-                note: None,
-                ts,
-                ttl,
-            },
-        )
+        (key_for(root, path), LockEntry {
+            path: path.into(),
+            root: root.into(),
+            holder: holder.into(),
+            pid,
+            note: None,
+            ts,
+            ttl,
+        })
     }
 
     #[test]
@@ -550,14 +548,11 @@ mod tests {
         ]);
         let (rel, refused) = d.do_release("/repo", &["b".into()], "alice", false);
         assert!(rel.is_empty());
-        assert_eq!(
-            refused,
-            vec![Refusal {
-                path: "b".into(),
-                held_by: "bob".into(),
-                reason: RefusedBecause::OtherSession,
-            }]
-        );
+        assert_eq!(refused, vec![Refusal {
+            path: "b".into(),
+            held_by: "bob".into(),
+            reason: RefusedBecause::OtherSession,
+        }]);
         let (rel, _) = d.do_release("/repo", &["a".into()], "alice", false);
         assert_eq!(rel, vec!["a".to_string()]);
         let (rel, _) = d.do_release("/repo", &["b".into()], "alice", true);
@@ -574,21 +569,18 @@ mod tests {
         ]);
         let (rel, refused) = d.do_release("/repo", &["a".into(), "b".into()], "S", false);
         assert!(rel.is_empty(), "neither row is the caller's own");
-        assert_eq!(
-            refused,
-            vec![
-                Refusal {
-                    path: "a".into(),
-                    held_by: "S/a1".into(),
-                    reason: RefusedBecause::SameSessionLine,
-                },
-                Refusal {
-                    path: "b".into(),
-                    held_by: "T".into(),
-                    reason: RefusedBecause::OtherSession,
-                },
-            ]
-        );
+        assert_eq!(refused, vec![
+            Refusal {
+                path: "a".into(),
+                held_by: "S/a1".into(),
+                reason: RefusedBecause::SameSessionLine,
+            },
+            Refusal {
+                path: "b".into(),
+                held_by: "T".into(),
+                reason: RefusedBecause::OtherSession,
+            },
+        ]);
     }
 
     #[test]
@@ -615,10 +607,10 @@ mod tests {
         ]);
         let mut got = d.dead_keys(1000);
         got.sort();
-        assert_eq!(
-            got,
-            vec![key_for("/repo", "deadpid"), key_for("/repo", "old")]
-        );
+        assert_eq!(got, vec![
+            key_for("/repo", "deadpid"),
+            key_for("/repo", "old")
+        ]);
     }
 
     #[test]
@@ -665,7 +657,8 @@ mod tests {
         d.decide_write("/repo", "src", "S", None, None, 1800, 100);
         let r = d.decide_write("/repo", "src/a.rs", "S/a1", None, None, 1800, 120);
         assert_eq!(r, WriteDecision::AllowedByOwnership);
-        // no row is inserted for the child, and the parent keeps the row's holder
+        // no row is inserted for the child, and the parent keeps the row's
+        // holder
         assert_eq!(d.locks.len(), 1);
         assert_eq!(d.locks[&key_for("/repo", "src")].holder, "S");
     }

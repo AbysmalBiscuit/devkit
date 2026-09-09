@@ -5,29 +5,28 @@
 use std::collections::{BTreeMap, HashMap};
 
 use devkit_config::{Config, TaskConfig};
-use devkit_ports::apps::App;
-use devkit_ports::registry::{self, Role};
-use devkit_ports::task;
+use devkit_ports::{
+    apps::App,
+    registry::{self, Role},
+    task,
+};
 
 const BASE: u16 = 47360;
 
 fn catalog() -> HashMap<String, App> {
     let mut m = HashMap::new();
-    m.insert(
-        "api".to_string(),
-        App {
-            name: "api".into(),
-            base_port: BASE,
-            path: "apps/api".into(),
-            launch: vec![],
-            url: None,
-            url_env: None,
-            provides_url: false,
-            static_env: HashMap::new(),
-            prep_files: vec![],
-            setup: vec![],
-        },
-    );
+    m.insert("api".to_string(), App {
+        name: "api".into(),
+        base_port: BASE,
+        path: "apps/api".into(),
+        launch: vec![],
+        url: None,
+        url_env: None,
+        provides_url: false,
+        static_env: HashMap::new(),
+        prep_files: vec![],
+        setup: vec![],
+    });
     m
 }
 

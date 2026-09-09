@@ -1,14 +1,17 @@
 mod common;
 
 use common::Harness;
-use devkit_ports::daemon::proto::{Request, Response};
-use devkit_ports::registry::Role;
+use devkit_ports::{
+    daemon::proto::{Request, Response},
+    registry::Role,
+};
 
 /// Alloc through the daemon writes a row to ports.json that contains the holder
 /// and app name.  Release removes it (returns Freed with at least one port).
 ///
-/// The holder must be an existing directory: `dead_ports()` checks `holder_alive`
-/// (i.e. whether the path exists) and prunes entries whose holder is gone.
+/// The holder must be an existing directory: `dead_ports()` checks
+/// `holder_alive` (i.e. whether the path exists) and prunes entries whose
+/// holder is gone.
 #[test]
 fn alloc_through_daemon_writes_registry() {
     let mut h = Harness::start();
@@ -30,9 +33,9 @@ fn alloc_through_daemon_writes_registry() {
         "alloc did not return an 'api' port: {ports:?}"
     );
 
-    // The daemon must have flushed the row to disk. Compare the holder against its
-    // JSON-encoded form so the check survives path separators that JSON escapes
-    // (e.g. backslashes in a Windows holder path).
+    // The daemon must have flushed the row to disk. Compare the holder against
+    // its JSON-encoded form so the check survives path separators that JSON
+    // escapes (e.g. backslashes in a Windows holder path).
     let json = h.ports_json();
     assert!(json.contains("\"api\""), "ports.json missing 'api': {json}");
     let holder_json = serde_json::to_string(&holder).unwrap();
@@ -53,10 +56,11 @@ fn alloc_through_daemon_writes_registry() {
     h.shutdown();
 }
 
-/// Snapshot returns the full registry, including an entry allocated via the daemon.
+/// Snapshot returns the full registry, including an entry allocated via the
+/// daemon.
 ///
-/// The holder must be an existing directory so it survives the liveness prune in
-/// `snapshot_flock`.
+/// The holder must be an existing directory so it survives the liveness prune
+/// in `snapshot_flock`.
 #[test]
 fn snapshot_roundtrips() {
     let mut h = Harness::start();

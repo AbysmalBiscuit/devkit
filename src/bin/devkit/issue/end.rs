@@ -1,12 +1,14 @@
+use std::{
+    io::{self, Write},
+    path::Path,
+    sync::Mutex,
+};
+
 use anyhow::{Context, Result};
-use devkit_common::progress::Steps;
-use devkit_common::record::RecordState;
-use std::io::{self, Write};
-use std::path::Path;
-use std::sync::Mutex;
+use devkit_common::{progress::Steps, record::RecordState};
+use devkit_issue::status::{IssueWorktree, gather_with, label, reason_not_finished};
 
 use crate::issue::triage::render;
-use devkit_issue::status::{IssueWorktree, gather_with, label, reason_not_finished};
 
 fn select_explicit(rows: &[IssueWorktree], selectors: &[String]) -> Vec<IssueWorktree> {
     let mut chosen = Vec::new();
@@ -76,10 +78,11 @@ fn recorded_leftovers(
 
 /// Drop this worktree's reference to the baseline it compared against, removing
 /// the baseline when this was the last one. Runs after the worktree is gone, so
-/// two concurrent `issue end` runs cannot each count the other and each decline.
+/// two concurrent `issue end` runs cannot each count the other and each
+/// decline.
 ///
-/// `issue end --force` is not threaded through: it waives uncommitted changes in
-/// the worktree, not a baseline's running servers, which stay a refusal.
+/// `issue end --force` is not threaded through: it waives uncommitted changes
+/// in the worktree, not a baseline's running servers, which stay a refusal.
 fn drop_baseline_reference(main: &Path, pin: &devkit_common::record::BaselinePin) -> Result<()> {
     let repo = main.to_str().context("primary checkout path not UTF-8")?;
     let ports = devkit_ports::registry::snapshot()?;
@@ -118,7 +121,8 @@ fn is_legacy_summary(name: &str, issue_id: &str) -> bool {
 }
 
 /// Sentinel error for a worktree refused because it has uncommitted changes;
-/// the caller downcasts to it to suggest `--force` instead of a generic failure.
+/// the caller downcasts to it to suggest `--force` instead of a generic
+/// failure.
 #[derive(Debug)]
 struct Dirty;
 
@@ -143,12 +147,12 @@ fn main_repo(start: &str) -> Result<String> {
 
 /// Remove a finished worktree, delete its branch, and remove its summary file.
 /// The record names that file exactly; only a record that names none falls back
-/// to sweeping the parent of the main repo for an `ISSUE_*<id>*.md` belonging to
-/// this issue, so a run that knows its summary path touches nothing else in a
-/// directory it does not own. Refuses if cwd is inside the worktree,
+/// to sweeping the parent of the main repo for an `ISSUE_*<id>*.md` belonging
+/// to this issue, so a run that knows its summary path touches nothing else in
+/// a directory it does not own. Refuses if cwd is inside the worktree,
 /// or (without `force`) if the tree is dirty. Serializes `git branch -D` behind
-/// `branch_lock` so concurrent removals never contend on `packed-refs.lock`; the
-/// worktree removal and file unlinks touch per-worktree state and run in
+/// `branch_lock` so concurrent removals never contend on `packed-refs.lock`;
+/// the worktree removal and file unlinks touch per-worktree state and run in
 /// parallel. Pruning the stale worktree entry is left to a single caller-side
 /// `git worktree prune` after all removals finish.
 fn cleanup(
@@ -224,10 +228,11 @@ fn cleanup(
         );
     }
 
-    // Ref deletion can rewrite packed-refs, so concurrent branch deletes contend
-    // on packed-refs.lock. Serialize just this step; a thread that can't take the
-    // lock queues on it. (A poisoned lock still yields the guard — the critical
-    // section is a git call with no invariant to corrupt.)
+    // Ref deletion can rewrite packed-refs, so concurrent branch deletes
+    // contend on packed-refs.lock. Serialize just this step; a thread that
+    // can't take the lock queues on it. (A poisoned lock still yields the
+    // guard — the critical section is a git call with no invariant to
+    // corrupt.)
     {
         let _guard = branch_lock.lock().unwrap_or_else(|e| e.into_inner());
         if devkit_common::git::Git::at(&main)
@@ -668,17 +673,14 @@ mod tests {
         let summary = dir.path().join("notes").join("ENG-1.md");
         std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
         std::fs::write(&summary, "notes\n").unwrap();
-        devkit_common::record::write(
-            &wt,
-            &devkit_common::record::IssueRecord {
-                issue: "ENG-1".into(),
-                slug: "fix".into(),
-                apps: vec![],
-                summary: Some(summary.display().to_string()),
-                pr: None,
-                baseline: None,
-            },
-        )
+        devkit_common::record::write(&wt, &devkit_common::record::IssueRecord {
+            issue: "ENG-1".into(),
+            slug: "fix".into(),
+            apps: vec![],
+            summary: Some(summary.display().to_string()),
+            pr: None,
+            baseline: None,
+        })
         .unwrap();
 
         let found = recorded_leftovers(&wt, false)
@@ -692,17 +694,14 @@ mod tests {
     #[test]
     fn a_worktree_with_no_summary_has_nothing_to_remove() {
         let dir = tempfile::tempdir().unwrap();
-        devkit_common::record::write(
-            dir.path(),
-            &devkit_common::record::IssueRecord {
-                issue: "ENG-2".into(),
-                slug: "fix".into(),
-                apps: vec![],
-                summary: None,
-                pr: None,
-                baseline: None,
-            },
-        )
+        devkit_common::record::write(dir.path(), &devkit_common::record::IssueRecord {
+            issue: "ENG-2".into(),
+            slug: "fix".into(),
+            apps: vec![],
+            summary: None,
+            pr: None,
+            baseline: None,
+        })
         .unwrap();
         assert!(recorded_leftovers(dir.path(), false).unwrap().0.is_none());
     }
@@ -729,23 +728,22 @@ mod tests {
             &main,
         );
 
-        // The summary sits beside the worktree, as the default path template puts it.
+        // The summary sits beside the worktree, as the default path template
+        // puts it.
         let summary = dir.path().join("ISSUE_SUMMARY_ENG-1.md");
         std::fs::write(&summary, "months of notes\n").unwrap();
-        devkit_common::record::write(
-            &wt,
-            &devkit_common::record::IssueRecord {
-                issue: "ENG-1".into(),
-                slug: "fix".into(),
-                apps: vec![],
-                summary: Some(summary.display().to_string()),
-                pr: None,
-                baseline: None,
-            },
-        )
+        devkit_common::record::write(&wt, &devkit_common::record::IssueRecord {
+            issue: "ENG-1".into(),
+            slug: "fix".into(),
+            apps: vec![],
+            summary: Some(summary.display().to_string()),
+            pr: None,
+            baseline: None,
+        })
         .unwrap();
 
-        // The record itself is untracked scratch, so the tree is dirty without --force.
+        // The record itself is untracked scratch, so the tree is dirty without
+        // --force.
         cleanup(wt.to_str().unwrap(), "ENG-1", true, &Mutex::new(())).unwrap();
 
         assert!(!wt.exists(), "worktree removed");
@@ -778,7 +776,8 @@ mod tests {
             &main,
         );
 
-        // Another issue's notes, in the same directory. Ending ENG-2 must not touch them.
+        // Another issue's notes, in the same directory. Ending ENG-2 must not
+        // touch them.
         let other = dir.path().join("ISSUE_SUMMARY_ENG-99.md");
         std::fs::write(&other, "someone else\n").unwrap();
 
@@ -795,10 +794,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let main = repo_with_one_commit(dir.path());
         let wt = dir.path().join("wt-eng-3");
-        fixture_git(
-            &main,
-            &["worktree", "add", "-q", "-b", "eng-3", wt.to_str().unwrap()],
-        );
+        fixture_git(&main, &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "eng-3",
+            wt.to_str().unwrap(),
+        ]);
         std::fs::create_dir_all(wt.join(".devkit")).unwrap();
         std::fs::write(wt.join(".devkit").join("issue.toml"), "issue = \n").unwrap();
         // The self-ignore every real record write drops beside the record.
@@ -836,20 +839,17 @@ mod tests {
     }
 
     fn record_pinned_at(wt: &std::path::Path, issue: &str, baseline: &std::path::Path) {
-        devkit_common::record::write(
-            wt,
-            &devkit_common::record::IssueRecord {
-                issue: issue.into(),
-                slug: "fix".into(),
-                apps: vec![],
-                summary: None,
-                pr: None,
-                baseline: Some(devkit_common::record::BaselinePin {
-                    sha: "d13d90b724bf8a3c".into(),
-                    path: baseline.display().to_string(),
-                }),
-            },
-        )
+        devkit_common::record::write(wt, &devkit_common::record::IssueRecord {
+            issue: issue.into(),
+            slug: "fix".into(),
+            apps: vec![],
+            summary: None,
+            pr: None,
+            baseline: Some(devkit_common::record::BaselinePin {
+                sha: "d13d90b724bf8a3c".into(),
+                path: baseline.display().to_string(),
+            }),
+        })
         .unwrap();
     }
 
@@ -863,30 +863,28 @@ mod tests {
 
         let baseline = dir.path().join("_baselines").join("d13d90b724bf");
         std::fs::create_dir_all(baseline.parent().unwrap()).unwrap();
-        fixture_git(
-            &main,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "--detach",
-                baseline.to_str().unwrap(),
-            ],
-        );
-        crate::baseline::write_marker(
-            &baseline,
-            &crate::baseline::Marker {
-                sha: "d13d90b724bf8a3c".into(),
-                apps: Default::default(),
-            },
-        )
+        fixture_git(&main, &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            baseline.to_str().unwrap(),
+        ]);
+        crate::baseline::write_marker(&baseline, &crate::baseline::Marker {
+            sha: "d13d90b724bf8a3c".into(),
+            apps: Default::default(),
+        })
         .unwrap();
 
         let wt = dir.path().join("wt-eng-5");
-        fixture_git(
-            &main,
-            &["worktree", "add", "-q", "-b", "eng-5", wt.to_str().unwrap()],
-        );
+        fixture_git(&main, &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "eng-5",
+            wt.to_str().unwrap(),
+        ]);
         record_pinned_at(&wt, "ENG-5", &baseline);
 
         cleanup(wt.to_str().unwrap(), "ENG-5", true, &Mutex::new(())).unwrap();
@@ -908,24 +906,25 @@ mod tests {
         let main = repo_with_one_commit(dir.path());
 
         let sibling = dir.path().join("wt-eng-7");
-        fixture_git(
-            &main,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                "eng-7",
-                sibling.to_str().unwrap(),
-            ],
-        );
+        fixture_git(&main, &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "eng-7",
+            sibling.to_str().unwrap(),
+        ]);
         std::fs::write(sibling.join("f.txt"), "uncommitted work\n").unwrap();
 
         let wt = dir.path().join("wt-eng-6");
-        fixture_git(
-            &main,
-            &["worktree", "add", "-q", "-b", "eng-6", wt.to_str().unwrap()],
-        );
+        fixture_git(&main, &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "eng-6",
+            wt.to_str().unwrap(),
+        ]);
         record_pinned_at(&wt, "ENG-6", &sibling);
 
         cleanup(wt.to_str().unwrap(), "ENG-6", true, &Mutex::new(())).unwrap();
@@ -967,17 +966,14 @@ mod tests {
         std::fs::write(&recorded, "the summary\n").unwrap();
         let archived = dir.path().join("ISSUE_NOTES_ENG-4.md");
         std::fs::write(&archived, "preserved\n").unwrap();
-        devkit_common::record::write(
-            &wt,
-            &devkit_common::record::IssueRecord {
-                issue: "ENG-4".into(),
-                slug: "fix".into(),
-                apps: vec![],
-                summary: Some(recorded.display().to_string()),
-                pr: None,
-                baseline: None,
-            },
-        )
+        devkit_common::record::write(&wt, &devkit_common::record::IssueRecord {
+            issue: "ENG-4".into(),
+            slug: "fix".into(),
+            apps: vec![],
+            summary: Some(recorded.display().to_string()),
+            pr: None,
+            baseline: None,
+        })
         .unwrap();
 
         cleanup(wt.to_str().unwrap(), "ENG-4", true, &Mutex::new(())).unwrap();
@@ -1069,10 +1065,10 @@ mod tests {
         let done: std::collections::HashSet<String> = ["/wt/c".to_string(), "/wt/a".to_string()]
             .into_iter()
             .collect();
-        assert_eq!(
-            removed_in_order(&approved, &done),
-            vec!["/wt/a".to_string(), "/wt/c".to_string()]
-        );
+        assert_eq!(removed_in_order(&approved, &done), vec![
+            "/wt/a".to_string(),
+            "/wt/c".to_string()
+        ]);
     }
 
     #[test]
@@ -1087,17 +1083,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wt = dir.path().join("eng-9-fix");
         std::fs::create_dir_all(&wt).unwrap();
-        devkit_common::record::write(
-            &wt,
-            &devkit_common::record::IssueRecord {
-                issue: "ENG-9".into(),
-                slug: "fix".into(),
-                apps: vec!["web".into()],
-                summary: None,
-                pr: None,
-                baseline: None,
-            },
-        )
+        devkit_common::record::write(&wt, &devkit_common::record::IssueRecord {
+            issue: "ENG-9".into(),
+            slug: "fix".into(),
+            apps: vec!["web".into()],
+            summary: None,
+            pr: None,
+            baseline: None,
+        })
         .unwrap();
         let approved = vec![approved_row(wt.to_str().unwrap(), "lev/eng-9-fix", "ENG-9")];
 

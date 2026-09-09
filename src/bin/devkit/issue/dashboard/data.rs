@@ -1,12 +1,12 @@
 use chrono::{DateTime, Utc};
-use devkit_common::cmd::{capture, gh_json_in};
-use devkit_common::github;
-use devkit_common::tracker::{AssignedIssue, Tracker};
+use devkit_common::{
+    cmd::{capture, gh_json_in},
+    github,
+    tracker::{AssignedIssue, Tracker},
+};
 use serde::{Deserialize, Serialize};
 
-use super::bucket::parse_ts;
-use super::cache;
-use super::cache::CacheScope;
+use super::{bucket::parse_ts, cache, cache::CacheScope};
 
 /// How long a cached timeline fetch stays fresh. The timeline charts show
 /// slow-moving trends, so a few minutes of staleness is invisible; the live
@@ -62,8 +62,9 @@ struct PrTimes {
     deletions: i64,
 }
 
-/// A `pr_timeline` result reduced to unix-second stamps so it serializes without
-/// chrono's serde feature; reconstituted into `DateTime`s on the way back out.
+/// A `pr_timeline` result reduced to unix-second stamps so it serializes
+/// without chrono's serde feature; reconstituted into `DateTime`s on the way
+/// back out.
 #[derive(Serialize, Deserialize)]
 struct PrTimelineCache {
     opened: Vec<i64>,
@@ -129,7 +130,8 @@ pub fn pr_timeline(
         .unwrap_or_default()
     };
     let prs = if all_roles {
-        // The two GitHub queries are independent round trips; run them together.
+        // The two GitHub queries are independent round trips; run them
+        // together.
         let (mut authored, reviewed) = std::thread::scope(|s| {
             let at = s.spawn(|| fetch("author:@me"));
             let rt = s.spawn(|| fetch("reviewed-by:@me"));
@@ -154,22 +156,19 @@ pub fn pr_timeline(
     let add = prs.iter().map(|p| p.additions).sum();
     let del = prs.iter().map(|p| p.deletions).sum();
     if use_cache && !(opened.is_empty() && merged.is_empty()) {
-        cache::put(
-            scope,
-            key,
-            &PrTimelineCache {
-                opened: opened.iter().map(|d| d.timestamp()).collect(),
-                merged: merged.iter().map(|d| d.timestamp()).collect(),
-                additions: add,
-                deletions: del,
-            },
-        );
+        cache::put(scope, key, &PrTimelineCache {
+            opened: opened.iter().map(|d| d.timestamp()).collect(),
+            merged: merged.iter().map(|d| d.timestamp()).collect(),
+            additions: add,
+            deletions: del,
+        });
     }
     (opened, merged, add, del)
 }
 
 /// Timeline PRs for `qualifier` (`author:@me` / `reviewed-by:@me`) over direct
-/// HTTP; `None` on no token / transport failure so the caller falls back to `gh`.
+/// HTTP; `None` on no token / transport failure so the caller falls back to
+/// `gh`.
 fn fetch_timeline_http(qualifier: &str, repo: &github::Repo) -> Option<Vec<PrTimes>> {
     github::token()?;
     let items = github::pr_timeline(&repo.slug, qualifier, 500).ok()?;
@@ -226,8 +225,7 @@ mod tests {
         assert_eq!(del, 0);
     }
 
-    use devkit_common::tracker::fake::FakeTracker;
-    use devkit_common::tracker::{State, StateKind};
+    use devkit_common::tracker::{State, StateKind, fake::FakeTracker};
 
     fn assigned(id: &str) -> AssignedIssue {
         AssignedIssue {

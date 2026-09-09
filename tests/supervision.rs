@@ -4,13 +4,20 @@
 
 mod common;
 
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
+
 use common::{Harness, pid_in_ports_json};
-use devkit_ports::daemon::proto::{Request, Response};
-use devkit_ports::registry::Role;
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
-use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
+use devkit_ports::{
+    daemon::proto::{Request, Response},
+    registry::Role,
+};
+use nix::{
+    sys::signal::{Signal, kill},
+    unistd::Pid,
+};
 
 /// The fixture server listens on the allocated port; the daemon's `Supervise`
 /// handler calls `wait_ready` and reports `ready=true`.
@@ -53,7 +60,8 @@ fn supervised_python_server_becomes_ready() {
 
 /// After SIGKILLing the supervised child, the daemon's supervision thread reaps
 /// the exit and respawns the server, because the child is still tracked in the
-/// supervisor table (it was not stopped via `Down`). The pid in ports.json changes.
+/// supervisor table (it was not stopped via `Down`). The pid in ports.json
+/// changes.
 #[test]
 fn restart_after_kill() {
     let mut h = Harness::start();
@@ -82,8 +90,8 @@ fn restart_after_kill() {
     // SIGKILL the child to simulate a crash.
     kill(Pid::from_raw(pid1 as i32), Signal::SIGKILL).expect("SIGKILL failed");
 
-    // Poll ports.json for up to 8 s until the pid changes (daemon restarted it).
-    // Supervision tick is 500 ms + python startup ≈ 1–2 s total.
+    // Poll ports.json for up to 8 s until the pid changes (daemon restarted
+    // it). Supervision tick is 500 ms + python startup ≈ 1–2 s total.
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut pid2: Option<u32> = None;
     loop {
@@ -116,13 +124,15 @@ fn restart_after_kill() {
 }
 
 /// A supervised child that is SIGKILLed restarts even while clients are pruning
-/// the registry. The supervisor table — not the registry row — decides crash vs.
-/// stop, so a concurrent `Snapshot` (which drops the dead-pid row inside the
-/// daemon) cannot make a crash look like an intentional stop.
+/// the registry. The supervisor table — not the registry row — decides crash
+/// vs. stop, so a concurrent `Snapshot` (which drops the dead-pid row inside
+/// the daemon) cannot make a crash look like an intentional stop.
 #[test]
 fn restart_survives_concurrent_snapshot() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
 
     let mut h = Harness::start();
     let port = common::free_port();
@@ -147,16 +157,16 @@ fn restart_survives_concurrent_snapshot() {
         pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
 
     // Hammer Snapshot from independent connections: each snapshot prunes the
-    // dead-pid row inside the daemon, reproducing the prune that races the restart.
+    // dead-pid row inside the daemon, reproducing the prune that races the
+    // restart.
     let sock = h.socket();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
     let hammer = std::thread::spawn(move || {
-        use devkit_ports::daemon::proto;
-        use devkit_ports::daemon::transport;
-        use interprocess::local_socket::Stream;
-        use interprocess::local_socket::traits::Stream as _;
         use std::io::{BufReader, BufWriter};
+
+        use devkit_ports::daemon::{proto, transport};
+        use interprocess::local_socket::{Stream, traits::Stream as _};
         while !stop_thread.load(Ordering::Relaxed) {
             if let Ok(name) = transport::socket_name(&sock)
                 && let Ok(stream) = Stream::connect(name)
@@ -174,7 +184,8 @@ fn restart_survives_concurrent_snapshot() {
     // SIGKILL the child to simulate a crash.
     kill(Pid::from_raw(pid1 as i32), Signal::SIGKILL).expect("SIGKILL failed");
 
-    // The daemon must restart it despite the concurrent pruning. Poll for a new pid.
+    // The daemon must restart it despite the concurrent pruning. Poll for a new
+    // pid.
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut pid2: Option<u32> = None;
     loop {
@@ -217,8 +228,9 @@ fn health_probe_restarts_hung_server() {
     let sentinel = h.home.path().join("hung-once");
 
     // Listen on `port`, accepting connections. On first run (sentinel absent),
-    // serve ~3 s — long enough for the 1 s probe to arm — then stop accepting but
-    // stay alive (hung). On later runs (sentinel present) serve forever (healthy).
+    // serve ~3 s — long enough for the 1 s probe to arm — then stop accepting
+    // but stay alive (hung). On later runs (sentinel present) serve forever
+    // (healthy).
     let script = r#"
 import socket, os, sys, time
 port = int(sys.argv[1]); sentinel = sys.argv[2]
@@ -297,18 +309,20 @@ while True:
 /// A server whose tree-RSS balloons past `memory_limit_mb` is restarted: after
 /// `memory_limit_ticks` consecutive over-limit ticks the daemon SIGTERMs it and
 /// the reap path respawns it. The fixture balloons only on its first run
-/// (sentinel-guarded), so the respawn is small and the pid in ports.json changes
-/// exactly once.
+/// (sentinel-guarded), so the respawn is small and the pid in ports.json
+/// changes exactly once.
 #[test]
 fn memory_restart_over_limit_server() {
-    // Act past 60 MB after 2 consecutive over-limit ticks; generous restart budget.
+    // Act past 60 MB after 2 consecutive over-limit ticks; generous restart
+    // budget.
     let mut h = Harness::start_with_memory(3600, 60, 2, 5);
     let port = common::free_port();
     let holder = h.home.path().to_str().unwrap().to_string();
     let sentinel = h.home.path().join("ballooned-once");
 
     // Bind + accept so wait_ready succeeds. First run (sentinel absent): touch
-    // ~120 MB resident, then keep serving (alive, over limit). Later runs: small.
+    // ~120 MB resident, then keep serving (alive, over limit). Later runs:
+    // small.
     let script = r#"
 import socket, os, sys
 port = int(sys.argv[1]); sentinel = sys.argv[2]
@@ -352,7 +366,8 @@ while True:
     let pid1 =
         pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
 
-    // Poll up to 15 s for the pid to change (daemon restarted the over-limit server).
+    // Poll up to 15 s for the pid to change (daemon restarted the over-limit
+    // server).
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut pid2: Option<u32> = None;
     loop {

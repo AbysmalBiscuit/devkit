@@ -1,20 +1,25 @@
 //! Shared test harness for devkitd integration tests.
 //!
-//! Compile-time unused helpers are expected: different test binaries use different
-//! subsets. The allow below is the standard idiom for shared test modules.
+//! Compile-time unused helpers are expected: different test binaries use
+//! different subsets. The allow below is the standard idiom for shared test
+//! modules.
 #![allow(dead_code)]
 
+use std::{
+    io::{BufReader, BufWriter},
+    net::TcpListener,
+    path::PathBuf,
+    process::{Child, Command},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
+};
+
 use devkit_locks::daemon::proto::{Request as LockRequest, Response as LockResponse};
-use devkit_ports::daemon::proto::{self, Request, Response};
-use devkit_ports::daemon::transport;
-use interprocess::local_socket::Stream;
-use interprocess::local_socket::traits::Stream as _;
-use std::io::{BufReader, BufWriter};
-use std::net::TcpListener;
-use std::path::PathBuf;
-use std::process::{Child, Command};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use devkit_ports::daemon::{
+    proto::{self, Request, Response},
+    transport,
+};
+use interprocess::local_socket::{Stream, traits::Stream as _};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -60,9 +65,9 @@ pub fn pid_in_ports_json(body: &str, app_name: &str) -> Option<u32> {
 /// Source of the minimal TCP server used as the supervised-process fixture.
 ///
 /// Binds and listens directly. `python3 -m http.server` is unsuitable: its
-/// `server_bind` resolves `socket.getfqdn(host)` between `bind()` and `listen()`,
-/// so wherever reverse resolution is slow the port refuses connections for the
-/// whole lookup and readiness polling waits it out.
+/// `server_bind` resolves `socket.getfqdn(host)` between `bind()` and
+/// `listen()`, so wherever reverse resolution is slow the port refuses
+/// connections for the whole lookup and readiness polling waits it out.
 const TCP_SERVER_SRC: &str = r#"
 import socket, sys
 port = int(sys.argv[1])
@@ -75,8 +80,8 @@ while True:
     c.close()
 "#;
 
-/// Launch argv for a server that accepts TCP connections on `port`, which is all
-/// `supervise::probe_port` checks.
+/// Launch argv for a server that accepts TCP connections on `port`, which is
+/// all `supervise::probe_port` checks.
 pub fn tcp_server_argv(port: u16) -> Vec<String> {
     vec![
         "python3".into(),
@@ -89,7 +94,8 @@ pub fn tcp_server_argv(port: u16) -> Vec<String> {
 /// A running `devkitd` instance bound to a throwaway HOME directory.
 pub struct Harness {
     pub home: tempfile::TempDir,
-    /// `$XDG_STATE_HOME` passed to the daemon — state lives under `<xdg_state>/devkit/`.
+    /// `$XDG_STATE_HOME` passed to the daemon — state lives under
+    /// `<xdg_state>/devkit/`.
     pub xdg_state: PathBuf,
     child: Child,
 }
@@ -105,8 +111,8 @@ impl Harness {
         Self::start_with_env(&[("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string())])
     }
 
-    /// Start a daemon with health probing on: `probe_secs` interval, restart after
-    /// `fail_threshold` consecutive post-arming probe failures.
+    /// Start a daemon with health probing on: `probe_secs` interval, restart
+    /// after `fail_threshold` consecutive post-arming probe failures.
     pub fn start_with_health(idle_secs: u64, probe_secs: u64, fail_threshold: u32) -> Self {
         Self::start_with_env(&[
             ("DEVKIT_DAEMON_IDLE_SECS", idle_secs.to_string()),
@@ -210,14 +216,16 @@ impl Harness {
             .expect("EOF before response")
     }
 
-    /// True if the daemon endpoint no longer accepts connections (it has exited).
+    /// True if the daemon endpoint no longer accepts connections (it has
+    /// exited).
     pub fn socket_gone(&self) -> bool {
         self.connect().is_none()
     }
 
     /// Send `Request::Shutdown` and wait for the daemon to exit.
     pub fn shutdown(&mut self) {
-        // Ignore errors — the daemon may have already exited (e.g. idle-exit test).
+        // Ignore errors — the daemon may have already exited (e.g. idle-exit
+        // test).
         if let Some(stream) = self.connect() {
             let (recv, send) = stream.split();
             let mut writer = BufWriter::new(send);
@@ -276,8 +284,9 @@ impl Harness {
         std::fs::read_to_string(self.xdg_state.join("devkit/locks.json")).unwrap_or_default()
     }
 
-    /// Wait up to `timeout` for the daemon process to exit (by polling `socket_gone`
-    /// and `child.try_wait`).  Returns true if it exited within the deadline.
+    /// Wait up to `timeout` for the daemon process to exit (by polling
+    /// `socket_gone` and `child.try_wait`).  Returns true if it exited
+    /// within the deadline.
     pub fn wait_exit(&mut self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         loop {
@@ -301,7 +310,8 @@ impl Drop for Harness {
     }
 }
 
-/// Convenience: path to the daemon binary under test (resolved at compile time).
+/// Convenience: path to the daemon binary under test (resolved at compile
+/// time).
 pub fn daemon_bin() -> &'static str {
     env!("CARGO_BIN_EXE_devkitd")
 }

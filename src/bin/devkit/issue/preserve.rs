@@ -1,10 +1,14 @@
 //! Copying a worktree's files out before `issue end` removes it. Resolution and
-//! validation live here; the copy itself is `devkit_common::worktree::copy_out`.
+//! validation live here; the copy itself is
+//! `devkit_common::worktree::copy_out`.
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
 use devkit_common::record::IssueRecord;
 use devkit_config::PreserveConfig;
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
 
 /// One entry resolved against one worktree: the patterns to glob and the
 /// directory they land in.
@@ -26,8 +30,8 @@ pub(crate) struct Skipped {
 /// The minijinja context an entry's `from` and `to` render against. `issue`,
 /// `slug`, and `apps` come from the record rather than being re-derived, so a
 /// template edited since setup cannot misname the destination; `record::read`
-/// returns `None` for a malformed record as well as an absent one, and both take
-/// the same empty defaults.
+/// returns `None` for a malformed record as well as an absent one, and both
+/// take the same empty defaults.
 ///
 /// `primary` is `None` when the primary checkout could not be resolved, and the
 /// key is then left out of the context entirely. Rendering is strict about
@@ -94,8 +98,8 @@ fn absent_note(ctx: &serde_json::Value) -> &'static str {
 }
 
 /// Render and validate one entry. `removal_roots` are the worktrees this run
-/// will delete, spelled as the status report gives them: a destination under any
-/// of them would be archived and then deleted seconds later.
+/// will delete, spelled as the status report gives them: a destination under
+/// any of them would be archived and then deleted seconds later.
 pub(crate) fn resolve_entry(
     name: &str,
     cfg: &PreserveConfig,
@@ -191,8 +195,8 @@ pub(crate) fn preserve_entries(
 
 /// Preserve one worktree. `entries` are the config's preserve entries in sorted
 /// key order. Fail-open per entry: a failure warns and the next entry still
-/// runs, unless the entry is `required`, which stops this worktree and leaves it
-/// for the caller to keep.
+/// runs, unless the entry is `required`, which stops this worktree and leaves
+/// it for the caller to keep.
 pub(crate) fn run_for(
     worktree: &Path,
     entries: &[(String, &PreserveConfig)],
@@ -670,14 +674,11 @@ mod tests {
     fn config_with(entries: &[(&str, PreserveConfig)]) -> devkit_config::Config {
         let mut config = devkit_config::Config::default();
         for (name, entry) in entries {
-            config.preserve.insert(
-                (*name).to_string(),
-                PreserveConfig {
-                    from: entry.from.clone(),
-                    to: entry.to.clone(),
-                    required: entry.required,
-                },
-            );
+            config.preserve.insert((*name).to_string(), PreserveConfig {
+                from: entry.from.clone(),
+                to: entry.to.clone(),
+                required: entry.required,
+            });
         }
         config
     }

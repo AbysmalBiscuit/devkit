@@ -1,14 +1,19 @@
-use anyhow::Result;
-use devkit_common::paths;
-use devkit_common::store::{self, Document, salvage_map};
-use fd_lock::RwLock;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::fs::OpenOptions;
 #[cfg(test)]
 use std::path::Path;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::BTreeMap,
+    fs::OpenOptions,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::Result;
+use devkit_common::{
+    paths,
+    store::{self, Document, salvage_map},
+};
+use fd_lock::RwLock;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -66,17 +71,21 @@ impl Document for Data {
     fn stamp_version(&mut self) {
         self.version = SCHEMA_VERSION;
     }
+
     /// Recover whatever port entries still deserialize from a registry whose
-    /// top-level schema has drifted; `None` only if there's no `entries` object.
+    /// top-level schema has drifted; `None` only if there's no `entries`
+    /// object.
     fn salvage(raw: &str) -> Option<Self> {
         Some(Data {
             version: 0,
             entries: salvage_map(raw, "entries", |k| k.parse::<u16>().ok())?,
         })
     }
+
     fn label() -> &'static str {
         "registry"
     }
+
     fn len(&self) -> usize {
         self.entries.len()
     }
@@ -91,8 +100,9 @@ pub trait Store {
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T>;
 }
 
-/// Error marker: a live `devkitd` holds the registry write gate (`devkitd.lock`).
-/// Carried via `anyhow` so callers can distinguish it (e.g. a best-effort prune).
+/// Error marker: a live `devkitd` holds the registry write gate
+/// (`devkitd.lock`). Carried via `anyhow` so callers can distinguish it (e.g. a
+/// best-effort prune).
 #[derive(Debug)]
 pub struct DaemonHoldsLock;
 
@@ -106,9 +116,10 @@ impl std::fmt::Display for DaemonHoldsLock {
 }
 impl std::error::Error for DaemonHoldsLock {}
 
-/// Direct file driver. Reads load the file ungated (the daemon keeps it current via
-/// write-through). Writes first take a shared, non-blocking lock on `devkitd.lock` — the
-/// gate — and refuse if a daemon holds it exclusive, then run the data-flock RMW.
+/// Direct file driver. Reads load the file ungated (the daemon keeps it current
+/// via write-through). Writes first take a shared, non-blocking lock on
+/// `devkitd.lock` — the gate — and refuse if a daemon holds it exclusive, then
+/// run the data-flock RMW.
 pub struct FlockStore {
     gate_path: PathBuf,
     lock_path: PathBuf,
@@ -124,6 +135,7 @@ impl FlockStore {
             data_path: paths::registry_file(),
         }
     }
+
     /// Scratch-paths store for tests.
     #[cfg(test)]
     fn at(dir: &Path) -> Self {
@@ -145,12 +157,14 @@ impl Store for FlockStore {
     fn snapshot(&self) -> Result<Data> {
         Ok(store::load(&self.data_path))
     }
+
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
-        // Every direct writer holds the shared gate for its entire RMW. The daemon
-        // holds devkitd.lock exclusive for its whole life (via MemoryStore, never
-        // FlockStore), so a concurrent try_read failure here means a live daemon
-        // owns the registry — surface that as the typed refusal rather than writing
-        // ports.json behind it.
+        // Every direct writer holds the shared gate for its entire RMW. The
+        // daemon holds devkitd.lock exclusive for its whole life (via
+        // MemoryStore, never FlockStore), so a concurrent try_read
+        // failure here means a live daemon owns the registry — surface
+        // that as the typed refusal rather than writing ports.json
+        // behind it.
         if let Some(parent) = self.gate_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -160,7 +174,8 @@ impl Store for FlockStore {
             .truncate(false)
             .open(&self.gate_path)?;
         let gate = RwLock::new(file);
-        // `anyhow::Error::new` (not `anyhow!`) so the type survives for `downcast_ref`.
+        // `anyhow::Error::new` (not `anyhow!`) so the type survives for
+        // `downcast_ref`.
         let _shared = gate
             .try_read()
             .map_err(|_| anyhow::Error::new(DaemonHoldsLock))?;
@@ -171,7 +186,8 @@ impl Store for FlockStore {
 /// The daemon's authoritative in-memory registry. Reads are served from memory
 /// with no flock and no file read; a mutation writes the file through (atomic
 /// rename) and updates memory only if that write succeeded — the file is the
-/// commit point, so memory and file never diverge and a crash can't orphan a pid.
+/// commit point, so memory and file never diverge and a crash can't orphan a
+/// pid.
 pub struct MemoryStore {
     state: std::sync::Arc<std::sync::Mutex<Data>>,
     data_path: PathBuf,
@@ -187,6 +203,7 @@ impl Store for MemoryStore {
     fn snapshot(&self) -> Result<Data> {
         Ok(self.state.lock().expect("registry mutex poisoned").clone())
     }
+
     fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
         let mut guard = self.state.lock().expect("registry mutex poisoned");
         let mut next = guard.clone();
@@ -217,17 +234,14 @@ mod tests {
     #[test]
     fn roundtrip_serde() {
         let mut d = Data::default();
-        d.entries.insert(
-            9100,
-            Entry {
-                app: "api".into(),
-                holder: "/w".into(),
-                role: Role::Issue,
-                pid: None,
-                logfile: None,
-                ts: 1,
-            },
-        );
+        d.entries.insert(9100, Entry {
+            app: "api".into(),
+            holder: "/w".into(),
+            role: Role::Issue,
+            pid: None,
+            logfile: None,
+            ts: 1,
+        });
         let s = serde_json::to_string(&d).unwrap();
         let back: Data = serde_json::from_str(&s).unwrap();
         assert_eq!(back.entries[&9100].app, "api");
@@ -236,17 +250,14 @@ mod tests {
     #[test]
     fn status_table_renders_from_a_supplied_listening_view() {
         let mut data = Data::default();
-        data.entries.insert(
-            4100,
-            Entry {
-                app: "api".into(),
-                holder: "/w/root".into(),
-                role: Role::Issue,
-                pid: Some(42),
-                logfile: None,
-                ts: now(),
-            },
-        );
+        data.entries.insert(4100, Entry {
+            app: "api".into(),
+            holder: "/w/root".into(),
+            role: Role::Issue,
+            pid: Some(42),
+            logfile: None,
+            ts: now(),
+        });
         let view: std::collections::BTreeMap<u16, bool> = [(4100u16, true)].into_iter().collect();
         let text = status_table_with(&data, Some("/w/root"), &view);
         assert!(text.contains("4100"), "{text}");
@@ -259,28 +270,22 @@ mod tests {
     #[test]
     fn status_table_linked_adds_a_url_column_when_urls_are_supplied() {
         let mut data = Data::default();
-        data.entries.insert(
-            4100,
-            Entry {
-                app: "api".into(),
-                holder: "/w/root".into(),
-                role: Role::Issue,
-                pid: Some(42),
-                logfile: None,
-                ts: now(),
-            },
-        );
-        data.entries.insert(
-            4200,
-            Entry {
-                app: "web".into(),
-                holder: "/w/root".into(),
-                role: Role::Issue,
-                pid: Some(43),
-                logfile: None,
-                ts: now(),
-            },
-        );
+        data.entries.insert(4100, Entry {
+            app: "api".into(),
+            holder: "/w/root".into(),
+            role: Role::Issue,
+            pid: Some(42),
+            logfile: None,
+            ts: now(),
+        });
+        data.entries.insert(4200, Entry {
+            app: "web".into(),
+            holder: "/w/root".into(),
+            role: Role::Issue,
+            pid: Some(43),
+            logfile: None,
+            ts: now(),
+        });
         let view: BTreeMap<u16, bool> = [(4100u16, true), (4200u16, true)].into_iter().collect();
         let urls: BTreeMap<u16, String> = [(4100u16, "http://localhost:4100".to_string())]
             .into_iter()
@@ -301,32 +306,32 @@ mod tests {
     #[test]
     fn status_table_linked_drops_the_url_column_when_urls_is_empty() {
         let mut data = Data::default();
-        data.entries.insert(
-            4100,
-            Entry {
-                app: "api".into(),
-                holder: "/w/root".into(),
-                role: Role::Issue,
-                pid: Some(42),
-                logfile: None,
-                ts: now(),
-            },
-        );
+        data.entries.insert(4100, Entry {
+            app: "api".into(),
+            holder: "/w/root".into(),
+            role: Role::Issue,
+            pid: Some(42),
+            logfile: None,
+            ts: now(),
+        });
         let view: BTreeMap<u16, bool> = [(4100u16, true)].into_iter().collect();
         let text = status_table_linked(&data, Some("/w/root"), &view, &BTreeMap::new());
         assert!(!text.contains("URL"), "{text}");
     }
 }
 
-use std::net::{SocketAddr, TcpStream};
-use std::time::Duration;
+use std::{
+    net::{SocketAddr, TcpStream},
+    time::Duration,
+};
 
 /// True if something accepts a connection on localhost:port.
 ///
 /// A one-shot TCP connect, not a bind probe: a server binds the wildcard
-/// address (`0.0.0.0`), and on macOS/Windows a fresh `bind(("127.0.0.1", port))`
-/// still succeeds against that, so a bind probe wrongly reports the port free.
-/// Connecting detects an accepting server identically on every platform.
+/// address (`0.0.0.0`), and on macOS/Windows a fresh `bind(("127.0.0.1",
+/// port))` still succeeds against that, so a bind probe wrongly reports the
+/// port free. Connecting detects an accepting server identically on every
+/// platform.
 pub fn listening(port: u16) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
@@ -371,16 +376,16 @@ mod liveness_tests {
     }
 }
 
-/// How long a pid-less reservation survives without something listening on its port.
-/// Must exceed `devrun`'s readiness timeout (120s) so a reservation cannot expire
-/// while its server is still being brought up in the same run.
+/// How long a pid-less reservation survives without something listening on its
+/// port. Must exceed `devrun`'s readiness timeout (120s) so a reservation
+/// cannot expire while its server is still being brought up in the same run.
 pub const RESERVATION_GRACE_SECS: u64 = 300;
 
 impl Data {
     /// Ports whose entry is no longer live (holder gone, pid dead, or a stale
-    /// unbacked reservation). Runs the liveness syscalls (stat/kill/bind); callers
-    /// run this on a snapshot *outside* the registry lock so the exclusive lock
-    /// never wraps blocking probes.
+    /// unbacked reservation). Runs the liveness syscalls (stat/kill/bind);
+    /// callers run this on a snapshot *outside* the registry lock so the
+    /// exclusive lock never wraps blocking probes.
     pub fn dead_ports(&self) -> Vec<u16> {
         let now = now();
         self.entries
@@ -399,7 +404,8 @@ impl Data {
             .collect()
     }
 
-    /// Drop entries whose holder is gone, pid is dead, or are stale unbacked reservations.
+    /// Drop entries whose holder is gone, pid is dead, or are stale unbacked
+    /// reservations.
     pub fn prune(&mut self) {
         for port in self.dead_ports() {
             self.entries.remove(&port);
@@ -413,7 +419,8 @@ impl Data {
             .map(|(p, _)| *p)
     }
 
-    /// Reserve a port for one app (idempotent per holder+app+role). pid stays None.
+    /// Reserve a port for one app (idempotent per holder+app+role). pid stays
+    /// None.
     pub fn alloc_one(&mut self, holder: &str, app: &str, base: u16, role: Role) -> u16 {
         if let Some(p) = self.holds(holder, app, role) {
             return p;
@@ -424,23 +431,21 @@ impl Data {
                 .checked_add(1)
                 .unwrap_or_else(|| panic!("no free port available at or above {base}"));
         }
-        self.entries.insert(
-            port,
-            Entry {
-                app: app.into(),
-                holder: holder.into(),
-                role,
-                pid: None,
-                logfile: None,
-                ts: now(),
-            },
-        );
+        self.entries.insert(port, Entry {
+            app: app.into(),
+            holder: holder.into(),
+            role,
+            pid: None,
+            logfile: None,
+            ts: now(),
+        });
         port
     }
 
-    /// Attach a pid + logfile to a port's reservation, re-establishing the row if it
-    /// was pruned in the gap between reserving and spawning — so a live process is
-    /// never left untracked (which would make `devrun down` unable to stop it).
+    /// Attach a pid + logfile to a port's reservation, re-establishing the row
+    /// if it was pruned in the gap between reserving and spawning — so a
+    /// live process is never left untracked (which would make `devrun down`
+    /// unable to stop it).
     pub fn record_pid(
         &mut self,
         port: u16,
@@ -465,7 +470,8 @@ impl Data {
         e.logfile = Some(logfile);
     }
 
-    /// Release exactly the listed ports that are still present. Returns freed ports.
+    /// Release exactly the listed ports that are still present. Returns freed
+    /// ports.
     pub fn release_ports(&mut self, ports: &[u16]) -> Vec<u16> {
         let freed: Vec<u16> = ports
             .iter()
@@ -478,7 +484,8 @@ impl Data {
         freed
     }
 
-    /// Release all entries for a holder (optionally one role). Returns freed ports.
+    /// Release all entries for a holder (optionally one role). Returns freed
+    /// ports.
     pub fn release(&mut self, holder: &str, role: Option<Role>) -> Vec<u16> {
         let freed: Vec<u16> = self
             .entries
@@ -495,9 +502,9 @@ impl Data {
 
 /// Try a running daemon. `Ok(None)` = no daemon (caller uses the flock path).
 /// `Ok(Some(resp))` = the daemon answered (the response may be `Response::Err`,
-/// which callers decode into an `Err`). `Err` = a *live* daemon failed mid-request
-/// — surfaced to the caller rather than silently written behind its back.
-/// Returns `Ok(None)` inside the daemon itself (`DEVKITD_SELF`).
+/// which callers decode into an `Err`). `Err` = a *live* daemon failed
+/// mid-request — surfaced to the caller rather than silently written behind its
+/// back. Returns `Ok(None)` inside the daemon itself (`DEVKITD_SELF`).
 #[cfg(feature = "daemon")]
 fn daemon_request(
     req: crate::daemon::proto::Request,
@@ -519,8 +526,8 @@ pub fn snapshot_with(store: &impl Store) -> Result<Data> {
         return Ok(data);
     }
     // Best-effort prune: a read must never fail because cleanup was blocked (a
-    // daemon now owns the write gate). Persist the removals if we can; otherwise
-    // return the dead-pruned view without persisting.
+    // daemon now owns the write gate). Persist the removals if we can;
+    // otherwise return the dead-pruned view without persisting.
     match store.commit(|d| {
         for p in &dead {
             d.entries.remove(p);
@@ -579,17 +586,14 @@ pub fn alloc_with(
                 .checked_add(1)
                 .unwrap_or_else(|| panic!("no free port available at or above {base}"));
         }
-        data.entries.insert(
-            port,
-            Entry {
-                app: app.clone(),
-                holder: holder.into(),
-                role,
-                pid: None,
-                logfile: None,
-                ts: now(),
-            },
-        );
+        data.entries.insert(port, Entry {
+            app: app.clone(),
+            holder: holder.into(),
+            role,
+            pid: None,
+            logfile: None,
+            ts: now(),
+        });
         chosen.push((app.clone(), port));
     }
 
@@ -607,17 +611,14 @@ pub fn alloc_with(
                 let p = d.alloc_one(holder, app, base, role);
                 out.push((app.clone(), p));
             } else {
-                d.entries.insert(
-                    *port,
-                    Entry {
-                        app: app.clone(),
-                        holder: holder.into(),
-                        role,
-                        pid: None,
-                        logfile: None,
-                        ts: now(),
-                    },
-                );
+                d.entries.insert(*port, Entry {
+                    app: app.clone(),
+                    holder: holder.into(),
+                    role,
+                    pid: None,
+                    logfile: None,
+                    ts: now(),
+                });
                 out.push((app.clone(), *port));
             }
         }
@@ -909,7 +910,8 @@ pub enum Filter {
     Columns(ColumnFilter),
 }
 
-/// Returns true if any identity column of this row contains `token` (already lowercased).
+/// Returns true if any identity column of this row contains `token` (already
+/// lowercased).
 fn row_contains(port: u16, e: &Entry, token: &str) -> bool {
     let leaf = devkit_common::paths::leaf(&e.holder).unwrap_or(&e.holder);
     leaf.to_lowercase().contains(token)
@@ -940,8 +942,8 @@ pub struct DownSelector {
 }
 
 /// Resolve a selector against a snapshot to the matching ports. Pure except for
-/// `listening()` syscalls when the `--listening` predicate is set; callers pass an
-/// already-pruned snapshot and the current `now()`.
+/// `listening()` syscalls when the `--listening` predicate is set; callers pass
+/// an already-pruned snapshot and the current `now()`.
 pub fn select(data: &Data, sel: &DownSelector, now: u64) -> Vec<u16> {
     data.entries
         .iter()
@@ -972,17 +974,14 @@ mod ops_tests {
     #[test]
     fn prune_drops_dead_holder() {
         let mut d = Data::default();
-        d.entries.insert(
-            9100,
-            Entry {
-                app: "api".into(),
-                holder: "/definitely/not/here".into(),
-                role: Role::Issue,
-                pid: None,
-                logfile: None,
-                ts: now(),
-            },
-        );
+        d.entries.insert(9100, Entry {
+            app: "api".into(),
+            holder: "/definitely/not/here".into(),
+            role: Role::Issue,
+            pid: None,
+            logfile: None,
+            ts: now(),
+        });
         d.prune();
         assert!(d.entries.is_empty());
     }
@@ -1000,8 +999,9 @@ mod ops_tests {
     }
     #[test]
     fn record_pid_reestablishes_pruned_reservation() {
-        // A pruned reservation must not leave a spawned process untracked: record_pid
-        // re-inserts the row so `down` can still find and stop it.
+        // A pruned reservation must not leave a spawned process untracked:
+        // record_pid re-inserts the row so `down` can still find and
+        // stop it.
         let mut d = Data::default();
         d.record_pid(9100, "api", "/w", Role::Issue, 4321, PathBuf::from("/log"));
         assert_eq!(d.entries[&9100].pid, Some(4321));
@@ -1038,7 +1038,8 @@ mod ops_tests {
         let mut d = Data::default();
         let p1 = d.alloc_one("/w", "api", 9100, Role::Issue);
         let p2 = d.alloc_one("/w", "web", 9200, Role::Issue);
-        // Release the first allocated port and one absent port (65000 is unlikely to be allocated).
+        // Release the first allocated port and one absent port (65000 is
+        // unlikely to be allocated).
         let freed = d.release_ports(&[p1, 65000]);
         assert_eq!(freed, vec![p1], "only the present listed port is freed");
         assert!(d.entries.contains_key(&p2), "unlisted ports stay");
@@ -1048,17 +1049,14 @@ mod ops_tests {
     #[test]
     fn dead_ports_flags_dead_holder() {
         let mut d = Data::default();
-        d.entries.insert(
-            9100,
-            Entry {
-                app: "api".into(),
-                holder: "/definitely/not/here".into(),
-                role: Role::Issue,
-                pid: None,
-                logfile: None,
-                ts: now(),
-            },
-        );
+        d.entries.insert(9100, Entry {
+            app: "api".into(),
+            holder: "/definitely/not/here".into(),
+            role: Role::Issue,
+            pid: None,
+            logfile: None,
+            ts: now(),
+        });
         assert_eq!(d.dead_ports(), vec![9100]);
     }
 
@@ -1070,17 +1068,14 @@ mod ops_tests {
     fn a_reservation_expires_the_moment_it_reaches_the_grace_boundary() {
         let dir = tempfile::tempdir().unwrap();
         let mut d = Data::default();
-        d.entries.insert(
-            47360,
-            Entry {
-                app: "api".into(),
-                holder: dir.path().to_string_lossy().into_owned(),
-                role: Role::Issue,
-                pid: None,
-                logfile: None,
-                ts: now().saturating_sub(RESERVATION_GRACE_SECS),
-            },
-        );
+        d.entries.insert(47360, Entry {
+            app: "api".into(),
+            holder: dir.path().to_string_lossy().into_owned(),
+            role: Role::Issue,
+            pid: None,
+            logfile: None,
+            ts: now().saturating_sub(RESERVATION_GRACE_SECS),
+        });
         assert_eq!(d.dead_ports(), vec![47360]);
 
         // Comfortably inside the grace, so a second of clock drift between
@@ -1126,6 +1121,7 @@ mod ops_tests {
             fn snapshot(&self) -> Result<Data> {
                 Ok(self.seen.clone())
             }
+
             fn commit<T>(&self, f: impl FnOnce(&mut Data) -> Result<T>) -> Result<T> {
                 f(&mut self.real.borrow_mut())
             }
@@ -1133,17 +1129,14 @@ mod ops_tests {
 
         let dir = tempfile::tempdir().unwrap();
         let mut real = Data::default();
-        real.entries.insert(
-            47500,
-            Entry {
-                app: "other".into(),
-                holder: "/gone".into(),
-                role: Role::Issue,
-                pid: None,
-                logfile: None,
-                ts: now(),
-            },
-        );
+        real.entries.insert(47500, Entry {
+            app: "other".into(),
+            holder: "/gone".into(),
+            role: Role::Issue,
+            pid: None,
+            logfile: None,
+            ts: now(),
+        });
         let store = Racing {
             seen: Data::default(),
             real: std::cell::RefCell::new(real),
@@ -1194,8 +1187,9 @@ mod ops_tests {
 
 #[cfg(test)]
 mod store_seam_tests {
-    use super::*;
     use std::path::PathBuf;
+
+    use super::*;
 
     #[test]
     fn alloc_with_reserves_pidless_then_record_pid_attaches() {
@@ -1237,7 +1231,8 @@ mod store_seam_tests {
     fn commit_refused_while_gate_held_exclusive() {
         let dir = tempfile::tempdir().unwrap();
         let store = FlockStore::at(dir.path());
-        // Simulate a running daemon: hold devkitd.lock exclusive on a separate fd.
+        // Simulate a running daemon: hold devkitd.lock exclusive on a separate
+        // fd.
         let f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -1266,22 +1261,19 @@ mod store_seam_tests {
         // Seed a dead reservation (dead holder dir => dead_ports flags it).
         store
             .commit(|d| {
-                d.entries.insert(
-                    9100,
-                    Entry {
-                        app: "api".into(),
-                        holder: "/definitely/not/here".into(),
-                        role: Role::Issue,
-                        pid: None,
-                        logfile: None,
-                        ts: 0,
-                    },
-                );
+                d.entries.insert(9100, Entry {
+                    app: "api".into(),
+                    holder: "/definitely/not/here".into(),
+                    role: Role::Issue,
+                    pid: None,
+                    logfile: None,
+                    ts: 0,
+                });
                 Ok(())
             })
             .unwrap();
-        // Now hold the gate exclusive: snapshot must still succeed (reads ungated)
-        // and must not propagate the blocked prune.
+        // Now hold the gate exclusive: snapshot must still succeed (reads
+        // ungated) and must not propagate the blocked prune.
         let f = std::fs::OpenOptions::new()
             .create(true)
             .write(true)

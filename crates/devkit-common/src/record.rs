@@ -1,6 +1,7 @@
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 /// Per-worktree record written by `issue setup`, carrying the setup-time
 /// context that is otherwise unavailable later: the authoritative issue id, and
@@ -185,13 +186,14 @@ mod tests {
         assert!(matches!(read_state(dir.path()), RecordState::Unusable));
     }
 
-    /// An unreadable record must never read as an absent one: a referencer-count
-    /// scan treats `Absent` as "this worktree references no baseline", and a
-    /// worktree whose record exists but could not be confirmed is the one case
-    /// where that answer is actively dangerous. A directory in place of the file
-    /// is the portable way to force a non-`NotFound` I/O error — the concrete
-    /// kind (`IsADirectory` on Linux, `PermissionDenied` on Windows) varies by
-    /// platform, so the assertion only rules out `NotFound`.
+    /// An unreadable record must never read as an absent one: a
+    /// referencer-count scan treats `Absent` as "this worktree references
+    /// no baseline", and a worktree whose record exists but could not be
+    /// confirmed is the one case where that answer is actively dangerous. A
+    /// directory in place of the file is the portable way to force a
+    /// non-`NotFound` I/O error — the concrete kind (`IsADirectory` on
+    /// Linux, `PermissionDenied` on Windows) varies by platform, so the
+    /// assertion only rules out `NotFound`.
     #[test]
     fn an_unreadable_record_is_unusable_not_absent() {
         let dir = tempfile::tempdir().unwrap();
@@ -203,9 +205,9 @@ mod tests {
     }
 
     /// The rename is what makes a write atomic: a reader sees either the whole
-    /// previous record or the whole new one, never a truncated file. Asserting the
-    /// temp file is gone is what pins the rename — a plain `fs::write` would also
-    /// pass a round-trip assertion.
+    /// previous record or the whole new one, never a truncated file. Asserting
+    /// the temp file is gone is what pins the rename — a plain `fs::write`
+    /// would also pass a round-trip assertion.
     #[test]
     fn a_write_leaves_no_temp_file_behind() {
         let dir = tempfile::tempdir().unwrap();

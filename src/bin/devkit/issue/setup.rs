@@ -1,13 +1,18 @@
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+};
+
 use anyhow::{Context, Result};
-use devkit_common::cmd::capture;
-use devkit_common::git::Git;
-use devkit_common::gitfetch;
-use devkit_common::progress::Steps;
-use devkit_common::tracker::{IssueDetails, IssueRef, Resolved, Tracker};
+use devkit_common::{
+    cmd::capture,
+    git::Git,
+    gitfetch,
+    progress::Steps,
+    tracker::{IssueDetails, IssueRef, Resolved, Tracker},
+};
 use devkit_config::{PrepFile, expand_tilde};
 use devkit_ports::load;
-use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 
 pub struct SetupArgs {
     pub issue: String,
@@ -15,7 +20,8 @@ pub struct SetupArgs {
     pub slug: Option<String>,
     pub apps: Vec<String>,
     pub dry_run: bool,
-    /// Also write the issue summary file named by `templates.issue_summary_path`.
+    /// Also write the issue summary file named by
+    /// `templates.issue_summary_path`.
     pub summary: bool,
     /// Skip that file for this run even when `defaults.issue_summary` is set.
     pub no_summary: bool,
@@ -95,8 +101,8 @@ fn write_prep_files(
 }
 
 /// Per-app bootstrap shared by `setup` and `pr checkout --setup`: write each
-/// app's prep files (rendered against `base_ctx` plus `app`/`branch`/`worktree`),
-/// then run its setup commands in its directory.
+/// app's prep files (rendered against `base_ctx` plus
+/// `app`/`branch`/`worktree`), then run its setup commands in its directory.
 pub(crate) fn prep_apps(
     worktree: &Path,
     branch: &str,
@@ -181,8 +187,9 @@ struct IncludeRender<'a> {
 
 impl IncludeRender<'_> {
     fn on(&self, event: devkit_common::worktree::IncludeEvent<'_>) {
-        use devkit_common::worktree::IncludeEvent as E;
         use std::sync::atomic::Ordering::Relaxed;
+
+        use devkit_common::worktree::IncludeEvent as E;
         match event {
             E::Found { files } => {
                 if self.discovery && self.due(files) {
@@ -557,18 +564,15 @@ pub fn run(args: SetupArgs) -> Result<()> {
         }
         None => None,
     };
-    devkit_common::record::write(
-        &worktree,
-        &devkit_common::record::IssueRecord {
-            issue: issue.clone(),
-            slug: slug.clone(),
-            apps: args.apps.clone(),
-            summary: summary_path.clone(),
-            // `issue setup` has no PR to record — there is none yet.
-            pr: None,
-            baseline: None,
-        },
-    )?;
+    devkit_common::record::write(&worktree, &devkit_common::record::IssueRecord {
+        issue: issue.clone(),
+        slug: slug.clone(),
+        apps: args.apps.clone(),
+        summary: summary_path.clone(),
+        // `issue setup` has no PR to record — there is none yet.
+        pr: None,
+        baseline: None,
+    })?;
     if !args.no_gitignore
         && let Err(e) = devkit_common::gitignore::ensure_devkit_ignored()
     {
@@ -595,9 +599,10 @@ pub fn run(args: SetupArgs) -> Result<()> {
     }
 
     // Ports are not reserved here. A worktree's servers get their ports
-    // dynamically from `devrun up`, which allocates against the live registry at
-    // start time — so the numbers always reflect what is actually free and no
-    // unused reservation can be reclaimed by another session in the meantime.
+    // dynamically from `devrun up`, which allocates against the live registry
+    // at start time — so the numbers always reflect what is actually free
+    // and no unused reservation can be reclaimed by another session in the
+    // meantime.
     let out = Prepared {
         issue: issue.clone(),
         worktree: holder,
@@ -623,10 +628,11 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_common::tracker::fake;
     use devkit_config::Templates;
     use serde_json::json;
+
+    use super::*;
 
     /// An empty root joins to a bare relative path, which `git -C <primary>`
     /// resolves inside the primary checkout — the one placement that corrupts
@@ -713,13 +719,10 @@ mod tests {
     /// directory name that reaches the filesystem actually fits the limit.
     #[test]
     fn short_slug_is_shorter_than_the_branch_slug() {
-        let cfg = cfg_with(
-            "lev/",
-            Templates {
-                worktree_dir: Some("{{ short_slug }}".into()),
-                ..Templates::default()
-            },
-        );
+        let cfg = cfg_with("lev/", Templates {
+            worktree_dir: Some("{{ short_slug }}".into()),
+            ..Templates::default()
+        });
         let budget = branch_budget(&cfg, &novars(), "142", &[]).unwrap();
         let slug = crate::issue::slug::cap("group-sync-includes-file-lists-in-the-output", budget);
         assert_eq!(slug, "group-sync-includes-file-lists-in-the");
@@ -753,14 +756,11 @@ mod tests {
     /// a path that overruns cannot be removed by every tool that meets it.
     #[test]
     fn a_worktree_dir_limit_the_template_cannot_meet_is_an_error() {
-        let cfg = cfg_with(
-            "lev/",
-            Templates {
-                worktree_dir: Some("worktree-for-issue-{{ issue }}-{{ short_slug }}".into()),
-                worktree_dir_max: Some(16),
-                ..Templates::default()
-            },
-        );
+        let cfg = cfg_with("lev/", Templates {
+            worktree_dir: Some("worktree-for-issue-{{ issue }}-{{ short_slug }}".into()),
+            worktree_dir_max: Some(16),
+            ..Templates::default()
+        });
         let err = short_slug(&cfg, &novars(), "142", &[], "fix-the-export").unwrap_err();
         // `Debug` prints the whole cause chain; the limit is named in
         // `budget`'s own bail, below the context this call site adds.
@@ -775,13 +775,10 @@ mod tests {
     /// filesystem path.
     #[test]
     fn a_branch_template_without_slug_still_bounds_the_budget() {
-        let cfg = cfg_with(
-            "lev/",
-            Templates {
-                branch: Some("{{ prefix }}{{ issue }}".into()),
-                ..Templates::default()
-            },
-        );
+        let cfg = cfg_with("lev/", Templates {
+            branch: Some("{{ prefix }}{{ issue }}".into()),
+            ..Templates::default()
+        });
         assert_eq!(
             branch_budget(&cfg, &novars(), "142", &[]).unwrap(),
             cfg.templates.branch_max()
@@ -792,7 +789,8 @@ mod tests {
     /// still worth reading, not an error: a git ref has no hard length limit.
     #[test]
     fn a_branch_limit_the_prefix_fills_falls_back_to_the_floor() {
-        // 39 characters of prefix against a limit of 46 leaves 7, below the floor.
+        // 39 characters of prefix against a limit of 46 leaves 7, below the
+        // floor.
         let cfg = cfg_with(
             "an-extremely-long-branch-prefix-indeed/",
             Templates::default(),

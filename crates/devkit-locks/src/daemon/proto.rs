@@ -1,10 +1,12 @@
-//! Lock-registry wire protocol. Payloads carry context the daemon cannot resolve
-//! itself (project root, holder, anchor pid); the daemon stamps `now`.
+//! Lock-registry wire protocol. Payloads carry context the daemon cannot
+//! resolve itself (project root, holder, anchor pid); the daemon stamps `now`.
 
-use crate::model::{AcquireOutcome, Conflict, LockEntry, Refusal};
 use serde::{Deserialize, Serialize};
 
-/// Wire-format version, independent of the port proto. Bump on any incompatible change.
+use crate::model::{AcquireOutcome, Conflict, LockEntry, Refusal};
+
+/// Wire-format version, independent of the port proto. Bump on any incompatible
+/// change.
 pub const PROTO: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,8 +77,9 @@ pub enum Response {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_common::daemon::framing::{recv, send};
+
+    use super::*;
 
     #[test]
     fn acquire_frame_roundtrips() {

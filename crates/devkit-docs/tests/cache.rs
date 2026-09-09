@@ -1,9 +1,12 @@
 mod common;
 
-use common::fixture_repo;
-use devkit_docs::cache::{self, LibCache, Meta, WorktreeMeta};
-use devkit_docs::tags::TagPattern;
 use std::path::Path;
+
+use common::fixture_repo;
+use devkit_docs::{
+    cache::{self, LibCache, Meta, WorktreeMeta},
+    tags::TagPattern,
+};
 
 /// A follow-up git operation against an already-built `fixture_repo`.
 fn git(args: &[&str], dir: &Path) {
@@ -148,21 +151,16 @@ fn meta_round_trips() {
         tag_pattern: Some(TagPattern::LeafDash),
         ..Default::default()
     };
-    m.layouts.insert(
-        "1.0.0".into(),
-        devkit_docs::layout::Layout {
+    m.layouts
+        .insert("1.0.0".into(), devkit_docs::layout::Layout {
             docs_dir: Some("docs".into()),
             ..Default::default()
-        },
-    );
-    m.worktrees.insert(
-        "v1.0.0".into(),
-        WorktreeMeta {
-            raw_ref: "v1.0.0".into(),
-            resolved_ref: "refs/tags/v1.0.0".into(),
-            commit: "0123456789012345678901234567890123456789".into(),
-        },
-    );
+        });
+    m.worktrees.insert("v1.0.0".into(), WorktreeMeta {
+        raw_ref: "v1.0.0".into(),
+        resolved_ref: "refs/tags/v1.0.0".into(),
+        commit: "0123456789012345678901234567890123456789".into(),
+    });
     cache::write_meta(tmp, &m).unwrap();
     assert_eq!(cache::read_meta(tmp).unwrap(), m);
     assert_eq!(

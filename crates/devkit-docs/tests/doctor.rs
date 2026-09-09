@@ -1,8 +1,11 @@
 mod common;
 
-use devkit_docs::manifest::{Ecosystem, LibEntry};
-use devkit_docs::resolve::{self, Options};
 use std::path::{Path, PathBuf};
+
+use devkit_docs::{
+    manifest::{Ecosystem, LibEntry},
+    resolve::{self, Options},
+};
 
 /// Materialize `up` at `git_ref`, returning the scratch guard, the cache root
 /// and the checkout. The guard comes first because both paths live inside it:

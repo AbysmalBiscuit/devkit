@@ -1,14 +1,16 @@
 //! The GitHub Issues adapter.
 //!
-//! Mirrors `linear.rs`'s split: every operation is a `*_query` string builder, a
-//! `parse_*` function over the response, and a networked wrapper. Only the
+//! Mirrors `linear.rs`'s split: every operation is a `*_query` string builder,
+//! a `parse_*` function over the response, and a networked wrapper. Only the
 //! wrappers touch the network, so each parser tests against a recorded response
 //! and nothing here needs a token under test.
 
+use std::collections::HashMap;
+
+use anyhow::{Context, Result};
+
 use super::{AssignedIssue, IssueDetails, IssueRef, PrRef, State, StateKind, Tracker, TrackerKind};
 use crate::github::{self, Repo};
-use anyhow::{Context, Result};
-use std::collections::HashMap;
 
 /// GitHub's `(state, stateReason)` pair, in devkit's vocabulary.
 ///
@@ -730,9 +732,10 @@ mod tests {
 
     #[test]
     fn every_state_and_reason_pair_maps() {
-        // NOT_PLANNED and DUPLICATE are synthetic: neither probed repository holds
-        // one. stateReason is a closed enum the API documents, and a wrong mapping
-        // degrades to a state label rather than a crash.
+        // NOT_PLANNED and DUPLICATE are synthetic: neither probed repository
+        // holds one. stateReason is a closed enum the API documents,
+        // and a wrong mapping degrades to a state label rather than a
+        // crash.
         for (state, reason, kind, name) in [
             ("OPEN", None, StateKind::Started, "Open"),
             ("CLOSED", Some("COMPLETED"), StateKind::Completed, "Done"),
@@ -1051,10 +1054,10 @@ mod tests {
             "https://github.com/o/r/pull/2".to_string(),
         );
         let got = parse_issues_for_prs(&resp, &aliases, "o/r");
-        assert_eq!(
-            got["https://github.com/o/r/pull/1"],
-            vec!["6".to_string(), "7".to_string()]
-        );
+        assert_eq!(got["https://github.com/o/r/pull/1"], vec![
+            "6".to_string(),
+            "7".to_string()
+        ]);
         assert!(!got.contains_key("https://github.com/o/r/pull/2"));
     }
 
@@ -1075,10 +1078,10 @@ mod tests {
             "https://github.com/o/r/pull/1".to_string(),
         );
         let got = parse_issues_for_prs(&resp, &aliases, "o/r");
-        assert_eq!(
-            got["https://github.com/o/r/pull/1"],
-            vec!["6".to_string(), "other/repo#42".to_string()]
-        );
+        assert_eq!(got["https://github.com/o/r/pull/1"], vec![
+            "6".to_string(),
+            "other/repo#42".to_string()
+        ]);
     }
 
     #[test]

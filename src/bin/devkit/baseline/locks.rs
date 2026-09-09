@@ -12,10 +12,13 @@
 //! of one lock file are two open-file descriptions, and `flock` blocks a
 //! process against itself.
 
+use std::{
+    fs::{self, OpenOptions},
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result};
 use fd_lock::RwLock;
-use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
 
 /// Set on a hook child's environment during bootstrap, carrying the slot name
 /// being built.
@@ -151,8 +154,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let got = with_slot(dir.path(), "d13d90b724bf", || Ok(7)).unwrap();
         assert_eq!(got, 7);
-        // Released: a second acquisition in the same thread would otherwise block
-        // forever, since two opens of one lock file are two open-file descriptions.
+        // Released: a second acquisition in the same thread would otherwise
+        // block forever, since two opens of one lock file are two
+        // open-file descriptions.
         assert_eq!(with_slot(dir.path(), "d13d90b724bf", || Ok(8)).unwrap(), 8);
     }
 
@@ -177,9 +181,10 @@ mod tests {
     }
 
     /// Mutual exclusion, which is the whole point of the lock. Two opens of one
-    /// lock file are two open-file descriptions, so `flock` serializes them even
-    /// inside a single process — the same guarantee that holds across processes.
-    /// The order of the two appends is what proves the contender waited.
+    /// lock file are two open-file descriptions, so `flock` serializes them
+    /// even inside a single process — the same guarantee that holds across
+    /// processes. The order of the two appends is what proves the contender
+    /// waited.
     #[test]
     fn a_contender_waits_for_the_holder() {
         use std::sync::mpsc;
@@ -200,8 +205,9 @@ mod tests {
                     })
                     .unwrap();
                 });
-                // The contender has entered `with_slot` and can only be blocking on
-                // the lock this closure holds. Waiting for the signal rather than
+                // The contender has entered `with_slot` and can only be
+                // blocking on the lock this closure holds.
+                // Waiting for the signal rather than
                 // sleeping keeps the test honest on a loaded runner.
                 started_rx.recv().unwrap();
                 log.lock().unwrap().push('A');

@@ -19,7 +19,7 @@ running them one after another. Install it with `cargo install cargo-nextest
 --locked`. It skips doctests, which CI covers in a separate
 `cargo test --workspace --doc` step.
 
-Run all three before committing: CI runs them on every push and PR, and a push to `main` also drives release-please. Format with `cargo fmt --all` (the `--check` above only verifies) using the stable toolchain CI uses, so formatting matches.
+Run all three before committing: CI runs them on every push and PR, and a push to `main` also drives release-please. Format with `devrun task fmt` (`fmt-check` only verifies). `rustfmt.toml` sets unstable options, so formatting requires the nightly toolchain the CI `fmt` job uses; stable rustfmt warns that it cannot set them and silently formats to the defaults instead.
 
 ### Mutation testing
 

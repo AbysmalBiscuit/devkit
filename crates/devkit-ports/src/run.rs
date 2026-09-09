@@ -3,19 +3,23 @@
 //! the binary) is what lets the MCP server call it directly instead of shelling
 //! out to `devrun`.
 
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
+use devkit_common::{paths, supervise};
 use serde::Serialize;
 
-use crate::apps::App;
-use crate::registry::{self, Data, Role};
-use devkit_common::{paths, supervise};
+use crate::{
+    apps::App,
+    registry::{self, Data, Role},
+};
 
 /// Env layering (low→high): static_env → url-wiring → user overrides.
-/// `provider_url` is the URL-providing app's rendered `url`, if it shares the run.
+/// `provider_url` is the URL-providing app's rendered `url`, if it shares the
+/// run.
 pub fn env_for(
     app: &App,
     provider_url: Option<&str>,
@@ -64,9 +68,9 @@ pub fn config_from_argv_env(argv: &[String], env: &BTreeMap<String, String>) -> 
 }
 
 /// Best-effort read of the locally-scoped Doppler config for `cwd` via
-/// `doppler configure get config --plain --scope <cwd>`. This reads the persisted
-/// scope (`~/.doppler/.doppler.yaml`) and does *not* fetch secrets. Returns `None`
-/// if `doppler` is absent, exits non-zero, or prints nothing.
+/// `doppler configure get config --plain --scope <cwd>`. This reads the
+/// persisted scope (`~/.doppler/.doppler.yaml`) and does *not* fetch secrets.
+/// Returns `None` if `doppler` is absent, exits non-zero, or prints nothing.
 fn doppler_scoped_config(cwd: &Path) -> Option<String> {
     let out = std::process::Command::new("doppler")
         .args(["configure", "get", "config", "--plain", "--scope"])
@@ -110,8 +114,9 @@ pub fn assert_not_prd(
     }
 }
 
-/// The env var a consumer reads to reach the URL-providing app. The provider's own
-/// `url_env` names the same var but it doesn't consume itself, so skip the provider.
+/// The env var a consumer reads to reach the URL-providing app. The provider's
+/// own `url_env` names the same var but it doesn't consume itself, so skip the
+/// provider.
 fn url_consumer_var(app: &App) -> Option<String> {
     if app.provides_url {
         None
@@ -145,7 +150,8 @@ pub struct ServerStatus {
 }
 
 /// Classify from already-probed signals: listening → Ready; else live pid →
-/// Starting; else Crashed. Pure, so the mapping is testable without binding ports.
+/// Starting; else Crashed. Pure, so the mapping is testable without binding
+/// ports.
 fn classify(listening: bool, pid_alive: bool) -> ServerState {
     if listening {
         ServerState::Ready
@@ -156,7 +162,8 @@ fn classify(listening: bool, pid_alive: bool) -> ServerState {
     }
 }
 
-/// Classify a tracked server: listening → Ready; else live pid → Starting; else Crashed.
+/// Classify a tracked server: listening → Ready; else live pid → Starting; else
+/// Crashed.
 fn server_state(port: u16, pid: Option<u32>) -> ServerState {
     classify(
         registry::listening(port),
@@ -164,7 +171,8 @@ fn server_state(port: u16, pid: Option<u32>) -> ServerState {
     )
 }
 
-/// Structured per-server rows from a registry snapshot, optionally limited to one holder.
+/// Structured per-server rows from a registry snapshot, optionally limited to
+/// one holder.
 pub fn server_rows(data: &Data, only_holder: Option<&str>) -> Vec<ServerStatus> {
     let mut rows = Vec::new();
     for (port, e) in &data.entries {
@@ -195,8 +203,8 @@ pub fn holder_slug(holder: &str) -> String {
 }
 
 /// Ensure the URL-providing app (the API) is present whenever a selected app
-/// consumes its URL, so the consumer can be wired. The provider is identified by
-/// config (`provides_url`), not by name.
+/// consumes its URL, so the consumer can be wired. The provider is identified
+/// by config (`provides_url`), not by name.
 pub fn ensure_provider(catalog: &HashMap<String, App>, apps: &mut Vec<String>) {
     let provider = catalog
         .iter()
@@ -213,7 +221,8 @@ pub fn ensure_provider(catalog: &HashMap<String, App>, apps: &mut Vec<String>) {
     }
 }
 
-/// A fully-resolved launch command for one app: ready to print (dry-run) or spawn.
+/// A fully-resolved launch command for one app: ready to print (dry-run) or
+/// spawn.
 #[derive(Debug, Clone)]
 pub struct LaunchPlan {
     pub app: String,
@@ -263,8 +272,9 @@ pub fn resolve_ports(
     Ok(registry::alloc(holder, &reqs, role)?.into_iter().collect())
 }
 
-/// Build a launch plan per app for one (role, holder) group. `ports` maps each app
-/// to its allocated port; `provider` names the URL-providing app if it shares the run.
+/// Build a launch plan per app for one (role, holder) group. `ports` maps each
+/// app to its allocated port; `provider` names the URL-providing app if it
+/// shares the run.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_group(
     catalog: &HashMap<String, App>,
@@ -330,7 +340,8 @@ pub fn plan_group(
 /// Result of stopping + releasing a holder's servers.
 #[derive(Debug, Clone, Serialize)]
 pub struct DownOutcome {
-    /// Processes that received SIGTERM (0 on the daemon path, which stops them itself).
+    /// Processes that received SIGTERM (0 on the daemon path, which stops them
+    /// itself).
     pub stopped: usize,
     /// Ports released.
     pub freed: Vec<u16>,
@@ -339,9 +350,9 @@ pub struct DownOutcome {
 }
 
 /// Stop every server for `holder` (optionally one role) and release its ports.
-/// Prefers a running daemon; otherwise stops + releases directly under one lock,
-/// without pruning first (a still-running server whose reservation looks stale
-/// must still receive SIGTERM).
+/// Prefers a running daemon; otherwise stops + releases directly under one
+/// lock, without pruning first (a still-running server whose reservation looks
+/// stale must still receive SIGTERM).
 pub fn bring_down(holder: &str, role: Option<Role>) -> Result<DownOutcome> {
     #[cfg(feature = "daemon")]
     if let Some(mut client) = crate::daemon::client::try_existing() {
@@ -378,8 +389,8 @@ pub fn bring_down(holder: &str, role: Option<Role>) -> Result<DownOutcome> {
 }
 
 /// Stop + release exactly the listed ports. Prefers a running daemon (precise
-/// `DownPorts`); otherwise SIGTERMs each port's pid and removes its row under one
-/// lock, without pruning first (the still-running-but-stale invariant).
+/// `DownPorts`); otherwise SIGTERMs each port's pid and removes its row under
+/// one lock, without pruning first (the still-running-but-stale invariant).
 pub fn bring_down_ports(ports: &[u16]) -> Result<DownOutcome> {
     #[cfg(feature = "daemon")]
     if let Some(mut client) = crate::daemon::client::try_existing() {
@@ -516,7 +527,7 @@ pub fn launch(
         let ready: BTreeMap<String, bool> = std::thread::scope(|s| {
             let handles: Vec<_> = spawned
                 .iter()
-                .map(|(a, port, _, _)| {
+                .map(|(a, port, ..)| {
                     let (a, port) = (a.clone(), *port);
                     s.spawn(move || {
                         (
@@ -610,8 +621,9 @@ fn supervise_via_daemon(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashMap;
+
+    use super::*;
 
     fn app(name: &str, url_env: Option<&str>) -> App {
         App {
@@ -746,7 +758,8 @@ mod tests {
             )
             .is_ok()
         );
-        // doppler launch with no flag/env, cwd has no scope → unresolvable → reject
+        // doppler launch with no flag/env, cwd has no scope → unresolvable →
+        // reject
         assert!(
             assert_not_prd(
                 "web",
@@ -796,10 +809,10 @@ mod tests {
         let mut catalog = HashMap::new();
         catalog.insert(
             "api".to_string(),
-            test_app(
-                &["nitro", "dev", "--port", "{{ port }}"],
-                &[("PEER", "http://localhost:{{ ports['api-prod'] }}")],
-            ),
+            test_app(&["nitro", "dev", "--port", "{{ port }}"], &[(
+                "PEER",
+                "http://localhost:{{ ports['api-prod'] }}",
+            )]),
         );
         let ports: BTreeMap<String, u16> =
             [("api".to_string(), 9100), ("api-prod".to_string(), 9101)].into();
@@ -837,14 +850,15 @@ mod tests {
             &BTreeMap::new(),
         )
         .unwrap_err();
-        // {:#} prints the whole context chain; the hint lives in the root cause.
+        // {:#} prints the whole context chain; the hint lives in the root
+        // cause.
         assert!(format!("{err:#}").contains("retired"), "got: {err:#}");
     }
 
     #[test]
     fn classify_maps_signals_to_state() {
-        // A pidless, unbound entry is crashed; a live pid without a bound port is
-        // still starting; a bound port is ready regardless of pid.
+        // A pidless, unbound entry is crashed; a live pid without a bound port
+        // is still starting; a bound port is ready regardless of pid.
         assert_eq!(classify(false, false), ServerState::Crashed);
         assert_eq!(classify(false, true), ServerState::Starting);
         assert_eq!(classify(true, false), ServerState::Ready);
@@ -854,17 +868,14 @@ mod tests {
     #[test]
     fn server_rows_filters_by_holder() {
         let mut data = Data::default();
-        data.entries.insert(
-            45123,
-            crate::registry::Entry {
-                app: "web".into(),
-                holder: "/w".into(),
-                role: Role::Issue,
-                pid: None,
-                logfile: None,
-                ts: crate::registry::now(),
-            },
-        );
+        data.entries.insert(45123, crate::registry::Entry {
+            app: "web".into(),
+            holder: "/w".into(),
+            role: Role::Issue,
+            pid: None,
+            logfile: None,
+            ts: crate::registry::now(),
+        });
         let rows = server_rows(&data, Some("/w"));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].app, "web");
@@ -878,17 +889,14 @@ mod tests {
         let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = l.local_addr().unwrap().port();
         let mut data = Data::default();
-        data.entries.insert(
-            port,
-            crate::registry::Entry {
-                app: "web".into(),
-                holder: "/w".into(),
-                role: Role::Issue,
-                pid: None,
-                logfile: None,
-                ts: crate::registry::now(),
-            },
-        );
+        data.entries.insert(port, crate::registry::Entry {
+            app: "web".into(),
+            holder: "/w".into(),
+            role: Role::Issue,
+            pid: None,
+            logfile: None,
+            ts: crate::registry::now(),
+        });
         let rows = server_rows(&data, None);
         assert_eq!(
             rows[0].state,
@@ -924,10 +932,11 @@ mod tests {
         assert!(p.cwd.ends_with("apps/x"));
     }
 
-    /// Command prefix that runs a *real* python interpreter, or None (then the test
-    /// skips). Mirrors the supervise helper: a direct `["python3"]`-style prefix, or
-    /// a uv invocation when the only bare `python` is the Windows Store app-alias
-    /// shim, which answers `--version` with "Python was not found …".
+    /// Command prefix that runs a *real* python interpreter, or None (then the
+    /// test skips). Mirrors the supervise helper: a direct
+    /// `["python3"]`-style prefix, or a uv invocation when the only bare
+    /// `python` is the Windows Store app-alias shim, which answers
+    /// `--version` with "Python was not found …".
     fn python_cmd() -> Option<Vec<String>> {
         for cand in ["python3", "python", "py"] {
             let prefix = vec![cand.to_string()];
@@ -935,8 +944,8 @@ mod tests {
                 return Some(prefix);
             }
         }
-        // uv fallbacks: `uv python find` yields a bare interpreter path (no wrapper
-        // process); `uv run python` is the last resort.
+        // uv fallbacks: `uv python find` yields a bare interpreter path (no
+        // wrapper process); `uv run python` is the last resort.
         if let Some(path) = uv_python_path() {
             let prefix = vec![path];
             if is_real_python(&prefix) {
@@ -970,10 +979,10 @@ mod tests {
     }
 
     /// True when running `prefix --version` exits successfully and prints
-    /// `Python <digit>…`. A real interpreter writes its version (stdout on 3.4+,
-    /// stderr on older); the Store shim writes "Python was not found …", so
-    /// requiring a digit right after "Python " rejects the shim despite it
-    /// borrowing the "Python" prefix.
+    /// `Python <digit>…`. A real interpreter writes its version (stdout on
+    /// 3.4+, stderr on older); the Store shim writes "Python was not found
+    /// …", so requiring a digit right after "Python " rejects the shim
+    /// despite it borrowing the "Python" prefix.
     fn is_real_python(prefix: &[String]) -> bool {
         use std::process::{Command, Stdio};
         let Some((prog, rest)) = prefix.split_first() else {
@@ -1021,9 +1030,9 @@ mod tests {
 
     #[test]
     fn bring_down_ports_releases_listed_reservations() {
-        // A real holder dir so a concurrent prune (which drops reservations whose
-        // holder path is gone) can't steal the still-reserved second port out from
-        // under this test before it asserts.
+        // A real holder dir so a concurrent prune (which drops reservations
+        // whose holder path is gone) can't steal the still-reserved
+        // second port out from under this test before it asserts.
         let holderdir = tempfile::tempdir().unwrap();
         let holder = holderdir.path().to_str().unwrap().to_string();
         let got = registry::alloc(
@@ -1046,8 +1055,8 @@ mod tests {
 
     #[test]
     fn read_log_tails_a_tracked_logfile() {
-        // Use logdir as the holder so holder_alive returns true (snapshot prunes
-        // entries whose holder path does not exist).
+        // Use logdir as the holder so holder_alive returns true (snapshot
+        // prunes entries whose holder path does not exist).
         let logdir = tempfile::tempdir().unwrap();
         let holder = logdir.path().to_str().unwrap().to_string();
         let logfile = logdir.path().join("issue-web.log");
@@ -1055,17 +1064,14 @@ mod tests {
 
         // Track an entry pointing at the log, then read it back.
         registry::with_lock(|d| {
-            d.entries.insert(
-                7100,
-                crate::registry::Entry {
-                    app: "web".into(),
-                    holder: holder.clone(),
-                    role: Role::Issue,
-                    pid: None,
-                    logfile: Some(logfile.clone()),
-                    ts: crate::registry::now(),
-                },
-            );
+            d.entries.insert(7100, crate::registry::Entry {
+                app: "web".into(),
+                holder: holder.clone(),
+                role: Role::Issue,
+                pid: None,
+                logfile: Some(logfile.clone()),
+                ts: crate::registry::now(),
+            });
             Ok(())
         })
         .unwrap();
@@ -1093,11 +1099,12 @@ mod tests {
         let logdir = tempfile::tempdir().unwrap();
         let tmp = logdir.path().join("run.log");
         let mut argv = py;
-        // Inline accept-loop listener rather than `-m http.server`: http.server's
-        // `server_bind` resolves the bound address with `socket.getfqdn()`, a
-        // reverse-DNS lookup that stalls ~35s on hosts without reverse resolution
-        // (macOS GitHub runners) — past this test's 10s readiness poll. The poll
-        // only needs a TCP accept on IPv4 loopback.
+        // Inline accept-loop listener rather than `-m http.server`:
+        // http.server's `server_bind` resolves the bound address with
+        // `socket.getfqdn()`, a reverse-DNS lookup that stalls ~35s on
+        // hosts without reverse resolution (macOS GitHub runners) —
+        // past this test's 10s readiness poll. The poll only needs a
+        // TCP accept on IPv4 loopback.
         argv.extend([
             "-u".to_string(),
             "-c".to_string(),
@@ -1119,7 +1126,8 @@ mod tests {
             log: tmp.clone(),
             url: format!("http://localhost:{port}"),
         };
-        // Non-blocking: returns immediately; the just-spawned server is "starting".
+        // Non-blocking: returns immediately; the just-spawned server is
+        // "starting".
         let out = launch(&[plan], "/w-launch-test", Role::Issue, false, false).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].port, port);
@@ -1216,13 +1224,10 @@ mod tests {
         let holder = holderdir.path().to_str().unwrap().to_string();
 
         let mut catalog = HashMap::new();
-        let mut primary = test_app(
-            &["nitro", "dev", "--port", "{{ port }}"],
-            &[(
-                "PEER_URL",
-                "http://localhost:{{ ports['resolve-ports-secondary'] }}",
-            )],
-        );
+        let mut primary = test_app(&["nitro", "dev", "--port", "{{ port }}"], &[(
+            "PEER_URL",
+            "http://localhost:{{ ports['resolve-ports-secondary'] }}",
+        )]);
         primary.base_port = 48210;
         catalog.insert("resolve-ports-primary".to_string(), primary);
         let mut secondary = test_app(&["nitro", "dev", "--port", "{{ port }}"], &[]);
@@ -1253,13 +1258,10 @@ mod tests {
     #[test]
     fn resolve_ports_rejects_a_reference_to_an_unknown_app() {
         let mut catalog = HashMap::new();
-        let mut selected = test_app(
-            &["nitro", "dev", "--port", "{{ port }}"],
-            &[(
-                "PEER_URL",
-                "http://localhost:{{ ports['resolve-ports-ghost'] }}",
-            )],
-        );
+        let mut selected = test_app(&["nitro", "dev", "--port", "{{ port }}"], &[(
+            "PEER_URL",
+            "http://localhost:{{ ports['resolve-ports-ghost'] }}",
+        )]);
         selected.base_port = 48410;
         catalog.insert("resolve-ports-selected".to_string(), selected);
 

@@ -1,10 +1,10 @@
 //! Newline-delimited JSON framing for the daemon control channel. Generic over
 //! any serde message type so each registry's proto reuses it.
 
-use anyhow::Result;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 use std::io::{BufRead, Write};
+
+use anyhow::Result;
+use serde::{Serialize, de::DeserializeOwned};
 
 /// Write one newline-delimited JSON frame and flush.
 pub fn send<W: Write>(w: &mut W, msg: &impl Serialize) -> Result<()> {

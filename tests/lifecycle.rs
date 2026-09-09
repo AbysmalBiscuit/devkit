@@ -1,9 +1,9 @@
 mod common;
 
+use std::{process::Command, time::Duration};
+
 use common::Harness;
 use devkit_ports::daemon::proto::{PROTO, Request, Response};
-use std::process::Command;
-use std::time::Duration;
 
 /// Handshake: a `Ping` with the current proto version must yield a `Pong` with
 /// the same version and the daemon's pid.

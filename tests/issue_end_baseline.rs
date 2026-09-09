@@ -20,15 +20,12 @@ fn ending_a_worktree_stops_its_baselines_servers() {
 
     // The triage `issue end` runs first reads the `origin` remote; the URL
     // itself is never fetched here.
-    git(
-        &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/acme/proj.git",
-        ],
-    );
+    git(&repo, &[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/acme/proj.git",
+    ]);
 
     let wt = tmp.path().join("proj_worktrees").join("a");
     git(&repo, &["worktree", "add", "-b", "a", wt.to_str().unwrap()]);
@@ -38,30 +35,22 @@ fn ending_a_worktree_stops_its_baselines_servers() {
     // A pid-less reservation is what `ports alloc` writes before anything
     // binds, so the teardown releases the row instead of signalling a process —
     // no child to spawn, and nothing to poll for.
-    devkit_ok(
-        &wt,
-        &state,
-        &[
-            "ports", "alloc", "--holder", &baseline, "--role", "baseline", "api",
-        ],
-    );
+    devkit_ok(&wt, &state, &[
+        "ports", "alloc", "--holder", &baseline, "--role", "baseline", "api",
+    ]);
     assert!(
         holders(&state).contains(&baseline),
         "reservation not seeded"
     );
 
-    let out = devkit(
-        &repo,
-        &state,
-        &[
-            "issue",
-            "end",
-            wt.to_str().unwrap(),
-            "--yes",
-            "--clean-worktree",
-            "--no-preserve",
-        ],
-    );
+    let out = devkit(&repo, &state, &[
+        "issue",
+        "end",
+        wt.to_str().unwrap(),
+        "--yes",
+        "--clean-worktree",
+        "--no-preserve",
+    ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!wt.exists(), "the worktree survived `issue end`: {stderr}");
     assert!(

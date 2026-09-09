@@ -1,12 +1,14 @@
+use std::io::IsTerminal;
+
 use anstyle::{AnsiColor, Style};
 use comfy_table::{ColumnConstraint, ContentArrangement, Table, Width, presets::NOTHING};
-use std::io::IsTerminal;
 
 /// A borderless table that wraps/truncates its content to the terminal width.
 ///
 /// `Dynamic` arrangement measures each cell's *visible* width — comfy-table's
-/// `custom_styling` strips embedded OSC 8 hyperlink and ANSI colour escapes — so
-/// styled, linked cells still wrap correctly instead of overflowing the screen.
+/// `custom_styling` strips embedded OSC 8 hyperlink and ANSI colour escapes —
+/// so styled, linked cells still wrap correctly instead of overflowing the
+/// screen.
 pub fn table(headers: &[&str]) -> Table {
     table_on(Stream::Stdout, headers)
 }
@@ -275,7 +277,8 @@ fn visible(s: &str) -> String {
     String::from_utf8(out).unwrap_or_default()
 }
 
-// --- colour --------------------------------------------------------------------
+// --- colour
+// --------------------------------------------------------------------
 
 /// An output stream that colour and width decisions key off. Final rendered
 /// output goes to stdout; live blocks (step logs, live tables) draw on
@@ -446,7 +449,8 @@ pub fn dim_strike(s: &str) -> String {
     stdout_paint().dim_strike(s)
 }
 
-// --- terminal width ------------------------------------------------------------
+// --- terminal width
+// ------------------------------------------------------------
 
 /// Terminal width of stdout: `$COLUMNS`, else `TIOCGWINSZ`, else 100.
 pub fn term_width() -> usize {
@@ -475,7 +479,8 @@ pub fn term_width_on(stream: Stream) -> usize {
             Stream::Stdout => std::io::stdout().as_raw_fd(),
             Stream::Stderr => std::io::stderr().as_raw_fd(),
         };
-        // SAFETY: ws is a plain POD struct sized for struct winsize; TIOCGWINSZ fills it.
+        // SAFETY: ws is a plain POD struct sized for struct winsize; TIOCGWINSZ
+        // fills it.
         let rc = unsafe { ioctl_winsize(fd, &mut ws) };
         if rc == 0 && ws.ws_col > 0 {
             return ws.ws_col as usize;
@@ -506,8 +511,9 @@ unsafe fn ioctl_winsize(fd: i32, ws: *mut Winsize) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use comfy_table::{ContentArrangement, Table, presets::NOTHING};
+
+    use super::*;
 
     #[test]
     fn link_plain_when_unsupported() {

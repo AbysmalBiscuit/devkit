@@ -4,10 +4,13 @@
 //! survives a directory rename. Lock files are persistent: unlinking one can
 //! let separate processes lock different inodes for the same logical path.
 
+use std::{
+    fs::{self, OpenOptions},
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result, bail};
 use fd_lock::RwLock;
-use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
 
 const DIR: &str = "registry.locks";
 const SUFFIX: &str = ".lock";

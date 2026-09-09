@@ -9,15 +9,12 @@ mod ghfake;
 
 #[test]
 fn a_refused_request_leaves_the_draft_alone() {
-    let fake = ghfake::Fake::new(
-        "",
-        &ghfake::Pr {
-            number: 1,
-            state: "OPEN",
-            is_draft: true,
-            author: "someone-else",
-        },
-    );
+    let fake = ghfake::Fake::new("", &ghfake::Pr {
+        number: 1,
+        state: "OPEN",
+        is_draft: true,
+        author: "someone-else",
+    });
     let out = fake.issue(&["review", "request", "--no-push"]);
 
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();

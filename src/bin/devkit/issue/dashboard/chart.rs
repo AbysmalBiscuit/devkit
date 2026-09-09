@@ -14,8 +14,9 @@ pub fn hex_rgb(hex: &str) -> (u8, u8, u8) {
 }
 
 /// Allocate `rows` vertical cells among stacked segment `values`, scaled so the
-/// tallest possible column (`max_total`) fills `rows`. Largest-remainder rounding
-/// keeps the visible cell total faithful. Returns segment indices bottom→top.
+/// tallest possible column (`max_total`) fills `rows`. Largest-remainder
+/// rounding keeps the visible cell total faithful. Returns segment indices
+/// bottom→top.
 pub fn stack_column(values: &[u32], max_total: u32, rows: usize) -> Vec<usize> {
     let total: u32 = values.iter().sum();
     if total == 0 || max_total == 0 || rows == 0 {
@@ -55,7 +56,8 @@ fn ansi(rgb: (u8, u8, u8), s: &str) -> String {
     format!("\x1b[38;2;{};{};{}m{s}\x1b[0m", rgb.0, rgb.1, rgb.2)
 }
 
-/// Render stacked vertical bars. `series[k][b]` = value of status k in bucket b.
+/// Render stacked vertical bars. `series[k][b]` = value of status k in bucket
+/// b.
 pub fn render_stacked_bars(
     title: &str,
     labels: &[String],

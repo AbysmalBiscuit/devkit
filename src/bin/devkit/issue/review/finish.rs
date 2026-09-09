@@ -1,10 +1,9 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
-use devkit_common::cmd::gh_json_in;
-use devkit_common::github;
-use devkit_common::progress::Steps;
+use devkit_common::{cmd::gh_json_in, github, progress::Steps};
 use devkit_config::Person;
 use serde::Deserialize;
-use std::collections::HashMap;
 
 use super::{
     Target, base_ctx, deliver, parse_args, person_by_login, resolve_target, target_from_person,
@@ -106,7 +105,8 @@ fn branch_pr_number(b: &str, cwd: &str, repo: &github::Repo) -> Result<Option<u6
     Ok(v.into_iter().next().map(|p| p.number))
 }
 
-/// URL/title/author for PR `n`, over direct HTTP when possible else `gh pr view`.
+/// URL/title/author for PR `n`, over direct HTTP when possible else `gh pr
+/// view`.
 pub(crate) fn fetch_pr_full(n: u64, cwd: &str, repo: &github::Repo) -> Result<PrFull> {
     if github::token().is_some()
         && let Ok(f) = github::pr_full(&repo.slug, n)
@@ -234,18 +234,15 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     let base = base_ctx(record.as_ref(), branch.as_deref().unwrap_or(""));
-    let notify_ctx = with_fields(
-        &base,
-        &[
-            ("pr_url", serde_json::json!(view.url)),
-            ("pr_title", serde_json::json!(view.title)),
-            (
-                "author",
-                serde_json::json!(author_login.unwrap_or_default()),
-            ),
-            ("input", serde_json::json!(args.body.unwrap_or_default())),
-        ],
-    );
+    let notify_ctx = with_fields(&base, &[
+        ("pr_url", serde_json::json!(view.url)),
+        ("pr_title", serde_json::json!(view.title)),
+        (
+            "author",
+            serde_json::json!(author_login.unwrap_or_default()),
+        ),
+        ("input", serde_json::json!(args.body.unwrap_or_default())),
+    ]);
     deliver(
         tmpls.review_finish(),
         "review_finish",
@@ -259,10 +256,12 @@ pub fn run(args: Args) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashMap;
+
     use devkit_common::github::HeadLookup;
     use devkit_config::Person;
-    use std::collections::HashMap;
+
+    use super::*;
 
     #[test]
     fn resolve_pr_takes_the_branchs_pr_or_names_the_flag() {
@@ -273,13 +272,10 @@ mod tests {
 
     #[test]
     fn author_target_reverse_looks_up_or_errors() {
-        let people = HashMap::from([(
-            "lev".to_string(),
-            Person {
-                slack: "U_LEV".into(),
-                github: Some("LevValle".into()),
-            },
-        )]);
+        let people = HashMap::from([("lev".to_string(), Person {
+            slack: "U_LEV".into(),
+            github: Some("LevValle".into()),
+        })]);
         let t = author_target("levvalle", &people).unwrap();
         assert_eq!(t.name, "lev");
         assert_eq!(t.channel, "U_LEV");
@@ -289,8 +285,9 @@ mod tests {
     #[test]
     fn no_match_does_not_reach_the_gh_fallback() {
         // The bug this replaces: `pr_by_head(..).ok()` turned Some(None) into a
-        // satisfied `if let`, so "the API said there is no PR" and "the API failed"
-        // both returned Ok(None) — one of them without ever consulting `gh`.
+        // satisfied `if let`, so "the API said there is no PR" and "the API
+        // failed" both returned Ok(None) — one of them without ever
+        // consulting `gh`.
         assert_eq!(decide_fallback(&HeadLookup::NoMatch), Fallback::No);
         assert_eq!(
             decide_fallback(&HeadLookup::Unavailable("no token".into())),
@@ -346,9 +343,10 @@ mod tests {
 
     #[test]
     fn precedence_is_explicit_then_record_then_branch() {
-        // review finish --pr wins over branch discovery by contract today. Making
-        // the record unconditionally authoritative would either disable that flag
-        // silently or leave an undocumented way around the new rule.
+        // review finish --pr wins over branch discovery by contract today.
+        // Making the record unconditionally authoritative would either
+        // disable that flag silently or leave an undocumented way
+        // around the new rule.
         let ex = loc(None, 7);
         let rec = loc(Some("up/app"), 9);
         assert_eq!(resolve_locator(Some(&ex), Some(&rec)), Some(ex.clone()));
@@ -358,9 +356,10 @@ mod tests {
 
     #[test]
     fn a_pr_that_is_not_this_worktrees_head_is_refused() {
-        // --pr with a mistyped number names a real PR that resolves cleanly, the
-        // record makes it authoritative, and its merge lets issue end run
-        // `git branch -D` on a worktree whose work never landed.
+        // --pr with a mistyped number names a real PR that resolves cleanly,
+        // the record makes it authoritative, and its merge lets issue
+        // end run `git branch -D` on a worktree whose work never
+        // landed.
         let pr = brief_at("cafe1234");
         assert!(assert_belongs(&pr, "cafe1234").is_ok());
         let err = assert_belongs(&pr, "beef5678").unwrap_err().to_string();

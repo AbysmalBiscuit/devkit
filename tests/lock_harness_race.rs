@@ -2,8 +2,9 @@
 //! facade in separate processes; exactly one acquires. Registry isolated via
 //! HOME + XDG_STATE_HOME pinned to a temp dir (mirrors tests/registry.rs).
 
-use devkit_locks::model::WriteDecision;
 use std::process::Command;
+
+use devkit_locks::model::WriteDecision;
 
 #[test]
 fn concurrent_write_decide_yields_one_winner() {

@@ -349,29 +349,26 @@ mod tests {
 
     #[test]
     fn process_substitution_spawns_its_own_segment() {
-        assert_eq!(
-            heads("diff <(vite dev) <(true)"),
-            vec!["diff", "vite", "true"]
-        );
+        assert_eq!(heads("diff <(vite dev) <(true)"), vec![
+            "diff", "vite", "true"
+        ]);
         assert_eq!(heads("echo hi >(cat)"), vec!["echo", "cat"]);
     }
 
     #[test]
     fn a_comment_is_not_command_text() {
-        assert_eq!(
-            segments("cargo build   # TODO(next dev)"),
-            vec![vec!["cargo", "build"]]
-        );
+        assert_eq!(segments("cargo build   # TODO(next dev)"), vec![vec![
+            "cargo", "build"
+        ]]);
         assert_eq!(heads("ls # build && next dev"), vec!["ls"]);
         assert_eq!(heads("ls # then run: cd x; uvicorn app"), vec!["ls"]);
     }
 
     #[test]
     fn a_comment_ends_at_the_newline() {
-        assert_eq!(
-            heads("ls # build && next dev\nuvicorn app"),
-            vec!["ls", "uvicorn"]
-        );
+        assert_eq!(heads("ls # build && next dev\nuvicorn app"), vec![
+            "ls", "uvicorn"
+        ]);
     }
 
     #[test]
@@ -381,10 +378,10 @@ mod tests {
 
     #[test]
     fn a_quoted_hash_is_not_a_comment() {
-        assert_eq!(
-            segments(r##"echo "# not a comment""##),
-            vec![vec!["echo", "# not a comment"]]
-        );
+        assert_eq!(segments(r##"echo "# not a comment""##), vec![vec![
+            "echo",
+            "# not a comment"
+        ]]);
     }
 
     #[test]

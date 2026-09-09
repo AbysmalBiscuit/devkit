@@ -1,8 +1,10 @@
-use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
-use devkit_common::tracker::{AssignedIssue, State, StateKind};
 use std::collections::HashMap;
 
-/// Parse an RFC3339 timestamp to UTC. Linear uses `…Z`; git `%aI` uses `+01:00`.
+use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
+use devkit_common::tracker::{AssignedIssue, State, StateKind};
+
+/// Parse an RFC3339 timestamp to UTC. Linear uses `…Z`; git `%aI` uses
+/// `+01:00`.
 pub fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .ok()
@@ -41,7 +43,8 @@ pub fn bucket_starts(first: DateTime<Utc>, now: DateTime<Utc>, bucket: &str) -> 
     out
 }
 
-/// Index of the period containing `t`, or None if `t` precedes the first period.
+/// Index of the period containing `t`, or None if `t` precedes the first
+/// period.
 pub fn bucket_index(starts: &[DateTime<Utc>], t: DateTime<Utc>) -> Option<usize> {
     let mut idx = None;
     for (i, s) in starts.iter().enumerate() {
@@ -89,10 +92,11 @@ pub fn tally(starts: &[DateTime<Utc>], dates: &[DateTime<Utc>]) -> Vec<u32> {
     counts
 }
 
-// --- issue state replay ---------------------------------------------------------
+// --- issue state replay
+// ---------------------------------------------------------
 
-/// A single issue reduced to: created time, the state before its first transition,
-/// and its transitions sorted ascending by time.
+/// A single issue reduced to: created time, the state before its first
+/// transition, and its transitions sorted ascending by time.
 pub struct Replay {
     pub created: Option<DateTime<Utc>>,
     pub initial: String,
@@ -162,8 +166,9 @@ pub fn state_at(r: &Replay, t: DateTime<Utc>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_common::tracker::StateKind;
+
+    use super::*;
 
     fn dt(s: &str) -> DateTime<Utc> {
         parse_ts(s).unwrap()

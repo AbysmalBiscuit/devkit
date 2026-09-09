@@ -20,9 +20,12 @@
 //! taken outside it, and a race test then cannot tell a contender blocked on
 //! the lock it is about from one blocked on a different lock.
 
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+
 use anyhow::{Context, Result, bail};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 pub const VAR: &str = "DEVKIT_DOCS_MANIFEST_BARRIER";
 const TIMEOUT: Duration = Duration::from_secs(60);

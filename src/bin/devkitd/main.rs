@@ -3,22 +3,33 @@
 //! lifecycle: lock, bind, accept, idle-exit; supervision and registry dispatch
 //! live in submodules.
 
+use std::{
+    fs::OpenOptions,
+    io::{BufReader, BufWriter},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
 use anyhow::{Context, Result};
 use devkit_common::paths;
-use devkit_ports::daemon::proto::{self, Request};
-use devkit_ports::daemon::transport;
-use devkit_ports::registry;
+use devkit_ports::{
+    daemon::{
+        proto::{self, Request},
+        transport,
+    },
+    registry,
+};
 use fd_lock::RwLock;
-use interprocess::local_socket::traits::{ListenerExt as _, Stream as _};
-use interprocess::local_socket::{ListenerOptions, Stream};
-use std::fs::OpenOptions;
-use std::io::{BufReader, BufWriter};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use interprocess::local_socket::{
+    ListenerOptions, Stream,
+    traits::{ListenerExt as _, Stream as _},
+};
 
-// A few supervisor accessors back deferred features (memory-limit action, log serving)
-// and have no caller yet.
+// A few supervisor accessors back deferred features (memory-limit action, log
+// serving) and have no caller yet.
 mod cgroup;
 mod lock_server;
 mod server;
@@ -32,19 +43,22 @@ pub(crate) struct CgroupCap {
     pub(crate) max_bytes: u64,
 }
 
-/// Shared daemon state, accessed from the connection threads and the idle watcher.
+/// Shared daemon state, accessed from the connection threads and the idle
+/// watcher.
 pub(crate) struct Daemon {
     pub(crate) last_activity: Mutex<Instant>,
     pub(crate) active_conns: AtomicUsize,
     pub(crate) shutdown: AtomicBool,
     pub(crate) idle_timeout: Duration,
     pub(crate) sup: Mutex<supervisor::Supervisor>,
-    /// Authoritative port registry, served from memory; the file is write-through.
+    /// Authoritative port registry, served from memory; the file is
+    /// write-through.
     pub(crate) ports: std::sync::Arc<std::sync::Mutex<registry::Data>>,
-    /// Authoritative lock registry, served from memory; the file is write-through.
+    /// Authoritative lock registry, served from memory; the file is
+    /// write-through.
     pub(crate) locks: std::sync::Arc<std::sync::Mutex<devkit_locks::model::Data>>,
-    /// Resolved hard-cap state: `Some` only when `memory_max_mb > 0` and cgroup-v2
-    /// enforcement is available. Consulted by both spawn paths.
+    /// Resolved hard-cap state: `Some` only when `memory_max_mb > 0` and
+    /// cgroup-v2 enforcement is available. Consulted by both spawn paths.
     pub(crate) cgroup_cap: Option<CgroupCap>,
 }
 
@@ -89,13 +103,15 @@ impl Daemon {
         )
     }
 
-    /// Idle = no live connections and no supervised children, for longer than the
-    /// timeout. Supervision suppresses this by keeping `supervising()` true.
+    /// Idle = no live connections and no supervised children, for longer than
+    /// the timeout. Supervision suppresses this by keeping `supervising()`
+    /// true.
     fn is_idle(&self) -> bool {
         self.active_conns.load(Ordering::SeqCst) == 0
             && !self.supervising()
             && self.last_activity.lock().unwrap().elapsed() >= self.idle_timeout
     }
+
     /// Whether the daemon currently owns live supervised child processes.
     fn supervising(&self) -> bool {
         self.sup.lock().unwrap().any_live()
@@ -154,11 +170,12 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(paths::state_dir())?;
     std::fs::create_dir_all(paths::logs_dir())?;
 
-    // Single-instance: hold devkitd.lock for the daemon's whole life. A peer daemon
-    // holds it exclusive for its entire lifetime, so all retry attempts fail →
-    // exit 0 (exactly one autostart winner). A transient shared hold by a direct
-    // writer (portm/devrun taking the gate during a registry RMW) clears within
-    // ~1ms, so a brief retry distinguishes that from a live peer without blocking.
+    // Single-instance: hold devkitd.lock for the daemon's whole life. A peer
+    // daemon holds it exclusive for its entire lifetime, so all retry
+    // attempts fail → exit 0 (exactly one autostart winner). A transient
+    // shared hold by a direct writer (portm/devrun taking the gate during a
+    // registry RMW) clears within ~1ms, so a brief retry distinguishes that
+    // from a live peer without blocking.
     let lock_path = paths::devkitd_lock();
     let lock_file = OpenOptions::new()
         .create(true)
@@ -166,10 +183,11 @@ fn main() -> Result<()> {
         .truncate(false)
         .open(&lock_path)?;
     let mut lock = RwLock::new(lock_file);
-    // Retry up to 5 times with 20ms gaps. A peer daemon holds devkitd.lock exclusive
-    // for its whole life, so all attempts fail → exit 0 (one autostart winner). A
-    // transient shared hold by a direct registry writer clears within ~1ms, so a
-    // retry succeeds without blocking indefinitely.
+    // Retry up to 5 times with 20ms gaps. A peer daemon holds devkitd.lock
+    // exclusive for its whole life, so all attempts fail → exit 0 (one
+    // autostart winner). A transient shared hold by a direct registry
+    // writer clears within ~1ms, so a retry succeeds without blocking
+    // indefinitely.
     let guard = 'acquire: {
         let mut attempts = 0u8;
         loop {
@@ -184,12 +202,14 @@ fn main() -> Result<()> {
         }
     };
 
-    // Load the registries into memory while holding devkitd.lock and before binding any
-    // socket, so no request is ever served against an unpopulated registry.
+    // Load the registries into memory while holding devkitd.lock and before
+    // binding any socket, so no request is ever served against an
+    // unpopulated registry.
     let ports = std::sync::Arc::new(std::sync::Mutex::new(registry::load()));
     let locks = std::sync::Arc::new(std::sync::Mutex::new(devkit_locks::store::load()));
 
-    // Holding the lock, no live daemon owns the socket — clear any stale one and bind.
+    // Holding the lock, no live daemon owns the socket — clear any stale one
+    // and bind.
     let sock = paths::port_socket_file();
     let _ = std::fs::remove_file(&sock); // clear a stale unix socket file before binding
     let name = transport::socket_name(&sock).with_context(|| "building socket name")?;
@@ -264,7 +284,8 @@ fn main() -> Result<()> {
         cgroup_cap,
     });
 
-    // Adopt servers a previous daemon left running: monitor by poll, not waitpid.
+    // Adopt servers a previous daemon left running: monitor by poll, not
+    // waitpid.
     {
         let data = daemon.ports.lock().unwrap().clone();
         let mut sup = daemon.sup.lock().unwrap();
@@ -292,8 +313,8 @@ fn main() -> Result<()> {
         cgroup::reconcile(&daemon, &live);
     }
 
-    // Combined supervision thread: reaps exited children, restarts crashed ones,
-    // warns on memory breaches, and triggers idle-exit.
+    // Combined supervision thread: reaps exited children, restarts crashed
+    // ones, warns on memory breaches, and triggers idle-exit.
     {
         let d = Arc::clone(&daemon);
         std::thread::spawn(move || {
@@ -308,18 +329,22 @@ fn main() -> Result<()> {
                     }
                     break;
                 }
-                // The supervisor table is the authority on crash vs. stop. An intentional
-                // `Down` removes the key from the table before stopping the child, so a
-                // stopped server never surfaces from `reap_once`; anything reaped exited on
-                // its own and is a crash. `restart` enforces the crash-loop budget and drops
-                // adopted survivors that have no launch spec. The bound `let` releases the
-                // `sup` lock before the loop, so `restart` (which re-locks `sup`) cannot
+                // The supervisor table is the authority on crash vs. stop. An
+                // intentional `Down` removes the key from the
+                // table before stopping the child, so a stopped
+                // server never surfaces from `reap_once`; anything reaped
+                // exited on its own and is a crash. `restart`
+                // enforces the crash-loop budget and drops
+                // adopted survivors that have no launch spec. The bound `let`
+                // releases the `sup` lock before the loop, so
+                // `restart` (which re-locks `sup`) cannot
                 // deadlock.
                 let dead = d.sup.lock().unwrap().reap_once();
                 for key in dead {
                     restart(&d, &key);
                 }
-                // Memory: warn once per breach (the implemented action is warn-only).
+                // Memory: warn once per breach (the implemented action is
+                // warn-only).
                 for (key, rss) in d.sup.lock().unwrap().memory_breaches() {
                     log_line(&format!(
                         "memory: {}/{} ({:?}) tree-RSS {} MB exceeds warn threshold",
@@ -330,8 +355,9 @@ fn main() -> Result<()> {
                     ));
                 }
                 // Memory limit: when the action is "restart", SIGTERM a server
-                // that has been over the limit for `mem_limit_ticks` consecutive
-                // ticks (the reap tick respawns it within the crash-loop budget);
+                // that has been over the limit for `mem_limit_ticks`
+                // consecutive ticks (the reap tick respawns it
+                // within the crash-loop budget);
                 // once the budget is exhausted, warn and leave it running.
                 if mem_restart {
                     for action in d.sup.lock().unwrap().mem_limit_actions(mem_limit_ticks) {
@@ -362,12 +388,13 @@ fn main() -> Result<()> {
         });
     }
 
-    // Health-probe thread (enabled by DEVKIT_DAEMON_HEALTH_PROBE_SECS > 0): TCP-probe
-    // each owned server's port and restart one that was once ready but has stopped
-    // accepting. It runs separately from the reap loop so its blocking 300 ms connects
-    // never delay reaping or idle-exit, and its only mutations are each child's probe
-    // counters and a SIGTERM — the reap tick does the respawn through the crash path,
-    // so the two threads never race on restart.
+    // Health-probe thread (enabled by DEVKIT_DAEMON_HEALTH_PROBE_SECS > 0):
+    // TCP-probe each owned server's port and restart one that was once
+    // ready but has stopped accepting. It runs separately from the reap
+    // loop so its blocking 300 ms connects never delay reaping or
+    // idle-exit, and its only mutations are each child's probe counters and
+    // a SIGTERM — the reap tick does the respawn through the crash path, so
+    // the two threads never race on restart.
     if !health_probe.is_zero() {
         let d = Arc::clone(&daemon);
         std::thread::spawn(move || {
@@ -376,14 +403,16 @@ fn main() -> Result<()> {
                 if d.shutdown.load(Ordering::SeqCst) {
                     break;
                 }
-                // Snapshot eligible (key, port) under a brief lock, then release it
-                // before any connect — a 300 ms probe must never run under `sup`.
+                // Snapshot eligible (key, port) under a brief lock, then
+                // release it before any connect — a 300 ms
+                // probe must never run under `sup`.
                 let targets = d.sup.lock().unwrap().probe_targets();
                 for (key, port) in targets {
                     let ok = devkit_common::supervise::probe_port(port);
                     // Bind the result so the `sup` guard drops before `stop`. A
-                    // returned pid means K consecutive post-arming failures: the
-                    // server is hung. SIGTERM it; the reap tick respawns it.
+                    // returned pid means K consecutive post-arming failures:
+                    // the server is hung. SIGTERM it; the
+                    // reap tick respawns it.
                     let hung = d
                         .sup
                         .lock()
@@ -435,8 +464,8 @@ fn main() -> Result<()> {
         }
         let Ok(stream) = stream else { continue };
         let d = Arc::clone(&daemon);
-        // `install_abort_hook` aborts the whole daemon on any panic, so handlers
-        // return Result and we only log failures here.
+        // `install_abort_hook` aborts the whole daemon on any panic, so
+        // handlers return Result and we only log failures here.
         std::thread::spawn(move || {
             let _conn = ConnGuard::new(&d);
             if let Err(e) = handle_conn(&d, stream) {
@@ -452,7 +481,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Serve requests on one port-registry connection until EOF or a close-signalling response.
+/// Serve requests on one port-registry connection until EOF or a
+/// close-signalling response.
 fn handle_conn(daemon: &Arc<Daemon>, stream: Stream) -> Result<()> {
     let (recv, send) = stream.split();
     let mut reader = BufReader::new(recv);
@@ -487,18 +517,19 @@ fn handle_lock_conn(daemon: &Arc<Daemon>, stream: Stream) -> Result<()> {
     Ok(())
 }
 
-/// Respawn a crashed child if its crash-loop budget allows; otherwise drop it and log.
+/// Respawn a crashed child if its crash-loop budget allows; otherwise drop it
+/// and log.
 fn restart(daemon: &Arc<Daemon>, key: &supervisor::Key) {
     let mut sup = daemon.sup.lock().unwrap();
     // A `Down` (or a give-up) can remove the key between the reap and here. The
-    // child is already gone and untracked, so there is nothing to restart — return
-    // without logging a spurious drop.
+    // child is already gone and untracked, so there is nothing to restart —
+    // return without logging a spurious drop.
     if !sup.contains(key) {
         return;
     }
     // An adopted survivor has no stored launch spec, so it can't be respawned —
-    // drop it on exit rather than charging the crash-loop budget for a spawn that
-    // can never happen.
+    // drop it on exit rather than charging the crash-loop budget for a spawn
+    // that can never happen.
     if sup.launch_of(key).is_none() {
         sup.remove(key);
         drop(sup);
@@ -552,8 +583,9 @@ fn env_u32(k: &str, d: u32) -> u32 {
         .unwrap_or(d)
 }
 
-/// Whether a hard cap and a soft limit are both set with the cap at or below the
-/// soft limit — a misconfiguration where the soft restart never gets to act first.
+/// Whether a hard cap and a soft limit are both set with the cap at or below
+/// the soft limit — a misconfiguration where the soft restart never gets to act
+/// first.
 fn cap_below_soft_limit(max_mb: u64, limit_mb: u64) -> bool {
     max_mb > 0 && limit_mb > 0 && max_mb <= limit_mb
 }
@@ -579,8 +611,7 @@ pub(crate) fn test_daemon_with_base(base: std::path::PathBuf, max_bytes: u64) ->
 
 #[cfg(test)]
 mod tests {
-    use super::cap_below_soft_limit;
-    use super::*;
+    use super::{cap_below_soft_limit, *};
 
     fn bare_daemon() -> Daemon {
         Daemon {
@@ -601,8 +632,9 @@ mod tests {
     }
 
     /// A handler that unwinds must still give its connection back. Losing the
-    /// decrement pins `active_conns` above zero for the life of the process, and
-    /// `is_idle` then never fires, so the daemon holds `devkitd.lock` forever.
+    /// decrement pins `active_conns` above zero for the life of the process,
+    /// and `is_idle` then never fires, so the daemon holds `devkitd.lock`
+    /// forever.
     #[test]
     fn a_connection_is_released_even_when_its_handler_unwinds() {
         let d = bare_daemon();

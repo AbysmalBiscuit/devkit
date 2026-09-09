@@ -1,6 +1,8 @@
-use std::path::Path;
-use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    process::{Child, Command, Output, Stdio},
+    time::{Duration, Instant},
+};
 
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
 

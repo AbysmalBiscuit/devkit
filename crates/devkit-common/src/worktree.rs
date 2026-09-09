@@ -1,10 +1,16 @@
-use crate::git::{self, Worktree};
+use std::{
+    collections::HashSet,
+    path::{Component, Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+
 use anyhow::Result;
 use rayon::prelude::*;
-use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::git::{self, Worktree};
 
 /// Marker identifying a baseline worktree. Baselines are linked worktrees, so
 /// without a way to tell one apart each becomes an `UNKNOWN` row in
@@ -67,8 +73,8 @@ pub fn issue_id_of(worktree: &std::path::Path, branch: &str) -> String {
 }
 
 /// The first letters-dash-digits run in `s` (e.g. `eng-1234`), if any. A
-/// `pr-<number>` run is the PR-checkout number marker, not an issue id, so it is
-/// skipped in favour of a real id later in the string (e.g. the trailing
+/// `pr-<number>` run is the PR-checkout number marker, not an issue id, so it
+/// is skipped in favour of a real id later in the string (e.g. the trailing
 /// `swe-8603` in `pr-3255-…-swe-8603`).
 pub fn find_id(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
@@ -147,13 +153,13 @@ pub fn discover(start: &str) -> Result<(PathBuf, Vec<Worktree>)> {
 }
 
 /// Copy files matching `patterns` (path globs relative to `source`) into `dest`
-/// at the same relative path. A match that is a directory is copied recursively.
-/// Patterns that match nothing are silently skipped; a destination file that
-/// already exists is left untouched (never clobbered). Fail-open: a glob or copy
-/// error is collected as a warning string rather than propagated, so backfill
-/// never aborts worktree creation. A match that is a symlink is reproduced as a
-/// symlink pointing at the same target; its contents are not copied. Returns
-/// (files_copied, links_created, warnings).
+/// at the same relative path. A match that is a directory is copied
+/// recursively. Patterns that match nothing are silently skipped; a destination
+/// file that already exists is left untouched (never clobbered). Fail-open: a
+/// glob or copy error is collected as a warning string rather than propagated,
+/// so backfill never aborts worktree creation. A match that is a symlink is
+/// reproduced as a symlink pointing at the same target; its contents are not
+/// copied. Returns (files_copied, links_created, warnings).
 pub fn copy_includes(
     source: &Path,
     dest: &Path,
@@ -196,14 +202,14 @@ fn normalize_pattern(pattern: &str) -> String {
     parts.join("/")
 }
 
-/// Copy files matching `patterns` (globs relative to `source`) out of a worktree
-/// into `dest`, at the same relative path, replacing what is already there. The
-/// outbound counterpart to `copy_includes`, fail-open the same way: returns
-/// (files_copied, warnings). A pattern that would leave either root is skipped
-/// with a warning, because the caller deletes `source` immediately afterward.
-/// Symlinks are followed and archived as their target's content — the outbound
-/// direction deliberately differs from the inbound one, which reproduces the
-/// link.
+/// Copy files matching `patterns` (globs relative to `source`) out of a
+/// worktree into `dest`, at the same relative path, replacing what is already
+/// there. The outbound counterpart to `copy_includes`, fail-open the same way:
+/// returns (files_copied, warnings). A pattern that would leave either root is
+/// skipped with a warning, because the caller deletes `source` immediately
+/// afterward. Symlinks are followed and archived as their target's content —
+/// the outbound direction deliberately differs from the inbound one, which
+/// reproduces the link.
 pub fn copy_out(source: &Path, dest: &Path, patterns: &[String]) -> (usize, Vec<String>) {
     let mut warnings = Vec::new();
     let mut inside = Vec::new();
@@ -240,9 +246,10 @@ pub fn apply_includes(
     apply_includes_with(source, dest, plan, overwrite, &|_| {})
 }
 
-/// [`apply_includes`], bracketing each pattern with [`IncludeEvent::EntryStart`]
-/// and [`IncludeEvent::EntryDone`] and reporting [`IncludeEvent::FileDone`] as
-/// each file and link belonging to that pattern is handled.
+/// [`apply_includes`], bracketing each pattern with
+/// [`IncludeEvent::EntryStart`] and [`IncludeEvent::EntryDone`] and reporting
+/// [`IncludeEvent::FileDone`] as each file and link belonging to that pattern
+/// is handled.
 ///
 /// The callback is `Sync` because `copy_includes_with` hands the same `on`
 /// reference to both the walk and the copy.
@@ -1287,9 +1294,10 @@ fn match_options() -> glob::MatchOptions {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::git::parse_porcelain;
-    use std::path::Path;
 
     #[test]
     fn a_directory_with_the_marker_is_a_baseline() {
@@ -1317,15 +1325,20 @@ mod tests {
         git(&main, &["commit", "-qm", "init"]);
 
         let issue = tmp.path().join("issue");
-        git(
-            &main,
-            &["worktree", "add", "-b", "feat", issue.to_str().unwrap()],
-        );
+        git(&main, &[
+            "worktree",
+            "add",
+            "-b",
+            "feat",
+            issue.to_str().unwrap(),
+        ]);
         let bl = tmp.path().join("bl");
-        git(
-            &main,
-            &["worktree", "add", "--detach", bl.to_str().unwrap()],
-        );
+        git(&main, &[
+            "worktree",
+            "add",
+            "--detach",
+            bl.to_str().unwrap(),
+        ]);
         std::fs::create_dir_all(bl.join(".devkit")).unwrap();
         std::fs::write(bl.join(BASELINE_MARKER), "sha = 'abc'\n").unwrap();
 
@@ -1376,10 +1389,13 @@ mod tests {
         git(&main, &["commit", "-qm", "init"]);
 
         let issue = tmp.path().join("issue");
-        git(
-            &main,
-            &["worktree", "add", "-b", "feat", issue.to_str().unwrap()],
-        );
+        git(&main, &[
+            "worktree",
+            "add",
+            "-b",
+            "feat",
+            issue.to_str().unwrap(),
+        ]);
         std::fs::create_dir_all(issue.join(".devkit")).unwrap();
         let marker = issue.join(BASELINE_MARKER);
         std::os::unix::fs::symlink(&marker, &marker).unwrap();
@@ -1499,7 +1515,8 @@ mod tests {
             "issue = \"87\"\nslug = \"fix\"\napps = []\n",
         )
         .unwrap();
-        // The branch carries a Linear-shaped id that is NOT this worktree's issue.
+        // The branch carries a Linear-shaped id that is NOT this worktree's
+        // issue.
         assert_eq!(issue_id_of(dir.path(), "lev/eng-1-something"), "87");
     }
 
@@ -1511,9 +1528,9 @@ mod tests {
 
     #[test]
     fn a_worktree_with_neither_is_unknown() {
-        // The directory name is a fallback id source, so the worktree is given a
-        // name carrying no letters-dash-digits run rather than the scratch
-        // directory's own.
+        // The directory name is a fallback id source, so the worktree is given
+        // a name carrying no letters-dash-digits run rather than the
+        // scratch directory's own.
         let scratch = tempfile::tempdir().unwrap();
         let worktree = scratch.path().join("noidhere");
         std::fs::create_dir_all(&worktree).unwrap();
@@ -1628,7 +1645,7 @@ mod tests {
         let dst = base.path().join("dst");
         write(&src.join("a/b/c/.env.local"), "X=1");
 
-        let (n, _, _) = copy_includes(&src, &dst, &["**/.env.local".to_string()]);
+        let (n, ..) = copy_includes(&src, &dst, &["**/.env.local".to_string()]);
 
         assert_eq!(n, 1);
         assert!(dst.join("a/b/c/.env.local").exists());
@@ -1678,7 +1695,7 @@ mod tests {
         write(&src.join(".tool-versions"), "node 20");
         write(&dst.join(".tool-versions"), "KEEP ME");
 
-        let (n, _, _) = copy_includes(&src, &dst, &[".tool-versions".to_string()]);
+        let (n, ..) = copy_includes(&src, &dst, &[".tool-versions".to_string()]);
 
         assert_eq!(n, 0);
         assert_eq!(
@@ -1696,10 +1713,9 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &[".env.local".to_string()]);
 
-        assert_eq!(
-            plan.missing().collect::<Vec<_>>(),
-            [Path::new(".env.local")]
-        );
+        assert_eq!(plan.missing().collect::<Vec<_>>(), [Path::new(
+            ".env.local"
+        )]);
         assert_eq!(plan.existing_len(), 0);
         assert!(plan.warnings.is_empty());
     }
@@ -1714,10 +1730,9 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
 
-        assert_eq!(
-            plan.existing().collect::<Vec<_>>(),
-            [Path::new(".tool-versions")]
-        );
+        assert_eq!(plan.existing().collect::<Vec<_>>(), [Path::new(
+            ".tool-versions"
+        )]);
         assert_eq!(plan.missing_len(), 0);
         assert!(plan.warnings.is_empty());
     }
@@ -1733,14 +1748,12 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &[".claude/hooks/".to_string()]);
 
-        assert_eq!(
-            plan.existing().collect::<Vec<_>>(),
-            [Path::new(".claude/hooks/pre.sh")]
-        );
-        assert_eq!(
-            plan.missing().collect::<Vec<_>>(),
-            [Path::new(".claude/hooks/sub/post.sh")]
-        );
+        assert_eq!(plan.existing().collect::<Vec<_>>(), [Path::new(
+            ".claude/hooks/pre.sh"
+        )]);
+        assert_eq!(plan.missing().collect::<Vec<_>>(), [Path::new(
+            ".claude/hooks/sub/post.sh"
+        )]);
         assert!(plan.warnings.is_empty());
     }
 
@@ -1765,20 +1778,17 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &["hooks/".to_string(), "configs/".to_string()]);
 
-        assert_eq!(
-            plan.missing().collect::<Vec<_>>(),
-            [
-                Path::new("hooks/b.sh"),
-                Path::new("hooks/d.sh"),
-                Path::new("configs/x.txt"),
-                Path::new("configs/y.txt"),
-                Path::new("configs/z.txt"),
-            ]
-        );
-        assert_eq!(
-            plan.existing().collect::<Vec<_>>(),
-            [Path::new("hooks/a.sh"), Path::new("hooks/c.sh")]
-        );
+        assert_eq!(plan.missing().collect::<Vec<_>>(), [
+            Path::new("hooks/b.sh"),
+            Path::new("hooks/d.sh"),
+            Path::new("configs/x.txt"),
+            Path::new("configs/y.txt"),
+            Path::new("configs/z.txt"),
+        ]);
+        assert_eq!(plan.existing().collect::<Vec<_>>(), [
+            Path::new("hooks/a.sh"),
+            Path::new("hooks/c.sh")
+        ]);
     }
 
     #[test]
@@ -1820,23 +1830,21 @@ mod tests {
         write(&src.join("hooks/a.sh"), "x");
         write(&src.join("hooks/b.sh"), "x");
 
-        let plan = plan_includes(
-            &src,
-            &dst,
-            &[".tool-versions".to_string(), "hooks/".to_string()],
-        );
+        let plan = plan_includes(&src, &dst, &[
+            ".tool-versions".to_string(),
+            "hooks/".to_string(),
+        ]);
 
         assert_eq!(plan.patterns.len(), 2);
         assert_eq!(plan.patterns[0].pattern, ".tool-versions");
-        assert_eq!(
-            plan.patterns[0].missing,
-            vec![PathBuf::from(".tool-versions")]
-        );
+        assert_eq!(plan.patterns[0].missing, vec![PathBuf::from(
+            ".tool-versions"
+        )]);
         assert_eq!(plan.patterns[1].pattern, "hooks/");
-        assert_eq!(
-            plan.patterns[1].missing,
-            vec![PathBuf::from("hooks/a.sh"), PathBuf::from("hooks/b.sh")]
-        );
+        assert_eq!(plan.patterns[1].missing, vec![
+            PathBuf::from("hooks/a.sh"),
+            PathBuf::from("hooks/b.sh")
+        ]);
     }
 
     /// Sub-step numbering is one-to-one with the configured include list, so a
@@ -1855,13 +1863,13 @@ mod tests {
         assert!(plan.patterns[0].missing.is_empty());
         assert!(plan.patterns[0].existing.is_empty());
         assert_eq!(plan.warnings.len(), 1);
-        assert_eq!(
-            plan.patterns[1].missing,
-            vec![PathBuf::from(".tool-versions")]
-        );
+        assert_eq!(plan.patterns[1].missing, vec![PathBuf::from(
+            ".tool-versions"
+        )]);
     }
 
-    /// missing() and existing() flatten every pattern's matches into one ordered sequence.
+    /// missing() and existing() flatten every pattern's matches into one
+    /// ordered sequence.
     #[test]
     fn the_flattening_views_yield_every_match() {
         let base = tempfile::tempdir().unwrap();
@@ -1871,20 +1879,17 @@ mod tests {
         write(&dst.join(".tool-versions"), "KEEP ME");
         write(&src.join("hooks/a.sh"), "x");
 
-        let plan = plan_includes(
-            &src,
-            &dst,
-            &[".tool-versions".to_string(), "hooks/".to_string()],
-        );
+        let plan = plan_includes(&src, &dst, &[
+            ".tool-versions".to_string(),
+            "hooks/".to_string(),
+        ]);
 
-        assert_eq!(
-            plan.missing().collect::<Vec<_>>(),
-            [Path::new("hooks/a.sh")]
-        );
-        assert_eq!(
-            plan.existing().collect::<Vec<_>>(),
-            [Path::new(".tool-versions")]
-        );
+        assert_eq!(plan.missing().collect::<Vec<_>>(), [Path::new(
+            "hooks/a.sh"
+        )]);
+        assert_eq!(plan.existing().collect::<Vec<_>>(), [Path::new(
+            ".tool-versions"
+        )]);
         assert_eq!(plan.missing_len(), 1);
         assert_eq!(plan.existing_len(), 1);
     }
@@ -1918,10 +1923,9 @@ mod tests {
         write(&src.join(".tool-versions"), "node 20");
 
         let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
-        assert_eq!(
-            plan.missing().collect::<Vec<_>>(),
-            [Path::new(".tool-versions")]
-        );
+        assert_eq!(plan.missing().collect::<Vec<_>>(), [Path::new(
+            ".tool-versions"
+        )]);
         write(&dst.join(".tool-versions"), "KEEP ME");
 
         let (n, _, warnings) = apply_includes(&src, &dst, &plan, false);
@@ -1967,9 +1971,10 @@ mod tests {
         assert!(!dst.exists());
     }
 
-    /// `source.join("")` is the source directory, which globs to itself and then
-    /// strips to an empty relative path — planning the entire tree. A pattern that
-    /// is empty, or only separators, has to drop out before the join.
+    /// `source.join("")` is the source directory, which globs to itself and
+    /// then strips to an empty relative path — planning the entire tree. A
+    /// pattern that is empty, or only separators, has to drop out before
+    /// the join.
     #[test]
     fn an_empty_pattern_plans_nothing() {
         let dir = tempfile::tempdir().unwrap();
@@ -1978,11 +1983,11 @@ mod tests {
         write(&src.join("a.txt"), "a");
         write(&src.join("nested/b.txt"), "b");
 
-        let plan = plan_includes(
-            &src,
-            &dst,
-            &["".to_string(), "/".to_string(), "//".to_string()],
-        );
+        let plan = plan_includes(&src, &dst, &[
+            "".to_string(),
+            "/".to_string(),
+            "//".to_string(),
+        ]);
 
         assert_eq!(
             plan.missing_len(),
@@ -1999,12 +2004,12 @@ mod tests {
         assert!(plan.warnings.is_empty(), "warned {:?}", plan.warnings);
     }
 
-    /// `plan_includes` strips `source` lexically, so `source.join("../x")` still
-    /// carries the prefix and yields `../x` as the "relative" path — escaping the
-    /// destination as well as the source. Absolute patterns replace the base
-    /// outright, and so does a root-relative one: `/etc/x` is not absolute on
-    /// Windows, but `Path::join` discards the base for it just the same. None
-    /// may reach the glob.
+    /// `plan_includes` strips `source` lexically, so `source.join("../x")`
+    /// still carries the prefix and yields `../x` as the "relative" path —
+    /// escaping the destination as well as the source. Absolute patterns
+    /// replace the base outright, and so does a root-relative one: `/etc/x`
+    /// is not absolute on Windows, but `Path::join` discards the base for
+    /// it just the same. None may reach the glob.
     #[test]
     fn copy_out_refuses_a_pattern_that_escapes_the_worktree() {
         let dir = tempfile::tempdir().unwrap();
@@ -2013,15 +2018,11 @@ mod tests {
         write(&dir.path().join("outside.md"), "secret");
         write(&wt.join("keep.md"), "keep");
 
-        let (copied, warnings) = copy_out(
-            &wt,
-            &dst,
-            &[
-                "../outside.md".to_string(),
-                "/etc/passwd".to_string(),
-                "keep.md".to_string(),
-            ],
-        );
+        let (copied, warnings) = copy_out(&wt, &dst, &[
+            "../outside.md".to_string(),
+            "/etc/passwd".to_string(),
+            "keep.md".to_string(),
+        ]);
 
         assert_eq!(copied, 1, "only the in-tree file is copied");
         let archived: Vec<String> = std::fs::read_dir(&dst)
@@ -2058,16 +2059,12 @@ mod tests {
         write(&src.join("keep.txt"), "x");
         write(&base.path().join("outside.md"), "secret");
 
-        let plan = plan_includes(
-            &src,
-            &dst,
-            &[
-                "../outside.md".to_string(),
-                "/etc/passwd".to_string(),
-                "../*/secrets".to_string(),
-                "keep.txt".to_string(),
-            ],
-        );
+        let plan = plan_includes(&src, &dst, &[
+            "../outside.md".to_string(),
+            "/etc/passwd".to_string(),
+            "../*/secrets".to_string(),
+            "keep.txt".to_string(),
+        ]);
 
         assert_eq!(plan.patterns.len(), 4, "every pattern keeps its entry");
         assert_eq!(plan.missing_len(), 1);
@@ -2154,27 +2151,26 @@ mod tests {
         let dst = dir.path().join("dst");
         write(&src.join("scratch/a.md"), "a");
 
-        let plan = plan_includes(
-            &src,
-            &dst,
-            &["scratch/".to_string(), "scratch/a.md".to_string()],
-        );
-        assert_eq!(
-            plan.missing().collect::<Vec<_>>(),
-            [PathBuf::from("scratch").join("a.md").as_path()]
-        );
+        let plan = plan_includes(&src, &dst, &[
+            "scratch/".to_string(),
+            "scratch/a.md".to_string(),
+        ]);
+        assert_eq!(plan.missing().collect::<Vec<_>>(), [PathBuf::from(
+            "scratch"
+        )
+        .join("a.md")
+        .as_path()]);
         assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
 
-        let (copied, warnings) = copy_out(
-            &src,
-            &dst,
-            &["scratch/".to_string(), "scratch/a.md".to_string()],
-        );
+        let (copied, warnings) = copy_out(&src, &dst, &[
+            "scratch/".to_string(),
+            "scratch/a.md".to_string(),
+        ]);
         assert_eq!(copied, 1, "{warnings:?}");
     }
 
-    /// The plan walk is the first of the two silences the display has to fill, so
-    /// it has to report matches as it finds them, not only at the end.
+    /// The plan walk is the first of the two silences the display has to fill,
+    /// so it has to report matches as it finds them, not only at the end.
     #[test]
     fn the_plan_walk_reports_a_running_count_and_a_total() {
         let base = tempfile::tempdir().unwrap();
@@ -2242,8 +2238,8 @@ mod tests {
         out
     }
 
-    /// The copy display draws one sub-step per include entry, so the copy has to
-    /// bracket each pattern and count within it.
+    /// The copy display draws one sub-step per include entry, so the copy has
+    /// to bracket each pattern and count within it.
     #[test]
     fn the_copy_brackets_each_pattern_and_counts_within_it() {
         let base = tempfile::tempdir().unwrap();
@@ -2285,23 +2281,21 @@ mod tests {
 
         assert_eq!(copied, 3);
         assert!(warnings.is_empty());
-        assert_eq!(
-            sort_file_runs(&log.lock().unwrap()),
-            vec![
-                "start .tool-versions 0/2 1",
-                "file .tool-versions 1/1",
-                "done .tool-versions 0/2 1",
-                "start hooks/ 1/2 2",
-                "file hooks/ 1/2",
-                "file hooks/ 2/2",
-                "done hooks/ 1/2 2",
-            ]
-        );
+        assert_eq!(sort_file_runs(&log.lock().unwrap()), vec![
+            "start .tool-versions 0/2 1",
+            "file .tool-versions 1/1",
+            "done .tool-versions 0/2 1",
+            "start hooks/ 1/2 2",
+            "file hooks/ 1/2",
+            "file hooks/ 2/2",
+            "done hooks/ 1/2 2",
+        ]);
     }
 
-    /// A plan is a snapshot, and the copy re-checks each destination. A file whose
-    /// destination appeared in the gap is skipped but still advances the display,
-    /// so a run that ends up writing nothing does not look stuck.
+    /// A plan is a snapshot, and the copy re-checks each destination. A file
+    /// whose destination appeared in the gap is skipped but still advances
+    /// the display, so a run that ends up writing nothing does not look
+    /// stuck.
     #[test]
     fn a_file_skipped_since_the_plan_still_advances_the_count() {
         let base = tempfile::tempdir().unwrap();
@@ -2344,7 +2338,7 @@ mod tests {
 
         let plan = plan_includes(&src, &dst, &[".tool-versions".to_string()]);
         let files = std::sync::Mutex::new(Vec::new());
-        let (copied, _, _) = apply_includes_with(&src, &dst, &plan, true, &|e| {
+        let (copied, ..) = apply_includes_with(&src, &dst, &plan, true, &|e| {
             if let IncludeEvent::FileDone { done, of, .. } = e {
                 files.lock().unwrap().push((done, of));
             }
@@ -2390,8 +2384,9 @@ mod tests {
     }
 
     /// A pattern that matches nothing still occupies its slot between two that
-    /// do, so `index` stays gap-free and `of` stays the configured pattern count
-    /// rather than the matched count. Callers number a display off these.
+    /// do, so `index` stays gap-free and `of` stays the configured pattern
+    /// count rather than the matched count. Callers number a display off
+    /// these.
     #[test]
     fn an_empty_pattern_between_two_matching_ones_still_brackets() {
         let base = tempfile::tempdir().unwrap();
@@ -2431,22 +2426,16 @@ mod tests {
             _ => {}
         });
 
-        assert_eq!(
-            *starts.lock().unwrap(),
-            vec![
-                (".tool-versions".to_string(), 0, 3, 1),
-                ("does/not/exist".to_string(), 1, 3, 0),
-                ("hooks/".to_string(), 2, 3, 1),
-            ]
-        );
-        assert_eq!(
-            *dones.lock().unwrap(),
-            vec![
-                (".tool-versions".to_string(), 0, 3, 1),
-                ("does/not/exist".to_string(), 1, 3, 0),
-                ("hooks/".to_string(), 2, 3, 1),
-            ]
-        );
+        assert_eq!(*starts.lock().unwrap(), vec![
+            (".tool-versions".to_string(), 0, 3, 1),
+            ("does/not/exist".to_string(), 1, 3, 0),
+            ("hooks/".to_string(), 2, 3, 1),
+        ]);
+        assert_eq!(*dones.lock().unwrap(), vec![
+            (".tool-versions".to_string(), 0, 3, 1),
+            ("does/not/exist".to_string(), 1, 3, 0),
+            ("hooks/".to_string(), 2, 3, 1),
+        ]);
     }
 
     #[test]
@@ -2472,8 +2461,9 @@ mod tests {
         assert!(!needs_discovery(&[]));
     }
 
-    /// Creating a symlink is refused on Windows without Developer Mode. Where it
-    /// is refused the test cannot build its fixture, so it reports and stops.
+    /// Creating a symlink is refused on Windows without Developer Mode. Where
+    /// it is refused the test cannot build its fixture, so it reports and
+    /// stops.
     fn link_or_skip(target: &Path, link: &Path, target_is_dir: bool) -> bool {
         match crate::sys::symlink(target, link, target_is_dir) {
             Ok(()) => true,
@@ -2588,8 +2578,9 @@ mod tests {
     }
 
     /// An occupied destination keeps the entry in `links`, never in `existing`:
-    /// `existing` is copied with `copy_file` under `--overwrite`, which would write
-    /// the target's contents. `make_link` decides skip-or-replace per link.
+    /// `existing` is copied with `copy_file` under `--overwrite`, which would
+    /// write the target's contents. `make_link` decides skip-or-replace per
+    /// link.
     #[test]
     fn an_occupied_link_destination_stays_a_link_entry() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2628,10 +2619,11 @@ mod tests {
         std::fs::create_dir_all(source.join("inc")).unwrap();
         std::fs::create_dir_all(&dest).unwrap();
         std::fs::write(source.join("real.txt"), "content").unwrap();
-        // Windows only resolves a relative reparse-point target when it uses the
-        // native separator, so the target is built with `join` rather than a
-        // literal `../real.txt`, which `read_link` would return unresolved but
-        // `copy_out`, which opens through the link, cannot.
+        // Windows only resolves a relative reparse-point target when it uses
+        // the native separator, so the target is built with `join`
+        // rather than a literal `../real.txt`, which `read_link` would
+        // return unresolved but `copy_out`, which opens through the
+        // link, cannot.
         let target = Path::new("..").join("real.txt");
         if !link_or_skip(&target, &source.join("inc/link.txt"), false) {
             return;
@@ -2944,8 +2936,9 @@ mod tests {
         );
     }
 
-    /// Replacing a link to a directory must remove the link, never recurse through
-    /// it: `remove_dir_all` on a symlinked directory deletes the target's contents.
+    /// Replacing a link to a directory must remove the link, never recurse
+    /// through it: `remove_dir_all` on a symlinked directory deletes the
+    /// target's contents.
     #[test]
     fn replacing_a_directory_link_does_not_delete_through_it() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2961,7 +2954,8 @@ mod tests {
         if !link_or_skip(Path::new("../real_dir"), &source.join("inc/link_dir"), true) {
             return;
         }
-        // The destination already holds a link, pointed somewhere else entirely.
+        // The destination already holds a link, pointed somewhere else
+        // entirely.
         if !link_or_skip(&keep, &dest.join("inc/link_dir"), true) {
             return;
         }
@@ -3047,10 +3041,12 @@ mod tests {
         );
         assert_eq!(walk_root("src/[abc]/x"), Some(PathBuf::from("src")));
         assert_eq!(walk_root("logs/?.txt"), Some(PathBuf::from("logs")));
-        // Wildcards in non-trailing components: stops at the first wildcard-containing component.
+        // Wildcards in non-trailing components: stops at the first
+        // wildcard-containing component.
         assert_eq!(walk_root("apps/web-*/x"), Some(PathBuf::from("apps")));
         assert_eq!(walk_root("apps/web*/config"), Some(PathBuf::from("apps")));
-        // Wildcard-suffixed component as the last component still returns the prefix.
+        // Wildcard-suffixed component as the last component still returns the
+        // prefix.
         assert_eq!(walk_root("apps/web-*"), Some(PathBuf::from("apps")));
     }
 
@@ -3119,13 +3115,10 @@ mod tests {
 
         let mut missing: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
         missing.sort();
-        assert_eq!(
-            missing,
-            vec![
-                PathBuf::from(".env.local"),
-                PathBuf::from("apps/web/.env.local"),
-            ]
-        );
+        assert_eq!(missing, vec![
+            PathBuf::from(".env.local"),
+            PathBuf::from("apps/web/.env.local"),
+        ]);
     }
 
     /// A symlinked directory in the middle of a pattern is read through.
@@ -3401,22 +3394,19 @@ mod tests {
         let anchored = plan_includes(&src, &dst, &["a/**".to_string()]);
         let mut under_a: Vec<_> = anchored.missing().map(Path::to_path_buf).collect();
         under_a.sort();
-        assert_eq!(
-            under_a,
-            vec![PathBuf::from("a/a.txt"), PathBuf::from("a/b/b.txt")]
-        );
+        assert_eq!(under_a, vec![
+            PathBuf::from("a/a.txt"),
+            PathBuf::from("a/b/b.txt")
+        ]);
 
         let bare = plan_includes(&src, &dst, &["**".to_string()]);
         let mut everything: Vec<_> = bare.missing().map(Path::to_path_buf).collect();
         everything.sort();
-        assert_eq!(
-            everything,
-            vec![
-                PathBuf::from("a/a.txt"),
-                PathBuf::from("a/b/b.txt"),
-                PathBuf::from("root.txt"),
-            ]
-        );
+        assert_eq!(everything, vec![
+            PathBuf::from("a/a.txt"),
+            PathBuf::from("a/b/b.txt"),
+            PathBuf::from("root.txt"),
+        ]);
     }
 
     /// A trailing `**` claims a symlinked directory itself, so `Preserve` mode
@@ -3514,10 +3504,10 @@ mod tests {
         assert_eq!(plan.links().count(), 0);
         let mut files: Vec<_> = plan.missing().map(Path::to_path_buf).collect();
         files.sort();
-        assert_eq!(
-            files,
-            vec![PathBuf::from("deep/n.txt"), PathBuf::from("keep.txt")]
-        );
+        assert_eq!(files, vec![
+            PathBuf::from("deep/n.txt"),
+            PathBuf::from("keep.txt")
+        ]);
     }
 
     #[test]

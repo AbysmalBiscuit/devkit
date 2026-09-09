@@ -1,7 +1,8 @@
 //! The `[harness]` table: the coding-agent enforcement opt-ins.
 
-use serde::Deserialize;
 use std::collections::BTreeMap;
+
+use serde::Deserialize;
 
 /// One `[harness.commands.<name>]` entry: a set of programs whose invocation
 /// the guard refuses, and the correction it offers instead.

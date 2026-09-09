@@ -1,11 +1,10 @@
 //! The `[hooks]` runner: render one command's argv, run it in a given
 //! directory, and draw a progress step per command. Every hook key shares it.
 
+use std::{collections::BTreeMap, path::Path};
+
 use anyhow::{Context, Result};
-use devkit_common::cmd::capture_env;
-use devkit_common::progress::Steps;
-use std::collections::BTreeMap;
-use std::path::Path;
+use devkit_common::{cmd::capture_env, progress::Steps};
 
 /// Width a hook's command is elided to in its progress step: sized for an
 /// 80-column terminal alongside the mark, the `[i/n]` counter, and the
@@ -79,8 +78,9 @@ pub(crate) fn run_all(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn ctx() -> serde_json::Value {
         json!({"prefix": "lev/", "issue": "eng-1", "slug": "fix", "apps": ["web"], "app": "web"})
@@ -168,10 +168,11 @@ mod tests {
     #[test]
     fn failing_hook_does_not_stop_the_next_one() {
         let dir = tempfile::tempdir().unwrap();
-        let hooks = vec![
-            vec!["devkit-no-such-program-xyz".to_string()],
-            vec!["git".to_string(), "init".to_string(), "after".to_string()],
-        ];
+        let hooks = vec![vec!["devkit-no-such-program-xyz".to_string()], vec![
+            "git".to_string(),
+            "init".to_string(),
+            "after".to_string(),
+        ]];
         run(dir.path(), &hooks, &Steps::persistent());
         assert!(dir.path().join("after").exists());
     }

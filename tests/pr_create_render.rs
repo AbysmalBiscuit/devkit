@@ -23,15 +23,12 @@ pr_title = "{{ issue }}: {{ input }}"
 #[test]
 fn reusing_a_pr_renders_neither_template() {
     for templates in [BODY_NEEDS_THE_RECORD, TITLE_NEEDS_THE_RECORD] {
-        let fake = ghfake::Fake::new(
-            templates,
-            &ghfake::Pr {
-                number: 7,
-                state: "OPEN",
-                is_draft: true,
-                author: "LevValle",
-            },
-        );
+        let fake = ghfake::Fake::new(templates, &ghfake::Pr {
+            number: 7,
+            state: "OPEN",
+            is_draft: true,
+            author: "LevValle",
+        });
         let out = fake.issue(&["pr", "create", "--no-push"]);
 
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();

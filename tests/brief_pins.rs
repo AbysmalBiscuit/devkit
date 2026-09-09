@@ -2,8 +2,10 @@
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::{
+    path::{Path, PathBuf},
+    process::{Command, Output},
+};
 
 fn write(path: &Path, body: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -756,10 +758,12 @@ fn additional_context_uses_cursors_field_when_cursor_runs_the_hook() {
     let project = Project::docs_only();
     project.set_config(&format!("[config]\nroot = true\n\n{DEFAULTS}"));
 
-    let value = envelope(&project.brief_env(
-        &["--pins-only", "--additional-context"],
-        &[("CURSOR_PROJECT_DIR", "/w")],
-    ));
+    let value = envelope(
+        &project.brief_env(&["--pins-only", "--additional-context"], &[(
+            "CURSOR_PROJECT_DIR",
+            "/w",
+        )]),
+    );
 
     assert!(
         value["additional_context"]

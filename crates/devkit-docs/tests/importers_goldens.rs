@@ -2,9 +2,9 @@
 //! fixture matrix. Re-record with `DOCM_GOLDEN_RECORD=1`; a diff without a
 //! deliberate re-record is a behavior change.
 
-use devkit_docs::importers;
-use devkit_docs::manifest::Ecosystem;
 use std::path::{Path, PathBuf};
+
+use devkit_docs::{importers, manifest::Ecosystem};
 
 #[allow(dead_code)]
 mod common;

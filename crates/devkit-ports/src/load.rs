@@ -1,11 +1,12 @@
+use std::{collections::HashMap, path::Path};
+
+use anyhow::Result;
+use devkit_config::{self as config, Config, Provenance};
+
 use crate::{
     apps::{self, App},
     doppler,
 };
-use anyhow::Result;
-use devkit_config::{self as config, Config, Provenance};
-use std::collections::HashMap;
-use std::path::Path;
 
 pub struct Loaded {
     pub config: Config,

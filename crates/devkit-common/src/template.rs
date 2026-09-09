@@ -1,10 +1,17 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
 use anyhow::{Context, Result};
-use minijinja::value::{Object, Value};
-use minijinja::{Environment, UndefinedBehavior};
+use minijinja::{
+    Environment, UndefinedBehavior,
+    value::{Object, Value},
+};
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 /// Render a compiled template against a prebuilt minijinja root value, with the
 /// same strict-undefined and trailing-newline settings as [`render`].
@@ -146,8 +153,9 @@ fn merged_context(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn novars() -> BTreeMap<String, String> {
         BTreeMap::new()

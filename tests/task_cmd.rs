@@ -3,8 +3,7 @@
 //! directly (not the `devrun` shim). Uses an isolated HOME/XDG_STATE_HOME so
 //! the port registry never touches the real one.
 
-use std::path::Path;
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 fn devkit_run() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
@@ -143,10 +142,13 @@ fn task_seq_dry_run_renders_up_step_plan() {
 #[test]
 fn task_seq_env_overrides_up_step_static_env() {
     let dir = setup();
-    let out = run_in(
-        dir.path(),
-        &["task", "seq", "--env", "FROM_APP=user", "--dry-run"],
-    );
+    let out = run_in(dir.path(), &[
+        "task",
+        "seq",
+        "--env",
+        "FROM_APP=user",
+        "--dry-run",
+    ]);
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -166,10 +168,13 @@ fn task_env_file_feeds_steps_and_env_wins() {
     std::fs::write(&envfile, "# comment\nFROM_APP=filed\nEXTRA=1\n").expect("write env file");
     let envfile = envfile.to_string_lossy().into_owned();
 
-    let out = run_in(
-        dir.path(),
-        &["task", "seq", "--env-file", &envfile, "--dry-run"],
-    );
+    let out = run_in(dir.path(), &[
+        "task",
+        "seq",
+        "--env-file",
+        &envfile,
+        "--dry-run",
+    ]);
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -181,18 +186,15 @@ fn task_env_file_feeds_steps_and_env_wins() {
         "up step fell back to static_env instead of the --env-file value: {stdout}"
     );
 
-    let out = run_in(
-        dir.path(),
-        &[
-            "task",
-            "seq",
-            "--env-file",
-            &envfile,
-            "--env",
-            "FROM_APP=cli",
-            "--dry-run",
-        ],
-    );
+    let out = run_in(dir.path(), &[
+        "task",
+        "seq",
+        "--env-file",
+        &envfile,
+        "--env",
+        "FROM_APP=cli",
+        "--dry-run",
+    ]);
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(

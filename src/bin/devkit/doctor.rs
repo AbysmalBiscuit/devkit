@@ -1,8 +1,10 @@
 use anyhow::Result;
-use devkit_common::progress::Steps;
-use devkit_common::secrets::{self, Source};
-use devkit_common::slack;
-use devkit_common::tracker::{Resolved, TrackerKind, linear};
+use devkit_common::{
+    progress::Steps,
+    secrets::{self, Source},
+    slack,
+    tracker::{Resolved, TrackerKind, linear},
+};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Check {
@@ -235,7 +237,8 @@ fn version_skew_check(binary: &str, plugin: Option<&str>) -> Check {
     }
 }
 
-/// Newest semver-named subdirectory of a plugin cache dir (`0.9.1`, `0.10.0`, …).
+/// Newest semver-named subdirectory of a plugin cache dir (`0.9.1`, `0.10.0`,
+/// …).
 fn newest_plugin_version(dir: &std::path::Path) -> Option<String> {
     let entries = std::fs::read_dir(dir).ok()?;
     entries
@@ -324,10 +327,11 @@ fn shim_rows() -> Vec<Row> {
         .collect()
 }
 
-/// Report the session identity `lockm` will hold locks under. `id` is `None` when
-/// no `HARNESS_SESSION_VARS` entry is set; `harness_env` says whether any variable
-/// carries a known harness prefix. The two together are the rename signature: a
-/// harness is present, but the variable naming its session is not one devkit knows.
+/// Report the session identity `lockm` will hold locks under. `id` is `None`
+/// when no `HARNESS_SESSION_VARS` entry is set; `harness_env` says whether any
+/// variable carries a known harness prefix. The two together are the rename
+/// signature: a harness is present, but the variable naming its session is not
+/// one devkit knows.
 fn harness_identity_check(id: Option<devkit_locks::ident::Identity>, harness_env: bool) -> Check {
     use devkit_locks::ident::{HARNESS_ENV_PREFIXES, Identity};
     match (id, harness_env) {
@@ -489,8 +493,9 @@ pub fn run(json: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use devkit_common::tracker::none;
+
+    use super::*;
 
     fn row(check: Check) -> Row {
         Row {
@@ -577,7 +582,8 @@ mod tests {
 
     /// A project that names `[tracker] kind = "github"` still warns about a
     /// missing token: the adapter is the project's own declared choice, so the
-    /// `declared || ready` arm would otherwise mark it Ok with no token in play.
+    /// `declared || ready` arm would otherwise mark it Ok with no token in
+    /// play.
     #[test]
     fn a_declared_github_tracker_with_no_token_warns_about_the_token() {
         let r = unready_github(true, "[tracker] kind = \"github\"");

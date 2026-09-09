@@ -1,6 +1,9 @@
-use devkit_locks::model::Data;
-use devkit_locks::store::{MemoryStore, acquire_with};
 use std::sync::{Arc, Mutex};
+
+use devkit_locks::{
+    model::Data,
+    store::{MemoryStore, acquire_with},
+};
 
 #[test]
 fn commit_writes_through_then_updates_memory() {

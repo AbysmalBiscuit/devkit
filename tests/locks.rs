@@ -6,8 +6,10 @@
 mod shimtest;
 #[path = "common/testenv.rs"]
 mod testenv;
-use std::path::Path;
-use std::process::{Command, Output};
+use std::{
+    path::Path,
+    process::{Command, Output},
+};
 
 fn project() -> tempfile::TempDir {
     let p = tempfile::tempdir().unwrap();
@@ -37,20 +39,17 @@ fn second_holder_conflicts_with_overlap() {
     let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    let a = run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["acquire", "scenes", "--as", "alice"],
-    );
+    let a = run(&link, proj.path(), state.path(), &[
+        "acquire", "scenes", "--as", "alice",
+    ]);
     assert!(a.status.success(), "alice should acquire");
 
-    let b = run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["acquire", "scenes/player.tscn", "--as", "bob"],
-    );
+    let b = run(&link, proj.path(), state.path(), &[
+        "acquire",
+        "scenes/player.tscn",
+        "--as",
+        "bob",
+    ]);
     assert_eq!(
         b.status.code(),
         Some(1),
@@ -65,19 +64,13 @@ fn json_conflict_shape() {
     let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["acquire", "scenes", "--as", "alice"],
-    );
+    run(&link, proj.path(), state.path(), &[
+        "acquire", "scenes", "--as", "alice",
+    ]);
 
-    let b = run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["check", "scenes/x", "--as", "bob", "--json"],
-    );
+    let b = run(&link, proj.path(), state.path(), &[
+        "check", "scenes/x", "--as", "bob", "--json",
+    ]);
     assert_eq!(b.status.code(), Some(1));
     let v: serde_json::Value = serde_json::from_slice(&b.stdout).expect("json on stdout");
     assert_eq!(v["ok"], serde_json::json!(false));
@@ -89,26 +82,17 @@ fn release_frees_for_other_holder() {
     let (_dir, link) = shimtest::linked("lockm");
     let proj = project();
     let state = tempfile::tempdir().unwrap();
-    run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["acquire", "scenes", "--as", "alice"],
-    );
-    let r = run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["release", "scenes", "--as", "alice"],
-    );
+    run(&link, proj.path(), state.path(), &[
+        "acquire", "scenes", "--as", "alice",
+    ]);
+    let r = run(&link, proj.path(), state.path(), &[
+        "release", "scenes", "--as", "alice",
+    ]);
     assert!(r.status.success());
 
-    let b = run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["acquire", "scenes", "--as", "bob"],
-    );
+    let b = run(&link, proj.path(), state.path(), &[
+        "acquire", "scenes", "--as", "bob",
+    ]);
     assert!(b.status.success(), "bob can acquire after alice releases");
 }
 
@@ -118,22 +102,16 @@ fn same_holder_reacquire_is_ok() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
     assert!(
-        run(
-            &link,
-            proj.path(),
-            state.path(),
-            &["acquire", "scenes", "--as", "alice"]
-        )
+        run(&link, proj.path(), state.path(), &[
+            "acquire", "scenes", "--as", "alice"
+        ])
         .status
         .success()
     );
     assert!(
-        run(
-            &link,
-            proj.path(),
-            state.path(),
-            &["acquire", "scenes", "--as", "alice"]
-        )
+        run(&link, proj.path(), state.path(), &[
+            "acquire", "scenes", "--as", "alice"
+        ])
         .status
         .success()
     );
@@ -261,12 +239,9 @@ fn session_end_releases_even_when_enforcement_is_off() {
     let proj = project();
     let state = tempfile::tempdir().unwrap();
 
-    let a = run(
-        &link,
-        proj.path(),
-        state.path(),
-        &["acquire", "src/a.rs", "--as", "S"],
-    );
+    let a = run(&link, proj.path(), state.path(), &[
+        "acquire", "src/a.rs", "--as", "S",
+    ]);
     assert!(a.status.success(), "S should acquire");
 
     let payload = r#"{"session_id":"S","hook_event_name":"SessionEnd"}"#;
@@ -347,13 +322,9 @@ fn a_hook_held_lock_is_not_a_conflict_for_its_own_session() {
         "the hook's own first write is allowed"
     );
 
-    let a = run_as_session(
-        &link,
-        proj.path(),
-        state.path(),
-        "sess-e2e",
-        &["acquire", "src/a.rs"],
-    );
+    let a = run_as_session(&link, proj.path(), state.path(), "sess-e2e", &[
+        "acquire", "src/a.rs",
+    ]);
     assert!(
         a.status.success(),
         "a session must not conflict with the lock its own write hook took; stdout: {} stderr: {}",
@@ -368,13 +339,9 @@ fn a_cli_held_lock_does_not_deny_its_own_sessions_write() {
     let state = tempfile::tempdir().unwrap();
     let (proj, target) = enforced_project();
 
-    let a = run_as_session(
-        &link,
-        proj.path(),
-        state.path(),
-        "sess-e2e",
-        &["acquire", "src/a.rs"],
-    );
+    let a = run_as_session(&link, proj.path(), state.path(), "sess-e2e", &[
+        "acquire", "src/a.rs",
+    ]);
     assert!(
         a.status.success(),
         "claim succeeds: {}",
@@ -410,13 +377,9 @@ fn a_subagent_hook_row_does_not_block_its_sessions_claim() {
         "the sub-agent's own first write is allowed"
     );
 
-    let a = run_as_session(
-        &link,
-        proj.path(),
-        state.path(),
-        "sess-fanout",
-        &["acquire", "src/a.rs", "--ttl", "60"],
-    );
+    let a = run_as_session(&link, proj.path(), state.path(), "sess-fanout", &[
+        "acquire", "src/a.rs", "--ttl", "60",
+    ]);
     assert!(
         a.status.success(),
         "a session must not conflict with the row its own sub-agent's write hook took; stderr: {}",
@@ -448,13 +411,9 @@ fn releasing_a_subagent_row_by_hand_is_refused_as_a_same_line_row() {
     );
     assert!(!is_deny("subagent write", &h));
 
-    let r = run_as_session(
-        &link,
-        proj.path(),
-        state.path(),
-        "sess-release",
-        &["release", "src/a.rs"],
-    );
+    let r = run_as_session(&link, proj.path(), state.path(), "sess-release", &[
+        "release", "src/a.rs",
+    ]);
     assert_eq!(r.status.code(), Some(1), "the release is still refused");
     let text = String::from_utf8_lossy(&r.stderr);
     assert!(

@@ -5,10 +5,11 @@
 //! project's `devkit.toml`. Layers merge field-by-field per lib name, the
 //! deeper (more project-specific) layer winning.
 
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result, bail};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 
 /// Which importer graph resolves a library's version, and therefore which
 /// lockfile is consulted.
@@ -236,7 +237,8 @@ pub fn load_global(path: &Path) -> Result<DocsManifest> {
     }
 }
 
-/// The global file is docm-owned and machine-written — a full serialize is fine.
+/// The global file is docm-owned and machine-written — a full serialize is
+/// fine.
 pub fn upsert_global(path: &Path, entry: &LibEntry, cache_root: &Path) -> Result<()> {
     crate::locks::with_manifest(cache_root, || {
         let mut m = load_global(path)?;

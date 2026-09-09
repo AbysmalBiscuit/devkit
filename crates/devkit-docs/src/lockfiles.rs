@@ -1,16 +1,18 @@
 //! Lockfile version discovery used by conservative prune liveness checks.
 //!
-//! Importer-aware checkout resolution lives in `crate::importers`. These parsers
-//! only answer whether a live project still has a lockfile reference. A lockfile
-//! that is genuinely absent yields no versions, but one that exists and fails to
-//! read or parse is not evidence of that — it comes back as `Err`, and the
-//! caller (`refs::live_reference`) keeps the project's existing reference rather
-//! than treating the failure as "no versions".
+//! Importer-aware checkout resolution lives in `crate::importers`. These
+//! parsers only answer whether a live project still has a lockfile reference. A
+//! lockfile that is genuinely absent yields no versions, but one that exists
+//! and fails to read or parse is not evidence of that — it comes back as `Err`,
+//! and the caller (`refs::live_reference`) keeps the project's existing
+//! reference rather than treating the failure as "no versions".
 
-use crate::manifest::Ecosystem;
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result};
 use devkit_common::store::read_strict;
-use std::path::{Path, PathBuf};
+
+use crate::manifest::Ecosystem;
 
 pub fn versions_in_dir(dir: &Path, eco: Ecosystem, package: &str) -> Result<Vec<String>> {
     match eco {
@@ -213,10 +215,9 @@ mod tests {
         let d_dir = tempfile::tempdir().unwrap();
         let d = d_dir.path();
         std::fs::write(d.join("Cargo.lock"), CARGO_LOCK).unwrap();
-        assert_eq!(
-            versions_in_dir(d, Ecosystem::Rust, "tokio").unwrap(),
-            vec!["1.38.0"]
-        );
+        assert_eq!(versions_in_dir(d, Ecosystem::Rust, "tokio").unwrap(), vec![
+            "1.38.0"
+        ]);
         assert!(
             versions_in_dir(d, Ecosystem::Rust, "absent")
                 .unwrap()
@@ -250,10 +251,9 @@ mod tests {
         let d_dir = tempfile::tempdir().unwrap();
         let d = d_dir.path();
         std::fs::write(d.join("pnpm-lock.yaml"), PNPM_V9).unwrap();
-        assert_eq!(
-            versions_in_dir(d, Ecosystem::Js, "react").unwrap(),
-            vec!["18.3.1"]
-        );
+        assert_eq!(versions_in_dir(d, Ecosystem::Js, "react").unwrap(), vec![
+            "18.3.1"
+        ]);
         assert_eq!(
             versions_in_dir(d, Ecosystem::Js, "@types/node").unwrap(),
             vec!["20.12.0"]
@@ -261,10 +261,9 @@ mod tests {
         let d6_dir = tempfile::tempdir().unwrap();
         let d6 = d6_dir.path();
         std::fs::write(d6.join("pnpm-lock.yaml"), PNPM_V6).unwrap();
-        assert_eq!(
-            versions_in_dir(d6, Ecosystem::Js, "react").unwrap(),
-            vec!["18.2.0"]
-        );
+        assert_eq!(versions_in_dir(d6, Ecosystem::Js, "react").unwrap(), vec![
+            "18.2.0"
+        ]);
     }
 
     #[test]

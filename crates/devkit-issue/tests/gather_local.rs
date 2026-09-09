@@ -1,6 +1,6 @@
-use devkit_common::tracker::fake::FakeTracker;
-use devkit_common::tracker::{Resolved, TrackerKind};
 use std::path::Path;
+
+use devkit_common::tracker::{Resolved, TrackerKind, fake::FakeTracker};
 
 fn git(args: &[&str], cwd: &Path) {
     devkit_common::git::Git::fixture(cwd)

@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-use std::process::Command;
+use std::{path::PathBuf, process::Command};
 
 mod common;
 
@@ -217,9 +216,10 @@ fn a_crash_between_worktree_prune_and_worktree_add_is_recovered_from_the_journal
     .trim()
     .to_string();
 
-    // The state a crash after `worktree prune` and before `worktree add` leaves:
-    // no directory, no admin entry, nothing on disk naming the checkout except
-    // the journal the previous run wrote before it started mutating.
+    // The state a crash after `worktree prune` and before `worktree add`
+    // leaves: no directory, no admin entry, nothing on disk naming the
+    // checkout except the journal the previous run wrote before it started
+    // mutating.
     let journal = cache
         .join("registry.locks")
         .join("@scope~pkg.migration.json");

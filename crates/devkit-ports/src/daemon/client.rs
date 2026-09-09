@@ -1,11 +1,15 @@
 //! Port daemon client: connect to the supervisor over `ports.sock`, with the
 //! port-proto handshake layered on the shared `Client`.
 
-use crate::daemon::proto::{PROTO, Request, Response};
-use anyhow::{Result, anyhow};
-use devkit_common::daemon::{self, Client};
-use devkit_common::paths;
 use std::time::{Duration, Instant};
+
+use anyhow::{Result, anyhow};
+use devkit_common::{
+    daemon::{self, Client},
+    paths,
+};
+
+use crate::daemon::proto::{PROTO, Request, Response};
 
 pub fn handshake_ok(server_proto: u32) -> bool {
     server_proto == PROTO
@@ -47,8 +51,9 @@ fn devkitd_bin() -> std::path::PathBuf {
     std::path::PathBuf::from("devkitd")
 }
 
-/// Whether autostart should launch the daemon via `systemctl --user start` rather
-/// than exec'ing the binary directly: true when the systemd user unit is present.
+/// Whether autostart should launch the daemon via `systemctl --user start`
+/// rather than exec'ing the binary directly: true when the systemd user unit is
+/// present.
 fn use_systemd_unit() -> bool {
     devkit_common::paths::systemd_user_unit().is_file()
 }
@@ -93,8 +98,9 @@ mod tests {
 
     #[test]
     fn routes_through_systemd_only_when_unit_present() {
-        // Use a unique temp dir so the test does not observe the developer's real
-        // ~/.config/systemd/user/devkitd.service — both branches are asserted.
+        // Use a unique temp dir so the test does not observe the developer's
+        // real ~/.config/systemd/user/devkitd.service — both branches
+        // are asserted.
         let tmp = tempfile::tempdir().unwrap();
 
         // Point XDG_CONFIG_HOME at the empty temp dir: no unit present → false.

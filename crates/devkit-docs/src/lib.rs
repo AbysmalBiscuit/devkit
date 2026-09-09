@@ -13,9 +13,11 @@ pub mod resolve;
 pub mod tags;
 pub mod upgrade;
 
-use crate::manifest::{Ecosystem, LibEntry};
-use anyhow::{Context, Result, bail};
 use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+
+use crate::manifest::{Ecosystem, LibEntry};
 
 /// Which manifest a registration targets: the machine-owned global file, or a
 /// repo-committed `devkit.toml`.

@@ -1,7 +1,9 @@
 //! `devkit schema init` — point a `devkit.toml` at the published schema.
 
-use std::path::Path;
-use std::process::{Command, Output};
+use std::{
+    path::Path,
+    process::{Command, Output},
+};
 
 const DIRECTIVE: &str =
     "#:schema https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json";

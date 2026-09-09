@@ -1,11 +1,16 @@
 mod common;
 
-use devkit_docs::manifest::{Ecosystem, LibEntry};
-use devkit_docs::refs::{self, RefStore};
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    process::{Child, Command, Output, Stdio},
+    time::{Duration, Instant},
+};
+
+use devkit_docs::{
+    manifest::{Ecosystem, LibEntry},
+    refs::{self, RefStore},
+};
 
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -606,10 +611,10 @@ fn a_legacy_row_keeps_its_checkout_until_a_workspace_row_retires_it() {
     let lockfile_dir = root.join("repo");
     let member = lockfile_dir.join("apps/api");
     std::fs::create_dir_all(&member).unwrap();
-    let worktrees = BTreeMap::from([(
-        "h3".to_string(),
-        vec!["default".to_string(), "v1.15.11".to_string()],
-    )]);
+    let worktrees = BTreeMap::from([("h3".to_string(), vec![
+        "default".to_string(),
+        "v1.15.11".to_string(),
+    ])]);
     let libs = BTreeSet::from(["h3".to_string()]);
 
     let mut data = refs::Data::default();

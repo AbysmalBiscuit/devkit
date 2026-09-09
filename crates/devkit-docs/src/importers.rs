@@ -1,14 +1,19 @@
-//! Resolve the version installed by one workspace from its lockfile importer graph.
+//! Resolve the version installed by one workspace from its lockfile importer
+//! graph.
 
-use crate::manifest::Ecosystem;
+use std::{
+    cell::{Ref, RefCell},
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use serde_yaml_ng::{Mapping as YamlMap, Value as YamlValue};
-use std::cell::{Ref, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+
+use crate::manifest::Ecosystem;
 
 /// A parse failure kept for replay. `anyhow::Error` is neither `Clone` nor
 /// itself a `std::error::Error`, so neither it nor an `Arc` of it can be

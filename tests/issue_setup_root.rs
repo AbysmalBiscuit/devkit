@@ -8,8 +8,10 @@ mod shimtest;
 #[path = "common/testenv.rs"]
 mod testenv;
 
-use std::path::Path;
-use std::process::{Command, Output};
+use std::{
+    path::Path,
+    process::{Command, Output},
+};
 
 fn git(args: &[&str], cwd: &Path) {
     devkit_common::git::Git::fixture(cwd)
@@ -67,11 +69,13 @@ fn run(project: &Path, state: &Path, args: &[&str]) -> Output {
 fn setup_resolves_the_primary_checkout_by_git_not_by_name() {
     let t = project();
     let state = tempfile::tempdir().unwrap();
-    let out = run(
-        t.path(),
-        state.path(),
-        &["setup", "ENG-1", "--slug", "fix-auth", "--no-gitignore"],
-    );
+    let out = run(t.path(), state.path(), &[
+        "setup",
+        "ENG-1",
+        "--slug",
+        "fix-auth",
+        "--no-gitignore",
+    ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         out.status.success(),

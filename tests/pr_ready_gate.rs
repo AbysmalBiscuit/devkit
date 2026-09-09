@@ -12,15 +12,12 @@ const REQUIRE_REVIEWER: &str = "require_pr_reviewer = true";
 
 #[test]
 fn an_already_ready_pr_is_not_judged_by_the_gate() {
-    let fake = ghfake::Fake::new(
-        REQUIRE_REVIEWER,
-        &ghfake::Pr {
-            number: 1,
-            state: "OPEN",
-            is_draft: false,
-            author: "someone-else",
-        },
-    );
+    let fake = ghfake::Fake::new(REQUIRE_REVIEWER, &ghfake::Pr {
+        number: 1,
+        state: "OPEN",
+        is_draft: false,
+        author: "someone-else",
+    });
     // A bot reviewer never satisfies the gate, so a gate that fired on this run
     // would refuse it after having added that reviewer.
     let out = fake.issue(&["pr", "ready", "--no-push", "--to", "bot"]);
@@ -48,15 +45,12 @@ fn an_already_ready_pr_is_not_judged_by_the_gate() {
 
 #[test]
 fn a_human_in_to_settles_the_gate_without_a_lookup() {
-    let fake = ghfake::Fake::new(
-        REQUIRE_REVIEWER,
-        &ghfake::Pr {
-            number: 1,
-            state: "OPEN",
-            is_draft: true,
-            author: "someone-else",
-        },
-    );
+    let fake = ghfake::Fake::new(REQUIRE_REVIEWER, &ghfake::Pr {
+        number: 1,
+        state: "OPEN",
+        is_draft: true,
+        author: "someone-else",
+    });
     let out = fake.issue(&["pr", "ready", "--no-push", "--to", "lev"]);
 
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -75,15 +69,12 @@ fn a_human_in_to_settles_the_gate_without_a_lookup() {
 /// review it, and it fires before the flip.
 #[test]
 fn a_draft_with_no_human_reviewer_is_refused_before_the_flip() {
-    let fake = ghfake::Fake::new(
-        REQUIRE_REVIEWER,
-        &ghfake::Pr {
-            number: 1,
-            state: "OPEN",
-            is_draft: true,
-            author: "someone-else",
-        },
-    );
+    let fake = ghfake::Fake::new(REQUIRE_REVIEWER, &ghfake::Pr {
+        number: 1,
+        state: "OPEN",
+        is_draft: true,
+        author: "someone-else",
+    });
     let out = fake.issue(&["pr", "ready", "--no-push", "--to", "bot"]);
 
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -105,15 +96,12 @@ fn a_draft_with_no_human_reviewer_is_refused_before_the_flip() {
 /// it let `require_pr_reviewer` pass with nobody but the author having looked.
 #[test]
 fn a_self_review_does_not_satisfy_the_gate() {
-    let fake = ghfake::Fake::new(
-        REQUIRE_REVIEWER,
-        &ghfake::Pr {
-            number: 1,
-            state: "OPEN",
-            is_draft: true,
-            author: "LevValle",
-        },
-    );
+    let fake = ghfake::Fake::new(REQUIRE_REVIEWER, &ghfake::Pr {
+        number: 1,
+        state: "OPEN",
+        is_draft: true,
+        author: "LevValle",
+    });
     fake.set_reviews(r#"{"reviews":[{"author":{"login":"LevValle"},"state":"COMMENTED"}]}"#);
     let out = fake.issue(&["pr", "ready", "--no-push"]);
 
@@ -138,15 +126,12 @@ fn a_self_review_does_not_satisfy_the_gate() {
 /// looked at would otherwise count nobody.
 #[test]
 fn another_persons_review_satisfies_the_gate() {
-    let fake = ghfake::Fake::new(
-        REQUIRE_REVIEWER,
-        &ghfake::Pr {
-            number: 1,
-            state: "OPEN",
-            is_draft: true,
-            author: "LevValle",
-        },
-    );
+    let fake = ghfake::Fake::new(REQUIRE_REVIEWER, &ghfake::Pr {
+        number: 1,
+        state: "OPEN",
+        is_draft: true,
+        author: "LevValle",
+    });
     fake.set_reviews(r#"{"reviews":[{"author":{"login":"igoracc"},"state":"COMMENTED"}]}"#);
     let out = fake.issue(&["pr", "ready", "--no-push"]);
 

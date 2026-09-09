@@ -2,10 +2,14 @@
 //! `MemoryStore`; reads serve from memory, mutations write through to the file.
 //! The daemon stamps `now`; clients supply resolved root/holder/paths/pid.
 
-use crate::Daemon;
-use devkit_locks::daemon::proto::{PROTO, Request, Response};
-use devkit_locks::store;
 use std::sync::Arc;
+
+use devkit_locks::{
+    daemon::proto::{PROTO, Request, Response},
+    store,
+};
+
+use crate::Daemon;
 
 fn now() -> u64 {
     std::time::SystemTime::now()

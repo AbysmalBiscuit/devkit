@@ -5,9 +5,9 @@
 //! `DEVKIT_UPDATE_SCHEMA=1 cargo test` rewrites the file instead of failing, so
 //! the run that catches the drift is also the one that fixes it.
 
+use std::{path::PathBuf, process::Command};
+
 use similar::TextDiff;
-use std::path::PathBuf;
-use std::process::Command;
 
 fn generated() -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_devkit"))

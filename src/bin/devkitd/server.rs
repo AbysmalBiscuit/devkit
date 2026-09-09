@@ -1,14 +1,22 @@
-//! Request handlers. Registry ops go through the daemon's authoritative `MemoryStore`;
-//! reads serve from memory, mutations write through to the file. Supervision ops own processes.
+//! Request handlers. Registry ops go through the daemon's authoritative
+//! `MemoryStore`; reads serve from memory, mutations write through to the file.
+//! Supervision ops own processes.
 
-use crate::Daemon;
-use crate::supervisor::{Key, Launch};
+use std::{
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
+
 use devkit_common::supervise;
-use devkit_ports::daemon::proto::{PROTO, Request, Response};
-use devkit_ports::registry::{self, Role, Store};
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
+use devkit_ports::{
+    daemon::proto::{PROTO, Request, Response},
+    registry::{self, Role, Store},
+};
+
+use crate::{
+    Daemon,
+    supervisor::{Key, Launch},
+};
 
 /// Map a request to `(response, should_close)`.
 pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
@@ -93,7 +101,8 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> (Response, bool) {
 
         Request::Shutdown => {
             daemon.shutdown.store(true, Ordering::SeqCst);
-            // Nudge both accept loops so each observes the shutdown flag and exits.
+            // Nudge both accept loops so each observes the shutdown flag and
+            // exits.
             use interprocess::local_socket::traits::Stream as _;
             for sock in [
                 devkit_common::paths::port_socket_file(),
@@ -179,8 +188,9 @@ fn supervise_app(
     Response::Supervised(vec![(port, ready)])
 }
 
-/// Atomic stop: remove each supervised child for this holder/role from the table
-/// (so the supervision thread won't restart it), SIGTERM it, then release the rows.
+/// Atomic stop: remove each supervised child for this holder/role from the
+/// table (so the supervision thread won't restart it), SIGTERM it, then release
+/// the rows.
 fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
     // Read the registry first, without holding `sup`, so this never blocks the
     // supervision thread while that thread holds the registry lock (every path
@@ -198,10 +208,11 @@ fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
                 .collect()
         })
         .unwrap_or_default();
-    // Remove each key from the supervisor table BEFORE signalling its child. The
-    // supervision thread restarts anything it reaps; removing the key first is what
-    // marks this exit intentional so the child is not respawned. This ordering is
-    // load-bearing — do not signal before removing.
+    // Remove each key from the supervisor table BEFORE signalling its child.
+    // The supervision thread restarts anything it reaps; removing the key
+    // first is what marks this exit intentional so the child is not
+    // respawned. This ordering is load-bearing — do not signal before
+    // removing.
     let mut sup = daemon.sup.lock().unwrap();
     for k in &keys {
         if let Some(pid) = sup.remove(k) {
@@ -218,11 +229,11 @@ fn down(daemon: &Arc<Daemon>, holder: String, role: Option<Role>) -> Response {
     }
 }
 
-/// Like `down`, but scoped to an explicit port set: resolve each listed port to its
-/// supervised key, remove it from the table BEFORE signalling its child (so the
-/// supervision thread treats the exit as intentional and does not restart it), then
-/// release exactly those ports. The remove-before-signal ordering is load-bearing,
-/// mirroring `down`.
+/// Like `down`, but scoped to an explicit port set: resolve each listed port to
+/// its supervised key, remove it from the table BEFORE signalling its child (so
+/// the supervision thread treats the exit as intentional and does not restart
+/// it), then release exactly those ports. The remove-before-signal ordering is
+/// load-bearing, mirroring `down`.
 fn down_ports(daemon: &Arc<Daemon>, ports: Vec<u16>) -> Response {
     use std::collections::BTreeSet;
     let want: BTreeSet<u16> = ports.iter().copied().collect();

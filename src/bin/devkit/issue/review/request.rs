@@ -1,19 +1,17 @@
-use anyhow::{Context, Result, bail};
-use devkit_common::cmd::gh_capture;
-use devkit_common::git::Git;
-use devkit_common::github;
-use devkit_common::progress::Steps;
-use devkit_config::Person;
 use std::collections::HashMap;
 
-use crate::issue::pr::resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing};
-use crate::issue::pr::{
-    add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr, reviewer_logins,
-};
+use anyhow::{Context, Result, bail};
+use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
+use devkit_config::Person;
 
 use super::{
     Target, base_ctx, deliver, guard_branch, is_human_login, parse_args, person_by_login,
     resolve_target, target_from_person, with_fields,
+};
+use crate::issue::pr::{
+    add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr,
+    resolve::{Existing, parse_pr_flag, record_with_pr, resolve_existing},
+    reviewer_logins,
 };
 
 pub struct Args {
@@ -30,8 +28,8 @@ pub struct Args {
     pub config: Option<String>,
 }
 
-/// Build Slack targets from reviewer logins via reverse lookup. Unmatched logins
-/// are skipped with a warning.
+/// Build Slack targets from reviewer logins via reverse lookup. Unmatched
+/// logins are skipped with a warning.
 pub(crate) fn targets_from_logins(
     logins: &[String],
     people: &HashMap<String, Person>,
@@ -47,9 +45,9 @@ pub(crate) fn targets_from_logins(
     (targets, warnings)
 }
 
-/// `--no-notify` pins the targets to whatever `--to` resolved to — possibly none —
-/// instead of falling back to the PR's current reviewers. `None` means no override:
-/// resolve them as usual.
+/// `--no-notify` pins the targets to whatever `--to` resolved to — possibly
+/// none — instead of falling back to the PR's current reviewers. `None` means
+/// no override: resolve them as usual.
 pub(crate) fn pinned_targets(explicit: &[Target], no_notify: bool) -> Option<Vec<Target>> {
     no_notify.then(|| explicit.to_vec())
 }
@@ -152,7 +150,8 @@ pub fn run(args: Args) -> Result<()> {
 
     // Resolving the recipients can refuse the run — a PR with no reviewers and
     // no `--to` names nobody — so it happens before any mutation. Refusing
-    // after the flip would leave the PR ready for a review nobody was asked for.
+    // after the flip would leave the PR ready for a review nobody was asked
+    // for.
     let targets = match pinned_targets(&explicit, args.no_notify) {
         Some(t) => t,
         None => steps.during_result("Resolving reviewers…", || {
@@ -196,17 +195,14 @@ pub fn run(args: Args) -> Result<()> {
         })
         .context("fetching the PR's title")?;
 
-    let notify_ctx = with_fields(
-        &base,
-        &[
-            ("pr_url", serde_json::json!(pr.url)),
-            ("pr_title", serde_json::json!(full.title)),
-            (
-                "input",
-                serde_json::json!(args.body.clone().unwrap_or_default()),
-            ),
-        ],
-    );
+    let notify_ctx = with_fields(&base, &[
+        ("pr_url", serde_json::json!(pr.url)),
+        ("pr_title", serde_json::json!(full.title)),
+        (
+            "input",
+            serde_json::json!(args.body.clone().unwrap_or_default()),
+        ),
+    ]);
     deliver(
         tmpls.review_request(),
         "review_request",
@@ -248,7 +244,9 @@ mod tests {
     #[test]
     fn notifying_flips_a_draft_but_no_notify_does_not() {
         assert!(should_flip(
-            /* is_draft */ true, /* no_notify */ false
+            // is_draft
+            true, // no_notify
+            false
         ));
         assert!(!should_flip(true, true));
         assert!(!should_flip(false, false));
@@ -257,15 +255,13 @@ mod tests {
 
     #[test]
     fn targets_from_logins_reverse_looks_up_and_warns() {
-        use devkit_config::Person;
         use std::collections::HashMap;
-        let people = HashMap::from([(
-            "lev".to_string(),
-            Person {
-                slack: "U_LEV".into(),
-                github: Some("LevValle".into()),
-            },
-        )]);
+
+        use devkit_config::Person;
+        let people = HashMap::from([("lev".to_string(), Person {
+            slack: "U_LEV".into(),
+            github: Some("LevValle".into()),
+        })]);
         let (targets, warnings) =
             targets_from_logins(&["levvalle".into(), "ghost".into()], &people);
         assert_eq!(targets.len(), 1);
