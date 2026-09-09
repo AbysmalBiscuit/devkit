@@ -1,6 +1,8 @@
-# devkit dogfoods its own write-access harness on this checkout.
-[harness]
-enforce_writes = true
+#:schema https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json
+
+[defaults]
+baseline_ref = "origin/main"
+pr_create_state = "ready"
 
 # The `origin` remote is an SSH alias, so nothing about it names github.com and
 # the repository cannot be derived from it. Both keys are spelled out instead.
@@ -12,3 +14,133 @@ pr_repo = "AbysmalBiscuit/devkit"
 # Linear for this project, which has nothing in Linear.
 [tracker]
 kind = "github"
+
+[harness]
+enforce_writes = true
+enforce_commands = true
+
+[harness.commands.worktree-add]
+programs = ["git"]
+args = ["worktree", "add"]
+reason = "Use devkit's issue binary to create worktrees: issue setup --summary --slug [branch-name]"
+
+[harness.commands.worktree-remove]
+programs = ["git"]
+args = ["worktree", "remove"]
+reason = "Use devkit's issue binary to remove worktrees: issue end [branch-name]"
+
+[harness.commands.pr-create]
+programs = ["gh"]
+args = ["pr", "create"]
+reason = """Use devkit to open PRs: `issue pr create`. It pushes the branch, renders the title and body from the config templates, opens it ready for review, and records the PR on the worktree.
+Supply:
+  --pr-title "type(scope): subject"   conventional-commit title, no trailing period
+  --pr-body "<markdown>"              the body; the template appends the closing line, so leave the issue reference out
+  --arg issue_magic_word=Closes       closing keyword: Closes, Fixes, or Resolves
+  --arg also_closes="12 13"           further issue numbers to close, space- or comma-separated
+  --base <branch>                     only when the base is not `defaults.pr_base`
+The issue number comes from the worktree's .devkit/issue.toml, so a worktree made by `issue setup --slug` (no issue id) gets no closing line."""
+
+[tasks.build]
+description = "Build the workspace"
+run = ["cargo", "build", "--workspace", "--locked"]
+guard = true
+
+[tasks.build-release]
+description = "Build the workspace with release optimizations"
+run = ["cargo", "build", "--workspace", "--release", "--locked"]
+guard = true
+
+[tasks.check]
+description = "Check all workspace targets and features"
+run = [
+    "cargo",
+    "check",
+    "--workspace",
+    "--all-targets",
+    "--all-features",
+    "--locked",
+]
+guard = true
+
+[tasks.test]
+description = "Run workspace tests with nextest"
+run = [
+    "cargo",
+    "nextest",
+    "run",
+    "--workspace",
+    "--all-features",
+    "--locked",
+    "--no-fail-fast",
+]
+guard = true
+
+[tasks.test-doc]
+description = "Run workspace documentation tests"
+run = ["cargo", "test", "--doc", "--workspace", "--all-features", "--locked"]
+guard = true
+
+[tasks.fmt]
+description = "Format the workspace with nightly rustfmt"
+run = ["cargo", "+nightly", "fmt", "--all"]
+guard = true
+
+[tasks.fmt-check]
+description = "Check workspace formatting with nightly rustfmt"
+run = ["cargo", "+nightly", "fmt", "--all", "--", "--check"]
+guard = true
+
+[tasks.lint]
+description = "Run clippy with warnings denied"
+run = [
+    "cargo",
+    "clippy",
+    "--workspace",
+    "--all-targets",
+    "--all-features",
+    "--locked",
+    "--",
+    "-D",
+    "warnings",
+]
+guard = true
+env = { ZCCACHE_PATH_REMAP = "off" }
+
+[tasks.docs]
+description = "Build workspace API documentation"
+run = ["cargo", "doc", "--workspace", "--no-deps", "--all-features", "--locked"]
+guard = true
+
+[tasks.clean]
+description = "Remove Cargo build artifacts"
+run = ["cargo", "clean"]
+guard = true
+
+[tasks.verify]
+description = "Check formatting, lint, and run tests including documentation tests"
+steps = [
+    { task = "fmt-check" },
+    { task = "lint" },
+    { task = "test" },
+    { task = "test-doc" },
+]
+
+[templates]
+pr_body = '''## TL;DR (human written)
+{% if issue is defined and issue and (issue_magic_word ~ " #" ~ issue) not in input %}
+---
+
+{{ issue_magic_word }} #{{ issue }}
+{%- for extra in also_closes | replace(",", " ") | split %}
+{{ issue_magic_word }} #{{ extra | trim("#") }}
+{%- endfor %}
+{% endif %}
+{{ input }}'''
+
+# Declared so the template above renders (an undefined name is a hard error)
+# and so `issue pr create --arg` accepts them: --arg is checked against this
+# table, not against the template.
+[templates.variables]
+issue_magic_word = "Closes"
+also_closes = ""
