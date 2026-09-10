@@ -509,7 +509,7 @@ mod tests {
         let s = summarize(&recs, Duration::from_millis(120));
         assert_eq!(s.serial_sum, Duration::from_millis(180));
         assert_eq!(s.io_busy, Duration::from_millis(100));
-        assert!((s.overlap() - 1.8).abs() < 1e-6);
+        assert!((s.overlap() - 1.8).abs() < 1.0e-6);
         // Rows sorted by total desc; hottest is the longest op.
         assert_eq!(s.rows[0].op, "a");
         assert_eq!(s.hottest.as_ref().unwrap().0, "a");
@@ -521,7 +521,7 @@ mod tests {
         let s = summarize(&recs, Duration::from_millis(100));
         assert_eq!(s.io_busy, Duration::from_millis(90));
         assert_eq!(s.serial_sum, Duration::from_millis(90));
-        assert!((s.overlap() - 1.0).abs() < 1e-6);
+        assert!((s.overlap() - 1.0).abs() < 1.0e-6);
     }
 
     #[test]
