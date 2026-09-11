@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.14.2](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.1...v0.14.2) (2026-09-11)
+
+
+### Features
+
+* **doctor:** report the resolved harness session identity ([90c4c5c](https://github.com/AbysmalBiscuit/devkit/commit/90c4c5c21f712089794baccc465a8995e3ec1402))
+* **locks:** refuse an ambiguous nested-harness identity ([5d9f27d](https://github.com/AbysmalBiscuit/devkit/commit/5d9f27dbcb1a8c1a4429687ffe279be7e4ea4ee8))
+* **locks:** resolve the holder from the harness session ([242523d](https://github.com/AbysmalBiscuit/devkit/commit/242523d438cfe9a28a97f0a8d91455bab00a2237))
+* **mcp:** share the harness session identity ([e3bdb36](https://github.com/AbysmalBiscuit/devkit/commit/e3bdb36412af81a47606bf525684a36eabd9b982))
+
+
+### Bug Fixes
+
+* **github:** accept www.github.com origin remotes ([#44](https://github.com/AbysmalBiscuit/devkit/issues/44)) ([e4c2aa9](https://github.com/AbysmalBiscuit/devkit/commit/e4c2aa9cedc729fff24cf1d68104bc82179e540d))
+* **locks:** deny a hook payload that will not parse ([c3aa3ab](https://github.com/AbysmalBiscuit/devkit/commit/c3aa3ab0c0e0c4a8c8d0a7b9a451aaa5fd2fab31))
+* **locks:** deny a write payload the hook cannot read ([cb996fe](https://github.com/AbysmalBiscuit/devkit/commit/cb996fe69d1e0a13f24b6082a1710d8662800704))
+* **locks:** ignore a subagent stop with no agent id ([7b6b00b](https://github.com/AbysmalBiscuit/devkit/commit/7b6b00be47fbf5135b3e75b757e611568c4421d2))
+* **locks:** let one session line acquire its own paths ([239d65f](https://github.com/AbysmalBiscuit/devkit/commit/239d65fcf2f1da71aee5d1550391079d06783a5d))
+* **locks:** name a same-session-line release refusal ([f58adc3](https://github.com/AbysmalBiscuit/devkit/commit/f58adc3fe1543593113ea515be78a358d638ecbf))
+* **locks:** release on session end without the write gate ([0c47201](https://github.com/AbysmalBiscuit/devkit/commit/0c47201c91065fd15bf6a206c557154fa886bc4e))
+* **locks:** renew a directory lock from writes beneath it ([a0aa8c8](https://github.com/AbysmalBiscuit/devkit/commit/a0aa8c8dcccad9d09cd3a1a99c916cfd197de056))
+* **locks:** renew a row kept on the session line ([b3ce709](https://github.com/AbysmalBiscuit/devkit/commit/b3ce709e9e9136f54bf7778030ee0d4bb9af14de))
+
 ## [0.14.1](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.0...v0.14.1) (2026-09-04)
 
 
