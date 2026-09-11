@@ -249,12 +249,18 @@ fn reaches_github(url: &str, resolve: &dyn Fn(&str) -> Option<String>) -> bool {
     let Some(host) = remote_host(url) else {
         return false;
     };
-    if host.eq_ignore_ascii_case("github.com") {
+    if is_github_host(host) {
         return true;
     }
     // An https host is literal. Resolving one through ssh config would let an
     // unrelated `Host` block decide where an https remote points.
-    is_ssh_form(url) && resolve(host).is_some_and(|h| h.eq_ignore_ascii_case("github.com"))
+    is_ssh_form(url) && resolve(host).is_some_and(|h| is_github_host(&h))
+}
+
+/// GitHub serves the same site at `www.github.com`, and git keeps whichever
+/// spelling a clone URL used.
+fn is_github_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("github.com") || host.eq_ignore_ascii_case("www.github.com")
 }
 
 /// Parse `owner/repo` from a GitHub remote URL (scp-like, `ssh://`, or https),
@@ -345,7 +351,7 @@ pub fn github_origin_slug(cwd: &str) -> Result<String> {
 /// ssh config that maps the alias somewhere else.
 fn unreachable_hint(url: &str) -> String {
     match remote_host(url) {
-        Some(host) if is_ssh_form(url) && !host.eq_ignore_ascii_case("github.com") => format!(
+        Some(host) if is_ssh_form(url) && !is_github_host(host) => format!(
             "ssh config resolves `{host}` to {}, so set [github] issues_repo / pr_repo explicitly",
             ssh_hostname(host).unwrap_or_else(|| "nothing".to_string())
         ),
@@ -1351,6 +1357,27 @@ mod tests {
         assert!(!is_github_remote("https://gitlab.com/o/r.git"));
         assert!(!is_github_remote("git@bitbucket.org:o/r.git"));
         assert!(!is_github_remote("https://github.com.evil.test/o/r"));
+    }
+
+    /// GitHub serves the same site at `www.github.com`, and git keeps whichever
+    /// spelling the clone URL used. Only that one prefix counts: look-alikes
+    /// and other subdomains do not.
+    #[test]
+    fn the_www_host_is_github() {
+        let resolve = |alias: &str| (alias == "gh").then(|| "www.github.com".to_string());
+        for (url, want) in [
+            ("https://www.github.com/o/r.git", true),
+            ("https://WWW.GitHub.com/o/r", true),
+            ("git@www.github.com:o/r.git", true),
+            ("ssh://git@www.github.com/o/r", true),
+            ("gh:o/r.git", true),
+            ("https://wwwgithub.com/o/r", false),
+            ("https://www.github.com.evil.test/o/r", false),
+            ("https://api.www.github.com/o/r", false),
+            ("https://gist.github.com/o/r", false),
+        ] {
+            assert_eq!(reaches_github(url, &resolve), want, "{url}");
+        }
     }
 
     fn cfg(issues: Option<&str>, prs: Option<&str>) -> devkit_config::GithubConfig {

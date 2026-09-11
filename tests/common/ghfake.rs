@@ -37,15 +37,21 @@ impl Fake {
     /// `extra` lands at the end of `[defaults]`, so a caller that needs another
     /// table (`[templates]`, say) opens one there.
     pub fn new(extra: &str, pr: &Pr) -> Self {
-        Self::build(extra, Some(pr))
+        Self::build(extra, Some(pr), None)
     }
 
     /// The same project, with `gh pr list` reporting no PR at all.
     pub fn without_pr(extra: &str) -> Self {
-        Self::build(extra, None)
+        Self::build(extra, None, None)
     }
 
-    fn build(extra_defaults: &str, pr: Option<&Pr>) -> Self {
+    /// A project with no `[github]` table and `origin` set to `url`, so every
+    /// repository it acts on defaults from the remote.
+    pub fn with_origin(url: &str) -> Self {
+        Self::build("", None, Some(url))
+    }
+
+    fn build(extra_defaults: &str, pr: Option<&Pr>, origin: Option<&str>) -> Self {
         let project = tempfile::tempdir().expect("project dir");
         let git = || devkit_common::git::Git::fixture(project.path());
         git()
@@ -64,6 +70,16 @@ impl Fake {
             .expect("git rev-parse")
             .trim()
             .to_string();
+        let github = match origin {
+            Some(url) => {
+                git()
+                    .args(["remote", "add", "origin", url])
+                    .output()
+                    .expect("git remote add");
+                ""
+            }
+            None => "[github]\npr_repo = \"o/r\"",
+        };
 
         std::fs::write(
             project.path().join("devkit.toml"),
@@ -76,8 +92,7 @@ baseline_ref = "origin/main"
 baseline_dir = "b"
 {extra_defaults}
 
-[github]
-pr_repo = "o/r"
+{github}
 
 [people.lev]
 slack = "U_LEV"

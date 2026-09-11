@@ -528,10 +528,14 @@ pub fn parse_timeline_origin(resp: &serde_json::Value) -> Option<String> {
 /// The `owner/repo` and issue number in a `.../issues/<n>` GitHub URL, or
 /// `None` when the string is not that shape.
 fn parse_issue_url(s: &str) -> Option<(String, u64)> {
+    let s = s.trim();
     let rest = s
-        .trim()
-        .strip_prefix("https://github.com/")
-        .or_else(|| s.trim().strip_prefix("http://github.com/"))?;
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))?;
+    let rest = rest
+        .strip_prefix("www.")
+        .unwrap_or(rest)
+        .strip_prefix("github.com/")?;
     let mut it = rest.split('/');
     let owner = it.next().filter(|s| !s.is_empty())?;
     let name = it.next().filter(|s| !s.is_empty())?;
@@ -987,6 +991,19 @@ mod tests {
                 .id,
             "9"
         );
+    }
+
+    #[test]
+    fn a_www_issue_url_is_a_github_issue_url() {
+        let t = GithubTracker::new(repo("me/widget"));
+        for (url, want) in [
+            ("https://www.github.com/me/widget/issues/9", Some("9")),
+            ("http://www.github.com/me/widget/issues/9", Some("9")),
+            ("https://wwwgithub.com/me/widget/issues/9", None),
+        ] {
+            let got = t.issue_ref(url).ok().map(|r| r.id);
+            assert_eq!(got.as_deref(), want, "{url}");
+        }
     }
 
     #[test]
