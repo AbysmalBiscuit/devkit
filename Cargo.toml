@@ -57,7 +57,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command"]
 
 [workspace.package]
 edition = "2024"
@@ -111,6 +111,14 @@ devkit-issue = { path = "crates/devkit-issue" }
 devkit-mcp = { path = "crates/devkit-mcp" }
 toml_edit = { version = "0.22", features = ["serde"] }
 devkit-docs = { path = "crates/devkit-docs" }
+devkit-command = { path = "crates/devkit-command" }
+tree-sitter = "0.27"
+tree-sitter-bash = "0.25"
+tree-sitter-powershell = "0.26"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-fish = "3.6"
 tempfile = "3"
 frizbee = "0.13"
 
