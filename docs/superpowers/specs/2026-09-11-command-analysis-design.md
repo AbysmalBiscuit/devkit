@@ -20,11 +20,12 @@ Every count below comes from the shell-call corpus in the primary checkout, snap
 | codex/windows `Bash` | 1,546 | PowerShell 7 | harness and platform |
 | claude-code/windows `PowerShell` | 147 | PowerShell | tool name |
 
-Three facts from that snapshot shape the design:
+Four facts from that snapshot shape the design:
 
 - No cohort supplies shell or working-directory metadata in its payload. Every record carries `cwd`.
 - Every Codex execution on Windows runs `pwsh.exe`, from the Codex session transcripts; no `powershell.exe` execution appears.
 - On all 147 Claude Code `PowerShell` records the collected environment reports `SHELL=C:\Program Files\Git\bin\bash.exe` and `MSYSTEM=MINGW64`, because the hook process itself runs under Git Bash.
+- Inline Python is where unresolved targets concentrate. Of 966 inline-Python calls with a recognized write site, 231 have at least one target the corpus probe could not resolve to a constant. Most of those targets are a name bound once from `sys.argv`, and in most of those calls the shell supplies the argument from a literal assignment in the same command (`f=src/a.ts; python3 - "$f" <<'PY'`). Only a handful take it from a shell loop. These classifications come from text matching over the recorded commands and rank the work; they are not exact counts.
 
 ## Agreed scope
 
@@ -125,6 +126,12 @@ Language adapters use syntax nodes and fields to identify executable structure. 
 Extract embedded source only from a recognized execution form. V1 covers shell command arguments, interpreter evaluation arguments, stdin and heredoc scripts, PowerShell here-string execution forms, and recognized runner wrappers. Model the wrapper's argument grammar before identifying its script argument.
 
 Ordinary strings and heredoc data remain data. Shell substitutions inside expandable strings or heredocs are executable and must be inspected separately. If shell expansion can change the embedded source and v1 cannot resolve it, report uncertainty rather than parsing the unexpanded text as the program that will run.
+
+### Interpreter arguments
+
+An embedded script's argument vector is part of its analysis context. When an interpreter runs source from stdin, a heredoc, or an evaluation argument, the words after the source argument become the script's arguments: `python3 - a b` and `python3 -c '...' a b` give the script `sys.argv[1] == "a"`, and `node -e '...' a b` and `bun -e '...' a b` give it the same trailing words in `process.argv`. The outer shell resolves each word first, through the literal assignments it already tracks in execution order, so `f=src/a.ts; python3 - "$f" <<'PY'` hands the Python adapter `sys.argv[1] == "src/a.ts"`. A word the shell cannot resolve reaches the script as an unknown value, an index past the supplied words is unknown, and a script that rebinds or mutates `sys.argv` invalidates the binding. `sys.argv[0]` is the interpreter's own convention (`-` or `-c`) and is never a write target.
+
+This binding is required, not an optimization. A shell variable passed to an inline Python script through `sys.argv` is the most common shape among unresolved Python targets in the recorded commands, and without the binding `unresolved_writes = "block"` denies the most common ad-hoc edit form.
 
 Nested interpreters recurse through the same bounded analysis interface. A constant subprocess argument vector can feed command analysis directly. A constant shell command passed to a process API feeds the appropriate shell parser. Dynamic command construction remains unknown.
 
@@ -258,13 +265,15 @@ Claims go through `WriteResolver::decide_write`, the same path structured edits 
 
 Cross-project targets do not introduce a new distributed transaction protocol: execution is denied if any claim fails, and any claims already acquired remain subject to the normal release lifecycle. All required successful claims precede execution.
 
-The shell hook must not carry a registration timeout once it acquires claims. All three harnesses let the tool call proceed when a hook times out, so a slow or contended registry would silently produce an unlocked write. The current 10-second timeout in the hook manifests is removed for this entry point, and a stalled registry must surface as a denial.
+The harnesses let a tool call proceed when a hook times out, so the manifest timeout cannot be what stops a stalled registry: reaching it produces an unlocked write. The hook process runs every command, one at a time, with no daemon of its own, but its registry work can still stall. A `devkitd` that accepts the connection and never answers leaves the lock client's request blocked, because the client sets no read timeout, and without a daemon a session holding the registry flock blocks the exclusive acquire indefinitely.
+
+The write stage therefore carries its own deadline, 5 seconds from the start of stage 5 to its decision. The stage runs on a worker thread and the hook waits on it with that timeout; when the deadline passes first, the hook emits a denial naming the stalled registry and exits, which ends the worker with the process. A claim the worker had already committed stays in the registry under the normal release lifecycle, the same outcome as a later claim failing. The manifest timeout for this entry point rises to 30 seconds so the internal deadline always fires first, and it remains only as a backstop against a hook that never starts its write stage.
 
 A `warn` action needs a delivery channel, because today's non-deny output reaches stderr, which the harnesses discard on a zero exit. Claude Code and Codex both accept an allow decision carrying agent-facing context; that is the warning envelope. Where a harness has no such channel, `warn` degrades to a silent allow and the spec says so rather than pretending the agent was told.
 
 The shell hook does not execute the captured command. It does not require result events to release locks or establish success. Post-tool outcomes and transcript audit results remain offline evidence only.
 
-Update registrations for supported shell tool names on Claude Code, Codex, and Cursor. Claude Code's `PowerShell` tool is a registration and adapter change both: the manifests match `Bash` alone, and the payload adapter returns nothing for any other tool name, so those calls reach no guard at all today. Keep structured-edit and session-release registrations intact.
+Update registrations for supported shell tool names on Claude Code and Codex. Cursor's `beforeShellExecution` registration stays as it is and reaches the command guard alone, for the identity reasons under "Boundaries". Claude Code's `PowerShell` tool is a registration and adapter change both: the manifests match `Bash` alone, and the payload adapter returns nothing for any other tool name, so those calls reach no guard at all today. Keep structured-edit and session-release registrations intact.
 
 ## Failure handling
 
@@ -298,6 +307,8 @@ Use the real shell-hook entry point with isolated temporary projects and registr
 - Dialect resolution per harness, platform, and tool name, including Claude Code's `PowerShell` tool, and the case where the hook process's own `SHELL` and `MSYSTEM` contradict the dialect.
 - Shell wrappers, argument quoting, pipelines, substitutions, ordinary versus executable heredocs, and explicit versus missing execution context.
 - Python path construction, aliases, rebinding, unknown open modes, and constant versus dynamic subprocess input.
+- Interpreter arguments: a literal shell assignment passed through `python3 - "$f"` or `python3 -c '...' "$f"` resolves `sys.argv[1]`; a loop variable, an index past the supplied words, and a rebound `sys.argv` stay unresolved; `node -e` and `bun -e` bind `process.argv` the same way.
+- The write-stage deadline: a registry that accepts a request and never answers produces a denial within the deadline rather than a hook that runs until the harness gives up.
 - PowerShell here-strings, cmdlets, file APIs, path expressions, and statement-scoped recovery: a statement that fails to parse leaves a sibling statement's write enforced and its own effects unresolved.
 - JavaScript and TypeScript imports, aliases, shadowing, reads, writes, asynchronous calls, and embedded process commands, with `require.resolve` probes as negative cases.
 - Unsupported-language wrappers (`nu -c`, `awk`, `perl -e`) and supported fish commands.
@@ -323,5 +334,7 @@ The implementation plan must separate the pure analysis contract, language adapt
 The user approved the separate crate, Tree-sitter, the language scope including JavaScript and TypeScript, configurable unresolved-write handling, a separate key for languages devkit cannot parse, tree effects as a conflict check rather than a claim, synthetic-only fixtures, and explicitly deferred benchmarking.
 
 The issue asks how an explicit-lock retry is verified after an unresolved write is blocked. It is not: v1 has no declaration-based retry. The issue itself grants that holding a lock is not evidence that unknown targets are covered, and nothing else could verify such a declaration without running the command. The diagnostic rules and `unresolved_writes = "warn"` are the paths forward instead.
+
+Two additions follow the review of the recorded commands and the lock client. Interpreter arguments bind into the embedded script's `sys.argv` or `process.argv`, because an argument supplied that way is the most common unresolved Python target. The write stage carries a 5-second in-process deadline and the manifest timeout rises to 30 seconds, because a harness timeout allows the call and so cannot be the guard against a stalled registry.
 
 The `shell` resolution order, `unsupported_language` and `script_files` keys, dropping `allow` from rule actions, the structured-only v1 rule matcher, statement-scoped parse recovery, serial v1 analysis, the concrete analysis limits, and the Cursor and `devrun task` gaps are implementation choices made to complete this spec. Their behavior is specified above so they can be reviewed before code is written. No additional user answer is required to interpret the document.
