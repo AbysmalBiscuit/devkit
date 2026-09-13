@@ -153,15 +153,19 @@ pub(crate) fn classify(name: &str, args: &[Value], stdin: &Stdin) -> Exec {
             let mut words = args.iter();
             while let Some(w) = words.next() {
                 match w.known() {
-                    Some("-f") => {
+                    Some("-f" | "-E" | "--file" | "--exec") => {
                         return words
                             .next()
                             .map_or(Exec::Plain, |s| Exec::ScriptFile { script: s.clone() });
                     }
-                    Some("-v" | "-F") => {
+                    Some("-i" | "-l" | "--include" | "--load") => {
+                        return Exec::Unsupported { language: "awk" };
+                    }
+                    Some("-v" | "-F" | "--assign" | "--field-separator") => {
                         words.next();
                     }
                     Some(t) if t.starts_with('-') => {}
+                    Some(program) if !awk_can_write(program) => return Exec::Plain,
                     _ => return Exec::Unsupported { language: "awk" },
                 }
             }
@@ -169,6 +173,53 @@ pub(crate) fn classify(name: &str, args: &[Value], stdin: &Stdin) -> Exec {
         }
         _ => Exec::Plain,
     }
+}
+
+/// Whether an awk program could write a file or run a command.
+///
+/// Writes are a `>` after `print`/`printf`, a pipe, or `system()`, with string
+/// and regex literals skipped so `/a|b/` stays data. A parenthesized
+/// comparison after `print` also reads as a redirect, which errs toward
+/// refusing.
+fn awk_can_write(program: &str) -> bool {
+    let chars: Vec<char> = program.chars().collect();
+    let mut code = String::with_capacity(program.len());
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        let operand_expected = code
+            .trim_end()
+            .chars()
+            .last()
+            .is_none_or(|p| "(,!~{};&|\n".contains(p));
+        if c == '"' || (c == '/' && operand_expected) {
+            i += 1;
+            while let Some(&s) = chars.get(i) {
+                i += if s == '\\' { 2 } else { 1 };
+                if s == c {
+                    break;
+                }
+            }
+            code.push_str(" _ ");
+            continue;
+        }
+        code.push(c);
+        i += 1;
+    }
+    if code.contains("system(") || code.contains("system (") {
+        return true;
+    }
+    let bytes = code.as_bytes();
+    let piped = bytes.iter().enumerate().any(|(i, &b)| {
+        b == b'|' && bytes.get(i + 1) != Some(&b'|') && (i == 0 || bytes[i - 1] != b'|')
+    });
+    if piped {
+        return true;
+    }
+    code.split([';', '{', '}', '\n']).any(|statement| {
+        statement
+            .find("print")
+            .is_some_and(|at| statement[at..].contains('>'))
+    })
 }
 
 fn python(args: &[Value], stdin: &Stdin) -> Exec {
@@ -535,7 +586,7 @@ mod tests {
             ("perl", vec!["-e", "print 1"]),
             ("ruby", vec!["-e", "1"]),
             ("nu", vec!["-c", "ls"]),
-            ("awk", vec!["{print $1}", "f"]),
+            ("awk", vec!["{print $1 > \"out.txt\"}", "f"]),
         ] {
             assert!(
                 matches!(
@@ -552,6 +603,51 @@ mod tests {
                 &Stdin::None
             ),
             Exec::Plain
+        ));
+    }
+
+    #[test]
+    fn an_awk_program_that_only_prints_is_plain() {
+        for program in [
+            "$1>=6400 && $1<=6600",
+            "{ if (length($0) > 72) print length($0)\": \"$0 }",
+            "/foo|bar/ { n++ } END { print n }",
+            "$1 == \"a\" || $2 ~ /x>y/ { printf \"%s>%s\\n\", $1, $2 }",
+        ] {
+            assert!(
+                matches!(
+                    classify("awk", &args(&["-F:", program, "f"]), &Stdin::None),
+                    Exec::Plain
+                ),
+                "{program}"
+            );
+        }
+        for program in [
+            "{ print > \"out.txt\" }",
+            "{ printf \"%s\", $1 >> $2 }",
+            "{ print | \"sort\" }",
+            "{ \"date\" | getline d }",
+            "BEGIN { system(\"rm x\") }",
+        ] {
+            assert!(
+                matches!(
+                    classify("awk", &args(&[program, "f"]), &Stdin::None),
+                    Exec::Unsupported { .. }
+                ),
+                "{program}"
+            );
+        }
+        assert!(matches!(
+            classify(
+                "gawk",
+                &args(&["-i", "inplace", "{ print }", "f"]),
+                &Stdin::None
+            ),
+            Exec::Unsupported { .. }
+        ));
+        assert!(matches!(
+            classify("awk", &[Value::Unknown, k("f")], &Stdin::None),
+            Exec::Unsupported { .. }
         ));
     }
 

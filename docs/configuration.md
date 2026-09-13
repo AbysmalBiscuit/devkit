@@ -330,7 +330,7 @@ Opt-in for the agent write-access harness.
 | `enforce_commands` | bool | `false` | When `true`, the devkit plugin's pre-execution hook refuses shell commands devkit already has a wired-up path for, naming the replacement. Resolves through the same three sources as `enforce_writes`, with `DEVKIT_ENFORCE_COMMANDS` as the override. |
 | `shell` | `"auto"` \| `"bash"` \| `"powershell"` | `"auto"` | The shell a hook command is read in. `auto`: Claude Code's `PowerShell` tool is PowerShell; Codex on Windows is PowerShell; everything else is bash. The hook process's own `SHELL` and `MSYSTEM` are never consulted. |
 | `unresolved_writes` | `"block"` \| `"warn"` \| `"allow"` | `"block"` | A write, or code that may write, whose target devkit could not determine. |
-| `unsupported_language` | `"block"` \| `"warn"` \| `"allow"` | `"block"` | Executable source in a language devkit cannot analyze, such as `perl -e`, `ruby -e`, `awk` programs, or `nu -c`. |
+| `unsupported_language` | `"block"` \| `"warn"` \| `"allow"` | `"block"` | Executable source in a language devkit cannot analyze, such as `perl -e`, `ruby -e`, or `nu -c`. An `awk` program counts only when it could write: a `>` after `print`/`printf`, a pipe, or `system()`. |
 | `script_files` | `"block"` \| `"warn"` \| `"allow"` | `"allow"` | A call to a stored script (`python3 tools/gen.py`, `bash deploy.sh`), whose contents devkit does not read. |
 
 **Three opt-in sources, with precedence.** The hook resolves whether to enforce for a given checkout from, in order:
