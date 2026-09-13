@@ -1547,6 +1547,22 @@ mod tests {
     }
 
     #[test]
+    fn oversized_cwd_resolved_powershell_values_are_not_emitted_as_targets() {
+        let path = "a".repeat(64 * 1024 - "C:/repo/".len() + 1);
+        let a = ps(&format!("$p = '{path}'; Set-Content $p x"));
+        assert!(
+            a.uncertainties
+                .iter()
+                .any(|u| u.kind == UncertaintyKind::LimitExhausted(Limit::ValueSize)),
+            "{a:?}"
+        );
+        assert!(
+            targets(&a).iter().all(|target| target.len() <= 64 * 1024),
+            "{a:?}"
+        );
+    }
+
+    #[test]
     fn external_programs_reach_the_catalog() {
         assert_eq!(targets(&ps("git checkout -- a.rs")), ["C:/repo/a.rs"]);
     }

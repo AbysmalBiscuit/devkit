@@ -319,3 +319,78 @@ devkit::supervision::supervised_python_server_becomes_ready
 ### Post-commit identity
 
 Review-fix commit: `e5126fd` (`fix(command): harden PowerShell recovery`). The report update is intentionally a separate documentation-only commit so this section can record the exact fix commit hash.
+
+## Minor follow-up verification
+
+The final checks for this test-only follow-up were:
+
+```text
+devrun task fmt
+passed: cargo +nightly fmt --all
+
+devrun task --env RUSTC_WRAPPER= test
+wrapper: cargo nextest run --workspace --all-features --locked --no-fail-fast
+1961 tests run: 1925 passed, 36 failed, 0 skipped
+
+devrun task --env RUSTC_WRAPPER= lint
+passed: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+devrun task --env RUSTC_WRAPPER= test-doc
+passed: cargo test --doc --workspace --all-features --locked
+```
+
+The 36 workspace failures were sandbox-sensitive and unrelated to PowerShell:
+
+```text
+devkit::down_ports down_ports_releases_listed_reservations
+devkit::shim_dispatch devrun_shim_still_refuses_reap_without_a_terminal
+devkit::lifecycle idle_exit_with_no_clients_or_children
+devkit::lifecycle second_instance_exits_immediately
+devkit::lifecycle ping_pong_handshake
+devkit::lock_daemon acquire_through_daemon_is_visible_to_check
+devkit::lock_daemon acquired_lock_persists_to_file_after_daemon_exits
+devkit::lock_daemon write_decide_and_release_prefix_through_daemon
+devkit::bin/devkit issue::dashboard::cache::tests::get_put_roundtrip_under_real_cache_dir
+devkit::parity alloc_through_daemon_writes_registry
+devkit::parity snapshot_roundtrips
+devkit-common livetable::tests::clear_retires_line_bars_so_drop_cannot_repaint
+devkit-common supervise::tests::probe_port_true_when_listening_false_when_free
+devkit-common supervise::tests::spawn_and_ready_on_python_tcp
+devkit::supervision health_probe_restarts_hung_server
+devkit::supervision memory_restart_gives_up_within_budget
+devkit::supervision down_does_not_restart
+devkit::supervision cap_requested_without_delegation_falls_back
+devkit::supervision memory_restart_over_limit_server
+devkit::supervision restart_after_kill
+devkit::supervision restart_survives_concurrent_snapshot
+devkit::supervision second_supervise_of_live_server_is_noop
+devkit::supervision supervised_python_server_becomes_ready
+devkit-locks tests::facade_without_daemon_uses_flock_path
+devkit-locks tests::resolved_fns_roundtrip_via_flock_path
+devkit-locks tests::resolver_scopes_each_batch_member_to_its_own_repository
+devkit-mcp locks::tests::acquire_status_release_roundtrip_through_handlers
+devkit-ports registry::liveness_tests::detects_bound_port
+devkit-ports registry::ops_tests::allocation_skips_a_port_a_stray_process_is_listening_on
+devkit-ports run::tests::bring_down_releases_a_pidless_reservation
+devkit-ports run::tests::launch_non_blocking_returns_before_readiness_then_status_flips
+devkit-ports run::tests::bring_down_ports_releases_listed_reservations
+devkit-ports run::tests::resolve_ports_includes_an_app_referenced_via_ports_template
+devkit-ports strays::os::tests::real_port_probe_reports_a_bound_listener
+devkit-ports run::tests::read_log_tails_a_tracked_logfile
+devkit-ports run::tests::server_rows_marks_a_listening_entry_ready
+```
+
+Sandbox evidence was `Operation not permitted` for socket/process probes and `Read-only file system` for state, cache, and lock writes. No C dependency was added.
+
+## Minor value-limit coverage follow-up
+
+Added `oversized_cwd_resolved_powershell_values_are_not_emitted_as_targets`. Its source assigns a 65,529-byte relative value to `$p` and then runs `Set-Content $p x`; the value fits before resolution, but resolving it against `C:/repo/` produces a 65,537-byte target. This exercises variable propagation and cwd composition rather than only a direct oversized literal. The assertion requires `LimitExhausted(ValueSize)` and rejects every target over 64 KiB.
+
+The test was written before any implementation edit. The current `bounded_resolved` path already rejects the oversized cwd-resolved value, so the new test was GREEN immediately and no production change was needed; there was no RED implementation failure to fix. The exact regression command passed:
+
+```text
+target/debug/deps/devkit_command-b94aadffacfba209 powershell::tests::oversized_cwd_resolved_powershell_values_are_not_emitted_as_targets --exact --nocapture
+1 passed; 0 failed
+```
+
+The complete focused shape/tripwire group passed 2/2, and the PowerShell adapter group passed 20/20, including the new regression. The grammar-derived kinds module and malformed-shape tripwire remain unchanged. No C dependency was added.
