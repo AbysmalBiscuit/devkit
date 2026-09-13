@@ -2,11 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The shell whose syntax a hook command is read in. `auto` resolves from
 /// the tool name and the harness; see `docs/configuration.md`.
-#[derive(Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(
+    Deserialize, Serialize, Default, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum ShellSetting {
     #[default]
@@ -16,7 +18,7 @@ pub enum ShellSetting {
 }
 
 /// What a policy finding does to the tool call.
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PolicyAction {
     /// Deny the tool call with an actionable reason.
@@ -29,7 +31,9 @@ pub enum PolicyAction {
 
 /// What a matching command rule does. A rule that should not act is disabled
 /// with `enabled = false`, so there is no `allow`.
-#[derive(Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(
+    Deserialize, Serialize, Default, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleAction {
     #[default]
@@ -38,7 +42,9 @@ pub enum RuleAction {
 }
 
 /// How a diagnostic is classified for the agent.
-#[derive(Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(
+    Deserialize, Serialize, Default, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Info,
@@ -72,8 +78,10 @@ pub struct CommandRule {
     #[serde(default = "enabled_default")]
     pub enabled: bool,
     #[serde(default)]
+    #[schemars(default)]
     pub action: RuleAction,
     #[serde(default)]
+    #[schemars(default)]
     pub severity: Severity,
 }
 
@@ -146,15 +154,19 @@ pub struct HarnessSection {
     pub enforce_commands: bool,
     /// The shell a hook command is read in.
     #[serde(default)]
+    #[schemars(default)]
     pub shell: ShellSetting,
     /// A write whose target could not be determined.
     #[serde(default = "block")]
+    #[schemars(default = "block")]
     pub unresolved_writes: PolicyAction,
     /// Executable source in a language devkit cannot analyze.
     #[serde(default = "block")]
+    #[schemars(default = "block")]
     pub unsupported_language: PolicyAction,
     /// A call to a stored script, whose contents are not read.
     #[serde(default = "allow")]
+    #[schemars(default = "allow")]
     pub script_files: PolicyAction,
     /// Extra refusals beyond the ones devkit derives from `[apps]` and
     /// `[tasks]`. Merged across config layers like every other table.

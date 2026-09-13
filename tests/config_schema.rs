@@ -103,3 +103,17 @@ fn the_schema_states_what_resolution_actually_requires() {
         assert!(props.contains_key(table), "missing table: {table}");
     }
 }
+
+#[test]
+fn the_harness_schema_exposes_runtime_defaults() {
+    let s: serde_json::Value = serde_json::from_str(&generated()).unwrap();
+    let command = &s["$defs"]["CommandRule"]["properties"];
+    let harness = &s["$defs"]["HarnessSection"]["properties"];
+
+    assert_eq!(command["action"]["default"], "block");
+    assert_eq!(command["severity"]["default"], "error");
+    assert_eq!(harness["shell"]["default"], "auto");
+    assert_eq!(harness["unresolved_writes"]["default"], "block");
+    assert_eq!(harness["unsupported_language"]["default"], "block");
+    assert_eq!(harness["script_files"]["default"], "allow");
+}

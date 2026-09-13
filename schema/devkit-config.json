@@ -142,7 +142,8 @@
       "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Parsing the command, unwrapping wrappers and\nrunners, and removing a program's own global options (`git -C`) are\ndevkit's job; a rule that had to restate them would get them wrong.",
       "properties": {
         "action": {
-          "$ref": "#/$defs/RuleAction"
+          "$ref": "#/$defs/RuleAction",
+          "default": "block"
         },
         "args": {
           "default": [],
@@ -171,7 +172,8 @@
           "type": "string"
         },
         "severity": {
-          "$ref": "#/$defs/Severity"
+          "$ref": "#/$defs/Severity",
+          "default": "error"
         }
       },
       "type": "object"
@@ -416,18 +418,22 @@
         },
         "script_files": {
           "$ref": "#/$defs/PolicyAction",
+          "default": "allow",
           "description": "A call to a stored script, whose contents are not read."
         },
         "shell": {
           "$ref": "#/$defs/ShellSetting",
+          "default": "auto",
           "description": "The shell a hook command is read in."
         },
         "unresolved_writes": {
           "$ref": "#/$defs/PolicyAction",
+          "default": "block",
           "description": "A write whose target could not be determined."
         },
         "unsupported_language": {
           "$ref": "#/$defs/PolicyAction",
+          "default": "block",
           "description": "Executable source in a language devkit cannot analyze."
         }
       },
