@@ -75,6 +75,7 @@ enum Js {
     Env,
     Foreign(String),
     Function(Range<usize>),
+    FunctionExpression,
     Data,
     Unknown,
 }
@@ -150,6 +151,16 @@ impl<'t> Walker<'_, '_, '_, 't> {
 
     fn statements(&mut self, node: Node<'t>, scope: &mut Scope) {
         for child in ts::named_children(node) {
+            if child.kind() == "function_declaration"
+                && let Some(name) = child.child_by_field_name("name")
+            {
+                scope.names.insert(
+                    ts::text(name, self.source).to_string(),
+                    Js::Function(child.byte_range()),
+                );
+            }
+        }
+        for child in ts::named_children(node) {
             self.statement(child, scope);
         }
     }
@@ -186,12 +197,12 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 let mut inner = scope.clone();
                 self.statements(node, &mut inner);
             }
-            "function_declaration" | "class_declaration" => {
+            "function_declaration" => {}
+            "class_declaration" => {
                 if let Some(name) = node.child_by_field_name("name") {
-                    scope.names.insert(
-                        ts::text(name, self.source).to_string(),
-                        Js::Function(node.byte_range()),
-                    );
+                    scope
+                        .names
+                        .insert(ts::text(name, self.source).to_string(), Js::Data);
                 }
             }
             "if_statement" | "for_statement" | "for_in_statement" | "while_statement"
@@ -363,14 +374,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 self.known(node, out)
             }
             "number" => text.parse().map_or(Js::Data, Js::Num),
-            "true"
-            | "false"
-            | "null"
-            | "undefined"
-            | "arrow_function"
-            | "function_expression"
-            | "function"
-            | "regex" => Js::Data,
+            "true" | "false" | "null" | "undefined" | "regex" => Js::Data,
+            "arrow_function" | "function_expression" | "function" => Js::FunctionExpression,
             "identifier" => scope
                 .names
                 .get(text)
@@ -577,7 +582,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 Js::Str(s) => Js::Str(normalize::basename(&s).to_string()),
                 _ => Js::Unknown,
             },
-            (Some("process.cwd"), _) => cwd.map_or(Js::Unknown, Js::Str),
+            (Some("process.cwd"), _) => cwd.map_or(Js::Unknown, |path| self.known(node, path)),
             (Some("process.chdir"), _) => {
                 scope.cwd = match arg(0) {
                     Js::Str(s) => match paths::resolve(
@@ -585,7 +590,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         scope.cwd.as_deref(),
                         self.a.ctx.path_style,
                     ) {
-                        crate::Target::Path(path) => Some(path),
+                        crate::Target::Path(path) if self.a.budget.value_fits(path.len()) => {
+                            Some(path)
+                        }
+                        crate::Target::Path(_) => {
+                            self.value_limit(node);
+                            None
+                        }
                         crate::Target::Unresolved => None,
                     },
                     _ => None,
@@ -600,6 +611,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     self.statements(body, &mut local);
                 }
                 Js::Data
+            }
+            (_, Js::FunctionExpression) => {
+                self.unresolved(
+                    node,
+                    "a function expression whose effects could not be analyzed",
+                );
+                Js::Unknown
             }
             (Some(name), _) if name.starts_with("fs.") || name.starts_with("fs/promises.") => {
                 let method = name.rsplit('.').next().unwrap_or("");
@@ -984,5 +1002,51 @@ mod tests {
             "node -e \"function write() { require('fs').writeFileSync('a.txt', '') } write()\"",
         );
         assert_eq!(targets(&a), ["/repo/a.txt"]);
+    }
+
+    #[test]
+    fn oversized_process_cwd_is_unresolved() {
+        let cwd = format!("/repo/{}", "a".repeat(121));
+        let context = Context {
+            dialect: Dialect::Bash,
+            cwd: Some(cwd.clone()),
+            path_style: PathStyle::Unix,
+            limits: Limits {
+                value: 128,
+                ..Limits::default()
+            },
+        };
+        let a = crate::analyze(
+            "node -e \"process.chdir('x'); require('fs').writeFileSync('out.txt', '')\"",
+            &context,
+        );
+        assert!(
+            a.uncertainties
+                .iter()
+                .any(|u| u.kind == UncertaintyKind::LimitExhausted(Limit::ValueSize)),
+            "{a:?}"
+        );
+        assert!(
+            a.file_effects
+                .iter()
+                .all(|effect| { effect.target != Target::Path(format!("{cwd}/x/out.txt")) })
+        );
+    }
+
+    #[test]
+    fn local_function_calls_are_hoisted() {
+        let a = bash(
+            "node -e \"write(); function write() { require('fs').writeFileSync('before.txt', '') }\"",
+        );
+        assert_eq!(targets(&a), ["/repo/before.txt"]);
+    }
+
+    #[test]
+    fn called_function_expression_is_uncertain() {
+        let a = bash(
+            "node -e \"const write = () => require('fs').writeFileSync('expression.txt', ''); write()\"",
+        );
+        assert!(!targets(&a).contains(&"/repo/expression.txt".to_string()));
+        assert!(unresolved(&a));
     }
 }
