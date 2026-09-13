@@ -135,7 +135,7 @@ This binding is required, not an optimization. A shell variable passed to an inl
 
 Nested interpreters recurse through the same bounded analysis interface. A constant subprocess argument vector can feed command analysis directly. A constant shell command passed to a process API feeds the appropriate shell parser. Dynamic command construction remains unknown.
 
-Inline source in a language with no analyzer is its own finding, not a write and not a harmless call. `nu -c`, `awk` programs, `perl -e`, and `ruby -e` all reach the analyzer as an interpreter wrapper whose source it cannot read. These follow `unsupported_language`. Adding a grammar moves a language out of this class; fish is in v1 for that reason, since its recorded calls are read-only completion probes that would otherwise be blocked.
+Inline source in a language with no analyzer is its own finding, not a write and not a harmless call. `nu -c`, `perl -e`, and `ruby -e` all reach the analyzer as an interpreter wrapper whose source it cannot read. These follow `unsupported_language`. An `awk` program is the one exception, because the recorded read-only filters (`awk -F: '$1>=10'`, `awk '{ print length($0) }'`) outnumber every other unsupported shape: a program with no `>` after `print` or `printf`, no pipe, and no `system()` is read-only, with string and regex literals skipped. Any other program, a dynamic one, and gawk's `-i`/`-l` extensions follow `unsupported_language`. Adding a grammar moves a language out of this class; fish is in v1 for that reason, since its recorded calls are read-only completion probes that would otherwise be blocked.
 
 ## Supported effect analysis
 
@@ -309,9 +309,10 @@ Use the real shell-hook entry point with isolated temporary projects and registr
 - Python path construction, aliases, rebinding, unknown open modes, and constant versus dynamic subprocess input.
 - Interpreter arguments: a literal shell assignment passed through `python3 - "$f"` or `python3 -c '...' "$f"` resolves `sys.argv[1]`; a loop variable, an index past the supplied words, and a rebound `sys.argv` stay unresolved; `node -e` and `bun -e` bind `process.argv` the same way.
 - The write-stage deadline: a registry that accepts a request and never answers produces a denial within the deadline rather than a hook that runs until the harness gives up.
-- PowerShell here-strings, cmdlets, file APIs, path expressions, and statement-scoped recovery: a statement that fails to parse leaves a sibling statement's write enforced and its own effects unresolved.
+- PowerShell here-strings, cmdlets, file APIs, path expressions, and statement-scoped recovery: a statement that fails to parse leaves a sibling statement's write enforced. Its own text is split into simple commands at unquoted separators, pipes, parentheses and braces, including `$(...)` inside double-quoted strings; each is analyzed like any invocation, and the statement is a parse error only when a recovered command could write, redirects, or the text cannot be split.
 - JavaScript and TypeScript imports, aliases, shadowing, reads, writes, asynchronous calls, and embedded process commands, with `require.resolve` probes as negative cases.
-- Unsupported-language wrappers (`nu -c`, `awk`, `perl -e`) and supported fish commands.
+- Unsupported-language wrappers (`nu -c`, writing `awk` programs, `perl -e`), read-only `awk` filters, and supported fish commands.
+- Python `str.replace(old, new)` on a receiver of unknown type, which is not `Path.replace(target)`.
 - Quoted command text, unused function bodies, and readonly examples that must not acquire locks or trigger unrelated command rules.
 - Input and nesting bounds.
 
