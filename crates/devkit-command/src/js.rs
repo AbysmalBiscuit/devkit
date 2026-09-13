@@ -1,5 +1,851 @@
+//! JavaScript and TypeScript run by Node, Bun, Deno, tsx and ts-node.
+
+use std::collections::HashMap;
+
+use tree_sitter::Node;
+
 use crate::{
-    analyzer::{Analyzer, Frame},
-    model::Language,
+    analyzer::{Analyzer, Frame, RawInvocation, Stdin, Word},
+    model::{FileOp, Language, Location, UncertaintyKind, Value},
+    normalize, paths, ts,
 };
-pub(crate) fn walk(_a: &mut Analyzer<'_>, _language: Language, _source: &str, _frame: &Frame) {}
+
+const KNOWN_MODULES: &[&str] = &[
+    "fs",
+    "fs/promises",
+    "path",
+    "child_process",
+    "os",
+    "util",
+    "url",
+    "crypto",
+    "assert",
+    "events",
+    "process",
+    "module",
+    "readline",
+    "stream",
+    "buffer",
+    "zlib",
+    "querystring",
+];
+const WRITES: &[(&str, FileOp, usize)] = &[
+    ("writeFileSync", FileOp::Overwrite, 0),
+    ("writeFile", FileOp::Overwrite, 0),
+    ("appendFileSync", FileOp::Append, 0),
+    ("appendFile", FileOp::Append, 0),
+    ("createWriteStream", FileOp::Overwrite, 0),
+    ("unlinkSync", FileOp::Delete, 0),
+    ("unlink", FileOp::Delete, 0),
+    ("truncateSync", FileOp::Overwrite, 0),
+    ("truncate", FileOp::Overwrite, 0),
+    ("copyFileSync", FileOp::Copy, 1),
+    ("copyFile", FileOp::Copy, 1),
+    ("symlinkSync", FileOp::Create, 1),
+    ("symlink", FileOp::Create, 1),
+];
+const WRITE_METHOD_NAMES: &[&str] = &[
+    "writeFileSync",
+    "writeFile",
+    "appendFileSync",
+    "appendFile",
+    "createWriteStream",
+    "unlinkSync",
+    "unlink",
+    "renameSync",
+    "rename",
+    "rmSync",
+    "rm",
+    "copyFileSync",
+    "copyFile",
+    "cpSync",
+    "cp",
+    "write",
+    "writeTextFile",
+];
+
+#[derive(Debug, Clone, PartialEq)]
+enum Js {
+    Str(String),
+    Num(i64),
+    Array(Vec<Js>),
+    Api(String),
+    Method(Box<Js>, String),
+    Argv,
+    Env,
+    Foreign(String),
+    Data,
+    Unknown,
+}
+impl Js {
+    fn as_value(&self) -> Value {
+        match self {
+            Self::Str(s) => Value::Known(s.clone()),
+            _ => Value::Unknown,
+        }
+    }
+}
+#[derive(Debug, Clone, Default)]
+struct Scope {
+    names: HashMap<String, Js>,
+    argv: Vec<Value>,
+    cwd: Option<String>,
+}
+
+pub(crate) fn walk(a: &mut Analyzer<'_>, language: Language, source: &str, frame: &Frame) {
+    let Some(tree) = ts::parse(language, source) else {
+        a.uncertain(
+            UncertaintyKind::ParseError,
+            "script source did not parse",
+            frame.locate(0..source.len()),
+        );
+        return;
+    };
+    let mut scope = Scope {
+        argv: frame.script_args.clone(),
+        cwd: frame.cwd.clone(),
+        ..Scope::default()
+    };
+    Walker { a, source, frame }.statements(tree.root_node(), &mut scope);
+}
+struct Walker<'a, 'c, 's> {
+    a: &'a mut Analyzer<'c>,
+    source: &'s str,
+    frame: &'a Frame,
+}
+impl<'t> Walker<'_, '_, '_> {
+    fn at(&self, node: Node<'_>) -> Location {
+        self.frame.locate(node.byte_range())
+    }
+
+    fn unresolved(&mut self, node: Node<'_>, detail: impl Into<String>) {
+        self.a
+            .uncertain(UncertaintyKind::UnresolvedWrite, detail, self.at(node));
+    }
+
+    fn statements(&mut self, node: Node<'t>, scope: &mut Scope) {
+        for child in ts::named_children(node) {
+            self.statement(child, scope);
+        }
+    }
+
+    fn statement(&mut self, node: Node<'t>, scope: &mut Scope) {
+        if self.a.budget.visit().is_err() {
+            return;
+        }
+        if node.has_error() && node.kind() != "program" && node.kind() != "statement_block" {
+            self.a.uncertain(
+                UncertaintyKind::ParseError,
+                "a script statement could not be parsed",
+                self.at(node),
+            );
+            return;
+        }
+        match node.kind() {
+            "comment" | "empty_statement" | "type_alias_declaration" | "interface_declaration" => {}
+            "import_statement" => self.import(node, scope),
+            "lexical_declaration" | "variable_declaration" => {
+                for d in ts::named_children(node)
+                    .into_iter()
+                    .filter(|d| d.kind() == "variable_declarator")
+                {
+                    let value = d
+                        .child_by_field_name("value")
+                        .map_or(Js::Unknown, |v| self.eval(v, scope));
+                    if let Some(name) = d.child_by_field_name("name") {
+                        self.bind(name, value, scope);
+                    }
+                }
+            }
+            "statement_block" => {
+                let mut inner = scope.clone();
+                self.statements(node, &mut inner);
+            }
+            "function_declaration" | "class_declaration" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    scope
+                        .names
+                        .insert(ts::text(name, self.source).to_string(), Js::Data);
+                }
+            }
+            "if_statement" | "for_statement" | "for_in_statement" | "while_statement"
+            | "do_statement" | "try_statement" | "switch_statement" => {
+                let mut branch = scope.clone();
+                for child in ts::named_children(node) {
+                    if child.kind().ends_with("statement")
+                        || child.kind() == "statement_block"
+                        || child.kind().ends_with("clause")
+                        || child.kind() == "switch_body"
+                    {
+                        self.statement(child, &mut branch);
+                    } else {
+                        self.eval(child, &mut branch);
+                    }
+                }
+                for (name, value) in &branch.names {
+                    if scope.names.get(name) != Some(value) {
+                        scope.names.insert(name.clone(), Js::Unknown);
+                    }
+                }
+            }
+            _ => {
+                for child in ts::named_children(node) {
+                    self.eval(child, scope);
+                }
+            }
+        }
+    }
+
+    fn module(specifier: &str) -> Js {
+        let s = specifier.strip_prefix("node:").unwrap_or(specifier);
+        if KNOWN_MODULES.contains(&s) {
+            Js::Api(s.to_string())
+        } else {
+            Js::Foreign(s.to_string())
+        }
+    }
+
+    fn import(&mut self, node: Node<'t>, scope: &mut Scope) {
+        let Some(source) = node.child_by_field_name("source") else {
+            return;
+        };
+        let module = match self.eval(source, scope) {
+            Js::Str(s) => Self::module(&s),
+            _ => Js::Unknown,
+        };
+        for clause in ts::named_children(node)
+            .into_iter()
+            .filter(|c| c.kind() == "import_clause")
+        {
+            for part in ts::named_children(clause) {
+                match part.kind() {
+                    "identifier" => {
+                        scope
+                            .names
+                            .insert(ts::text(part, self.source).to_string(), module.clone());
+                    }
+                    "namespace_import" => {
+                        if let Some(id) = ts::named_children(part)
+                            .into_iter()
+                            .find(|n| n.kind() == "identifier")
+                        {
+                            scope
+                                .names
+                                .insert(ts::text(id, self.source).to_string(), module.clone());
+                        }
+                    }
+                    "named_imports" => {
+                        for spec in ts::named_children(part)
+                            .into_iter()
+                            .filter(|s| s.kind() == "import_specifier")
+                        {
+                            let name = spec
+                                .child_by_field_name("name")
+                                .map(|n| ts::text(n, self.source).to_string());
+                            let alias = spec
+                                .child_by_field_name("alias")
+                                .map(|n| ts::text(n, self.source).to_string());
+                            if let Some(name) = name {
+                                scope.names.insert(
+                                    alias.unwrap_or_else(|| name.clone()),
+                                    member(&module, &name),
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn bind(&mut self, pattern: Node<'t>, value: Js, scope: &mut Scope) {
+        match pattern.kind() {
+            "identifier" => {
+                scope
+                    .names
+                    .insert(ts::text(pattern, self.source).to_string(), value);
+            }
+            "object_pattern" => {
+                for prop in ts::named_children(pattern) {
+                    match prop.kind() {
+                        "shorthand_property_identifier_pattern" => {
+                            let name = ts::text(prop, self.source).to_string();
+                            scope.names.insert(name.clone(), member(&value, &name));
+                        }
+                        "pair_pattern" => {
+                            if let (Some(key), Some(target)) = (
+                                prop.child_by_field_name("key"),
+                                prop.child_by_field_name("value"),
+                            ) {
+                                self.bind(
+                                    target,
+                                    member(
+                                        &value,
+                                        ts::text(key, self.source).trim_matches(['\'', '"']),
+                                    ),
+                                    scope,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "array_pattern" => {
+                for (i, part) in ts::named_children(pattern).into_iter().enumerate() {
+                    self.bind(
+                        part,
+                        match &value {
+                            Js::Array(items) => items.get(i).cloned().unwrap_or(Js::Unknown),
+                            _ => Js::Unknown,
+                        },
+                        scope,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn eval(&mut self, node: Node<'t>, scope: &mut Scope) -> Js {
+        if self.a.budget.visit().is_err() {
+            return Js::Unknown;
+        }
+        let text = ts::text(node, self.source);
+        match node.kind() {
+            "string" => Js::Str(text[1..text.len().saturating_sub(1)].to_string()),
+            "template_string" => {
+                let mut out = String::new();
+                let mut last = node.start_byte() + 1;
+                for sub in ts::named_children(node)
+                    .into_iter()
+                    .filter(|n| n.kind() == "template_substitution")
+                {
+                    out.push_str(&self.source[last..sub.start_byte()]);
+                    last = sub.end_byte();
+                    match ts::named_children(sub)
+                        .first()
+                        .map(|e| self.eval(*e, scope))
+                    {
+                        Some(Js::Str(s)) => out.push_str(&s),
+                        Some(Js::Num(n)) => out.push_str(&n.to_string()),
+                        _ => return Js::Unknown,
+                    }
+                }
+                out.push_str(&self.source[last..node.end_byte() - 1]);
+                Js::Str(out)
+            }
+            "number" => text.parse().map_or(Js::Data, Js::Num),
+            "true"
+            | "false"
+            | "null"
+            | "undefined"
+            | "arrow_function"
+            | "function_expression"
+            | "function"
+            | "regex" => Js::Data,
+            "identifier" => scope
+                .names
+                .get(text)
+                .cloned()
+                .unwrap_or_else(|| match text {
+                    "require" => Js::Api("require".into()),
+                    "process" => Js::Api("process".into()),
+                    "Bun" => Js::Api("Bun".into()),
+                    "Deno" => Js::Api("Deno".into()),
+                    "eval" | "Function" => Js::Api(text.into()),
+                    "console" | "JSON" | "Math" | "Object" | "Array" | "String" | "Number"
+                    | "Promise" | "Date" | "Map" | "Set" | "Error" => Js::Data,
+                    _ => Js::Unknown,
+                }),
+            "member_expression" => {
+                let object = node
+                    .child_by_field_name("object")
+                    .map_or(Js::Unknown, |o| self.eval(o, scope));
+                let property = node
+                    .child_by_field_name("property")
+                    .map_or("", |p| ts::text(p, self.source));
+                match (&object, property) {
+                    (Js::Api(p), "argv") if p == "process" => Js::Argv,
+                    (Js::Api(p), "env") if p == "process" => Js::Env,
+                    (Js::Api(p), "promises") if p == "fs" => Js::Api("fs/promises".into()),
+                    _ => member(&object, property),
+                }
+            }
+            "subscript_expression" => match (
+                node.child_by_field_name("object")
+                    .map_or(Js::Unknown, |o| self.eval(o, scope)),
+                node.child_by_field_name("index")
+                    .map_or(Js::Unknown, |i| self.eval(i, scope)),
+            ) {
+                (Js::Argv, Js::Num(i)) => usize::try_from(i)
+                    .ok()
+                    .and_then(|i| scope.argv.get(i))
+                    .map_or(Js::Unknown, |v| match v {
+                        Value::Known(s) => Js::Str(s.clone()),
+                        Value::Unknown => Js::Unknown,
+                    }),
+                (Js::Array(items), Js::Num(i)) => usize::try_from(i)
+                    .ok()
+                    .and_then(|i| items.get(i).cloned())
+                    .unwrap_or(Js::Unknown),
+                _ => Js::Unknown,
+            },
+            "array" => Js::Array(
+                ts::named_children(node)
+                    .into_iter()
+                    .map(|c| self.eval(c, scope))
+                    .collect(),
+            ),
+            "call_expression" => self.call(node, scope),
+            "await_expression"
+            | "parenthesized_expression"
+            | "as_expression"
+            | "satisfies_expression"
+            | "non_null_expression"
+            | "type_assertion" => ts::named_children(node)
+                .into_iter()
+                .map(|c| self.eval(c, scope))
+                .find(|v| *v != Js::Data)
+                .unwrap_or(Js::Data),
+            "assignment_expression" => {
+                let value = node
+                    .child_by_field_name("right")
+                    .map_or(Js::Unknown, |r| self.eval(r, scope));
+                if let Some(left) = node.child_by_field_name("left") {
+                    self.bind(left, value.clone(), scope);
+                }
+                value
+            }
+            "import" => Js::Api("import".into()),
+            _ => {
+                for child in ts::named_children(node) {
+                    self.eval(child, scope);
+                }
+                Js::Unknown
+            }
+        }
+    }
+
+    fn call(&mut self, node: Node<'t>, scope: &mut Scope) -> Js {
+        let callee = node
+            .child_by_field_name("function")
+            .map_or(Js::Unknown, |f| self.eval(f, scope));
+        let args: Vec<(Js, Node<'t>)> = node
+            .child_by_field_name("arguments")
+            .map(|list| {
+                ts::named_children(list)
+                    .into_iter()
+                    .map(|arg| (self.eval(arg, scope), arg))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let arg = |i: usize| args.get(i).map_or(Js::Unknown, |(value, _)| value.clone());
+        let cwd = scope.cwd.clone();
+        let at = self.at(node);
+        let api = match &callee {
+            Js::Api(name) => Some(name.as_str()),
+            _ => None,
+        };
+        match (api, &callee) {
+            (Some("require"), _) => match arg(0) {
+                Js::Str(s) => Self::module(&s),
+                _ => {
+                    self.unresolved(node, "a `require` of a module that could not be determined");
+                    Js::Unknown
+                }
+            },
+            (Some("require.resolve"), _) => Js::Data,
+            (Some("import"), _) => match arg(0) {
+                Js::Str(s) => Self::module(&s),
+                _ => {
+                    self.unresolved(node, "a dynamic `import()` that could not be determined");
+                    Js::Unknown
+                }
+            },
+            (Some("eval" | "Function"), _) => {
+                self.unresolved(node, "dynamically evaluated script source");
+                Js::Unknown
+            }
+            (Some("path.join" | "path.posix.join"), _) => args
+                .iter()
+                .map(|(v, _)| match v {
+                    Js::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()
+                .filter(|p| !p.is_empty())
+                .map_or(Js::Unknown, |parts| {
+                    Js::Str(parts.iter().skip(1).fold(parts[0].clone(), |base, part| {
+                        paths::join(&base, part, self.a.ctx.path_style)
+                    }))
+                }),
+            (Some("path.resolve"), _) => match (
+                args.iter()
+                    .map(|(v, _)| match v {
+                        Js::Str(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>(),
+                cwd,
+            ) {
+                (Some(parts), Some(dir)) => Js::Str(parts.iter().fold(dir, |base, part| {
+                    if part.starts_with('/') {
+                        part.clone()
+                    } else {
+                        paths::join(&base, part, self.a.ctx.path_style)
+                    }
+                })),
+                _ => Js::Unknown,
+            },
+            (Some("path.dirname"), _) => match arg(0) {
+                Js::Str(s) => Js::Str(paths::parent(&s).unwrap_or(".").to_string()),
+                _ => Js::Unknown,
+            },
+            (Some("path.basename"), _) => match arg(0) {
+                Js::Str(s) => Js::Str(normalize::basename(&s).to_string()),
+                _ => Js::Unknown,
+            },
+            (Some("process.cwd"), _) => cwd.map_or(Js::Unknown, Js::Str),
+            (Some("process.chdir"), _) => {
+                scope.cwd = match arg(0) {
+                    Js::Str(s) => match paths::resolve(
+                        &Value::Known(s),
+                        scope.cwd.as_deref(),
+                        self.a.ctx.path_style,
+                    ) {
+                        crate::Target::Path(path) => Some(path),
+                        crate::Target::Unresolved => None,
+                    },
+                    _ => None,
+                };
+                Js::Data
+            }
+            (Some(name), _) if name.starts_with("fs.") || name.starts_with("fs/promises.") => {
+                let method = name.rsplit('.').next().unwrap_or("");
+                if let Some((_, op, index)) = WRITES
+                    .iter()
+                    .find(|(method_name, ..)| *method_name == method)
+                {
+                    self.a
+                        .file_effect(*op, &arg(*index).as_value(), cwd.as_deref(), at);
+                } else if matches!(method, "renameSync" | "rename") {
+                    self.a.file_effect(
+                        FileOp::Rename,
+                        &arg(0).as_value(),
+                        cwd.as_deref(),
+                        at.clone(),
+                    );
+                    self.a
+                        .file_effect(FileOp::Rename, &arg(1).as_value(), cwd.as_deref(), at);
+                } else if matches!(method, "rmSync" | "rm" | "cpSync" | "cp") {
+                    let recursive = args
+                        .get(if method.starts_with("cp") { 2 } else { 1 })
+                        .is_some_and(|(_, arg)| {
+                            ts::text(*arg, self.source).contains("recursive: true")
+                        });
+                    let target = if method.starts_with("cp") {
+                        arg(1)
+                    } else {
+                        arg(0)
+                    };
+                    if recursive {
+                        self.a.tree_effect(
+                            &target.as_value(),
+                            false,
+                            cwd.as_deref(),
+                            &format!("fs.{method}"),
+                            at,
+                        );
+                    } else {
+                        self.a.file_effect(
+                            if method.starts_with("cp") {
+                                FileOp::Copy
+                            } else {
+                                FileOp::Delete
+                            },
+                            &target.as_value(),
+                            cwd.as_deref(),
+                            at,
+                        );
+                    }
+                } else if matches!(method, "openSync" | "open") {
+                    match arg(1) {
+                        Js::Str(flags) if flags.contains(['w', 'a', '+']) => self.a.file_effect(
+                            FileOp::Overwrite,
+                            &arg(0).as_value(),
+                            cwd.as_deref(),
+                            at,
+                        ),
+                        Js::Str(_) => {}
+                        _ if args.len() < 2 => {}
+                        _ => self.unresolved(
+                            node,
+                            "a file opened with flags that could not be determined",
+                        ),
+                    }
+                }
+                Js::Data
+            }
+            (Some("Bun.write"), _) => {
+                self.a
+                    .file_effect(FileOp::Overwrite, &arg(0).as_value(), cwd.as_deref(), at);
+                Js::Data
+            }
+            (Some(name), _) if name.starts_with("Deno.") => {
+                match &name[5..] {
+                    "writeTextFile" | "writeFile" => self.a.file_effect(
+                        FileOp::Overwrite,
+                        &arg(0).as_value(),
+                        cwd.as_deref(),
+                        at,
+                    ),
+                    "remove" => {
+                        self.a
+                            .file_effect(FileOp::Delete, &arg(0).as_value(), cwd.as_deref(), at)
+                    }
+                    "rename" => {
+                        self.a.file_effect(
+                            FileOp::Rename,
+                            &arg(0).as_value(),
+                            cwd.as_deref(),
+                            at.clone(),
+                        );
+                        self.a
+                            .file_effect(FileOp::Rename, &arg(1).as_value(), cwd.as_deref(), at);
+                    }
+                    "copyFile" => {
+                        self.a
+                            .file_effect(FileOp::Copy, &arg(1).as_value(), cwd.as_deref(), at)
+                    }
+                    _ => {}
+                }
+                Js::Data
+            }
+            (Some("child_process.execSync" | "child_process.exec"), _) => {
+                match arg(0) {
+                    Js::Str(command) => self.a.source(Language::Bash, &command, Frame {
+                        depth: self.frame.depth + 1,
+                        script_args: Vec::new(),
+                        base: Some(at),
+                        cwd: scope.cwd.clone(),
+                    }),
+                    _ => self.unresolved(node, "a shell command that could not be determined"),
+                }
+                Js::Data
+            }
+            (
+                Some(
+                    "child_process.spawnSync"
+                    | "child_process.spawn"
+                    | "child_process.execFileSync"
+                    | "child_process.execFile",
+                ),
+                _,
+            ) => {
+                let mut argv = vec![arg(0).as_value()];
+                match arg(1) {
+                    Js::Array(items) => argv.extend(items.iter().map(Js::as_value)),
+                    Js::Unknown if args.len() > 1 => argv.push(Value::Unknown),
+                    _ => {}
+                }
+                self.run_argv(node, argv, scope.cwd.clone());
+                Js::Data
+            }
+            (Some("Bun.spawn" | "Bun.spawnSync"), _) => {
+                match arg(0) {
+                    Js::Array(items) => self.run_argv(
+                        node,
+                        items.iter().map(Js::as_value).collect(),
+                        scope.cwd.clone(),
+                    ),
+                    _ => {
+                        self.unresolved(node, "a `Bun.spawn` command that could not be determined")
+                    }
+                }
+                Js::Data
+            }
+            (_, Js::Foreign(module)) => {
+                self.unresolved(
+                    node,
+                    format!("a call into `{module}`, which devkit does not model"),
+                );
+                Js::Unknown
+            }
+            (_, Js::Method(receiver, method))
+                if matches!(**receiver, Js::Unknown)
+                    && WRITE_METHOD_NAMES.contains(&method.as_str()) =>
+            {
+                self.unresolved(
+                    node,
+                    format!("`.{method}()` on a value whose type could not be determined"),
+                );
+                Js::Unknown
+            }
+            _ => Js::Unknown,
+        }
+    }
+
+    fn run_argv(&mut self, node: Node<'t>, argv: Vec<Value>, cwd: Option<String>) {
+        let words = argv
+            .into_iter()
+            .map(|value| Word {
+                typed: value.known().unwrap_or("?").to_string(),
+                value,
+                span: node.byte_range(),
+            })
+            .collect();
+        self.a.invocation(
+            RawInvocation {
+                words,
+                stdin: Stdin::None,
+                cwd,
+                language: Language::JavaScript,
+                location: self.at(node),
+            },
+            self.frame,
+        );
+    }
+}
+fn member(object: &Js, property: &str) -> Js {
+    match object {
+        Js::Api(base) => Js::Api(format!("{base}.{property}")),
+        Js::Foreign(module) => Js::Foreign(module.clone()),
+        Js::Env => Js::Unknown,
+        Js::Data => Js::Data,
+        other => Js::Method(Box::new(other.clone()), property.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        model::UncertaintyKind,
+        testutil::{bash, targets},
+    };
+
+    fn unresolved(a: &crate::Analysis) -> bool {
+        a.uncertainties
+            .iter()
+            .any(|u| u.kind == UncertaintyKind::UnresolvedWrite)
+            || targets(a).contains(&"?".to_string())
+    }
+
+    #[test]
+    fn node_fs_writes_through_require_and_imports() {
+        assert_eq!(
+            targets(&bash(
+                "node -e \"require('fs').writeFileSync('a.txt', 'x')\""
+            )),
+            ["/repo/a.txt"]
+        );
+        assert_eq!(
+            targets(&bash(
+                "node -e \"const { appendFileSync: add } = require('node:fs'); add('b.txt', 'x')\""
+            )),
+            ["/repo/b.txt"]
+        );
+        assert_eq!(
+            targets(&bash(
+                "bun -e \"import { writeFile } from 'node:fs/promises'; await writeFile('c.txt', 'x')\""
+            )),
+            ["/repo/c.txt"]
+        );
+    }
+
+    #[test]
+    fn path_join_templates_and_argv_resolve() {
+        assert_eq!(
+            targets(&bash(
+                "node -e 'const fs = require(\"fs\"); const path = require(\"path\"); const d = \"gen\"; fs.writeFileSync(path.join(d, `${\"x\"}.txt`), \"\")'"
+            )),
+            ["/repo/gen/x.txt"]
+        );
+        assert_eq!(
+            targets(&bash(
+                "f=out.txt; node -e \"require('fs').writeFileSync(process.argv[1], '')\" \"$f\""
+            )),
+            ["/repo/out.txt"]
+        );
+    }
+
+    #[test]
+    fn bun_and_deno_writers() {
+        assert_eq!(
+            targets(&bash("bun -e \"await Bun.write('d.txt', 'x')\"")),
+            ["/repo/d.txt"]
+        );
+        assert_eq!(
+            targets(&bash(
+                "deno eval \"await Deno.writeTextFile('e.txt', 'x')\""
+            )),
+            ["/repo/e.txt"]
+        );
+    }
+
+    #[test]
+    fn shadowing_drops_the_api_binding() {
+        let a = bash(
+            "node -e \"const fs = require('fs'); { const fs = { writeFileSync() {} }; fs.writeFileSync('a.txt') }\"",
+        );
+        assert!(a.file_effects.is_empty(), "{:?}", a.file_effects);
+    }
+
+    #[test]
+    fn a_method_name_alone_is_not_a_known_write() {
+        let a = bash("node -e \"thing.writeFile('a.txt')\"");
+        assert!(
+            a.file_effects
+                .iter()
+                .all(|e| e.target == crate::Target::Unresolved)
+        );
+        assert!(unresolved(&a));
+    }
+
+    #[test]
+    fn resolution_probes_and_reads_are_silent() {
+        let a = bash(
+            "node -e \"console.log(require.resolve('vite')); const fs = require('fs'); fs.readFileSync('a.json', 'utf8'); fs.existsSync('b')\"",
+        );
+        assert!(
+            a.file_effects.is_empty() && a.uncertainties.is_empty(),
+            "{a:?}"
+        );
+    }
+
+    #[test]
+    fn child_process_commands_are_analyzed_when_constant() {
+        assert_eq!(
+            targets(&bash(
+                "node -e \"require('child_process').execSync('rm a.txt')\""
+            )),
+            ["/repo/a.txt"]
+        );
+        assert_eq!(
+            targets(&bash(
+                "node -e \"require('child_process').spawnSync('rm', ['b.txt'])\""
+            )),
+            ["/repo/b.txt"]
+        );
+        assert!(unresolved(&bash(
+            "node -e \"require('child_process').execSync(process.env.CMD)\""
+        )));
+    }
+
+    #[test]
+    fn typescript_syntax_parses_as_syntax() {
+        assert_eq!(
+            targets(&bash(
+                "bun -e \"import fs from 'node:fs'; const p: string = 'f.txt'; fs.writeFileSync(p as string, '')\""
+            )),
+            ["/repo/f.txt"]
+        );
+    }
+
+    #[test]
+    fn dynamic_code_is_unresolved() {
+        assert!(unresolved(&bash("node -e \"eval(process.env.X)\"")));
+        assert!(unresolved(&bash("node -e \"import(process.env.M)\"")));
+    }
+}
