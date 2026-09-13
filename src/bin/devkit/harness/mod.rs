@@ -53,6 +53,8 @@ pub fn run(cli: HarnessCli) -> Result<()> {
 /// Longer than a healthy registry ever takes and well inside the manifest's
 /// 30-second timeout, which allows the call when it fires.
 const WRITE_STAGE_DEADLINE: Duration = Duration::from_secs(5);
+const UNUSABLE_SHELL_REASON: &str =
+    "devkit write-harness: shell payload could not be evaluated (fail-closed)";
 
 enum Response {
     Silent,
@@ -81,26 +83,68 @@ fn deny(which: Harness, reasons: &[String]) -> Response {
     Response::Envelope(harness::deny_shell_json(which, &reasons.join("\n")))
 }
 
+fn current_cwd() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+/// Recover only an explicit Claude Code or Codex shell identity from a raw
+/// payload whose command cannot be parsed.
+fn raw_shell_context(payload: &serde_json::Value) -> Option<(Harness, Option<std::path::PathBuf>)> {
+    payload
+        .get("hook_event_name")
+        .and_then(serde_json::Value::as_str)?;
+    let tool = payload
+        .get("tool_name")
+        .and_then(serde_json::Value::as_str)?;
+    if !matches!(tool, "Bash" | "PowerShell") {
+        return None;
+    }
+    let harness = if payload.get("turn_id").is_some() || payload.get("model").is_some() {
+        Harness::Codex
+    } else {
+        Harness::ClaudeCode
+    };
+    let cwd = payload
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+    Some((harness, cwd))
+}
+
+fn deny_unusable_shell(payload: &serde_json::Value) -> Response {
+    let Some((which, cwd)) = raw_shell_context(payload) else {
+        return Response::Silent;
+    };
+    let cwd = cwd.unwrap_or_else(current_cwd);
+    if harness::writes_enabled(&cwd) {
+        Response::Envelope(harness::deny_shell_json(which, UNUSABLE_SHELL_REASON))
+    } else {
+        Response::Silent
+    }
+}
+
 fn respond(write_stage: &OnceLock<Harness>) -> Response {
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_err() {
-        return Response::Silent;
+        return if harness::writes_enabled(&current_cwd()) {
+            Response::Envelope(harness::deny_json(UNUSABLE_SHELL_REASON))
+        } else {
+            Response::Silent
+        };
     }
     let payload: serde_json::Value = match serde_json::from_str(&buf) {
         Ok(v) => v,
-        Err(e) => {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            return if harness::writes_enabled(&cwd) {
-                Response::Envelope(harness::deny_json(&format!(
-                    "devkit write-harness: hook payload did not parse ({e}) (fail-closed)"
-                )))
+        Err(_) => {
+            return if harness::writes_enabled(&current_cwd()) {
+                Response::Envelope(harness::deny_json(UNUSABLE_SHELL_REASON))
             } else {
                 Response::Silent
             };
         }
     };
     let Some(shell) = harness::parse_shell_payload(&payload) else {
-        return Response::Silent;
+        return deny_unusable_shell(&payload);
     };
     let Some(cwd) = shell.cwd.clone().or_else(|| std::env::current_dir().ok()) else {
         return Response::Silent;

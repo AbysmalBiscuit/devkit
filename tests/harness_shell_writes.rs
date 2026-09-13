@@ -69,6 +69,22 @@ fn payload(e: &Env, session: Option<&str>, tool: &str, command: &str) -> String 
     p.to_string()
 }
 
+fn unusable_shell_payload(e: &Env, codex: bool) -> String {
+    let mut p = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "prompt_id": "p",
+        "session_id": if codex { "C1" } else { "S1" },
+        "tool_input": {},
+        "cwd": e.project.path().to_string_lossy(),
+    });
+    if codex {
+        p["turn_id"] = "t".into();
+        p["model"] = "m".into();
+    }
+    p.to_string()
+}
+
 fn hook(e: &Env, session: Option<&str>, command: &str) -> Output {
     devkit(
         e,
@@ -362,6 +378,69 @@ fn a_cursor_payload_never_claims() {
         "command": "echo x > a.txt",
         "cwd": e.project.path().to_string_lossy(),
         "conversation_id": "x",
+    });
+    let out = devkit(&e, &["harness", "shell"], Some(&p.to_string()), &[]);
+    assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
+    assert!(rows(&e).is_empty());
+}
+
+#[test]
+fn an_unusable_claude_shell_payload_denies_when_writes_are_enabled() {
+    let e = env(WRITES);
+    let out = devkit(
+        &e,
+        &["harness", "shell"],
+        Some(&unusable_shell_payload(&e, false)),
+        &[],
+    );
+    let reason = denial(&out).expect("fail-closed denial");
+    assert!(
+        reason.contains("shell payload") && reason.contains("fail-closed"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn an_unusable_codex_shell_payload_denies_when_writes_are_enabled() {
+    let e = env(WRITES);
+    let out = devkit(
+        &e,
+        &["harness", "shell"],
+        Some(&unusable_shell_payload(&e, true)),
+        &[],
+    );
+    let reason = denial(&out).expect("fail-closed denial");
+    assert!(
+        reason.contains("shell payload") && reason.contains("fail-closed"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn an_unusable_shell_payload_is_silent_when_writes_are_disabled() {
+    let e = env("[harness]\n");
+    for codex in [false, true] {
+        let out = devkit(
+            &e,
+            &["harness", "shell"],
+            Some(&unusable_shell_payload(&e, codex)),
+            &[],
+        );
+        assert_eq!(denial(&out), None, "codex={codex}");
+        assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
+    }
+}
+
+#[test]
+fn a_non_shell_claude_payload_stays_silent_when_writes_are_enabled() {
+    let e = env(WRITES);
+    let p = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "prompt_id": "p",
+        "session_id": "S1",
+        "tool_input": {},
+        "cwd": e.project.path().to_string_lossy(),
     });
     let out = devkit(&e, &["harness", "shell"], Some(&p.to_string()), &[]);
     assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
