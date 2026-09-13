@@ -7,7 +7,7 @@ use tree_sitter::Node;
 
 use crate::{
     analyzer::{Analyzer, Frame, RawInvocation, Stdin, Word},
-    model::{FileOp, Language, UncertaintyKind, Value},
+    model::{FileOp, Language, Limit, UncertaintyKind, Value},
     paths, ts,
 };
 
@@ -21,9 +21,15 @@ struct Scope {
 
 impl Scope {
     fn merge_uncertain(&mut self, branch: &Scope) {
-        for (name, value) in &branch.vars {
-            if self.vars.get(name) != Some(value) {
-                self.vars.insert(name.clone(), Value::Unknown);
+        let names: Vec<String> = self
+            .vars
+            .keys()
+            .chain(branch.vars.keys())
+            .cloned()
+            .collect();
+        for name in names {
+            if self.vars.get(&name) != branch.vars.get(&name) {
+                self.vars.insert(name, Value::Unknown);
             }
         }
         if branch.cwd != self.cwd {
@@ -45,7 +51,12 @@ pub(crate) fn walk(a: &mut Analyzer<'_>, source: &str, frame: &Frame) {
         cwd: frame.cwd.clone(),
         ..Scope::default()
     };
-    let mut w = Walker { a, source, frame };
+    let mut w = Walker {
+        a,
+        source,
+        frame,
+        exhausted: false,
+    };
     w.statements(tree.root_node(), &mut scope);
 }
 
@@ -53,9 +64,26 @@ struct Walker<'a, 'c, 's> {
     a: &'a mut Analyzer<'c>,
     source: &'s str,
     frame: &'a Frame,
+    exhausted: bool,
 }
 
 impl<'t> Walker<'_, '_, '_> {
+    fn visit(&mut self, node: Node<'t>) -> bool {
+        if self.exhausted {
+            return false;
+        }
+        if self.a.budget.visit().is_err() {
+            self.exhausted = true;
+            self.a.uncertain(
+                UncertaintyKind::LimitExhausted(Limit::Nodes),
+                "fish source was only partly analyzed",
+                self.frame.locate(node.byte_range()),
+            );
+            return false;
+        }
+        true
+    }
+
     fn statements(&mut self, node: Node<'t>, scope: &mut Scope) {
         for child in ts::named_children(node) {
             self.statement(child, scope, Stdin::None);
@@ -63,7 +91,7 @@ impl<'t> Walker<'_, '_, '_> {
     }
 
     fn statement(&mut self, node: Node<'t>, scope: &mut Scope, stdin: Stdin) {
-        if self.a.budget.visit().is_err() {
+        if !self.visit(node) {
             return;
         }
         if node.has_error() && node.kind() != "ERROR" {
@@ -99,7 +127,11 @@ impl<'t> Walker<'_, '_, '_> {
                     };
                 }
             }
-            "conditional_execution" | "negated_statement" => self.statements(node, scope),
+            "conditional_execution" | "negated_statement" => {
+                let mut branch = scope.clone();
+                self.statements(node, &mut branch);
+                scope.merge_uncertain(&branch);
+            }
             "if_statement" | "while_statement" | "switch_statement" | "begin_statement"
             | "else_clause" | "else_if_clause" | "case_clause" => {
                 let mut branch = scope.clone();
@@ -127,7 +159,8 @@ impl<'t> Walker<'_, '_, '_> {
         let Some(destination) = node.child_by_field_name("destination") else {
             return;
         };
-        let value = self.value(destination, &mut scope.clone());
+        let mut destination_scope = scope.clone();
+        let value = self.word(destination, &mut destination_scope).value;
         if matches!(
             value.known(),
             Some("/dev/null" | "/dev/stderr" | "/dev/stdout" | "/dev/tty")
@@ -212,7 +245,14 @@ impl<'t> Walker<'_, '_, '_> {
                             .is_none_or(|value| !value.starts_with('-'))
                     })
                     .collect();
-                if let Some(name) = rest.first().and_then(|word| word.value.known()) {
+                let erase = words[1..]
+                    .iter()
+                    .any(|word| matches!(word.value.known(), Some("-e" | "--erase")));
+                if erase {
+                    for name in rest.iter().filter_map(|word| word.value.known()) {
+                        scope.vars.remove(name);
+                    }
+                } else if let Some(name) = rest.first().and_then(|word| word.value.known()) {
                     let value = match rest.get(1..) {
                         Some([single]) => single.value.clone(),
                         _ => Value::Unknown,
@@ -365,12 +405,67 @@ mod shapes {
             assert!(sexp.contains(fragment), "{source:?}\n{sexp}");
         }
     }
+
+    #[test]
+    fn node_fields_this_adapter_relies_on() {
+        let source = "echo x > a.txt";
+        let tree = ts::parse(Language::Fish, source).unwrap();
+        let command = ts::named_children(tree.root_node())
+            .into_iter()
+            .find(|node| node.kind() == "command")
+            .expect("command");
+        let redirect = command
+            .child_by_field_name("redirect")
+            .expect("redirect field");
+        assert_eq!(redirect.kind(), "file_redirect");
+        assert_eq!(
+            ts::text(
+                redirect
+                    .child_by_field_name("operator")
+                    .expect("operator field"),
+                source,
+            ),
+            ">"
+        );
+        assert_eq!(
+            ts::text(
+                redirect
+                    .child_by_field_name("destination")
+                    .expect("destination field"),
+                source,
+            ),
+            "a.txt"
+        );
+
+        let source = "for f in a b; echo $f; end";
+        let tree = ts::parse(Language::Fish, source).unwrap();
+        let for_statement = ts::named_children(tree.root_node())
+            .into_iter()
+            .find(|node| node.kind() == "for_statement")
+            .expect("for_statement");
+        assert_eq!(
+            ts::text(
+                for_statement
+                    .child_by_field_name("variable")
+                    .expect("variable field"),
+                source,
+            ),
+            "f"
+        );
+        let mut cursor = for_statement.walk();
+        let values: Vec<_> = for_statement
+            .children_by_field_name("value", &mut cursor)
+            .map(|node| ts::text(node, source))
+            .collect();
+        assert_eq!(values, ["a", "b"]);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
         Analysis, Dialect,
+        model::{Limit, Target, UncertaintyKind},
         testutil::{ctx, programs, targets},
     };
 
@@ -390,6 +485,51 @@ mod tests {
         assert_eq!(targets(&fish("cd sub; and echo x > a.txt")), [
             "/repo/sub/a.txt"
         ]);
+    }
+
+    #[test]
+    fn node_budget_exhaustion_is_reported_once() {
+        let mut context = ctx(Dialect::Fish);
+        context.limits.nodes = 1;
+        let a = crate::analyze("echo x > a.txt; echo y > b.txt", &context);
+        assert_eq!(
+            a.uncertainties
+                .iter()
+                .filter(|uncertainty| {
+                    uncertainty.kind == UncertaintyKind::LimitExhausted(Limit::Nodes)
+                })
+                .count(),
+            1,
+            "{a:?}"
+        );
+    }
+
+    #[test]
+    fn conditional_cwd_is_merged_as_uncertain() {
+        assert_eq!(targets(&fish("false; and cd sub; touch a.txt")), ["?"]);
+    }
+
+    #[test]
+    fn oversized_redirect_destination_is_unresolved() {
+        let path = "a".repeat(64 * 1024 + 1);
+        let a = fish(&format!("echo x > {path}"));
+        assert!(
+            a.file_effects
+                .iter()
+                .all(|effect| effect.target == Target::Unresolved),
+            "{a:?}"
+        );
+    }
+
+    #[test]
+    fn set_erase_invalidates_variable() {
+        let a = fish("set f out; set -e f; echo x > $f");
+        assert!(
+            a.file_effects
+                .iter()
+                .all(|effect| effect.target == Target::Unresolved),
+            "{a:?}"
+        );
     }
 
     #[test]
