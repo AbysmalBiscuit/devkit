@@ -53,6 +53,7 @@ fn guard_shell() {
             harness: which,
             command,
             cwd,
+            ..
         } = harness::parse_shell_payload(&payload)?;
 
         let cwd = cwd.or_else(|| std::env::current_dir().ok())?;
