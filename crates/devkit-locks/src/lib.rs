@@ -472,6 +472,41 @@ impl WriteResolver {
         Ok((root.to_string_lossy().into_owned(), rel))
     }
 
+    /// The registry key for a directory an unenumerated write rewrites:
+    /// its checkout root, and the directory relative to it, or `.` for the
+    /// root itself or when the writer rewrites the whole checkout.
+    pub fn scope_key(&mut self, dir: &str, whole_checkout: bool) -> Result<(String, String)> {
+        let p = Path::new(dir);
+        let abs = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .context("getting current dir")?
+                .join(p)
+        };
+        let root = self.root_for(&existing_ancestor(&abs));
+        let rel = if whole_checkout || abs == root {
+            ".".to_string()
+        } else {
+            match rel_under_root(&abs, &root)? {
+                r if r.is_empty() => ".".to_string(),
+                r => r,
+            }
+        };
+        Ok((root.to_string_lossy().into_owned(), rel))
+    }
+
+    /// Live rows another session holds anywhere under `dir`. Takes no lock.
+    pub fn check_scope(
+        &mut self,
+        dir: &str,
+        whole_checkout: bool,
+        holder: &str,
+    ) -> Result<Vec<Conflict>> {
+        let (root, rel) = self.scope_key(dir, whole_checkout)?;
+        check_resolved(&root, holder, &[rel])
+    }
+
     /// Same decision as [`decide_write`], but sharing this resolver's cache.
     pub fn decide_write(
         &mut self,
@@ -507,6 +542,32 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    #[test]
+    fn a_scope_keys_to_its_checkout_root() {
+        let repo = tempfile::tempdir().unwrap();
+        devkit_common::git::Git::fixture(repo.path())
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+        let sub = repo.path().join("src");
+        std::fs::create_dir_all(&sub).unwrap();
+        let root = find_root_from(repo.path()).to_string_lossy().into_owned();
+        let mut r = WriteResolver::new();
+
+        assert_eq!(
+            r.scope_key(sub.to_str().unwrap(), false).unwrap(),
+            (root.clone(), "src".to_string())
+        );
+        assert_eq!(
+            r.scope_key(sub.to_str().unwrap(), true).unwrap(),
+            (root.clone(), ".".to_string())
+        );
+        assert_eq!(
+            r.scope_key(repo.path().to_str().unwrap(), false).unwrap(),
+            (root, ".".to_string())
+        );
+    }
 
     #[test]
     fn facade_without_daemon_uses_flock_path() {
