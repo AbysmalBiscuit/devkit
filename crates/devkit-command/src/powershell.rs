@@ -8,7 +8,7 @@ use tree_sitter::Node;
 use crate::{
     analyzer::{Analyzer, Frame, RawInvocation, Stdin, Word},
     catalog, embed,
-    model::{FileOp, Language, Location, UncertaintyKind, Value},
+    model::{FileOp, Language, Limit, Location, UncertaintyKind, Value},
     normalize, paths, ts,
 };
 
@@ -207,12 +207,13 @@ pub(crate) fn walk(a: &mut Analyzer<'_>, source: &str, frame: &Frame) {
         source,
         frame,
         root: tree.root_node(),
+        exhausted: false,
     };
     if tree.root_node().has_error() && w.recover_here_string(tree.root_node(), &mut scope) {
         return;
     }
     if tree.root_node().has_error() && tree.root_node().kind() == "ERROR" {
-        w.broken(tree.root_node());
+        w.broken(tree.root_node(), &scope);
         return;
     }
     w.statements(tree.root_node(), &mut scope);
@@ -223,9 +224,26 @@ struct Walker<'a, 'c, 's, 't> {
     source: &'s str,
     frame: &'a Frame,
     root: Node<'t>,
+    exhausted: bool,
 }
 
 impl<'t> Walker<'_, '_, '_, 't> {
+    fn visit(&mut self, node: Node<'t>) -> bool {
+        if self.exhausted {
+            return false;
+        }
+        if self.a.budget.visit().is_err() {
+            self.exhausted = true;
+            self.a.uncertain(
+                UncertaintyKind::LimitExhausted(crate::model::Limit::Nodes),
+                "PowerShell source was only partly analyzed",
+                self.at(node),
+            );
+            return false;
+        }
+        true
+    }
+
     fn recover_here_string(&mut self, root: Node<'t>, scope: &mut Scope) -> bool {
         let Some(here) = self.find_kind(root, "verbatim_here_string_characters") else {
             return false;
@@ -237,6 +255,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
         if !embed::is_interpreter(&program) {
             return false;
         }
+        let here_value = self.bounded_value(
+            here,
+            Value::Known(here_string_body(ts::text(here, self.source))),
+        );
         self.a.invocation(
             RawInvocation {
                 words: vec![
@@ -252,7 +274,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     },
                 ],
                 stdin: Stdin::Source {
-                    value: Value::Known(here_string_body(ts::text(here, self.source))),
+                    value: here_value,
                     span: here.byte_range(),
                 },
                 cwd: scope.cwd.clone(),
@@ -261,10 +283,26 @@ impl<'t> Walker<'_, '_, '_, 't> {
             },
             self.frame,
         );
+        let tail_start = self.source[command.end_byte()..]
+            .find(['\n', ';'])
+            .map(|offset| command.end_byte() + offset + 1)
+            .unwrap_or(self.source.len());
+        if tail_start < self.source.len() {
+            self.a
+                .source(Language::PowerShell, &self.source[tail_start..], Frame {
+                    depth: self.frame.depth,
+                    script_args: Vec::new(),
+                    base: Some(self.at(root)),
+                    cwd: scope.cwd.clone(),
+                });
+        }
         true
     }
 
-    fn find_kind(&self, node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+    fn find_kind(&mut self, node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+        if !self.visit(node) {
+            return None;
+        }
         if node.kind() == kind {
             return Some(node);
         }
@@ -298,7 +336,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             ]
             .contains(&node.kind());
         if node.has_error() && !container {
-            self.broken(node);
+            self.broken(node, scope);
             return;
         }
         match node.kind() {
@@ -330,13 +368,16 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
-    fn broken(&mut self, node: Node<'t>) {
+    fn broken(&mut self, node: Node<'t>, scope: &Scope) {
         let text = ts::text(node, self.source);
         let mut program = None;
         let mut redirects = false;
         let mut cursor = node.walk();
         let mut stack = vec![node];
         while let Some(n) = stack.pop() {
+            if !self.visit(n) {
+                return;
+            }
             if n.kind() == kinds::REDIRECTION || n.kind() == "file_redirection_operator" {
                 redirects = true
             }
@@ -356,7 +397,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
         redirects |= text
             .split_whitespace()
             .any(|w| matches!(w, ">" | ">>" | "*>" | "2>" | "2>>"));
-        if self.recover_command(node, text, redirects) {
+        if self.recover_command(node, text, redirects, scope) {
             return;
         }
         let could_write = match &program {
@@ -381,7 +422,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
-    fn recover_command(&mut self, node: Node<'t>, text: &str, redirects: bool) -> bool {
+    fn recover_command(
+        &mut self,
+        node: Node<'t>,
+        text: &str,
+        redirects: bool,
+        scope: &Scope,
+    ) -> bool {
         let Some(first) = text.split_whitespace().next() else {
             return false;
         };
@@ -393,14 +440,36 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
         let values: Vec<Value> = text
             .split_whitespace()
-            .map(|word| Value::Known(word.trim_matches(['\'', '"']).to_string()))
+            .map(|word| {
+                self.bounded_value(
+                    node,
+                    Value::Known(word.trim_matches(['\'', '"']).to_string()),
+                )
+            })
             .collect();
         let Some(program) = values.first().and_then(Value::known) else {
             return false;
         };
         let args = values[1..].to_vec();
-        let effectful =
-            redirects || !catalog::effects(normalize::basename(program), &args).is_empty();
+        let known_cmdlet = cmdlet(normalize::basename(program));
+        let effectful = redirects
+            || known_cmdlet.as_ref().is_some_and(|c| {
+                !matches!(
+                    c.verb,
+                    Verb::JoinPath | Verb::GetLocation | Verb::PopLocation
+                )
+            })
+            || !catalog::effects(normalize::basename(program), &args).is_empty();
+        if known_cmdlet.is_some() {
+            if effectful {
+                self.a.uncertain(
+                    UncertaintyKind::ParseError,
+                    "a PowerShell statement could not be parsed",
+                    self.at(node),
+                );
+            }
+            return true;
+        }
         let words = values
             .iter()
             .map(|value| Word {
@@ -413,7 +482,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             RawInvocation {
                 words,
                 stdin: Stdin::None,
-                cwd: self.frame.cwd.clone(),
+                cwd: scope.cwd.clone(),
                 language: Language::PowerShell,
                 location: self.at(node),
             },
@@ -481,7 +550,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
         {
             return;
         }
-        let value = self.value(dest, scope);
+        let raw_value = self.value(dest, scope);
+        let value = self.bounded_resolved(dest, raw_value, scope.cwd.as_deref());
         self.a
             .file_effect(op, &value, scope.cwd.as_deref(), self.at(node));
     }
@@ -588,7 +658,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
 
     fn value(&mut self, node: Node<'t>, scope: &mut Scope) -> Value {
         let text = ts::text(node, self.source);
-        match node.kind() {
+        let value = match node.kind() {
             "verbatim_string_characters" | "verbatim_string_literal" => Value::Known(
                 text.trim_start_matches('\'')
                     .trim_end_matches('\'')
@@ -635,7 +705,38 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     Value::Unknown
                 }
             },
+        };
+        self.bounded_value(node, value)
+    }
+
+    fn bounded_value(&mut self, node: Node<'t>, value: Value) -> Value {
+        match value {
+            Value::Known(value) if !self.a.budget.value_fits(value.len()) => {
+                self.value_limit(node);
+                Value::Unknown
+            }
+            value => value,
         }
+    }
+
+    fn bounded_resolved(&mut self, node: Node<'t>, value: Value, cwd: Option<&str>) -> Value {
+        let value = self.bounded_value(node, value);
+        if let crate::model::Target::Path(path) = paths::resolve(&value, cwd, self.a.ctx.path_style)
+            && !self.a.budget.value_fits(path.len())
+        {
+            self.value_limit(node);
+            Value::Unknown
+        } else {
+            value
+        }
+    }
+
+    fn value_limit(&mut self, node: Node<'t>) {
+        self.a.uncertain(
+            UncertaintyKind::LimitExhausted(Limit::ValueSize),
+            "a PowerShell value exceeded the configured size limit",
+            self.at(node),
+        );
     }
 
     fn lookup(&self, text: &str, scope: &Scope) -> Value {
@@ -646,6 +747,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
             .to_ascii_lowercase();
         match name.as_str() {
             "pwd" => scope.cwd.clone().map_or(Value::Unknown, Value::Known),
+            "true" => Value::Known("true".into()),
+            "false" => Value::Known("false".into()),
             n if n.contains(':') => Value::Unknown,
             n => scope.vars.get(n).cloned().unwrap_or(Value::Unknown),
         }
@@ -731,57 +834,88 @@ impl<'t> Walker<'_, '_, '_, 't> {
         };
         let type_name = type_name.strip_prefix("system.").unwrap_or(&type_name);
         let arg = |i: usize| args.get(i).cloned().unwrap_or(Value::Unknown);
+        let cwd = scope.cwd.clone();
+        let path = |w: &mut Self, i: usize| w.bounded_resolved(node, arg(i), cwd.as_deref());
         let at = self.at(node);
         match (type_name, method.as_str()) {
             ("io.path", "combine") => args
                 .iter()
                 .map(Value::known)
                 .collect::<Option<Vec<_>>>()
-                .map_or(Value::Unknown, |p| Value::Known(p.join("/"))),
+                .map_or(Value::Unknown, |p| {
+                    self.bounded_value(node, Value::Known(p.join("/")))
+                }),
             (
                 "io.file",
                 "writealltext" | "writealllines" | "writeallbytes" | "create" | "createtext"
                 | "openwrite",
             )
             | ("io.streamwriter", "new") => {
+                let target = path(self, 0);
                 self.a
-                    .file_effect(FileOp::Overwrite, &arg(0), scope.cwd.as_deref(), at);
+                    .file_effect(FileOp::Overwrite, &target, cwd.as_deref(), at);
                 Value::Unknown
             }
             ("io.file", "appendalltext" | "appendalllines" | "appendtext") => {
+                let target = path(self, 0);
                 self.a
-                    .file_effect(FileOp::Append, &arg(0), scope.cwd.as_deref(), at);
+                    .file_effect(FileOp::Append, &target, cwd.as_deref(), at);
                 Value::Unknown
             }
-            ("io.file", "delete") | ("io.directory", "delete") => {
+            ("io.file", "delete") => {
+                let target = path(self, 0);
                 self.a
-                    .file_effect(FileOp::Delete, &arg(0), scope.cwd.as_deref(), at);
+                    .file_effect(FileOp::Delete, &target, cwd.as_deref(), at);
+                Value::Unknown
+            }
+            ("io.directory", "delete") => {
+                if arg(1).known().is_some_and(|value| {
+                    value.eq_ignore_ascii_case("$true") || value.eq_ignore_ascii_case("true")
+                }) {
+                    let target = path(self, 0);
+                    self.a.tree_effect(
+                        &target,
+                        false,
+                        cwd.as_deref(),
+                        "[IO.Directory]::Delete",
+                        at,
+                    );
+                } else {
+                    let target = path(self, 0);
+                    self.a
+                        .file_effect(FileOp::Delete, &target, cwd.as_deref(), at);
+                }
                 Value::Unknown
             }
             ("io.file", "move" | "replace") => {
+                let source = path(self, 0);
+                let destination = path(self, 1);
                 self.a
-                    .file_effect(FileOp::Rename, &arg(0), scope.cwd.as_deref(), at.clone());
+                    .file_effect(FileOp::Rename, &source, cwd.as_deref(), at.clone());
                 self.a
-                    .file_effect(FileOp::Rename, &arg(1), scope.cwd.as_deref(), at);
+                    .file_effect(FileOp::Rename, &destination, cwd.as_deref(), at);
                 Value::Unknown
             }
             ("io.file", "copy") => {
+                let target = path(self, 1);
                 self.a
-                    .file_effect(FileOp::Copy, &arg(1), scope.cwd.as_deref(), at);
+                    .file_effect(FileOp::Copy, &target, cwd.as_deref(), at);
                 Value::Unknown
             }
             ("io.directory", "move") => {
+                let source = path(self, 0);
+                let destination = path(self, 1);
                 self.a.tree_effect(
-                    &arg(0),
+                    &source,
                     false,
-                    scope.cwd.as_deref(),
+                    cwd.as_deref(),
                     "[IO.Directory]::Move",
                     at.clone(),
                 );
                 self.a.tree_effect(
-                    &arg(1),
+                    &destination,
                     false,
-                    scope.cwd.as_deref(),
+                    cwd.as_deref(),
                     "[IO.Directory]::Move",
                     at,
                 );
@@ -803,13 +937,19 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         bound.get("path").and_then(|v| v.known()),
                         bound.get("childpath").and_then(|v| v.known()),
                     ) {
-                        (Some(p), Some(child)) => {
-                            Value::Known(format!("{}/{}", p.trim_end_matches(['/', '\\']), child))
-                        }
+                        (Some(p), Some(child)) => self.bounded_value(
+                            node,
+                            Value::Known(format!("{}/{}", p.trim_end_matches(['/', '\\']), child)),
+                        ),
                         _ => Value::Unknown,
                     };
                 }
-                Verb::GetLocation => return scope.cwd.clone().map_or(Value::Unknown, Value::Known),
+                Verb::GetLocation => {
+                    return self.bounded_value(
+                        node,
+                        scope.cwd.clone().map_or(Value::Unknown, Value::Known),
+                    );
+                }
                 _ => {}
             }
         }
@@ -934,7 +1074,12 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 Value::Known(p) if !literal && p.contains(['*', '?', '[']) => Value::Unknown,
                 _ => v,
             };
+            let v = w.bounded_resolved(node, v, cwd.as_deref());
             w.a.file_effect(op, &v, cwd.as_deref(), w.at(node));
+        };
+        let tree = |w: &mut Self, v: Value, by: &str| {
+            let v = w.bounded_resolved(node, v, cwd.as_deref());
+            w.a.tree_effect(&v, false, cwd.as_deref(), by, w.at(node));
         };
         let switch = |k| bound.contains_key(k);
         let literal = elements.iter().any(|(p, _)| {
@@ -971,12 +1116,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             Verb::RemoveItem => {
                 if switch("recurse") {
-                    self.a.tree_effect(
-                        &get("path").unwrap_or(Value::Unknown),
-                        false,
-                        cwd.as_deref(),
+                    tree(
+                        self,
+                        get("path").unwrap_or(Value::Unknown),
                         "Remove-Item -Recurse",
-                        self.at(node),
                     );
                 } else {
                     for (_, w) in elements.iter().filter(|(p, _)| {
@@ -1005,23 +1148,19 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             Verb::CopyItem => {
                 if switch("recurse") {
-                    self.a.tree_effect(
-                        &get("destination").unwrap_or(Value::Unknown),
-                        false,
-                        cwd.as_deref(),
+                    tree(
+                        self,
+                        get("destination").unwrap_or(Value::Unknown),
                         "Copy-Item -Recurse",
-                        self.at(node),
                     );
                 } else {
                     file(self, FileOp::Copy, get("destination"), true);
                 }
             }
-            Verb::ExpandArchive => self.a.tree_effect(
-                &get("destinationpath").unwrap_or(Value::Known(".".into())),
-                false,
-                cwd.as_deref(),
+            Verb::ExpandArchive => tree(
+                self,
+                get("destinationpath").unwrap_or(Value::Known(".".into())),
                 "Expand-Archive",
-                self.at(node),
             ),
             Verb::WebRequest => {
                 if let Some(out) = get("outfile") {
@@ -1031,6 +1170,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             Verb::SetLocation => {
                 scope.cwd = match get("path") {
                     Some(v) => {
+                        let v = self.bounded_resolved(node, v, scope.cwd.as_deref());
                         match paths::resolve(&v, scope.cwd.as_deref(), self.a.ctx.path_style) {
                             crate::model::Target::Path(d) => Some(d),
                             crate::model::Target::Unresolved => None,
@@ -1174,7 +1314,7 @@ mod shapes {
 mod tests {
     use crate::{
         Analysis, Dialect, PathStyle,
-        model::UncertaintyKind,
+        model::{Limit, UncertaintyKind},
         testutil::{ctx, targets},
     };
 
@@ -1257,9 +1397,28 @@ mod tests {
     }
 
     #[test]
+    fn dotnet_directory_delete_is_tree_only_when_recursive() {
+        let nonrecursive = ps("[IO.Directory]::Delete('build')");
+        assert_eq!(targets(&nonrecursive), ["C:/repo/build"]);
+        assert!(nonrecursive.tree_effects.is_empty());
+
+        let source = "[IO.Directory]::Delete('build', $true)";
+        let recursive = ps(source);
+        assert!(recursive.file_effects.is_empty(), "{recursive:?}");
+        assert_eq!(recursive.tree_effects[0].scope, "C:/repo/build");
+    }
+
+    #[test]
     fn a_here_string_piped_to_python_is_python_source() {
         let a = ps("@'\nopen('h.txt', 'w')\n'@ | python -");
         assert_eq!(targets(&a), ["C:/repo/h.txt"]);
+    }
+
+    #[test]
+    fn a_malformed_here_string_does_not_skip_following_writes() {
+        let source = "@'\nopen('h.txt', 'w')\n'@ | python -\nSet-Content after.txt y";
+        let a = ps(source);
+        assert_eq!(targets(&a), ["C:/repo/h.txt", "C:/repo/after.txt"], "{a:?}");
     }
 
     #[test]
@@ -1317,6 +1476,74 @@ mod tests {
                 .any(|u| u.kind == UncertaintyKind::ParseError),
             "{a:?}"
         );
+    }
+
+    #[test]
+    fn a_malformed_known_cmdlet_preserves_parse_error() {
+        let source = "Set-Content -Path a.txt -Value x |";
+        let tree = crate::ts::parse(crate::model::Language::PowerShell, source).unwrap();
+        let a = ps(source);
+        assert!(
+            a.uncertainties
+                .iter()
+                .any(|u| u.kind == UncertaintyKind::ParseError),
+            "{}\n{a:?}",
+            tree.root_node().to_sexp()
+        );
+    }
+
+    #[test]
+    fn malformed_recovery_uses_current_location() {
+        let a = ps("Set-Location sub\ngit checkout -- a.rs |");
+        let targets = targets(&a);
+        assert!(targets.contains(&"C:/repo/sub/a.rs".to_string()), "{a:?}");
+        assert!(!targets.contains(&"C:/repo/a.rs".to_string()), "{a:?}");
+    }
+
+    #[test]
+    fn malformed_here_string_recovery_respects_node_limit() {
+        let mut c = ctx(Dialect::PowerShell);
+        c.cwd = Some("C:/repo".into());
+        c.path_style = PathStyle::Windows;
+        c.limits.nodes = 1;
+        let a = crate::analyze("@'\n'@ | python - |", &c);
+        assert!(
+            a.uncertainties
+                .iter()
+                .any(|u| u.kind == UncertaintyKind::LimitExhausted(Limit::Nodes)),
+            "{a:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_error_recovery_respects_node_limit() {
+        let source = "Get-ChildItem | Format-Table Mode, Name -AutoSize";
+        let tree = crate::ts::parse(crate::model::Language::PowerShell, source).unwrap();
+        let mut c = ctx(Dialect::PowerShell);
+        c.cwd = Some("C:/repo".into());
+        c.path_style = PathStyle::Windows;
+        c.limits.nodes = 20;
+        let a = crate::analyze(source, &c);
+        assert!(
+            a.uncertainties
+                .iter()
+                .any(|u| u.kind == UncertaintyKind::LimitExhausted(Limit::Nodes)),
+            "{}\n{a:?}",
+            tree.root_node().to_sexp()
+        );
+    }
+
+    #[test]
+    fn oversized_powershell_values_are_not_emitted_as_targets() {
+        let path = "a".repeat(65 * 1024);
+        let a = ps(&format!("Set-Content '{path}' x"));
+        assert!(
+            a.uncertainties
+                .iter()
+                .any(|u| u.kind == UncertaintyKind::LimitExhausted(Limit::ValueSize)),
+            "{a:?}"
+        );
+        assert_eq!(targets(&a), ["?"]);
     }
 
     #[test]
