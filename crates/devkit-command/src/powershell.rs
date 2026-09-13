@@ -31,6 +31,9 @@ mod kinds {
     pub const FOREACH: &str = "foreach_statement";
     pub const FUNCTION: &str = "function_statement";
     pub const SUB_EXPRESSION: &str = "sub_expression";
+    pub const SCRIPT_BLOCK: &str = "script_block";
+    pub const SCRIPT_BLOCK_BODY: &str = "script_block_body";
+    pub const STATEMENT_BLOCK: &str = "statement_block";
 }
 
 const MAX_LOOP_ITEMS: usize = 32;
@@ -287,16 +290,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
         if self.a.budget.visit().is_err() {
             return;
         }
-        if node.has_error()
-            && !matches!(
-                node.kind(),
-                "program"
-                    | "statement_list"
-                    | "statement_block"
-                    | "script_block"
-                    | "script_block_body"
-            )
-        {
+        let container = matches!(node.kind(), "program" | "statement_list")
+            || [
+                kinds::STATEMENT_BLOCK,
+                kinds::SCRIPT_BLOCK,
+                kinds::SCRIPT_BLOCK_BODY,
+            ]
+            .contains(&node.kind());
+        if node.has_error() && !container {
             self.broken(node);
             return;
         }
@@ -311,7 +312,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .find(|n| n.kind() == "function_name");
                 let body = ts::named_children(node)
                     .into_iter()
-                    .find(|n| n.kind() == "script_block");
+                    .find(|n| n.kind() == kinds::SCRIPT_BLOCK);
                 if let (Some(name), Some(body)) = (name, body) {
                     scope.functions.insert(
                         ts::text(name, self.source).to_ascii_lowercase(),
