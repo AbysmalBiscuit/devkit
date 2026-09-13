@@ -67,21 +67,21 @@ pub struct IssueCli {
 pub(crate) enum Cmd {
     /// Prepare an issue worktree: branch, setup commands, ports.
     Setup {
-        /// Linear issue id or issue URL (equivalent to --issue).
+        /// Issue id or issue URL (equivalent to --issue).
         #[arg(
             value_name = "ISSUE",
             required_unless_present = "issue",
             conflicts_with = "issue"
         )]
         issue_pos: Option<String>,
-        /// Linear issue id or issue URL (equivalent to the positional ISSUE).
+        /// Issue id or issue URL (equivalent to the positional ISSUE).
         #[arg(long)]
         issue: Option<String>,
         /// Short kebab title, without the issue id, rendered into the branch
         /// and worktree names (e.g. `fix-bli-export`). Omit to take the
         /// slug a pasted issue URL already spells out, else the Linear
         /// title.
-        #[arg(long)]
+        #[arg(short = 'l', long)]
         slug: Option<String>,
         /// Apps to bootstrap: writes each one's prep files and runs its setup
         /// commands. Omit for a worktree with no per-app setup.
@@ -92,7 +92,7 @@ pub(crate) enum Cmd {
         /// `templates.issue_summary_path` names. Needs a Linear key, and never
         /// overwrites a summary that is already there. Set
         /// `defaults.issue_summary = true` to make this the default.
-        #[arg(long)]
+        #[arg(short = 's', long)]
         summary: bool,
         /// Skip the issue summary file for this run, whatever
         /// `defaults.issue_summary` says.
@@ -162,15 +162,15 @@ pub(crate) enum Cmd {
         yes: bool,
         /// Discard uncommitted changes instead of refusing to remove a dirty
         /// worktree.
-        #[arg(long)]
+        #[arg(short = 'f', long)]
         force: bool,
         /// Count a merged PR plus a clean tree as finished, ignoring the
         /// tracker state and the issue-id gate.
-        #[arg(long = "pr-only")]
+        #[arg(short = 'p', long = "pr-only")]
         pr_only: bool,
         /// Remove the selected worktrees whether or not they are finished.
         /// Requires at least one selector.
-        #[arg(long = "clean-worktree")]
+        #[arg(short = 'w', long = "clean-worktree")]
         clean_worktree: bool,
         /// Remove without copying out the `[preserve]` entries first.
         #[arg(long = "no-preserve")]
@@ -186,11 +186,11 @@ pub(crate) enum Cmd {
         /// Replace files the worktree already has instead of leaving them
         /// alone. Asks once per worktree before clobbering anything, and needs
         /// a scope: one or more selectors, or --all.
-        #[arg(long)]
+        #[arg(short = 'o', long)]
         overwrite: bool,
         /// Widen --overwrite to every worktree in the repository, other
         /// sessions' included.
-        #[arg(long)]
+        #[arg(short = 'a', long)]
         all: bool,
         /// Answer the --overwrite prompt yes. Does nothing on its own: without
         /// --overwrite there is no prompt and nothing is replaced.
@@ -273,10 +273,10 @@ pub(crate) enum PrCmd {
     /// an open PR that already exists is reused with its state left alone.
     Create {
         /// Open as a draft, whatever `defaults.pr_create_state` says.
-        #[arg(long)]
+        #[arg(short = 'd', long)]
         draft: bool,
         /// Open ready for review, whatever `defaults.pr_create_state` says.
-        #[arg(long, conflicts_with = "draft")]
+        #[arg(short = 'r', long, conflicts_with = "draft")]
         ready: bool,
         /// Reviewer: a `[people]` alias. Repeatable. Adds GitHub reviewers and
         /// sends no Slack.
@@ -286,10 +286,10 @@ pub(crate) enum PrCmd {
         #[arg(long)]
         base: Option<String>,
         /// PR title, instead of the one the template renders.
-        #[arg(long = "pr-title")]
+        #[arg(short = 't', long = "pr-title")]
         pr_title: Option<String>,
         /// PR body, instead of the one the template renders.
-        #[arg(long = "pr-body")]
+        #[arg(short = 'b', long = "pr-body")]
         pr_body: Option<String>,
         /// Open or update the PR without pushing the branch first.
         #[arg(long = "no-push")]
@@ -300,7 +300,7 @@ pub(crate) enum PrCmd {
         pr: Option<String>,
         /// Override a declared template variable: `--arg key=value`.
         /// Repeatable.
-        #[arg(long = "arg")]
+        #[arg(short = 'a', long = "arg")]
         args: Vec<String>,
     },
     /// Mark this branch's PR ready for review.
