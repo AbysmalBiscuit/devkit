@@ -11,6 +11,9 @@ use clap::{Args, Subcommand};
 use devkit_common::harness::{self, ShellPayload};
 use devkit_ports::guard::{self, Decision, Project};
 
+mod dialect;
+mod writes;
+
 // The fail-open contract below is `catch_unwind`, which catches nothing under
 // an aborting panic strategy. Nothing else ties the compile profile to this
 // file, so the dependency is stated where it is relied on.

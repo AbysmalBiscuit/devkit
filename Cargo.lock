@@ -318,6 +318,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_complete_nushell",
+ "devkit-command",
  "devkit-common",
  "devkit-config",
  "devkit-docs",
