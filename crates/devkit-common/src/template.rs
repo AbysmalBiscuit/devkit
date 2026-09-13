@@ -111,6 +111,26 @@ pub fn referenced_ports(
     })
 }
 
+/// Top-level names `templates` read without assigning them, minus minijinja's
+/// own globals (`range`, `dict`, ...). The analysis is static, so a name read
+/// only inside a branch that never runs still counts.
+pub fn undeclared(templates: &[&str]) -> Result<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    for t in templates {
+        let mut env = Environment::new();
+        env.add_template("t", t)
+            .with_context(|| format!("compiling template `{t}`"))?;
+        let tmpl = env.get_template("t").expect("template just added");
+        let globals: BTreeSet<&str> = env.globals().map(|(name, _)| name).collect();
+        names.extend(
+            tmpl.undeclared_variables(false)
+                .into_iter()
+                .filter(|n| !globals.contains(n.as_str())),
+        );
+    }
+    Ok(names)
+}
+
 #[derive(Serialize)]
 struct LaunchCtx<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -269,6 +289,22 @@ mod tests {
     #[test]
     fn referenced_ports_unknown_variable_is_an_error() {
         assert!(referenced_ports(&["{{ typo }}"], &novars()).is_err());
+    }
+
+    #[test]
+    fn undeclared_lists_reads_but_not_assignments_or_globals() {
+        let names = undeclared(&[
+            "{% set x = msg %}{{ x }}{% for i in range(2) %}{{ i }}{% endfor %}",
+            "{% if issue is defined %}{{ issue }}{% endif %}{{ ports['api'] }}",
+        ])
+        .unwrap();
+        assert_eq!(
+            names,
+            ["issue", "msg", "ports"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        );
     }
 
     #[test]

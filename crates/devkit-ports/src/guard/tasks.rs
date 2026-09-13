@@ -34,11 +34,19 @@ pub fn redirect_worth_it(
 
 /// Whether the task's `run` or `env` reads a port. Rendered against a recording
 /// context rather than scanned for `{{`, so `ports["web"]` and a
-/// `{% if port %}` guard both count and neither touches the registry.
+/// `{% if port %}` guard both count and neither touches the registry. The guard
+/// sees no `--arg` and no issue record, so every other name the templates read
+/// renders as an empty placeholder instead of failing the scan.
 fn references_a_port(task: &TaskConfig, vars: &BTreeMap<String, String>) -> bool {
     let mut templates: Vec<&str> = task.run.iter().map(String::as_str).collect();
     templates.extend(task.env.values().map(String::as_str));
-    devkit_common::template::referenced_ports(&templates, vars)
+    let mut vars = vars.clone();
+    for name in devkit_common::template::undeclared(&templates).unwrap_or_default() {
+        if name != "port" && name != "ports" {
+            vars.entry(name).or_default();
+        }
+    }
+    devkit_common::template::referenced_ports(&templates, &vars)
         .map(|r| r.own_port || !r.apps.is_empty())
         .unwrap_or(false)
 }
@@ -85,6 +93,11 @@ mod tests {
     fn a_port_template_is_worth_redirecting() {
         assert!(worth(&task(&["curl", "http://localhost:{{ port }}"])));
         assert!(worth(&task(&["curl", "{{ ports['api'] }}"])));
+    }
+
+    #[test]
+    fn a_port_template_beside_a_task_arg_is_worth_redirecting() {
+        assert!(worth(&task(&["curl", "{{ ports['api'] }}/{{ path }}"])));
     }
 
     #[test]

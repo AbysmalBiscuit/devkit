@@ -4,12 +4,12 @@
 //! future MCP surface).
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use devkit_common::template;
+use devkit_common::{git, record, template};
 use devkit_config::{Config, Step, TaskConfig};
 
 use crate::{
@@ -46,7 +46,16 @@ pub struct TaskRow {
     pub name: String,
     pub kind: &'static str,
     pub app: String,
+    pub args: Vec<TaskArg>,
     pub description: String,
+}
+
+/// A variable a task's templates read, set with `--arg name=value`.
+pub struct TaskArg {
+    pub name: String,
+    /// No `[templates.variables]` value backs it, so the task cannot run
+    /// without the `--arg`.
+    pub required: bool,
 }
 
 /// Configured tasks sorted by name. `kind` reflects the shape on disk; an
@@ -64,6 +73,14 @@ pub fn list(cfg: &Config) -> Vec<TaskRow> {
                 _ => "invalid",
             },
             app: t.app.clone().unwrap_or_else(|| "-".into()),
+            args: args(cfg, name)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|name| TaskArg {
+                    required: !cfg.templates.variables.contains_key(&name),
+                    name,
+                })
+                .collect(),
             description: t.description.clone().unwrap_or_default(),
         })
         .collect();
@@ -73,28 +90,140 @@ pub fn list(cfg: &Config) -> Vec<TaskRow> {
 
 /// Configured tasks as a text table, or a hint when none are configured.
 /// Shared by `devrun task`/`devkit config tasks` and `devkit brief` so all
-/// render identically.
+/// render identically. An optional arg is bracketed.
 pub fn tasks_text(rows: &[TaskRow]) -> String {
     if rows.is_empty() {
         return "no tasks configured (add [tasks.<name>] to devkit.toml)\n".into();
     }
-    let mut t = devkit_common::ui::table(&["NAME", "KIND", "APP", "DESCRIPTION"]);
+    let mut t = devkit_common::ui::table(&["NAME", "KIND", "APP", "ARGS", "DESCRIPTION"]);
     for r in rows {
+        let args: Vec<String> = r
+            .args
+            .iter()
+            .map(|a| {
+                if a.required {
+                    a.name.clone()
+                } else {
+                    format!("[{}]", a.name)
+                }
+            })
+            .collect();
         t.add_row(vec![
             r.name.clone(),
             r.kind.to_string(),
             r.app.clone(),
+            if args.is_empty() {
+                "-".into()
+            } else {
+                args.join(" ")
+            },
             r.description.clone(),
         ]);
     }
     t.to_string()
 }
 
+/// Names task templates read from devkit rather than from a variable: `port`
+/// and `ports` from the registry, and the issue fields [`variables`] supplies.
+const CONTEXT: [&str; 5] = ["port", "ports", "issue", "slug", "branch"];
+
+/// Every variable task `name` reads from `[templates.variables]` or `--arg`,
+/// across all of its steps for a sequence. Only `run` and `env` count: an
+/// app's `static_env` renders for `devrun up` too, where no `--arg` exists.
+pub fn args(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
+    let t = cfg
+        .tasks
+        .get(name)
+        .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
+    let mut names = command_args(t)?;
+    for step in &t.steps {
+        if let Step::Task(r) = step
+            && let Some(sub) = cfg.tasks.get(r)
+        {
+            names.extend(command_args(sub)?);
+        }
+    }
+    Ok(names)
+}
+
+/// The args task `name` cannot run without.
+pub fn required_args(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
+    let mut names = args(cfg, name)?;
+    names.retain(|n| !cfg.templates.variables.contains_key(n));
+    Ok(names)
+}
+
+fn command_args(t: &TaskConfig) -> Result<BTreeSet<String>> {
+    let mut templates: Vec<&str> = t.run.iter().map(String::as_str).collect();
+    templates.extend(t.env.values().map(String::as_str));
+    let mut names = template::undeclared(&templates)?;
+    names.retain(|n| !CONTEXT.contains(&n.as_str()));
+    Ok(names)
+}
+
+/// Parse repeated `--arg key=value` pairs.
+pub fn parse_args(pairs: &[String]) -> Result<BTreeMap<String, String>> {
+    pairs
+        .iter()
+        .map(|pair| {
+            pair.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .with_context(|| format!("--arg must be key=value, got `{pair}`"))
+        })
+        .collect()
+}
+
+/// Refuse an `--arg` task `name` never reads and a required one left unset,
+/// before any step of it resolves.
+fn check_args(cfg: &Config, name: &str, given: &BTreeMap<String, String>) -> Result<()> {
+    let reads = args(cfg, name)?;
+    for k in given.keys() {
+        ensure!(
+            reads.contains(k) || cfg.templates.variables.contains_key(k),
+            "task `{name}` reads no variable `{k}`"
+        );
+    }
+    let missing: Vec<String> = required_args(cfg, name)?
+        .into_iter()
+        .filter(|n| !given.contains_key(n))
+        .map(|n| format!("--arg {n}=..."))
+        .collect();
+    ensure!(
+        missing.is_empty(),
+        "task `{name}` needs {}",
+        missing.join(" ")
+    );
+    Ok(())
+}
+
+/// The variables task templates render over, lowest first:
+/// `[templates.variables]`, `issue`/`slug` from `.devkit/issue.toml` and
+/// `branch` from git, then `--arg`. An issue field with no source stays
+/// undefined rather than empty.
+fn variables(
+    cfg: &Config,
+    worktree_root: &Path,
+    args: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut vars = cfg.templates.variables.clone();
+    if let Some(r) = record::read(worktree_root) {
+        vars.insert("issue".into(), r.issue);
+        vars.insert("slug".into(), r.slug);
+    }
+    if let Ok(branch) = git::branch(worktree_root) {
+        vars.insert("branch".into(), branch);
+    }
+    vars.extend(args.iter().map(|(k, v)| (k.clone(), v.clone())));
+    vars
+}
+
 /// Resolve task `name` for execution in `worktree_root`. Command tasks get
 /// their port references allocated (issue role, pid-less reservations for
 /// apps not yet running) and their templates rendered; sequence tasks
 /// validate and resolve each step. All validation errors fire here, before
-/// anything spawns.
+/// anything spawns, including an `--arg` in `args` the task never reads and a
+/// required one missing from it.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve(
     cfg: &Config,
     catalog: &HashMap<String, App>,
@@ -102,16 +231,19 @@ pub fn resolve(
     holder: &str,
     name: &str,
     user_env: &BTreeMap<String, String>,
+    args: &BTreeMap<String, String>,
 ) -> Result<Resolved> {
     let t = cfg
         .tasks
         .get(name)
         .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
+    check_args(cfg, name, args)?;
+    let vars = variables(cfg, worktree_root, args);
     match (!t.run.is_empty(), !t.steps.is_empty()) {
         (true, true) => bail!("task `{name}` sets both `run` and `steps`"),
         (false, false) => bail!("task `{name}` sets neither `run` nor `steps`"),
         (true, false) => Ok(Resolved::Command(resolve_command(
-            cfg,
+            &vars,
             catalog,
             worktree_root,
             holder,
@@ -138,7 +270,7 @@ pub fn resolve(
                              (sequences cannot nest)"
                         );
                         items.push(SeqItem::Run(resolve_command(
-                            cfg,
+                            &vars,
                             catalog,
                             worktree_root,
                             holder,
@@ -187,7 +319,7 @@ fn effective_env<'a>(
 /// own app are allocated in one `registry::alloc` call.
 #[allow(clippy::too_many_arguments)]
 fn resolve_command(
-    cfg: &Config,
+    vars: &BTreeMap<String, String>,
     catalog: &HashMap<String, App>,
     worktree_root: &Path,
     holder: &str,
@@ -207,7 +339,6 @@ fn resolve_command(
         .transpose()?;
     let static_env = app.map(|a| a.static_env.clone()).unwrap_or_default();
     let env_templates = effective_env(&static_env, t, user_env);
-    let vars = &cfg.templates.variables;
 
     let empty_user_env = BTreeMap::new();
     let unfiltered_env = effective_env(&static_env, t, &empty_user_env);
@@ -297,7 +428,10 @@ fn resolve_command(
 /// Resolve command task `name` for immediate execution: fresh allocation,
 /// fresh render, `require_live` enforced. Sequences call this per step at
 /// execution time so a long-running earlier step cannot expire the ports an
-/// upfront render used; standalone commands call it right before exec.
+/// upfront render used; standalone commands call it right before exec. `args`
+/// were checked by [`resolve`] against the task the user named, which for a
+/// sequence is not this step, so they are not checked again here.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_step(
     cfg: &Config,
     catalog: &HashMap<String, App>,
@@ -305,6 +439,7 @@ pub fn resolve_step(
     holder: &str,
     name: &str,
     user_env: &BTreeMap<String, String>,
+    args: &BTreeMap<String, String>,
 ) -> Result<CommandPlan> {
     let t = cfg
         .tasks
@@ -314,7 +449,17 @@ pub fn resolve_step(
         !t.run.is_empty() && t.steps.is_empty(),
         "task `{name}` is not a command task"
     );
-    resolve_command(cfg, catalog, worktree_root, holder, name, t, user_env, true)
+    let vars = variables(cfg, worktree_root, args);
+    resolve_command(
+        &vars,
+        catalog,
+        worktree_root,
+        holder,
+        name,
+        t,
+        user_env,
+        true,
+    )
 }
 
 /// Render one command task against an already-resolved port map. Registry-free
@@ -391,12 +536,14 @@ mod tests {
                 name: "check".into(),
                 kind: "sequence",
                 app: "-".into(),
+                args: vec![],
                 description: "lint then test".into(),
             },
             TaskRow {
                 name: "lint".into(),
                 kind: "command",
                 app: "api".into(),
+                args: vec![],
                 description: String::new(),
             },
         ];
@@ -578,7 +725,7 @@ mod tests {
             "missing",
         ] {
             assert!(
-                resolve(&cfg, &cat, Path::new("/wt"), "/wt", bad, &u).is_err(),
+                resolve(&cfg, &cat, Path::new("/wt"), "/wt", bad, &u, &u).is_err(),
                 "task `{bad}` must fail validation"
             );
         }
@@ -598,6 +745,7 @@ mod tests {
             Path::new("/wt"),
             "/wt",
             "seq",
+            &BTreeMap::new(),
             &BTreeMap::new(),
         )
         .unwrap();
@@ -681,6 +829,7 @@ mod tests {
             "/wt",
             "t",
             &BTreeMap::new(),
+            &BTreeMap::new(),
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("unknown app `nope`"));
@@ -700,6 +849,7 @@ mod tests {
             "/wt",
             "seq",
             &BTreeMap::new(),
+            &BTreeMap::new(),
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("not a command task"));
@@ -718,7 +868,16 @@ mod tests {
         let mut t = command_task(Some("api-prod"), &["git", "version"], &[("URL", "static")]);
         t.require_live = vec!["api-prod".into()];
         let cfg = cfg_with(&[("t", t)]);
-        let err = resolve(&cfg, &cat, Path::new("/wt"), "/wt", "t", &BTreeMap::new()).unwrap_err();
+        let err = resolve(
+            &cfg,
+            &cat,
+            Path::new("/wt"),
+            "/wt",
+            "t",
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
         assert!(format!("{err:#}").contains("never references"));
     }
 
@@ -733,6 +892,7 @@ mod tests {
             Path::new("/wt"),
             "/wt",
             "t",
+            &BTreeMap::new(),
             &BTreeMap::new(),
         )
         .unwrap_err();

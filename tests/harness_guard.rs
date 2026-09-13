@@ -217,6 +217,31 @@ fn a_task_denies_through_the_binary_and_writes_no_registry_row() {
 }
 
 #[test]
+fn a_redirect_names_the_args_the_task_requires() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        &(GUARDED.to_string()
+            + r#"
+[tasks.commit]
+run = ["git", "commit", "-m", "{{ msg }}"]
+guard = true
+"#),
+    );
+    let out = run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("git commit -m wip"),
+    );
+    assert!(
+        denied(&out),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("devrun task commit --arg msg="), "{stdout}");
+}
+
+#[test]
 fn the_cwd_names_the_app_for_a_catalog_hit() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(&format!(

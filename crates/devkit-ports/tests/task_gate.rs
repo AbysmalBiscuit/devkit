@@ -65,7 +65,7 @@ fn gate_waiver_scoping_and_lazy_resolution() {
     let none = BTreeMap::new();
 
     // Gate: no reservation at all → loud error, and no reservation minted.
-    let err = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none).unwrap_err();
+    let err = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none, &none).unwrap_err();
     assert!(format!("{err:#}").contains("no live server"), "{err:#}");
     assert!(registry::snapshot().unwrap().entries.is_empty());
 
@@ -73,14 +73,14 @@ fn gate_waiver_scoping_and_lazy_resolution() {
     // gate is skipped and nothing is allocated.
     let user: BTreeMap<String, String> =
         [("BASE".to_string(), "https://preview".to_string())].into();
-    let plan = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &user).unwrap();
+    let plan = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &user, &none).unwrap();
     assert_eq!(plan.env["BASE"], "https://preview");
     assert!(registry::snapshot().unwrap().entries.is_empty());
 
     // Holder scoping: a foreign holder on BASE never satisfies my gate and
     // never leaks into my allocation.
     registry::with_lock(|d| Ok(d.alloc_one(foreign_s, "api", BASE, Role::Issue))).unwrap();
-    let err = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none).unwrap_err();
+    let err = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none, &none).unwrap_err();
     assert!(format!("{err:#}").contains("no live server"), "{err:#}");
 
     let my_port =
@@ -95,7 +95,7 @@ fn gate_waiver_scoping_and_lazy_resolution() {
         tmp.path().join("api.log"),
     )
     .unwrap();
-    let plan = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none).unwrap();
+    let plan = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none, &none).unwrap();
     assert_eq!(plan.env["BASE"], format!("http://localhost:{}", BASE + 1));
 
     // Laziness: after the server moves, a fresh resolve_step renders the new
@@ -113,6 +113,6 @@ fn gate_waiver_scoping_and_lazy_resolution() {
         tmp.path().join("api.log"),
     )
     .unwrap();
-    let plan = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none).unwrap();
+    let plan = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none, &none).unwrap();
     assert_eq!(plan.env["BASE"], format!("http://localhost:{BASE}"));
 }
