@@ -46,6 +46,7 @@ const PROGRAMS: &[&str] = &[
     "clang-format",
     "shfmt",
     "stylua",
+    "mkdir",
     "source",
     ".",
     "patch",
@@ -238,7 +239,19 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 return p
                     .operands
                     .iter()
-                    .map(|s| file(FileOp::Copy, &join_name(dir, s)))
+                    .map(|s| {
+                        let target = join_name(dir, s);
+                        if recursive {
+                            match target {
+                                Value::Known(_) => tree(&target, false, "cp -r"),
+                                Value::Unknown => Hit::Unresolved(
+                                    "`cp -r` destination could not be determined".into(),
+                                ),
+                            }
+                        } else {
+                            file(FileOp::Copy, &target)
+                        }
+                    })
                     .collect();
             }
             match p.operands.split_last() {
@@ -282,6 +295,13 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
         }
         "ln" => {
             let p = parse(args, &["-t", "--target-directory", "-S", "--suffix"]);
+            if let Some(dir) = p.value(&["-t", "--target-directory"]) {
+                return p
+                    .operands
+                    .iter()
+                    .map(|source| file(FileOp::Create, &join_name(dir, source)))
+                    .collect();
+            }
             match p.operands.as_slice() {
                 [_, .., link] => vec![file(FileOp::Create, link)],
                 _ => Vec::new(),
@@ -663,6 +683,26 @@ mod tests {
         ]);
         assert!(hits("mkdir", &["-p", "src"]).is_empty());
         assert!(hits("cat", &["a"]).is_empty());
+    }
+
+    #[test]
+    fn recursive_copy_to_a_target_directory_claims_the_joined_tree() {
+        assert_eq!(hits("cp", &["-r", "-t", "out", "src"]), [
+            "Tree out/src false cp -r"
+        ]);
+    }
+
+    #[test]
+    fn link_target_directories_claim_joined_link_paths() {
+        assert_eq!(hits("ln", &["-t", "links", "source"]), [
+            "Create links/source"
+        ]);
+    }
+
+    #[test]
+    fn mkdir_is_cataloged_even_without_an_effect() {
+        assert!(is_cataloged("mkdir"));
+        assert!(effects("mkdir", &[k("-p"), k("src")]).is_empty());
     }
 
     #[test]
