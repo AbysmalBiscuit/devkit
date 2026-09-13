@@ -133,3 +133,71 @@ devkit::supervision::supervised_python_server_becomes_ready
 The failures report `Read-only file system` or `Operation not permitted` while creating state files, probing/binding ports, or starting daemon sockets. The initial direct Cargo invocation was also blocked by the write harness; a later filtered direct Cargo invocation was rejected by the hook as the `test-doc` task. The configured devrun wrapper was used for all final checks. No claim of a green workspace suite is made.
 
 The follow-up run after the grammar-kind cleanup compiled the changed adapter and reported 1,953 tests run, 1,918 passed, 35 failed, and 0 skipped. It reproduced the same 34 failures above and added `devkit-locks::tests::facade_without_daemon_uses_flock_path`, which also failed in the sandbox while using the flock path. This is unrelated to the PowerShell adapter.
+
+## Cleanup verification
+
+Cleanup commit: `6eed9d243ac5281827fff5ecbead0075ee086ca1` (`fix(command): centralize PowerShell grammar kinds`). No production code changed while appending this section.
+
+Focused verification used the two grammar shape/tripwire tests and the five PowerShell adapter tests listed above, each with `--exact --nocapture`; all seven passed.
+
+```text
+devrun task fmt
+```
+
+Passed.
+
+```text
+devrun task --env RUSTC_WRAPPER= lint
+```
+
+Passed with `-D warnings`.
+
+```text
+devrun task --env RUSTC_WRAPPER= test-doc
+```
+
+Passed for all workspace doctests.
+
+```text
+devrun task --env RUSTC_WRAPPER= test
+```
+
+Final workspace result: 1,953 tests run, 1,918 passed, 35 failed, 0 skipped. The 35 failures were sandbox-sensitive:
+
+```text
+devkit::shim_dispatch::devrun_shim_still_refuses_reap_without_a_terminal
+devkit::down_ports::down_ports_releases_listed_reservations
+devkit::bin/devkit issue::dashboard::cache::tests::get_put_roundtrip_under_real_cache_dir
+devkit::lifecycle::idle_exit_with_no_clients_or_children
+devkit::lifecycle::ping_pong_handshake
+devkit::lifecycle::second_instance_exits_immediately
+devkit::lock_daemon::acquired_lock_persists_to_file_after_daemon_exits
+devkit::lock_daemon::acquire_through_daemon_is_visible_to_check
+devkit::lock_daemon::write_decide_and_release_prefix_through_daemon
+devkit-common supervise::tests::probe_port_true_when_listening_false_when_free
+devkit-common supervise::tests::spawn_and_ready_on_python_tcp
+devkit::parity::alloc_through_daemon_writes_registry
+devkit::parity::snapshot_roundtrips
+devkit-locks tests::facade_without_daemon_uses_flock_path
+devkit-locks tests::resolved_fns_roundtrip_via_flock_path
+devkit-locks tests::resolver_scopes_each_batch_member_to_its_own_repository
+devkit-mcp locks::tests::acquire_status_release_roundtrip_through_handlers
+devkit-ports registry::liveness_tests::detects_bound_port
+devkit-ports registry::ops_tests::allocation_skips_a_port_a_stray_process_is_listening_on
+devkit-ports run::tests::bring_down_ports_releases_listed_reservations
+devkit-ports run::tests::bring_down_releases_a_pidless_reservation
+devkit-ports run::tests::launch_non_blocking_returns_before_readiness_then_status_flips
+devkit-ports run::tests::server_rows_marks_a_listening_entry_ready
+devkit-ports strays::os::tests::real_port_probe_reports_a_bound_listener
+devkit-ports run::tests::read_log_tails_a_tracked_logfile
+devkit-ports run::tests::resolve_ports_includes_an_app_referenced_via_ports_template
+devkit::supervision::health_probe_restarts_hung_server
+devkit::supervision::down_does_not_restart
+devkit::supervision::memory_restart_over_limit_server
+devkit::supervision::cap_requested_without_delegation_falls_back
+devkit::supervision::memory_restart_gives_up_within_budget
+devkit::supervision::restart_after_kill
+devkit::supervision::restart_survives_concurrent_snapshot
+devkit::supervision::second_supervise_of_live_server_is_noop
+devkit::supervision::supervised_python_server_becomes_ready
+```
