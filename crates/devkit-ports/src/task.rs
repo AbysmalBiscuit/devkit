@@ -59,29 +59,33 @@ pub struct TaskArg {
 }
 
 /// Configured tasks sorted by name. `kind` reflects the shape on disk; an
-/// invalid shape (both or neither of `run`/`steps`) is listed as `invalid`
-/// rather than hidden, so a typo is visible in the listing.
+/// invalid shape (both or neither of `run`/`steps`) or a template that does not
+/// compile is listed as `invalid` rather than hidden, so a typo is visible in
+/// the listing.
 pub fn list(cfg: &Config) -> Vec<TaskRow> {
     let mut rows: Vec<TaskRow> = cfg
         .tasks
         .iter()
-        .map(|(name, t)| TaskRow {
-            name: name.clone(),
-            kind: match (!t.run.is_empty(), !t.steps.is_empty()) {
-                (true, false) => "command",
-                (false, true) => "sequence",
-                _ => "invalid",
-            },
-            app: t.app.clone().unwrap_or_else(|| "-".into()),
-            args: args(cfg, name)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|name| TaskArg {
-                    required: !cfg.templates.variables.contains_key(&name),
-                    name,
-                })
-                .collect(),
-            description: t.description.clone().unwrap_or_default(),
+        .map(|(name, t)| {
+            let args = args(cfg, name);
+            TaskRow {
+                name: name.clone(),
+                kind: match (!t.run.is_empty(), !t.steps.is_empty(), args.is_ok()) {
+                    (true, false, true) => "command",
+                    (false, true, true) => "sequence",
+                    _ => "invalid",
+                },
+                app: t.app.clone().unwrap_or_else(|| "-".into()),
+                args: args
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|name| TaskArg {
+                        required: !cfg.templates.variables.contains_key(&name),
+                        name,
+                    })
+                    .collect(),
+                description: t.description.clone().unwrap_or_default(),
+            }
         })
         .collect();
     rows.sort_by(|a, b| a.name.cmp(&b.name));
@@ -97,52 +101,65 @@ pub fn tasks_text(rows: &[TaskRow]) -> String {
     }
     let mut t = devkit_common::ui::table(&["NAME", "KIND", "APP", "ARGS", "DESCRIPTION"]);
     for r in rows {
-        let args: Vec<String> = r
-            .args
-            .iter()
-            .map(|a| {
-                if a.required {
-                    a.name.clone()
-                } else {
-                    format!("[{}]", a.name)
-                }
-            })
-            .collect();
         t.add_row(vec![
             r.name.clone(),
             r.kind.to_string(),
             r.app.clone(),
-            if args.is_empty() {
-                "-".into()
-            } else {
-                args.join(" ")
-            },
+            args_text(&r.args),
             r.description.clone(),
         ]);
     }
     t.to_string()
 }
 
-/// Names task templates read from devkit rather than from a variable: `port`
-/// and `ports` from the registry, and the issue fields [`variables`] supplies.
-const CONTEXT: [&str; 5] = ["port", "ports", "issue", "slug", "branch"];
+/// A task's args as the listing prints them: required ones bare, optional ones
+/// bracketed, `-` for none.
+pub fn args_text(args: &[TaskArg]) -> String {
+    if args.is_empty() {
+        return "-".into();
+    }
+    args.iter()
+        .map(|a| {
+            if a.required {
+                a.name.clone()
+            } else {
+                format!("[{}]", a.name)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
-/// Every variable task `name` reads from `[templates.variables]` or `--arg`,
-/// across all of its steps for a sequence. Only `run` and `env` count: an
-/// app's `static_env` renders for `devrun up` too, where no `--arg` exists.
-pub fn args(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
+/// Names the port registry supplies. The render context sets them above every
+/// variable, so an `--arg` of either name could never take effect.
+const PORT_NAMES: [&str; 2] = ["port", "ports"];
+/// Names [`variables`] fills from the worktree. `--arg` can override them, but
+/// they are never a task's args.
+const ISSUE_FIELDS: [&str; 3] = ["issue", "slug", "branch"];
+
+/// Every name the `run` and `env` templates of task `name` read, across all of
+/// its steps for a sequence. An app's `static_env` renders for `devrun up`
+/// too, where no `--arg` exists, so it is left out.
+fn read_names(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
     let t = cfg
         .tasks
         .get(name)
         .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
-    let mut names = command_args(t)?;
+    let mut names = command_reads(t)?;
     for step in &t.steps {
         if let Step::Task(r) = step
             && let Some(sub) = cfg.tasks.get(r)
         {
-            names.extend(command_args(sub)?);
+            names.extend(command_reads(sub)?);
         }
     }
+    Ok(names)
+}
+
+/// The variables task `name` takes from `[templates.variables]` or `--arg`.
+pub fn args(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
+    let mut names = read_names(cfg, name)?;
+    names.retain(|n| !PORT_NAMES.contains(&n.as_str()) && !ISSUE_FIELDS.contains(&n.as_str()));
     Ok(names)
 }
 
@@ -153,12 +170,10 @@ pub fn required_args(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
     Ok(names)
 }
 
-fn command_args(t: &TaskConfig) -> Result<BTreeSet<String>> {
+fn command_reads(t: &TaskConfig) -> Result<BTreeSet<String>> {
     let mut templates: Vec<&str> = t.run.iter().map(String::as_str).collect();
     templates.extend(t.env.values().map(String::as_str));
-    let mut names = template::undeclared(&templates)?;
-    names.retain(|n| !CONTEXT.contains(&n.as_str()));
-    Ok(names)
+    template::undeclared(&templates)
 }
 
 /// Parse repeated `--arg key=value` pairs.
@@ -176,10 +191,11 @@ pub fn parse_args(pairs: &[String]) -> Result<BTreeMap<String, String>> {
 /// Refuse an `--arg` task `name` never reads and a required one left unset,
 /// before any step of it resolves.
 fn check_args(cfg: &Config, name: &str, given: &BTreeMap<String, String>) -> Result<()> {
-    let reads = args(cfg, name)?;
+    let reads = read_names(cfg, name)?;
     for k in given.keys() {
         ensure!(
-            reads.contains(k) || cfg.templates.variables.contains_key(k),
+            (reads.contains(k) && !PORT_NAMES.contains(&k.as_str()))
+                || cfg.templates.variables.contains_key(k),
             "task `{name}` reads no variable `{k}`"
         );
     }
@@ -237,12 +253,20 @@ pub fn resolve(
         .tasks
         .get(name)
         .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
-    check_args(cfg, name, args)?;
-    let vars = variables(cfg, worktree_root, args);
-    match (!t.run.is_empty(), !t.steps.is_empty()) {
+    let is_sequence = match (!t.run.is_empty(), !t.steps.is_empty()) {
         (true, true) => bail!("task `{name}` sets both `run` and `steps`"),
         (false, false) => bail!("task `{name}` sets neither `run` nor `steps`"),
-        (true, false) => Ok(Resolved::Command(resolve_command(
+        (true, false) => false,
+        (false, true) => true,
+    };
+    ensure!(
+        !is_sequence || (t.app.is_none() && t.env.is_empty() && t.require_live.is_empty()),
+        "sequence task `{name}` may only set `description` and `steps`"
+    );
+    check_args(cfg, name, args)?;
+    let vars = variables(cfg, worktree_root, args);
+    if !is_sequence {
+        return Ok(Resolved::Command(resolve_command(
             &vars,
             catalog,
             worktree_root,
@@ -251,47 +275,42 @@ pub fn resolve(
             t,
             user_env,
             false,
-        )?)),
-        (false, true) => {
-            ensure!(
-                t.app.is_none() && t.env.is_empty() && t.require_live.is_empty(),
-                "sequence task `{name}` may only set `description` and `steps`"
-            );
-            let mut items = Vec::with_capacity(t.steps.len());
-            for step in &t.steps {
-                match step {
-                    Step::Task(r) => {
-                        let sub = cfg.tasks.get(r).ok_or_else(|| {
-                            anyhow!("task `{name}` references unknown task `{r}`")
-                        })?;
-                        ensure!(
-                            !sub.run.is_empty() && sub.steps.is_empty(),
-                            "task `{name}` references `{r}`, which is not a command task \
-                             (sequences cannot nest)"
-                        );
-                        items.push(SeqItem::Run(resolve_command(
-                            &vars,
-                            catalog,
-                            worktree_root,
-                            holder,
-                            r,
-                            sub,
-                            user_env,
-                            false,
-                        )?));
-                    }
-                    Step::Up(app) => {
-                        ensure!(
-                            catalog.contains_key(app),
-                            "task `{name}` brings up unknown app `{app}`"
-                        );
-                        items.push(SeqItem::Up(app.clone()));
-                    }
-                }
+        )?));
+    }
+    let mut items = Vec::with_capacity(t.steps.len());
+    for step in &t.steps {
+        match step {
+            Step::Task(r) => {
+                let sub = cfg
+                    .tasks
+                    .get(r)
+                    .ok_or_else(|| anyhow!("task `{name}` references unknown task `{r}`"))?;
+                ensure!(
+                    !sub.run.is_empty() && sub.steps.is_empty(),
+                    "task `{name}` references `{r}`, which is not a command task \
+                     (sequences cannot nest)"
+                );
+                items.push(SeqItem::Run(resolve_command(
+                    &vars,
+                    catalog,
+                    worktree_root,
+                    holder,
+                    r,
+                    sub,
+                    user_env,
+                    false,
+                )?));
             }
-            Ok(Resolved::Sequence(items))
+            Step::Up(app) => {
+                ensure!(
+                    catalog.contains_key(app),
+                    "task `{name}` brings up unknown app `{app}`"
+                );
+                items.push(SeqItem::Up(app.clone()));
+            }
         }
     }
+    Ok(Resolved::Sequence(items))
 }
 
 /// Env templates a command task will render: `static_env` overlaid by the

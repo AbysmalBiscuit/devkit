@@ -60,6 +60,16 @@ run = ["git", "--msg={{ scope }}: {{ msg }}", "version"]
 [tasks.seq-commit]
 steps = [{ task = "hello" }, { task = "commit" }]
 
+[tasks.issue-only]
+run = ["git", "--issue={{ issue }}", "version"]
+
+[tasks.both]
+run = ["git", "--msg={{ msg }}"]
+steps = [{ up = "api" }]
+
+[tasks.broken]
+run = ["git", "--msg={{ msg "]
+
 [tasks.tagged]
 run = ["git", "--tag={% if issue is defined %}{{ issue }}/{{ slug }}@{{ branch }}{% else %}none{% endif %}", "version"]
 "#,
@@ -313,6 +323,45 @@ fn issue_fields_render_from_the_record_and_are_undefined_without_one() {
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--tag=ENG-42/fix-it@feat"), "{stdout}");
+}
+
+#[test]
+fn an_arg_overrides_an_issue_field() {
+    let dir = setup();
+    let out = run_in(dir.path(), &[
+        "task",
+        "issue-only",
+        "--arg",
+        "issue=ENG-9",
+        "--dry-run",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("--issue=ENG-9"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn a_malformed_task_reports_its_shape_before_its_args() {
+    let dir = setup();
+    let out = run_in(dir.path(), &["task", "both", "--dry-run"]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("sets both"), "{stderr}");
+}
+
+#[test]
+fn the_listing_marks_a_task_whose_template_does_not_compile_invalid() {
+    let dir = setup();
+    let out = run_in(dir.path(), &["task"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let broken = stdout
+        .lines()
+        .find(|l| l.contains("broken"))
+        .unwrap_or_else(|| panic!("broken row missing: {stdout}"));
+    assert!(broken.contains("invalid"), "{broken}");
 }
 
 #[test]
