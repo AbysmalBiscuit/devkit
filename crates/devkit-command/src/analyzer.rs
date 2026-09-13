@@ -1,6 +1,74 @@
 //! The invocation pipeline every adapter feeds.
 
-use crate::{budget::Budget, context::Context, model::Analysis};
+#![allow(dead_code)]
+
+use std::ops::Range;
+
+use crate::{
+    budget::Budget,
+    catalog,
+    context::{Context, Dialect},
+    embed,
+    model::{
+        Analysis, FileEffect, FileOp, Invocation, Language, Location, ScriptFileInvocation,
+        TreeEffect, Uncertainty, UncertaintyKind, Value,
+    },
+    normalize, paths,
+};
+
+#[derive(Debug, Clone)]
+pub(crate) struct Word {
+    pub(crate) value: Value,
+    pub(crate) typed: String,
+    pub(crate) span: Range<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum Stdin {
+    None,
+    Source { value: Value, span: Range<usize> },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RawInvocation {
+    pub(crate) words: Vec<Word>,
+    pub(crate) stdin: Stdin,
+    pub(crate) cwd: Option<String>,
+    pub(crate) language: Language,
+    pub(crate) location: Location,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Frame {
+    pub(crate) depth: usize,
+    pub(crate) script_args: Vec<Value>,
+    pub(crate) base: Option<Location>,
+    pub(crate) cwd: Option<String>,
+}
+
+impl Frame {
+    pub(crate) fn outer() -> Self {
+        Self {
+            depth: 0,
+            script_args: Vec::new(),
+            base: None,
+            cwd: None,
+        }
+    }
+
+    pub(crate) fn locate(&self, span: Range<usize>) -> Location {
+        match &self.base {
+            None => Location {
+                outer: span,
+                embedded: None,
+            },
+            Some(base) => Location {
+                outer: base.outer.clone(),
+                embedded: Some(span),
+            },
+        }
+    }
+}
 
 pub(crate) struct Analyzer<'c> {
     pub(crate) ctx: &'c Context,
@@ -24,15 +92,323 @@ impl<'c> Analyzer<'c> {
     }
 
     pub(crate) fn run_source(mut self, source: &str) -> Analysis {
-        let _ = self.ctx.dialect;
-        let _ = self.budget.admit(source.len(), 0);
+        let language = match self.ctx.dialect {
+            Dialect::Bash => Language::Bash,
+            Dialect::PowerShell => Language::PowerShell,
+            Dialect::Fish => Language::Fish,
+        };
+        let frame = Frame {
+            cwd: self.ctx.cwd.clone(),
+            ..Frame::outer()
+        };
+        self.source(language, source, frame);
         self.out
     }
 
-    pub(crate) fn run_argv(mut self, _argv: &[String]) -> Analysis {
-        let _ = self.budget.limits();
-        let _ = self.budget.visit();
-        let _ = self.budget.value_fits(0);
+    pub(crate) fn run_argv(mut self, argv: &[String]) -> Analysis {
+        let _ = (
+            self.budget.limits(),
+            self.budget.visit(),
+            self.budget.value_fits(0),
+        );
+        let words = argv
+            .iter()
+            .map(|w| Word {
+                value: Value::Known(w.clone()),
+                typed: w.clone(),
+                span: 0..0,
+            })
+            .collect();
+        let raw = RawInvocation {
+            words,
+            stdin: Stdin::None,
+            cwd: self.ctx.cwd.clone(),
+            language: Language::Bash,
+            location: Location {
+                outer: 0..0,
+                embedded: None,
+            },
+        };
+        let frame = Frame {
+            cwd: self.ctx.cwd.clone(),
+            ..Frame::outer()
+        };
+        self.invocation(raw, &frame);
         self.out
+    }
+
+    pub(crate) fn source(&mut self, language: Language, text: &str, frame: Frame) {
+        let at = frame.locate(0..text.len());
+        if let Err(limit) = self.budget.admit(text.len(), frame.depth) {
+            self.uncertain(
+                UncertaintyKind::LimitExhausted(limit),
+                format!("{language:?} source was not analyzed"),
+                at,
+            );
+            return;
+        }
+        match language {
+            Language::Bash => crate::bash::walk(self, text, &frame),
+            Language::Fish => crate::fish::walk(self, text, &frame),
+            Language::PowerShell => crate::powershell::walk(self, text, &frame),
+            Language::Python => crate::python::walk(self, text, &frame),
+            Language::JavaScript | Language::TypeScript => {
+                crate::js::walk(self, language, text, &frame)
+            }
+        }
+    }
+
+    pub(crate) fn uncertain(
+        &mut self,
+        kind: UncertaintyKind,
+        detail: impl Into<String>,
+        location: Location,
+    ) {
+        self.out.uncertainties.push(Uncertainty {
+            kind,
+            detail: detail.into(),
+            location,
+        });
+    }
+
+    pub(crate) fn file_effect(
+        &mut self,
+        op: FileOp,
+        path: &Value,
+        cwd: Option<&str>,
+        location: Location,
+    ) {
+        let target = paths::resolve(path, cwd, self.ctx.path_style);
+        self.out.file_effects.push(FileEffect {
+            op,
+            target,
+            location,
+        });
+    }
+
+    pub(crate) fn tree_effect(
+        &mut self,
+        scope: &Value,
+        whole_checkout: bool,
+        cwd: Option<&str>,
+        by: &str,
+        location: Location,
+    ) {
+        match paths::resolve(scope, cwd, self.ctx.path_style) {
+            crate::model::Target::Path(scope) => self.out.tree_effects.push(TreeEffect {
+                scope,
+                whole_checkout,
+                by: by.to_string(),
+                location,
+            }),
+            crate::model::Target::Unresolved => self.uncertain(
+                UncertaintyKind::UnresolvedWrite,
+                format!("`{by}` rewrites a directory that could not be determined"),
+                location,
+            ),
+        }
+    }
+
+    pub(crate) fn invocation(&mut self, raw: RawInvocation, frame: &Frame) {
+        let unwrapped = normalize::unwrap(self, &raw, frame);
+        let Some(program) = unwrapped.argv.first() else {
+            return;
+        };
+        let location = raw.location.clone();
+        let cwd = unwrapped.cwd.apply(raw.cwd.clone());
+        let program_value = program.value.clone();
+        let args: Vec<Value> = unwrapped.argv[1..]
+            .iter()
+            .map(|w| w.value.clone())
+            .collect();
+        let git =
+            normalize::program_options(&program_value, &args, cwd.as_deref(), self.ctx.path_style);
+
+        self.out.invocations.push(Invocation {
+            program: program_value.clone(),
+            args: args.clone(),
+            semantic_args: git.semantic_args.clone(),
+            wrappers: unwrapped
+                .wrappers
+                .iter()
+                .map(|ws| ws.iter().map(|w| w.value.clone()).collect())
+                .collect(),
+            typed: raw.words.iter().map(|w| w.typed.clone()).collect(),
+            cwd: cwd.clone(),
+            language: raw.language,
+            depth: frame.depth,
+            location: location.clone(),
+        });
+
+        let Some(name) = program_value
+            .known()
+            .map(normalize::basename)
+            .map(str::to_string)
+        else {
+            self.uncertain(
+                UncertaintyKind::UnresolvedInvocation,
+                format!("the program `{}` could not be determined", program.typed),
+                location,
+            );
+            return;
+        };
+
+        match embed::classify(&name, &args, &raw.stdin) {
+            embed::Exec::Source {
+                language,
+                source,
+                script_args,
+            } => match source.known() {
+                Some(text) => {
+                    let child = Frame {
+                        depth: frame.depth + 1,
+                        script_args,
+                        base: Some(location.clone()),
+                        cwd: cwd.clone(),
+                    };
+                    self.source(language, text, child);
+                }
+                None => self.uncertain(
+                    UncertaintyKind::UnresolvedWrite,
+                    format!("`{name}` runs source that could not be determined"),
+                    location.clone(),
+                ),
+            },
+            embed::Exec::ScriptFile { script } => {
+                self.out.script_files.push(ScriptFileInvocation {
+                    interpreter: Some(name.clone()),
+                    script,
+                    location: location.clone(),
+                })
+            }
+            embed::Exec::Unsupported { language } => self.uncertain(
+                UncertaintyKind::UnsupportedLanguage(language.to_string()),
+                format!("`{name}` runs {language} source, which devkit cannot analyze"),
+                location.clone(),
+            ),
+            embed::Exec::Plain => {}
+        }
+
+        let effective_cwd = git.cwd.apply(cwd.clone());
+        for hit in catalog::effects(&name, &git.semantic_args) {
+            match hit {
+                catalog::Hit::File(op, path) => {
+                    self.file_effect(op, &path, effective_cwd.as_deref(), location.clone())
+                }
+                catalog::Hit::Tree {
+                    scope,
+                    whole_checkout,
+                    by,
+                } => self.tree_effect(
+                    &scope,
+                    whole_checkout,
+                    effective_cwd.as_deref(),
+                    &by,
+                    location.clone(),
+                ),
+                catalog::Hit::Unresolved(detail) => {
+                    self.uncertain(UncertaintyKind::UnresolvedWrite, detail, location.clone())
+                }
+                catalog::Hit::ScriptFile(script) => {
+                    self.out.script_files.push(ScriptFileInvocation {
+                        interpreter: None,
+                        script,
+                        location: location.clone(),
+                    })
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        context::{Context, Dialect, Limits, PathStyle},
+        model::{FileOp, Language, Location, Target, UncertaintyKind, Value},
+    };
+
+    pub(crate) fn ctx() -> Context {
+        Context {
+            dialect: Dialect::Bash,
+            cwd: Some("/repo".into()),
+            path_style: PathStyle::Unix,
+            limits: Limits::default(),
+        }
+    }
+
+    fn word(s: &str) -> Word {
+        Word {
+            value: Value::Known(s.into()),
+            typed: s.into(),
+            span: 0..s.len(),
+        }
+    }
+    fn at() -> Location {
+        Location {
+            outer: 0..1,
+            embedded: None,
+        }
+    }
+
+    #[test]
+    fn an_invocation_is_recorded_with_its_cwd() {
+        let c = ctx();
+        let mut a = Analyzer::new(&c);
+        a.invocation(
+            RawInvocation {
+                words: vec![word("ls"), word("-la")],
+                stdin: Stdin::None,
+                cwd: Some("/repo".into()),
+                language: Language::Bash,
+                location: at(),
+            },
+            &Frame::outer(),
+        );
+        let inv = &a.out.invocations[0];
+        assert_eq!(inv.program, Value::Known("ls".into()));
+        assert_eq!(inv.args, vec![Value::Known("-la".into())]);
+        assert_eq!(inv.cwd.as_deref(), Some("/repo"));
+    }
+
+    #[test]
+    fn an_unknown_program_word_is_an_unresolved_invocation() {
+        let c = ctx();
+        let mut a = Analyzer::new(&c);
+        a.invocation(
+            RawInvocation {
+                words: vec![Word {
+                    value: Value::Unknown,
+                    typed: "$cmd".into(),
+                    span: 0..4,
+                }],
+                stdin: Stdin::None,
+                cwd: None,
+                language: Language::Bash,
+                location: at(),
+            },
+            &Frame::outer(),
+        );
+        assert_eq!(
+            a.out.uncertainties[0].kind,
+            UncertaintyKind::UnresolvedInvocation
+        );
+    }
+
+    #[test]
+    fn a_file_effect_resolves_against_the_given_cwd() {
+        let c = ctx();
+        let mut a = Analyzer::new(&c);
+        a.file_effect(
+            FileOp::Overwrite,
+            &Value::Known("out.txt".into()),
+            Some("/repo/sub"),
+            at(),
+        );
+        assert_eq!(
+            a.out.file_effects[0].target,
+            Target::Path("/repo/sub/out.txt".into())
+        );
     }
 }
