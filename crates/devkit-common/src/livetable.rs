@@ -372,8 +372,8 @@ mod tests {
             ProgressDrawTarget::term_like(Box::new(term.clone())),
         ));
         ll.set_lines(&["one".into(), "two".into()]);
-        let _sp = ll.spinner("working…");
         assert!(term.contents().contains("one"));
+        let _sp = ll.spinner("working…");
         ll.clear();
         assert_eq!(term.contents(), "");
         // The final screen ends up blank either way (each drop's repaint is
