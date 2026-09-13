@@ -43,7 +43,12 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> Response {
             root,
             holder,
             paths,
-        } => match store::check_with(&s, &root, &holder, &paths, now()) {
+            prune,
+        } => match if prune {
+            store::check_with(&s, &root, &holder, &paths, now())
+        } else {
+            store::check_read_only_with(&s, &root, &holder, &paths, now())
+        } {
             Ok(v) => Response::Conflicts(v),
             Err(e) => Response::Err(format!("{e:#}")),
         },

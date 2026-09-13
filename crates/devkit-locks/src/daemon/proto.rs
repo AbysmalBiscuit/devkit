@@ -7,7 +7,7 @@ use crate::model::{AcquireOutcome, Conflict, LockEntry, Refusal};
 
 /// Wire-format version, independent of the port proto. Bump on any incompatible
 /// change.
-pub const PROTO: u32 = 2;
+pub const PROTO: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -26,6 +26,7 @@ pub enum Request {
         root: String,
         holder: String,
         paths: Vec<String>,
+        prune: bool,
     },
     Release {
         root: String,

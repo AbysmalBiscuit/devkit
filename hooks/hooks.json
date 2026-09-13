@@ -47,12 +47,12 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
             "command": "devkit harness shell",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       }

@@ -282,7 +282,7 @@ The library table answers for the directory it runs in. At a workspace root — 
 
 ## `harness`: command guard
 
-`devkit harness shell` is the pre-execution hook entry point for the command guard: it reads a shell command's hook payload on stdin, decides whether devkit already has a wired-up path for that command, and answers on stdout. It never mutates state — no lock taken, no registry row written — and always exits 0, whether it denies, allows, or hits an internal error along the way. Wired into the plugin's `PreToolUse` (Claude Code and Codex) and `beforeShellExecution` (Cursor) hooks; see [configuration.md](configuration.md#harness) for what it gates, how rules are declared, and how enforcement is turned on.
+`devkit harness shell` is the pre-execution hook entry point for shell tools. It reads the hook payload on stdin, parses the command and any script it runs, and answers on stdout with a denial, a warning, or nothing. With `enforce_commands` on it refuses commands devkit already has a wired-up path for, and fails open. With `enforce_writes` on, for Claude Code and Codex, it claims the files the command writes before it runs, using the session's lock identity, and fails closed: an unresolved write, a registry error, or a registry that does not answer within 5 seconds is a denial. It always exits 0 and never runs the command. Wired into the plugin's `PreToolUse` hooks for `Bash` and `PowerShell` (Claude Code and Codex) and `beforeShellExecution` (Cursor, command guard only); see [configuration.md](configuration.md#harness).
 
 ## `docm`: library docs
 

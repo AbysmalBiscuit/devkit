@@ -1,0 +1,33 @@
+[package]
+name = "devkit-command"
+edition.workspace = true
+version = "0.14.1" # x-release-please-version
+
+[dependencies]
+tree-sitter.workspace = true
+tree-sitter-bash.workspace = true
+tree-sitter-powershell.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-fish.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+# Local measurement tools run against a shell-call corpus. Off by default so
+# builds, tests and clippy skip them.
+corpus = []
+
+[[example]]
+name = "corpus_probe"
+required-features = ["corpus"]
+
+[[example]]
+name = "corpus_bench"
+required-features = ["corpus"]
+
+[[example]]
+name = "analyze_one"
+required-features = ["corpus"]

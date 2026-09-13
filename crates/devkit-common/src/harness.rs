@@ -6,7 +6,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use devkit_config::{AppMatch, CommandRule};
+use devkit_config::{AppMatch, CommandRule, PolicyAction, ShellSetting};
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 /// The Claude Code / Codex `PreToolUse` deny envelope. `reason` reaches the
@@ -107,13 +108,34 @@ pub fn enforcement_enabled(cwd: &Path, flag: &str, env_var: &str) -> bool {
     )
 }
 
-/// The merged `[harness]` tables the command guard reads. The two enforcement
-/// flags are not here: they ratchet on with `any` across layers rather than
-/// merging by precedence, and `enforcement_enabled` already owns that.
+/// The policy keys the shell hook reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HarnessPolicy {
+    pub shell: ShellSetting,
+    pub unresolved_writes: PolicyAction,
+    pub unsupported_language: PolicyAction,
+    pub script_files: PolicyAction,
+}
+
+impl Default for HarnessPolicy {
+    fn default() -> Self {
+        Self {
+            shell: ShellSetting::Auto,
+            unresolved_writes: PolicyAction::Block,
+            unsupported_language: PolicyAction::Block,
+            script_files: PolicyAction::Allow,
+        }
+    }
+}
+
+/// The merged `[harness]` tables and policy keys the shell hook reads. The two
+/// enforcement flags are not here: they ratchet on across layers rather than
+/// merging by precedence, and `enforcement_enabled` owns that.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct HarnessRules {
     pub commands: BTreeMap<String, CommandRule>,
     pub app_match: AppMatch,
+    pub policy: HarnessPolicy,
 }
 
 /// Merge the `[harness]` tables of parsed layers, lowest precedence first, and
@@ -147,6 +169,43 @@ pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<Stri
             warnings.push(format!("ignoring `[harness.app_match]`: {e}"));
             AppMatch::default()
         }),
+    };
+
+    fn key<T: DeserializeOwned>(
+        merged: &toml::Table,
+        name: &str,
+        default: T,
+        warnings: &mut Vec<String>,
+    ) -> T {
+        match merged.get(name) {
+            None => default,
+            Some(v) => v.clone().try_into::<T>().unwrap_or_else(|e| {
+                warnings.push(format!("ignoring `[harness] {name}`: {e}"));
+                default
+            }),
+        }
+    }
+    let defaults = HarnessPolicy::default();
+    let policy = HarnessPolicy {
+        shell: key(&merged, "shell", defaults.shell, &mut warnings),
+        unresolved_writes: key(
+            &merged,
+            "unresolved_writes",
+            defaults.unresolved_writes,
+            &mut warnings,
+        ),
+        unsupported_language: key(
+            &merged,
+            "unsupported_language",
+            defaults.unsupported_language,
+            &mut warnings,
+        ),
+        script_files: key(
+            &merged,
+            "script_files",
+            defaults.script_files,
+            &mut warnings,
+        ),
     };
 
     let mut commands = BTreeMap::new();
@@ -183,6 +242,7 @@ pub fn merge_rules(layers: &[(PathBuf, toml::Table)]) -> (HarnessRules, Vec<Stri
         HarnessRules {
             commands,
             app_match,
+            policy,
         },
         warnings,
     )
@@ -227,37 +287,54 @@ pub fn commands_enabled(cwd: &Path) -> bool {
     enforcement_enabled(cwd, "enforce_commands", "DEVKIT_ENFORCE_COMMANDS")
 }
 
-/// Which harness sent a payload, and therefore which envelope answers it.
+/// Which harness sent a payload, and therefore which envelope answers it and
+/// whether the write stage may run for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Harness {
-    /// Claude Code and Codex, which share `PreToolUse` and its envelope.
     ClaudeCode,
+    Codex,
     Cursor,
 }
 
-/// A pre-execution shell payload, normalized across the harnesses.
+/// Tool names whose `tool_input.command` is a shell command.
+const SHELL_TOOLS: [&str; 2] = ["Bash", "PowerShell"];
+
+/// A pre-execution shell payload. Fields the harness did not send stay
+/// `None`; nothing here is filled in from the hook process's environment.
 #[derive(Debug, Clone)]
 pub struct ShellPayload {
     pub harness: Harness,
+    pub tool_name: Option<String>,
     pub command: String,
     pub cwd: Option<PathBuf>,
+    pub session_id: Option<String>,
+    pub agent_id: Option<String>,
 }
 
 /// Read a pre-execution shell payload. `None` when the event is not about a
 /// shell command, which is not a failure: harnesses send events this hook does
 /// not model.
 ///
-/// The harness is told apart by a string-valued `hook_event_name`, which Claude
-/// Code and Codex send and Cursor does not; a payload carrying that key with
-/// any other type reads as Cursor. `tool_input` cannot be the discriminator:
-/// Cursor's generic `preToolUse` carries that key too, so testing it would
-/// answer a Cursor session in Claude Code's envelope.
+/// Claude Code and Codex send a string `hook_event_name`; Cursor does not.
+/// Codex's payload carries `turn_id` and `model`, which Claude Code's does not,
+/// and that is what separates the two.
 pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
-    let harness = match p.get("hook_event_name").and_then(Value::as_str) {
-        Some(_) => Harness::ClaudeCode,
-        None => Harness::Cursor,
+    let text = |key: &str| {
+        p.get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
     };
-    if harness == Harness::ClaudeCode && p.get("tool_name").and_then(Value::as_str) != Some("Bash")
+    let harness = match p.get("hook_event_name").and_then(Value::as_str) {
+        None => Harness::Cursor,
+        Some(_) if p.get("turn_id").is_some() || p.get("model").is_some() => Harness::Codex,
+        Some(_) => Harness::ClaudeCode,
+    };
+    let tool_name = text("tool_name");
+    if harness != Harness::Cursor
+        && !tool_name
+            .as_deref()
+            .is_some_and(|tool| SHELL_TOOLS.contains(&tool))
     {
         return None;
     }
@@ -267,15 +344,13 @@ pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
         .or_else(|| p.get("tool_input")?.get("command")?.as_str())
         .filter(|s| !s.trim().is_empty())?
         .to_string();
-    let cwd = p
-        .get("cwd")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from);
     Some(ShellPayload {
         harness,
+        tool_name,
         command,
-        cwd,
+        cwd: text("cwd").map(PathBuf::from),
+        session_id: text("session_id"),
+        agent_id: text("agent_id"),
     })
 }
 
@@ -285,13 +360,34 @@ pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
 /// command it can retry.
 pub fn deny_shell_json(harness: Harness, reason: &str) -> Value {
     match harness {
-        Harness::ClaudeCode => deny_json(reason),
+        Harness::ClaudeCode | Harness::Codex => deny_json(reason),
         Harness::Cursor => json!({
             "permission": "deny",
             "agent_message": reason,
             "continue": true
         }),
     }
+}
+
+/// An allow that carries text to the agent, or `None` where the harness has no
+/// such channel and a warning can only be a silent allow. No
+/// `permissionDecision` is sent: an explicit allow would also bypass the
+/// user's own permission prompt.
+pub fn warn_shell_json(harness: Harness, context: &str) -> Option<Value> {
+    match harness {
+        Harness::ClaudeCode | Harness::Codex => Some(json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": context
+            }
+        })),
+        Harness::Cursor => None,
+    }
+}
+
+/// Whether the shell hook's write stage is active for a command at `cwd`.
+pub fn writes_enabled(cwd: &Path) -> bool {
+    enforcement_enabled(cwd, "enforce_writes", "DEVKIT_ENFORCE_WRITES")
 }
 
 #[cfg(test)]
@@ -649,6 +745,96 @@ programs = "node"
     #[test]
     fn a_payload_with_no_command_is_not_a_shell_payload() {
         assert!(parse_shell_payload(&serde_json::json!({ "cwd": "/repo" })).is_none());
+    }
+
+    #[test]
+    fn a_codex_payload_is_told_apart_by_its_turn_fields() {
+        let p = serde_json::json!({
+            "hook_event_name": "PreToolUse", "tool_name": "Bash", "turn_id": "t1", "model": "m",
+            "session_id": "S", "tool_input": { "command": "ls" }, "cwd": "/repo"
+        });
+        let parsed = parse_shell_payload(&p).unwrap();
+        assert_eq!(parsed.harness, Harness::Codex);
+        assert_eq!(parsed.session_id.as_deref(), Some("S"));
+    }
+
+    #[test]
+    fn claude_codes_powershell_tool_is_a_shell_payload() {
+        let p = serde_json::json!({
+            "hook_event_name": "PreToolUse", "tool_name": "PowerShell", "prompt_id": "p",
+            "session_id": "S", "agent_id": "a1", "tool_input": { "command": "Get-ChildItem" }
+        });
+        let parsed = parse_shell_payload(&p).unwrap();
+        assert_eq!(parsed.harness, Harness::ClaudeCode);
+        assert_eq!(parsed.tool_name.as_deref(), Some("PowerShell"));
+        assert_eq!(parsed.agent_id.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn missing_identity_stays_missing() {
+        let p = serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": "ls" } });
+        let parsed = parse_shell_payload(&p).unwrap();
+        assert!(parsed.session_id.is_none() && parsed.cwd.is_none());
+    }
+
+    #[test]
+    fn the_warning_envelope_allows_without_a_permission_decision() {
+        let w = warn_shell_json(Harness::ClaudeCode, "not checked").unwrap();
+        assert_eq!(w["hookSpecificOutput"]["additionalContext"], "not checked");
+        assert!(w["hookSpecificOutput"].get("permissionDecision").is_none());
+        assert!(warn_shell_json(Harness::Cursor, "not checked").is_none());
+        assert_eq!(
+            deny_shell_json(Harness::Codex, "no")["hookSpecificOutput"]["permissionDecision"],
+            "deny"
+        );
+    }
+
+    #[test]
+    fn the_closest_layer_sets_each_policy_key() {
+        let (h, warns) = merge_rules(&[
+            layer(
+                "global",
+                "[harness]\nunresolved_writes = \"warn\"\nscript_files = \"block\"\n",
+            ),
+            layer("project", "[harness]\nunresolved_writes = \"allow\"\n"),
+        ]);
+        assert!(warns.is_empty(), "{warns:?}");
+        assert_eq!(
+            h.policy.unresolved_writes,
+            devkit_config::PolicyAction::Allow
+        );
+        assert_eq!(h.policy.script_files, devkit_config::PolicyAction::Block);
+        assert_eq!(
+            h.policy.unsupported_language,
+            devkit_config::PolicyAction::Block
+        );
+    }
+
+    #[test]
+    fn an_invalid_policy_value_warns_and_keeps_that_keys_default_only() {
+        let (h, warns) = merge_rules(&[layer(
+            "root",
+            "[harness]\nunresolved_writes = \"sometimes\"\nscript_files = \"warn\"\n[harness.commands.bad]\nprograms = \"git\"\n",
+        )]);
+        assert_eq!(
+            h.policy.unresolved_writes,
+            devkit_config::PolicyAction::Block
+        );
+        assert_eq!(h.policy.script_files, devkit_config::PolicyAction::Warn);
+        assert_eq!(warns.len(), 2, "{warns:?}");
+    }
+
+    #[test]
+    fn a_child_layer_disables_an_inherited_rule_without_repeating_it() {
+        let (h, _) = merge_rules(&[
+            layer(
+                "global",
+                "[harness.commands.no-node]\nprograms = [\"node\"]\nreason = \"use bun\"\n",
+            ),
+            layer("project", "[harness.commands.no-node]\nenabled = false\n"),
+        ]);
+        assert!(!h.commands["no-node"].enabled);
+        assert_eq!(h.commands["no-node"].programs, vec!["node"]);
     }
 
     #[test]

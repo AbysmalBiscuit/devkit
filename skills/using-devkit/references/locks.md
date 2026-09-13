@@ -65,6 +65,9 @@ Mechanics:
   agent; coordinate or wait for it to finish
   ```
 - **Automatic release.** Sub-agent locks release on `SubagentStop`; all session locks release on `SessionEnd`, whether that is a normal exit, Ctrl-C, or an error. The 30-min TTL backstops a hard kill.
-- **`Bash` writes are not covered** — only the structured write tools above.
 - **Fail-open when off or when `lockm` is absent.** The hook exits without blocking and takes no locks.
 - **Fail-closed on registry errors.** With `lockm` present but the registry erroring (corruption, permissions), the hook denies the write rather than allowing it silently.
+
+## Shell writes
+
+`devkit harness shell` claims the targets of a shell command before it runs, with the same holder, TTL, and release as `Edit`/`Write`. A conflict is refused naming the holder. A whole-tree writer (`cargo fmt`, `git checkout`, `rm -r dir`) claims nothing and is refused while another session holds any lock under the tree. What devkit cannot resolve follows `[harness] unresolved_writes`, `unsupported_language`, and `script_files` (`block`, `warn`, or `allow`); the defaults block the first two and allow script files. A refused unresolved write is fixed by making the target explicit, not by acquiring a lock.
