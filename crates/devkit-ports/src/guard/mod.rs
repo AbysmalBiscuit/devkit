@@ -335,6 +335,7 @@ mod tests {
             programs: programs.iter().map(|s| s.to_string()).collect(),
             args: Vec::new(),
             reason: reason.into(),
+            ..CommandRule::default()
         })])
     }
 

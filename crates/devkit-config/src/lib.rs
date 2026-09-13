@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 mod layers;
 pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
 pub mod harness;
-pub use harness::{AppMatch, CommandRule, HarnessSection};
+pub use harness::{
+    AppMatch, CommandRule, HarnessSection, PolicyAction, RuleAction, Severity, ShellSetting,
+};
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct Config {

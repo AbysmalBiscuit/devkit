@@ -139,8 +139,11 @@
       "type": "object"
     },
     "CommandRule": {
-      "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Splitting the command into segments, stripping\nrunner prefixes, and anchoring the command word are devkit's job; a rule\nthat had to restate them would get them wrong.",
+      "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Parsing the command, unwrapping wrappers and\nrunners, and removing a program's own global options (`git -C`) are\ndevkit's job; a rule that had to restate them would get them wrong.",
       "properties": {
+        "action": {
+          "$ref": "#/$defs/RuleAction"
+        },
         "args": {
           "default": [],
           "description": "Arguments that must appear, in order, at the head of the typed\narguments for the rule to fire. Empty matches any arguments.",
@@ -148,6 +151,11 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "description": "`false` turns off a rule a parent layer declared.",
+          "type": "boolean"
         },
         "programs": {
           "default": [],
@@ -161,6 +169,9 @@
           "default": "",
           "description": "Shown to the agent verbatim when the rule denies. Name the replacement\ncommand; the agent retries from this text.",
           "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
         }
       },
       "type": "object"
@@ -402,6 +413,22 @@
           "default": false,
           "description": "Refuse writes to paths this checkout has not claimed with `lockm`.",
           "type": "boolean"
+        },
+        "script_files": {
+          "$ref": "#/$defs/PolicyAction",
+          "description": "A call to a stored script, whose contents are not read."
+        },
+        "shell": {
+          "$ref": "#/$defs/ShellSetting",
+          "description": "The shell a hook command is read in."
+        },
+        "unresolved_writes": {
+          "$ref": "#/$defs/PolicyAction",
+          "description": "A write whose target could not be determined."
+        },
+        "unsupported_language": {
+          "$ref": "#/$defs/PolicyAction",
+          "description": "Executable source in a language devkit cannot analyze."
         }
       },
       "type": "object"
@@ -570,6 +597,26 @@
       ],
       "type": "object"
     },
+    "PolicyAction": {
+      "description": "What a policy finding does to the tool call.",
+      "oneOf": [
+        {
+          "const": "block",
+          "description": "Deny the tool call with an actionable reason.",
+          "type": "string"
+        },
+        {
+          "const": "warn",
+          "description": "Allow it and tell the agent what was not checked.",
+          "type": "string"
+        },
+        {
+          "const": "allow",
+          "description": "Allow it silently.",
+          "type": "string"
+        }
+      ]
+    },
     "PrCreateState": {
       "description": "The state a PR is opened in by `issue pr create` when neither `--draft` nor\n`--ready` is passed.",
       "oneOf": [
@@ -634,6 +681,32 @@
         "to"
       ],
       "type": "object"
+    },
+    "RuleAction": {
+      "description": "What a matching command rule does. A rule that should not act is disabled\nwith `enabled = false`, so there is no `allow`.",
+      "enum": [
+        "block",
+        "warn"
+      ],
+      "type": "string"
+    },
+    "Severity": {
+      "description": "How a diagnostic is classified for the agent.",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ],
+      "type": "string"
+    },
+    "ShellSetting": {
+      "description": "The shell whose syntax a hook command is read in. `auto` resolves from\nthe tool name and the harness; see `docs/configuration.md`.",
+      "enum": [
+        "auto",
+        "bash",
+        "powershell"
+      ],
+      "type": "string"
     },
     "Step": {
       "description": "One step of a sequence task: run a sibling command task, or bring an app up.",
