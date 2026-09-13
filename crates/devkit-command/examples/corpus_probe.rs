@@ -1,6 +1,10 @@
 //! Run the analyzer over a frozen shell-call corpus and print how the default
 //! write policy would treat it. Local measurement only: pass the path to a
 //! `corpus.jsonl` from `data_analysis.local`; nothing is written anywhere.
+//!
+//! ```sh
+//! cargo run -p devkit-command --release --features corpus --example corpus_probe -- <corpus.jsonl>
+//! ```
 
 use std::collections::BTreeMap;
 

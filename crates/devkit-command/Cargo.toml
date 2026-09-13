@@ -14,3 +14,20 @@ tree-sitter-fish.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+
+[features]
+# Local measurement tools run against a shell-call corpus. Off by default so
+# builds, tests and clippy skip them.
+corpus = []
+
+[[example]]
+name = "corpus_probe"
+required-features = ["corpus"]
+
+[[example]]
+name = "corpus_bench"
+required-features = ["corpus"]
+
+[[example]]
+name = "analyze_one"
+required-features = ["corpus"]
