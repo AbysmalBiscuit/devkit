@@ -45,7 +45,7 @@ focused run passed all five tests.
 
 ## Commit
 
-Commit `ed9c02a` with the required subject: `feat(command): unwrap wrappers, runners and git options`.
+Commit `185389df73b7963ef1a28bd241251fe5f5d23748` with the required subject: `feat(command): unwrap wrappers, runners and git options`.
 
 ## Concerns
 
@@ -56,3 +56,15 @@ so the test assertion uses 8 while retaining the planned semantic assertion.
 
 The workspace gate cannot be fully green in this sandbox because tests requiring
 Unix sockets, network binds, or unrestricted filesystem operations are denied.
+
+## Fix round 1
+
+The reviewed implementation head was verified as `185389df73b7963ef1a28bd241251fe5f5d23748` before the evidence run. A standalone temporary clone was created at that head with an isolated Cargo target directory and a temporary focused devkit task; the shared worktree and Git stash were not used.
+
+RED was observed through the approved `devrun` wrapper using `devrun task -C /tmp/devkit-task4-red.ot5B06/checkout --config /tmp/devkit-task4-red.ot5B06/focused-devkit.toml test --env RUSTC_WRAPPER= --env RUSTC_WORKSPACE_WRAPPER=` after replacing only the temporary clone's normalizer with the stub and supplying a temporary `doppler_flags` signature. The result was `0 passed, 5 failed, 30 skipped`; failures were the expected missing wrapper, runner, Doppler, xargs/find, and Git normalization behaviors.
+
+GREEN was then observed through the same approved task after restoring `normalize.rs` from `185389df73b7963ef1a28bd241251fe5f5d23748`: `5 passed, 30 skipped`.
+
+The implementation checkout remained at the reviewed head throughout. The required follow-up verification was run there with the project compiler-wrapper overrides: `devrun task fmt` passed; `devrun task lint --env RUSTC_WRAPPER= --env RUSTC_WORKSPACE_WRAPPER=` passed; `devrun task test-doc --env RUSTC_WRAPPER= --env RUSTC_WORKSPACE_WRAPPER=` passed; and `devrun task test --env RUSTC_WRAPPER= --env RUSTC_WORKSPACE_WRAPPER=` produced the same sandbox-only failures while all Task 4 normalization tests passed. No production behavior or design was changed in this fix round.
+
+The artifact correction and RED/GREEN evidence are committed separately as `fix(command): verify normalization red path`.
