@@ -1,6 +1,6 @@
 //! JavaScript and TypeScript run by Node, Bun, Deno, tsx and ts-node.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Range};
 
 use tree_sitter::Node;
 
@@ -74,6 +74,7 @@ enum Js {
     Argv,
     Env,
     Foreign(String),
+    Function(Range<usize>),
     Data,
     Unknown,
 }
@@ -106,14 +107,21 @@ pub(crate) fn walk(a: &mut Analyzer<'_>, language: Language, source: &str, frame
         cwd: frame.cwd.clone(),
         ..Scope::default()
     };
-    Walker { a, source, frame }.statements(tree.root_node(), &mut scope);
+    Walker {
+        a,
+        source,
+        frame,
+        root: tree.root_node(),
+    }
+    .statements(tree.root_node(), &mut scope);
 }
-struct Walker<'a, 'c, 's> {
+struct Walker<'a, 'c, 's, 't> {
     a: &'a mut Analyzer<'c>,
     source: &'s str,
     frame: &'a Frame,
+    root: Node<'t>,
 }
-impl<'t> Walker<'_, '_, '_> {
+impl<'t> Walker<'_, '_, '_, 't> {
     fn at(&self, node: Node<'_>) -> Location {
         self.frame.locate(node.byte_range())
     }
@@ -121,6 +129,23 @@ impl<'t> Walker<'_, '_, '_> {
     fn unresolved(&mut self, node: Node<'_>, detail: impl Into<String>) {
         self.a
             .uncertain(UncertaintyKind::UnresolvedWrite, detail, self.at(node));
+    }
+
+    fn value_limit(&mut self, node: Node<'_>) {
+        self.a.uncertain(
+            UncertaintyKind::LimitExhausted(crate::model::Limit::ValueSize),
+            "a JavaScript value exceeded the configured size limit",
+            self.at(node),
+        );
+    }
+
+    fn known(&mut self, node: Node<'_>, value: String) -> Js {
+        if self.a.budget.value_fits(value.len()) {
+            Js::Str(value)
+        } else {
+            self.value_limit(node);
+            Js::Unknown
+        }
     }
 
     fn statements(&mut self, node: Node<'t>, scope: &mut Scope) {
@@ -163,9 +188,10 @@ impl<'t> Walker<'_, '_, '_> {
             }
             "function_declaration" | "class_declaration" => {
                 if let Some(name) = node.child_by_field_name("name") {
-                    scope
-                        .names
-                        .insert(ts::text(name, self.source).to_string(), Js::Data);
+                    scope.names.insert(
+                        ts::text(name, self.source).to_string(),
+                        Js::Function(node.byte_range()),
+                    );
                 }
             }
             "if_statement" | "for_statement" | "for_in_statement" | "while_statement"
@@ -314,7 +340,7 @@ impl<'t> Walker<'_, '_, '_> {
         }
         let text = ts::text(node, self.source);
         match node.kind() {
-            "string" => Js::Str(text[1..text.len().saturating_sub(1)].to_string()),
+            "string" => self.known(node, text[1..text.len().saturating_sub(1)].to_string()),
             "template_string" => {
                 let mut out = String::new();
                 let mut last = node.start_byte() + 1;
@@ -334,7 +360,7 @@ impl<'t> Walker<'_, '_, '_> {
                     }
                 }
                 out.push_str(&self.source[last..node.end_byte() - 1]);
-                Js::Str(out)
+                self.known(node, out)
             }
             "number" => text.parse().map_or(Js::Data, Js::Num),
             "true"
@@ -360,6 +386,19 @@ impl<'t> Walker<'_, '_, '_> {
                     _ => Js::Unknown,
                 }),
             "member_expression" => {
+                if let Some(value) = scope.names.get(text) {
+                    if value == &Js::Unknown {
+                        let property = node
+                            .child_by_field_name("property")
+                            .map_or("", |p| ts::text(p, self.source));
+                        return if text == "process.argv" {
+                            Js::Unknown
+                        } else {
+                            Js::Method(Box::new(Js::Unknown), property.to_string())
+                        };
+                    }
+                    return value.clone();
+                }
                 let object = node
                     .child_by_field_name("object")
                     .map_or(Js::Unknown, |o| self.eval(o, scope));
@@ -383,7 +422,11 @@ impl<'t> Walker<'_, '_, '_> {
                     .ok()
                     .and_then(|i| scope.argv.get(i))
                     .map_or(Js::Unknown, |v| match v {
-                        Value::Known(s) => Js::Str(s.clone()),
+                        Value::Known(s) if self.a.budget.value_fits(s.len()) => Js::Str(s.clone()),
+                        Value::Known(_) => {
+                            self.value_limit(node);
+                            Js::Unknown
+                        }
                         Value::Unknown => Js::Unknown,
                     }),
                 (Js::Array(items), Js::Num(i)) => usize::try_from(i)
@@ -398,6 +441,21 @@ impl<'t> Walker<'_, '_, '_> {
                     .map(|c| self.eval(c, scope))
                     .collect(),
             ),
+            "binary_expression" => {
+                let left = node
+                    .child_by_field_name("left")
+                    .map_or(Js::Unknown, |l| self.eval(l, scope));
+                let right = node
+                    .child_by_field_name("right")
+                    .map_or(Js::Unknown, |r| self.eval(r, scope));
+                let operator = node
+                    .child_by_field_name("operator")
+                    .map_or("", |o| ts::text(o, self.source));
+                match (operator, left, right) {
+                    ("+", Js::Str(left), Js::Str(right)) => self.known(node, left + &right),
+                    _ => Js::Data,
+                }
+            }
             "call_expression" => self.call(node, scope),
             "await_expression"
             | "parenthesized_expression"
@@ -414,7 +472,13 @@ impl<'t> Walker<'_, '_, '_> {
                     .child_by_field_name("right")
                     .map_or(Js::Unknown, |r| self.eval(r, scope));
                 if let Some(left) = node.child_by_field_name("left") {
-                    self.bind(left, value.clone(), scope);
+                    if left.kind() == "member_expression" {
+                        scope
+                            .names
+                            .insert(ts::text(left, self.source).to_string(), Js::Unknown);
+                    } else {
+                        self.bind(left, value.clone(), scope);
+                    }
                 }
                 value
             }
@@ -477,9 +541,12 @@ impl<'t> Walker<'_, '_, '_> {
                 .collect::<Option<Vec<_>>>()
                 .filter(|p| !p.is_empty())
                 .map_or(Js::Unknown, |parts| {
-                    Js::Str(parts.iter().skip(1).fold(parts[0].clone(), |base, part| {
-                        paths::join(&base, part, self.a.ctx.path_style)
-                    }))
+                    self.known(
+                        node,
+                        parts.iter().skip(1).fold(parts[0].clone(), |base, part| {
+                            paths::join(&base, part, self.a.ctx.path_style)
+                        }),
+                    )
                 }),
             (Some("path.resolve"), _) => match (
                 args.iter()
@@ -490,13 +557,16 @@ impl<'t> Walker<'_, '_, '_> {
                     .collect::<Option<Vec<_>>>(),
                 cwd,
             ) {
-                (Some(parts), Some(dir)) => Js::Str(parts.iter().fold(dir, |base, part| {
-                    if part.starts_with('/') {
-                        part.clone()
-                    } else {
-                        paths::join(&base, part, self.a.ctx.path_style)
-                    }
-                })),
+                (Some(parts), Some(dir)) => self.known(
+                    node,
+                    parts.iter().fold(dir, |base, part| {
+                        if part.starts_with('/') {
+                            part.clone()
+                        } else {
+                            paths::join(&base, part, self.a.ctx.path_style)
+                        }
+                    }),
+                ),
                 _ => Js::Unknown,
             },
             (Some("path.dirname"), _) => match arg(0) {
@@ -520,6 +590,15 @@ impl<'t> Walker<'_, '_, '_> {
                     },
                     _ => None,
                 };
+                Js::Data
+            }
+            (_, Js::Function(range)) => {
+                if let Some(function) = self.root.descendant_for_byte_range(range.start, range.end)
+                    && let Some(body) = function.child_by_field_name("body")
+                {
+                    let mut local = scope.clone();
+                    self.statements(body, &mut local);
+                }
                 Js::Data
             }
             (Some(name), _) if name.starts_with("fs.") || name.starts_with("fs/promises.") => {
@@ -683,6 +762,10 @@ impl<'t> Walker<'_, '_, '_> {
                 );
                 Js::Unknown
             }
+            (_, Js::Method(receiver, _)) if matches!(**receiver, Js::Argv) => {
+                self.unresolved(node, "process.argv was mutated");
+                Js::Unknown
+            }
             _ => Js::Unknown,
         }
     }
@@ -721,7 +804,8 @@ fn member(object: &Js, property: &str) -> Js {
 #[cfg(test)]
 mod tests {
     use crate::{
-        model::UncertaintyKind,
+        Context, Dialect, Limits, PathStyle,
+        model::{Limit, Target, UncertaintyKind},
         testutil::{bash, targets},
     };
 
@@ -847,5 +931,58 @@ mod tests {
     fn dynamic_code_is_unresolved() {
         assert!(unresolved(&bash("node -e \"eval(process.env.X)\"")));
         assert!(unresolved(&bash("node -e \"import(process.env.M)\"")));
+    }
+
+    #[test]
+    fn reassigned_process_argv_does_not_use_outer_arguments() {
+        let a = bash(
+            "node -e \"process.argv = ['node', 'other.txt']; require('fs').writeFileSync(process.argv[1], '')\" original.txt",
+        );
+        assert!(!targets(&a).contains(&"/repo/original.txt".to_string()));
+        assert!(unresolved(&a));
+    }
+
+    #[test]
+    fn reassigned_fs_member_is_not_a_known_write() {
+        let a = bash(
+            "node -e \"const fs = require('fs'); fs.writeFileSync = () => {}; fs.writeFileSync('a.txt')\"",
+        );
+        assert!(!targets(&a).contains(&"/repo/a.txt".to_string()));
+        assert!(unresolved(&a));
+    }
+
+    #[test]
+    fn oversized_js_values_are_unresolved() {
+        let context = Context {
+            dialect: Dialect::Bash,
+            cwd: Some("/repo".into()),
+            path_style: PathStyle::Unix,
+            limits: Limits {
+                value: 128,
+                ..Limits::default()
+            },
+        };
+        let a = crate::analyze(
+            "node -e \"x='1234567890';require('fs').writeFileSync(x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x, '')\"",
+            &context,
+        );
+        assert!(
+            a.uncertainties
+                .iter()
+                .any(|u| u.kind == UncertaintyKind::LimitExhausted(Limit::ValueSize)),
+            "{a:?}"
+        );
+        assert!(a
+            .file_effects
+            .iter()
+            .all(|effect| effect.target != Target::Path("/repo/123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890".into())));
+    }
+
+    #[test]
+    fn directly_called_local_function_is_analyzed() {
+        let a = bash(
+            "node -e \"function write() { require('fs').writeFileSync('a.txt', '') } write()\"",
+        );
+        assert_eq!(targets(&a), ["/repo/a.txt"]);
     }
 }
