@@ -35,6 +35,7 @@ fn run_hook_with(project: &Path, home: &Path, payload: &str, extra_env: &[(&str,
         .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env_remove("DEVKIT_CONFIG")
         .env_remove("DEVKIT_ENFORCE_COMMANDS")
+        .env_remove("DEVKIT_ENFORCE_WRITES")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

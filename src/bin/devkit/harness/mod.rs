@@ -1,18 +1,25 @@
-//! `devkit harness shell`: the pre-execution command guard.
+//! `devkit harness shell`: the pre-execution hook for shell tools.
 //!
-//! Reads a harness's hook payload on stdin and either emits that harness's deny
-//! envelope or says nothing. Every failure path exits 0 — a missed nudge costs
-//! nothing, while a false denial would block legitimate work on every command.
-
-use std::io::{Read, Write};
-
-use anyhow::Result;
-use clap::{Args, Subcommand};
-use devkit_common::harness::{self, ShellPayload};
-use devkit_ports::guard::{self, Decision, Project};
+//! One analysis of the command feeds two stages. The command guard fails
+//! open: its own failures allow the command. The write stage, active for
+//! Claude Code and Codex when `enforce_writes` is on, fails closed: a write it
+//! cannot evaluate, a registry it cannot reach, or a deadline it misses is a
+//! denial.
 
 mod dialect;
 mod writes;
+
+use std::{
+    io::{Read, Write},
+    sync::OnceLock,
+    time::Duration,
+};
+
+use anyhow::Result;
+use clap::{Args, Subcommand};
+use devkit_command::{Context, Limits, PathStyle};
+use devkit_common::harness::{self, Harness};
+use devkit_ports::guard::{self, Project};
 
 // The fail-open contract below is `catch_unwind`, which catches nothing under
 // an aborting panic strategy. Nothing else ties the compile profile to this
@@ -43,43 +50,149 @@ pub fn run(cli: HarnessCli) -> Result<()> {
     }
 }
 
-/// Never returns an error and never panics out: a guard that fails a tool call
-/// is worse than a guard that misses one.
+/// Longer than a healthy registry ever takes and well inside the manifest's
+/// 30-second timeout, which allows the call when it fires.
+const WRITE_STAGE_DEADLINE: Duration = Duration::from_secs(5);
+
+enum Response {
+    Silent,
+    Envelope(serde_json::Value),
+}
+
+/// Never returns an error. A panic allows the command unless the write stage
+/// had started, in which case it denies.
 fn guard_shell() {
-    let outcome = std::panic::catch_unwind(|| {
-        let mut buf = String::new();
-        if std::io::stdin().read_to_string(&mut buf).is_err() {
-            return None;
-        }
-        let payload: serde_json::Value = serde_json::from_str(&buf).ok()?;
-        let ShellPayload {
-            harness: which,
-            command,
-            cwd,
-            ..
-        } = harness::parse_shell_payload(&payload)?;
-
-        let cwd = cwd.or_else(|| std::env::current_dir().ok())?;
-        if !harness::commands_enabled(&cwd) {
-            return None;
-        }
-
-        let (rules, warnings) = harness::resolve_rules(&cwd);
-        for w in warnings {
-            warn(&w);
-        }
-        let project = load_project(&cwd, rules.app_match.clone());
-        match guard::decide_with(&command, &rules.commands, project.as_ref()) {
-            Decision::Allow => None,
-            Decision::Deny { reason } => Some(harness::deny_shell_json(which, &reason)),
-        }
-    });
-
+    let write_stage: OnceLock<Harness> = OnceLock::new();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| respond(&write_stage)));
     match outcome {
-        Ok(Some(envelope)) => print_envelope(&envelope),
-        Ok(None) => {}
-        Err(_) => warn("command guard panicked; allowing the command"),
+        Ok(Response::Envelope(v)) => print_envelope(&v),
+        Ok(Response::Silent) => {}
+        Err(_) => match write_stage.get() {
+            Some(h) => print_envelope(&harness::deny_shell_json(
+                *h,
+                "devkit write-harness: internal failure while evaluating a shell write (fail-closed)",
+            )),
+            None => warn("command guard panicked; allowing the command"),
+        },
     }
+}
+
+fn deny(which: Harness, reasons: &[String]) -> Response {
+    Response::Envelope(harness::deny_shell_json(which, &reasons.join("\n")))
+}
+
+fn respond(write_stage: &OnceLock<Harness>) -> Response {
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_err() {
+        return Response::Silent;
+    }
+    let payload: serde_json::Value = match serde_json::from_str(&buf) {
+        Ok(v) => v,
+        Err(e) => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            return if harness::writes_enabled(&cwd) {
+                Response::Envelope(harness::deny_json(&format!(
+                    "devkit write-harness: hook payload did not parse ({e}) (fail-closed)"
+                )))
+            } else {
+                Response::Silent
+            };
+        }
+    };
+    let Some(shell) = harness::parse_shell_payload(&payload) else {
+        return Response::Silent;
+    };
+    let Some(cwd) = shell.cwd.clone().or_else(|| std::env::current_dir().ok()) else {
+        return Response::Silent;
+    };
+    let commands_on = harness::commands_enabled(&cwd);
+    let writes_on = shell.harness != Harness::Cursor && harness::writes_enabled(&cwd);
+    if !commands_on && !writes_on {
+        return Response::Silent;
+    }
+    if writes_on {
+        let _ = write_stage.set(shell.harness);
+    }
+
+    let (rules, warnings) = harness::resolve_rules(&cwd);
+    for w in &warnings {
+        warn(w);
+    }
+    let ctx = Context {
+        dialect: dialect::resolve(
+            rules.policy.shell,
+            shell.harness,
+            shell.tool_name.as_deref(),
+            cfg!(windows),
+        ),
+        cwd: shell.cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        path_style: if cfg!(windows) {
+            PathStyle::Windows
+        } else {
+            PathStyle::Unix
+        },
+        limits: Limits::default(),
+    };
+    let analysis = devkit_command::analyze(&shell.command, &ctx);
+
+    let mut blocks: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    if commands_on {
+        let project = load_project(&cwd, rules.app_match.clone());
+        let verdict = guard::decide(&analysis, &rules.commands, project.as_ref());
+        blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
+        notes.extend(verdict.warnings.into_iter().map(|f| f.message));
+    }
+    if writes_on {
+        let evaluation = writes::evaluate(&analysis, &rules.policy);
+        blocks.extend(evaluation.blocks.iter().cloned());
+        notes.extend(evaluation.warnings.iter().cloned());
+        if blocks.is_empty() && evaluation.needs_registry() {
+            let Some(session) = shell.session_id.clone() else {
+                return deny(shell.harness, &[
+                    "devkit write-harness: shell write payload carries no session_id (fail-closed)"
+                        .into(),
+                ]);
+            };
+            let holder =
+                devkit_locks::hook::holder_from_fields(&session, shell.agent_id.as_deref());
+            match writes::with_deadline(WRITE_STAGE_DEADLINE, move || {
+                writes::enforce(&evaluation, &holder)
+            }) {
+                Ok(Ok(conflicts)) if conflicts.is_empty() => {}
+                Ok(Ok(conflicts)) => blocks.push(writes::conflict_message(&conflicts)),
+                Ok(Err(e)) => {
+                    blocks.push(format!(
+                        "devkit write-harness: registry error (fail-closed): {e:#}"
+                    ));
+                }
+                Err(writes::StageError::Panicked) => blocks.push(
+                    "devkit write-harness: internal failure while claiming shell write targets (fail-closed)"
+                        .into(),
+                ),
+                Err(writes::StageError::TimedOut) => {
+                    print_envelope(&harness::deny_shell_json(
+                        shell.harness,
+                        &format!(
+                            "devkit write-harness: the lock registry did not answer within {}s (fail-closed). Retry; if it persists, check `lockm status` and `devkit doctor`.",
+                            WRITE_STAGE_DEADLINE.as_secs()
+                        ),
+                    ));
+                    // The worker is still blocked on the registry; exiting the
+                    // process is what ends it.
+                    std::process::exit(0);
+                }
+            }
+        }
+    }
+    if !blocks.is_empty() {
+        return deny(shell.harness, &blocks);
+    }
+    if notes.is_empty() {
+        return Response::Silent;
+    }
+    harness::warn_shell_json(shell.harness, &notes.join("\n"))
+        .map_or(Response::Silent, Response::Envelope)
 }
 
 /// Write a deny envelope to stdout. A closed pipe or a full disk on the
