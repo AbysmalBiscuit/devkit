@@ -115,11 +115,6 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     stack.into_iter().collect()
 }
 
-fn normalize_scope_path(path: &Path) -> PathBuf {
-    let lexical = normalize_lexically(path);
-    resolve_existing(&lexical).unwrap_or(lexical)
-}
-
 /// The deepest ancestor of `start` that is a directory. git cannot report a
 /// checkout root from a directory that does not exist, and a write to a new
 /// file in a new directory names one that does not, so the root would fall
@@ -530,15 +525,15 @@ impl WriteResolver {
                 .context("getting current dir")?
                 .join(p)
         };
-        let abs = normalize_scope_path(&abs);
-        let root = normalize_scope_path(&self.root_for(&existing_ancestor(&abs)));
-        let rel = if whole_checkout || abs == root {
+        let abs = normalize_lexically(&abs);
+        // The root stays in git's spelling: `acquire` keys rows by it, and a
+        // canonicalized root (`\\?\C:\...` on Windows) would match none of
+        // them.
+        let root = self.root_for(&existing_ancestor(&abs));
+        let rel = if whole_checkout {
             ".".to_string()
         } else {
-            match rel_under_root(&abs, &root)? {
-                r if r.is_empty() => ".".to_string(),
-                r => r,
-            }
+            rel_under_root(&abs, &root)?
         };
         Ok((root.to_string_lossy().into_owned(), rel))
     }
