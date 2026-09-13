@@ -466,6 +466,7 @@ version = "0.14.1"
 dependencies = [
  "anyhow",
  "clap",
+ "devkit-command",
  "devkit-common",
  "devkit-config",
  "fd-lock",

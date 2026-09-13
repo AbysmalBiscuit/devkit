@@ -762,9 +762,36 @@ mod shapes {
 #[cfg(test)]
 mod tests {
     use crate::{
-        model::{FileOp, UncertaintyKind},
+        model::{FileOp, UncertaintyKind, Value},
         testutil::{bash, programs, targets},
     };
+
+    #[test]
+    fn operators_start_new_invocations() {
+        assert_eq!(
+            programs(&bash("foo && next dev; cd sub; uvicorn app:app")),
+            ["foo", "next", "uvicorn"]
+        );
+        let mut substitution = programs(&bash("echo $(vite dev)"));
+        substitution.sort();
+        assert_eq!(substitution, ["echo", "vite"]);
+    }
+
+    #[test]
+    fn quoted_operators_and_double_dash_stay_arguments() {
+        assert_eq!(programs(&bash(r#"git commit -m "fix: uvicorn; retry""#)), [
+            "git"
+        ]);
+        assert_eq!(programs(&bash("cargo run -- next dev")), ["cargo"]);
+    }
+
+    #[test]
+    fn redirects_do_not_create_invocations_or_stray_arguments() {
+        assert_eq!(programs(&bash("bun test > /tmp/x.log 2>&1 &")), ["bun"]);
+        let a = bash("vite dev 2>&1");
+        assert_eq!(a.invocations[0].args, [Value::Known("dev".into())]);
+        assert_eq!(programs(&bash("cat notes.md > vite")), ["cat"]);
+    }
 
     #[test]
     fn redirects_overwrite_and_append() {
@@ -840,6 +867,14 @@ mod tests {
     }
 
     #[test]
+    fn quoted_and_indented_heredoc_delimiters_keep_body_inert() {
+        assert_eq!(programs(&bash("cat <<'EOF'\nvite dev\nEOF")), ["cat"]);
+        assert_eq!(programs(&bash("cat <<-EOF\nvite dev\n\tEOF\nls")), [
+            "cat", "ls"
+        ]);
+    }
+
+    #[test]
     fn a_substitution_inside_an_unquoted_heredoc_runs() {
         let a = bash("cat > n.md <<EOF\n$(echo t > t.txt)\nEOF\n");
         assert!(
@@ -847,6 +882,41 @@ mod tests {
             "{:?}",
             targets(&a)
         );
+    }
+
+    #[test]
+    fn backtick_and_process_substitutions_are_invocations() {
+        let mut backtick = programs(&bash("echo `vite dev`"));
+        backtick.sort();
+        assert_eq!(backtick, ["echo", "vite"]);
+        let mut process = programs(&bash("diff <(vite dev) <(true)"));
+        process.sort();
+        assert_eq!(process, ["diff", "true", "vite"]);
+        let mut output = programs(&bash("echo hi >(cat)"));
+        output.sort();
+        assert_eq!(output, ["cat", "echo"]);
+    }
+
+    #[test]
+    fn comments_end_at_newlines_and_hashes_inside_words_are_data() {
+        assert_eq!(programs(&bash("cargo build # TODO(next dev)")), ["cargo"]);
+        assert_eq!(
+            programs(&bash("ls # build && next dev\nuvicorn app:app")),
+            ["ls", "uvicorn"]
+        );
+        let a = bash(r##"echo foo#bar "# not a comment""##);
+        assert_eq!(a.invocations[0].args, [
+            Value::Known("foo#bar".into()),
+            Value::Known("# not a comment".into())
+        ]);
+    }
+
+    #[test]
+    fn malformed_quotes_and_trailing_backslashes_are_grammar_values() {
+        assert_eq!(programs(&bash("echo \"unterminated")), ["echo"]);
+        assert_eq!(bash("vite dev\\").invocations[0].args, [Value::Known(
+            "dev".into()
+        )]);
     }
 
     #[test]

@@ -2,15 +2,15 @@
 
 pub mod appname;
 pub mod catalog;
-pub mod lex;
 pub mod norm;
 pub mod sig;
 pub mod tasks;
 
 use std::collections::{BTreeMap, HashMap};
 
-use devkit_config::{AppMatch, CommandRule, Config};
-use norm::{Normalized, basename};
+use devkit_command::{Analysis, Invocation, Value};
+use devkit_config::{AppMatch, CommandRule, Config, RuleAction, Severity};
+use norm::basename;
 
 use crate::apps::App;
 
@@ -49,49 +49,184 @@ pub enum Decision {
     Deny { reason: String },
 }
 
-/// Decide over already-loaded inputs. The IO-free half of the guard, so every
-/// matching rule is unit-testable without a project on disk.
-///
-/// Segments are evaluated in order and the first denial decides the whole
-/// command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finding {
+    pub rule: Option<String>,
+    pub severity: Severity,
+    pub message: String,
+}
+
+#[derive(Debug, Default)]
+pub struct Verdict {
+    pub blocks: Vec<Finding>,
+    pub warnings: Vec<Finding>,
+}
+
+/// The guard's reading of one invocation: the program and arguments as
+/// strings when every word is known.
+struct Known {
+    argv: Vec<String>,
+    doppler: Option<norm::Doppler>,
+}
+
+fn known(inv: &Invocation) -> Option<Known> {
+    let mut argv = vec![inv.program.known()?.to_string()];
+    for arg in &inv.args {
+        argv.push(arg.known()?.to_string());
+    }
+    Some(Known {
+        argv,
+        doppler: norm::doppler_of(inv),
+    })
+}
+
+enum Match {
+    Yes,
+    Possible,
+    No,
+}
+
+fn rule_match(inv: &Invocation, rule: &CommandRule) -> Match {
+    let program = match inv.program.known() {
+        Some(program) => basename(program),
+        None => return Match::Possible,
+    };
+    if !rule.programs.iter().any(|p| basename(p) == program) {
+        return Match::No;
+    }
+    let mut possible = false;
+    for (index, expected) in rule.args.iter().enumerate() {
+        match inv.semantic_args.get(index) {
+            Some(Value::Known(actual)) if actual == expected => {}
+            Some(Value::Known(_)) | None => return Match::No,
+            Some(Value::Unknown) => possible = true,
+        }
+    }
+    if possible {
+        Match::Possible
+    } else {
+        Match::Yes
+    }
+}
+
+/// Decide over an analysis. Every invocation is checked, nested ones
+/// included; findings keep invocation order, then rule name order.
+pub fn decide(
+    analysis: &Analysis,
+    rules: &BTreeMap<String, CommandRule>,
+    project: Option<&Project>,
+) -> Verdict {
+    let mut verdict = Verdict::default();
+    for inv in &analysis.invocations {
+        if inv
+            .program
+            .known()
+            .map(basename)
+            .is_some_and(|program| SHIMS.contains(&program))
+        {
+            continue;
+        }
+        let typed = inv.typed.join(" ");
+        let mut undetermined = false;
+        for (name, rule) in rules
+            .iter()
+            .filter(|(_, rule)| rule.enabled && !rule.programs.is_empty())
+        {
+            match rule_match(inv, rule) {
+                Match::Yes => {
+                    let finding = Finding {
+                        rule: Some(name.clone()),
+                        severity: rule.severity,
+                        message: rule.reason.clone(),
+                    };
+                    match rule.action {
+                        RuleAction::Block => verdict.blocks.push(finding),
+                        RuleAction::Warn => verdict.warnings.push(finding),
+                    }
+                }
+                Match::Possible => undetermined = true,
+                Match::No => {}
+            }
+        }
+        if undetermined {
+            verdict.warnings.push(Finding {
+                rule: None,
+                severity: Severity::Warning,
+                message: format!("`{typed}` could not be fully resolved, so devkit could not tell whether a `[harness.commands]` rule applies; it was allowed."),
+            });
+        }
+        let Some(project) = project else { continue };
+        match known(inv) {
+            Some(known) => {
+                let program = basename(&known.argv[0]).to_string();
+                let normalized = norm_view(&known);
+                if let Some(message) = project_hit(&inv.typed, &normalized, &program, project) {
+                    verdict.blocks.push(Finding {
+                        rule: None,
+                        severity: Severity::Error,
+                        message,
+                    });
+                }
+            }
+            None if !project.config.tasks.is_empty() || !project.catalog.is_empty() => {
+                verdict.warnings.push(Finding {
+                    rule: None,
+                    severity: Severity::Info,
+                    message: format!("`{typed}` could not be fully resolved, so devkit did not check it against the project's tasks and apps."),
+                })
+            }
+            None => {}
+        }
+    }
+    verdict
+}
+
+/// Kept for callers holding a bash command string: the first block, if any.
 pub fn decide_with(
     command: &str,
     rules: &BTreeMap<String, CommandRule>,
     project: Option<&Project>,
 ) -> Decision {
-    for words in lex::segments(command) {
-        let Some(n) = norm::normalize(&words) else {
-            continue;
-        };
-        let Some(prog) = n.argv.first().map(|w| basename(w).to_string()) else {
-            continue;
-        };
-        if SHIMS.contains(&prog.as_str()) {
-            continue;
-        }
-        if let Some(reason) = rule_hit(&n, &prog, rules) {
-            return Decision::Deny { reason };
-        }
-        if let Some(p) = project
-            && let Some(reason) = project_hit(&words, &n, &prog, p)
-        {
-            return Decision::Deny { reason };
-        }
+    let analysis = devkit_command::analyze(command, &bash_context());
+    match decide(&analysis, rules, project).blocks.into_iter().next() {
+        Some(finding) => Decision::Deny {
+            reason: finding.message,
+        },
+        None => Decision::Allow,
     }
-    Decision::Allow
 }
 
-/// Source 2: a `[harness.commands.*]` rule. An empty `programs` matches
-/// nothing, which is how a child layer exempts a subtree.
-fn rule_hit(n: &Normalized, prog: &str, rules: &BTreeMap<String, CommandRule>) -> Option<String> {
-    rules.values().find_map(|rule| {
-        let named = rule.programs.iter().any(|p| basename(p) == prog);
-        let args_match = n
-            .argv
-            .get(1..)
-            .is_some_and(|typed| typed.starts_with(&rule.args));
-        (named && args_match).then(|| rule.reason.clone())
-    })
+fn bash_context() -> devkit_command::Context {
+    devkit_command::Context {
+        dialect: devkit_command::Dialect::Bash,
+        cwd: None,
+        path_style: if cfg!(windows) {
+            devkit_command::PathStyle::Windows
+        } else {
+            devkit_command::PathStyle::Unix
+        },
+        limits: devkit_command::Limits::default(),
+    }
+}
+
+/// A configured argv, unwrapped the same way as a typed command.
+fn configured(argv: &[String]) -> Option<Known> {
+    devkit_command::analyze_argv(argv, &bash_context())
+        .invocations
+        .first()
+        .and_then(known)
+}
+
+struct Normalized {
+    argv: Vec<String>,
+    doppler: Option<norm::Doppler>,
+}
+
+fn norm_view(known: &Known) -> Normalized {
+    Normalized {
+        argv: known.argv.clone(),
+        doppler: known.doppler.clone(),
+    }
 }
 
 /// Sources 3 through 5, in order.
@@ -220,7 +355,7 @@ fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
         .filter_map(|(name, task)| {
             // Both sides normalize, or a task's own runner prefix and doppler
             // wrapper make it unmatchable against the stripped typed side.
-            let cfg = norm::normalize(&task.run)?;
+            let cfg = configured(&task.run)?;
             let s = sig::signature(&cfg.argv)?;
             // The floor is a heuristic about bare-program tasks. A task that
             // states its own `guard` answer has already settled the question,
@@ -282,7 +417,7 @@ fn matching_apps(n: &Normalized, p: &Project) -> Vec<String> {
         .catalog
         .values()
         .filter_map(|app| {
-            let launch = norm::normalize(&app.launch)?;
+            let launch = configured(&app.launch)?;
             let s = sig::signature(&launch.argv)?;
             sig::matches(&s, &n.argv).then_some((s.len(), app.name.as_str()))
         })
@@ -326,7 +461,7 @@ fn catalog_message(typed: &[String], app: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use devkit_config::{AppConfig, AppMatch, CommandRule, TaskConfig};
+    use devkit_config::{AppConfig, AppMatch, CommandRule, RuleAction, Severity, TaskConfig};
 
     use super::*;
 
@@ -337,6 +472,31 @@ mod tests {
             reason: reason.into(),
             ..CommandRule::default()
         })])
+    }
+
+    fn rule(
+        programs: &[&str],
+        args: &[&str],
+        edit: impl FnOnce(&mut CommandRule),
+    ) -> BTreeMap<String, CommandRule> {
+        let mut r = CommandRule {
+            programs: programs.iter().map(|s| s.to_string()).collect(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            reason: "use issue".into(),
+            ..CommandRule::default()
+        };
+        edit(&mut r);
+        BTreeMap::from([("worktree-add".to_string(), r)])
+    }
+
+    fn verdict(command: &str, rules: &BTreeMap<String, CommandRule>) -> Verdict {
+        let ctx = devkit_command::Context {
+            dialect: devkit_command::Dialect::Bash,
+            cwd: None,
+            path_style: devkit_command::PathStyle::Unix,
+            limits: devkit_command::Limits::default(),
+        };
+        decide(&devkit_command::analyze(command, &ctx), rules, None)
     }
 
     fn project(build: impl FnOnce(&mut Config)) -> Project {
@@ -377,6 +537,55 @@ mod tests {
             Decision::Deny { reason } => reason,
             Decision::Allow => panic!("expected a denial"),
         }
+    }
+
+    #[test]
+    fn git_global_options_do_not_hide_a_worktree_rule() {
+        let r = rule(&["git"], &["worktree", "add"], |_| {});
+        assert_eq!(
+            verdict("git -C /repo worktree add ../wt", &r).blocks.len(),
+            1
+        );
+        assert!(verdict("git -C /repo worktree list", &r).blocks.is_empty());
+    }
+
+    #[test]
+    fn a_warn_rule_warns_and_a_disabled_rule_is_silent() {
+        let warn = rule(&["git"], &["worktree", "add"], |r| {
+            r.action = RuleAction::Warn;
+            r.severity = Severity::Warning;
+        });
+        let v = verdict("git worktree add x", &warn);
+        assert!(v.blocks.is_empty());
+        assert_eq!(v.warnings[0].severity, Severity::Warning);
+        let off = rule(&["git"], &["worktree", "add"], |r| r.enabled = false);
+        let v = verdict("git worktree add x", &off);
+        assert!(v.blocks.is_empty() && v.warnings.is_empty());
+    }
+
+    #[test]
+    fn an_undetermined_argument_is_a_possible_match_that_warns() {
+        let r = rule(&["git"], &["worktree", "add"], |_| {});
+        let v = verdict("git \"$verb\" add /tmp/wt", &r);
+        assert!(v.blocks.is_empty());
+        assert_eq!(
+            v.warnings.len(),
+            1,
+            "{:?}",
+            v.warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rules_see_nested_commands_but_not_quoted_mentions() {
+        let r = rule(&["git"], &["worktree", "add"], |_| {});
+        assert_eq!(verdict("bash -c 'git worktree add x'", &r).blocks.len(), 1);
+        assert!(verdict("echo 'git worktree add x'", &r).blocks.is_empty());
+        assert!(
+            verdict("git commit -m \"git worktree add x\"", &r)
+                .blocks
+                .is_empty()
+        );
     }
 
     #[test]

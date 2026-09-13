@@ -442,9 +442,16 @@ pub(crate) fn doppler_flags(words: &[Value]) -> (Option<String>, Option<String>)
             Some((key, value)) => (key, Some(value.to_string())),
             None => (text, None),
         };
-        let value = inline
-            .clone()
-            .or_else(|| words.get(i + 1).and_then(|v| v.known()).map(str::to_string));
+        if text == "--" {
+            break;
+        }
+        let value = inline.clone().or_else(|| {
+            words
+                .get(i + 1)
+                .filter(|v| v.known() != Some("--"))
+                .and_then(|v| v.known())
+                .map(str::to_string)
+        });
         match key {
             "-c" | "--config" => config = value,
             "-p" | "--project" => project = value,
@@ -624,6 +631,9 @@ mod tests {
             bash("npx -y prettier --write .").invocations[0].program,
             k("prettier")
         );
+        assert_eq!(bash("bunx --bun vite").invocations[0].program, k("vite"));
+        assert_eq!(bash("npm exec vite").invocations[0].program, k("vite"));
+        assert_eq!(bash("npm run dev").invocations[0].program, k("npm"));
     }
 
     #[test]
@@ -639,6 +649,72 @@ mod tests {
         assert_eq!(
             super::doppler_flags(&b.invocations[0].wrappers[0]),
             (Some("prd".into()), None)
+        );
+    }
+
+    #[test]
+    fn doppler_config_spellings_have_the_same_metadata() {
+        let short = bash("doppler run -c dev -- x");
+        let long = bash("doppler run --config dev -- x");
+        assert_eq!(
+            super::doppler_flags(&short.invocations[0].wrappers[0]),
+            super::doppler_flags(&long.invocations[0].wrappers[0])
+        );
+    }
+
+    #[test]
+    fn doppler_metadata_handles_equals_and_dangling_flags() {
+        let equals = bash("doppler run --config=dev -- vite");
+        assert_eq!(
+            super::doppler_flags(&equals.invocations[0].wrappers[0]),
+            (Some("dev".into()), None)
+        );
+        let dangling = bash("doppler run -c -- vite");
+        assert_eq!(
+            super::doppler_flags(&dangling.invocations[0].wrappers[0]),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn a_doppler_run_without_a_separator_is_left_alone() {
+        assert_eq!(
+            bash("doppler run -c dev").invocations[0].program,
+            k("doppler")
+        );
+    }
+
+    #[test]
+    fn basename_and_assignment_normalization_match_guard_inputs() {
+        assert_eq!(super::basename("./node_modules/.bin/vite"), "vite");
+        assert!(bash("FOO=1").invocations.is_empty());
+        assert_eq!(
+            bash("FOO=1 env BAR=2 vite").invocations[0].program,
+            k("vite")
+        );
+    }
+
+    #[test]
+    fn wrapper_options_are_skipped_before_the_command() {
+        for (command, program) in [
+            ("env -i FOO=1 vite", "vite"),
+            ("timeout --foreground 30 vite", "vite"),
+            ("npx --yes vite", "vite"),
+            ("bunx --bun vite", "vite"),
+        ] {
+            assert_eq!(
+                bash(command).invocations[0].program,
+                k(program),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_compound_doppler_command_value_stays_wrapped() {
+        assert_eq!(
+            bash("doppler run --command='bun test && ls'").invocations[0].program,
+            k("doppler")
         );
     }
 

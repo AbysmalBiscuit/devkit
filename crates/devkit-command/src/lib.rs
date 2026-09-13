@@ -36,6 +36,11 @@ pub fn analyze_argv(argv: &[String], ctx: &Context) -> Analysis {
     analyzer::Analyzer::new(ctx).run_argv(argv)
 }
 
+/// `(config, project)` from a `doppler run` wrapper's words.
+pub fn doppler_flags(words: &[Value]) -> (Option<String>, Option<String>) {
+    normalize::doppler_flags(words)
+}
+
 #[cfg(test)]
 pub(crate) mod testutil {
     use crate::{Analysis, Context, Dialect, Limits, PathStyle, Target};
