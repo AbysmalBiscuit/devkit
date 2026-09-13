@@ -179,7 +179,7 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
 struct BriefSnapshot {
     root: String,
     apps: Vec<String>,
-    tasks: Vec<(String, String, String, String)>,
+    tasks: Vec<(String, String, String, String, String)>,
     servers: Vec<ServerKey>,
     locks: bool,
     pins: Vec<PinKey>,
@@ -259,8 +259,10 @@ impl BriefSnapshot {
         for app in &self.apps {
             out.push_str(&format!("app\t{app}\n"));
         }
-        for (name, kind, app, description) in &self.tasks {
-            out.push_str(&format!("task\t{name}\t{kind}\t{app}\t{description}\n"));
+        for (name, kind, app, args, description) in &self.tasks {
+            out.push_str(&format!(
+                "task\t{name}\t{kind}\t{app}\t{args}\t{description}\n"
+            ));
         }
         for s in &self.servers {
             out.push_str(&format!(
@@ -402,10 +404,13 @@ fn snapshot(
                 Vec::new()
             };
             apps.sort();
-            let mut tasks: Vec<(String, String, String, String)> = if settings.tasks {
+            let mut tasks: Vec<(String, String, String, String, String)> = if settings.tasks {
                 task::list(&loaded.config)
                     .into_iter()
-                    .map(|r| (r.name, r.kind.to_string(), r.app, r.description))
+                    .map(|r| {
+                        let args = task::args_text(&r.args);
+                        (r.name, r.kind.to_string(), r.app, args, r.description)
+                    })
                     .collect()
             } else {
                 Vec::new()
