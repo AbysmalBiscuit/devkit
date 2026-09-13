@@ -24,7 +24,7 @@ Before running a project build, profiling flow, or verification command by hand,
 |---|---|
 | `references/locks.md` | full `lockm` flags, holder identity, TTL, or an enforced-write hook denied your edit |
 | `references/servers.md` | starting or stopping dev servers, allocating ports, reading logs, another worktree's servers |
-| `references/tasks.md` | a `devrun task` hit a `require_live` gate, or you need to override its env |
+| `references/tasks.md` | a `devrun task` needs an `--arg`, hit a `require_live` gate, or you need to override its env |
 | `references/issues.md` | starting an issue worktree, checking out a PR, shipping for review, tearing down |
 | `references/diagnostics.md` | a `devkit.toml` key's name, type or default is in question, a credential is missing, or you need `doctor` or `brief` |
 

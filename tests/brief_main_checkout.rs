@@ -238,3 +238,29 @@ fn if_changed_treats_a_main_checkout_only_fault_as_a_change() {
         "an unchanged repeat after the fault was already reported should stay silent: {repeat_out:?}"
     );
 }
+
+#[test]
+fn if_changed_treats_a_change_to_a_tasks_args_as_a_change() {
+    let task = |run: &str| {
+        format!("{DEFAULTS}[tasks.commit]\ndescription = \"commit\"\nrun = [\"git\", \"{run}\"]\n")
+    };
+    let (t, worktree) = project_with_main_config(&task("{{ msg }}"));
+    let state = tempfile::tempdir().unwrap();
+    let session = "if-changed-task-args-session";
+
+    let first = devkit_if_changed(&worktree, state.path(), session);
+    let first_out = String::from_utf8_lossy(&first.stdout);
+    assert!(first_out.contains("commit"), "{first_out:?}");
+
+    std::fs::write(
+        t.path().join("main").join("devkit.toml"),
+        task("{{ scope }}: {{ msg }}"),
+    )
+    .unwrap();
+    let changed = devkit_if_changed(&worktree, state.path(), session);
+    let changed_out = String::from_utf8_lossy(&changed.stdout);
+    assert!(
+        changed_out.contains("scope"),
+        "a task gaining an arg changes the brief and must be emitted: {changed_out:?}"
+    );
+}

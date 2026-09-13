@@ -171,6 +171,10 @@ pub(crate) enum Cmd {
         /// skipped). A key also passed with --env wins.
         #[arg(long = "env-file")]
         env_file: Option<String>,
+        /// Set a template variable the task reads, over its
+        /// `[templates.variables]` value. Repeatable.
+        #[arg(long = "arg", value_name = "KEY=VALUE")]
+        args: Vec<String>,
         /// Print the rendered plan (cwd, argv, env, resolved ports) without
         /// executing.
         #[arg(long)]
@@ -505,6 +509,7 @@ pub fn run(cli: RunCli) -> Result<()> {
             name,
             env,
             env_file,
+            args,
             dry_run,
         } => cmd_task(
             &cli,
@@ -512,6 +517,7 @@ pub fn run(cli: RunCli) -> Result<()> {
             name.as_deref(),
             env,
             env_file.as_deref(),
+            args,
             *dry_run,
         ),
     }
@@ -619,6 +625,7 @@ fn cmd_task(
     name: Option<&str>,
     env_pairs: &[String],
     env_file: Option<&str>,
+    arg_pairs: &[String],
     dry_run: bool,
 ) -> Result<()> {
     use devkit_ports::task::{self, Resolved, SeqItem};
@@ -631,6 +638,7 @@ fn cmd_task(
     };
 
     let user = parse_user_env(env_pairs, env_file)?;
+    let args = task::parse_args(arg_pairs)?;
     let root = toplevel(cwd)?;
     let resolved = task::resolve(
         &loaded.config,
@@ -639,6 +647,7 @@ fn cmd_task(
         &root,
         name,
         &user,
+        &args,
     )?;
     let root_path = Path::new(&root);
     match resolved {
@@ -653,6 +662,7 @@ fn cmd_task(
                 &root,
                 name,
                 &user,
+                &args,
             )?;
             run_task_step(&fresh, false)
         }
@@ -670,6 +680,7 @@ fn cmd_task(
                                 &root,
                                 &plan.name,
                                 &user,
+                                &args,
                             )?;
                             run_task_step(&fresh, false)?;
                         }

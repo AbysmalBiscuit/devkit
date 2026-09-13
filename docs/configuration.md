@@ -222,6 +222,14 @@ steps = [
 ```
 
 - Command tasks run in the foreground with inherited stdio; the exit code is propagated. `run` and `env` values are minijinja templates with the same `port`/`ports` context as launches; `{{ ports['x'] }}` resolves from the port registry (issue role), writing a pid-less reservation when `x` isn't running. Env layering, low to high: app `static_env` → task `env` → CLI `--env-file` → `--env`. Tasks do not get `url_env` provider wiring — reference the app you need explicitly via `ports[...]`. Doppler invocations go through the same `prd` guard as launches.
+- `run` and `env` also read `[templates.variables]`, plus `issue` and `slug` from the worktree's `.devkit/issue.toml` and `branch` from git. `devrun task <name> --arg key=value` (repeatable) sets a variable for one run, over both. Any other name a task's `run` or `env` reads is an arg of that task: optional when `[templates.variables]` gives it a value, required otherwise. A `| default(...)` or `is defined` in the template does not make an arg optional. A missing required arg, or an `--arg` that no template reads and `[templates.variables]` does not declare, fails before anything resolves, and for a sequence the check covers every step. `devrun task` lists each task's args with optional ones in brackets, and the command guard's redirect names the required ones. An issue field with no source is undefined rather than empty, so `{{ issue }}` fails outside an issue worktree; write `{% if issue is defined %}` for a task that runs in both.
+
+  ```toml
+  [tasks.commit]
+  run = ["git", "commit", "-m", "{% if issue is defined %}{{ issue }}: {% endif %}{{ msg }}"]
+  guard = true   # redirect an agent's `git commit` here
+  ```
+
 - `require_live = ["app", …]` (command tasks only): each listed app must have a live devrun-managed server in this worktree when the task *executes*, or the task fails before spawning:
 
       require_live: `api-serve` has no live server in this worktree (devrun up api-serve)

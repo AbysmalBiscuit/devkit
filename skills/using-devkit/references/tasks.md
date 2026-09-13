@@ -3,14 +3,28 @@
 Projects define oneshot tasks in `[tasks]`: builds, profiling flows, assertions, anything needing the project's apps, ports, and env wired in. A task renders **real registry ports** into its templates, so a hand-typed port is exactly the drift devkit exists to prevent. Check for a task before assembling the command yourself.
 
 ```sh
-devrun task                                   # list configured tasks (name, kind, app, description)
+devrun task                                   # list configured tasks (name, kind, app, args, description)
 devrun task <name> --dry-run                  # print the rendered plan(s) — argv, cwd, env — without running
 devrun task <name>                            # run it
+devrun task <name> --arg KEY=value            # set a template variable the task reads
 devrun task <name> --env KEY=value            # overlay env on every step
 devrun task <name> --env-file F
 ```
 
 A **command** task runs in the foreground and propagates its exit code. A **sequence** task runs `{ task = … }` / `{ up = … }` steps in order, stopping at the first failure. The `--env`/`--env-file` overlay applies to every step: command steps layer it above the task's `env`, `up` steps above the app's `static_env`, the same as `devrun up --env`.
+
+## Args
+
+A task's templates can read variables as well as ports. The ARGS column of `devrun task` names them: a bare name is required, a bracketed one has a project default. Pass each with `--arg`:
+
+```sh
+devrun task commit --arg msg="fix login redirect"
+```
+
+- A missing required arg fails before any step runs, naming the flag: ``task `commit` needs --arg msg=...``. A sequence checks every step's args up front.
+- An `--arg` the task never reads is rejected, so a mistyped key fails loudly.
+- `issue`, `slug` and `branch` come from the worktree's `.devkit/issue.toml` and git. Outside an issue worktree they are undefined; supply one with `--arg issue=<id>` when the task reads it.
+- When the command guard redirects a command you typed to a task, its message spells out the required `--arg` flags. Run the task with them.
 
 ## The `require_live` gate
 

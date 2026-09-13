@@ -113,9 +113,14 @@ fn project_hit(typed: &[String], n: &Normalized, prog: &str, p: &Project) -> Opt
     };
 
     if let Some(name) = best_task(n, p, min_sig) {
+        let usage: String = crate::task::required_args(&p.config, &name)
+            .unwrap_or_default()
+            .iter()
+            .map(|a| format!(" --arg {a}=<{a}>"))
+            .collect();
         return Some(format!(
-            "`{}` is the `{name}` task. Run `devrun task {name}` so it gets its app directory, \
-             layered env and allocated ports.",
+            "`{}` is the `{name}` task. Run `devrun task {name}{usage}` so it gets its app \
+             directory, layered env and allocated ports.",
             typed.join(" ")
         ));
     }
