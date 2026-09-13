@@ -70,3 +70,98 @@ pub(crate) mod testutil {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod limit_tests {
+    use crate::{
+        Dialect, Limit, Limits, UncertaintyKind,
+        testutil::{ctx, targets},
+    };
+
+    fn with(limits: Limits, source: &str) -> crate::Analysis {
+        let mut c = ctx(Dialect::Bash);
+        c.limits = limits;
+        crate::analyze(source, &c)
+    }
+
+    fn exhausted(a: &crate::Analysis, limit: Limit) -> bool {
+        a.uncertainties
+            .iter()
+            .any(|u| u.kind == UncertaintyKind::LimitExhausted(limit))
+    }
+
+    #[test]
+    fn an_oversized_command_is_not_parsed() {
+        let a = with(
+            Limits {
+                outer_source: 16,
+                ..Limits::default()
+            },
+            "echo x > a.txt; echo y > b.txt",
+        );
+        assert!(exhausted(&a, Limit::OuterSource));
+        assert!(a.file_effects.is_empty());
+    }
+
+    #[test]
+    fn cumulative_embedded_source_is_bounded_and_earlier_findings_stay() {
+        let a = with(
+            Limits {
+                cumulative_source: 100,
+                ..Limits::default()
+            },
+            "echo a > a.txt; bash -c 'echo b > b.txt; echo c > c.txt; echo d > d.txt'",
+        );
+        assert!(exhausted(&a, Limit::CumulativeSource));
+        assert_eq!(targets(&a), ["/repo/a.txt"]);
+    }
+
+    #[test]
+    fn embedded_recursion_stops_at_the_depth_limit_once() {
+        let a = with(
+            Limits {
+                depth: 1,
+                ..Limits::default()
+            },
+            "echo a > a.txt; bash -c 'echo b > b.txt; bash -c \"echo c > c.txt\"'",
+        );
+        assert_eq!(targets(&a), ["/repo/a.txt", "/repo/b.txt"]);
+        assert_eq!(
+            a.uncertainties
+                .iter()
+                .filter(|u| u.kind == UncertaintyKind::LimitExhausted(Limit::Depth))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_node_budget_stops_the_walk_and_keeps_what_it_found() {
+        let source = (0..200)
+            .map(|i| format!("echo {i} > f{i}.txt"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let a = with(
+            Limits {
+                nodes: 60,
+                ..Limits::default()
+            },
+            &source,
+        );
+        assert!(exhausted(&a, Limit::Nodes));
+        assert!(!a.file_effects.is_empty() && a.file_effects.len() < 200);
+    }
+
+    #[test]
+    fn an_oversized_value_is_unknown() {
+        let big = "x".repeat(100);
+        let a = with(
+            Limits {
+                value: 64,
+                ..Limits::default()
+            },
+            &format!("f={big}; echo y > \"$f\""),
+        );
+        assert_eq!(targets(&a), ["?"]);
+    }
+}
