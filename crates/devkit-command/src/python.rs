@@ -1172,6 +1172,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .map_or(Py::Unknown, |parts| self.known(node, parts.join(&s), false)),
                 _ => Py::Unknown,
             },
+            // `str.replace` takes the old and new text; `Path.replace` takes one target.
+            Py::Unknown if method == "replace" && args.len() >= 2 => Py::Unknown,
             Py::Unknown if WRITE_METHODS.contains(&method) => {
                 self.unresolved(
                     node,
@@ -1377,6 +1379,13 @@ mod tests {
         assert_eq!(targets(&a), ["/repo/a.txt", "/repo/b.txt", "/repo/d.txt"]);
         let ops: Vec<FileOp> = a.file_effects.iter().map(|e| e.op).collect();
         assert_eq!(ops, [FileOp::Overwrite, FileOp::Append, FileOp::Create]);
+    }
+
+    #[test]
+    fn a_two_argument_replace_is_a_string_method() {
+        let a = py("print(row['command'][:1000].replace('\\n', ' | '))");
+        assert!(!unresolved(&a), "{a:?}");
+        assert!(unresolved(&py("src.replace('b.txt')")));
     }
 
     #[test]
