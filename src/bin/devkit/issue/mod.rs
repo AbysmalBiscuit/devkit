@@ -67,14 +67,14 @@ pub struct IssueCli {
 pub(crate) enum Cmd {
     /// Prepare an issue worktree: branch, setup commands, ports.
     Setup {
-        /// Linear issue id or issue URL (equivalent to --issue).
+        /// Issue id or issue URL (equivalent to --issue).
         #[arg(
             value_name = "ISSUE",
             required_unless_present = "issue",
             conflicts_with = "issue"
         )]
         issue_pos: Option<String>,
-        /// Linear issue id or issue URL (equivalent to the positional ISSUE).
+        /// Issue id or issue URL (equivalent to the positional ISSUE).
         #[arg(long)]
         issue: Option<String>,
         /// Short kebab title, without the issue id, rendered into the branch
