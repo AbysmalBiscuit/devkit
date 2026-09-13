@@ -7,7 +7,7 @@ use tree_sitter::Node;
 
 use crate::{
     analyzer::{Analyzer, Frame, RawInvocation, Stdin, Word},
-    catalog, embed,
+    embed,
     model::{FileOp, Language, Limit, Location, UncertaintyKind, Value},
     normalize, paths, ts,
 };
@@ -189,6 +189,189 @@ fn cmdlet(name: &str) -> Option<Cmdlet> {
     }
 }
 
+const KEYWORDS: &[&str] = &[
+    "if", "elseif", "else", "foreach", "for", "while", "do", "until", "switch", "try", "catch",
+    "finally", "trap", "return", "exit", "throw", "break", "continue", "param", "function",
+    "filter", "begin", "process", "end", "in", "data", "class", "enum", "using",
+];
+
+#[derive(Debug, Default)]
+struct SimpleCommand {
+    words: Vec<String>,
+    /// Preceded by the `&` call operator, so a variable first word is a
+    /// program.
+    call: bool,
+    /// Redirects output anywhere but `$null`.
+    redirect: bool,
+}
+
+/// Splits PowerShell source into simple commands without the grammar.
+///
+/// Commands end at unquoted separators, pipes, parentheses and braces; a
+/// `$(...)` inside a double-quoted string contributes its own commands.
+/// `None` means the source cannot be split with confidence: an unbalanced
+/// quote or a here-string.
+fn simple_commands(source: &str) -> Option<Vec<SimpleCommand>> {
+    let chars: Vec<char> = source.chars().collect();
+    let mut out = Vec::new();
+    let mut command = SimpleCommand::default();
+    let mut word = String::new();
+    let mut redirect_target = false;
+
+    let end_word = |word: &mut String, command: &mut SimpleCommand, target: &mut bool| {
+        if word.is_empty() {
+            return;
+        }
+        let w = std::mem::take(word);
+        if std::mem::take(target) {
+            command.redirect |= !w.eq_ignore_ascii_case("$null");
+        } else {
+            command.words.push(w);
+        }
+    };
+    let end_command = |word: &mut String,
+                       command: &mut SimpleCommand,
+                       target: &mut bool,
+                       out: &mut Vec<SimpleCommand>| {
+        end_word(word, command, target);
+        command.redirect |= std::mem::take(target);
+        let done = std::mem::take(command);
+        if !done.words.is_empty() || done.redirect {
+            out.push(done);
+        }
+    };
+
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        let next = chars.get(i + 1).copied();
+        match c {
+            '@' if word.is_empty() && matches!(next, Some('\'' | '"')) => return None,
+            '\'' => {
+                let mut j = i + 1;
+                loop {
+                    match chars.get(j)? {
+                        '\'' if chars.get(j + 1) == Some(&'\'') => j += 2,
+                        '\'' => break,
+                        _ => j += 1,
+                    }
+                }
+                word.extend(&chars[i..=j]);
+                i = j + 1;
+            }
+            '"' => {
+                let mut j = i + 1;
+                loop {
+                    match chars.get(j)? {
+                        '`' => j += 2,
+                        '"' if chars.get(j + 1) == Some(&'"') => j += 2,
+                        '"' => break,
+                        '$' if chars.get(j + 1) == Some(&'(') => {
+                            let close = subexpression_end(&chars, j + 1)?;
+                            let body: String = chars[j + 2..close].iter().collect();
+                            out.extend(simple_commands(&body)?);
+                            j = close + 1;
+                        }
+                        _ => j += 1,
+                    }
+                }
+                word.extend(&chars[i..=j]);
+                i = j + 1;
+            }
+            '`' => {
+                word.push(c);
+                word.extend(next);
+                i += 2;
+            }
+            '#' if word.is_empty() => {
+                while chars.get(i).is_some_and(|&c| c != '\n') {
+                    i += 1;
+                }
+            }
+            '>' => {
+                if matches!(word.as_str(), "1" | "2" | "3" | "4" | "5" | "6" | "*") {
+                    word.clear();
+                } else {
+                    end_word(&mut word, &mut command, &mut redirect_target);
+                }
+                i += if next == Some('>') { 2 } else { 1 };
+                if chars.get(i) == Some(&'&') {
+                    i += 1;
+                    while chars.get(i).is_some_and(char::is_ascii_digit) {
+                        i += 1;
+                    }
+                } else {
+                    redirect_target = true;
+                }
+            }
+            '&' => {
+                end_command(&mut word, &mut command, &mut redirect_target, &mut out);
+                if next == Some('&') {
+                    i += 2;
+                } else {
+                    command.call = true;
+                    i += 1;
+                }
+            }
+            '|' | ';' | '\n' | '(' | ')' | '{' | '}' => {
+                end_command(&mut word, &mut command, &mut redirect_target, &mut out);
+                i += 1;
+            }
+            c if c.is_whitespace() => {
+                end_word(&mut word, &mut command, &mut redirect_target);
+                i += 1;
+            }
+            c => {
+                word.push(c);
+                i += 1;
+            }
+        }
+    }
+    end_command(&mut word, &mut command, &mut redirect_target, &mut out);
+    Some(out)
+}
+
+/// The index of the `)` closing the `(` at `open`, skipping quoted text.
+fn subexpression_end(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut j = open;
+    loop {
+        match chars.get(j)? {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(j);
+                }
+            }
+            '`' => j += 1,
+            quote @ ('\'' | '"') => {
+                j += 1;
+                while chars.get(j)? != quote {
+                    j += if chars[j] == '`' { 2 } else { 1 };
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+}
+
+/// A recovered word's value: literal text, or unknown when it expands.
+fn recovered_value(typed: &str) -> Value {
+    let quoted = |q: char| typed.len() >= 2 && typed.starts_with(q) && typed.ends_with(q);
+    if quoted('\'') {
+        return Value::Known(typed[1..typed.len() - 1].replace("''", "'"));
+    }
+    let expands = typed.contains(['$', '`', '(', '@']);
+    if quoted('"') && !expands {
+        return Value::Known(typed[1..typed.len() - 1].to_string());
+    }
+    if expands || typed.contains(['"', '\'']) {
+        return Value::Unknown;
+    }
+    Value::Known(typed.to_string())
+}
+
 pub(crate) fn walk(a: &mut Analyzer<'_>, source: &str, frame: &Frame) {
     let Some(tree) = ts::parse(Language::PowerShell, source) else {
         a.uncertain(
@@ -368,21 +551,17 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
+    /// Recovers the simple commands of a statement the grammar rejected.
+    ///
+    /// Each command is analyzed on its own; the statement is a parse error
+    /// only when a recovered command could write, since the split may have
+    /// lost a word the full parse would have bound.
     fn broken(&mut self, node: Node<'t>, scope: &Scope) {
-        let text = ts::text(node, self.source);
-        let mut program = None;
-        let mut redirects = false;
         let mut cursor = node.walk();
         let mut stack = vec![node];
         while let Some(n) = stack.pop() {
             if !self.visit(n) {
                 return;
-            }
-            if n.kind() == kinds::REDIRECTION || n.kind() == "file_redirection_operator" {
-                redirects = true
-            }
-            if program.is_none() && matches!(n.kind(), "command_name" | "generic_token") {
-                program = Some(ts::text(n, self.source).to_string())
             }
             stack.extend(
                 n.children(&mut cursor)
@@ -391,29 +570,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .rev(),
             );
         }
-        if program.is_none() {
-            program = text.split_whitespace().next().map(str::to_string)
-        }
-        redirects |= text
-            .split_whitespace()
-            .any(|w| matches!(w, ">" | ">>" | "*>" | "2>" | "2>>"));
-        if self.recover_command(node, text, redirects, scope) {
-            return;
-        }
-        let could_write = match &program {
-            None => true,
-            Some(p) => {
-                let base = normalize::basename(p);
-                cmdlet(base).is_some_and(|c| {
-                    !matches!(
-                        c.verb,
-                        Verb::JoinPath | Verb::GetLocation | Verb::PopLocation
-                    )
-                }) || catalog::is_cataloged(base)
-                    || embed::is_interpreter(base)
+        let mut could_write = true;
+        if let Some(commands) = simple_commands(ts::text(node, self.source)) {
+            could_write = false;
+            for command in commands {
+                could_write |= self.recovered_command(node, command, scope);
             }
-        };
-        if redirects || could_write {
+        }
+        if could_write {
             self.a.uncertain(
                 UncertaintyKind::ParseError,
                 "a PowerShell statement could not be parsed",
@@ -422,62 +586,54 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
-    fn recover_command(
-        &mut self,
-        node: Node<'t>,
-        text: &str,
-        redirects: bool,
-        scope: &Scope,
-    ) -> bool {
-        let Some(first) = text.split_whitespace().next() else {
-            return false;
-        };
-        let Some(command) = self.find_kind(node, kinds::COMMAND_NAME) else {
-            return false;
-        };
-        if ts::text(command, self.source) != first {
-            return false;
+    /// Analyzes one recovered command and reports whether it could write.
+    fn recovered_command(&mut self, node: Node<'t>, command: SimpleCommand, scope: &Scope) -> bool {
+        let mut words = command.words;
+        if !command.call && words.first().is_some_and(|w| w.starts_with('$')) {
+            let first = words.remove(0);
+            match first.split_once('=') {
+                Some((_, rest)) if !rest.is_empty() => words.insert(0, rest.to_string()),
+                Some(_) => {}
+                None if words
+                    .first()
+                    .is_some_and(|w| w.len() <= 2 && w.ends_with('=')) =>
+                {
+                    words.remove(0);
+                }
+                None => return command.redirect,
+            }
         }
-        let values: Vec<Value> = text
-            .split_whitespace()
-            .map(|word| {
-                self.bounded_value(
-                    node,
-                    Value::Known(word.trim_matches(['\'', '"']).to_string()),
-                )
-            })
-            .collect();
-        let Some(program) = values.first().and_then(Value::known) else {
-            return false;
+        let Some(program) = words.first() else {
+            return command.redirect;
         };
-        let args = values[1..].to_vec();
-        let known_cmdlet = cmdlet(normalize::basename(program));
-        let effectful = redirects
-            || known_cmdlet.as_ref().is_some_and(|c| {
-                !matches!(
+        let not_a_command = KEYWORDS.contains(&program.to_ascii_lowercase().as_str())
+            || program.starts_with(['$', '"', '\'', '-', '[', '@', '!', ','])
+            || program.chars().all(|c| c.is_ascii_digit() || c == '.');
+        if !command.call && not_a_command {
+            return command.redirect;
+        }
+        if let Some(c) = cmdlet(normalize::basename(program)) {
+            return command.redirect
+                || !matches!(
                     c.verb,
                     Verb::JoinPath | Verb::GetLocation | Verb::PopLocation
-                )
-            })
-            || !catalog::effects(normalize::basename(program), &args).is_empty();
-        if known_cmdlet.is_some() {
-            if effectful {
-                self.a.uncertain(
-                    UncertaintyKind::ParseError,
-                    "a PowerShell statement could not be parsed",
-                    self.at(node),
                 );
-            }
-            return true;
         }
-        let words = values
+        let words = words
             .iter()
-            .map(|value| Word {
-                typed: value.known().unwrap_or("?").to_string(),
-                value: value.clone(),
+            .map(|typed| Word {
+                value: self.bounded_value(node, recovered_value(typed)),
+                typed: typed.clone(),
                 span: node.byte_range(),
             })
             .collect();
+        let out = &self.a.out;
+        let before = (
+            out.file_effects.len(),
+            out.tree_effects.len(),
+            out.script_files.len(),
+            out.uncertainties.len(),
+        );
         self.a.invocation(
             RawInvocation {
                 words,
@@ -488,14 +644,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
             },
             self.frame,
         );
-        if effectful {
-            self.a.uncertain(
-                UncertaintyKind::ParseError,
-                "a PowerShell statement could not be parsed",
-                self.at(node),
-            );
-        }
-        true
+        let out = &self.a.out;
+        let after = (
+            out.file_effects.len(),
+            out.tree_effects.len(),
+            out.script_files.len(),
+            out.uncertainties.len(),
+        );
+        command.redirect || before != after
     }
 
     fn pipeline(&mut self, node: Node<'t>, scope: &mut Scope) {
@@ -1476,6 +1632,43 @@ mod tests {
                 .any(|u| u.kind == UncertaintyKind::ParseError),
             "{a:?}"
         );
+    }
+
+    #[test]
+    fn a_broken_statement_of_read_only_programs_is_silent() {
+        for source in [
+            "$s14 = git -C $repo log --format=%s a..b",
+            "$x=(git -C $repo diff --binary -- a.rs) -join \"`n\"",
+            "git -C $r push origin x --force-with-lease=a:b 2>&1 | Select-Object -Last 3",
+            "cargo fmt --all -- --check; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+            "rg -n -A12 \"a\\(cfg\\)|b\" $p",
+        ] {
+            let a = ps(source);
+            assert!(a.uncertainties.is_empty(), "{source}\n{a:?}");
+            assert!(
+                a.file_effects.is_empty() && a.tree_effects.is_empty(),
+                "{source}\n{a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broken_statement_hiding_a_write_is_uncertain() {
+        for source in [
+            "$s = git log --format=%s; cargo fmt",
+            "$x=(git diff -- a.rs) -join \"$(Remove-Item b.txt)\"",
+            "$s = git log --format=%s > log.txt",
+            "$s = git log --format=%s | Set-Content c.txt",
+            "$s = git log --format=%s; & $tool --write",
+        ] {
+            let a = ps(source);
+            assert!(
+                !a.uncertainties.is_empty()
+                    || !a.file_effects.is_empty()
+                    || !a.tree_effects.is_empty(),
+                "{source}\n{a:?}"
+            );
+        }
     }
 
     #[test]
