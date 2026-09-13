@@ -84,10 +84,11 @@ mod limit_tests {
         crate::analyze(source, &c)
     }
 
-    fn exhausted(a: &crate::Analysis, limit: Limit) -> bool {
+    fn exhaustion_count(a: &crate::Analysis, limit: Limit) -> usize {
         a.uncertainties
             .iter()
-            .any(|u| u.kind == UncertaintyKind::LimitExhausted(limit))
+            .filter(|u| u.kind == UncertaintyKind::LimitExhausted(limit))
+            .count()
     }
 
     #[test]
@@ -99,7 +100,7 @@ mod limit_tests {
             },
             "echo x > a.txt; echo y > b.txt",
         );
-        assert!(exhausted(&a, Limit::OuterSource));
+        assert_eq!(exhaustion_count(&a, Limit::OuterSource), 1);
         assert!(a.file_effects.is_empty());
     }
 
@@ -112,7 +113,7 @@ mod limit_tests {
             },
             "echo a > a.txt; bash -c 'echo b > b.txt; echo c > c.txt; echo d > d.txt'",
         );
-        assert!(exhausted(&a, Limit::CumulativeSource));
+        assert_eq!(exhaustion_count(&a, Limit::CumulativeSource), 1);
         assert_eq!(targets(&a), ["/repo/a.txt"]);
     }
 
@@ -148,7 +149,7 @@ mod limit_tests {
             },
             &source,
         );
-        assert!(exhausted(&a, Limit::Nodes));
+        assert_eq!(exhaustion_count(&a, Limit::Nodes), 1);
         assert!(!a.file_effects.is_empty() && a.file_effects.len() < 200);
     }
 
@@ -160,8 +161,9 @@ mod limit_tests {
                 value: 64,
                 ..Limits::default()
             },
-            &format!("f={big}; echo y > \"$f\""),
+            &format!("python3 - <<'PY'\nopen('{big}', 'w')\nPY"),
         );
+        assert_eq!(exhaustion_count(&a, Limit::ValueSize), 1);
         assert_eq!(targets(&a), ["?"]);
     }
 }
