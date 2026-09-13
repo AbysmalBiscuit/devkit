@@ -170,11 +170,15 @@ enum Py {
     Str(String),
     Path(String),
     Int(i64),
+    Bool(bool),
     List(Vec<Py>),
     Api(String),
     Method(Box<Py>, String),
     Argv,
-    WriteHandle,
+    WriteHandle {
+        target: Box<Py>,
+        write_op: Option<FileOp>,
+    },
     Foreign(String),
     Def(Range<usize>),
     Data,
@@ -186,6 +190,16 @@ impl Py {
         match self {
             Py::Str(s) | Py::Path(s) => Value::Known(s.clone()),
             _ => Value::Unknown,
+        }
+    }
+
+    fn truthiness(&self) -> Option<bool> {
+        match self {
+            Py::Bool(value) => Some(*value),
+            Py::Int(value) => Some(*value != 0),
+            Py::Str(value) | Py::Path(value) => Some(!value.is_empty()),
+            Py::List(items) => Some(!items.is_empty()),
+            _ => None,
         }
     }
 }
@@ -250,6 +264,62 @@ struct Walker<'a, 'c, 's, 't> {
 impl<'t> Walker<'_, '_, '_, 't> {
     fn at(&self, node: Node<'_>) -> Location {
         self.frame.locate(node.byte_range())
+    }
+
+    fn value_limit(&mut self, node: Node<'_>) {
+        self.a.uncertain(
+            UncertaintyKind::LimitExhausted(crate::model::Limit::ValueSize),
+            "a Python value exceeded the configured size limit",
+            self.at(node),
+        );
+    }
+
+    fn known(&mut self, node: Node<'_>, value: String, path: bool) -> Py {
+        if !self.a.budget.value_fits(value.len()) {
+            self.value_limit(node);
+            Py::Unknown
+        } else if path {
+            Py::Path(value)
+        } else {
+            Py::Str(value)
+        }
+    }
+
+    fn bounded_value(&mut self, node: Node<'_>, value: Value) -> Value {
+        match value {
+            Value::Known(value) if !self.a.budget.value_fits(value.len()) => {
+                self.value_limit(node);
+                Value::Unknown
+            }
+            value => value,
+        }
+    }
+
+    fn bounded_resolved(&mut self, node: Node<'t>, value: Value, cwd: Option<&str>) -> Value {
+        if let crate::model::Target::Path(path) = paths::resolve(&value, cwd, self.a.ctx.path_style)
+            && !self.a.budget.value_fits(path.len())
+        {
+            self.value_limit(node);
+            Value::Unknown
+        } else {
+            value
+        }
+    }
+
+    fn resolved_path(
+        &mut self,
+        node: Node<'t>,
+        value: &Value,
+        cwd: Option<&str>,
+    ) -> Option<String> {
+        match paths::resolve(value, cwd, self.a.ctx.path_style) {
+            crate::model::Target::Path(path) if self.a.budget.value_fits(path.len()) => Some(path),
+            crate::model::Target::Path(_) => {
+                self.value_limit(node);
+                None
+            }
+            crate::model::Target::Unresolved => None,
+        }
     }
 
     fn visit(&mut self, node: Node<'t>) -> bool {
@@ -515,17 +585,29 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         let Some(value) = item.child_by_field_name("value") else {
                             continue;
                         };
-                        if value.kind() == "as_pattern" {
-                            let parts = ts::named_children(value);
-                            let bound = parts.first().map_or(Py::Unknown, |e| self.eval(*e, scope));
-                            if let Some(alias) = value
-                                .child_by_field_name("alias")
-                                .and_then(|a| ts::named_children(a).into_iter().next())
-                            {
-                                self.bind(alias, bound, scope);
-                            }
+                        let bound = if value.kind() == "as_pattern" {
+                            ts::named_children(value)
+                                .into_iter()
+                                .next()
+                                .map_or(Py::Unknown, |resource| self.eval(resource, scope))
                         } else {
-                            self.eval(value, scope);
+                            self.eval(value, scope)
+                        };
+                        let patterns = if value.kind() == "as_pattern" {
+                            vec![value]
+                        } else {
+                            ts::named_children(item)
+                                .into_iter()
+                                .filter(|child| child.kind() == "as_pattern")
+                                .collect()
+                        };
+                        for pattern in patterns {
+                            if let Some(alias) = pattern
+                                .child_by_field_name("alias")
+                                .and_then(|alias| ts::named_children(alias).into_iter().next())
+                            {
+                                self.bind(alias, bound.clone(), scope);
+                            }
                         }
                     }
                 }
@@ -592,10 +674,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         _ => return Py::Unknown,
                     }
                 }
-                Py::Str(out)
+                self.known(node, out, false)
             }
             "integer" => text.parse().map_or(Py::Data, Py::Int),
-            "true" | "false" | "none" | "float" | "lambda" => Py::Data,
+            "true" => Py::Bool(true),
+            "false" => Py::Bool(false),
+            "none" => Py::Bool(false),
+            "float" | "lambda" => Py::Data,
             "identifier" => match scope.names.get(text) {
                 Some(v) => v.clone(),
                 None if text == "open" => Py::Api("builtins.open".into()),
@@ -613,7 +698,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .child_by_field_name("attribute")
                     .map_or("", |a| ts::text(a, self.source))
                     .to_string();
-                self.attribute(object, &attr, scope)
+                self.attribute(node, object, &attr, scope)
             }
             "subscript" => {
                 let value = node
@@ -628,7 +713,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         .as_ref()
                         .and_then(|argv| usize::try_from(i).ok().and_then(|i| argv.get(i)))
                     {
-                        Some(Value::Known(s)) => Py::Str(s.clone()),
+                        Some(Value::Known(s)) => self.known(node, s.clone(), false),
                         _ => Py::Unknown,
                     },
                     (Py::List(items), Py::Int(i)) => usize::try_from(i)
@@ -649,8 +734,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .child_by_field_name("operator")
                     .map_or("", |o| ts::text(o, self.source));
                 match (op, left, right) {
-                    ("/", Py::Path(l), Py::Str(r) | Py::Path(r)) => Py::Path(join(&l, &r)),
-                    ("+", Py::Str(l), Py::Str(r)) => Py::Str(l + &r),
+                    ("/", Py::Path(l), Py::Str(r) | Py::Path(r)) => {
+                        self.known(node, join(&l, &r), true)
+                    }
+                    ("+", Py::Str(l), Py::Str(r)) => self.known(node, l + &r, false),
                     _ => Py::Unknown,
                 }
             }
@@ -706,16 +793,20 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 _ => known = false,
             }
         }
-        if known { Py::Str(out) } else { Py::Unknown }
+        if known {
+            self.known(node, out, false)
+        } else {
+            Py::Unknown
+        }
     }
 
-    fn attribute(&mut self, object: Py, attr: &str, scope: &Scope) -> Py {
+    fn attribute(&mut self, node: Node<'t>, object: Py, attr: &str, scope: &Scope) -> Py {
         match object {
             Py::Api(module) => Self::module_value(&format!("{module}.{attr}")),
             Py::Foreign(module) => Py::Foreign(module),
             Py::Path(p) => match attr {
-                "parent" => Py::Path(paths::parent(&p).unwrap_or(".").to_string()),
-                "name" => Py::Str(normalize::basename(&p).to_string()),
+                "parent" => self.known(node, paths::parent(&p).unwrap_or(".").to_string(), true),
+                "name" => self.known(node, normalize::basename(&p).to_string(), false),
                 "stem" | "suffix" => Py::Data,
                 _ => Py::Method(Box::new(Py::Path(p)), attr.to_string()),
             },
@@ -774,9 +865,11 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             _ => return Py::Unknown,
                         }
                     }
-                    Py::Path(out.unwrap_or_else(|| ".".into()))
+                    self.known(node, out.unwrap_or_else(|| ".".into()), true)
                 }
-                "pathlib.Path.cwd" | "os.getcwd" => cwd.map_or(Py::Unknown, Py::Path),
+                "pathlib.Path.cwd" | "os.getcwd" => cwd
+                    .map(|cwd| self.known(node, cwd, true))
+                    .unwrap_or(Py::Unknown),
                 "os.path.join" => {
                     let parts: Option<Vec<String>> = positional
                         .iter()
@@ -786,27 +879,35 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         })
                         .collect();
                     parts.map_or(Py::Unknown, |parts| {
-                        Py::Str(
+                        self.known(
+                            node,
                             parts
                                 .iter()
                                 .skip(1)
                                 .fold(parts[0].clone(), |acc, p| join(&acc, p)),
+                            false,
                         )
                     })
                 }
                 "os.path.dirname" => match arg(0, "p") {
                     Py::Str(s) | Py::Path(s) => {
-                        Py::Str(paths::parent(&s).unwrap_or("").to_string())
+                        self.known(node, paths::parent(&s).unwrap_or("").to_string(), false)
                     }
                     _ => Py::Unknown,
                 },
                 "os.path.basename" => match arg(0, "p") {
-                    Py::Str(s) | Py::Path(s) => Py::Str(normalize::basename(&s).to_string()),
+                    Py::Str(s) | Py::Path(s) => {
+                        self.known(node, normalize::basename(&s).to_string(), false)
+                    }
                     _ => Py::Unknown,
                 },
                 "os.path.abspath" | "os.path.realpath" => match (arg(0, "path"), cwd) {
-                    (Py::Str(s) | Py::Path(s), _) if s.starts_with('/') => Py::Str(s),
-                    (Py::Str(s) | Py::Path(s), Some(dir)) => Py::Str(join(&dir, &s)),
+                    (Py::Str(s) | Py::Path(s), _) if s.starts_with('/') => {
+                        self.known(node, s, false)
+                    }
+                    (Py::Str(s) | Py::Path(s), Some(dir)) => {
+                        self.known(node, join(&dir, &s), false)
+                    }
                     _ => Py::Unknown,
                 },
                 "os.chdir" => {
@@ -816,7 +917,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             scope.cwd.as_deref(),
                             self.a.ctx.path_style,
                         ) {
-                            crate::model::Target::Path(d) => Some(d),
+                            crate::model::Target::Path(d) if self.a.budget.value_fits(d.len()) => {
+                                Some(d)
+                            }
+                            crate::model::Target::Path(_) => {
+                                self.value_limit(node);
+                                None
+                            }
                             crate::model::Target::Unresolved => None,
                         },
                         _ => None,
@@ -836,7 +943,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 }
                 "os.open" => {
                     self.unresolved(node, "`os.open` flags were not analyzed");
-                    Py::WriteHandle
+                    Py::WriteHandle {
+                        target: Box::new(Py::Unknown),
+                        write_op: None,
+                    }
                 }
                 "shutil.copy" | "shutil.copy2" | "shutil.copyfile" => {
                     self.effect(node, FileOp::Copy, &arg(1, "dst"), scope)
@@ -866,11 +976,12 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 | "subprocess.Popen" => {
                     let shell = keywords
                         .get("shell")
-                        .is_some_and(|(_, n)| ts::text(*n, self.source) == "True");
+                        .map(|(value, _)| value.clone())
+                        .unwrap_or(Py::Bool(false));
                     let cwd_arg = keywords.get("cwd").map(|(v, _)| v.clone());
-                    self.subprocess(node, &arg(0, "args"), shell, cwd_arg, scope)
+                    self.subprocess(node, &arg(0, "args"), &shell, cwd_arg, scope)
                 }
-                "builtins.exec" | "builtins.eval" | "builtins.compile" => match arg(0, "source") {
+                "builtins.exec" | "builtins.eval" => match arg(0, "source") {
                     Py::Str(source) => {
                         let child = Frame {
                             depth: self.frame.depth + 1,
@@ -886,13 +997,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         Py::Unknown
                     }
                 },
+                "builtins.compile" => Py::Data,
                 "builtins.__import__" | "importlib.import_module" | "builtins.getattr" => {
                     Py::Unknown
                 }
                 _ => Py::Data,
             },
             Py::Method(receiver, method) => {
-                self.method(node, *receiver, &method, &positional, scope)
+                self.method(node, *receiver, &method, &positional, &keywords, scope)
             }
             Py::Foreign(module) => {
                 self.unresolved(
@@ -948,9 +1060,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
             Py::Str(_)
             | Py::Path(_)
             | Py::Int(_)
+            | Py::Bool(_)
             | Py::List(_)
             | Py::Argv
-            | Py::WriteHandle
+            | Py::WriteHandle { .. }
             | Py::Data => Py::Data,
         }
     }
@@ -961,6 +1074,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
         receiver: Py,
         method: &str,
         args: &[Py],
+        keywords: &HashMap<String, (Py, Node<'t>)>,
         scope: &mut Scope,
     ) -> Py {
         match receiver {
@@ -983,21 +1097,31 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     "open" => self.open(
                         node,
                         &this,
-                        &args.first().cloned().unwrap_or(Py::Unknown),
-                        !args.is_empty(),
+                        &args
+                            .first()
+                            .cloned()
+                            .or_else(|| keywords.get("mode").map(|(value, _)| value.clone()))
+                            .unwrap_or(Py::Unknown),
+                        !args.is_empty() || keywords.contains_key("mode"),
                         scope.cwd.as_deref(),
                     ),
                     "with_suffix" => match args.first() {
-                        Some(Py::Str(s)) => Py::Path(format!(
-                            "{}{s}",
-                            p.rsplit_once('.')
-                                .filter(|(stem, _)| !stem.ends_with('/'))
-                                .map_or(p.as_str(), |(stem, _)| stem)
-                        )),
+                        Some(Py::Str(s)) => self.known(
+                            node,
+                            format!(
+                                "{}{s}",
+                                p.rsplit_once('.')
+                                    .filter(|(stem, _)| !stem.ends_with('/'))
+                                    .map_or(p.as_str(), |(stem, _)| stem)
+                            ),
+                            true,
+                        ),
                         _ => Py::Unknown,
                     },
                     "with_name" => match args.first() {
-                        Some(Py::Str(s)) => Py::Path(join(paths::parent(&p).unwrap_or("."), s)),
+                        Some(Py::Str(s)) => {
+                            self.known(node, join(paths::parent(&p).unwrap_or("."), s), true)
+                        }
                         _ => Py::Unknown,
                     },
                     "joinpath" => args
@@ -1006,10 +1130,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             Py::Str(s) | Py::Path(s) => Some(join(&acc, s)),
                             _ => None,
                         })
-                        .map_or(Py::Unknown, Py::Path),
+                        .map_or(Py::Unknown, |path| self.known(node, path, true)),
                     "resolve" | "absolute" => match &scope.cwd {
-                        Some(dir) if !p.starts_with('/') => Py::Path(join(dir, &p)),
-                        _ => Py::Path(p),
+                        Some(dir) if !p.starts_with('/') => self.known(node, join(dir, &p), true),
+                        _ => self.known(node, p, true),
                     },
                     "iterdir" | "glob" | "rglob" | "expanduser" => Py::Unknown,
                     _ => Py::Data,
@@ -1031,6 +1155,12 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 }
                 Py::Data
             }
+            Py::WriteHandle { target, write_op } if method == "write" => {
+                if let Some(op) = write_op {
+                    self.effect(node, op, &target, scope);
+                }
+                Py::Data
+            }
             Py::Str(s) if method == "join" => match args.first() {
                 Some(Py::List(items)) => items
                     .iter()
@@ -1039,7 +1169,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         _ => None,
                     })
                     .collect::<Option<Vec<_>>>()
-                    .map_or(Py::Unknown, |parts| Py::Str(parts.join(&s))),
+                    .map_or(Py::Unknown, |parts| self.known(node, parts.join(&s), false)),
                 _ => Py::Unknown,
             },
             Py::Unknown if WRITE_METHODS.contains(&method) => {
@@ -1068,42 +1198,54 @@ impl<'t> Walker<'_, '_, '_, 't> {
         mode_given: bool,
         cwd: Option<&str>,
     ) -> Py {
-        if !mode_given {
-            return Py::Data;
-        }
-        let op = match mode {
-            Py::Str(m) if m.contains('w') => FileOp::Overwrite,
-            Py::Str(m) if m.contains('a') => FileOp::Append,
-            Py::Str(m) if m.contains('x') => FileOp::Create,
-            Py::Str(m) if m.contains('+') => FileOp::Overwrite,
-            Py::Str(_) => return Py::Data,
-            _ => {
-                self.unresolved(
-                    node,
-                    "a file opened with a mode that could not be determined",
-                );
-                return Py::WriteHandle;
-            }
+        let op = if !mode_given {
+            None
+        } else {
+            Some(match mode {
+                Py::Str(m) if m.contains('w') => FileOp::Overwrite,
+                Py::Str(m) if m.contains('a') => FileOp::Append,
+                Py::Str(m) if m.contains('x') => FileOp::Create,
+                Py::Str(m) if m.contains('+') => FileOp::Overwrite,
+                Py::Str(_) => return Py::Data,
+                _ => {
+                    self.unresolved(
+                        node,
+                        "a file opened with a mode that could not be determined",
+                    );
+                    return Py::WriteHandle {
+                        target: Box::new(target.clone()),
+                        write_op: None,
+                    };
+                }
+            })
         };
-        self.a
-            .file_effect(op, &target.as_value(), cwd, self.at(node));
-        Py::WriteHandle
+        if let Some(op) = op {
+            self.file_effect(node, op, target, cwd);
+        }
+        Py::WriteHandle {
+            target: Box::new(target.clone()),
+            write_op: if mode_given {
+                None
+            } else {
+                Some(FileOp::Overwrite)
+            },
+        }
     }
 
     fn effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, scope: &Scope) -> Py {
-        self.a
-            .file_effect(op, &target.as_value(), scope.cwd.as_deref(), self.at(node));
+        self.file_effect(node, op, target, scope.cwd.as_deref());
         Py::Data
     }
 
+    fn file_effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, cwd: Option<&str>) {
+        let value = self.bounded_resolved(node, target.as_value(), cwd);
+        self.a.file_effect(op, &value, cwd, self.at(node));
+    }
+
     fn tree(&mut self, node: Node<'t>, scope_path: &Py, by: &str, scope: &Scope) -> Py {
-        self.a.tree_effect(
-            &scope_path.as_value(),
-            false,
-            scope.cwd.as_deref(),
-            by,
-            self.at(node),
-        );
+        let value = self.bounded_resolved(node, scope_path.as_value(), scope.cwd.as_deref());
+        self.a
+            .tree_effect(&value, false, scope.cwd.as_deref(), by, self.at(node));
         Py::Data
     }
 
@@ -1127,33 +1269,32 @@ impl<'t> Walker<'_, '_, '_, 't> {
         &mut self,
         node: Node<'t>,
         args: &Py,
-        shell: bool,
+        shell: &Py,
         cwd_arg: Option<Py>,
         scope: &Scope,
     ) -> Py {
         let cwd = match cwd_arg {
             None => scope.cwd.clone(),
-            Some(Py::Str(d) | Py::Path(d)) => match paths::resolve(
-                &Value::Known(d),
-                scope.cwd.as_deref(),
-                self.a.ctx.path_style,
-            ) {
-                crate::model::Target::Path(p) => Some(p),
-                crate::model::Target::Unresolved => None,
-            },
+            Some(Py::Str(d) | Py::Path(d)) => {
+                self.resolved_path(node, &Value::Known(d), scope.cwd.as_deref())
+            }
             Some(_) => None,
         };
         let inner_scope = Scope {
             cwd: cwd.clone(),
             ..scope.clone()
         };
-        match (args, shell) {
-            (Py::Str(_), true) => self.shell_source(node, args, &inner_scope),
-            (Py::Str(program), false) => {
+        match (args, shell.truthiness()) {
+            (Py::Str(_), Some(true)) => self.shell_source(node, args, &inner_scope),
+            (Py::Str(program), Some(false)) => {
                 self.run_argv(node, vec![Value::Known(program.clone())], cwd)
             }
-            (Py::List(items), false) => {
+            (Py::List(items), Some(false)) => {
                 self.run_argv(node, items.iter().map(Py::as_value).collect(), cwd)
+            }
+            (Py::Str(_), None) => {
+                self.unresolved(node, "a subprocess shell mode that could not be determined");
+                Py::Data
             }
             _ => {
                 self.unresolved(node, "a subprocess command that could not be determined");
@@ -1165,10 +1306,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
     fn run_argv(&mut self, node: Node<'t>, argv: Vec<Value>, cwd: Option<String>) -> Py {
         let words = argv
             .into_iter()
-            .map(|value| Word {
-                typed: value.known().unwrap_or("?").to_string(),
-                value,
-                span: node.byte_range(),
+            .map(|value| {
+                let value = self.bounded_value(node, value);
+                Word {
+                    typed: value.known().unwrap_or("?").to_string(),
+                    value,
+                    span: node.byte_range(),
+                }
             })
             .collect();
         self.a.invocation(
@@ -1203,7 +1347,7 @@ fn join(base: &str, rel: &str) -> String {
 mod tests {
     use crate::{
         Analysis,
-        model::{FileOp, UncertaintyKind},
+        model::{FileOp, Limit, UncertaintyKind},
         testutil::{bash, targets},
     };
 
@@ -1320,6 +1464,58 @@ mod tests {
         assert!(unresolved(&py(
             "import subprocess, sys\nsubprocess.run(sys.stdin.read(), shell=True)"
         )));
+    }
+
+    #[test]
+    fn subprocess_shell_truthiness_analyzes_a_truthy_integer() {
+        assert_eq!(
+            targets(&py(
+                "import subprocess\nsubprocess.run('echo x > shared.txt', shell=1)"
+            )),
+            ["/repo/shared.txt"]
+        );
+    }
+
+    #[test]
+    fn subprocess_unknown_shell_truthiness_stays_unresolved() {
+        assert!(unresolved(&py(
+            "import subprocess\nshell_mode = object()\nsubprocess.run('echo x > shared.txt', shell=shell_mode)"
+        )));
+    }
+
+    #[test]
+    fn pathlib_open_accepts_a_keyword_mode() {
+        assert_eq!(
+            targets(&py(
+                "from pathlib import Path\nPath('shared.txt').open(mode='w')"
+            )),
+            ["/repo/shared.txt"]
+        );
+    }
+
+    #[test]
+    fn compile_does_not_execute_constant_python_source() {
+        let a = py("compile(\"open('compiled.txt', 'w')\", '<string>', 'exec')");
+        assert!(a.file_effects.is_empty(), "{a:?}");
+        assert!(a.uncertainties.is_empty(), "{a:?}");
+    }
+
+    #[test]
+    fn oversized_python_values_are_not_emitted_as_targets() {
+        let path = "x".repeat(64 * 1024 - "/repo/".len() + 1);
+        let a = py(&format!("open('{path}', 'w')"));
+        assert!(
+            a.uncertainties
+                .iter()
+                .any(|u| { u.kind == UncertaintyKind::LimitExhausted(Limit::ValueSize) })
+        );
+        assert!(targets(&a).iter().all(|target| target.len() <= 64 * 1024));
+    }
+
+    #[test]
+    fn with_open_binds_the_file_handle_alias() {
+        let a = py("with open('shared.txt') as f:\n    f.write('x')");
+        assert_eq!(targets(&a), ["/repo/shared.txt"]);
     }
 
     #[test]
