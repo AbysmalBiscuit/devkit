@@ -29,6 +29,7 @@ fn acquire_through_daemon_is_visible_to_check() {
         root: "/repo".into(),
         holder: "bob".into(),
         paths: vec!["scenes/player.tscn".into()],
+        prune: true,
     });
     match chk {
         Response::Conflicts(c) => {

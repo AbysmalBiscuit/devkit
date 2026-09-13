@@ -194,6 +194,19 @@ pub fn check_with(
     Ok(conflicts)
 }
 
+/// Strictly read-only conflicts for `paths` in `root`. Unlike `check_with`,
+/// this path never attempts to prune dead rows or acquire a write gate.
+pub fn check_read_only_with(
+    s: &impl Store,
+    root: &str,
+    holder: &str,
+    paths: &[String],
+    now: u64,
+) -> Result<Vec<Conflict>> {
+    let data = s.snapshot()?;
+    Ok(data.check(root, paths, holder, now))
+}
+
 /// Release named paths (explicit mutation). Returns (released, refused).
 pub fn release_with(
     s: &impl Store,
@@ -337,6 +350,7 @@ mod tests {
 #[cfg(test)]
 mod seam_tests {
     use super::*;
+    use crate::model::key_for;
 
     #[test]
     fn acquire_with_then_check_sees_conflict_for_other_holder() {
@@ -358,6 +372,23 @@ mod seam_tests {
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].held_by, "alice");
         let _ = std::fs::remove_dir_all(dir.path());
+    }
+
+    #[test]
+    fn read_only_check_used_by_scope_does_not_prune_expired_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = FlockStore::at(dir.path());
+        acquire_with(&s, "/repo", "alice", &["scenes".into()], None, None, 60, 0).unwrap();
+
+        let conflicts = check_read_only_with(&s, "/repo", "bob", &["scenes".into()], 1000)
+            .expect("read-only scope check");
+        assert!(conflicts.is_empty());
+        assert!(
+            s.snapshot()
+                .unwrap()
+                .locks
+                .contains_key(&key_for("/repo", "scenes"))
+        );
     }
 
     #[test]

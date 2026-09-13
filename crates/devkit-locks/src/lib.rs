@@ -92,6 +92,34 @@ pub fn normalize_under_root(abs: &Path, root: &Path) -> Result<String> {
     })
 }
 
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut stack = Vec::new();
+    let mut has_root = false;
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::RootDir | Component::Prefix(_) => {
+                has_root = true;
+                stack.push(component);
+            }
+            Component::ParentDir => match stack.last() {
+                Some(Component::Normal(_)) => {
+                    stack.pop();
+                }
+                Some(Component::ParentDir) | None if !has_root => stack.push(component),
+                _ => {}
+            },
+            Component::Normal(_) => stack.push(component),
+        }
+    }
+    stack.into_iter().collect()
+}
+
+fn normalize_scope_path(path: &Path) -> PathBuf {
+    let lexical = normalize_lexically(path);
+    resolve_existing(&lexical).unwrap_or(lexical)
+}
+
 /// The deepest ancestor of `start` that is a directory. git cannot report a
 /// checkout root from a directory that does not exist, and a write to a new
 /// file in a new directory names one that does not, so the root would fall
@@ -268,6 +296,7 @@ pub fn check_resolved(root: &str, holder: &str, paths: &[String]) -> Result<Vec<
         root: root.to_string(),
         holder: holder.to_string(),
         paths: paths.to_vec(),
+        prune: true,
     })? {
         return match resp {
             daemon::proto::Response::Conflicts(v) => Ok(v),
@@ -276,6 +305,23 @@ pub fn check_resolved(root: &str, holder: &str, paths: &[String]) -> Result<Vec<
         };
     }
     store::check_with(&store::FlockStore::new(), root, holder, paths, now())
+}
+
+fn check_scope_resolved(root: &str, holder: &str, paths: &[String]) -> Result<Vec<Conflict>> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = daemon_request(daemon::proto::Request::Check {
+        root: root.to_string(),
+        holder: holder.to_string(),
+        paths: paths.to_vec(),
+        prune: false,
+    })? {
+        return match resp {
+            daemon::proto::Response::Conflicts(v) => Ok(v),
+            daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    store::check_read_only_with(&store::FlockStore::new(), root, holder, paths, now())
 }
 
 pub fn release(
@@ -484,7 +530,8 @@ impl WriteResolver {
                 .context("getting current dir")?
                 .join(p)
         };
-        let root = self.root_for(&existing_ancestor(&abs));
+        let abs = normalize_scope_path(&abs);
+        let root = normalize_scope_path(&self.root_for(&existing_ancestor(&abs)));
         let rel = if whole_checkout || abs == root {
             ".".to_string()
         } else {
@@ -504,7 +551,7 @@ impl WriteResolver {
         holder: &str,
     ) -> Result<Vec<Conflict>> {
         let (root, rel) = self.scope_key(dir, whole_checkout)?;
-        check_resolved(&root, holder, &[rel])
+        check_scope_resolved(&root, holder, &[rel])
     }
 
     /// Same decision as [`decide_write`], but sharing this resolver's cache.
@@ -566,6 +613,26 @@ mod tests {
         assert_eq!(
             r.scope_key(repo.path().to_str().unwrap(), false).unwrap(),
             (root, ".".to_string())
+        );
+    }
+
+    #[test]
+    fn a_scope_normalizes_parent_components_before_keying() {
+        let repo = tempfile::tempdir().unwrap();
+        init_repo(repo.path());
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        let root = find_root_from(repo.path()).to_string_lossy().into_owned();
+        let traversal = repo
+            .path()
+            .join("src")
+            .join("../..")
+            .join(repo.path().file_name().unwrap())
+            .join("src");
+        let mut r = WriteResolver::new();
+
+        assert_eq!(
+            r.scope_key(traversal.to_str().unwrap(), false).unwrap(),
+            (root, "src".to_string())
         );
     }
 
