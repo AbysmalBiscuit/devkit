@@ -46,3 +46,41 @@ The shape test keeps the smallest fragments needed by the walker and remains in 
 ## Concerns
 
 The full workspace gate cannot be green in this sandbox because the unrelated daemon, port, process, and filesystem tests need permissions unavailable here. The adapter itself is green, and clippy plus documentation tests pass.
+
+## Round 1 fix report
+
+### Findings addressed
+
+The malformed read-only regression no longer uses `ls -la fi`, which the pinned grammar accepts as an ordinary command with an argument. The fixture is now `if (ls -la\n`. Its root S-expression is `(program (ERROR (command name: (command_name (word)) argument: (word))))`; the test asserts one localized `ERROR`, its source span, and the nested command shape before retaining the empty-uncertainties assertion. The actual error span includes the trailing newline.
+
+The pinned grammar represents unquoted `{a,b}` as a `concatenation` containing three `word` nodes. `simple_argv` now resolves literal concatenations recursively, while an unescaped brace in a `word` makes the complete argv unknown. This preserves known literal concatenation such as `bun foo"bar"` and returns `None` for brace expansion and the other existing argv-changing syntax checks.
+
+### RED/GREEN TDD evidence
+
+The recovery and `simple_argv` regression tests were added before the fix. The first focused run exposed the actual concatenation shape: `simple_argv_reads_one_plain_command` failed with `left: None`, `right: Some(["bun", "foobar"])` for `bun foo"bar"`. The malformed fixture's recorded error span also established that the newline belongs to the localized `ERROR`. After adding grammar-aligned literal concatenation handling, the focused brace assertion failed with `left: Some(["bun", "{a,b}"])`, `right: None`, demonstrating the missing brace guard. Adding that guard made the covering Bash tests green.
+
+Final focused command: `/home/lev/Git/lev/devkit_worktrees/feat-locks-enforce-locks-for-shell-writes/target/debug/deps/devkit_command-24db53e000e4d575 bash::tests --nocapture`. Result: `17 passed; 0 failed`.
+
+### Verification
+
+- `env CARGO_BUILD_RUSTC_WRAPPER= devrun task fmt`: passed.
+- `env CARGO_BUILD_RUSTC_WRAPPER= devrun task lint`: passed with `-D warnings`.
+- `env CARGO_BUILD_RUSTC_WRAPPER= devrun task test-doc`: all workspace documentation tests passed.
+- `env CARGO_BUILD_RUSTC_WRAPPER= devrun task test`: `1891 tests run: 1857 passed, 34 failed, 0 skipped`; no `devkit-command` test failed. The 34 failures are the sandbox's protected socket, port-probe, daemon-file, process, and filesystem operations.
+- `git diff --check`: passed.
+- No Windows gate was run because this fix adds no C dependency.
+
+### Files
+
+- `crates/devkit-command/src/bash.rs`: localized malformed-statement regression and grammar-aligned `simple_argv` concatenation and brace handling.
+- `.superpowers/sdd/2026-09-13-command-analysis/task-3-report.md`: this appended fix report.
+
+### Commit
+
+Commit subject: `fix(command): tighten bash adapter recovery`
+
+Commit: `fix(command): tighten bash adapter recovery`, present at the final repository `HEAD`.
+
+### Concerns
+
+The workspace nextest gate remains non-green only because the sandbox denies unrelated runtime operations. The focused Bash tests, clippy, formatting, and documentation tests are green. No later task was implemented and nothing was pushed.

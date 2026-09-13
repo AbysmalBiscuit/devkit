@@ -74,13 +74,38 @@ pub(crate) fn simple_argv(source: &str) -> Option<Vec<String>> {
     }
     ts::named_children(command)
         .into_iter()
-        .map(|n| match n.kind() {
-            "command_name" | "word" => Some(unescape(ts::text(n, source))),
-            "raw_string" => Some(ts::text(n, source).trim_matches('\'').to_string()),
-            _ => None,
-        })
+        .map(|n| simple_argv_word(n, source))
         .map(|w| w.filter(|w| !w.contains(['$', '*', '?', '`'])))
         .collect()
+}
+
+fn simple_argv_word(node: Node<'_>, source: &str) -> Option<String> {
+    let text = ts::text(node, source);
+    match node.kind() {
+        "command_name" | "word" if has_unescaped(text, &['{', '}']) => None,
+        "command_name" | "word" => Some(unescape(text)),
+        "raw_string" => Some(text.trim_matches('\'').to_string()),
+        "string_content" => Some(unescape_dquoted(text)),
+        "string" => {
+            let mut out = String::new();
+            let mut last = node.start_byte() + 1;
+            for part in ts::named_children(node) {
+                out.push_str(&unescape_dquoted(&source[last..part.start_byte()]));
+                out.push_str(&simple_argv_word(part, source)?);
+                last = part.end_byte();
+            }
+            out.push_str(&unescape_dquoted(
+                &source[last..node.end_byte().saturating_sub(1).max(last)],
+            ));
+            Some(out)
+        }
+        "concatenation" => ts::named_children(node)
+            .into_iter()
+            .map(|part| simple_argv_word(part, source))
+            .collect::<Option<Vec<_>>>()
+            .map(|parts| parts.concat()),
+        _ => None,
+    }
 }
 
 struct Walker<'a, 'c, 's, 't> {
@@ -866,7 +891,17 @@ mod tests {
 
     #[test]
     fn a_broken_read_only_statement_is_silent() {
-        let a = bash("ls -la fi\n");
+        let source = "if (ls -la\n";
+        let tree = crate::ts::parse(crate::model::Language::Bash, source).unwrap();
+        let errors: Vec<_> = crate::ts::named_children(tree.root_node())
+            .into_iter()
+            .filter(|node| node.kind() == "ERROR")
+            .collect();
+        assert_eq!(errors.len(), 1, "{}", tree.root_node().to_sexp());
+        assert_eq!(crate::ts::text(errors[0], source), "if (ls -la\n");
+        assert!(errors[0].to_sexp().contains("(command name:"));
+
+        let a = bash(source);
         assert!(a.uncertainties.is_empty(), "{:?}", a.uncertainties);
     }
 
@@ -878,5 +913,14 @@ mod tests {
         );
         assert_eq!(super::simple_argv("bun test && ls"), None);
         assert_eq!(super::simple_argv("bun $X"), None);
+        assert_eq!(
+            super::simple_argv("bun foo/bar"),
+            Some(vec!["bun".into(), "foo/bar".into()])
+        );
+        assert_eq!(
+            super::simple_argv("bun foo\"bar\""),
+            Some(vec!["bun".into(), "foobar".into()])
+        );
+        assert_eq!(super::simple_argv("bun {a,b}"), None);
     }
 }
