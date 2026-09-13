@@ -29,14 +29,14 @@ fn from_msys(p: &str) -> Option<String> {
 }
 
 pub(crate) fn join(base: &str, rel: &str, style: PathStyle) -> String {
-    let base = match style {
-        PathStyle::Unix => base.trim_end_matches('/'),
-        PathStyle::Windows => base.trim_end_matches(['/', '\\']),
-    };
     let rel = rel.strip_prefix("./").unwrap_or(rel);
     if rel == "." || rel.is_empty() {
         return base.to_string();
     }
+    let base = match style {
+        PathStyle::Unix => base.trim_end_matches('/'),
+        PathStyle::Windows => base.trim_end_matches(['/', '\\']),
+    };
     format!("{base}/{rel}")
 }
 
@@ -84,6 +84,22 @@ mod tests {
         assert_eq!(
             resolve(&k("./a.rs"), Some("/repo/"), PathStyle::Unix),
             Target::Path("/repo/a.rs".into())
+        );
+    }
+
+    #[test]
+    fn a_relative_dot_path_preserves_a_unix_root_cwd() {
+        assert_eq!(
+            resolve(&k("."), Some("/"), PathStyle::Unix),
+            Target::Path("/".into())
+        );
+    }
+
+    #[test]
+    fn a_relative_dot_path_preserves_a_windows_root_cwd() {
+        assert_eq!(
+            resolve(&k("."), Some("C:/"), PathStyle::Windows),
+            Target::Path("C:/".into())
         );
     }
 
