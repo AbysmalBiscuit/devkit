@@ -23,3 +23,7 @@ pub(crate) enum Exec {
 pub(crate) fn classify(_name: &str, _args: &[Value], _stdin: &Stdin) -> Exec {
     Exec::Plain
 }
+
+pub(crate) fn is_interpreter(_name: &str) -> bool {
+    false
+}

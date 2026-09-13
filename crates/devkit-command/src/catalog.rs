@@ -16,3 +16,7 @@ pub(crate) enum Hit {
 pub(crate) fn effects(_name: &str, _args: &[Value]) -> Vec<Hit> {
     Vec::new()
 }
+
+pub(crate) fn is_cataloged(_name: &str) -> bool {
+    false
+}

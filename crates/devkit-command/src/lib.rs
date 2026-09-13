@@ -35,3 +35,38 @@ pub fn analyze(source: &str, ctx: &Context) -> Analysis {
 pub fn analyze_argv(argv: &[String], ctx: &Context) -> Analysis {
     analyzer::Analyzer::new(ctx).run_argv(argv)
 }
+
+#[cfg(test)]
+pub(crate) mod testutil {
+    use crate::{Analysis, Context, Dialect, Limits, PathStyle, Target};
+
+    pub(crate) fn ctx(dialect: Dialect) -> Context {
+        Context {
+            dialect,
+            cwd: Some("/repo".into()),
+            path_style: PathStyle::Unix,
+            limits: Limits::default(),
+        }
+    }
+
+    pub(crate) fn bash(source: &str) -> Analysis {
+        crate::analyze(source, &ctx(Dialect::Bash))
+    }
+
+    pub(crate) fn targets(a: &Analysis) -> Vec<String> {
+        a.file_effects
+            .iter()
+            .map(|e| match &e.target {
+                Target::Path(p) => p.clone(),
+                Target::Unresolved => "?".into(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn programs(a: &Analysis) -> Vec<String> {
+        a.invocations
+            .iter()
+            .map(|i| i.program.known().unwrap_or("?").to_string())
+            .collect()
+    }
+}
