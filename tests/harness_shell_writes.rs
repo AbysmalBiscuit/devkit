@@ -325,6 +325,51 @@ fn a_fresh_entry_under_a_held_directory_is_denied() {
     }
 }
 
+/// A claim below a directory reaches no name created fresh in it: the fresh
+/// name is a sibling of the held path, never a parent of it.
+#[test]
+fn a_claim_below_a_directory_leaves_a_fresh_entry_in_it_alone() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("src")).unwrap();
+    std::fs::write(e.project.path().join("src/model.rs"), "x").unwrap();
+    acquire(&e, "B", "src/model.rs");
+    let cases = [
+        "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(dir='.'); f.write(b'x')\"",
+        "T=$(mktemp -p .); echo x > \"$T\"",
+        // Everything under a directory created a moment ago is itself fresh, so
+        // a recursive writer rooted there reaches nothing anyone holds.
+        "rm -rf \"$(mktemp -d -p .)\"",
+    ];
+    for c in cases {
+        assert_eq!(denial(&hook(&e, Some("S1"), c)), None, "denied: {c}");
+    }
+    assert_eq!(rows(&e), [("src/model.rs".to_string(), "B".to_string())]);
+}
+
+/// A claim above a directory covers every name created in it, and the refusal
+/// names that claim rather than the directory the command asked about.
+#[test]
+fn a_claim_above_a_directory_blocks_a_fresh_entry_and_names_the_claim() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("src")).unwrap();
+    acquire(&e, "B", ".");
+    let c = "T=$(mktemp -p src); echo x > \"$T\"";
+    let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+    assert!(reason.contains(". (held by B)"), "{reason}");
+}
+
+/// A writer that rewrites files it did not create still conflicts with a claim
+/// under its directory, which is what the broader check is for.
+#[test]
+fn a_tree_writer_still_conflicts_with_a_claim_under_its_directory() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("build")).unwrap();
+    std::fs::write(e.project.path().join("build/out.o"), "x").unwrap();
+    acquire(&e, "B", "build/out.o");
+    let reason = denial(&hook(&e, Some("S1"), "rm -rf build")).unwrap_or_else(|| panic!("allowed"));
+    assert!(reason.contains("locked by another agent"), "{reason}");
+}
+
 /// `mktemp` failure leaves the variable empty, which turns the rest of the
 /// word into an absolute path nobody claimed on this session's behalf.
 #[test]

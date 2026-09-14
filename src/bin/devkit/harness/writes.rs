@@ -6,7 +6,7 @@
 
 use std::{sync::mpsc, time::Duration};
 
-use devkit_command::{Analysis, FileOp, Target, UncertaintyKind, Value};
+use devkit_command::{Analysis, FileOp, Target, TreeReach, UncertaintyKind, Value};
 use devkit_common::harness::HarnessPolicy;
 use devkit_config::PolicyAction;
 use devkit_locks::model::{Conflict, WriteDecision};
@@ -19,13 +19,30 @@ pub struct Evaluation {
     pub warnings: Vec<String>,
     /// Absolute write targets, in order, without repeats.
     pub claims: Vec<String>,
-    /// `(directory, whole_checkout)` for writers of an unenumerated file set.
-    pub scopes: Vec<(String, bool)>,
+    /// Directories to check without claiming, in order, without repeats.
+    pub scopes: Vec<ScopeCheck>,
+}
+
+/// A directory the registry is asked about, and which question to ask of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScopeCheck {
+    /// A writer rewrites an unenumerated set of files under this directory, so
+    /// any claim overlapping it conflicts.
+    Tree { dir: String, whole_checkout: bool },
+    /// A name was created fresh under this directory. Nobody else can produce
+    /// that name, so only a claim covering the directory's children conflicts.
+    Fresh { dir: String, whole_checkout: bool },
 }
 
 impl Evaluation {
     pub fn needs_registry(&self) -> bool {
         !self.claims.is_empty() || !self.scopes.is_empty()
+    }
+
+    fn scope(&mut self, check: ScopeCheck) {
+        if !self.scopes.contains(&check) {
+            self.scopes.push(check);
+        }
     }
 
     fn apply(&mut self, action: PolicyAction, message: String) {
@@ -78,19 +95,27 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
             // every path born under it, so that is checked like any other scope.
             Target::Ephemeral { at } => {
                 if let Some(dir) = at.named() {
-                    let scope = (dir.to_string(), false);
-                    if !e.scopes.contains(&scope) {
-                        e.scopes.push(scope);
-                    }
+                    e.scope(ScopeCheck::Fresh {
+                        dir: dir.to_string(),
+                        whole_checkout: false,
+                    });
                 }
             }
         }
     }
     for tree in &analysis.tree_effects {
-        let scope = (tree.scope.clone(), tree.whole_checkout);
-        if !e.scopes.contains(&scope) {
-            e.scopes.push(scope);
-        }
+        let dir = tree.scope.clone();
+        let whole_checkout = tree.whole_checkout;
+        e.scope(match tree.reach {
+            TreeReach::All => ScopeCheck::Tree {
+                dir,
+                whole_checkout,
+            },
+            TreeReach::FreshSubtree => ScopeCheck::Fresh {
+                dir,
+                whole_checkout,
+            },
+        });
     }
     for u in &analysis.uncertainties {
         match &u.kind {
@@ -146,8 +171,17 @@ fn op_name(op: FileOp) -> &'static str {
 pub fn enforce(evaluation: &Evaluation, holder: &str) -> anyhow::Result<Vec<Conflict>> {
     let mut resolver = devkit_locks::WriteResolver::new();
     let mut conflicts = Vec::new();
-    for (scope, whole) in &evaluation.scopes {
-        conflicts.extend(resolver.check_scope(scope, *whole, holder)?);
+    for check in &evaluation.scopes {
+        conflicts.extend(match check {
+            ScopeCheck::Tree {
+                dir,
+                whole_checkout,
+            } => resolver.check_scope(dir, *whole_checkout, holder)?,
+            ScopeCheck::Fresh {
+                dir,
+                whole_checkout,
+            } => resolver.check_covering(dir, *whole_checkout, holder)?,
+        });
     }
     if !conflicts.is_empty() {
         return Ok(conflicts);
@@ -223,7 +257,10 @@ mod tests {
             HarnessPolicy::default(),
         );
         assert_eq!(e.claims, ["/repo/a.txt", "/repo/b.txt", "/repo/c.txt"]);
-        assert_eq!(e.scopes, [("/repo".to_string(), true)]);
+        assert_eq!(e.scopes, [ScopeCheck::Tree {
+            dir: "/repo".to_string(),
+            whole_checkout: true,
+        }]);
         assert!(e.blocks.is_empty());
     }
 
@@ -300,13 +337,19 @@ mod tests {
             HarnessPolicy::default(),
         );
         assert!(e.claims.is_empty(), "{:?}", e.claims);
-        assert_eq!(e.scopes, [("/repo/sub".to_string(), false)]);
+        assert_eq!(e.scopes, [ScopeCheck::Fresh {
+            dir: "/repo/sub".to_string(),
+            whole_checkout: false,
+        }]);
 
         let e = eval(
             "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(dir='.'); f.write(b'x')\"",
             HarnessPolicy::default(),
         );
-        assert_eq!(e.scopes, [("/repo".to_string(), false)]);
+        assert_eq!(e.scopes, [ScopeCheck::Fresh {
+            dir: "/repo".to_string(),
+            whole_checkout: false,
+        }]);
     }
 
     #[test]

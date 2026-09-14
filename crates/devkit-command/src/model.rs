@@ -105,9 +105,20 @@ pub struct FileEffect {
     pub location: Location,
 }
 
+/// Which paths under a tree writer's scope it can reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeReach {
+    /// Every path under the scope, so a claim anywhere under it conflicts.
+    All,
+    /// Only paths under a directory created fresh in the scope. No other
+    /// session can name one, so only a claim covering the scope conflicts.
+    FreshSubtree,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeEffect {
     pub scope: String,
+    pub reach: TreeReach,
     pub whole_checkout: bool,
     pub by: String,
     pub location: Location,

@@ -52,6 +52,12 @@ pub(crate) fn dispatch(daemon: &Arc<Daemon>, req: Request) -> Response {
             Ok(v) => Response::Conflicts(v),
             Err(e) => Response::Err(format!("{e:#}")),
         },
+        Request::CheckCovering { root, holder, dirs } => {
+            match store::check_covering_with(&s, &root, &holder, &dirs, now()) {
+                Ok(v) => Response::Conflicts(v),
+                Err(e) => Response::Err(format!("{e:#}")),
+            }
+        }
         Request::Release {
             root,
             holder,

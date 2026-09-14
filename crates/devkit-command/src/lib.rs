@@ -22,7 +22,7 @@ mod ts;
 pub use context::{Context, Dialect, Limits, PathStyle};
 pub use model::{
     Analysis, FileEffect, FileOp, Invocation, Language, Limit, Location, ScriptFileInvocation,
-    Target, TempLocation, TreeEffect, Uncertainty, UncertaintyKind, Value,
+    Target, TempLocation, TreeEffect, TreeReach, Uncertainty, UncertaintyKind, Value,
 };
 
 /// Analyze a command in `ctx.dialect`.
