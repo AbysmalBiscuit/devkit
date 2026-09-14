@@ -723,25 +723,44 @@ impl<'t> Walker<'_, '_, '_, 't> {
             return None;
         }
         let mut named = None;
+        let mut system = false;
         let mut template = None;
         let mut i = 0;
         while let Some(arg) = args.get(i) {
             if let Some(dir) = arg.strip_prefix("--tmpdir=") {
                 named = Some(dir);
+            } else if *arg == "--tmpdir" {
+                system = true;
             } else if *arg == "-p" {
-                named = args.get(i + 1).copied();
+                named = Some(*args.get(i + 1)?);
                 i += 1;
             } else if !arg.starts_with('-') {
                 template = Some(*arg);
             }
             i += 1;
         }
-        // A template is a path prefix the random characters are appended to,
-        // so the entry is made in its parent, and it wins over `-p`.
-        let dir = match (template, named) {
-            (Some(t), _) => paths::parent_dir(t, self.a.ctx.path_style),
-            (None, Some(d)) => d.to_string(),
-            (None, None) => return Some(None),
+        // A template is a path prefix the random characters are appended to, so
+        // the entry is made in its parent. A relative template hangs off the
+        // directory `-p` names rather than replacing it; an absolute one is
+        // taken as it stands, which is what `mktemp` itself does.
+        let style = self.a.ctx.path_style;
+        let dir = match template {
+            Some(t) if paths::is_absolute(t, style) => paths::parent_dir(t, style)?,
+            Some(t) => {
+                let under = paths::parent_dir(t, style)?;
+                match (named, system) {
+                    (Some(base), _) => paths::join(base, &under, style),
+                    // `$TMPDIR` is not knowable, so a template carrying a
+                    // directory of its own lands somewhere this cannot name.
+                    (None, true) if under != "." => return None,
+                    (None, true) => return Some(None),
+                    (None, false) => under,
+                }
+            }
+            None => match named {
+                Some(base) => base.to_string(),
+                None => return Some(None),
+            },
         };
         match paths::resolve(
             &Value::Known(dir),
@@ -915,6 +934,20 @@ mod tests {
         assert_eq!(
             dir("T=$(mktemp --tmpdir=/var/tmp); echo x > \"$T\""),
             Some("/var/tmp".to_string())
+        );
+        // A relative template hangs off `-p`, it does not replace it.
+        assert_eq!(
+            dir("T=$(mktemp -p /held fresh.XXXX); echo x > \"$T\""),
+            Some("/held".to_string())
+        );
+        assert_eq!(
+            dir("T=$(mktemp -p /held sub/fresh.XXXX); echo x > \"$T\""),
+            Some("/held/sub".to_string())
+        );
+        // An absolute template is taken as it stands.
+        assert_eq!(
+            dir("T=$(mktemp -p /held /other/fresh.XXXX); echo x > \"$T\""),
+            Some("/other".to_string())
         );
     }
 

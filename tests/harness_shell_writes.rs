@@ -248,17 +248,42 @@ fn a_temp_path_that_leaves_its_fresh_directory_is_not_exempt() {
             .to_string(),
         "D=$(mktemp -d ./fresh.XXXXXX); echo x > \"$D/../victim.txt\"".to_string(),
         "python3 -c \"import tempfile, pathlib; \
-         pathlib.Path(tempfile.mkdtemp()).rename('victim.txt')\""
-            .to_string(),
-        "python3 -c \"import tempfile, pathlib; \
          pathlib.Path(tempfile.mkdtemp()).joinpath('../victim.txt').write_text('x')\""
             .to_string(),
         "python3 -c \"import tempfile, pathlib; \
          (pathlib.Path(tempfile.mkdtemp(dir='.')).parent / 'victim.txt').write_text('x')\""
             .to_string(),
+        "python3 -c \"import tempfile, pathlib; \
+         p = pathlib.Path(tempfile.mkdtemp()).joinpath('victim.txt'); \
+         open(p.name, 'w').write('x')\""
+            .to_string(),
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).parent.rename('moved')\""
+            .to_string(),
     ];
     for c in &cases {
-        assert!(denial(&hook(&e, Some("S1"), c)).is_some(), "allowed: {c}");
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("could not be determined"), "{c}: {reason}");
+    }
+}
+
+/// A destination outside the fresh directory is an ordinary target, so it is
+/// claimed and the holder is named rather than reported as undeterminable.
+#[test]
+fn a_copy_or_move_out_of_a_fresh_directory_names_the_holder() {
+    let e = env(WRITES);
+    acquire(&e, "B", "victim.txt");
+    let cases = [
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).copy('victim.txt')\"",
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).move('victim.txt')\"",
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).rename('victim.txt')\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("locked by another agent"), "{c}: {reason}");
     }
 }
 
@@ -287,6 +312,8 @@ fn a_fresh_entry_under_a_held_directory_is_denied() {
     let cases = [
         "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(dir='.'); f.write(b'x')\"",
         "T=$(mktemp -p .); echo x > \"$T\"",
+        "T=$(mktemp -p . fresh.XXXXXX); echo x > \"$T\"",
+        "D=$(mktemp -d ./fresh.XXXXXX); echo x > \"$D\"",
         "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(dir='.'); \
          open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
         "python3 -c \"import tempfile, pathlib; \

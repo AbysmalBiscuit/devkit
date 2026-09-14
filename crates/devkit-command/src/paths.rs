@@ -35,13 +35,18 @@ fn separators(style: PathStyle) -> &'static [char] {
 /// The directory part of a path, keeping a filesystem root as itself. `mktemp`
 /// and `fs.mkdtemp` append to a prefix rather than to a directory, so `/fresh-`
 /// is made in `/`, not in the working directory.
-pub(crate) fn parent_dir(p: &str, style: PathStyle) -> String {
-    match p.rfind(separators(style)) {
+pub(crate) fn parent_dir(p: &str, style: PathStyle) -> Option<String> {
+    // A drive-relative prefix, `C:fresh-`, hangs off drive C's own working
+    // directory rather than this one, so it names nothing resolvable here.
+    if style == PathStyle::Windows && has_drive_prefix(p) && !is_absolute(p, style) {
+        return None;
+    }
+    Some(match p.rfind(separators(style)) {
         None => ".".to_string(),
         Some(0) => p[..1].to_string(),
         Some(2) if style == PathStyle::Windows && has_drive_prefix(p) => format!("{}/", &p[..2]),
         Some(i) => p[..i].to_string(),
-    }
+    })
 }
 
 fn has_drive_prefix(p: &str) -> bool {
@@ -223,11 +228,16 @@ mod tests {
 
     #[test]
     fn a_prefix_directly_under_a_root_keeps_that_root_as_its_parent() {
-        assert_eq!(parent_dir("/fresh-", PathStyle::Unix), "/");
-        assert_eq!(parent_dir("fresh-", PathStyle::Unix), ".");
-        assert_eq!(parent_dir("/tmp/fresh-", PathStyle::Unix), "/tmp");
-        assert_eq!(parent_dir(r"C:\fresh-", PathStyle::Windows), "C:/");
-        assert_eq!(parent_dir(r"C:\tmp\fresh-", PathStyle::Windows), r"C:\tmp");
+        let unix = |p| parent_dir(p, PathStyle::Unix);
+        let win = |p| parent_dir(p, PathStyle::Windows);
+        assert_eq!(unix("/fresh-").as_deref(), Some("/"));
+        assert_eq!(unix("fresh-").as_deref(), Some("."));
+        assert_eq!(unix("/tmp/fresh-").as_deref(), Some("/tmp"));
+        assert_eq!(win(r"C:\fresh-").as_deref(), Some("C:/"));
+        assert_eq!(win(r"C:\tmp\fresh-").as_deref(), Some(r"C:\tmp"));
+        // Relative to drive C's own working directory, which is not this one.
+        assert_eq!(win("C:fresh-"), None);
+        assert_eq!(win("C:"), None);
     }
 
     #[test]

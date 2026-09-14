@@ -166,6 +166,24 @@ const WRITE_METHODS: &[&str] = &[
     "save",
 ];
 
+/// `pathlib` methods that write, whatever the receiver turns out to be.
+const MUTATING_PATH_METHODS: &[&str] = &[
+    "write_text",
+    "write_bytes",
+    "touch",
+    "symlink_to",
+    "hardlink_to",
+    "mkdir",
+    "unlink",
+    "rmdir",
+    "rename",
+    "replace",
+    "copy",
+    "copy_into",
+    "move",
+    "move_into",
+];
+
 /// The directory a `tempfile` entry is created in. `Some(None)` when the call
 /// named none and the system temp directory is used, which no project claim
 /// reaches. `None` when it named one that could not be resolved, leaving
@@ -229,10 +247,9 @@ impl Py {
         match self {
             Py::Ephemeral(dir) => Some(dir.clone()),
             Py::WriteHandle { target, .. } => target.ephemeral(),
-            // `TemporaryDirectory().name` is the directory itself. Every other
-            // member reads somewhere else: `.parent` is the directory it was
-            // created in, which is exactly what a fresh name does not cover.
-            Py::Method(object, member) if member == "name" => object.ephemeral(),
+            // No bare member stands in for the path. `.parent` is the directory
+            // the entry was made in, which a fresh name says nothing about, and
+            // `.name` is a basename in the working directory.
             _ => None,
         }
     }
@@ -1175,6 +1192,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         self.effect(node, FileOp::Create, &this, scope)
                     }
                     "unlink" => self.effect(node, FileOp::Delete, &this, scope),
+                    "copy" | "move" => {
+                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
+                        self.effect(node, FileOp::Copy, &dest, scope)
+                    }
+                    "copy_into" | "move_into" => {
+                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
+                        self.tree(node, &dest, method, scope)
+                    }
                     "rename" | "replace" => {
                         self.effect(node, FileOp::Rename, &this, scope);
                         let dest = args.first().cloned().unwrap_or(Py::Unknown);
@@ -1285,6 +1310,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         self.effect(node, FileOp::Create, &this, scope)
                     }
                     "unlink" | "rmdir" => self.effect(node, FileOp::Delete, &this, scope),
+                    "copy" | "move" => {
+                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
+                        self.effect(node, FileOp::Copy, &dest, scope)
+                    }
+                    "copy_into" | "move_into" => {
+                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
+                        self.tree(node, &dest, method, scope)
+                    }
                     "rename" | "replace" => {
                         self.effect(node, FileOp::Rename, &this, scope);
                         let dest = args.first().cloned().unwrap_or(Py::Unknown);
@@ -1309,6 +1342,16 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     }
                     _ => Py::Unknown,
                 }
+            }
+            // Losing track of a receiver must not lose the write with it: a
+            // method known to mutate a path still reports what it could not
+            // determine.
+            _ if MUTATING_PATH_METHODS.contains(&method) => {
+                self.unresolved(
+                    node,
+                    format!("`{method}` writes through a value that could not be determined"),
+                );
+                Py::Unknown
             }
             _ => Py::Unknown,
         }
