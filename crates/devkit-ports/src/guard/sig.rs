@@ -45,6 +45,11 @@ pub fn signature(config_argv: &[String]) -> Option<Vec<String>> {
     Some(sig.to_vec())
 }
 
+/// Stands in for config text whose rendered width is unknown, so [`signature`]
+/// truncates there. It is spelled as minijinja because [`is_template`] is what
+/// does the truncating; any spelling without `{{` would silently stop working.
+pub const OPAQUE: &str = "{{ opaque }}";
+
 /// Whether a word carries minijinja that renders to something the typed command
 /// cannot be expected to reproduce.
 fn is_template(word: &str) -> bool {

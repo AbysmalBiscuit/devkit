@@ -9,7 +9,7 @@ pub mod tasks;
 use std::collections::{BTreeMap, HashMap};
 
 use devkit_command::{Analysis, Invocation, Value};
-use devkit_config::{AppMatch, CommandRule, Config, RuleAction, Severity};
+use devkit_config::{AppMatch, CommandRule, Config, RuleAction, RunArg, Severity};
 use norm::basename;
 
 use crate::apps::App;
@@ -217,26 +217,29 @@ fn configured(argv: &[String]) -> Option<Known> {
         .and_then(known)
 }
 
-fn configured_task(args: &[devkit_config::RunArg]) -> Option<Known> {
-    let mut argv = Vec::new();
-    let mut expanding = false;
-    for arg in args {
-        match arg {
-            devkit_config::RunArg::Scalar(s) if !expanding => argv.push(s.clone()),
-            devkit_config::RunArg::Scalar(_) => return None,
-            devkit_config::RunArg::Expand { .. } => {
-                if !expanding {
-                    if argv.last().map(String::as_str) != Some("--") {
-                        return None;
-                    }
-                    // Keep the unknown argv boundary visible to wrapper
-                    // normalization.
-                    argv.push("{{ __argv_expansion__ }}".into());
-                    expanding = true;
-                }
-            }
-        }
+/// A task's `run` unwrapped the same way as a typed command.
+///
+/// A split renders to an unknown number of words, so nothing after one sits at
+/// a knowable offset: a scalar following a split gives up on the task rather
+/// than matching a typed command at the wrong position. The words before the
+/// first split also have to carry the signature on their own, which takes at
+/// least two of them. `["git", { split }]` would otherwise claim every `git`.
+fn configured_task(args: &[RunArg]) -> Option<Known> {
+    let words = |args: &[RunArg]| -> Vec<String> {
+        args.iter().map(|a| a.template().to_string()).collect()
+    };
+    let Some(first_split) = args.iter().position(|a| matches!(a, RunArg::Split { .. })) else {
+        return configured(&words(args));
+    };
+    if first_split < 2
+        || args[first_split..]
+            .iter()
+            .any(|a| matches!(a, RunArg::Scalar(_)))
+    {
+        return None;
     }
+    let mut argv: Vec<String> = words(&args[..first_split]);
+    argv.push(sig::OPAQUE.into());
     configured(&argv)
 }
 
@@ -669,46 +672,46 @@ mod tests {
     }
 
     #[test]
-    fn trailing_expansion_after_separator_keeps_the_static_task_signature() {
-        let p = project(|c| {
-            c.tasks.insert(
-                "stage".into(),
-                toml::from_str(
-                    r#"
-run = ["git", "add", "--", { expand = "files | split(';')" }]
-guard = true
-"#,
-                )
-                .unwrap(),
+    fn a_trailing_split_keeps_the_static_task_signature() {
+        for run in [
+            r#"["git", "add", "--", { split = "{{ files }}", on = ";" }]"#,
+            r#"["git", "add", { split = "{{ files }}", on = ";" }]"#,
+        ] {
+            let p = project(|c| {
+                c.tasks.insert(
+                    "stage".into(),
+                    toml::from_str(&format!("run = {run}\nguard = true")).unwrap(),
+                );
+            });
+            let d = decide_with("git add -- selected.txt", &BTreeMap::new(), Some(&p));
+            assert!(
+                reason(&d).contains("devrun task stage --arg files=<files>"),
+                "{run}: {}",
+                reason(&d)
             );
-        });
-        let d = decide_with("git add -- selected.txt", &BTreeMap::new(), Some(&p));
-        assert!(
-            reason(&d).contains("devrun task stage --arg files=<files>"),
-            "{}",
-            reason(&d)
-        );
-        assert!(!denies(&decide_with(
-            "git diff",
-            &BTreeMap::new(),
-            Some(&p)
-        )));
+            assert!(!denies(&decide_with(
+                "git diff",
+                &BTreeMap::new(),
+                Some(&p)
+            )));
+        }
     }
 
     #[test]
-    fn expansions_cannot_supply_a_guard_signature_or_wrapper_argument() {
+    fn splits_cannot_supply_a_guard_signature_or_wrapper_argument() {
+        let split = r#"{ split = "{{ args }}", on = ";" }"#;
         for (run, typed) in [
             (
-                r#"["docker", "compose", { expand = "flags" }, "up"]"#,
+                format!(r#"["docker", "compose", {split}, "up"]"#),
                 "docker compose down",
             ),
-            (r#"["sudo", "-u", { expand = "args" }]"#, "sudo ls"),
+            (format!(r#"["sudo", "-u", {split}]"#), "sudo ls"),
             (
-                r#"["doppler", "run", "-c", { expand = "args" }]"#,
+                format!(r#"["doppler", "run", "-c", {split}]"#),
                 "doppler run -c dev -- git status",
             ),
-            (r#"["bun", "--", { expand = "args" }]"#, "bun test"),
-            (r#"["git", { expand = "args" }]"#, "git status"),
+            (format!(r#"["bun", "--", {split}]"#), "bun test"),
+            (format!(r#"["git", {split}]"#), "git status"),
         ] {
             let p = project(|c| {
                 c.tasks.insert(

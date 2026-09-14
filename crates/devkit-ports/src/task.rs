@@ -171,8 +171,8 @@ pub fn required_args(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
 }
 
 fn command_reads(t: &TaskConfig) -> Result<BTreeSet<String>> {
-    let mut templates: Vec<template::Source<'_>> = t.run.iter().map(Into::into).collect();
-    templates.extend(t.env.values().map(|s| template::Source::Scalar(s)));
+    let mut templates: Vec<&str> = t.run.iter().map(RunArg::template).collect();
+    templates.extend(t.env.values().map(String::as_str));
     template::undeclared(&templates)
 }
 
@@ -349,8 +349,18 @@ fn resolve_command(
 ) -> Result<CommandPlan> {
     ensure!(
         matches!(t.run.first(), Some(RunArg::Scalar(_))),
-        "task `{name}` program must be a string, not an expansion"
+        "task `{name}` program must be a plain string, not a split"
     );
+    for entry in &t.run {
+        if let RunArg::Split { on, .. } = entry {
+            // Splitting on the empty pattern yields a boundary between every
+            // character, so it would silently produce one argument per byte.
+            ensure!(
+                !on.is_empty(),
+                "task `{name}` has a split with an empty `on`"
+            );
+        }
+    }
     let app = t
         .app
         .as_deref()
@@ -365,8 +375,8 @@ fn resolve_command(
 
     let empty_user_env = BTreeMap::new();
     let unfiltered_env = effective_env(&static_env, t, &empty_user_env);
-    let mut all_templates: Vec<template::Source<'_>> = t.run.iter().map(Into::into).collect();
-    all_templates.extend(unfiltered_env.values().map(|s| template::Source::Scalar(s)));
+    let mut all_templates: Vec<&str> = t.run.iter().map(RunArg::template).collect();
+    all_templates.extend(unfiltered_env.values().copied());
     let all_refs = template::referenced_ports(&all_templates, vars)
         .with_context(|| format!("scanning require_live templates of task `{name}`"))?;
     for r in &t.require_live {
@@ -380,8 +390,8 @@ fn resolve_command(
         );
     }
 
-    let mut templates: Vec<template::Source<'_>> = t.run.iter().map(Into::into).collect();
-    templates.extend(env_templates.values().map(|s| template::Source::Scalar(s)));
+    let mut templates: Vec<&str> = t.run.iter().map(RunArg::template).collect();
+    templates.extend(env_templates.values().copied());
     let refs = template::referenced_ports(&templates, vars)
         .with_context(|| format!("scanning templates of task `{name}`"))?;
 
@@ -501,20 +511,18 @@ fn resolve_command_with_ports(
 ) -> Result<CommandPlan> {
     let mut argv = Vec::new();
     for entry in &t.run {
-        let rendered = match entry {
-            RunArg::Scalar(s) => {
-                template::render_launch(s, own_port, ports, variables).map(|s| vec![s])
+        let rendered = template::render_launch(entry.template(), own_port, ports, variables)
+            .with_context(|| format!("rendering `run` of task `{name}`"))?;
+        match entry {
+            RunArg::Scalar(_) => argv.push(rendered),
+            // An empty render is an empty list, not a list holding one empty
+            // argument: a task staging a caller-supplied set of paths has to
+            // be able to express "none".
+            RunArg::Split { on, .. } if !rendered.is_empty() => {
+                argv.extend(rendered.split(on.as_str()).map(str::to_string));
             }
-            RunArg::Expand { expand } => {
-                template::expand_launch(expand, own_port, ports, variables)
-            }
+            RunArg::Split { .. } => {}
         }
-        .with_context(|| format!("rendering `run` of task `{name}`"))?;
-        ensure!(
-            rendered.iter().all(|s| !s.contains('\0')),
-            "task `{name}` argument contains NUL"
-        );
-        argv.extend(rendered);
     }
     ensure!(
         argv.first().is_some_and(|p| !p.is_empty()),

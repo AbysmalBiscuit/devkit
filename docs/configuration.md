@@ -239,22 +239,24 @@ steps = [
 - Sequence steps run in order and stop at the first failure. `{ up = "app" }` is `devrun up app` (a no-op for a live server). A sequence may only set `description` and `steps`, and cannot reference another sequence. The CLI `--env`/`--env-file` overlay applies to every step: command steps layer it above the task `env`, and `{ up = "app" }` steps layer it above the app's `static_env`, exactly as `devrun up --env` would.
 - `devrun task <name> --dry-run` prints each rendered plan (still resolving ports, so the printed values are real) without executing.
 
-### Expanding task arguments
+### Splitting one value into several arguments
 
-A string in `run` always produces one argument. An entry such as `{ expand = "files | split(';')" }` evaluates a MiniJinja expression and inserts each resulting string as a separate argument at that position. Write the expression without `{{ }}`. It uses the same variables and port context as scalar templates, including `--arg` values.
+A string in `run` renders to exactly one argument, so a caller-supplied list of paths cannot become a list of arguments. A `{ split = "...", on = "..." }` entry renders its template the way every other entry does, then cuts the result on `on` and contributes each piece as a separate argument.
 
 ```toml
 [tasks.stage]
-run = ["git", "add", "--", { expand = "files | split(';')" }]
+run = ["git", "add", "--", { split = "{{ files }}", on = ";" }]
 ```
 
 ```sh
 devrun task stage --arg 'files=new file.txt;other.txt'
 ```
 
-The result must be a sequence or iterator containing only strings. An empty sequence adds no arguments. Empty strings, spaces, and shell metacharacters remain unchanged; devkit neither trims nor shell-evaluates them. Choose a delimiter absent from the values when using `split`. The program, the first entry in `run`, must remain a scalar string. Preflight validation rejects wrong result types and NUL characters before a sequence starts; fresh evaluation repeats validation before each step.
+A template that renders empty contributes no arguments at all, which is how a task says nothing was selected. Every other piece reaches the program exactly as it was written, spaces, quotes and shell metacharacters included, because devkit execs the argv instead of handing it to a shell. Pick a delimiter the values cannot contain. An empty `on` is rejected.
 
-Expansion expressions participate in argument discovery and port allocation. Dry runs display their expanded arguments, and each sequence step evaluates them again immediately before execution. For command-guard inference, expansions must form a trailing suffix after a literal `--`. Other layouts still execute; use explicit `[harness.commands]` rules to redirect their commands. Existing scalar-only signature rules still apply.
+A split reads the same variables and port context as a scalar template, so `--arg` discovery, `require_live` scanning and port allocation all see it, and `--dry-run` prints the arguments it produced. Sequence steps re-render theirs immediately before each step runs.
+
+Two shape rules apply. The program, the first entry in `run`, must be a plain string. And a split must be the last entry or followed only by other splits, with at least two plain entries ahead of the first one. The second rule exists for the command guard, which recognizes a typed command as this task by its leading static words; a split renders to an unknown number of words, so nothing after one sits at a knowable position. A task breaking that rule still runs, it just stops being one the guard offers as a redirect.
 
 ### `[daemon]`
 
