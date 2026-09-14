@@ -31,7 +31,7 @@ pub enum ScopeCheck {
     Tree { dir: String, whole_checkout: bool },
     /// A name was created fresh under this directory. Nobody else can produce
     /// that name, so only a claim covering the directory's children conflicts.
-    Fresh { dir: String, whole_checkout: bool },
+    Fresh { dir: String },
 }
 
 impl Evaluation {
@@ -97,7 +97,6 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
                 if let Some(dir) = at.named() {
                     e.scope(ScopeCheck::Fresh {
                         dir: dir.to_string(),
-                        whole_checkout: false,
                     });
                 }
             }
@@ -111,10 +110,7 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
                 dir,
                 whole_checkout,
             },
-            TreeReach::FreshSubtree => ScopeCheck::Fresh {
-                dir,
-                whole_checkout,
-            },
+            TreeReach::FreshSubtree => ScopeCheck::Fresh { dir },
         });
     }
     for u in &analysis.uncertainties {
@@ -177,10 +173,7 @@ pub fn enforce(evaluation: &Evaluation, holder: &str) -> anyhow::Result<Vec<Conf
                 dir,
                 whole_checkout,
             } => resolver.check_scope(dir, *whole_checkout, holder)?,
-            ScopeCheck::Fresh {
-                dir,
-                whole_checkout,
-            } => resolver.check_covering(dir, *whole_checkout, holder)?,
+            ScopeCheck::Fresh { dir } => resolver.check_covering(dir, holder)?,
         });
     }
     if !conflicts.is_empty() {
@@ -339,7 +332,6 @@ mod tests {
         assert!(e.claims.is_empty(), "{:?}", e.claims);
         assert_eq!(e.scopes, [ScopeCheck::Fresh {
             dir: "/repo/sub".to_string(),
-            whole_checkout: false,
         }]);
 
         let e = eval(
@@ -348,7 +340,6 @@ mod tests {
         );
         assert_eq!(e.scopes, [ScopeCheck::Fresh {
             dir: "/repo".to_string(),
-            whole_checkout: false,
         }]);
     }
 

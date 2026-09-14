@@ -101,6 +101,10 @@ pub struct Refusal {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
+    /// What the caller has to work around. [`Data::check`] echoes the path
+    /// that was asked about, because a claim overlapping it may sit on either
+    /// side; [`Data::check_covering`] names the row instead, because the claim
+    /// that reaches the new path may sit well above the directory asked about.
     pub path: String,
     pub held_by: String,
     pub age_secs: u64,

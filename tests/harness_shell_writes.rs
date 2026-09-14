@@ -325,6 +325,42 @@ fn a_fresh_entry_under_a_held_directory_is_denied() {
     }
 }
 
+/// A link made inside a fresh directory can point out of it, and every write
+/// through the link lands wherever it points, so the fresh subtree stops
+/// proving anything.
+#[test]
+fn a_link_out_of_a_fresh_directory_loses_the_exemption() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("src")).unwrap();
+    std::fs::write(e.project.path().join("src/model.rs"), "x").unwrap();
+    acquire(&e, "B", "src/model.rs");
+    let cases = [
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(dir='.'); \
+         os.symlink('../src', os.path.join(d, 'link')); \
+         open(os.path.join(d, 'link/model.rs'), 'w').write('x')\"",
+        "python3 -c \"import pathlib, tempfile; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).joinpath('link').symlink_to('../src')\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('./fresh-'); \
+         fs.symlinkSync('../src', path.join(d, 'link')); \
+         fs.writeFileSync(path.join(d, 'link/model.rs'), 'x')\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("point outside it"), "{reason}");
+    }
+}
+
+/// A link that stays inside the fresh directory reaches nothing anyone holds.
+#[test]
+fn a_link_inside_a_fresh_directory_keeps_the_exemption() {
+    let e = env(WRITES);
+    acquire(&e, "B", ".");
+    let c = "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(); \
+             os.symlink('real.txt', os.path.join(d, 'link'))\"";
+    assert_eq!(denial(&hook(&e, Some("S1"), c)), None);
+}
+
 /// `move` and `move_into` rename the source away, so the source is written
 /// too, not just the destination.
 #[test]

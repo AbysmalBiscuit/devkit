@@ -568,13 +568,13 @@ impl WriteResolver {
     /// Live rows another session holds that cover a name created fresh under
     /// `dir`. Narrower than [`check_scope`](Self::check_scope): a claim below
     /// `dir` reaches no such name, so it is not a conflict. Takes no lock.
-    pub fn check_covering(
-        &mut self,
-        dir: &str,
-        whole_checkout: bool,
-        holder: &str,
-    ) -> Result<Vec<Conflict>> {
-        let (root, rel) = self.scope_key(dir, whole_checkout)?;
+    ///
+    /// There is no whole-checkout form. `scope_key` answers that with `.`,
+    /// which only a claim on the checkout root covers, while the directory
+    /// the fresh name was actually made in is covered by every claim above it
+    /// as well.
+    pub fn check_covering(&mut self, dir: &str, holder: &str) -> Result<Vec<Conflict>> {
+        let (root, rel) = self.scope_key(dir, false)?;
         check_covering_resolved(&root, holder, &[rel])
     }
 

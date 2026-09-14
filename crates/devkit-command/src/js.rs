@@ -160,6 +160,26 @@ impl<'t> Walker<'_, '_, '_, 't> {
         );
     }
 
+    /// A link made inside a freshly created directory can point out of it, and
+    /// every write through the link lands wherever it points. Containment of
+    /// the fresh subtree is then only as good as the link target, so a target
+    /// that cannot be shown to stay inside costs the exemption.
+    fn link_escape(&mut self, node: Node<'t>, link: &Js, target: &Js) {
+        if !link.is_ephemeral() {
+            return;
+        }
+        let inside = match target {
+            Js::Str(s) => paths::stays_within(&[s.as_str()], self.a.ctx.path_style),
+            _ => false,
+        };
+        if !inside {
+            self.unresolved(
+                node,
+                "a link made in a fresh directory could point outside it",
+            );
+        }
+    }
+
     fn js_effect(&mut self, op: FileOp, target: &Js, cwd: Option<&str>, at: Location) {
         self.a.file_effect(op, &target.as_value(), cwd, at);
     }
@@ -697,6 +717,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .iter()
                     .find(|(method_name, ..)| *method_name == method)
                 {
+                    if matches!(method, "symlink" | "symlinkSync") {
+                        self.link_escape(node, &arg(*index), &arg(0));
+                    }
                     self.js_effect(*op, &arg(*index), cwd.as_deref(), at);
                 } else if matches!(method, "renameSync" | "rename") {
                     self.js_effect(FileOp::Rename, &arg(0), cwd.as_deref(), at.clone());

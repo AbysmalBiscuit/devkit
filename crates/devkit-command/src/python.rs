@@ -1049,7 +1049,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 }
                 "os.truncate" => self.effect(node, FileOp::Overwrite, &arg(0, "path"), scope),
                 "os.symlink" | "os.link" => {
-                    self.effect(node, FileOp::Create, &arg(1, "dst"), scope)
+                    let link = arg(1, "dst");
+                    self.link_escape(node, &link, &arg(0, "src"));
+                    self.effect(node, FileOp::Create, &link, scope)
                 }
                 "os.open" => {
                     self.unresolved(node, "`os.open` flags were not analyzed");
@@ -1373,7 +1375,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
         let dest = || args.first().cloned().unwrap_or(Py::Unknown);
         Some(match method {
             "write_text" | "write_bytes" => self.effect(node, FileOp::Overwrite, this, scope),
-            "touch" | "symlink_to" | "hardlink_to" | "mkdir" => {
+            "touch" | "mkdir" => self.effect(node, FileOp::Create, this, scope),
+            "symlink_to" | "hardlink_to" => {
+                self.link_escape(node, this, &dest());
                 self.effect(node, FileOp::Create, this, scope)
             }
             "unlink" | "rmdir" => self.effect(node, FileOp::Delete, this, scope),
@@ -1400,6 +1404,26 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             _ => return None,
         })
+    }
+
+    /// A link made inside a freshly created directory can point out of it, and
+    /// every write through the link lands wherever it points. Containment of
+    /// the fresh subtree is then only as good as the link target, so a target
+    /// that cannot be shown to stay inside costs the exemption.
+    fn link_escape(&mut self, node: Node<'t>, link: &Py, target: &Py) {
+        if !link.is_ephemeral() {
+            return;
+        }
+        let inside = match target {
+            Py::Str(s) | Py::Path(s) => paths::stays_within(&[s.as_str()], self.a.ctx.path_style),
+            _ => false,
+        };
+        if !inside {
+            self.unresolved(
+                node,
+                "a link made in a fresh directory could point outside it",
+            );
+        }
     }
 
     fn effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, scope: &Scope) -> Py {
