@@ -182,6 +182,7 @@ struct BriefSnapshot {
     tasks: Vec<(String, String, String, String, String)>,
     servers: Vec<ServerKey>,
     locks: bool,
+    enforced: bool,
     pins: Vec<PinKey>,
     /// Why the config does not load, so that fixing it is a change
     /// `--if-changed` can see — otherwise the session that was told about the
@@ -213,6 +214,9 @@ struct DevrunBrief {
     tasks: Option<String>,
     servers: Option<String>,
     locks: bool,
+    /// The write stage claims locks for this checkout, so the agent does not
+    /// reach for `lockm` before an edit.
+    enforced: bool,
 }
 
 /// Which devrun facilities a checkout has anything to say about. `render` and
@@ -226,6 +230,7 @@ struct Facilities {
     tasks: bool,
     servers: bool,
     locks: bool,
+    enforced: bool,
 }
 
 impl Facilities {
@@ -248,6 +253,7 @@ impl DevrunBrief {
             tasks: self.tasks.is_some(),
             servers: self.servers.is_some(),
             locks: self.locks,
+            enforced: self.enforced,
         }
     }
 }
@@ -271,6 +277,7 @@ impl BriefSnapshot {
             ));
         }
         out.push_str(&format!("locks\t{}\n", self.locks));
+        out.push_str(&format!("enforced\t{}\n", self.enforced));
         for p in &self.pins {
             out.push_str(&format!(
                 "pin\t{}\t{}\t{}\t{}\t{}\n",
@@ -449,11 +456,13 @@ fn snapshot(
     servers.sort_by_key(|s| s.port);
 
     let locks = devrun.is_some() && settings.locks;
+    let enforced = locks && devkit_common::harness::writes_enabled(cwd);
     let facilities = Facilities {
         apps: !apps.is_empty(),
         tasks: !tasks.is_empty(),
         servers: !servers.is_empty(),
         locks,
+        enforced,
     };
     let config_fault = config_fault(cwd, main_checkout);
     if pin_keys.is_empty() && !facilities.any() && config_fault.is_none() {
@@ -466,6 +475,7 @@ fn snapshot(
         tasks,
         servers,
         locks,
+        enforced,
         pins: pin_keys,
         config_fault,
     })
@@ -575,14 +585,31 @@ fn devrun_intro(root: &str, facilities: Facilities) -> String {
     if facilities.tasks {
         named.push("canned tasks");
     }
-    if facilities.locks {
+    // Under enforcement the hooks work the lock registry, so listing locks
+    // among the CLIs an agent drives is what sends it reaching for `lockm
+    // acquire` ahead of every edit.
+    if facilities.locks && !facilities.enforced {
         named.push("cross-session file locks");
     }
-    format!(
-        "This checkout ({root}) is a devkit-managed project: {} are coordinated by the \
-         devkit CLIs. Load the `using-devkit` skill before using them.",
-        join_and(&named)
-    )
+    let mut out = if named.is_empty() {
+        format!("This checkout ({root}) is a devkit-managed project.")
+    } else {
+        format!(
+            "This checkout ({root}) is a devkit-managed project: {} are coordinated by the \
+             devkit CLIs. Load the `using-devkit` skill before using them.",
+            join_and(&named)
+        )
+    };
+    if facilities.enforced {
+        out.push_str(
+            " Writes here are lock-enforced: your edits and resolvable shell writes are claimed \
+             for you and released at session end. A denied write names the holder.",
+        );
+        if named.is_empty() {
+            out.push_str(" Load the `using-devkit` skill for the lock protocol.");
+        }
+    }
+    out
 }
 
 /// `["a"] → "a"`, `["a", "b"] → "a and b"`, `["a", "b", "c"] → "a, b, and c"`.
@@ -697,6 +724,7 @@ fn devrun_sections(root: &str, cwd: &Path, settings: &BriefConfig) -> Option<Dev
         tasks: (settings.tasks && !rows.is_empty()).then(|| task::tasks_text(&rows)),
         servers: live_servers(root),
         locks: settings.locks,
+        enforced: settings.locks && devkit_common::harness::writes_enabled(Path::new(root)),
     };
     sections.facilities().any().then_some(sections)
 }
@@ -879,7 +907,44 @@ mod tests {
             tasks: tasks.map(str::to_string),
             servers: servers.map(str::to_string),
             locks,
+            enforced: false,
         }
+    }
+
+    fn brief_enforced(
+        apps: Option<&str>,
+        tasks: Option<&str>,
+        servers: Option<&str>,
+    ) -> DevrunBrief {
+        DevrunBrief {
+            apps: apps.map(str::to_string),
+            tasks: tasks.map(str::to_string),
+            servers: servers.map(str::to_string),
+            locks: true,
+            enforced: true,
+        }
+    }
+
+    #[test]
+    fn enforcement_replaces_the_lock_claim_with_the_automatic_one() {
+        let on = devrun_intro(
+            "/w",
+            brief_enforced(Some("a"), Some("t"), None).facilities(),
+        );
+        assert!(!on.contains("cross-session file locks"), "{on}");
+        assert!(on.contains("claimed for you"), "{on}");
+        assert!(on.contains("dev servers, ports, and canned tasks"), "{on}");
+
+        let off = devrun_intro("/w", brief(Some("a"), Some("t"), None, true).facilities());
+        assert!(off.contains("cross-session file locks"), "{off}");
+        assert!(!off.contains("claimed for you"), "{off}");
+    }
+
+    #[test]
+    fn enforcement_alone_still_yields_an_intro() {
+        let only = devrun_intro("/w", brief_enforced(None, None, None).facilities());
+        assert!(only.contains("claimed for you"), "{only}");
+        assert!(!only.contains("are coordinated by the"), "{only}");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 name: using-devkit
-description: "Use before editing files in a checkout several agents or sessions share (claim them first), before running a project build or verification command by hand (a canned `devrun task` may already have the ports and env wired in), when running local dev servers or allocating ports, or when setting up issue worktrees and shipping them for review. Covers the devkit CLIs: `devkit`, `devrun`, `issue`, `lockm`, `portm`."
+description: "Use when editing files in a checkout several agents or sessions share, when a write or shell command is denied naming another holder, when running a project build or verification command by hand, when starting local dev servers or allocating ports, and when setting up issue worktrees or shipping them for review. Covers the devkit CLIs: `devkit`, `devrun`, `issue`, `lockm`, `portm`."
 allowed-tools: Bash(devkit:*), Bash(devrun:*), Bash(issue:*), Bash(lockm:*), Bash(portm:*), Bash(rg:*), Bash(ast-grep:*), Glob, Grep, mcp__devkit__devkit_describe, mcp__devkit__devkit_call
 disable-model-invocation: false
 user-invocable: true
@@ -30,11 +30,27 @@ Before running a project build, profiling flow, or verification command by hand,
 
 Global flags go **before** the subcommand (`issue -C ~/git/acme/app status`): `-C/--dir <path>` on `issue`/`devrun`/`portm`, `--config <file>` and `--timing[=trace]` / `--timing-log <FILE>` on `issue`/`devrun`.
 
-## Claim before you edit
+## Locks
 
-In a shared checkout, claim every file you will touch, then release when done. Locks are **advisory** — they coordinate cooperating sessions rather than enforcing at the filesystem level. Respect them.
+Which mode a checkout is in decides everything below, so settle that first. `devkit brief` says so at session start: an enforced checkout's brief carries the sentence "Writes here are lock-enforced". Without it, locking is yours to drive. `devkit doctor` reports the same.
 
-**1. Look at the board, then claim everything in one call.** Your holder id is detected from the coding-agent session you are running in, so acquire and release already agree with each other and with the write hook. `acquire` is all-or-nothing: it claims every path, or if *any* is held it claims none and exits non-zero.
+Locks are **advisory** in both modes. They coordinate cooperating sessions rather than enforcing at the filesystem level. Respect them.
+
+### Enforced checkouts
+
+The plugin's `PreToolUse` hooks claim a lock on each file a write touches, structured edits and resolvable shell writes alike, and release them when the session or sub-agent ends. Edit directly.
+
+A blocked write comes back as a **deny** naming the holder. Move to another file, or wait for that session to finish.
+
+A shell write is claimed automatically whenever devkit can trace its target back to a literal path: written straight into the command, assigned to a variable earlier in the same command, or reaching an inline `python3 -`, `node -e` or PowerShell script, either as an argument or as a literal inside the script's own body. A heredoc fed to a script counts as that body, so `python3 - <<'EOF'` writing to a path spelled out in the script is covered. When devkit cannot resolve a target (a path built at runtime, a script file, `perl -e`), the call is refused with the reason; rewrite the edit with an explicit path or use `Edit`/`Write`. Claiming some other path with `lockm acquire` does not get an unresolved write through.
+
+One manual claim still earns its place here: `lockm acquire <dir>` over a subtree you are churning through takes a single row covering every path under it.
+
+### Unenforced checkouts
+
+Claim every file you will touch, then release when done.
+
+**1. Look at the board, then claim everything in one call.** Your holder id is detected from the coding-agent session you are running in, so acquire and release already agree with each other. `acquire` is all-or-nothing: it claims every path, or if *any* is held it claims none and exits non-zero.
 
 ```sh
 lockm status                                  # who holds what right now
@@ -46,9 +62,9 @@ Lock a directory (`src/auth/`) to claim a subtree, or individual files for finer
 
 **2. Branch on the exit code.** It is a gate, not a formality.
 
-- **Exit 0** (`locked …`, or `already held on this session line: …` where your own write hook or a sub-agent got there first) — you may edit the paths.
-- **Exit 1** (`conflict: …`) — another session holds one. Edit something else.
-- **Exit 2** (`ambiguous session identity: …`) — two nested harnesses expose different session ids, and devkit refuses to guess between them. Re-run with `--as <id>`, choosing the **inner** harness's id: that is the harness whose write hook evaluates your edits.
+- **Exit 0** (`locked ...`, or `already held on this session line: ...` where a sub-agent of yours got there first) means you may edit the paths.
+- **Exit 1** (`conflict: ...`) means another session holds one. Edit something else.
+- **Exit 2** (`ambiguous session identity: ...`) means two nested harnesses expose different session ids and devkit refuses to guess. Re-run with `--as <id>`, choosing the **inner** harness's id.
 
 **3. Release once the edit *and* its verification are done.** Others may be waiting.
 
@@ -65,13 +81,7 @@ lockm release --all                           # or: drop everything you hold
 
 ```
 conflict: 1 path(s) held by another session:
-  src/auth/mod.rs held by agent-bob (12s ago) — wiring new endpoint
+  src/auth/mod.rs held by agent-bob (12s ago) - wiring new endpoint
 ```
 
-Work on an unblocked file first, then poll with `lockm check <paths>` (read-only, takes no claim) and re-run `acquire`. When a holder looks stuck, `references/locks.md` covers the TTL, `prune`, and when `release --force` is the right answer.
-
-## Enforced checkouts
-
-Some checkouts turn on write enforcement, where the plugin's `PreToolUse` hook auto-locks each file on your first `Edit`/`Write` and releases at session end. Acquiring manually there is redundant for `Edit`/`Write`, which the hook already covers, and it is safe: `lockm` resolves the same session id the hook does, so your own claims are recognised as your own. Shell writes are claimed too when devkit can resolve their targets.
-
-What changes is the failure: a blocked write comes back as a **deny** naming the holder. Treat that exactly like an `acquire` conflict — edit a different file, or wait. A shell write is claimed automatically when its target is a literal path or a variable assigned a literal in the same command, including a path passed to an inline `python3 -` or `node -e` script as an argument. When devkit cannot resolve a target (a path built at runtime, a script file, `perl -e`), the call is refused with the reason; rewrite the edit with an explicit path or use `Edit`/`Write`. Claiming some other path with `lockm acquire` does not get an unresolved write through. `references/locks.md` has the full mechanism, including how a checkout turns enforcement on.
+Work on an unblocked file first, then poll with `lockm check <paths>` (read-only, takes no claim) and re-run `acquire`. When a holder looks stuck, `references/locks.md` covers the TTL, `prune`, and when `release --force` is the right answer. It also has the full enforcement mechanism, including how a checkout turns it on.
