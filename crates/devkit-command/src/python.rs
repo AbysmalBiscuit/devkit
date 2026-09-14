@@ -9,7 +9,7 @@ use tree_sitter::Node;
 
 use crate::{
     analyzer::{Analyzer, Frame, RawInvocation, Stdin, Word},
-    model::{FileOp, Language, Location, UncertaintyKind, Value},
+    model::{FileOp, Language, Location, TempLocation, UncertaintyKind, Value},
     normalize, paths, ts,
 };
 
@@ -184,20 +184,18 @@ const MUTATING_PATH_METHODS: &[&str] = &[
     "move_into",
 ];
 
-/// The directory a `tempfile` entry is created in. `Some(None)` when the call
-/// named none and the system temp directory is used, which no project claim
-/// reaches. `None` when it named one that could not be resolved, leaving
-/// nothing to check a claim against.
+/// Where a `tempfile` entry is created. `None` when the call named a directory
+/// that could not be resolved, leaving nothing to check a claim against.
 fn temp_dir(
     named: Option<&Py>,
     cwd: Option<&str>,
     style: crate::context::PathStyle,
-) -> Option<Option<String>> {
+) -> Option<TempLocation> {
     match named {
-        None => Some(None),
+        None => Some(TempLocation::SystemTemp),
         Some(Py::Str(s) | Py::Path(s)) => {
             match paths::resolve(&Value::Known(s.clone()), cwd, style) {
-                crate::model::Target::Path(dir) => Some(Some(dir)),
+                crate::model::Target::Path(dir) => Some(TempLocation::In(dir)),
                 _ => None,
             }
         }
@@ -209,10 +207,10 @@ fn temp_dir(
 enum Py {
     Str(String),
     Path(String),
-    /// A path `tempfile` created fresh under a random name, carrying the
-    /// directory it was made in. The name needs no claim of its own, but that
-    /// directory can be held by someone.
-    Ephemeral(Option<String>),
+    /// A path `tempfile` created fresh under a random name, carrying where it
+    /// was made. The name needs no claim of its own, but the directory it was
+    /// made in can be held by someone.
+    Ephemeral(TempLocation),
     Int(i64),
     Bool(bool),
     List(Vec<Py>),
@@ -234,18 +232,16 @@ impl Py {
         match self {
             Py::Str(s) | Py::Path(s) => Value::Known(s.clone()),
             _ => match self.ephemeral() {
-                Some(dir) => Value::Ephemeral(dir),
+                Some(at) => Value::Ephemeral(at),
                 None => Value::Unknown,
             },
         }
     }
 
-    /// The directory a freshly created temp path was made in, when this value
-    /// is one. The outer `Option` says whether it is a temp path at all, the
-    /// inner one whether the call named a directory for it.
-    fn ephemeral(&self) -> Option<Option<String>> {
+    /// Where a freshly created temp path was made, when this value is one.
+    fn ephemeral(&self) -> Option<TempLocation> {
         match self {
-            Py::Ephemeral(dir) => Some(dir.clone()),
+            Py::Ephemeral(at) => Some(at.clone()),
             Py::WriteHandle { target, .. } => target.ephemeral(),
             // No bare member stands in for the path. `.parent` is the directory
             // the entry was made in, which a fresh name says nothing about, and
@@ -925,10 +921,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         .map(|(v, _)| v)
                         .or_else(|| positional.get(2));
                     match temp_dir(named, cwd.as_deref(), self.a.ctx.path_style) {
-                        Some(dir) if api == "tempfile.mkstemp" => {
-                            Py::List(vec![Py::Unknown, Py::Ephemeral(dir)])
+                        Some(at) if api == "tempfile.mkstemp" => {
+                            Py::List(vec![Py::Unknown, Py::Ephemeral(at)])
                         }
-                        Some(dir) => Py::Ephemeral(dir),
+                        Some(at) => Py::Ephemeral(at),
                         None => Py::Unknown,
                     }
                 }
@@ -936,14 +932,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     // `dir` is the seventh parameter of both, so a call passing
                     // that many positionally is one this cannot read.
                     let named = keywords.get("dir").map(|(v, _)| v);
-                    let dir = if positional.len() > 4 {
+                    let at = if positional.len() > 4 {
                         None
                     } else {
                         temp_dir(named, cwd.as_deref(), self.a.ctx.path_style)
                     };
-                    match dir {
-                        Some(dir) => Py::WriteHandle {
-                            target: Box::new(Py::Ephemeral(dir)),
+                    match at {
+                        Some(at) => Py::WriteHandle {
+                            target: Box::new(Py::Ephemeral(at)),
                             write_op: Some(FileOp::Overwrite),
                         },
                         None => Py::Unknown,
@@ -1413,7 +1409,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
         if !parts.iter().any(Py::is_ephemeral) {
             return None;
         }
-        let Some(dir) = parts.first().and_then(Py::ephemeral) else {
+        let Some(at) = parts.first().and_then(Py::ephemeral) else {
             return Some(Py::Unknown);
         };
         let Some(rest) = parts[1..]
@@ -1427,7 +1423,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             return Some(Py::Unknown);
         };
         Some(if paths::stays_within(&rest, self.a.ctx.path_style) {
-            Py::Ephemeral(dir)
+            Py::Ephemeral(at)
         } else {
             Py::Unknown
         })

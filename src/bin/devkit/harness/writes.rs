@@ -76,9 +76,9 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
             // would write a row nobody could ever conflict with. The directory
             // it was created in is another matter, since a claim there covers
             // every path born under it, so that is checked like any other scope.
-            Target::Ephemeral { dir } => {
-                if let Some(dir) = dir {
-                    let scope = (dir.clone(), false);
+            Target::Ephemeral { at } => {
+                if let Some(dir) = at.named() {
+                    let scope = (dir.to_string(), false);
                     if !e.scopes.contains(&scope) {
                         e.scopes.push(scope);
                     }

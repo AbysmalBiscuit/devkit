@@ -212,8 +212,8 @@ impl<'c> Analyzer<'c> {
             // A tree writer rooted at a freshly created temp directory reaches
             // no path another session could name, but a claim on the directory
             // that one was made in covers the whole fresh subtree.
-            crate::model::Target::Ephemeral { dir } => {
-                if let Some(scope) = dir {
+            crate::model::Target::Ephemeral { at } => {
+                if let crate::model::TempLocation::In(scope) = at {
                     self.out.tree_effects.push(TreeEffect {
                         scope,
                         whole_checkout,

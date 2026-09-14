@@ -6,7 +6,7 @@ use tree_sitter::Node;
 
 use crate::{
     analyzer::{Analyzer, Frame, RawInvocation, Stdin, Word},
-    model::{FileOp, Language, Location, UncertaintyKind, Value},
+    model::{FileOp, Language, Location, TempLocation, UncertaintyKind, Value},
     normalize, paths, ts,
 };
 
@@ -67,10 +67,10 @@ const WRITE_METHOD_NAMES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq)]
 enum Js {
     Str(String),
-    /// A directory `fs.mkdtemp` created fresh under a random name, carrying the
-    /// directory it was made in. The name needs no claim of its own, but that
-    /// directory can be held by someone.
-    Ephemeral(Option<String>),
+    /// A directory `fs.mkdtemp` created fresh under a random name, carrying
+    /// where it was made. The name needs no claim of its own, but the directory
+    /// it was made in can be held by someone.
+    Ephemeral(TempLocation),
     Num(i64),
     Array(Vec<Js>),
     Api(String),
@@ -88,18 +88,16 @@ impl Js {
         match self {
             Self::Str(s) => Value::Known(s.clone()),
             _ => match self.ephemeral() {
-                Some(dir) => Value::Ephemeral(dir),
+                Some(at) => Value::Ephemeral(at),
                 None => Value::Unknown,
             },
         }
     }
 
-    /// The directory a freshly created temp path was made in, when this value
-    /// is one. The outer `Option` says whether it is a temp path at all, the
-    /// inner one whether the call named a directory for it.
-    fn ephemeral(&self) -> Option<Option<String>> {
+    /// Where a freshly created temp path was made, when this value is one.
+    fn ephemeral(&self) -> Option<TempLocation> {
         match self {
-            Self::Ephemeral(dir) => Some(dir.clone()),
+            Self::Ephemeral(at) => Some(at.clone()),
             _ => None,
         }
     }
@@ -175,7 +173,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
     /// directory: an unknown one cannot show containment, and a temp path
     /// anywhere but first is not the thing being extended.
     fn temp_join(&self, args: &[(Js, Node<'t>)]) -> Js {
-        let Some(dir) = args.first().and_then(|(v, _)| v.ephemeral()) else {
+        let Some(at) = args.first().and_then(|(v, _)| v.ephemeral()) else {
             return Js::Unknown;
         };
         let Some(rest) = args[1..]
@@ -189,7 +187,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             return Js::Unknown;
         };
         if paths::stays_within(&rest, self.a.ctx.path_style) {
-            Js::Ephemeral(dir)
+            Js::Ephemeral(at)
         } else {
             Js::Unknown
         }
@@ -488,7 +486,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             Js::Unknown
                         }
                         Value::Unknown => Js::Unknown,
-                        Value::Ephemeral(dir) => Js::Ephemeral(dir.clone()),
+                        Value::Ephemeral(at) => Js::Ephemeral(at.clone()),
                     }),
                 (Js::Array(items), Js::Num(i)) => usize::try_from(i)
                     .ok()
@@ -600,7 +598,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     match paths::parent_dir(&prefix, self.a.ctx.path_style).map(|parent| {
                         paths::resolve(&Value::Known(parent), cwd.as_deref(), self.a.ctx.path_style)
                     }) {
-                        Some(crate::Target::Path(dir)) => Js::Ephemeral(Some(dir)),
+                        Some(crate::Target::Path(dir)) => Js::Ephemeral(TempLocation::In(dir)),
                         _ => Js::Unknown,
                     }
                 }

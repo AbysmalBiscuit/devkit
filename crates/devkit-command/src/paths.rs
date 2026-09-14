@@ -73,8 +73,8 @@ pub(crate) fn join(base: &str, rel: &str, style: PathStyle) -> String {
 }
 
 pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Target {
-    if let Value::Ephemeral(dir) = value {
-        return Target::Ephemeral { dir: dir.clone() };
+    if let Value::Ephemeral(at) = value {
+        return Target::Ephemeral { at: at.clone() };
     }
     let Some(p) = value.known() else {
         return Target::Unresolved;

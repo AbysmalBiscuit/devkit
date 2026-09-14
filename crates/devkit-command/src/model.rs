@@ -8,14 +8,33 @@ pub struct Location {
     pub embedded: Option<Range<usize>>,
 }
 
+/// Where an API created a fresh entry under a random name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TempLocation {
+    /// The directory the API picked for itself, which no project claim reaches.
+    SystemTemp,
+    /// A directory the caller named, resolved against the execution directory.
+    In(String),
+}
+
+impl TempLocation {
+    /// The directory the caller named, when it named one.
+    pub fn named(&self) -> Option<&str> {
+        match self {
+            TempLocation::SystemTemp => None,
+            TempLocation::In(dir) => Some(dir),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Known(String),
     Unknown,
     /// A path an API created fresh under a random name, atomically, carrying
-    /// the directory it was created in. Resolves to [`Target::Ephemeral`]; see
-    /// its documentation for why that is not [`Value::Unknown`].
-    Ephemeral(Option<String>),
+    /// where it was created. Resolves to [`Target::Ephemeral`]; see its
+    /// documentation for why that is not [`Value::Unknown`].
+    Ephemeral(TempLocation),
 }
 
 impl Value {
@@ -70,13 +89,12 @@ pub enum Target {
     /// its own. Distinct from `Unresolved`, whose path is merely unknown and
     /// may well be shared.
     ///
-    /// `dir` is the directory the caller asked for it to be created in, when
-    /// there was one. A fresh name proves nothing about that directory. A claim
-    /// on it, or on one of its ancestors, covers every path born under it, so
-    /// `dir` is still checked for conflicts. `None` means the API chose the
-    /// system temp directory, which no project claim reaches.
+    /// `at` is where the caller asked for it to be created. A fresh name
+    /// proves nothing about that directory, and a claim on it, or on one of its
+    /// ancestors, covers every path born under it, so `at` is still checked for
+    /// conflicts.
     Ephemeral {
-        dir: Option<String>,
+        at: TempLocation,
     },
 }
 

@@ -8,7 +8,7 @@ use tree_sitter::Node;
 use crate::{
     analyzer::{Analyzer, Frame, RawInvocation, Stdin, Word},
     catalog, embed,
-    model::{FileOp, Language, Limit, UncertaintyKind, Value},
+    model::{FileOp, Language, Limit, TempLocation, UncertaintyKind, Value},
     normalize, paths, ts,
 };
 
@@ -637,7 +637,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     match self.value(part, scope) {
                         Value::Known(s) => out.push_str(&s),
                         Value::Unknown => known = false,
-                        Value::Ephemeral(dir) => ephemeral = Some(dir),
+                        Value::Ephemeral(at) => ephemeral = Some(at),
                     }
                 }
                 out.push_str(&unescape_dquoted(
@@ -649,7 +649,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     // `mktemp` that failed leaves the variable empty, so the
                     // rest of the word would stand on its own as an absolute
                     // path.
-                    Some(dir) if parts == 1 && out.is_empty() => Value::Ephemeral(dir),
+                    Some(at) if parts == 1 && out.is_empty() => Value::Ephemeral(at),
                     Some(_) => Value::Unknown,
                     None if known => Value::Known(out),
                     None => Value::Unknown,
@@ -682,7 +682,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 let mut inner = scope.clone();
                 self.statements(node, &mut inner);
                 match self.makes_temp_path(node, scope) {
-                    Some(dir) => Value::Ephemeral(dir),
+                    Some(at) => Value::Ephemeral(at),
                     None => Value::Unknown,
                 }
             }
@@ -698,12 +698,11 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
-    /// The directory a lone `mktemp` substitution creates its entry in, when
-    /// the substitution is one: its stdout is then a path the command has
-    /// already created under a random name. `Some(None)` means `mktemp` chose
-    /// the system temp directory. An argument carrying an expansion reads as
+    /// Where a lone `mktemp` substitution creates its entry, when the
+    /// substitution is one: its stdout is then a path the command has already
+    /// created under a random name. An argument carrying an expansion reads as
     /// not a temp path at all, because the expansion could be `-u`.
-    fn makes_temp_path(&self, node: Node<'t>, scope: &Scope) -> Option<Option<String>> {
+    fn makes_temp_path(&self, node: Node<'t>, scope: &Scope) -> Option<TempLocation> {
         let children = ts::named_children(node);
         let [command] = children.as_slice() else {
             return None;
@@ -753,13 +752,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     // `$TMPDIR` is not knowable, so a template carrying a
                     // directory of its own lands somewhere this cannot name.
                     (None, true) if under != "." => return None,
-                    (None, true) => return Some(None),
+                    (None, true) => return Some(TempLocation::SystemTemp),
                     (None, false) => under,
                 }
             }
             None => match named {
                 Some(base) => base.to_string(),
-                None => return Some(None),
+                None => return Some(TempLocation::SystemTemp),
             },
         };
         match paths::resolve(
@@ -767,7 +766,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             scope.cwd.as_deref(),
             self.a.ctx.path_style,
         ) {
-            crate::model::Target::Path(dir) => Some(Some(dir)),
+            crate::model::Target::Path(dir) => Some(TempLocation::In(dir)),
             _ => None,
         }
     }
@@ -919,7 +918,7 @@ mod tests {
     #[test]
     fn an_mktemp_template_names_the_directory_the_entry_is_made_in() {
         let dir = |source| match &bash(source).file_effects[0].target {
-            Target::Ephemeral { dir } => dir.clone(),
+            Target::Ephemeral { at } => at.named().map(str::to_string),
             other => panic!("{other:?}"),
         };
         assert_eq!(dir("T=$(mktemp); echo x > \"$T\""), None);
