@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.3](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.2...v0.14.3) (2026-09-14)
+
+
+### Features
+
+* **tasks:** split one value into several arguments ([#57](https://github.com/AbysmalBiscuit/devkit/issues/57)) ([e6c2eb2](https://github.com/AbysmalBiscuit/devkit/commit/e6c2eb2178bb58f71ef7ef251d3737537ab4bcce))
+
 ## [0.14.2](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.1...v0.14.2) (2026-09-14)
 
 
