@@ -224,6 +224,14 @@ fn an_unresolved_write_blocks_by_default_and_warns_when_configured() {
 }
 
 #[test]
+fn a_root_claim_does_not_unblock_an_unresolved_write() {
+    let e = env(WRITES);
+    acquire(&e, "S1", ".");
+    let reason = denial(&hook(&e, Some("S1"), "echo x > \"$OUT\"")).expect("denied");
+    assert!(reason.contains("could not be determined"), "{reason}");
+}
+
+#[test]
 fn a_warning_cannot_override_a_known_conflict() {
     let e = env("[harness]\nenforce_writes = true\nunresolved_writes = \"warn\"\n");
     acquire(&e, "S2", "a.txt");

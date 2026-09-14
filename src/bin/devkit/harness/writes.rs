@@ -37,7 +37,7 @@ impl Evaluation {
     }
 }
 
-const UNRESOLVED_FIX: &str = "Rewrite the edit so each target is a literal path, or a variable assigned a literal earlier in the same command, or make it with a structured edit tool.";
+const UNRESOLVED_FIX: &str = "Rewrite the edit so each target is a literal path, or a variable assigned a literal earlier in the same command, or make it with a structured edit tool; those targets are claimed for you. For a dynamic write permitted by `[harness] unresolved_writes = \"warn\"`, claim the actual destinations yourself with `lockm acquire`, naming the paths or a directory known to contain them, and proceed only if the claim succeeds. A claim covers only the paths it names, and never resolves this finding or unblocks the command while the policy is `block`.";
 
 pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     let mut e = Evaluation::default();
@@ -256,10 +256,14 @@ mod tests {
     }
 
     #[test]
-    fn a_blocking_diagnostic_names_a_correction_and_no_lock_workaround() {
+    fn a_blocking_diagnostic_names_a_correction() {
         let e = eval("echo x > \"$OUT\"", HarnessPolicy::default());
         assert!(e.blocks[0].contains("literal"), "{}", e.blocks[0]);
-        assert!(!e.blocks[0].contains("lockm acquire"), "{}", e.blocks[0]);
+        assert!(
+            e.blocks[0].contains("never resolves this finding"),
+            "{}",
+            e.blocks[0]
+        );
     }
 
     #[test]
