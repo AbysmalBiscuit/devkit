@@ -329,7 +329,7 @@ fn a_fresh_entry_under_a_held_directory_is_denied() {
 /// through the link lands wherever it points, so the fresh subtree stops
 /// proving anything.
 #[test]
-fn a_link_out_of_a_fresh_directory_loses_the_exemption() {
+fn a_link_made_in_a_fresh_directory_loses_the_exemption() {
     let e = env(WRITES);
     std::fs::create_dir(e.project.path().join("src")).unwrap();
     std::fs::write(e.project.path().join("src/model.rs"), "x").unwrap();
@@ -344,21 +344,37 @@ fn a_link_out_of_a_fresh_directory_loses_the_exemption() {
          const d = fs.mkdtempSync('./fresh-'); \
          fs.symlinkSync('../src', path.join(d, 'link')); \
          fs.writeFileSync(path.join(d, 'link/model.rs'), 'x')\"",
+        // A hard link names the source's inode, so a write through it lands on
+        // the source wherever that is.
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(dir='.'); \
+         os.link('src/model.rs', os.path.join(d, 'link')); \
+         open(os.path.join(d, 'link'), 'w').write('x')\"",
+        "python3 -c \"import pathlib, tempfile; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).joinpath('link').hardlink_to('src/model.rs')\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('./fresh-'); \
+         fs.linkSync('src/model.rs', path.join(d, 'link')); \
+         fs.writeFileSync(path.join(d, 'link'), 'x')\"",
+        // Each target stays inside the directory by name, but the second is
+        // read through the first, which leads out of it.
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(dir='.'); \
+         os.symlink('.', os.path.join(d, 'a')); \
+         os.symlink('a/../src', os.path.join(d, 'b')); \
+         open(os.path.join(d, 'b/model.rs'), 'w').write('x')\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('./fresh-'); \
+         fs.symlinkSync('.', path.join(d, 'a')); \
+         fs.symlinkSync('a/../src', path.join(d, 'b')); \
+         fs.writeFileSync(path.join(d, 'b/model.rs'), 'x')\"",
+        // No claim is needed for the rule to hold: the link itself is what the
+        // analyzer cannot follow.
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(); \
+         os.symlink('real.txt', os.path.join(d, 'link'))\"",
     ];
     for c in cases {
         let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
         assert!(reason.contains("point outside it"), "{reason}");
     }
-}
-
-/// A link that stays inside the fresh directory reaches nothing anyone holds.
-#[test]
-fn a_link_inside_a_fresh_directory_keeps_the_exemption() {
-    let e = env(WRITES);
-    acquire(&e, "B", ".");
-    let c = "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(); \
-             os.symlink('real.txt', os.path.join(d, 'link'))\"";
-    assert_eq!(denial(&hook(&e, Some("S1"), c)), None);
 }
 
 /// `move` and `move_into` rename the source away, so the source is written

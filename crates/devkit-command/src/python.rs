@@ -1050,7 +1050,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 "os.truncate" => self.effect(node, FileOp::Overwrite, &arg(0, "path"), scope),
                 "os.symlink" | "os.link" => {
                     let link = arg(1, "dst");
-                    self.link_escape(node, &link, &arg(0, "src"));
+                    self.link_in_fresh(node, &link);
                     self.effect(node, FileOp::Create, &link, scope)
                 }
                 "os.open" => {
@@ -1377,7 +1377,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "write_text" | "write_bytes" => self.effect(node, FileOp::Overwrite, this, scope),
             "touch" | "mkdir" => self.effect(node, FileOp::Create, this, scope),
             "symlink_to" | "hardlink_to" => {
-                self.link_escape(node, this, &dest());
+                self.link_in_fresh(node, this);
                 self.effect(node, FileOp::Create, this, scope)
             }
             "unlink" | "rmdir" => self.effect(node, FileOp::Delete, this, scope),
@@ -1406,22 +1406,17 @@ impl<'t> Walker<'_, '_, '_, 't> {
         })
     }
 
-    /// A link made inside a freshly created directory can point out of it, and
-    /// every write through the link lands wherever it points. Containment of
-    /// the fresh subtree is then only as good as the link target, so a target
-    /// that cannot be shown to stay inside costs the exemption.
-    fn link_escape(&mut self, node: Node<'t>, link: &Py, target: &Py) {
-        if !link.is_ephemeral() {
-            return;
-        }
-        let inside = match target {
-            Py::Str(s) | Py::Path(s) => paths::stays_within(&[s.as_str()], self.a.ctx.path_style),
-            _ => false,
-        };
-        if !inside {
+    /// A link created under a fresh directory is where the exemption ends.
+    /// Writes through the link land wherever it points, and the name it was
+    /// given is no evidence of that: a hard link is a second name for a file
+    /// that already exists somewhere, and a symbolic link's target is read
+    /// through whatever links precede it, so a target that stays inside the
+    /// directory by spelling can still lead out of it.
+    fn link_in_fresh(&mut self, node: Node<'t>, link: &Py) {
+        if link.is_ephemeral() {
             self.unresolved(
                 node,
-                "a link made in a fresh directory could point outside it",
+                "a link made in a fresh directory can point outside it",
             );
         }
     }

@@ -43,6 +43,8 @@ const WRITES: &[(&str, FileOp, usize)] = &[
     ("copyFile", FileOp::Copy, 1),
     ("symlinkSync", FileOp::Create, 1),
     ("symlink", FileOp::Create, 1),
+    ("linkSync", FileOp::Create, 1),
+    ("link", FileOp::Create, 1),
 ];
 const WRITE_METHOD_NAMES: &[&str] = &[
     "writeFileSync",
@@ -160,22 +162,17 @@ impl<'t> Walker<'_, '_, '_, 't> {
         );
     }
 
-    /// A link made inside a freshly created directory can point out of it, and
-    /// every write through the link lands wherever it points. Containment of
-    /// the fresh subtree is then only as good as the link target, so a target
-    /// that cannot be shown to stay inside costs the exemption.
-    fn link_escape(&mut self, node: Node<'t>, link: &Js, target: &Js) {
-        if !link.is_ephemeral() {
-            return;
-        }
-        let inside = match target {
-            Js::Str(s) => paths::stays_within(&[s.as_str()], self.a.ctx.path_style),
-            _ => false,
-        };
-        if !inside {
+    /// A link created under a fresh directory is where the exemption ends.
+    /// Writes through the link land wherever it points, and the name it was
+    /// given is no evidence of that: a hard link is a second name for a file
+    /// that already exists somewhere, and a symbolic link's target is read
+    /// through whatever links precede it, so a target that stays inside the
+    /// directory by spelling can still lead out of it.
+    fn link_in_fresh(&mut self, node: Node<'t>, link: &Js) {
+        if link.is_ephemeral() {
             self.unresolved(
                 node,
-                "a link made in a fresh directory could point outside it",
+                "a link made in a fresh directory can point outside it",
             );
         }
     }
@@ -717,8 +714,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .iter()
                     .find(|(method_name, ..)| *method_name == method)
                 {
-                    if matches!(method, "symlink" | "symlinkSync") {
-                        self.link_escape(node, &arg(*index), &arg(0));
+                    if matches!(method, "symlink" | "symlinkSync" | "link" | "linkSync") {
+                        self.link_in_fresh(node, &arg(*index));
                     }
                     self.js_effect(*op, &arg(*index), cwd.as_deref(), at);
                 } else if matches!(method, "renameSync" | "rename") {
