@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use devkit_common::template::{self, Source};
 use devkit_config::TaskConfig;
 
 use super::norm::Doppler;
@@ -38,15 +39,15 @@ pub fn redirect_worth_it(
 /// sees no `--arg` and no issue record, so every other name the templates read
 /// renders as an empty placeholder instead of failing the scan.
 fn references_a_port(task: &TaskConfig, vars: &BTreeMap<String, String>) -> bool {
-    let mut templates: Vec<&str> = task.run.iter().map(String::as_str).collect();
-    templates.extend(task.env.values().map(String::as_str));
+    let mut templates: Vec<Source<'_>> = task.run.iter().map(Into::into).collect();
+    templates.extend(task.env.values().map(|s| Source::Scalar(s)));
     let mut vars = vars.clone();
-    for name in devkit_common::template::undeclared(&templates).unwrap_or_default() {
+    for name in template::undeclared(&templates).unwrap_or_default() {
         if name != "port" && name != "ports" {
             vars.entry(name).or_default();
         }
     }
-    devkit_common::template::referenced_ports(&templates, &vars)
+    template::referenced_ports(&templates, &vars)
         .map(|r| r.own_port || !r.apps.is_empty())
         .unwrap_or(false)
 }
@@ -61,7 +62,7 @@ mod tests {
 
     fn task(run: &[&str]) -> TaskConfig {
         TaskConfig {
-            run: run.iter().map(|s| s.to_string()).collect(),
+            run: run.iter().map(|s| (*s).into()).collect(),
             ..Default::default()
         }
     }

@@ -239,6 +239,23 @@ steps = [
 - Sequence steps run in order and stop at the first failure. `{ up = "app" }` is `devrun up app` (a no-op for a live server). A sequence may only set `description` and `steps`, and cannot reference another sequence. The CLI `--env`/`--env-file` overlay applies to every step: command steps layer it above the task `env`, and `{ up = "app" }` steps layer it above the app's `static_env`, exactly as `devrun up --env` would.
 - `devrun task <name> --dry-run` prints each rendered plan (still resolving ports, so the printed values are real) without executing.
 
+### Expanding task arguments
+
+A string in `run` always produces one argument. An entry such as `{ expand = "files | split(';')" }` evaluates a MiniJinja expression and inserts each resulting string as a separate argument at that position. Write the expression without `{{ }}`. It uses the same variables and port context as scalar templates, including `--arg` values.
+
+```toml
+[tasks.stage]
+run = ["git", "add", "--", { expand = "files | split(';')" }]
+```
+
+```sh
+devrun task stage --arg 'files=new file.txt;other.txt'
+```
+
+The result must be a sequence or iterator containing only strings. An empty sequence adds no arguments. Empty strings, spaces, and shell metacharacters remain unchanged; devkit neither trims nor shell-evaluates them. Choose a delimiter absent from the values when using `split`. The program, the first entry in `run`, must remain a scalar string. Preflight validation rejects wrong result types and NUL characters before a sequence starts; fresh evaluation repeats validation before each step.
+
+Expansion expressions participate in argument discovery and port allocation. Dry runs display their expanded arguments, and each sequence step evaluates them again immediately before execution. For command-guard inference, expansions must form a trailing suffix after a literal `--`. Other layouts still execute; use explicit `[harness.commands]` rules to redirect their commands. Existing scalar-only signature rules still apply.
+
 ### `[daemon]`
 
 Optional daemon-level tuning. Env overrides are listed alongside each key,

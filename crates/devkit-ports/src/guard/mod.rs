@@ -217,6 +217,29 @@ fn configured(argv: &[String]) -> Option<Known> {
         .and_then(known)
 }
 
+fn configured_task(args: &[devkit_config::RunArg]) -> Option<Known> {
+    let mut argv = Vec::new();
+    let mut expanding = false;
+    for arg in args {
+        match arg {
+            devkit_config::RunArg::Scalar(s) if !expanding => argv.push(s.clone()),
+            devkit_config::RunArg::Scalar(_) => return None,
+            devkit_config::RunArg::Expand { .. } => {
+                if !expanding {
+                    if argv.last().map(String::as_str) != Some("--") {
+                        return None;
+                    }
+                    // Keep the unknown argv boundary visible to wrapper
+                    // normalization.
+                    argv.push("{{ __argv_expansion__ }}".into());
+                    expanding = true;
+                }
+            }
+        }
+    }
+    configured(&argv)
+}
+
 struct Normalized {
     argv: Vec<String>,
     doppler: Option<norm::Doppler>,
@@ -355,7 +378,7 @@ fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
         .filter_map(|(name, task)| {
             // Both sides normalize, or a task's own runner prefix and doppler
             // wrapper make it unmatchable against the stripped typed side.
-            let cfg = configured(&task.run)?;
+            let cfg = configured_task(&task.run)?;
             let s = sig::signature(&cfg.argv)?;
             // The floor is a heuristic about bare-program tasks. A task that
             // states its own `guard` answer has already settled the question,
@@ -645,6 +668,59 @@ mod tests {
         assert!(reason(&d).contains("devrun task check"), "{}", reason(&d));
     }
 
+    #[test]
+    fn trailing_expansion_after_separator_keeps_the_static_task_signature() {
+        let p = project(|c| {
+            c.tasks.insert(
+                "stage".into(),
+                toml::from_str(
+                    r#"
+run = ["git", "add", "--", { expand = "files | split(';')" }]
+guard = true
+"#,
+                )
+                .unwrap(),
+            );
+        });
+        let d = decide_with("git add -- selected.txt", &BTreeMap::new(), Some(&p));
+        assert!(
+            reason(&d).contains("devrun task stage --arg files=<files>"),
+            "{}",
+            reason(&d)
+        );
+        assert!(!denies(&decide_with(
+            "git diff",
+            &BTreeMap::new(),
+            Some(&p)
+        )));
+    }
+
+    #[test]
+    fn expansions_cannot_supply_a_guard_signature_or_wrapper_argument() {
+        for (run, typed) in [
+            (
+                r#"["docker", "compose", { expand = "flags" }, "up"]"#,
+                "docker compose down",
+            ),
+            (r#"["sudo", "-u", { expand = "args" }]"#, "sudo ls"),
+            (
+                r#"["doppler", "run", "-c", { expand = "args" }]"#,
+                "doppler run -c dev -- git status",
+            ),
+            (r#"["bun", "--", { expand = "args" }]"#, "bun test"),
+            (r#"["git", { expand = "args" }]"#, "git status"),
+        ] {
+            let p = project(|c| {
+                c.tasks.insert(
+                    "dynamic".into(),
+                    toml::from_str(&format!("run = {run}\nguard = true")).unwrap(),
+                );
+            });
+            let d = decide_with(typed, &BTreeMap::new(), Some(&p));
+            assert!(!denies(&d), "{run}: {}", reason(&d));
+        }
+    }
+
     /// A bare-program task is normally held back from a command the catalog
     /// reads as something other than a server. An explicit `guard = true` is
     /// the project overruling that, and it has to reach the decision to do
@@ -693,7 +769,7 @@ mod tests {
             c.tasks.insert("check".into(), TaskConfig {
                 run: ["doppler", "run", "-c", "dev", "--", "bun", "test"]
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(|s| (*s).into())
                     .collect(),
                 ..Default::default()
             });
@@ -734,7 +810,7 @@ mod tests {
                 ("long", vec!["bun", "test", "unit"]),
             ] {
                 c.tasks.insert(name.into(), TaskConfig {
-                    run: run.iter().map(|s| s.to_string()).collect(),
+                    run: run.iter().map(|s| (*s).into()).collect(),
                     app: Some("web".into()),
                     ..Default::default()
                 });
@@ -856,7 +932,7 @@ mod tests {
     fn vite_task(name: &str, run: &[&str]) -> Project {
         project(|c| {
             c.tasks.insert(name.into(), TaskConfig {
-                run: run.iter().map(|s| s.to_string()).collect(),
+                run: run.iter().map(|s| (*s).into()).collect(),
                 app: Some("storefront".into()),
                 ..Default::default()
             });

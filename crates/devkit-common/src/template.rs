@@ -6,12 +6,64 @@ use std::{
     },
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
+use devkit_config::RunArg;
 use minijinja::{
     Environment, UndefinedBehavior,
-    value::{Object, Value},
+    value::{Object, Value, ValueKind},
 };
 use serde::Serialize;
+
+/// A scalar template or a task argument expansion expression.
+#[derive(Clone, Copy)]
+pub enum Source<'a> {
+    Scalar(&'a str),
+    Expansion(&'a str),
+}
+
+impl<'a> From<&'a str> for Source<'a> {
+    fn from(value: &'a str) -> Self {
+        Self::Scalar(value)
+    }
+}
+
+impl<'a> From<&'a RunArg> for Source<'a> {
+    fn from(value: &'a RunArg) -> Self {
+        match value {
+            RunArg::Scalar(s) => Self::Scalar(s),
+            RunArg::Expand { expand } => Self::Expansion(expand),
+        }
+    }
+}
+
+fn expand_value(expression: &str, root: Value) -> Result<Vec<String>> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    let value = env
+        .compile_expression(expression)
+        .context("compiling expansion expression")?
+        .eval(root)
+        .context("evaluating expansion expression")?;
+    ensure!(
+        matches!(value.kind(), ValueKind::Seq | ValueKind::Iterable),
+        "expansion must yield a sequence of strings, got {}",
+        value.kind()
+    );
+    value
+        .try_iter()?
+        .enumerate()
+        .map(|(index, value)| {
+            ensure!(
+                value.kind() == ValueKind::String,
+                "expansion element {index} must be a string, got {}",
+                value.kind()
+            );
+            let s = value.as_str().expect("string kind checked");
+            ensure!(!s.contains('\0'), "expansion element {index} contains NUL");
+            Ok(s.to_string())
+        })
+        .collect()
+}
 
 /// Render a compiled template against a prebuilt minijinja root value, with the
 /// same strict-undefined and trailing-newline settings as [`render`].
@@ -90,8 +142,8 @@ impl Object for DiscoveryCtx {
 /// placeholder values goes unrecorded; however, plain `{% if port %}`/
 /// `{% if ports[...] %}` guards take the branch during discovery and will
 /// record references within.
-pub fn referenced_ports(
-    templates: &[&str],
+pub fn referenced_ports<'a>(
+    templates: &[impl Copy + Into<Source<'a>>],
     variables: &BTreeMap<String, String>,
 ) -> Result<PortRefs> {
     let ports = Arc::new(PortsRecorder::default());
@@ -102,8 +154,18 @@ pub fn referenced_ports(
             ports: ports.clone(),
             own_port: own_port.clone(),
         });
-        render_value(t, Value::from_dyn_object(ctx))
-            .with_context(|| format!("scanning template `{t}` for port references"))?;
+        let root = Value::from_dyn_object(ctx);
+        match (*t).into() {
+            Source::Scalar(t) => {
+                render_value(t, root)
+                    .with_context(|| format!("scanning template `{t}` for port references"))?;
+            }
+            Source::Expansion(expression) => {
+                expand_value(expression, root).with_context(|| {
+                    format!("scanning expansion `{expression}` for port references")
+                })?;
+            }
+        }
     }
     Ok(PortRefs {
         apps: std::mem::take(&mut ports.apps.lock().unwrap()),
@@ -114,19 +176,25 @@ pub fn referenced_ports(
 /// Top-level names `templates` read without assigning them, minus minijinja's
 /// own globals (`range`, `dict`, ...). The analysis is static, so a name read
 /// only inside a branch that never runs still counts.
-pub fn undeclared(templates: &[&str]) -> Result<BTreeSet<String>> {
+pub fn undeclared<'a>(templates: &[impl Copy + Into<Source<'a>>]) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for t in templates {
         let mut env = Environment::new();
-        env.add_template("t", t)
-            .with_context(|| format!("compiling template `{t}`"))?;
-        let tmpl = env.get_template("t").expect("template just added");
+        let reads = match (*t).into() {
+            Source::Scalar(t) => {
+                env.add_template("t", t)
+                    .with_context(|| format!("compiling template `{t}`"))?;
+                env.get_template("t")
+                    .expect("template just added")
+                    .undeclared_variables(false)
+            }
+            Source::Expansion(expression) => env
+                .compile_expression(expression)
+                .with_context(|| format!("compiling expansion `{expression}`"))?
+                .undeclared_variables(false),
+        };
         let globals: BTreeSet<&str> = env.globals().map(|(name, _)| name).collect();
-        names.extend(
-            tmpl.undeclared_variables(false)
-                .into_iter()
-                .filter(|n| !globals.contains(n.as_str())),
-        );
+        names.extend(reads.into_iter().filter(|n| !globals.contains(n.as_str())));
     }
     Ok(names)
 }
@@ -155,6 +223,17 @@ pub fn render_launch(
         "`{{port}}` is retired; use `{{{{ port }}}}` (minijinja) in launch/static_env/task templates"
     );
     Ok(out)
+}
+
+/// Expand task arguments against the same context as scalar launch templates.
+pub fn expand_launch(
+    expression: &str,
+    port: Option<u16>,
+    ports: &BTreeMap<String, u16>,
+    variables: &BTreeMap<String, String>,
+) -> Result<Vec<String>> {
+    let root = merged_context(&LaunchCtx { port, ports }, variables)?;
+    expand_value(expression, Value::from_serialize(root))
 }
 
 fn merged_context(
@@ -197,6 +276,59 @@ mod tests {
     #[test]
     fn strict_undefined_is_an_error() {
         assert!(render("{{ missing }}", &json!({}), &novars()).is_err());
+    }
+
+    #[test]
+    fn expansion_preserves_empty_and_literal_strings() {
+        let vars = BTreeMap::from([("files".into(), " space ;;;$(literal);{port}".into())]);
+        assert_eq!(
+            expand_launch("files | split(';')", None, &ports(&[]), &vars).unwrap(),
+            [" space ", "", "", "$(literal)", "{port}"]
+        );
+        assert!(
+            expand_launch("[]", None, &ports(&[]), &novars())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn expansion_rejects_wrong_types_and_nul() {
+        for expression in [
+            "'string'",
+            "42",
+            "true",
+            "none",
+            "{'a': 'b'}",
+            "['ok', 1]",
+            "[['a']]",
+            "[missing]",
+            r#"['\u0000']"#,
+        ] {
+            assert!(
+                expand_launch(expression, None, &ports(&[]), &novars()).is_err(),
+                "{expression}"
+            );
+        }
+    }
+
+    #[test]
+    fn expansion_discovers_and_renders_port_references() {
+        let expression = "[port, ports['api']] | map('string')";
+        let refs = referenced_ports(&[Source::Expansion(expression)], &novars()).unwrap();
+        assert!(refs.own_port);
+        assert_eq!(refs.apps, BTreeSet::from(["api".into()]));
+        assert_eq!(
+            expand_launch(expression, Some(9200), &ports(&[("api", 9101)]), &novars()).unwrap(),
+            ["9200", "9101"]
+        );
+    }
+
+    #[test]
+    fn expansion_undeclared_reads_expression_syntax() {
+        let names = undeclared(&[Source::Expansion("files | split(';')")]).unwrap();
+        assert_eq!(names, BTreeSet::from(["files".into()]));
+        assert!(undeclared(&[Source::Expansion("{{ files }}")]).is_err());
     }
 
     #[test]

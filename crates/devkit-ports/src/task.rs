@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use devkit_common::{git, record, template};
-use devkit_config::{Config, Step, TaskConfig};
+use devkit_config::{Config, RunArg, Step, TaskConfig};
 
 use crate::{
     apps::App,
@@ -171,8 +171,8 @@ pub fn required_args(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
 }
 
 fn command_reads(t: &TaskConfig) -> Result<BTreeSet<String>> {
-    let mut templates: Vec<&str> = t.run.iter().map(String::as_str).collect();
-    templates.extend(t.env.values().map(String::as_str));
+    let mut templates: Vec<template::Source<'_>> = t.run.iter().map(Into::into).collect();
+    templates.extend(t.env.values().map(|s| template::Source::Scalar(s)));
     template::undeclared(&templates)
 }
 
@@ -347,6 +347,10 @@ fn resolve_command(
     user_env: &BTreeMap<String, String>,
     enforce_live: bool,
 ) -> Result<CommandPlan> {
+    ensure!(
+        matches!(t.run.first(), Some(RunArg::Scalar(_))),
+        "task `{name}` program must be a string, not an expansion"
+    );
     let app = t
         .app
         .as_deref()
@@ -361,8 +365,8 @@ fn resolve_command(
 
     let empty_user_env = BTreeMap::new();
     let unfiltered_env = effective_env(&static_env, t, &empty_user_env);
-    let mut all_templates: Vec<&str> = t.run.iter().map(String::as_str).collect();
-    all_templates.extend(unfiltered_env.values().copied());
+    let mut all_templates: Vec<template::Source<'_>> = t.run.iter().map(Into::into).collect();
+    all_templates.extend(unfiltered_env.values().map(|s| template::Source::Scalar(s)));
     let all_refs = template::referenced_ports(&all_templates, vars)
         .with_context(|| format!("scanning require_live templates of task `{name}`"))?;
     for r in &t.require_live {
@@ -376,8 +380,8 @@ fn resolve_command(
         );
     }
 
-    let mut templates: Vec<&str> = t.run.iter().map(String::as_str).collect();
-    templates.extend(env_templates.values().copied());
+    let mut templates: Vec<template::Source<'_>> = t.run.iter().map(Into::into).collect();
+    templates.extend(env_templates.values().map(|s| template::Source::Scalar(s)));
     let refs = template::referenced_ports(&templates, vars)
         .with_context(|| format!("scanning templates of task `{name}`"))?;
 
@@ -495,12 +499,23 @@ fn resolve_command_with_ports(
     variables: &BTreeMap<String, String>,
     user_env: &BTreeMap<String, String>,
 ) -> Result<CommandPlan> {
-    let argv = t
-        .run
-        .iter()
-        .map(|s| template::render_launch(s, own_port, ports, variables))
-        .collect::<Result<Vec<_>>>()
+    let mut argv = Vec::new();
+    for entry in &t.run {
+        let rendered = match entry {
+            RunArg::Scalar(s) => {
+                template::render_launch(s, own_port, ports, variables).map(|s| vec![s])
+            }
+            RunArg::Expand { expand } => {
+                template::expand_launch(expand, own_port, ports, variables)
+            }
+        }
         .with_context(|| format!("rendering `run` of task `{name}`"))?;
+        ensure!(
+            rendered.iter().all(|s| !s.contains('\0')),
+            "task `{name}` argument contains NUL"
+        );
+        argv.extend(rendered);
+    }
     ensure!(
         argv.first().is_some_and(|p| !p.is_empty()),
         "task `{name}` has an empty program"
@@ -584,7 +599,7 @@ mod tests {
     fn command_task(app: Option<&str>, run: &[&str], env: &[(&str, &str)]) -> TaskConfig {
         TaskConfig {
             app: app.map(String::from),
-            run: run.iter().map(|s| s.to_string()).collect(),
+            run: run.iter().map(|s| (*s).into()).collect(),
             env: env
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))

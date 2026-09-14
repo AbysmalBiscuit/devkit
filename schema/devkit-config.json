@@ -696,6 +696,26 @@
       ],
       "type": "string"
     },
+    "RunArg": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expand": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expand"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "One task argument: a scalar template or an expression yielding string\narguments."
+    },
     "Severity": {
       "description": "How a diagnostic is classified for the agent.",
       "enum": [
@@ -790,9 +810,9 @@
         },
         "run": {
           "default": [],
-          "description": "The command as one argv (program + args), rendered as minijinja over\n`{{ port }}`, `ports['<app>']`, and `[templates.variables]`. Mutually\nexclusive with `steps`.",
+          "description": "Program and arguments. Strings render as scalar minijinja templates;\n`{ expand = \"expression\" }` appends a sequence of string arguments.\nThe program must be a string. Mutually exclusive with `steps`.",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/RunArg"
           },
           "type": "array"
         },

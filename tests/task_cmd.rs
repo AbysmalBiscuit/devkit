@@ -136,10 +136,7 @@ fn task_seq_dry_run_renders_up_step_plan() {
         !stdout.contains("up api\n") && !stdout.trim_end().ends_with("up api"),
         "up step must render its full plan, not a bare `up api` line: {stdout}"
     );
-    // `cmd_up`'s dry-run block is the only place that prints a `log:` line
-    // (`run_task_step`'s dry-run branch prints only cwd/argv/env), so its
-    // presence proves the up step went through the same rendering as
-    // `up --dry-run` rather than the old one-line summary.
+    // Only `cmd_up` prints `log:`, so it proves the step uses `up` rendering.
     assert!(
         stdout.contains("[issue] api :") && stdout.contains("log:"),
         "up step must render the same [role] app :port / cwd / argv / env / log \
@@ -391,5 +388,202 @@ fn task_runs_and_propagates_exit_codes() {
     assert!(
         String::from_utf8_lossy(&missing.stderr).contains("unknown task"),
         "{missing:?}"
+    );
+}
+
+#[test]
+fn task_expansion_passes_selected_paths_as_separate_arguments() {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[tasks.stage]
+run = ["git", "add", "--", { expand = "files | split(';')" }]
+"#,
+    )
+    .unwrap();
+    for name in ["new file.txt", "ordinary.txt", "unselected.txt"] {
+        std::fs::write(dir.path().join(name), name).unwrap();
+    }
+
+    let out = run_in(dir.path(), &[
+        "task",
+        "stage",
+        "--arg",
+        "files=new file.txt;ordinary.txt",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    let staged = devkit_common::git::Git::fixture(dir.path())
+        .args(["diff", "--cached", "--name-only", "-z"])
+        .output()
+        .unwrap();
+    assert_eq!(staged, "new file.txt\0ordinary.txt\0");
+}
+
+#[test]
+fn task_expansion_preserves_literal_contents_between_fixed_arguments() {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[tasks.show]
+run = ["git", "-c", { expand = "['probe.value=' ~ value]" }, "config", "--get", "probe.value"]
+"#,
+    )
+    .unwrap();
+    let value = " space  'quoted' $(touch injected) & end ";
+    let out = run_in(dir.path(), &[
+        "task",
+        "show",
+        "--arg",
+        &format!("value={value}"),
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{value}\n"));
+    assert!(!dir.path().join("injected").exists());
+}
+
+#[test]
+fn task_expansion_dry_run_discovers_args_and_ports_without_executing() {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[apps.api]
+base_port = 39140
+path = "."
+launch = ["git", "version"]
+[tasks.show]
+run = ["git", "config", "--file", "observed", "probe.value", { expand = "[prefix ~ ports['api']]" }]
+require_live = ["api"]
+"#,
+    )
+    .unwrap();
+    let listing = run_in(dir.path(), &["task"]);
+    assert!(listing.status.success(), "{listing:?}");
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("prefix"));
+    let out = run_in(dir.path(), &[
+        "task",
+        "show",
+        "--arg",
+        "prefix=port-",
+        "--dry-run",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("probe.value port-391"),
+        "{out:?}"
+    );
+    assert!(!dir.path().join("observed").exists());
+    let gated = run_in(dir.path(), &["task", "show", "--arg", "prefix=port-"]);
+    assert!(!gated.status.success(), "{gated:?}");
+    assert!(
+        String::from_utf8_lossy(&gated.stderr).contains("no live server"),
+        "{gated:?}"
+    );
+    assert!(!dir.path().join("observed").exists());
+}
+
+#[test]
+fn task_expansion_sequence_renders_the_current_branch_per_step() {
+    let dir = setup();
+    devkit_common::git::Git::fixture(dir.path())
+        .args(["commit", "--allow-empty", "-qm", "init"])
+        .output()
+        .unwrap();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[tasks.rename]
+run = ["git", "branch", "-m", "renamed"]
+[tasks.record]
+run = ["git", "config", "--file", "observed", "probe.branch", { expand = "[branch]" }]
+[tasks.sequence]
+steps = [{ task = "rename" }, { task = "record" }]
+"#,
+    )
+    .unwrap();
+    let out = run_in(dir.path(), &["task", "sequence"]);
+    assert!(out.status.success(), "{out:?}");
+    let recorded = devkit_common::git::Git::fixture(dir.path())
+        .args(["config", "--file", "observed", "--get", "probe.branch"])
+        .output()
+        .unwrap();
+    assert_eq!(recorded, "renamed\n");
+}
+
+#[test]
+fn task_expansion_invalid_values_fail_before_any_sequence_step_executes() {
+    for expression in [
+        "'scalar'",
+        "42",
+        "{'key': 'value'}",
+        "['ok', 42]",
+        "[['nested']]",
+        "[issue]",
+        r#"['\u0000']"#,
+    ] {
+        let dir = setup();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            format!(
+                r#"[tasks.first]
+run = ["git", "config", "--file", "executed", "probe.value", "yes"]
+[tasks.invalid]
+run = ["git", "version", {{ expand = {expression:?} }}]
+[tasks.sequence]
+steps = [{{ task = "first" }}, {{ task = "invalid" }}]
+"#
+            ),
+        )
+        .unwrap();
+        let out = run_in(dir.path(), &["task", "sequence"]);
+        assert!(!out.status.success(), "{expression}: {out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("expansion"),
+            "{expression}: {out:?}"
+        );
+        assert!(
+            !dir.path().join("executed").exists(),
+            "{expression}: first step ran"
+        );
+    }
+}
+
+#[test]
+fn task_expansion_requires_a_scalar_program() {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[tasks.invalid]
+run = [{ expand = "['git']" }, "version"]
+"#,
+    )
+    .unwrap();
+    let out = run_in(dir.path(), &["task", "invalid"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("program must be a string"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn task_expansion_validates_missing_and_unknown_args() {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[tasks.show]
+run = ["git", "version", { expand = "files | split(';')" }]
+"#,
+    )
+    .unwrap();
+    let missing = run_in(dir.path(), &["task", "show"]);
+    assert!(!missing.status.success(), "{missing:?}");
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("--arg files="),
+        "{missing:?}"
+    );
+    let unknown = run_in(dir.path(), &["task", "show", "--arg", "typo=value"]);
+    assert!(!unknown.status.success(), "{unknown:?}");
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("reads no variable `typo`"),
+        "{unknown:?}"
     );
 }
