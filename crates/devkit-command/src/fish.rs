@@ -268,7 +268,7 @@ impl<'t> Walker<'_, '_, '_> {
                     }
                     match paths::resolve(&word.value, scope.cwd.as_deref(), self.a.ctx.path_style) {
                         crate::model::Target::Path(directory) => Some(directory),
-                        crate::model::Target::Unresolved => None,
+                        crate::model::Target::Unresolved | crate::model::Target::Ephemeral => None,
                     }
                 });
                 return;

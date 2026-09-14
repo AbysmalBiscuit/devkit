@@ -533,7 +533,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     Some(v @ Value::Known(p)) if p != "-" => {
                         match paths::resolve(v, scope.cwd.as_deref(), self.a.ctx.path_style) {
                             crate::model::Target::Path(dir) => Some(dir),
-                            crate::model::Target::Unresolved => None,
+                            crate::model::Target::Unresolved | crate::model::Target::Ephemeral => {
+                                None
+                            }
                         }
                     }
                     _ => None,

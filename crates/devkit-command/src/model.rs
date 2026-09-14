@@ -60,6 +60,12 @@ pub enum FileOp {
 pub enum Target {
     Path(String),
     Unresolved,
+    /// A path an API created fresh under a random name, atomically: a
+    /// `tempfile` entry, `mktemp`, `fs.mkdtemp`. No other session can already
+    /// hold it and none can independently produce it, so it is uncontendable
+    /// and needs no claim. Distinct from `Unresolved`, whose path is merely
+    /// unknown and may well be shared.
+    Ephemeral,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

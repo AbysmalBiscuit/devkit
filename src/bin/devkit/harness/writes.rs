@@ -55,6 +55,10 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
                     op_name(effect.op)
                 ),
             ),
+            // A path an API created fresh under a random name is uncontendable:
+            // no other session holds it, and none can produce it. Claiming it
+            // would write a row nobody could ever conflict with.
+            Target::Ephemeral => {}
         }
     }
     for tree in &analysis.tree_effects {
@@ -238,6 +242,17 @@ mod tests {
         };
         let e = eval("echo x > a.txt; echo y > \"$OUT\"", allow);
         assert_eq!(e.claims, ["/repo/a.txt"]);
+    }
+
+    #[test]
+    fn a_tempfile_write_claims_nothing_and_blocks_nothing() {
+        let e = eval(
+            "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+            HarnessPolicy::default(),
+        );
+        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert!(e.blocks.is_empty(), "{:?}", e.blocks);
+        assert!(e.warnings.is_empty(), "{:?}", e.warnings);
     }
 
     #[test]

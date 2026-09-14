@@ -17,6 +17,7 @@ const MAX_LOOP_ITEMS: usize = 32;
 
 const KNOWN_MODULES: &[&str] = &[
     "pathlib",
+    "tempfile",
     "os",
     "os.path",
     "shutil",
@@ -169,6 +170,9 @@ const WRITE_METHODS: &[&str] = &[
 enum Py {
     Str(String),
     Path(String),
+    /// A path `tempfile` created fresh under a random name. Uncontendable, so a
+    /// write to it is recorded without a claim.
+    Ephemeral,
     Int(i64),
     Bool(bool),
     List(Vec<Py>),
@@ -190,6 +194,16 @@ impl Py {
         match self {
             Py::Str(s) | Py::Path(s) => Value::Known(s.clone()),
             _ => Value::Unknown,
+        }
+    }
+
+    /// Whether this value is, or was derived from, a freshly created temp path.
+    fn is_ephemeral(&self) -> bool {
+        match self {
+            Py::Ephemeral => true,
+            Py::WriteHandle { target, .. } => target.is_ephemeral(),
+            Py::Method(object, _) => object.is_ephemeral(),
+            _ => false,
         }
     }
 
@@ -318,7 +332,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 self.value_limit(node);
                 None
             }
-            crate::model::Target::Unresolved => None,
+            crate::model::Target::Unresolved | crate::model::Target::Ephemeral => None,
         }
     }
 
@@ -853,10 +867,19 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     keywords.contains_key("mode") || positional.len() > 1,
                     cwd.as_deref(),
                 ),
+                "tempfile.mkdtemp" | "tempfile.TemporaryDirectory" => Py::Ephemeral,
+                "tempfile.NamedTemporaryFile" | "tempfile.TemporaryFile" => Py::WriteHandle {
+                    target: Box::new(Py::Ephemeral),
+                    write_op: Some(FileOp::Overwrite),
+                },
+                "tempfile.mkstemp" => Py::List(vec![Py::Unknown, Py::Ephemeral]),
                 "pathlib.Path"
                 | "pathlib.PurePath"
                 | "pathlib.PosixPath"
                 | "pathlib.WindowsPath" => {
+                    if positional.iter().any(Py::is_ephemeral) {
+                        return Py::Ephemeral;
+                    }
                     let mut out = None;
                     for part in &positional {
                         match (part, &out) {
@@ -871,6 +894,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .map(|cwd| self.known(node, cwd, true))
                     .unwrap_or(Py::Unknown),
                 "os.path.join" => {
+                    if positional.iter().any(Py::is_ephemeral) {
+                        return Py::Ephemeral;
+                    }
                     let parts: Option<Vec<String>> = positional
                         .iter()
                         .map(|p| match p {
@@ -924,7 +950,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                                 self.value_limit(node);
                                 None
                             }
-                            crate::model::Target::Unresolved => None,
+                            crate::model::Target::Unresolved | crate::model::Target::Ephemeral => {
+                                None
+                            }
                         },
                         _ => None,
                     };
@@ -1059,6 +1087,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             Py::Str(_)
             | Py::Path(_)
+            | Py::Ephemeral
             | Py::Int(_)
             | Py::Bool(_)
             | Py::List(_)
@@ -1240,11 +1269,18 @@ impl<'t> Walker<'_, '_, '_, 't> {
     }
 
     fn file_effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, cwd: Option<&str>) {
+        if target.is_ephemeral() {
+            self.a.ephemeral_effect(op, self.at(node));
+            return;
+        }
         let value = self.bounded_resolved(node, target.as_value(), cwd);
         self.a.file_effect(op, &value, cwd, self.at(node));
     }
 
     fn tree(&mut self, node: Node<'t>, scope_path: &Py, by: &str, scope: &Scope) -> Py {
+        if scope_path.is_ephemeral() {
+            return Py::Data;
+        }
         let value = self.bounded_resolved(node, scope_path.as_value(), scope.cwd.as_deref());
         self.a
             .tree_effect(&value, false, scope.cwd.as_deref(), by, self.at(node));
@@ -1362,6 +1398,30 @@ mod tests {
             .iter()
             .any(|u| u.kind == UncertaintyKind::UnresolvedWrite)
             || targets(a).contains(&"?".to_string())
+    }
+
+    #[test]
+    fn a_tempfile_directory_write_is_ephemeral() {
+        let a = py(
+            "import tempfile, os\nd = tempfile.mkdtemp()\nopen(os.path.join(d, 'out.txt'), 'w').write('x')",
+        );
+        assert_eq!(targets(&a), ["<ephemeral>"]);
+        assert!(!unresolved(&a), "{:?}", a.uncertainties);
+    }
+
+    #[test]
+    fn a_named_temporary_file_is_ephemeral() {
+        let a = py("import tempfile\nf = tempfile.NamedTemporaryFile(dir='src')\nf.write(b'x')");
+        assert_eq!(targets(&a), ["<ephemeral>"]);
+        assert!(!unresolved(&a), "{:?}", a.uncertainties);
+    }
+
+    #[test]
+    fn a_path_under_gettempdir_stays_unresolved() {
+        let a = py(
+            "import tempfile, os\nopen(os.path.join(tempfile.gettempdir(), 'out.txt'), 'w').write('x')",
+        );
+        assert!(unresolved(&a), "{:?}", targets(&a));
     }
 
     #[test]

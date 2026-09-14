@@ -64,6 +64,7 @@ pub(crate) mod testutil {
             .map(|e| match &e.target {
                 Target::Path(p) => p.clone(),
                 Target::Unresolved => "?".into(),
+                Target::Ephemeral => "<ephemeral>".into(),
             })
             .collect()
     }

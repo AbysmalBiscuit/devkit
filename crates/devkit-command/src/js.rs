@@ -597,7 +597,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             self.value_limit(node);
                             None
                         }
-                        crate::Target::Unresolved => None,
+                        crate::Target::Unresolved | crate::Target::Ephemeral => None,
                     },
                     _ => None,
                 };

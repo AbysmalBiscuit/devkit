@@ -1329,7 +1329,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         let v = self.bounded_resolved(node, v, scope.cwd.as_deref());
                         match paths::resolve(&v, scope.cwd.as_deref(), self.a.ctx.path_style) {
                             crate::model::Target::Path(d) => Some(d),
-                            crate::model::Target::Unresolved => None,
+                            crate::model::Target::Unresolved | crate::model::Target::Ephemeral => {
+                                None
+                            }
                         }
                     }
                     None => None,
