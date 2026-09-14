@@ -125,7 +125,7 @@ fn each(op: FileOp, operands: &[Value]) -> Vec<Hit> {
 
 fn file(op: FileOp, v: &Value) -> Hit {
     match v {
-        Value::Known(_) | Value::Ephemeral => Hit::File(op, v.clone()),
+        Value::Known(_) | Value::Ephemeral(_) => Hit::File(op, v.clone()),
         Value::Unknown => Hit::Unresolved(format!("a {op:?} target could not be determined")),
     }
 }
@@ -207,7 +207,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 p.operands
                     .iter()
                     .map(|v| match v {
-                        Value::Known(_) | Value::Ephemeral => tree(v, false, "rm -r"),
+                        Value::Known(_) | Value::Ephemeral(_) => tree(v, false, "rm -r"),
                         Value::Unknown => Hit::Unresolved(
                             "`rm -r` removes a path that could not be determined".into(),
                         ),
@@ -243,7 +243,9 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                         let target = join_name(dir, s);
                         if recursive {
                             match target {
-                                Value::Known(_) | Value::Ephemeral => tree(&target, false, "cp -r"),
+                                Value::Known(_) | Value::Ephemeral(_) => {
+                                    tree(&target, false, "cp -r")
+                                }
                                 Value::Unknown => Hit::Unresolved(
                                     "`cp -r` destination could not be determined".into(),
                                 ),
@@ -258,7 +260,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 Some((dest, sources)) if !sources.is_empty() => {
                     if recursive {
                         vec![match dest {
-                            Value::Known(_) | Value::Ephemeral => tree(dest, false, "cp -r"),
+                            Value::Known(_) | Value::Ephemeral(_) => tree(dest, false, "cp -r"),
                             Value::Unknown => Hit::Unresolved(
                                 "`cp -r` destination could not be determined".into(),
                             ),
@@ -622,7 +624,7 @@ fn git(args: &[Value]) -> Vec<Hit> {
                 p.operands
                     .iter()
                     .map(|v| match v {
-                        Value::Known(_) | Value::Ephemeral => tree(v, false, "git rm -r"),
+                        Value::Known(_) | Value::Ephemeral(_) => tree(v, false, "git rm -r"),
                         Value::Unknown => {
                             Hit::Unresolved("`git rm -r` path could not be determined".into())
                         }

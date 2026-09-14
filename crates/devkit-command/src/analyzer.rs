@@ -174,14 +174,6 @@ impl<'c> Analyzer<'c> {
     /// Record a write to a path an API created fresh under a random name. The
     /// path is never known, and never needs to be: no other session can hold
     /// it.
-    pub(crate) fn ephemeral_effect(&mut self, op: FileOp, location: Location) {
-        self.out.file_effects.push(FileEffect {
-            op,
-            target: crate::model::Target::Ephemeral,
-            location,
-        });
-    }
-
     pub(crate) fn file_effect(
         &mut self,
         op: FileOp,
@@ -218,8 +210,18 @@ impl<'c> Analyzer<'c> {
                 location,
             ),
             // A tree writer rooted at a freshly created temp directory reaches
-            // no path another session could hold.
-            crate::model::Target::Ephemeral => {}
+            // no path another session could name, but a claim on the directory
+            // that one was made in covers the whole fresh subtree.
+            crate::model::Target::Ephemeral { dir } => {
+                if let Some(scope) = dir {
+                    self.out.tree_effects.push(TreeEffect {
+                        scope,
+                        whole_checkout,
+                        by: by.to_string(),
+                        location,
+                    });
+                }
+            }
         }
     }
 

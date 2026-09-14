@@ -413,7 +413,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 .map(|n| self.word(n, scope).value)
                 .map(|v| match v {
                     Value::Known(s) => Value::Known(format!("{s}\n")),
-                    Value::Unknown | Value::Ephemeral => Value::Unknown,
+                    Value::Unknown | Value::Ephemeral(_) => Value::Unknown,
                 })
                 .unwrap_or(Value::Unknown);
             return Stdin::Source { value, span };
@@ -533,9 +533,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     Some(v @ Value::Known(p)) if p != "-" => {
                         match paths::resolve(v, scope.cwd.as_deref(), self.a.ctx.path_style) {
                             crate::model::Target::Path(dir) => Some(dir),
-                            crate::model::Target::Unresolved | crate::model::Target::Ephemeral => {
-                                None
-                            }
+                            crate::model::Target::Unresolved
+                            | crate::model::Target::Ephemeral { .. } => None,
                         }
                     }
                     _ => None,
@@ -628,42 +627,46 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "string" => {
                 let mut out = String::new();
                 let mut known = true;
-                let mut ephemeral = false;
+                let mut ephemeral = None;
+                let mut parts = 0;
                 let mut last = node.start_byte() + 1;
                 for part in ts::named_children(node) {
                     out.push_str(&unescape_dquoted(&self.source[last..part.start_byte()]));
                     last = part.end_byte();
+                    parts += 1;
                     match self.value(part, scope) {
                         Value::Known(s) => out.push_str(&s),
                         Value::Unknown => known = false,
-                        Value::Ephemeral => ephemeral = true,
+                        Value::Ephemeral(dir) => ephemeral = Some(dir),
                     }
                 }
                 out.push_str(&unescape_dquoted(
                     &self.source[last..node.end_byte().saturating_sub(1).max(last)],
                 ));
-                match (ephemeral, known) {
-                    (true, _) => Value::Ephemeral,
-                    (false, true) => Value::Known(out),
-                    (false, false) => Value::Unknown,
+                match ephemeral {
+                    // A temp path stays uncontendable only while it is the
+                    // whole word. Anything appended can climb back out, and a
+                    // `mktemp` that failed leaves the variable empty, so the
+                    // rest of the word would stand on its own as an absolute
+                    // path.
+                    Some(dir) if parts == 1 && out.is_empty() => Value::Ephemeral(dir),
+                    Some(_) => Value::Unknown,
+                    None if known => Value::Known(out),
+                    None => Value::Unknown,
                 }
             }
             "string_content" => Value::Known(unescape_dquoted(text)),
             "concatenation" => {
                 let mut out = String::new();
-                let mut ephemeral = false;
                 for part in ts::named_children(node) {
                     match self.value(part, scope) {
                         Value::Known(s) => out.push_str(&s),
-                        Value::Unknown => return Value::Unknown,
-                        Value::Ephemeral => ephemeral = true,
+                        // A concatenation always has something beside the temp
+                        // path, which is exactly what stops it being bounded.
+                        Value::Unknown | Value::Ephemeral(_) => return Value::Unknown,
                     }
                 }
-                if ephemeral {
-                    Value::Ephemeral
-                } else {
-                    Value::Known(out)
-                }
+                Value::Known(out)
             }
             "simple_expansion" => self.lookup(&text[1..], scope),
             "expansion" => {
@@ -678,10 +681,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "command_substitution" => {
                 let mut inner = scope.clone();
                 self.statements(node, &mut inner);
-                if self.makes_temp_path(node) {
-                    Value::Ephemeral
-                } else {
-                    Value::Unknown
+                match self.makes_temp_path(node, scope) {
+                    Some(dir) => Value::Ephemeral(dir),
+                    None => Value::Unknown,
                 }
             }
             "process_substitution" => {
@@ -696,23 +698,54 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
-    /// Whether a substitution is a lone `mktemp`, whose stdout is a path the
-    /// command has already created under a random name. An argument carrying an
-    /// expansion reads as not one, because the expansion could be `-u`.
-    fn makes_temp_path(&self, node: Node<'t>) -> bool {
+    /// The directory a lone `mktemp` substitution creates its entry in, when
+    /// the substitution is one: its stdout is then a path the command has
+    /// already created under a random name. `Some(None)` means `mktemp` chose
+    /// the system temp directory. An argument carrying an expansion reads as
+    /// not a temp path at all, because the expansion could be `-u`.
+    fn makes_temp_path(&self, node: Node<'t>, scope: &Scope) -> Option<Option<String>> {
         let children = ts::named_children(node);
         let [command] = children.as_slice() else {
-            return false;
+            return None;
         };
         if command.kind() != "command" {
-            return false;
+            return None;
         }
-        let mut words = ts::named_children(*command)
+        let words: Vec<&str> = ts::named_children(*command)
             .into_iter()
             .filter(|n| n.kind() != "variable_assignment")
-            .map(|n| ts::text(n, self.source));
-        words.next().map(normalize::basename) == Some("mktemp")
-            && words.all(|w| !w.contains('$') && !is_dry_run(w))
+            .map(|n| ts::text(n, self.source))
+            .collect();
+        let (program, args) = words.split_first()?;
+        if normalize::basename(program) != "mktemp"
+            || args.iter().any(|a| a.contains('$') || is_dry_run(a))
+        {
+            return None;
+        }
+        let mut named = None;
+        let mut i = 0;
+        while let Some(arg) = args.get(i) {
+            if let Some(dir) = arg.strip_prefix("--tmpdir=") {
+                named = Some(dir);
+            } else if *arg == "-p" {
+                named = args.get(i + 1).copied();
+                i += 1;
+            } else if !arg.starts_with('-') {
+                named = Some(paths::parent(arg).unwrap_or("."));
+            }
+            i += 1;
+        }
+        let Some(dir) = named else {
+            return Some(None);
+        };
+        match paths::resolve(
+            &Value::Known(dir.to_string()),
+            scope.cwd.as_deref(),
+            self.a.ctx.path_style,
+        ) {
+            crate::model::Target::Path(dir) => Some(Some(dir)),
+            _ => None,
+        }
     }
 
     fn lookup(&self, name: &str, scope: &Scope) -> Value {
@@ -806,7 +839,7 @@ mod shapes {
 #[cfg(test)]
 mod tests {
     use crate::{
-        model::{FileOp, UncertaintyKind, Value},
+        model::{FileOp, Target, UncertaintyKind, Value},
         testutil::{bash, programs, targets},
     };
 
@@ -846,14 +879,38 @@ mod tests {
     }
 
     #[test]
-    fn an_mktemp_path_is_ephemeral_and_a_dry_run_name_is_not() {
+    fn an_mktemp_path_is_ephemeral_only_as_the_whole_word() {
         assert_eq!(targets(&bash("T=$(mktemp); echo x > \"$T\"")), [
             "<ephemeral>"
         ]);
+        assert_eq!(targets(&bash("T=$(mktemp); echo x > $T")), ["<ephemeral>"]);
+        // A `mktemp` that failed leaves `$D` empty, which would make the rest
+        // of the word an absolute path of its own.
         assert_eq!(targets(&bash("D=$(mktemp -d); echo x > \"$D/out.txt\"")), [
-            "<ephemeral>"
+            "?"
         ]);
         assert_eq!(targets(&bash("T=$(mktemp -u); echo x > \"$T\"")), ["?"]);
+    }
+
+    #[test]
+    fn an_mktemp_template_names_the_directory_the_entry_is_made_in() {
+        let dir = |source| match &bash(source).file_effects[0].target {
+            Target::Ephemeral { dir } => dir.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(dir("T=$(mktemp); echo x > \"$T\""), None);
+        assert_eq!(
+            dir("T=$(mktemp ./fresh.XXXX); echo x > \"$T\""),
+            Some("/repo".to_string())
+        );
+        assert_eq!(
+            dir("T=$(mktemp -p sub); echo x > \"$T\""),
+            Some("/repo/sub".to_string())
+        );
+        assert_eq!(
+            dir("T=$(mktemp --tmpdir=/var/tmp); echo x > \"$T\""),
+            Some("/var/tmp".to_string())
+        );
     }
 
     #[test]

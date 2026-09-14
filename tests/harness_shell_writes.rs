@@ -223,6 +223,108 @@ fn an_unresolved_write_blocks_by_default_and_warns_when_configured() {
     );
 }
 
+/// A `..` component, or an absolute later argument, carries a temp-derived
+/// path back out of the directory that made it uncontendable.
+#[test]
+fn a_temp_path_that_leaves_its_fresh_directory_is_not_exempt() {
+    let e = env(WRITES);
+    acquire(&e, "B", "victim.txt");
+    let outside = e.project.path().join("victim.txt");
+    let outside = outside.to_string_lossy();
+    let cases = [
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(dir='.'); \
+             open(os.path.join(d, '../victim.txt'), 'w').write('x')\""
+            .to_string(),
+        format!(
+            "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); \
+             open(os.path.join(d, '{outside}'), 'w').write('x')\""
+        ),
+        "python3 -c \"import tempfile, pathlib; d = tempfile.mkdtemp(); \
+             pathlib.Path(d, '../victim.txt').write_text('x')\""
+            .to_string(),
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+             const d = fs.mkdtempSync('./fresh-'); \
+             fs.writeFileSync(path.join(d, '../victim.txt'), 'x')\""
+            .to_string(),
+        "D=$(mktemp -d ./fresh.XXXXXX); echo x > \"$D/../victim.txt\"".to_string(),
+    ];
+    for c in &cases {
+        assert!(denial(&hook(&e, Some("S1"), c)).is_some(), "allowed: {c}");
+    }
+}
+
+/// An unknown suffix cannot show that the destination stayed inside the fresh
+/// directory, so it does not inherit the exemption.
+#[test]
+fn an_unknown_component_does_not_keep_a_temp_path_exempt() {
+    let e = env(WRITES);
+    let cases = [
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); \
+         open(os.path.join(d, os.environ['REL']), 'w').write('x')\"",
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(dir=os.environ['X']); \
+         open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+    ];
+    for c in cases {
+        assert!(denial(&hook(&e, Some("S1"), c)).is_some(), "allowed: {c}");
+    }
+}
+
+/// A fresh random name cannot be held by anyone, but the directory it is made
+/// in can be, and that claim covers everything born under it.
+#[test]
+fn a_fresh_entry_under_a_held_directory_is_denied() {
+    let e = env(WRITES);
+    acquire(&e, "B", ".");
+    let cases = [
+        "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(dir='.'); f.write(b'x')\"",
+        "T=$(mktemp -p .); echo x > \"$T\"",
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(dir='.'); \
+         open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("locked by another agent"), "{reason}");
+    }
+}
+
+/// `mktemp` failure leaves the variable empty, which turns the rest of the
+/// word into an absolute path nobody claimed on this session's behalf.
+#[test]
+fn a_failed_mktemp_substitution_does_not_launder_the_suffix() {
+    let e = env(WRITES);
+    acquire(&e, "B", "victim.txt");
+    let victim = e.project.path().join("victim.txt");
+    let c = format!(
+        "D=$(mktemp -d /missing-parent/XXXXXX); echo x > \"$D{}\"",
+        victim.to_string_lossy()
+    );
+    assert!(denial(&hook(&e, Some("S1"), &c)).is_some(), "allowed: {c}");
+}
+
+/// The exemption this feature exists for: a destination that provably stays
+/// inside a directory created fresh under a random name.
+#[test]
+fn a_write_that_stays_inside_a_fresh_directory_is_allowed() {
+    let e = env(WRITES);
+    acquire(&e, "B", "victim.txt");
+    let cases = [
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); \
+         open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+        "python3 -c \"import tempfile, pathlib; d = tempfile.mkdtemp(); \
+         pathlib.Path(d, 'sub', 'out.txt').write_text('x')\"",
+        "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(); f.write(b'x')\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('/tmp/fresh-'); \
+         fs.writeFileSync(path.join(d, 'out.txt'), 'x')\"",
+        "T=$(mktemp); echo x > \"$T\"",
+    ];
+    for c in cases {
+        let out = hook(&e, Some("S1"), c);
+        assert!(denial(&out).is_none(), "denied: {c}");
+    }
+    assert_eq!(rows(&e), [("victim.txt".to_string(), "B".to_string())]);
+}
+
 #[test]
 fn a_root_claim_does_not_unblock_an_unresolved_write() {
     let e = env(WRITES);

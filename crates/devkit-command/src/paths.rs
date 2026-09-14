@@ -41,8 +41,8 @@ pub(crate) fn join(base: &str, rel: &str, style: PathStyle) -> String {
 }
 
 pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Target {
-    if matches!(value, Value::Ephemeral) {
-        return Target::Ephemeral;
+    if let Value::Ephemeral(dir) = value {
+        return Target::Ephemeral { dir: dir.clone() };
     }
     let Some(p) = value.known() else {
         return Target::Unresolved;
@@ -62,6 +62,32 @@ pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Tar
         Some(dir) => Target::Path(join(dir, p, style)),
         None => Target::Unresolved,
     }
+}
+
+/// Whether appending `parts` to a directory lands inside it. A component that
+/// walks up, or one that restarts from the filesystem root, reaches paths the
+/// directory never contained, and in Python's `join` an absolute component
+/// discards everything before it outright.
+pub(crate) fn stays_within(parts: &[&str], style: PathStyle) -> bool {
+    let mut depth = 0i32;
+    for part in parts {
+        if is_absolute(part, style) {
+            return false;
+        }
+        for segment in part.split(['/', '\\']) {
+            match segment {
+                "" | "." => {}
+                ".." => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return false;
+                    }
+                }
+                _ => depth += 1,
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn parent(p: &str) -> Option<&str> {
@@ -140,6 +166,19 @@ mod tests {
             resolve(&k("/c/repo/a.txt"), None, PathStyle::Windows),
             Target::Path("C:/repo/a.txt".into())
         );
+    }
+
+    #[test]
+    fn containment_rejects_climbing_out_and_restarting_at_the_root() {
+        let u = PathStyle::Unix;
+        assert!(stays_within(&["out.txt"], u));
+        assert!(stays_within(&["sub", "out.txt"], u));
+        assert!(stays_within(&["sub/./deep/../out.txt"], u));
+        assert!(!stays_within(&["../victim.txt"], u));
+        assert!(!stays_within(&["sub/../../victim.txt"], u));
+        assert!(!stays_within(&["/repo/victim.txt"], u));
+        assert!(!stays_within(&["out.txt", "/repo/victim.txt"], u));
+        assert!(!stays_within(&[r"C:\repo\victim.txt"], PathStyle::Windows));
     }
 
     #[test]

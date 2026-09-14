@@ -67,9 +67,10 @@ const WRITE_METHOD_NAMES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq)]
 enum Js {
     Str(String),
-    /// A directory `fs.mkdtemp` created fresh under a random name.
-    /// Uncontendable, so a write under it is recorded without a claim.
-    Ephemeral,
+    /// A directory `fs.mkdtemp` created fresh under a random name, carrying the
+    /// directory it was made in. The name needs no claim of its own, but that
+    /// directory can be held by someone.
+    Ephemeral(Option<String>),
     Num(i64),
     Array(Vec<Js>),
     Api(String),
@@ -86,17 +87,27 @@ impl Js {
     fn as_value(&self) -> Value {
         match self {
             Self::Str(s) => Value::Known(s.clone()),
-            _ => Value::Unknown,
+            _ => match self.ephemeral() {
+                Some(dir) => Value::Ephemeral(dir),
+                None => Value::Unknown,
+            },
+        }
+    }
+
+    /// The directory a freshly created temp path was made in, when this value
+    /// is one. The outer `Option` says whether it is a temp path at all, the
+    /// inner one whether the call named a directory for it.
+    fn ephemeral(&self) -> Option<Option<String>> {
+        match self {
+            Self::Ephemeral(dir) => Some(dir.clone()),
+            Self::Method(object, _) => object.ephemeral(),
+            _ => None,
         }
     }
 
     /// Whether this value is, or was derived from, a freshly created temp path.
     fn is_ephemeral(&self) -> bool {
-        match self {
-            Self::Ephemeral => true,
-            Self::Method(object, _) => object.is_ephemeral(),
-            _ => false,
-        }
+        self.ephemeral().is_some()
     }
 }
 #[derive(Debug, Clone, Default)]
@@ -153,18 +164,36 @@ impl<'t> Walker<'_, '_, '_, 't> {
     }
 
     fn js_effect(&mut self, op: FileOp, target: &Js, cwd: Option<&str>, at: Location) {
-        if target.is_ephemeral() {
-            self.a.ephemeral_effect(op, at);
-            return;
-        }
         self.a.file_effect(op, &target.as_value(), cwd, at);
     }
 
     fn js_tree(&mut self, scope: &Js, whole: bool, cwd: Option<&str>, by: &str, at: Location) {
-        if scope.is_ephemeral() {
-            return;
-        }
         self.a.tree_effect(&scope.as_value(), whole, cwd, by, at);
+    }
+
+    /// A join whose first argument is a freshly created temp path. It keeps the
+    /// exemption only while every later argument is known and lands inside that
+    /// directory: an unknown one cannot show containment, and a temp path
+    /// anywhere but first is not the thing being extended.
+    fn temp_join(&self, args: &[(Js, Node<'t>)]) -> Js {
+        let Some(dir) = args.first().and_then(|(v, _)| v.ephemeral()) else {
+            return Js::Unknown;
+        };
+        let Some(rest) = args[1..]
+            .iter()
+            .map(|(v, _)| match v {
+                Js::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect::<Option<Vec<&str>>>()
+        else {
+            return Js::Unknown;
+        };
+        if paths::stays_within(&rest, self.a.ctx.path_style) {
+            Js::Ephemeral(dir)
+        } else {
+            Js::Unknown
+        }
     }
 
     fn known(&mut self, node: Node<'_>, value: String) -> Js {
@@ -460,7 +489,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             Js::Unknown
                         }
                         Value::Unknown => Js::Unknown,
-                        Value::Ephemeral => Js::Ephemeral,
+                        Value::Ephemeral(dir) => Js::Ephemeral(dir.clone()),
                     }),
                 (Js::Array(items), Js::Num(i)) => usize::try_from(i)
                     .ok()
@@ -565,11 +594,26 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 self.unresolved(node, "dynamically evaluated script source");
                 Js::Unknown
             }
-            (Some("fs.mkdtemp" | "fs.mkdtempSync"), _) => Js::Ephemeral,
+            // The argument is a path prefix, not a directory: the fresh name
+            // is appended to it, so the directory is its parent.
+            (Some("fs.mkdtemp" | "fs.mkdtempSync"), _) => match arg(0) {
+                Js::Str(prefix) => {
+                    let parent = paths::parent(&prefix).unwrap_or(".").to_string();
+                    match paths::resolve(
+                        &Value::Known(parent),
+                        cwd.as_deref(),
+                        self.a.ctx.path_style,
+                    ) {
+                        crate::Target::Path(dir) => Js::Ephemeral(Some(dir)),
+                        _ => Js::Unknown,
+                    }
+                }
+                _ => Js::Unknown,
+            },
             (Some("path.join" | "path.posix.join"), _)
                 if args.iter().any(|(v, _)| v.is_ephemeral()) =>
             {
-                Js::Ephemeral
+                self.temp_join(&args)
             }
             (Some("path.join" | "path.posix.join"), _) => args
                 .iter()
@@ -631,7 +675,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             self.value_limit(node);
                             None
                         }
-                        crate::Target::Unresolved | crate::Target::Ephemeral => None,
+                        crate::Target::Unresolved | crate::Target::Ephemeral { .. } => None,
                     },
                     _ => None,
                 };

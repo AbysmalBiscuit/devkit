@@ -12,17 +12,17 @@ pub struct Location {
 pub enum Value {
     Known(String),
     Unknown,
-    /// A path an API created fresh under a random name, atomically. Resolves to
-    /// [`Target::Ephemeral`]; see its documentation for why that is not
-    /// [`Value::Unknown`].
-    Ephemeral,
+    /// A path an API created fresh under a random name, atomically, carrying
+    /// the directory it was created in. Resolves to [`Target::Ephemeral`]; see
+    /// its documentation for why that is not [`Value::Unknown`].
+    Ephemeral(Option<String>),
 }
 
 impl Value {
     pub fn known(&self) -> Option<&str> {
         match self {
             Value::Known(s) => Some(s),
-            Value::Unknown | Value::Ephemeral => None,
+            Value::Unknown | Value::Ephemeral(_) => None,
         }
     }
 }
@@ -65,11 +65,19 @@ pub enum Target {
     Path(String),
     Unresolved,
     /// A path an API created fresh under a random name, atomically: a
-    /// `tempfile` entry, `mktemp`, `fs.mkdtemp`. No other session can already
-    /// hold it and none can independently produce it, so it is uncontendable
-    /// and needs no claim. Distinct from `Unresolved`, whose path is merely
-    /// unknown and may well be shared.
-    Ephemeral,
+    /// `tempfile` entry, `mktemp`, `fs.mkdtemp`. No other session already holds
+    /// that name and none can independently produce it, so it needs no claim of
+    /// its own. Distinct from `Unresolved`, whose path is merely unknown and
+    /// may well be shared.
+    ///
+    /// `dir` is the directory the caller asked for it to be created in, when
+    /// there was one. A fresh name proves nothing about that directory. A claim
+    /// on it, or on one of its ancestors, covers every path born under it, so
+    /// `dir` is still checked for conflicts. `None` means the API chose the
+    /// system temp directory, which no project claim reaches.
+    Ephemeral {
+        dir: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -166,13 +166,35 @@ const WRITE_METHODS: &[&str] = &[
     "save",
 ];
 
+/// The directory a `tempfile` entry is created in. `Some(None)` when the call
+/// named none and the system temp directory is used, which no project claim
+/// reaches. `None` when it named one that could not be resolved, leaving
+/// nothing to check a claim against.
+fn temp_dir(
+    named: Option<&Py>,
+    cwd: Option<&str>,
+    style: crate::context::PathStyle,
+) -> Option<Option<String>> {
+    match named {
+        None => Some(None),
+        Some(Py::Str(s) | Py::Path(s)) => {
+            match paths::resolve(&Value::Known(s.clone()), cwd, style) {
+                crate::model::Target::Path(dir) => Some(Some(dir)),
+                _ => None,
+            }
+        }
+        Some(_) => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Py {
     Str(String),
     Path(String),
-    /// A path `tempfile` created fresh under a random name. Uncontendable, so a
-    /// write to it is recorded without a claim.
-    Ephemeral,
+    /// A path `tempfile` created fresh under a random name, carrying the
+    /// directory it was made in. The name needs no claim of its own, but that
+    /// directory can be held by someone.
+    Ephemeral(Option<String>),
     Int(i64),
     Bool(bool),
     List(Vec<Py>),
@@ -193,18 +215,28 @@ impl Py {
     fn as_value(&self) -> Value {
         match self {
             Py::Str(s) | Py::Path(s) => Value::Known(s.clone()),
-            _ => Value::Unknown,
+            _ => match self.ephemeral() {
+                Some(dir) => Value::Ephemeral(dir),
+                None => Value::Unknown,
+            },
+        }
+    }
+
+    /// The directory a freshly created temp path was made in, when this value
+    /// is one. The outer `Option` says whether it is a temp path at all, the
+    /// inner one whether the call named a directory for it.
+    fn ephemeral(&self) -> Option<Option<String>> {
+        match self {
+            Py::Ephemeral(dir) => Some(dir.clone()),
+            Py::WriteHandle { target, .. } => target.ephemeral(),
+            Py::Method(object, _) => object.ephemeral(),
+            _ => None,
         }
     }
 
     /// Whether this value is, or was derived from, a freshly created temp path.
     fn is_ephemeral(&self) -> bool {
-        match self {
-            Py::Ephemeral => true,
-            Py::WriteHandle { target, .. } => target.is_ephemeral(),
-            Py::Method(object, _) => object.is_ephemeral(),
-            _ => false,
-        }
+        self.ephemeral().is_some()
     }
 
     fn truthiness(&self) -> Option<bool> {
@@ -332,7 +364,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 self.value_limit(node);
                 None
             }
-            crate::model::Target::Unresolved | crate::model::Target::Ephemeral => None,
+            crate::model::Target::Unresolved | crate::model::Target::Ephemeral { .. } => None,
         }
     }
 
@@ -867,18 +899,42 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     keywords.contains_key("mode") || positional.len() > 1,
                     cwd.as_deref(),
                 ),
-                "tempfile.mkdtemp" | "tempfile.TemporaryDirectory" => Py::Ephemeral,
-                "tempfile.NamedTemporaryFile" | "tempfile.TemporaryFile" => Py::WriteHandle {
-                    target: Box::new(Py::Ephemeral),
-                    write_op: Some(FileOp::Overwrite),
-                },
-                "tempfile.mkstemp" => Py::List(vec![Py::Unknown, Py::Ephemeral]),
+                "tempfile.mkdtemp" | "tempfile.TemporaryDirectory" | "tempfile.mkstemp" => {
+                    let named = keywords
+                        .get("dir")
+                        .map(|(v, _)| v)
+                        .or_else(|| positional.get(2));
+                    match temp_dir(named, cwd.as_deref(), self.a.ctx.path_style) {
+                        Some(dir) if api == "tempfile.mkstemp" => {
+                            Py::List(vec![Py::Unknown, Py::Ephemeral(dir)])
+                        }
+                        Some(dir) => Py::Ephemeral(dir),
+                        None => Py::Unknown,
+                    }
+                }
+                "tempfile.NamedTemporaryFile" | "tempfile.TemporaryFile" => {
+                    // `dir` is the seventh parameter of both, so a call passing
+                    // that many positionally is one this cannot read.
+                    let named = keywords.get("dir").map(|(v, _)| v);
+                    let dir = if positional.len() > 4 {
+                        None
+                    } else {
+                        temp_dir(named, cwd.as_deref(), self.a.ctx.path_style)
+                    };
+                    match dir {
+                        Some(dir) => Py::WriteHandle {
+                            target: Box::new(Py::Ephemeral(dir)),
+                            write_op: Some(FileOp::Overwrite),
+                        },
+                        None => Py::Unknown,
+                    }
+                }
                 "pathlib.Path"
                 | "pathlib.PurePath"
                 | "pathlib.PosixPath"
                 | "pathlib.WindowsPath" => {
-                    if positional.iter().any(Py::is_ephemeral) {
-                        return Py::Ephemeral;
+                    if let Some(joined) = self.temp_join(&positional) {
+                        return joined;
                     }
                     let mut out = None;
                     for part in &positional {
@@ -894,8 +950,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .map(|cwd| self.known(node, cwd, true))
                     .unwrap_or(Py::Unknown),
                 "os.path.join" => {
-                    if positional.iter().any(Py::is_ephemeral) {
-                        return Py::Ephemeral;
+                    if let Some(joined) = self.temp_join(&positional) {
+                        return joined;
                     }
                     let parts: Option<Vec<String>> = positional
                         .iter()
@@ -950,9 +1006,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                                 self.value_limit(node);
                                 None
                             }
-                            crate::model::Target::Unresolved | crate::model::Target::Ephemeral => {
-                                None
-                            }
+                            crate::model::Target::Unresolved
+                            | crate::model::Target::Ephemeral { .. } => None,
                         },
                         _ => None,
                     };
@@ -1087,7 +1142,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             Py::Str(_)
             | Py::Path(_)
-            | Py::Ephemeral
+            | Py::Ephemeral(_)
             | Py::Int(_)
             | Py::Bool(_)
             | Py::List(_)
@@ -1268,19 +1323,41 @@ impl<'t> Walker<'_, '_, '_, 't> {
         Py::Data
     }
 
-    fn file_effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, cwd: Option<&str>) {
-        if target.is_ephemeral() {
-            self.a.ephemeral_effect(op, self.at(node));
-            return;
+    /// A join whose first component is a freshly created temp path. `None` when
+    /// there is no temp path to bound. It keeps the exemption only while every
+    /// later component is known and lands inside that directory: an unknown one
+    /// cannot show containment, and a temp path anywhere but first is not the
+    /// thing being extended.
+    fn temp_join(&self, parts: &[Py]) -> Option<Py> {
+        if !parts.iter().any(Py::is_ephemeral) {
+            return None;
         }
+        let Some(dir) = parts.first().and_then(Py::ephemeral) else {
+            return Some(Py::Unknown);
+        };
+        let Some(rest) = parts[1..]
+            .iter()
+            .map(|p| match p {
+                Py::Str(s) | Py::Path(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect::<Option<Vec<&str>>>()
+        else {
+            return Some(Py::Unknown);
+        };
+        Some(if paths::stays_within(&rest, self.a.ctx.path_style) {
+            Py::Ephemeral(dir)
+        } else {
+            Py::Unknown
+        })
+    }
+
+    fn file_effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, cwd: Option<&str>) {
         let value = self.bounded_resolved(node, target.as_value(), cwd);
         self.a.file_effect(op, &value, cwd, self.at(node));
     }
 
     fn tree(&mut self, node: Node<'t>, scope_path: &Py, by: &str, scope: &Scope) -> Py {
-        if scope_path.is_ephemeral() {
-            return Py::Data;
-        }
         let value = self.bounded_resolved(node, scope_path.as_value(), scope.cwd.as_deref());
         self.a
             .tree_effect(&value, false, scope.cwd.as_deref(), by, self.at(node));

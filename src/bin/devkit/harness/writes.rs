@@ -73,8 +73,17 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
             ),
             // A path an API created fresh under a random name is uncontendable:
             // no other session holds it, and none can produce it. Claiming it
-            // would write a row nobody could ever conflict with.
-            Target::Ephemeral => {}
+            // would write a row nobody could ever conflict with. The directory
+            // it was created in is another matter, since a claim there covers
+            // every path born under it, so that is checked like any other scope.
+            Target::Ephemeral { dir } => {
+                if let Some(dir) = dir {
+                    let scope = (dir.clone(), false);
+                    if !e.scopes.contains(&scope) {
+                        e.scopes.push(scope);
+                    }
+                }
+            }
         }
     }
     for tree in &analysis.tree_effects {
@@ -108,7 +117,7 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     for script in &analysis.script_files {
         let name = match &script.script {
             Value::Known(s) => format!("`{s}`"),
-            Value::Unknown | Value::Ephemeral => "a script".to_string(),
+            Value::Unknown | Value::Ephemeral(_) => "a script".to_string(),
         };
         e.apply(
             policy.script_files,
@@ -277,13 +286,27 @@ mod tests {
 
     #[test]
     fn an_mktemp_write_claims_nothing_and_blocks_nothing() {
-        let e = eval(
-            "D=$(mktemp -d); echo x > \"$D/out.txt\"",
-            HarnessPolicy::default(),
-        );
+        let e = eval("T=$(mktemp); echo x > \"$T\"", HarnessPolicy::default());
         assert!(e.claims.is_empty(), "{:?}", e.claims);
         assert!(e.blocks.is_empty(), "{:?}", e.blocks);
         assert!(e.warnings.is_empty(), "{:?}", e.warnings);
+        assert!(e.scopes.is_empty(), "{:?}", e.scopes);
+    }
+
+    #[test]
+    fn a_named_temp_directory_is_checked_for_a_covering_claim() {
+        let e = eval(
+            "T=$(mktemp -p sub); echo x > \"$T\"",
+            HarnessPolicy::default(),
+        );
+        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert_eq!(e.scopes, [("/repo/sub".to_string(), false)]);
+
+        let e = eval(
+            "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(dir='.'); f.write(b'x')\"",
+            HarnessPolicy::default(),
+        );
+        assert_eq!(e.scopes, [("/repo".to_string(), false)]);
     }
 
     #[test]
