@@ -100,7 +100,9 @@ impl Js {
     fn ephemeral(&self) -> Option<Option<String>> {
         match self {
             Self::Ephemeral(dir) => Some(dir.clone()),
-            Self::Method(object, _) => object.ephemeral(),
+            // A member that renders the directory keeps naming it. Anything
+            // else reads somewhere the fresh name never covered.
+            Self::Method(object, member) if member == "toString" => object.ephemeral(),
             _ => None,
         }
     }
@@ -598,7 +600,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             // is appended to it, so the directory is its parent.
             (Some("fs.mkdtemp" | "fs.mkdtempSync"), _) => match arg(0) {
                 Js::Str(prefix) => {
-                    let parent = paths::parent(&prefix).unwrap_or(".").to_string();
+                    let parent = paths::parent_dir(&prefix, self.a.ctx.path_style);
                     match paths::resolve(
                         &Value::Known(parent),
                         cwd.as_deref(),

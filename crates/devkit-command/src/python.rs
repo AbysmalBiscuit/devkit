@@ -229,7 +229,10 @@ impl Py {
         match self {
             Py::Ephemeral(dir) => Some(dir.clone()),
             Py::WriteHandle { target, .. } => target.ephemeral(),
-            Py::Method(object, _) => object.ephemeral(),
+            // `TemporaryDirectory().name` is the directory itself. Every other
+            // member reads somewhere else: `.parent` is the directory it was
+            // created in, which is exactly what a fresh name does not cover.
+            Py::Method(object, member) if member == "name" => object.ephemeral(),
             _ => None,
         }
     }
@@ -1271,6 +1274,41 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     format!("a call into `{module}`, which devkit does not model"),
                 );
                 Py::Unknown
+            }
+            receiver if receiver.is_ephemeral() => {
+                let this = receiver.clone();
+                match method {
+                    "write_text" | "write_bytes" => {
+                        self.effect(node, FileOp::Overwrite, &this, scope)
+                    }
+                    "touch" | "symlink_to" | "hardlink_to" | "mkdir" => {
+                        self.effect(node, FileOp::Create, &this, scope)
+                    }
+                    "unlink" | "rmdir" => self.effect(node, FileOp::Delete, &this, scope),
+                    "rename" | "replace" => {
+                        self.effect(node, FileOp::Rename, &this, scope);
+                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
+                        self.effect(node, FileOp::Rename, &dest, scope);
+                        dest
+                    }
+                    "open" => self.open(
+                        node,
+                        &this,
+                        &args
+                            .first()
+                            .cloned()
+                            .or_else(|| keywords.get("mode").map(|(value, _)| value.clone()))
+                            .unwrap_or(Py::Unknown),
+                        !args.is_empty() || keywords.contains_key("mode"),
+                        scope.cwd.as_deref(),
+                    ),
+                    "joinpath" => {
+                        let mut parts = vec![this];
+                        parts.extend(args.iter().cloned());
+                        self.temp_join(&parts).unwrap_or(Py::Unknown)
+                    }
+                    _ => Py::Unknown,
+                }
             }
             _ => Py::Unknown,
         }

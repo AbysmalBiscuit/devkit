@@ -22,6 +22,28 @@ pub(crate) fn is_absolute(p: &str, style: PathStyle) -> bool {
     }
 }
 
+/// What separates path components on the machine the command runs on. A
+/// backslash is an ordinary filename character under Unix, so counting it as a
+/// separator would read one directory name as two.
+fn separators(style: PathStyle) -> &'static [char] {
+    match style {
+        PathStyle::Unix => &['/'],
+        PathStyle::Windows => &['/', '\\'],
+    }
+}
+
+/// The directory part of a path, keeping a filesystem root as itself. `mktemp`
+/// and `fs.mkdtemp` append to a prefix rather than to a directory, so `/fresh-`
+/// is made in `/`, not in the working directory.
+pub(crate) fn parent_dir(p: &str, style: PathStyle) -> String {
+    match p.rfind(separators(style)) {
+        None => ".".to_string(),
+        Some(0) => p[..1].to_string(),
+        Some(2) if style == PathStyle::Windows && has_drive_prefix(p) => format!("{}/", &p[..2]),
+        Some(i) => p[..i].to_string(),
+    }
+}
+
 fn has_drive_prefix(p: &str) -> bool {
     let b = p.as_bytes();
     b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
@@ -81,7 +103,7 @@ pub(crate) fn stays_within(parts: &[&str], style: PathStyle) -> bool {
         if is_absolute(part, style) || (style == PathStyle::Windows && has_drive_prefix(part)) {
             return false;
         }
-        for segment in part.split(['/', '\\']) {
+        for segment in part.split(separators(style)) {
             match segment {
                 "" | "." => {}
                 ".." => {
@@ -194,6 +216,18 @@ mod tests {
         ));
         // A colon is an ordinary filename character off Windows.
         assert!(stays_within(&["C:victim.txt"], PathStyle::Unix));
+        // So is a backslash, which makes `a\\b` one directory name, not two.
+        assert!(!stays_within(&[r"a\b/../../victim.txt"], PathStyle::Unix));
+        assert!(stays_within(&[r"a\b/../victim.txt"], PathStyle::Unix));
+    }
+
+    #[test]
+    fn a_prefix_directly_under_a_root_keeps_that_root_as_its_parent() {
+        assert_eq!(parent_dir("/fresh-", PathStyle::Unix), "/");
+        assert_eq!(parent_dir("fresh-", PathStyle::Unix), ".");
+        assert_eq!(parent_dir("/tmp/fresh-", PathStyle::Unix), "/tmp");
+        assert_eq!(parent_dir(r"C:\fresh-", PathStyle::Windows), "C:/");
+        assert_eq!(parent_dir(r"C:\tmp\fresh-", PathStyle::Windows), r"C:\tmp");
     }
 
     #[test]

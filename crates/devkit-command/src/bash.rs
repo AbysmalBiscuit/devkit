@@ -723,6 +723,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             return None;
         }
         let mut named = None;
+        let mut template = None;
         let mut i = 0;
         while let Some(arg) = args.get(i) {
             if let Some(dir) = arg.strip_prefix("--tmpdir=") {
@@ -731,15 +732,19 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 named = args.get(i + 1).copied();
                 i += 1;
             } else if !arg.starts_with('-') {
-                named = Some(paths::parent(arg).unwrap_or("."));
+                template = Some(*arg);
             }
             i += 1;
         }
-        let Some(dir) = named else {
-            return Some(None);
+        // A template is a path prefix the random characters are appended to,
+        // so the entry is made in its parent, and it wins over `-p`.
+        let dir = match (template, named) {
+            (Some(t), _) => paths::parent_dir(t, self.a.ctx.path_style),
+            (None, Some(d)) => d.to_string(),
+            (None, None) => return Some(None),
         };
         match paths::resolve(
-            &Value::Known(dir.to_string()),
+            &Value::Known(dir),
             scope.cwd.as_deref(),
             self.a.ctx.path_style,
         ) {

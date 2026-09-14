@@ -247,6 +247,15 @@ fn a_temp_path_that_leaves_its_fresh_directory_is_not_exempt() {
              fs.writeFileSync(path.join(d, '../victim.txt'), 'x')\""
             .to_string(),
         "D=$(mktemp -d ./fresh.XXXXXX); echo x > \"$D/../victim.txt\"".to_string(),
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).rename('victim.txt')\""
+            .to_string(),
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).joinpath('../victim.txt').write_text('x')\""
+            .to_string(),
+        "python3 -c \"import tempfile, pathlib; \
+         (pathlib.Path(tempfile.mkdtemp(dir='.')).parent / 'victim.txt').write_text('x')\""
+            .to_string(),
     ];
     for c in &cases {
         assert!(denial(&hook(&e, Some("S1"), c)).is_some(), "allowed: {c}");
@@ -280,6 +289,8 @@ fn a_fresh_entry_under_a_held_directory_is_denied() {
         "T=$(mktemp -p .); echo x > \"$T\"",
         "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(dir='.'); \
          open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).write_text('x')\"",
     ];
     for c in cases {
         let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
@@ -317,6 +328,8 @@ fn a_write_that_stays_inside_a_fresh_directory_is_allowed() {
          const d = fs.mkdtempSync('/tmp/fresh-'); \
          fs.writeFileSync(path.join(d, 'out.txt'), 'x')\"",
         "T=$(mktemp); echo x > \"$T\"",
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).joinpath('sub', 'out.txt').write_text('x')\"",
     ];
     for c in cases {
         let out = hook(&e, Some("S1"), c);
