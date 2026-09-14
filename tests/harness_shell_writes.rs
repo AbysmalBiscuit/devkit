@@ -429,6 +429,28 @@ fn an_open_on_an_undetermined_path_reports_the_write() {
     assert_eq!(denial(&hook(&e, Some("S1"), read)), None);
 }
 
+/// A receiver whose filesystem behaviour could not be established may still be
+/// a path, so `open` on it reads its mode like any other.
+#[test]
+fn an_open_on_an_undetermined_receiver_reports_the_write() {
+    let e = env(WRITES);
+    let cases = [
+        "python3 -c \"import pathlib; \
+         pathlib.Path('safe.txt').with_stem('victim').open('w').write('x')\"",
+        "python3 -c \"import pathlib, tempfile; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).joinpath('out.txt', 'child') \
+         .parent.open('w').write('x')\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("could not be determined"), "{reason}");
+    }
+
+    let read = "python3 -c \"import pathlib; \
+                pathlib.Path('safe.txt').with_stem('notes').open().read()\"";
+    assert_eq!(denial(&hook(&e, Some("S1"), read)), None);
+}
+
 /// A quoted `mktemp` argument names the same directory the shell would use.
 #[test]
 fn a_quoted_mktemp_directory_is_read_without_its_quotes() {

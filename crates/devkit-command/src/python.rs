@@ -1267,12 +1267,6 @@ impl<'t> Walker<'_, '_, '_, 't> {
             },
             // `str.replace` takes the old and new text; `Path.replace` takes one target.
             Py::Unknown if method == "replace" && args.len() >= 2 => Py::Unknown,
-            // A path this could not determine is still opened for writing
-            // when the mode says so, and a read mode still writes nothing.
-            Py::Unknown if method == "open" => {
-                let (mode, given) = open_mode(args, keywords);
-                self.open(node, &Py::Unknown, &mode, given, scope.cwd.as_deref())
-            }
             Py::Unknown if WRITE_METHODS.contains(&method) => {
                 self.unresolved(
                     node,
@@ -1301,6 +1295,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     }
                     _ => Py::Unknown,
                 }
+            }
+            // Nothing established that this receiver is not a path, and
+            // `open` on a path writes when its mode says so. A read mode still
+            // writes nothing.
+            _ if method == "open" => {
+                let (mode, given) = open_mode(args, keywords);
+                self.open(node, &Py::Unknown, &mode, given, scope.cwd.as_deref())
             }
             // Losing track of a receiver must not lose the write with it: a
             // method known to mutate a path still reports what it could not
