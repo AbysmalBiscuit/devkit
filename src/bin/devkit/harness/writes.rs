@@ -88,7 +88,7 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     for script in &analysis.script_files {
         let name = match &script.script {
             Value::Known(s) => format!("`{s}`"),
-            Value::Unknown => "a script".to_string(),
+            Value::Unknown | Value::Ephemeral => "a script".to_string(),
         };
         e.apply(
             policy.script_files,
@@ -248,6 +248,17 @@ mod tests {
     fn a_tempfile_write_claims_nothing_and_blocks_nothing() {
         let e = eval(
             "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+            HarnessPolicy::default(),
+        );
+        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert!(e.blocks.is_empty(), "{:?}", e.blocks);
+        assert!(e.warnings.is_empty(), "{:?}", e.warnings);
+    }
+
+    #[test]
+    fn an_mktemp_write_claims_nothing_and_blocks_nothing() {
+        let e = eval(
+            "D=$(mktemp -d); echo x > \"$D/out.txt\"",
             HarnessPolicy::default(),
         );
         assert!(e.claims.is_empty(), "{:?}", e.claims);

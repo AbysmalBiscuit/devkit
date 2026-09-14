@@ -945,7 +945,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     }
                     match self.lookup(&name, scope) {
                         Value::Known(v) => out.push_str(&v),
-                        Value::Unknown => return Value::Unknown,
+                        Value::Unknown | Value::Ephemeral => return Value::Unknown,
                     }
                 }
                 c => out.push(c),

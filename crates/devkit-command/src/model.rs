@@ -12,13 +12,17 @@ pub struct Location {
 pub enum Value {
     Known(String),
     Unknown,
+    /// A path an API created fresh under a random name, atomically. Resolves to
+    /// [`Target::Ephemeral`]; see its documentation for why that is not
+    /// [`Value::Unknown`].
+    Ephemeral,
 }
 
 impl Value {
     pub fn known(&self) -> Option<&str> {
         match self {
             Value::Known(s) => Some(s),
-            Value::Unknown => None,
+            Value::Unknown | Value::Ephemeral => None,
         }
     }
 }

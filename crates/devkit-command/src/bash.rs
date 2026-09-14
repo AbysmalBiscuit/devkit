@@ -413,7 +413,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 .map(|n| self.word(n, scope).value)
                 .map(|v| match v {
                     Value::Known(s) => Value::Known(format!("{s}\n")),
-                    Value::Unknown => Value::Unknown,
+                    Value::Unknown | Value::Ephemeral => Value::Unknown,
                 })
                 .unwrap_or(Value::Unknown);
             return Stdin::Source { value, span };
@@ -628,6 +628,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "string" => {
                 let mut out = String::new();
                 let mut known = true;
+                let mut ephemeral = false;
                 let mut last = node.start_byte() + 1;
                 for part in ts::named_children(node) {
                     out.push_str(&unescape_dquoted(&self.source[last..part.start_byte()]));
@@ -635,27 +636,34 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     match self.value(part, scope) {
                         Value::Known(s) => out.push_str(&s),
                         Value::Unknown => known = false,
+                        Value::Ephemeral => ephemeral = true,
                     }
                 }
                 out.push_str(&unescape_dquoted(
                     &self.source[last..node.end_byte().saturating_sub(1).max(last)],
                 ));
-                if known {
-                    Value::Known(out)
-                } else {
-                    Value::Unknown
+                match (ephemeral, known) {
+                    (true, _) => Value::Ephemeral,
+                    (false, true) => Value::Known(out),
+                    (false, false) => Value::Unknown,
                 }
             }
             "string_content" => Value::Known(unescape_dquoted(text)),
             "concatenation" => {
                 let mut out = String::new();
+                let mut ephemeral = false;
                 for part in ts::named_children(node) {
                     match self.value(part, scope) {
                         Value::Known(s) => out.push_str(&s),
                         Value::Unknown => return Value::Unknown,
+                        Value::Ephemeral => ephemeral = true,
                     }
                 }
-                Value::Known(out)
+                if ephemeral {
+                    Value::Ephemeral
+                } else {
+                    Value::Known(out)
+                }
             }
             "simple_expansion" => self.lookup(&text[1..], scope),
             "expansion" => {
@@ -667,7 +675,16 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     Value::Unknown
                 }
             }
-            "command_substitution" | "process_substitution" => {
+            "command_substitution" => {
+                let mut inner = scope.clone();
+                self.statements(node, &mut inner);
+                if self.makes_temp_path(node) {
+                    Value::Ephemeral
+                } else {
+                    Value::Unknown
+                }
+            }
+            "process_substitution" => {
                 let mut inner = scope.clone();
                 self.statements(node, &mut inner);
                 Value::Unknown
@@ -679,12 +696,37 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
+    /// Whether a substitution is a lone `mktemp`, whose stdout is a path the
+    /// command has already created under a random name. An argument carrying an
+    /// expansion reads as not one, because the expansion could be `-u`.
+    fn makes_temp_path(&self, node: Node<'t>) -> bool {
+        let children = ts::named_children(node);
+        let [command] = children.as_slice() else {
+            return false;
+        };
+        if command.kind() != "command" {
+            return false;
+        }
+        let mut words = ts::named_children(*command)
+            .into_iter()
+            .filter(|n| n.kind() != "variable_assignment")
+            .map(|n| ts::text(n, self.source));
+        words.next().map(normalize::basename) == Some("mktemp")
+            && words.all(|w| !w.contains('$') && !is_dry_run(w))
+    }
+
     fn lookup(&self, name: &str, scope: &Scope) -> Value {
         if let Ok(i) = name.parse::<usize>() {
             return scope.positional.get(i).cloned().unwrap_or(Value::Unknown);
         }
         scope.vars.get(name).cloned().unwrap_or(Value::Unknown)
     }
+}
+
+/// `mktemp -u` prints a name without creating anything, leaving the path free
+/// for another process to take.
+fn is_dry_run(arg: &str) -> bool {
+    arg == "--dry-run" || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('u'))
 }
 
 fn has_unescaped(text: &str, chars: &[char]) -> bool {
@@ -801,6 +843,17 @@ mod tests {
         assert_eq!(targets(&a), ["/repo/a.txt", "/repo/b.txt"]);
         assert_eq!(a.file_effects[0].op, FileOp::Overwrite);
         assert_eq!(a.file_effects[1].op, FileOp::Append);
+    }
+
+    #[test]
+    fn an_mktemp_path_is_ephemeral_and_a_dry_run_name_is_not() {
+        assert_eq!(targets(&bash("T=$(mktemp); echo x > \"$T\"")), [
+            "<ephemeral>"
+        ]);
+        assert_eq!(targets(&bash("D=$(mktemp -d); echo x > \"$D/out.txt\"")), [
+            "<ephemeral>"
+        ]);
+        assert_eq!(targets(&bash("T=$(mktemp -u); echo x > \"$T\"")), ["?"]);
     }
 
     #[test]

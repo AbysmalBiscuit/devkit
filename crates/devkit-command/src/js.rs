@@ -460,6 +460,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             Js::Unknown
                         }
                         Value::Unknown => Js::Unknown,
+                        Value::Ephemeral => Js::Ephemeral,
                     }),
                 (Js::Array(items), Js::Num(i)) => usize::try_from(i)
                     .ok()

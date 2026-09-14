@@ -337,7 +337,7 @@ impl<'t> Walker<'_, '_, '_> {
                     last = part.end_byte();
                     match self.value(part, scope) {
                         Value::Known(value) => out.push_str(&value),
-                        Value::Unknown => return Value::Unknown,
+                        Value::Unknown | Value::Ephemeral => return Value::Unknown,
                     }
                 }
                 out.push_str(&self.source[last..node.end_byte().saturating_sub(1).max(last)]);
@@ -357,7 +357,7 @@ impl<'t> Walker<'_, '_, '_> {
                 for part in ts::named_children(node) {
                     match self.value(part, scope) {
                         Value::Known(value) => out.push_str(&value),
-                        Value::Unknown => return Value::Unknown,
+                        Value::Unknown | Value::Ephemeral => return Value::Unknown,
                     }
                 }
                 Value::Known(out)

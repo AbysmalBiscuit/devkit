@@ -41,6 +41,9 @@ pub(crate) fn join(base: &str, rel: &str, style: PathStyle) -> String {
 }
 
 pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Target {
+    if matches!(value, Value::Ephemeral) {
+        return Target::Ephemeral;
+    }
     let Some(p) = value.known() else {
         return Target::Unresolved;
     };
