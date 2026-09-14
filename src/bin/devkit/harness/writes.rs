@@ -37,7 +37,22 @@ impl Evaluation {
     }
 }
 
-const UNRESOLVED_FIX: &str = "Rewrite the edit so each target is a literal path, or a variable assigned a literal earlier in the same command, or make it with a structured edit tool; those targets are claimed for you. For a dynamic write permitted by `[harness] unresolved_writes = \"warn\"`, claim the actual destinations yourself with `lockm acquire`, naming the paths or a directory known to contain them, and proceed only if the claim succeeds. A claim covers only the paths it names, and never resolves this finding or unblocks the command while the policy is `block`.";
+/// The correction, which differs by what the policy does with the finding: a
+/// blocked command has to be rewritten, a warned one runs and leaves the agent
+/// to claim what devkit could not name.
+fn unresolved_fix(action: PolicyAction) -> &'static str {
+    match action {
+        PolicyAction::Warn => {
+            "Claim the destinations with `lockm acquire` before writing, or name a literal path \
+             and they are claimed for you."
+        }
+        PolicyAction::Block | PolicyAction::Allow => {
+            "Name a literal path, or a variable assigned a literal earlier in the same command, \
+             or make the edit with a structured edit tool; those targets are claimed for you. \
+             `lockm acquire` does not lift this block."
+        }
+    }
+}
 
 pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     let mut e = Evaluation::default();
@@ -51,8 +66,9 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
             Target::Unresolved => e.apply(
                 policy.unresolved_writes,
                 format!(
-                    "{PREFIX} a {} target could not be determined. {UNRESOLVED_FIX}",
-                    op_name(effect.op)
+                    "{PREFIX} a {} target could not be determined. {}",
+                    op_name(effect.op),
+                    unresolved_fix(policy.unresolved_writes)
                 ),
             ),
             // A path an API created fresh under a random name is uncontendable:
@@ -74,7 +90,11 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
             | UncertaintyKind::LimitExhausted(_)
             | UncertaintyKind::UnresolvedInvocation => e.apply(
                 policy.unresolved_writes,
-                format!("{PREFIX} {}. {UNRESOLVED_FIX}", u.detail),
+                format!(
+                    "{PREFIX} {}. {}",
+                    u.detail,
+                    unresolved_fix(policy.unresolved_writes)
+                ),
             ),
             UncertaintyKind::UnsupportedLanguage(language) => e.apply(
                 policy.unsupported_language,
@@ -267,14 +287,21 @@ mod tests {
     }
 
     #[test]
-    fn a_blocking_diagnostic_names_a_correction() {
+    fn a_block_names_a_rewrite_and_a_warning_names_a_claim() {
         let e = eval("echo x > \"$OUT\"", HarnessPolicy::default());
-        assert!(e.blocks[0].contains("literal"), "{}", e.blocks[0]);
+        assert!(e.blocks[0].contains("literal path"), "{}", e.blocks[0]);
         assert!(
-            e.blocks[0].contains("never resolves this finding"),
+            e.blocks[0].contains("does not lift this block"),
             "{}",
             e.blocks[0]
         );
+
+        let warn = HarnessPolicy {
+            unresolved_writes: PolicyAction::Warn,
+            ..HarnessPolicy::default()
+        };
+        let e = eval("echo x > \"$OUT\"", warn);
+        assert!(e.warnings[0].contains("lockm acquire"), "{}", e.warnings[0]);
     }
 
     #[test]
