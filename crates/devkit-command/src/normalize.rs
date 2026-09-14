@@ -351,7 +351,9 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
                 };
                 cwd = match paths::resolve(&value, current_cwd.as_deref(), a.ctx.path_style) {
                     crate::model::Target::Path(dir) => CwdChange::To(dir),
-                    crate::model::Target::Unresolved => CwdChange::Unknown,
+                    crate::model::Target::Unresolved | crate::model::Target::Ephemeral { .. } => {
+                        CwdChange::Unknown
+                    }
                 };
                 current_cwd = cwd.apply(current_cwd.clone());
             } else if wrapper.value_flags.contains(&flag) && inline.is_none() {
@@ -364,7 +366,9 @@ pub(crate) fn unwrap(a: &mut Analyzer<'_>, raw: &RawInvocation, frame: &Frame) -
         {
             cwd = match paths::resolve(&dir.value, current_cwd.as_deref(), a.ctx.path_style) {
                 crate::model::Target::Path(path) => CwdChange::To(path),
-                crate::model::Target::Unresolved => CwdChange::Unknown,
+                crate::model::Target::Unresolved | crate::model::Target::Ephemeral { .. } => {
+                    CwdChange::Unknown
+                }
             };
             current_cwd = cwd.apply(current_cwd.clone());
         }
@@ -574,7 +578,9 @@ pub(crate) fn program_options(
             if matches!(flag, "-C" | "--work-tree") {
                 change = match paths::resolve(&value, current.as_deref(), style) {
                     crate::model::Target::Path(dir) => CwdChange::To(dir),
-                    crate::model::Target::Unresolved => CwdChange::Unknown,
+                    crate::model::Target::Unresolved | crate::model::Target::Ephemeral { .. } => {
+                        CwdChange::Unknown
+                    }
                 };
                 current = change.apply(current.clone());
             }

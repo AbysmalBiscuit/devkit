@@ -8,17 +8,40 @@ pub struct Location {
     pub embedded: Option<Range<usize>>,
 }
 
+/// Where an API created a fresh entry under a random name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TempLocation {
+    /// The directory the API picked for itself, which no project claim reaches.
+    SystemTemp,
+    /// A directory the caller named, resolved against the execution directory.
+    In(String),
+}
+
+impl TempLocation {
+    /// The directory the caller named, when it named one.
+    pub fn named(&self) -> Option<&str> {
+        match self {
+            TempLocation::SystemTemp => None,
+            TempLocation::In(dir) => Some(dir),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Known(String),
     Unknown,
+    /// A path an API created fresh under a random name, atomically, carrying
+    /// where it was created. Resolves to [`Target::Ephemeral`]; see its
+    /// documentation for why that is not [`Value::Unknown`].
+    Ephemeral(TempLocation),
 }
 
 impl Value {
     pub fn known(&self) -> Option<&str> {
         match self {
             Value::Known(s) => Some(s),
-            Value::Unknown => None,
+            Value::Unknown | Value::Ephemeral(_) => None,
         }
     }
 }
@@ -60,6 +83,19 @@ pub enum FileOp {
 pub enum Target {
     Path(String),
     Unresolved,
+    /// A path an API created fresh under a random name, atomically: a
+    /// `tempfile` entry, `mktemp`, `fs.mkdtemp`. No other session already holds
+    /// that name and none can independently produce it, so it needs no claim of
+    /// its own. Distinct from `Unresolved`, whose path is merely unknown and
+    /// may well be shared.
+    ///
+    /// `at` is where the caller asked for it to be created. A fresh name
+    /// proves nothing about that directory, and a claim on it, or on one of its
+    /// ancestors, covers every path born under it, so `at` is still checked for
+    /// conflicts.
+    Ephemeral {
+        at: TempLocation,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,9 +105,20 @@ pub struct FileEffect {
     pub location: Location,
 }
 
+/// Which paths under a tree writer's scope it can reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeReach {
+    /// Every path under the scope, so a claim anywhere under it conflicts.
+    All,
+    /// Only paths under a directory created fresh in the scope. No other
+    /// session can name one, so only a claim covering the scope conflicts.
+    FreshSubtree,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeEffect {
     pub scope: String,
+    pub reach: TreeReach,
     pub whole_checkout: bool,
     pub by: String,
     pub location: Location,

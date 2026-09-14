@@ -22,7 +22,7 @@ mod ts;
 pub use context::{Context, Dialect, Limits, PathStyle};
 pub use model::{
     Analysis, FileEffect, FileOp, Invocation, Language, Limit, Location, ScriptFileInvocation,
-    Target, TreeEffect, Uncertainty, UncertaintyKind, Value,
+    Target, TempLocation, TreeEffect, TreeReach, Uncertainty, UncertaintyKind, Value,
 };
 
 /// Analyze a command in `ctx.dialect`.
@@ -64,6 +64,7 @@ pub(crate) mod testutil {
             .map(|e| match &e.target {
                 Target::Path(p) => p.clone(),
                 Target::Unresolved => "?".into(),
+                Target::Ephemeral { .. } => "<ephemeral>".into(),
             })
             .collect()
     }

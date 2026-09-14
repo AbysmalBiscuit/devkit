@@ -945,7 +945,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     }
                     match self.lookup(&name, scope) {
                         Value::Known(v) => out.push_str(&v),
-                        Value::Unknown => return Value::Unknown,
+                        Value::Unknown | Value::Ephemeral(_) => return Value::Unknown,
                     }
                 }
                 c => out.push(c),
@@ -1329,7 +1329,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         let v = self.bounded_resolved(node, v, scope.cwd.as_deref());
                         match paths::resolve(&v, scope.cwd.as_deref(), self.a.ctx.path_style) {
                             crate::model::Target::Path(d) => Some(d),
-                            crate::model::Target::Unresolved => None,
+                            crate::model::Target::Unresolved
+                            | crate::model::Target::Ephemeral { .. } => None,
                         }
                     }
                     None => None,

@@ -223,6 +223,343 @@ fn an_unresolved_write_blocks_by_default_and_warns_when_configured() {
     );
 }
 
+/// A `..` component, or an absolute later argument, carries a temp-derived
+/// path back out of the directory that made it uncontendable.
+#[test]
+fn a_temp_path_that_leaves_its_fresh_directory_is_not_exempt() {
+    let e = env(WRITES);
+    acquire(&e, "B", "victim.txt");
+    let outside = e.project.path().join("victim.txt");
+    let outside = outside.to_string_lossy();
+    let cases = [
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(dir='.'); \
+             open(os.path.join(d, '../victim.txt'), 'w').write('x')\""
+            .to_string(),
+        format!(
+            "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); \
+             open(os.path.join(d, '{outside}'), 'w').write('x')\""
+        ),
+        "python3 -c \"import tempfile, pathlib; d = tempfile.mkdtemp(); \
+             pathlib.Path(d, '../victim.txt').write_text('x')\""
+            .to_string(),
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+             const d = fs.mkdtempSync('./fresh-'); \
+             fs.writeFileSync(path.join(d, '../victim.txt'), 'x')\""
+            .to_string(),
+        "D=$(mktemp -d ./fresh.XXXXXX); echo x > \"$D/../victim.txt\"".to_string(),
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).joinpath('../victim.txt').write_text('x')\""
+            .to_string(),
+        "python3 -c \"import tempfile, pathlib; \
+         (pathlib.Path(tempfile.mkdtemp(dir='.')).parent / 'victim.txt').write_text('x')\""
+            .to_string(),
+        "python3 -c \"import tempfile, pathlib; \
+         p = pathlib.Path(tempfile.mkdtemp()).joinpath('victim.txt'); \
+         open(p.name, 'w').write('x')\""
+            .to_string(),
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).parent.rename('moved')\""
+            .to_string(),
+    ];
+    for c in &cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("could not be determined"), "{c}: {reason}");
+    }
+}
+
+/// A destination outside the fresh directory is an ordinary target, so it is
+/// claimed and the holder is named rather than reported as undeterminable.
+#[test]
+fn a_copy_or_move_out_of_a_fresh_directory_names_the_holder() {
+    let e = env(WRITES);
+    acquire(&e, "B", "victim.txt");
+    let cases = [
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).copy('victim.txt')\"",
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).move('victim.txt')\"",
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).rename('victim.txt')\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("locked by another agent"), "{c}: {reason}");
+    }
+}
+
+/// An unknown suffix cannot show that the destination stayed inside the fresh
+/// directory, so it does not inherit the exemption.
+#[test]
+fn an_unknown_component_does_not_keep_a_temp_path_exempt() {
+    let e = env(WRITES);
+    let cases = [
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); \
+         open(os.path.join(d, os.environ['REL']), 'w').write('x')\"",
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(dir=os.environ['X']); \
+         open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+    ];
+    for c in cases {
+        assert!(denial(&hook(&e, Some("S1"), c)).is_some(), "allowed: {c}");
+    }
+}
+
+/// A fresh random name cannot be held by anyone, but the directory it is made
+/// in can be, and that claim covers everything born under it.
+#[test]
+fn a_fresh_entry_under_a_held_directory_is_denied() {
+    let e = env(WRITES);
+    acquire(&e, "B", ".");
+    let cases = [
+        "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(dir='.'); f.write(b'x')\"",
+        "T=$(mktemp -p .); echo x > \"$T\"",
+        "T=$(mktemp -p . fresh.XXXXXX); echo x > \"$T\"",
+        "D=$(mktemp -d ./fresh.XXXXXX); echo x > \"$D\"",
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(dir='.'); \
+         open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).write_text('x')\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("locked by another agent"), "{reason}");
+    }
+}
+
+/// A link made inside a fresh directory can point out of it, and every write
+/// through the link lands wherever it points, so the fresh subtree stops
+/// proving anything.
+#[test]
+fn a_link_made_in_a_fresh_directory_loses_the_exemption() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("src")).unwrap();
+    std::fs::write(e.project.path().join("src/model.rs"), "x").unwrap();
+    acquire(&e, "B", "src/model.rs");
+    let cases = [
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(dir='.'); \
+         os.symlink('../src', os.path.join(d, 'link')); \
+         open(os.path.join(d, 'link/model.rs'), 'w').write('x')\"",
+        "python3 -c \"import pathlib, tempfile; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).joinpath('link').symlink_to('../src')\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('./fresh-'); \
+         fs.symlinkSync('../src', path.join(d, 'link')); \
+         fs.writeFileSync(path.join(d, 'link/model.rs'), 'x')\"",
+        // A hard link names the source's inode, so a write through it lands on
+        // the source wherever that is.
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(dir='.'); \
+         os.link('src/model.rs', os.path.join(d, 'link')); \
+         open(os.path.join(d, 'link'), 'w').write('x')\"",
+        "python3 -c \"import pathlib, tempfile; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).joinpath('link').hardlink_to('src/model.rs')\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('./fresh-'); \
+         fs.linkSync('src/model.rs', path.join(d, 'link')); \
+         fs.writeFileSync(path.join(d, 'link'), 'x')\"",
+        // Each target stays inside the directory by name, but the second is
+        // read through the first, which leads out of it.
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(dir='.'); \
+         os.symlink('.', os.path.join(d, 'a')); \
+         os.symlink('a/../src', os.path.join(d, 'b')); \
+         open(os.path.join(d, 'b/model.rs'), 'w').write('x')\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('./fresh-'); \
+         fs.symlinkSync('.', path.join(d, 'a')); \
+         fs.symlinkSync('a/../src', path.join(d, 'b')); \
+         fs.writeFileSync(path.join(d, 'b/model.rs'), 'x')\"",
+        // No claim is needed for the rule to hold: the link itself is what the
+        // analyzer cannot follow.
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(); \
+         os.symlink('real.txt', os.path.join(d, 'link'))\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("point outside it"), "{reason}");
+    }
+}
+
+/// `move` and `move_into` rename the source away, so the source is written
+/// too, not just the destination.
+#[test]
+fn a_move_names_the_source_it_renames_away() {
+    let e = env(WRITES);
+    std::fs::write(e.project.path().join("held.txt"), "x").unwrap();
+    std::fs::create_dir(e.project.path().join("free")).unwrap();
+    acquire(&e, "B", "held.txt");
+    let cases = [
+        "python3 -c \"import pathlib; pathlib.Path('held.txt').move('free.txt')\"",
+        "python3 -c \"import pathlib; pathlib.Path('held.txt').move_into('free')\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("held.txt (held by B)"), "{reason}");
+    }
+}
+
+/// `mkdir` and `rmdir` on a resolved `pathlib.Path` write, and were reaching
+/// the registry only through a freshly created receiver.
+#[test]
+fn a_pathlib_directory_method_reaches_the_registry() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("build")).unwrap();
+    acquire(&e, "B", "build");
+    let cases = [
+        "python3 -c \"import pathlib; pathlib.Path('build').rmdir()\"",
+        "python3 -c \"import pathlib; pathlib.Path('build/sub').mkdir()\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("locked by another agent"), "{reason}");
+    }
+}
+
+/// A write mode still writes when the path it opens could not be determined,
+/// and a read mode still writes nothing.
+#[test]
+fn an_open_on_an_undetermined_path_reports_the_write() {
+    let e = env(WRITES);
+    let write = "python3 -c \"import tempfile, pathlib; \
+                 p = pathlib.Path(tempfile.mkdtemp(dir='.')).parent.joinpath('victim.txt'); \
+                 p.open('w').write('x')\"";
+    let reason = denial(&hook(&e, Some("S1"), write)).unwrap_or_else(|| panic!("allowed"));
+    assert!(reason.contains("could not be determined"), "{reason}");
+
+    let read = "python3 -c \"import tempfile, pathlib; \
+                p = pathlib.Path(tempfile.mkdtemp(dir='.')).parent.joinpath('notes.txt'); \
+                p.open().read()\"";
+    assert_eq!(denial(&hook(&e, Some("S1"), read)), None);
+}
+
+/// A receiver whose filesystem behaviour could not be established may still be
+/// a path, so `open` on it reads its mode like any other.
+#[test]
+fn an_open_on_an_undetermined_receiver_reports_the_write() {
+    let e = env(WRITES);
+    let cases = [
+        "python3 -c \"import pathlib; \
+         pathlib.Path('safe.txt').with_stem('victim').open('w').write('x')\"",
+        "python3 -c \"import pathlib, tempfile; \
+         pathlib.Path(tempfile.mkdtemp(dir='.')).joinpath('out.txt', 'child') \
+         .parent.open('w').write('x')\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("could not be determined"), "{reason}");
+    }
+
+    let read = "python3 -c \"import pathlib; \
+                pathlib.Path('safe.txt').with_stem('notes').open().read()\"";
+    assert_eq!(denial(&hook(&e, Some("S1"), read)), None);
+}
+
+/// A quoted `mktemp` argument names the same directory the shell would use.
+#[test]
+fn a_quoted_mktemp_directory_is_read_without_its_quotes() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("held")).unwrap();
+    acquire(&e, "B", "held");
+    let cases = [
+        "T=$(mktemp -p 'held' fresh.XXXXXX); echo x > \"$T\"",
+        "T=$(mktemp -p \"held\"); echo x > \"$T\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("held (held by B)"), "{reason}");
+    }
+}
+
+/// A claim below a directory reaches no name created fresh in it: the fresh
+/// name is a sibling of the held path, never a parent of it.
+#[test]
+fn a_claim_below_a_directory_leaves_a_fresh_entry_in_it_alone() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("src")).unwrap();
+    std::fs::write(e.project.path().join("src/model.rs"), "x").unwrap();
+    acquire(&e, "B", "src/model.rs");
+    let cases = [
+        "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(dir='.'); f.write(b'x')\"",
+        "T=$(mktemp -p .); echo x > \"$T\"",
+        // Everything under a directory created a moment ago is itself fresh, so
+        // a recursive writer rooted there reaches nothing anyone holds.
+        "rm -rf \"$(mktemp -d -p .)\"",
+    ];
+    for c in cases {
+        assert_eq!(denial(&hook(&e, Some("S1"), c)), None, "denied: {c}");
+    }
+    assert_eq!(rows(&e), [("src/model.rs".to_string(), "B".to_string())]);
+}
+
+/// A claim above a directory covers every name created in it, and the refusal
+/// names that claim rather than the directory the command asked about.
+#[test]
+fn a_claim_above_a_directory_blocks_a_fresh_entry_and_names_the_claim() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("src")).unwrap();
+    acquire(&e, "B", ".");
+    let c = "T=$(mktemp -p src); echo x > \"$T\"";
+    let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+    assert!(reason.contains(". (held by B)"), "{reason}");
+}
+
+/// A writer that rewrites files it did not create still conflicts with a claim
+/// under its directory, which is what the broader check is for.
+#[test]
+fn a_tree_writer_still_conflicts_with_a_claim_under_its_directory() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("build")).unwrap();
+    std::fs::write(e.project.path().join("build/out.o"), "x").unwrap();
+    acquire(&e, "B", "build/out.o");
+    let reason = denial(&hook(&e, Some("S1"), "rm -rf build")).unwrap_or_else(|| panic!("allowed"));
+    assert!(reason.contains("locked by another agent"), "{reason}");
+}
+
+/// `mktemp` failure leaves the variable empty, which turns the rest of the
+/// word into an absolute path nobody claimed on this session's behalf.
+#[test]
+fn a_failed_mktemp_substitution_does_not_launder_the_suffix() {
+    let e = env(WRITES);
+    acquire(&e, "B", "victim.txt");
+    let victim = e.project.path().join("victim.txt");
+    let c = format!(
+        "D=$(mktemp -d /missing-parent/XXXXXX); echo x > \"$D{}\"",
+        victim.to_string_lossy()
+    );
+    assert!(denial(&hook(&e, Some("S1"), &c)).is_some(), "allowed: {c}");
+}
+
+/// The exemption this feature exists for: a destination that provably stays
+/// inside a directory created fresh under a random name.
+#[test]
+fn a_write_that_stays_inside_a_fresh_directory_is_allowed() {
+    let e = env(WRITES);
+    acquire(&e, "B", "victim.txt");
+    let cases = [
+        "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); \
+         open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+        "python3 -c \"import tempfile, pathlib; d = tempfile.mkdtemp(); \
+         pathlib.Path(d, 'sub', 'out.txt').write_text('x')\"",
+        "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(); f.write(b'x')\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('/tmp/fresh-'); \
+         fs.writeFileSync(path.join(d, 'out.txt'), 'x')\"",
+        "T=$(mktemp); echo x > \"$T\"",
+        "python3 -c \"import tempfile, pathlib; \
+         pathlib.Path(tempfile.mkdtemp()).joinpath('sub', 'out.txt').write_text('x')\"",
+    ];
+    for c in cases {
+        let out = hook(&e, Some("S1"), c);
+        assert!(denial(&out).is_none(), "denied: {c}");
+    }
+    assert_eq!(rows(&e), [("victim.txt".to_string(), "B".to_string())]);
+}
+
+#[test]
+fn a_root_claim_does_not_unblock_an_unresolved_write() {
+    let e = env(WRITES);
+    acquire(&e, "S1", ".");
+    let reason = denial(&hook(&e, Some("S1"), "echo x > \"$OUT\"")).expect("denied");
+    assert!(reason.contains("could not be determined"), "{reason}");
+}
+
 #[test]
 fn a_warning_cannot_override_a_known_conflict() {
     let e = env("[harness]\nenforce_writes = true\nunresolved_writes = \"warn\"\n");

@@ -44,6 +44,7 @@ The workspace root is the `devkit` binary package; it and `devkitd` install toge
 | `crates/devkit-common` | shared lib: `git`, the single door every git invocation in the workspace goes through, scrubbing the environment variables that could redirect a call at another repository or inject config into it; `config`, the single door every config resolution goes through, which is what lets the shared rayon `pool` be sized from `[parallelism]` in one place; `paths`, `secrets`, `cmd` (a generic subprocess-capture helper, plus `gh` wrappers) with `github` and `gitfetch`, `worktree` plus the `record` it reads (`.devkit/issue.toml`) and `gitignore`, `slug`, `template`, `ui` (tables/links) with `livetable` and `progress` (TTY-only spinners), `tracker` (the `Tracker` seam and its `linear`, `github` and `none` implementations), `slack`, `store` (flock'd JSON documents), `supervise`, `sys` (the platform boundary), `timing`, `report`, and a `daemon` client behind the `daemon` feature |
 | `crates/devkit-ports` | lib: `doppler` (yaml), `apps` (catalog), `load` (config + catalog), `registry` (flock'd port store), `run` (server lifecycle), `strays` (servers outside the registry), `daemon`, `task` (canned oneshot resolution/exec), `guard` (the command guard's IO-free decision: shell lexing, wrapper and runner-prefix stripping, task and `launch` signatures, the built-in dev-server catalog, and app naming) |
 | `crates/devkit-locks` | file-lock registry: model + flock'd JSON store |
+| `crates/devkit-command` | lib: the shell-command analyzer both harness stages decide from. Parses a command, and the inline scripts it runs, into the write targets it will touch and the programs it will launch, over tree-sitter grammars for bash, PowerShell, fish, Python, JavaScript and TypeScript. A target counts as resolved only when it is statically determinable; everything else is reported as unresolved for the caller's policy to rule on. Pure analysis, carrying the IO-free guarantee the shell-hook invariant below rests on. Every grammar compiles C through `cc`, so a source build needs a C compiler |
 | `crates/devkit-issue` | lib: read-only issue triage facade — `status` (worktree + PR + tracker state with the finished verdict) and `prs` (PR triage); serializable, no rendering, no mutations |
 | `crates/devkit-mcp` | lib: stdio MCP server (`jsonrpc`, action `registry`, `ports`/`locks`/`devrun`/`issue` handlers) over the port + lock facades, the `devkit-ports::run` server-lifecycle facade, and the `devkit-issue` triage facade |
 | `crates/devkit-docs` | lib: version-correct library checkouts — manifest (global `docs.toml` + `devkit.toml` `[docs]`), importer-graph resolution (pnpm/bun/npm/Cargo/uv) matched to git tags, hard-error failure modes instead of a silent default-branch fallback (opt in per run with `--allow-default-branch`), bare-clone cache with ref-named worktrees (`/` encoded as `~`) under a reserved-stem-checked cache root, flock'd reference registry with reference-based prune, per-checkout pins that roll up a workspace root's members (JS lockfiles only — cargo and uv name members in a manifest) and union in the reference registry's rows for this project, and 0.12.x cache migration that moves the layout but hard-errors on a `meta.toml` it cannot parse, naming every such library in one run |
@@ -114,11 +115,9 @@ The primary clone (`C:/Users/Lev/Git/lev/devkit`) stays on `main`. Feature work 
 
 ## File locks
 
-When multiple sessions share one checkout, claim files before editing them with the `lockm` binary instead of writing ad-hoc `.lock` files:
-
-- `lockm acquire <paths…>` before editing; it exits `1` with the current holder if any path is taken — branch on that.
-- `lockm release <paths…>` (or `lockm release --all`) when done.
-- Inside a coding-agent session the holder is detected, so acquire and release already agree; pass `--as <id>` only outside one, or when devkit reports two nested harnesses disagreeing.
+Several agent sessions share this checkout. The `using-devkit` skill carries the lock
+protocol: what a denied write means, the coarse directory claim, and what happens to a
+shell write whose target devkit cannot resolve.
 
 ## Registry facade
 

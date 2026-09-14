@@ -6,7 +6,7 @@ use tree_sitter::Node;
 
 use crate::{
     analyzer::{Analyzer, Frame, RawInvocation, Stdin, Word},
-    model::{FileOp, Language, Location, UncertaintyKind, Value},
+    model::{FileOp, Language, Location, TempLocation, UncertaintyKind, Value},
     normalize, paths, ts,
 };
 
@@ -43,6 +43,8 @@ const WRITES: &[(&str, FileOp, usize)] = &[
     ("copyFile", FileOp::Copy, 1),
     ("symlinkSync", FileOp::Create, 1),
     ("symlink", FileOp::Create, 1),
+    ("linkSync", FileOp::Create, 1),
+    ("link", FileOp::Create, 1),
 ];
 const WRITE_METHOD_NAMES: &[&str] = &[
     "writeFileSync",
@@ -67,6 +69,10 @@ const WRITE_METHOD_NAMES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq)]
 enum Js {
     Str(String),
+    /// A directory `fs.mkdtemp` created fresh under a random name, carrying
+    /// where it was made. The name needs no claim of its own, but the directory
+    /// it was made in can be held by someone.
+    Ephemeral(TempLocation),
     Num(i64),
     Array(Vec<Js>),
     Api(String),
@@ -83,8 +89,24 @@ impl Js {
     fn as_value(&self) -> Value {
         match self {
             Self::Str(s) => Value::Known(s.clone()),
-            _ => Value::Unknown,
+            _ => match self.ephemeral() {
+                Some(at) => Value::Ephemeral(at),
+                None => Value::Unknown,
+            },
         }
+    }
+
+    /// Where a freshly created temp path was made, when this value is one.
+    fn ephemeral(&self) -> Option<TempLocation> {
+        match self {
+            Self::Ephemeral(at) => Some(at.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether this value is, or was derived from, a freshly created temp path.
+    fn is_ephemeral(&self) -> bool {
+        self.ephemeral().is_some()
     }
 }
 #[derive(Debug, Clone, Default)]
@@ -138,6 +160,54 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "a JavaScript value exceeded the configured size limit",
             self.at(node),
         );
+    }
+
+    /// A link created under a fresh directory is where the exemption ends.
+    /// Writes through the link land wherever it points, and the name it was
+    /// given is no evidence of that: a hard link is a second name for a file
+    /// that already exists somewhere, and a symbolic link's target is read
+    /// through whatever links precede it, so a target that stays inside the
+    /// directory by spelling can still lead out of it.
+    fn link_in_fresh(&mut self, node: Node<'t>, link: &Js) {
+        if link.is_ephemeral() {
+            self.unresolved(
+                node,
+                "a link made in a fresh directory can point outside it",
+            );
+        }
+    }
+
+    fn js_effect(&mut self, op: FileOp, target: &Js, cwd: Option<&str>, at: Location) {
+        self.a.file_effect(op, &target.as_value(), cwd, at);
+    }
+
+    fn js_tree(&mut self, scope: &Js, whole: bool, cwd: Option<&str>, by: &str, at: Location) {
+        self.a.tree_effect(&scope.as_value(), whole, cwd, by, at);
+    }
+
+    /// A join whose first argument is a freshly created temp path. It keeps the
+    /// exemption only while every later argument is known and lands inside that
+    /// directory: an unknown one cannot show containment, and a temp path
+    /// anywhere but first is not the thing being extended.
+    fn temp_join(&self, args: &[(Js, Node<'t>)]) -> Js {
+        let Some(at) = args.first().and_then(|(v, _)| v.ephemeral()) else {
+            return Js::Unknown;
+        };
+        let Some(rest) = args[1..]
+            .iter()
+            .map(|(v, _)| match v {
+                Js::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect::<Option<Vec<&str>>>()
+        else {
+            return Js::Unknown;
+        };
+        if paths::stays_within(&rest, self.a.ctx.path_style) {
+            Js::Ephemeral(at)
+        } else {
+            Js::Unknown
+        }
     }
 
     fn known(&mut self, node: Node<'_>, value: String) -> Js {
@@ -433,6 +503,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             Js::Unknown
                         }
                         Value::Unknown => Js::Unknown,
+                        Value::Ephemeral(at) => Js::Ephemeral(at.clone()),
                     }),
                 (Js::Array(items), Js::Num(i)) => usize::try_from(i)
                     .ok()
@@ -537,6 +608,24 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 self.unresolved(node, "dynamically evaluated script source");
                 Js::Unknown
             }
+            // The argument is a path prefix, not a directory: the fresh name
+            // is appended to it, so the directory is its parent.
+            (Some("fs.mkdtemp" | "fs.mkdtempSync"), _) => match arg(0) {
+                Js::Str(prefix) => {
+                    match paths::parent_dir(&prefix, self.a.ctx.path_style).map(|parent| {
+                        paths::resolve(&Value::Known(parent), cwd.as_deref(), self.a.ctx.path_style)
+                    }) {
+                        Some(crate::Target::Path(dir)) => Js::Ephemeral(TempLocation::In(dir)),
+                        _ => Js::Unknown,
+                    }
+                }
+                _ => Js::Unknown,
+            },
+            (Some("path.join" | "path.posix.join"), _)
+                if args.iter().any(|(v, _)| v.is_ephemeral()) =>
+            {
+                self.temp_join(&args)
+            }
             (Some("path.join" | "path.posix.join"), _) => args
                 .iter()
                 .map(|(v, _)| match v {
@@ -597,7 +686,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                             self.value_limit(node);
                             None
                         }
-                        crate::Target::Unresolved => None,
+                        crate::Target::Unresolved | crate::Target::Ephemeral { .. } => None,
                     },
                     _ => None,
                 };
@@ -625,17 +714,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .iter()
                     .find(|(method_name, ..)| *method_name == method)
                 {
-                    self.a
-                        .file_effect(*op, &arg(*index).as_value(), cwd.as_deref(), at);
+                    if matches!(method, "symlink" | "symlinkSync" | "link" | "linkSync") {
+                        self.link_in_fresh(node, &arg(*index));
+                    }
+                    self.js_effect(*op, &arg(*index), cwd.as_deref(), at);
                 } else if matches!(method, "renameSync" | "rename") {
-                    self.a.file_effect(
-                        FileOp::Rename,
-                        &arg(0).as_value(),
-                        cwd.as_deref(),
-                        at.clone(),
-                    );
-                    self.a
-                        .file_effect(FileOp::Rename, &arg(1).as_value(), cwd.as_deref(), at);
+                    self.js_effect(FileOp::Rename, &arg(0), cwd.as_deref(), at.clone());
+                    self.js_effect(FileOp::Rename, &arg(1), cwd.as_deref(), at);
                 } else if matches!(method, "rmSync" | "rm" | "cpSync" | "cp") {
                     let recursive = args
                         .get(if method.starts_with("cp") { 2 } else { 1 })
@@ -648,33 +733,24 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         arg(0)
                     };
                     if recursive {
-                        self.a.tree_effect(
-                            &target.as_value(),
-                            false,
-                            cwd.as_deref(),
-                            &format!("fs.{method}"),
-                            at,
-                        );
+                        self.js_tree(&target, false, cwd.as_deref(), &format!("fs.{method}"), at);
                     } else {
-                        self.a.file_effect(
+                        self.js_effect(
                             if method.starts_with("cp") {
                                 FileOp::Copy
                             } else {
                                 FileOp::Delete
                             },
-                            &target.as_value(),
+                            &target,
                             cwd.as_deref(),
                             at,
                         );
                     }
                 } else if matches!(method, "openSync" | "open") {
                     match arg(1) {
-                        Js::Str(flags) if flags.contains(['w', 'a', '+']) => self.a.file_effect(
-                            FileOp::Overwrite,
-                            &arg(0).as_value(),
-                            cwd.as_deref(),
-                            at,
-                        ),
+                        Js::Str(flags) if flags.contains(['w', 'a', '+']) => {
+                            self.js_effect(FileOp::Overwrite, &arg(0), cwd.as_deref(), at)
+                        }
                         Js::Str(_) => {}
                         _ if args.len() < 2 => {}
                         _ => self.unresolved(
@@ -686,36 +762,20 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 Js::Data
             }
             (Some("Bun.write"), _) => {
-                self.a
-                    .file_effect(FileOp::Overwrite, &arg(0).as_value(), cwd.as_deref(), at);
+                self.js_effect(FileOp::Overwrite, &arg(0), cwd.as_deref(), at);
                 Js::Data
             }
             (Some(name), _) if name.starts_with("Deno.") => {
                 match &name[5..] {
-                    "writeTextFile" | "writeFile" => self.a.file_effect(
-                        FileOp::Overwrite,
-                        &arg(0).as_value(),
-                        cwd.as_deref(),
-                        at,
-                    ),
-                    "remove" => {
-                        self.a
-                            .file_effect(FileOp::Delete, &arg(0).as_value(), cwd.as_deref(), at)
+                    "writeTextFile" | "writeFile" => {
+                        self.js_effect(FileOp::Overwrite, &arg(0), cwd.as_deref(), at)
                     }
+                    "remove" => self.js_effect(FileOp::Delete, &arg(0), cwd.as_deref(), at),
                     "rename" => {
-                        self.a.file_effect(
-                            FileOp::Rename,
-                            &arg(0).as_value(),
-                            cwd.as_deref(),
-                            at.clone(),
-                        );
-                        self.a
-                            .file_effect(FileOp::Rename, &arg(1).as_value(), cwd.as_deref(), at);
+                        self.js_effect(FileOp::Rename, &arg(0), cwd.as_deref(), at.clone());
+                        self.js_effect(FileOp::Rename, &arg(1), cwd.as_deref(), at);
                     }
-                    "copyFile" => {
-                        self.a
-                            .file_effect(FileOp::Copy, &arg(1).as_value(), cwd.as_deref(), at)
-                    }
+                    "copyFile" => self.js_effect(FileOp::Copy, &arg(1), cwd.as_deref(), at),
                     _ => {}
                 }
                 Js::Data
@@ -826,6 +886,15 @@ mod tests {
         model::{Limit, Target, UncertaintyKind},
         testutil::{bash, targets},
     };
+
+    #[test]
+    fn an_mkdtemp_directory_write_is_ephemeral() {
+        let a = bash(
+            "node -e \"const fs = require('fs'); const path = require('path'); const d = fs.mkdtempSync('pre'); fs.writeFileSync(path.join(d, 'out.txt'), 'x')\"",
+        );
+        assert_eq!(targets(&a), ["<ephemeral>"]);
+        assert!(a.uncertainties.is_empty(), "{:?}", a.uncertainties);
+    }
 
     fn unresolved(a: &crate::Analysis) -> bool {
         a.uncertainties

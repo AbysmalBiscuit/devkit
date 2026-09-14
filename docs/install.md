@@ -20,6 +20,14 @@ The installer places only the binaries. To use devkit inside a coding agent, reg
 
 ## From source
 
+A source build needs a C compiler alongside the Rust toolchain. The shell-command analyzer links tree-sitter grammars, and those grammars are C.
+
+- **Linux, macOS, WSL**: the system `cc` (gcc or clang) is enough. Install `build-essential`, `gcc`, or the Xcode command line tools if `cc` is missing.
+- **Windows, MSVC toolchain**: nothing extra. `x86_64-pc-windows-msvc` already requires the Visual Studio C++ build tools, which carry the compiler the grammars need.
+- **Windows, GNU toolchain**: install mingw-w64. The `rust-mingw` component ships a linker, not a C compiler, so the grammar crates fail to build without it.
+
+The prebuilt binaries above need none of this.
+
 Install `devkit` and `devkitd` into `~/.cargo/bin` with one command, from a clone:
 
 ```sh

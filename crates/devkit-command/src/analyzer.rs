@@ -11,7 +11,7 @@ use crate::{
     embed,
     model::{
         Analysis, FileEffect, FileOp, Invocation, Language, Location, ScriptFileInvocation,
-        TreeEffect, Uncertainty, UncertaintyKind, Value,
+        TreeEffect, TreeReach, Uncertainty, UncertaintyKind, Value,
     },
     normalize, paths,
 };
@@ -171,6 +171,9 @@ impl<'c> Analyzer<'c> {
         });
     }
 
+    /// Record a write to a path an API created fresh under a random name. The
+    /// path is never known, and never needs to be: no other session can hold
+    /// it.
     pub(crate) fn file_effect(
         &mut self,
         op: FileOp,
@@ -197,6 +200,7 @@ impl<'c> Analyzer<'c> {
         match paths::resolve(scope, cwd, self.ctx.path_style) {
             crate::model::Target::Path(scope) => self.out.tree_effects.push(TreeEffect {
                 scope,
+                reach: TreeReach::All,
                 whole_checkout,
                 by: by.to_string(),
                 location,
@@ -206,6 +210,20 @@ impl<'c> Analyzer<'c> {
                 format!("`{by}` rewrites a directory that could not be determined"),
                 location,
             ),
+            // A tree writer rooted at a freshly created temp directory reaches
+            // no path another session could name, but a claim on the directory
+            // that one was made in covers the whole fresh subtree.
+            crate::model::Target::Ephemeral { at } => {
+                if let crate::model::TempLocation::In(scope) = at {
+                    self.out.tree_effects.push(TreeEffect {
+                        scope,
+                        reach: TreeReach::FreshSubtree,
+                        whole_checkout,
+                        by: by.to_string(),
+                        location,
+                    });
+                }
+            }
         }
     }
 

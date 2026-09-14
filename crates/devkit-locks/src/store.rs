@@ -207,6 +207,18 @@ pub fn check_read_only_with(
     Ok(data.check(root, paths, holder, now))
 }
 
+/// Rows covering a fresh name under each of `dirs` (ungated read, no prune).
+pub fn check_covering_with(
+    s: &impl Store,
+    root: &str,
+    holder: &str,
+    dirs: &[String],
+    now: u64,
+) -> Result<Vec<Conflict>> {
+    let data = s.snapshot()?;
+    Ok(data.check_covering(root, dirs, holder, now))
+}
+
 /// Release named paths (explicit mutation). Returns (released, refused).
 pub fn release_with(
     s: &impl Store,

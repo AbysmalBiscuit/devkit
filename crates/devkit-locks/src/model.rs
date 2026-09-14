@@ -101,6 +101,10 @@ pub struct Refusal {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
+    /// What the caller has to work around. [`Data::check`] echoes the path
+    /// that was asked about, because a claim overlapping it may sit on either
+    /// side; [`Data::check_covering`] names the row instead, because the claim
+    /// that reaches the new path may sit well above the directory asked about.
     pub path: String,
     pub held_by: String,
     pub age_secs: u64,
@@ -145,6 +149,18 @@ pub fn entry_dead(e: &LockEntry, now: u64) -> bool {
     }
 }
 
+/// Whether `claim` covers every path created fresh under `dir`: a claim on
+/// `dir` itself, or on a directory above it. A claim below `dir` covers none of
+/// them, because a name created there under random characters is neither the
+/// held path nor inside it.
+pub fn covers_children(claim: &str, dir: &str) -> bool {
+    claim == "."
+        || claim == dir
+        || dir
+            .strip_prefix(claim)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 impl Data {
     /// Remove every dead lock; returns how many were dropped.
     pub fn prune_dead(&mut self, now: u64) -> usize {
@@ -168,6 +184,38 @@ impl Data {
                 {
                     out.push(Conflict {
                         path: req.clone(),
+                        held_by: e.holder.clone(),
+                        age_secs: now.saturating_sub(e.ts),
+                        note: e.note.clone(),
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Conflicts that would block `holder` from creating a fresh name under
+    /// each of `dirs`: any live lock on another session line that covers that
+    /// directory's children. The conflict names the row rather than the
+    /// directory asked about, because the claim the caller has to work around
+    /// may sit well above it.
+    pub fn check_covering(
+        &self,
+        root: &str,
+        dirs: &[String],
+        holder: &str,
+        now: u64,
+    ) -> Vec<Conflict> {
+        let mut out = Vec::new();
+        for dir in dirs {
+            for e in self.locks.values() {
+                if e.root == root
+                    && !on_one_ancestry_line(&e.holder, holder)
+                    && !entry_dead(e, now)
+                    && covers_children(&e.path, dir)
+                {
+                    out.push(Conflict {
+                        path: e.path.clone(),
                         held_by: e.holder.clone(),
                         age_secs: now.saturating_sub(e.ts),
                         note: e.note.clone(),
@@ -400,6 +448,18 @@ mod tests {
     fn key_joins_root_and_path() {
         assert_eq!(key_for("/repo", "scenes/x"), "/repo\u{0}scenes/x");
     }
+    #[test]
+    fn a_claim_covers_children_only_from_the_directory_up() {
+        assert!(covers_children("src", "src"));
+        assert!(covers_children("src", "src/gen"));
+        assert!(covers_children(".", "src/gen"));
+        // A claim beside or below the directory reaches no name created in it.
+        assert!(!covers_children("src/model.rs", "."));
+        assert!(!covers_children("src/gen", "src"));
+        assert!(!covers_children("srcs", "src"));
+        assert!(!covers_children("docs", "src"));
+    }
+
     #[test]
     fn overlap_equal_paths() {
         assert!(paths_overlap("scenes/x", "scenes/x"));

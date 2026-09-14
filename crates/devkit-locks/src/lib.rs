@@ -319,6 +319,22 @@ fn check_scope_resolved(root: &str, holder: &str, paths: &[String]) -> Result<Ve
     store::check_read_only_with(&store::FlockStore::new(), root, holder, paths, now())
 }
 
+fn check_covering_resolved(root: &str, holder: &str, dirs: &[String]) -> Result<Vec<Conflict>> {
+    #[cfg(feature = "daemon")]
+    if let Some(resp) = daemon_request(daemon::proto::Request::CheckCovering {
+        root: root.to_string(),
+        holder: holder.to_string(),
+        dirs: dirs.to_vec(),
+    })? {
+        return match resp {
+            daemon::proto::Response::Conflicts(v) => Ok(v),
+            daemon::proto::Response::Err(e) => Err(anyhow::anyhow!(e)),
+            other => Err(anyhow::anyhow!("unexpected daemon response: {other:?}")),
+        };
+    }
+    store::check_covering_with(&store::FlockStore::new(), root, holder, dirs, now())
+}
+
 pub fn release(
     paths_in: &[String],
     as_flag: Option<&str>,
@@ -547,6 +563,19 @@ impl WriteResolver {
     ) -> Result<Vec<Conflict>> {
         let (root, rel) = self.scope_key(dir, whole_checkout)?;
         check_scope_resolved(&root, holder, &[rel])
+    }
+
+    /// Live rows another session holds that cover a name created fresh under
+    /// `dir`. Narrower than [`check_scope`](Self::check_scope): a claim below
+    /// `dir` reaches no such name, so it is not a conflict. Takes no lock.
+    ///
+    /// There is no whole-checkout form. `scope_key` answers that with `.`,
+    /// which only a claim on the checkout root covers, while the directory
+    /// the fresh name was actually made in is covered by every claim above it
+    /// as well.
+    pub fn check_covering(&mut self, dir: &str, holder: &str) -> Result<Vec<Conflict>> {
+        let (root, rel) = self.scope_key(dir, false)?;
+        check_covering_resolved(&root, holder, &[rel])
     }
 
     /// Same decision as [`decide_write`], but sharing this resolver's cache.

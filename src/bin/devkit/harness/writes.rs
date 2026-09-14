@@ -6,7 +6,7 @@
 
 use std::{sync::mpsc, time::Duration};
 
-use devkit_command::{Analysis, FileOp, Target, UncertaintyKind, Value};
+use devkit_command::{Analysis, FileOp, Target, TreeReach, UncertaintyKind, Value};
 use devkit_common::harness::HarnessPolicy;
 use devkit_config::PolicyAction;
 use devkit_locks::model::{Conflict, WriteDecision};
@@ -19,13 +19,30 @@ pub struct Evaluation {
     pub warnings: Vec<String>,
     /// Absolute write targets, in order, without repeats.
     pub claims: Vec<String>,
-    /// `(directory, whole_checkout)` for writers of an unenumerated file set.
-    pub scopes: Vec<(String, bool)>,
+    /// Directories to check without claiming, in order, without repeats.
+    pub scopes: Vec<ScopeCheck>,
+}
+
+/// A directory the registry is asked about, and which question to ask of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScopeCheck {
+    /// A writer rewrites an unenumerated set of files under this directory, so
+    /// any claim overlapping it conflicts.
+    Tree { dir: String, whole_checkout: bool },
+    /// A name was created fresh under this directory. Nobody else can produce
+    /// that name, so only a claim covering the directory's children conflicts.
+    Fresh { dir: String },
 }
 
 impl Evaluation {
     pub fn needs_registry(&self) -> bool {
         !self.claims.is_empty() || !self.scopes.is_empty()
+    }
+
+    fn scope(&mut self, check: ScopeCheck) {
+        if !self.scopes.contains(&check) {
+            self.scopes.push(check);
+        }
     }
 
     fn apply(&mut self, action: PolicyAction, message: String) {
@@ -37,7 +54,22 @@ impl Evaluation {
     }
 }
 
-const UNRESOLVED_FIX: &str = "Rewrite the edit so each target is a literal path, or a variable assigned a literal earlier in the same command, or make it with a structured edit tool.";
+/// The correction, which differs by what the policy does with the finding: a
+/// blocked command has to be rewritten, a warned one runs and leaves the agent
+/// to claim what devkit could not name.
+fn unresolved_fix(action: PolicyAction) -> &'static str {
+    match action {
+        PolicyAction::Warn => {
+            "Claim the destinations with `lockm acquire` before writing, or name a literal path \
+             and they are claimed for you."
+        }
+        PolicyAction::Block | PolicyAction::Allow => {
+            "Name a literal path, or a variable assigned a literal earlier in the same command, \
+             or make the edit with a structured edit tool; those targets are claimed for you. \
+             `lockm acquire` does not lift this block."
+        }
+    }
+}
 
 pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     let mut e = Evaluation::default();
@@ -51,17 +83,35 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
             Target::Unresolved => e.apply(
                 policy.unresolved_writes,
                 format!(
-                    "{PREFIX} a {} target could not be determined. {UNRESOLVED_FIX}",
-                    op_name(effect.op)
+                    "{PREFIX} a {} target could not be determined. {}",
+                    op_name(effect.op),
+                    unresolved_fix(policy.unresolved_writes)
                 ),
             ),
+            // A path an API created fresh under a random name is uncontendable:
+            // no other session holds it, and none can produce it. Claiming it
+            // would write a row nobody could ever conflict with. The directory
+            // it was created in is another matter, since a claim there covers
+            // every path born under it, so that is checked like any other scope.
+            Target::Ephemeral { at } => {
+                if let Some(dir) = at.named() {
+                    e.scope(ScopeCheck::Fresh {
+                        dir: dir.to_string(),
+                    });
+                }
+            }
         }
     }
     for tree in &analysis.tree_effects {
-        let scope = (tree.scope.clone(), tree.whole_checkout);
-        if !e.scopes.contains(&scope) {
-            e.scopes.push(scope);
-        }
+        let dir = tree.scope.clone();
+        let whole_checkout = tree.whole_checkout;
+        e.scope(match tree.reach {
+            TreeReach::All => ScopeCheck::Tree {
+                dir,
+                whole_checkout,
+            },
+            TreeReach::FreshSubtree => ScopeCheck::Fresh { dir },
+        });
     }
     for u in &analysis.uncertainties {
         match &u.kind {
@@ -70,7 +120,11 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
             | UncertaintyKind::LimitExhausted(_)
             | UncertaintyKind::UnresolvedInvocation => e.apply(
                 policy.unresolved_writes,
-                format!("{PREFIX} {}. {UNRESOLVED_FIX}", u.detail),
+                format!(
+                    "{PREFIX} {}. {}",
+                    u.detail,
+                    unresolved_fix(policy.unresolved_writes)
+                ),
             ),
             UncertaintyKind::UnsupportedLanguage(language) => e.apply(
                 policy.unsupported_language,
@@ -84,7 +138,7 @@ pub fn evaluate(analysis: &Analysis, policy: &HarnessPolicy) -> Evaluation {
     for script in &analysis.script_files {
         let name = match &script.script {
             Value::Known(s) => format!("`{s}`"),
-            Value::Unknown => "a script".to_string(),
+            Value::Unknown | Value::Ephemeral(_) => "a script".to_string(),
         };
         e.apply(
             policy.script_files,
@@ -113,8 +167,14 @@ fn op_name(op: FileOp) -> &'static str {
 pub fn enforce(evaluation: &Evaluation, holder: &str) -> anyhow::Result<Vec<Conflict>> {
     let mut resolver = devkit_locks::WriteResolver::new();
     let mut conflicts = Vec::new();
-    for (scope, whole) in &evaluation.scopes {
-        conflicts.extend(resolver.check_scope(scope, *whole, holder)?);
+    for check in &evaluation.scopes {
+        conflicts.extend(match check {
+            ScopeCheck::Tree {
+                dir,
+                whole_checkout,
+            } => resolver.check_scope(dir, *whole_checkout, holder)?,
+            ScopeCheck::Fresh { dir } => resolver.check_covering(dir, holder)?,
+        });
     }
     if !conflicts.is_empty() {
         return Ok(conflicts);
@@ -190,7 +250,10 @@ mod tests {
             HarnessPolicy::default(),
         );
         assert_eq!(e.claims, ["/repo/a.txt", "/repo/b.txt", "/repo/c.txt"]);
-        assert_eq!(e.scopes, [("/repo".to_string(), true)]);
+        assert_eq!(e.scopes, [ScopeCheck::Tree {
+            dir: "/repo".to_string(),
+            whole_checkout: true,
+        }]);
         assert!(e.blocks.is_empty());
     }
 
@@ -241,10 +304,61 @@ mod tests {
     }
 
     #[test]
-    fn a_blocking_diagnostic_names_a_correction_and_no_lock_workaround() {
+    fn a_tempfile_write_claims_nothing_and_blocks_nothing() {
+        let e = eval(
+            "python3 -c \"import tempfile, os; d = tempfile.mkdtemp(); open(os.path.join(d, 'out.txt'), 'w').write('x')\"",
+            HarnessPolicy::default(),
+        );
+        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert!(e.blocks.is_empty(), "{:?}", e.blocks);
+        assert!(e.warnings.is_empty(), "{:?}", e.warnings);
+    }
+
+    #[test]
+    fn an_mktemp_write_claims_nothing_and_blocks_nothing() {
+        let e = eval("T=$(mktemp); echo x > \"$T\"", HarnessPolicy::default());
+        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert!(e.blocks.is_empty(), "{:?}", e.blocks);
+        assert!(e.warnings.is_empty(), "{:?}", e.warnings);
+        assert!(e.scopes.is_empty(), "{:?}", e.scopes);
+    }
+
+    #[test]
+    fn a_named_temp_directory_is_checked_for_a_covering_claim() {
+        let e = eval(
+            "T=$(mktemp -p sub); echo x > \"$T\"",
+            HarnessPolicy::default(),
+        );
+        assert!(e.claims.is_empty(), "{:?}", e.claims);
+        assert_eq!(e.scopes, [ScopeCheck::Fresh {
+            dir: "/repo/sub".to_string(),
+        }]);
+
+        let e = eval(
+            "python3 -c \"import tempfile; f = tempfile.NamedTemporaryFile(dir='.'); f.write(b'x')\"",
+            HarnessPolicy::default(),
+        );
+        assert_eq!(e.scopes, [ScopeCheck::Fresh {
+            dir: "/repo".to_string(),
+        }]);
+    }
+
+    #[test]
+    fn a_block_names_a_rewrite_and_a_warning_names_a_claim() {
         let e = eval("echo x > \"$OUT\"", HarnessPolicy::default());
-        assert!(e.blocks[0].contains("literal"), "{}", e.blocks[0]);
-        assert!(!e.blocks[0].contains("lockm acquire"), "{}", e.blocks[0]);
+        assert!(e.blocks[0].contains("literal path"), "{}", e.blocks[0]);
+        assert!(
+            e.blocks[0].contains("does not lift this block"),
+            "{}",
+            e.blocks[0]
+        );
+
+        let warn = HarnessPolicy {
+            unresolved_writes: PolicyAction::Warn,
+            ..HarnessPolicy::default()
+        };
+        let e = eval("echo x > \"$OUT\"", warn);
+        assert!(e.warnings[0].contains("lockm acquire"), "{}", e.warnings[0]);
     }
 
     #[test]

@@ -22,6 +22,38 @@ pub(crate) fn is_absolute(p: &str, style: PathStyle) -> bool {
     }
 }
 
+/// What separates path components on the machine the command runs on. A
+/// backslash is an ordinary filename character under Unix, so counting it as a
+/// separator would read one directory name as two.
+fn separators(style: PathStyle) -> &'static [char] {
+    match style {
+        PathStyle::Unix => &['/'],
+        PathStyle::Windows => &['/', '\\'],
+    }
+}
+
+/// The directory part of a path, keeping a filesystem root as itself. `mktemp`
+/// and `fs.mkdtemp` append to a prefix rather than to a directory, so `/fresh-`
+/// is made in `/`, not in the working directory.
+pub(crate) fn parent_dir(p: &str, style: PathStyle) -> Option<String> {
+    // A drive-relative prefix, `C:fresh-`, hangs off drive C's own working
+    // directory rather than this one, so it names nothing resolvable here.
+    if style == PathStyle::Windows && has_drive_prefix(p) && !is_absolute(p, style) {
+        return None;
+    }
+    Some(match p.rfind(separators(style)) {
+        None => ".".to_string(),
+        Some(0) => p[..1].to_string(),
+        Some(2) if style == PathStyle::Windows && has_drive_prefix(p) => format!("{}/", &p[..2]),
+        Some(i) => p[..i].to_string(),
+    })
+}
+
+fn has_drive_prefix(p: &str) -> bool {
+    let b = p.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+}
+
 fn from_msys(p: &str) -> Option<String> {
     let b = p.as_bytes();
     (b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b'/')
@@ -41,6 +73,9 @@ pub(crate) fn join(base: &str, rel: &str, style: PathStyle) -> String {
 }
 
 pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Target {
+    if let Value::Ephemeral(at) = value {
+        return Target::Ephemeral { at: at.clone() };
+    }
     let Some(p) = value.known() else {
         return Target::Unresolved;
     };
@@ -59,6 +94,34 @@ pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Tar
         Some(dir) => Target::Path(join(dir, p, style)),
         None => Target::Unresolved,
     }
+}
+
+/// Whether appending `parts` to a directory lands inside it. A component that
+/// walks up, or one that restarts from the filesystem root, reaches paths the
+/// directory never contained, and in Python's `join` an absolute component
+/// discards everything before it outright.
+pub(crate) fn stays_within(parts: &[&str], style: PathStyle) -> bool {
+    let mut depth = 0i32;
+    for part in parts {
+        // A drive-letter prefix without a separator, `C:foo`, is relative to
+        // that drive's own working directory rather than to this one.
+        if is_absolute(part, style) || (style == PathStyle::Windows && has_drive_prefix(part)) {
+            return false;
+        }
+        for segment in part.split(separators(style)) {
+            match segment {
+                "" | "." => {}
+                ".." => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return false;
+                    }
+                }
+                _ => depth += 1,
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn parent(p: &str) -> Option<&str> {
@@ -137,6 +200,44 @@ mod tests {
             resolve(&k("/c/repo/a.txt"), None, PathStyle::Windows),
             Target::Path("C:/repo/a.txt".into())
         );
+    }
+
+    #[test]
+    fn containment_rejects_climbing_out_and_restarting_at_the_root() {
+        let u = PathStyle::Unix;
+        assert!(stays_within(&["out.txt"], u));
+        assert!(stays_within(&["sub", "out.txt"], u));
+        assert!(stays_within(&["sub/./deep/../out.txt"], u));
+        assert!(!stays_within(&["../victim.txt"], u));
+        assert!(!stays_within(&["sub/../../victim.txt"], u));
+        assert!(!stays_within(&["/repo/victim.txt"], u));
+        assert!(!stays_within(&["out.txt", "/repo/victim.txt"], u));
+        assert!(!stays_within(&[r"C:\repo\victim.txt"], PathStyle::Windows));
+        assert!(!stays_within(&["C:victim.txt"], PathStyle::Windows));
+        assert!(!stays_within(&["C:"], PathStyle::Windows));
+        assert!(!stays_within(
+            &[r"sub\..\..\victim.txt"],
+            PathStyle::Windows
+        ));
+        // A colon is an ordinary filename character off Windows.
+        assert!(stays_within(&["C:victim.txt"], PathStyle::Unix));
+        // So is a backslash, which makes `a\\b` one directory name, not two.
+        assert!(!stays_within(&[r"a\b/../../victim.txt"], PathStyle::Unix));
+        assert!(stays_within(&[r"a\b/../victim.txt"], PathStyle::Unix));
+    }
+
+    #[test]
+    fn a_prefix_directly_under_a_root_keeps_that_root_as_its_parent() {
+        let unix = |p| parent_dir(p, PathStyle::Unix);
+        let win = |p| parent_dir(p, PathStyle::Windows);
+        assert_eq!(unix("/fresh-").as_deref(), Some("/"));
+        assert_eq!(unix("fresh-").as_deref(), Some("."));
+        assert_eq!(unix("/tmp/fresh-").as_deref(), Some("/tmp"));
+        assert_eq!(win(r"C:\fresh-").as_deref(), Some("C:/"));
+        assert_eq!(win(r"C:\tmp\fresh-").as_deref(), Some(r"C:\tmp"));
+        // Relative to drive C's own working directory, which is not this one.
+        assert_eq!(win("C:fresh-"), None);
+        assert_eq!(win("C:"), None);
     }
 
     #[test]

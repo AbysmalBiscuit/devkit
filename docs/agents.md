@@ -2,7 +2,7 @@
 
 devkit ships two things for agents:
 
-- a plugin bundling the `using-devkit` skill, session-start hooks, and the `devkit-mcp` server; and
+- a plugin bundling the `using-devkit` skill, the session and write hooks, and the `devkit-mcp` server; and
 - the `devkit-mcp` server on its own, for hosts without a plugin system.
 
 Either way the binaries must be on your `PATH`. The plugin's MCP entry and every config below invoke `devkit-mcp` by name. See [install.md](install.md).
@@ -36,6 +36,24 @@ Two cases where it stays out of the way. Binaries already on `PATH` that the hoo
 A failed install (offline, say) never blocks the session. It warns and does not retry until you resolve it or delete `${XDG_STATE_HOME:-~/.local/state}/devkit/bootstrap-failed`.
 
 On Windows the hook runs under Git Bash when it is present and under PowerShell otherwise, so it does not depend on a bash being installed. Both paths resolve the same state directory, so gaining Git Bash later does not reinstall.
+
+## What the hooks do
+
+Installing the plugin wires these events. The `PreToolUse` pair is what makes lock coordination automatic, so an agent working in a shared checkout does not hand-call `lockm acquire` before an edit.
+
+| Event | Command | Effect |
+|---|---|---|
+| `SessionStart` | `devkit brief` | Injects the project summary: the canned tasks, and the library versions this checkout resolves. |
+| `PostCompact`, `CwdChanged` | `devkit brief --pins-only`, `--if-changed` | Re-injects that context after a compaction or a directory change. |
+| `PreToolUse` on `Edit`, `MultiEdit`, `Write`, `NotebookEdit` | `lockm hook pretooluse` | Claims a lock on each file the tool is about to write. |
+| `PreToolUse` on `Bash`, `PowerShell` | `devkit harness shell` | Guards the command, then claims every write target it can resolve from the command text. |
+| `SubagentStop`, `SessionEnd` | `lockm hook subagent-stop`, `session-end` | Releases what that session line claimed. |
+
+Both claim paths run only where `[harness] enforce_writes` is on, resolved from the env var, the project layers, or the global config. Everywhere else they exit without effect and nothing is locked.
+
+A conflict surfaces as a denied tool call naming the holder. That is the signal to edit a different file or wait, never to `--force` past a live holder. A manual `lockm acquire` still has one use in an enforced checkout: a coarse claim over a whole subtree you are churning through, since a directory lock covers everything under it.
+
+A shell write is claimed when devkit can resolve its target statically. What happens to the rest, and which hosts get which stage, is the `[harness]` table in [configuration.md](configuration.md#harness).
 
 ## Claude Code
 

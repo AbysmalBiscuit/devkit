@@ -9,7 +9,7 @@ use tree_sitter::Node;
 
 use crate::{
     analyzer::{Analyzer, Frame, RawInvocation, Stdin, Word},
-    model::{FileOp, Language, Location, UncertaintyKind, Value},
+    model::{FileOp, Language, Location, TempLocation, UncertaintyKind, Value},
     normalize, paths, ts,
 };
 
@@ -17,6 +17,7 @@ const MAX_LOOP_ITEMS: usize = 32;
 
 const KNOWN_MODULES: &[&str] = &[
     "pathlib",
+    "tempfile",
     "os",
     "os.path",
     "shutil",
@@ -165,10 +166,62 @@ const WRITE_METHODS: &[&str] = &[
     "save",
 ];
 
+/// `pathlib` methods that write, whatever the receiver turns out to be.
+const MUTATING_PATH_METHODS: &[&str] = &[
+    "write_text",
+    "write_bytes",
+    "touch",
+    "symlink_to",
+    "hardlink_to",
+    "mkdir",
+    "unlink",
+    "rmdir",
+    "rename",
+    "replace",
+    "copy",
+    "copy_into",
+    "move",
+    "move_into",
+];
+
+/// The mode a call to `open` was given, and whether it was given one at all.
+fn open_mode<'t>(args: &[Py], keywords: &HashMap<String, (Py, Node<'t>)>) -> (Py, bool) {
+    (
+        args.first()
+            .cloned()
+            .or_else(|| keywords.get("mode").map(|(value, _)| value.clone()))
+            .unwrap_or(Py::Unknown),
+        !args.is_empty() || keywords.contains_key("mode"),
+    )
+}
+
+/// Where a `tempfile` entry is created. `None` when the call named a directory
+/// that could not be resolved, leaving nothing to check a claim against.
+fn temp_dir(
+    named: Option<&Py>,
+    cwd: Option<&str>,
+    style: crate::context::PathStyle,
+) -> Option<TempLocation> {
+    match named {
+        None => Some(TempLocation::SystemTemp),
+        Some(Py::Str(s) | Py::Path(s)) => {
+            match paths::resolve(&Value::Known(s.clone()), cwd, style) {
+                crate::model::Target::Path(dir) => Some(TempLocation::In(dir)),
+                _ => None,
+            }
+        }
+        Some(_) => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Py {
     Str(String),
     Path(String),
+    /// A path `tempfile` created fresh under a random name, carrying where it
+    /// was made. The name needs no claim of its own, but the directory it was
+    /// made in can be held by someone.
+    Ephemeral(TempLocation),
     Int(i64),
     Bool(bool),
     List(Vec<Py>),
@@ -189,8 +242,28 @@ impl Py {
     fn as_value(&self) -> Value {
         match self {
             Py::Str(s) | Py::Path(s) => Value::Known(s.clone()),
-            _ => Value::Unknown,
+            _ => match self.ephemeral() {
+                Some(at) => Value::Ephemeral(at),
+                None => Value::Unknown,
+            },
         }
+    }
+
+    /// Where a freshly created temp path was made, when this value is one.
+    fn ephemeral(&self) -> Option<TempLocation> {
+        match self {
+            Py::Ephemeral(at) => Some(at.clone()),
+            Py::WriteHandle { target, .. } => target.ephemeral(),
+            // No bare member stands in for the path. `.parent` is the directory
+            // the entry was made in, which a fresh name says nothing about, and
+            // `.name` is a basename in the working directory.
+            _ => None,
+        }
+    }
+
+    /// Whether this value is, or was derived from, a freshly created temp path.
+    fn is_ephemeral(&self) -> bool {
+        self.ephemeral().is_some()
     }
 
     fn truthiness(&self) -> Option<bool> {
@@ -318,7 +391,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 self.value_limit(node);
                 None
             }
-            crate::model::Target::Unresolved => None,
+            crate::model::Target::Unresolved | crate::model::Target::Ephemeral { .. } => None,
         }
     }
 
@@ -853,10 +926,43 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     keywords.contains_key("mode") || positional.len() > 1,
                     cwd.as_deref(),
                 ),
+                "tempfile.mkdtemp" | "tempfile.TemporaryDirectory" | "tempfile.mkstemp" => {
+                    let named = keywords
+                        .get("dir")
+                        .map(|(v, _)| v)
+                        .or_else(|| positional.get(2));
+                    match temp_dir(named, cwd.as_deref(), self.a.ctx.path_style) {
+                        Some(at) if api == "tempfile.mkstemp" => {
+                            Py::List(vec![Py::Unknown, Py::Ephemeral(at)])
+                        }
+                        Some(at) => Py::Ephemeral(at),
+                        None => Py::Unknown,
+                    }
+                }
+                "tempfile.NamedTemporaryFile" | "tempfile.TemporaryFile" => {
+                    // `dir` is the seventh parameter of both, so a call passing
+                    // that many positionally is one this cannot read.
+                    let named = keywords.get("dir").map(|(v, _)| v);
+                    let at = if positional.len() > 4 {
+                        None
+                    } else {
+                        temp_dir(named, cwd.as_deref(), self.a.ctx.path_style)
+                    };
+                    match at {
+                        Some(at) => Py::WriteHandle {
+                            target: Box::new(Py::Ephemeral(at)),
+                            write_op: Some(FileOp::Overwrite),
+                        },
+                        None => Py::Unknown,
+                    }
+                }
                 "pathlib.Path"
                 | "pathlib.PurePath"
                 | "pathlib.PosixPath"
                 | "pathlib.WindowsPath" => {
+                    if let Some(joined) = self.temp_join(&positional) {
+                        return joined;
+                    }
                     let mut out = None;
                     for part in &positional {
                         match (part, &out) {
@@ -871,6 +977,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .map(|cwd| self.known(node, cwd, true))
                     .unwrap_or(Py::Unknown),
                 "os.path.join" => {
+                    if let Some(joined) = self.temp_join(&positional) {
+                        return joined;
+                    }
                     let parts: Option<Vec<String>> = positional
                         .iter()
                         .map(|p| match p {
@@ -924,7 +1033,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                                 self.value_limit(node);
                                 None
                             }
-                            crate::model::Target::Unresolved => None,
+                            crate::model::Target::Unresolved
+                            | crate::model::Target::Ephemeral { .. } => None,
                         },
                         _ => None,
                     };
@@ -939,7 +1049,9 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 }
                 "os.truncate" => self.effect(node, FileOp::Overwrite, &arg(0, "path"), scope),
                 "os.symlink" | "os.link" => {
-                    self.effect(node, FileOp::Create, &arg(1, "dst"), scope)
+                    let link = arg(1, "dst");
+                    self.link_in_fresh(node, &link);
+                    self.effect(node, FileOp::Create, &link, scope)
                 }
                 "os.open" => {
                     self.unresolved(node, "`os.open` flags were not analyzed");
@@ -1059,6 +1171,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             Py::Str(_)
             | Py::Path(_)
+            | Py::Ephemeral(_)
             | Py::Int(_)
             | Py::Bool(_)
             | Py::List(_)
@@ -1080,31 +1193,11 @@ impl<'t> Walker<'_, '_, '_, 't> {
         match receiver {
             Py::Path(p) => {
                 let this = Py::Path(p.clone());
+                if let Some(result) = self.path_mutation(node, &this, method, args, keywords, scope)
+                {
+                    return result;
+                }
                 match method {
-                    "write_text" | "write_bytes" => {
-                        self.effect(node, FileOp::Overwrite, &this, scope)
-                    }
-                    "touch" | "symlink_to" | "hardlink_to" => {
-                        self.effect(node, FileOp::Create, &this, scope)
-                    }
-                    "unlink" => self.effect(node, FileOp::Delete, &this, scope),
-                    "rename" | "replace" => {
-                        self.effect(node, FileOp::Rename, &this, scope);
-                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
-                        self.effect(node, FileOp::Rename, &dest, scope);
-                        dest
-                    }
-                    "open" => self.open(
-                        node,
-                        &this,
-                        &args
-                            .first()
-                            .cloned()
-                            .or_else(|| keywords.get("mode").map(|(value, _)| value.clone()))
-                            .unwrap_or(Py::Unknown),
-                        !args.is_empty() || keywords.contains_key("mode"),
-                        scope.cwd.as_deref(),
-                    ),
                     "with_suffix" => match args.first() {
                         Some(Py::Str(s)) => self.known(
                             node,
@@ -1188,6 +1281,38 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 );
                 Py::Unknown
             }
+            receiver if receiver.is_ephemeral() => {
+                let this = receiver.clone();
+                if let Some(result) = self.path_mutation(node, &this, method, args, keywords, scope)
+                {
+                    return result;
+                }
+                match method {
+                    "joinpath" => {
+                        let mut parts = vec![this];
+                        parts.extend(args.iter().cloned());
+                        self.temp_join(&parts).unwrap_or(Py::Unknown)
+                    }
+                    _ => Py::Unknown,
+                }
+            }
+            // Nothing established that this receiver is not a path, and
+            // `open` on a path writes when its mode says so. A read mode still
+            // writes nothing.
+            _ if method == "open" => {
+                let (mode, given) = open_mode(args, keywords);
+                self.open(node, &Py::Unknown, &mode, given, scope.cwd.as_deref())
+            }
+            // Losing track of a receiver must not lose the write with it: a
+            // method known to mutate a path still reports what it could not
+            // determine.
+            _ if MUTATING_PATH_METHODS.contains(&method) => {
+                self.unresolved(
+                    node,
+                    format!("`{method}` writes through a value that could not be determined"),
+                );
+                Py::Unknown
+            }
             _ => Py::Unknown,
         }
     }
@@ -1234,9 +1359,101 @@ impl<'t> Walker<'_, '_, '_, 't> {
         }
     }
 
+    /// The effect of a `pathlib` method that mutates the path it is called on,
+    /// whatever that receiver turned out to be. Covers every name in
+    /// [`MUTATING_PATH_METHODS`], and `open`, whose mode decides. `None` for
+    /// any other method, leaving the caller to read it against its own
+    /// receiver.
+    fn path_mutation(
+        &mut self,
+        node: Node<'t>,
+        this: &Py,
+        method: &str,
+        args: &[Py],
+        keywords: &HashMap<String, (Py, Node<'t>)>,
+        scope: &Scope,
+    ) -> Option<Py> {
+        let dest = || args.first().cloned().unwrap_or(Py::Unknown);
+        Some(match method {
+            "write_text" | "write_bytes" => self.effect(node, FileOp::Overwrite, this, scope),
+            "touch" | "mkdir" => self.effect(node, FileOp::Create, this, scope),
+            "symlink_to" | "hardlink_to" => {
+                self.link_in_fresh(node, this);
+                self.effect(node, FileOp::Create, this, scope)
+            }
+            "unlink" | "rmdir" => self.effect(node, FileOp::Delete, this, scope),
+            "copy" => self.effect(node, FileOp::Copy, &dest(), scope),
+            "copy_into" => self.tree(node, &dest(), method, scope),
+            // A move renames the source away, so the source is written too.
+            "move" => {
+                self.effect(node, FileOp::Rename, this, scope);
+                self.effect(node, FileOp::Rename, &dest(), scope)
+            }
+            "move_into" => {
+                self.effect(node, FileOp::Rename, this, scope);
+                self.tree(node, &dest(), method, scope)
+            }
+            "rename" | "replace" => {
+                self.effect(node, FileOp::Rename, this, scope);
+                let dest = dest();
+                self.effect(node, FileOp::Rename, &dest, scope);
+                dest
+            }
+            "open" => {
+                let (mode, given) = open_mode(args, keywords);
+                self.open(node, this, &mode, given, scope.cwd.as_deref())
+            }
+            _ => return None,
+        })
+    }
+
+    /// A link created under a fresh directory is where the exemption ends.
+    /// Writes through the link land wherever it points, and the name it was
+    /// given is no evidence of that: a hard link is a second name for a file
+    /// that already exists somewhere, and a symbolic link's target is read
+    /// through whatever links precede it, so a target that stays inside the
+    /// directory by spelling can still lead out of it.
+    fn link_in_fresh(&mut self, node: Node<'t>, link: &Py) {
+        if link.is_ephemeral() {
+            self.unresolved(
+                node,
+                "a link made in a fresh directory can point outside it",
+            );
+        }
+    }
+
     fn effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, scope: &Scope) -> Py {
         self.file_effect(node, op, target, scope.cwd.as_deref());
         Py::Data
+    }
+
+    /// A join whose first component is a freshly created temp path. `None` when
+    /// there is no temp path to bound. It keeps the exemption only while every
+    /// later component is known and lands inside that directory: an unknown one
+    /// cannot show containment, and a temp path anywhere but first is not the
+    /// thing being extended.
+    fn temp_join(&self, parts: &[Py]) -> Option<Py> {
+        if !parts.iter().any(Py::is_ephemeral) {
+            return None;
+        }
+        let Some(at) = parts.first().and_then(Py::ephemeral) else {
+            return Some(Py::Unknown);
+        };
+        let Some(rest) = parts[1..]
+            .iter()
+            .map(|p| match p {
+                Py::Str(s) | Py::Path(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect::<Option<Vec<&str>>>()
+        else {
+            return Some(Py::Unknown);
+        };
+        Some(if paths::stays_within(&rest, self.a.ctx.path_style) {
+            Py::Ephemeral(at)
+        } else {
+            Py::Unknown
+        })
     }
 
     fn file_effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, cwd: Option<&str>) {
@@ -1365,10 +1582,50 @@ mod tests {
     }
 
     #[test]
+    fn a_tempfile_directory_write_is_ephemeral() {
+        let a = py(
+            "import tempfile, os\nd = tempfile.mkdtemp()\nopen(os.path.join(d, 'out.txt'), 'w').write('x')",
+        );
+        assert_eq!(targets(&a), ["<ephemeral>"]);
+        assert!(!unresolved(&a), "{:?}", a.uncertainties);
+    }
+
+    #[test]
+    fn a_named_temporary_file_is_ephemeral() {
+        let a = py("import tempfile\nf = tempfile.NamedTemporaryFile(dir='src')\nf.write(b'x')");
+        assert_eq!(targets(&a), ["<ephemeral>"]);
+        assert!(!unresolved(&a), "{:?}", a.uncertainties);
+    }
+
+    #[test]
+    fn a_path_under_gettempdir_stays_unresolved() {
+        let a = py(
+            "import tempfile, os\nopen(os.path.join(tempfile.gettempdir(), 'out.txt'), 'w').write('x')",
+        );
+        assert!(unresolved(&a), "{:?}", targets(&a));
+    }
+
+    #[test]
     fn pathlib_writes_a_literal_path() {
         let a = py("from pathlib import Path\nPath('src/a.ts').write_text('x')");
         assert_eq!(targets(&a), ["/repo/src/a.ts"]);
         assert!(a.file_effects[0].location.embedded.is_some());
+    }
+
+    /// Every method the analyzer calls mutating has to record something when
+    /// the receiver is a path it resolved, or the list and the dispatch that
+    /// reads it have drifted apart.
+    #[test]
+    fn every_mutating_path_method_records_an_effect() {
+        for method in crate::python::MUTATING_PATH_METHODS {
+            let a = py(&format!(
+                "import pathlib\npathlib.Path('a.txt').{method}('b.txt')"
+            ));
+            assert!(
+                !a.file_effects.is_empty() || !a.tree_effects.is_empty(),
+                "`{method}` recorded nothing"
+            );
+        }
     }
 
     #[test]

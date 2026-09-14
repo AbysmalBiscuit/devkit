@@ -99,7 +99,7 @@ fn rule_match(inv: &Invocation, rule: &CommandRule) -> Match {
         match inv.semantic_args.get(index) {
             Some(Value::Known(actual)) if actual == expected => {}
             Some(Value::Known(_)) | None => return Match::No,
-            Some(Value::Unknown) => possible = true,
+            Some(Value::Unknown | Value::Ephemeral(_)) => possible = true,
         }
     }
     if possible {
