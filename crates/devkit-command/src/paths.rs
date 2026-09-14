@@ -22,6 +22,11 @@ pub(crate) fn is_absolute(p: &str, style: PathStyle) -> bool {
     }
 }
 
+fn has_drive_prefix(p: &str) -> bool {
+    let b = p.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+}
+
 fn from_msys(p: &str) -> Option<String> {
     let b = p.as_bytes();
     (b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b'/')
@@ -71,7 +76,9 @@ pub(crate) fn resolve(value: &Value, cwd: Option<&str>, style: PathStyle) -> Tar
 pub(crate) fn stays_within(parts: &[&str], style: PathStyle) -> bool {
     let mut depth = 0i32;
     for part in parts {
-        if is_absolute(part, style) {
+        // A drive-letter prefix without a separator, `C:foo`, is relative to
+        // that drive's own working directory rather than to this one.
+        if is_absolute(part, style) || (style == PathStyle::Windows && has_drive_prefix(part)) {
             return false;
         }
         for segment in part.split(['/', '\\']) {
@@ -179,6 +186,14 @@ mod tests {
         assert!(!stays_within(&["/repo/victim.txt"], u));
         assert!(!stays_within(&["out.txt", "/repo/victim.txt"], u));
         assert!(!stays_within(&[r"C:\repo\victim.txt"], PathStyle::Windows));
+        assert!(!stays_within(&["C:victim.txt"], PathStyle::Windows));
+        assert!(!stays_within(&["C:"], PathStyle::Windows));
+        assert!(!stays_within(
+            &[r"sub\..\..\victim.txt"],
+            PathStyle::Windows
+        ));
+        // A colon is an ordinary filename character off Windows.
+        assert!(stays_within(&["C:victim.txt"], PathStyle::Unix));
     }
 
     #[test]
