@@ -325,6 +325,74 @@ fn a_fresh_entry_under_a_held_directory_is_denied() {
     }
 }
 
+/// `move` and `move_into` rename the source away, so the source is written
+/// too, not just the destination.
+#[test]
+fn a_move_names_the_source_it_renames_away() {
+    let e = env(WRITES);
+    std::fs::write(e.project.path().join("held.txt"), "x").unwrap();
+    std::fs::create_dir(e.project.path().join("free")).unwrap();
+    acquire(&e, "B", "held.txt");
+    let cases = [
+        "python3 -c \"import pathlib; pathlib.Path('held.txt').move('free.txt')\"",
+        "python3 -c \"import pathlib; pathlib.Path('held.txt').move_into('free')\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("held.txt (held by B)"), "{reason}");
+    }
+}
+
+/// `mkdir` and `rmdir` on a resolved `pathlib.Path` write, and were reaching
+/// the registry only through a freshly created receiver.
+#[test]
+fn a_pathlib_directory_method_reaches_the_registry() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("build")).unwrap();
+    acquire(&e, "B", "build");
+    let cases = [
+        "python3 -c \"import pathlib; pathlib.Path('build').rmdir()\"",
+        "python3 -c \"import pathlib; pathlib.Path('build/sub').mkdir()\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("locked by another agent"), "{reason}");
+    }
+}
+
+/// A write mode still writes when the path it opens could not be determined,
+/// and a read mode still writes nothing.
+#[test]
+fn an_open_on_an_undetermined_path_reports_the_write() {
+    let e = env(WRITES);
+    let write = "python3 -c \"import tempfile, pathlib; \
+                 p = pathlib.Path(tempfile.mkdtemp(dir='.')).parent.joinpath('victim.txt'); \
+                 p.open('w').write('x')\"";
+    let reason = denial(&hook(&e, Some("S1"), write)).unwrap_or_else(|| panic!("allowed"));
+    assert!(reason.contains("could not be determined"), "{reason}");
+
+    let read = "python3 -c \"import tempfile, pathlib; \
+                p = pathlib.Path(tempfile.mkdtemp(dir='.')).parent.joinpath('notes.txt'); \
+                p.open().read()\"";
+    assert_eq!(denial(&hook(&e, Some("S1"), read)), None);
+}
+
+/// A quoted `mktemp` argument names the same directory the shell would use.
+#[test]
+fn a_quoted_mktemp_directory_is_read_without_its_quotes() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("held")).unwrap();
+    acquire(&e, "B", "held");
+    let cases = [
+        "T=$(mktemp -p 'held' fresh.XXXXXX); echo x > \"$T\"",
+        "T=$(mktemp -p \"held\"); echo x > \"$T\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(reason.contains("held (held by B)"), "{reason}");
+    }
+}
+
 /// A claim below a directory reaches no name created fresh in it: the fresh
 /// name is a sibling of the held path, never a parent of it.
 #[test]

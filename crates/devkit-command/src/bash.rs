@@ -710,11 +710,13 @@ impl<'t> Walker<'_, '_, '_, 't> {
         if command.kind() != "command" {
             return None;
         }
-        let words: Vec<&str> = ts::named_children(*command)
+        // The words the shell would pass, not their source text: `-p 'held'`
+        // names the directory `held`, quotes and all removed.
+        let words: Vec<String> = ts::named_children(*command)
             .into_iter()
             .filter(|n| n.kind() != "variable_assignment")
-            .map(|n| ts::text(n, self.source))
-            .collect();
+            .map(|n| simple_argv_word(n, self.source))
+            .collect::<Option<Vec<String>>>()?;
         let (program, args) = words.split_first()?;
         if normalize::basename(program) != "mktemp"
             || args.iter().any(|a| a.contains('$') || is_dry_run(a))
@@ -728,23 +730,29 @@ impl<'t> Walker<'_, '_, '_, 't> {
         while let Some(arg) = args.get(i) {
             if let Some(dir) = arg.strip_prefix("--tmpdir=") {
                 named = Some(dir);
-            } else if *arg == "--tmpdir" {
+            } else if arg == "--tmpdir" {
                 system = true;
-            } else if *arg == "-p" {
-                named = Some(*args.get(i + 1)?);
+            } else if arg == "-p" {
+                named = Some(args.get(i + 1)?.as_str());
                 i += 1;
             } else if !arg.starts_with('-') {
-                template = Some(*arg);
+                template = Some(arg.as_str());
             }
             i += 1;
         }
         // A template is a path prefix the random characters are appended to, so
         // the entry is made in its parent. A relative template hangs off the
-        // directory `-p` names rather than replacing it; an absolute one is
-        // taken as it stands, which is what `mktemp` itself does.
+        // directory `-p` names rather than replacing it.
         let style = self.a.ctx.path_style;
         let dir = match template {
-            Some(t) if paths::is_absolute(t, style) => paths::parent_dir(t, style)?,
+            // Once a directory is named, `mktemp` refuses an absolute template
+            // outright and creates nothing at all.
+            Some(t) if paths::is_absolute(t, style) => {
+                if named.is_some() || system {
+                    return None;
+                }
+                paths::parent_dir(t, style)?
+            }
             Some(t) => {
                 let under = paths::parent_dir(t, style)?;
                 match (named, system) {
@@ -943,10 +951,18 @@ mod tests {
             dir("T=$(mktemp -p /held sub/fresh.XXXX); echo x > \"$T\""),
             Some("/held/sub".to_string())
         );
-        // An absolute template is taken as it stands.
+        // On its own an absolute template is taken as it stands.
         assert_eq!(
-            dir("T=$(mktemp -p /held /other/fresh.XXXX); echo x > \"$T\""),
+            dir("T=$(mktemp /other/fresh.XXXX); echo x > \"$T\""),
             Some("/other".to_string())
+        );
+        // Named a directory as well, `mktemp` refuses the template and creates
+        // nothing, so the substitution is empty rather than a fresh path.
+        assert_eq!(
+            targets(&bash(
+                "T=$(mktemp -p /held /other/fresh.XXXX); echo x > \"$T\""
+            )),
+            ["?"]
         );
     }
 

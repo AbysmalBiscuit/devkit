@@ -184,6 +184,17 @@ const MUTATING_PATH_METHODS: &[&str] = &[
     "move_into",
 ];
 
+/// The mode a call to `open` was given, and whether it was given one at all.
+fn open_mode<'t>(args: &[Py], keywords: &HashMap<String, (Py, Node<'t>)>) -> (Py, bool) {
+    (
+        args.first()
+            .cloned()
+            .or_else(|| keywords.get("mode").map(|(value, _)| value.clone()))
+            .unwrap_or(Py::Unknown),
+        !args.is_empty() || keywords.contains_key("mode"),
+    )
+}
+
 /// Where a `tempfile` entry is created. `None` when the call named a directory
 /// that could not be resolved, leaving nothing to check a claim against.
 fn temp_dir(
@@ -1180,39 +1191,11 @@ impl<'t> Walker<'_, '_, '_, 't> {
         match receiver {
             Py::Path(p) => {
                 let this = Py::Path(p.clone());
+                if let Some(result) = self.path_mutation(node, &this, method, args, keywords, scope)
+                {
+                    return result;
+                }
                 match method {
-                    "write_text" | "write_bytes" => {
-                        self.effect(node, FileOp::Overwrite, &this, scope)
-                    }
-                    "touch" | "symlink_to" | "hardlink_to" => {
-                        self.effect(node, FileOp::Create, &this, scope)
-                    }
-                    "unlink" => self.effect(node, FileOp::Delete, &this, scope),
-                    "copy" | "move" => {
-                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
-                        self.effect(node, FileOp::Copy, &dest, scope)
-                    }
-                    "copy_into" | "move_into" => {
-                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
-                        self.tree(node, &dest, method, scope)
-                    }
-                    "rename" | "replace" => {
-                        self.effect(node, FileOp::Rename, &this, scope);
-                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
-                        self.effect(node, FileOp::Rename, &dest, scope);
-                        dest
-                    }
-                    "open" => self.open(
-                        node,
-                        &this,
-                        &args
-                            .first()
-                            .cloned()
-                            .or_else(|| keywords.get("mode").map(|(value, _)| value.clone()))
-                            .unwrap_or(Py::Unknown),
-                        !args.is_empty() || keywords.contains_key("mode"),
-                        scope.cwd.as_deref(),
-                    ),
                     "with_suffix" => match args.first() {
                         Some(Py::Str(s)) => self.known(
                             node,
@@ -1282,6 +1265,12 @@ impl<'t> Walker<'_, '_, '_, 't> {
             },
             // `str.replace` takes the old and new text; `Path.replace` takes one target.
             Py::Unknown if method == "replace" && args.len() >= 2 => Py::Unknown,
+            // A path this could not determine is still opened for writing
+            // when the mode says so, and a read mode still writes nothing.
+            Py::Unknown if method == "open" => {
+                let (mode, given) = open_mode(args, keywords);
+                self.open(node, &Py::Unknown, &mode, given, scope.cwd.as_deref())
+            }
             Py::Unknown if WRITE_METHODS.contains(&method) => {
                 self.unresolved(
                     node,
@@ -1298,39 +1287,11 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             receiver if receiver.is_ephemeral() => {
                 let this = receiver.clone();
+                if let Some(result) = self.path_mutation(node, &this, method, args, keywords, scope)
+                {
+                    return result;
+                }
                 match method {
-                    "write_text" | "write_bytes" => {
-                        self.effect(node, FileOp::Overwrite, &this, scope)
-                    }
-                    "touch" | "symlink_to" | "hardlink_to" | "mkdir" => {
-                        self.effect(node, FileOp::Create, &this, scope)
-                    }
-                    "unlink" | "rmdir" => self.effect(node, FileOp::Delete, &this, scope),
-                    "copy" | "move" => {
-                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
-                        self.effect(node, FileOp::Copy, &dest, scope)
-                    }
-                    "copy_into" | "move_into" => {
-                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
-                        self.tree(node, &dest, method, scope)
-                    }
-                    "rename" | "replace" => {
-                        self.effect(node, FileOp::Rename, &this, scope);
-                        let dest = args.first().cloned().unwrap_or(Py::Unknown);
-                        self.effect(node, FileOp::Rename, &dest, scope);
-                        dest
-                    }
-                    "open" => self.open(
-                        node,
-                        &this,
-                        &args
-                            .first()
-                            .cloned()
-                            .or_else(|| keywords.get("mode").map(|(value, _)| value.clone()))
-                            .unwrap_or(Py::Unknown),
-                        !args.is_empty() || keywords.contains_key("mode"),
-                        scope.cwd.as_deref(),
-                    ),
                     "joinpath" => {
                         let mut parts = vec![this];
                         parts.extend(args.iter().cloned());
@@ -1393,6 +1354,52 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 Some(FileOp::Overwrite)
             },
         }
+    }
+
+    /// The effect of a `pathlib` method that mutates the path it is called on,
+    /// whatever that receiver turned out to be. Covers every name in
+    /// [`MUTATING_PATH_METHODS`], and `open`, whose mode decides. `None` for
+    /// any other method, leaving the caller to read it against its own
+    /// receiver.
+    fn path_mutation(
+        &mut self,
+        node: Node<'t>,
+        this: &Py,
+        method: &str,
+        args: &[Py],
+        keywords: &HashMap<String, (Py, Node<'t>)>,
+        scope: &Scope,
+    ) -> Option<Py> {
+        let dest = || args.first().cloned().unwrap_or(Py::Unknown);
+        Some(match method {
+            "write_text" | "write_bytes" => self.effect(node, FileOp::Overwrite, this, scope),
+            "touch" | "symlink_to" | "hardlink_to" | "mkdir" => {
+                self.effect(node, FileOp::Create, this, scope)
+            }
+            "unlink" | "rmdir" => self.effect(node, FileOp::Delete, this, scope),
+            "copy" => self.effect(node, FileOp::Copy, &dest(), scope),
+            "copy_into" => self.tree(node, &dest(), method, scope),
+            // A move renames the source away, so the source is written too.
+            "move" => {
+                self.effect(node, FileOp::Rename, this, scope);
+                self.effect(node, FileOp::Rename, &dest(), scope)
+            }
+            "move_into" => {
+                self.effect(node, FileOp::Rename, this, scope);
+                self.tree(node, &dest(), method, scope)
+            }
+            "rename" | "replace" => {
+                self.effect(node, FileOp::Rename, this, scope);
+                let dest = dest();
+                self.effect(node, FileOp::Rename, &dest, scope);
+                dest
+            }
+            "open" => {
+                let (mode, given) = open_mode(args, keywords);
+                self.open(node, this, &mode, given, scope.cwd.as_deref())
+            }
+            _ => return None,
+        })
     }
 
     fn effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, scope: &Scope) -> Py {
@@ -1583,6 +1590,22 @@ mod tests {
         let a = py("from pathlib import Path\nPath('src/a.ts').write_text('x')");
         assert_eq!(targets(&a), ["/repo/src/a.ts"]);
         assert!(a.file_effects[0].location.embedded.is_some());
+    }
+
+    /// Every method the analyzer calls mutating has to record something when
+    /// the receiver is a path it resolved, or the list and the dispatch that
+    /// reads it have drifted apart.
+    #[test]
+    fn every_mutating_path_method_records_an_effect() {
+        for method in crate::python::MUTATING_PATH_METHODS {
+            let a = py(&format!(
+                "import pathlib\npathlib.Path('a.txt').{method}('b.txt')"
+            ));
+            assert!(
+                !a.file_effects.is_empty() || !a.tree_effects.is_empty(),
+                "`{method}` recorded nothing"
+            );
+        }
     }
 
     #[test]
