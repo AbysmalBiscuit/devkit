@@ -67,6 +67,9 @@ const WRITE_METHOD_NAMES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq)]
 enum Js {
     Str(String),
+    /// A directory `fs.mkdtemp` created fresh under a random name.
+    /// Uncontendable, so a write under it is recorded without a claim.
+    Ephemeral,
     Num(i64),
     Array(Vec<Js>),
     Api(String),
@@ -84,6 +87,15 @@ impl Js {
         match self {
             Self::Str(s) => Value::Known(s.clone()),
             _ => Value::Unknown,
+        }
+    }
+
+    /// Whether this value is, or was derived from, a freshly created temp path.
+    fn is_ephemeral(&self) -> bool {
+        match self {
+            Self::Ephemeral => true,
+            Self::Method(object, _) => object.is_ephemeral(),
+            _ => false,
         }
     }
 }
@@ -138,6 +150,21 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "a JavaScript value exceeded the configured size limit",
             self.at(node),
         );
+    }
+
+    fn js_effect(&mut self, op: FileOp, target: &Js, cwd: Option<&str>, at: Location) {
+        if target.is_ephemeral() {
+            self.a.ephemeral_effect(op, at);
+            return;
+        }
+        self.a.file_effect(op, &target.as_value(), cwd, at);
+    }
+
+    fn js_tree(&mut self, scope: &Js, whole: bool, cwd: Option<&str>, by: &str, at: Location) {
+        if scope.is_ephemeral() {
+            return;
+        }
+        self.a.tree_effect(&scope.as_value(), whole, cwd, by, at);
     }
 
     fn known(&mut self, node: Node<'_>, value: String) -> Js {
@@ -537,6 +564,12 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 self.unresolved(node, "dynamically evaluated script source");
                 Js::Unknown
             }
+            (Some("fs.mkdtemp" | "fs.mkdtempSync"), _) => Js::Ephemeral,
+            (Some("path.join" | "path.posix.join"), _)
+                if args.iter().any(|(v, _)| v.is_ephemeral()) =>
+            {
+                Js::Ephemeral
+            }
             (Some("path.join" | "path.posix.join"), _) => args
                 .iter()
                 .map(|(v, _)| match v {
@@ -625,17 +658,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     .iter()
                     .find(|(method_name, ..)| *method_name == method)
                 {
-                    self.a
-                        .file_effect(*op, &arg(*index).as_value(), cwd.as_deref(), at);
+                    self.js_effect(*op, &arg(*index), cwd.as_deref(), at);
                 } else if matches!(method, "renameSync" | "rename") {
-                    self.a.file_effect(
-                        FileOp::Rename,
-                        &arg(0).as_value(),
-                        cwd.as_deref(),
-                        at.clone(),
-                    );
-                    self.a
-                        .file_effect(FileOp::Rename, &arg(1).as_value(), cwd.as_deref(), at);
+                    self.js_effect(FileOp::Rename, &arg(0), cwd.as_deref(), at.clone());
+                    self.js_effect(FileOp::Rename, &arg(1), cwd.as_deref(), at);
                 } else if matches!(method, "rmSync" | "rm" | "cpSync" | "cp") {
                     let recursive = args
                         .get(if method.starts_with("cp") { 2 } else { 1 })
@@ -648,33 +674,24 @@ impl<'t> Walker<'_, '_, '_, 't> {
                         arg(0)
                     };
                     if recursive {
-                        self.a.tree_effect(
-                            &target.as_value(),
-                            false,
-                            cwd.as_deref(),
-                            &format!("fs.{method}"),
-                            at,
-                        );
+                        self.js_tree(&target, false, cwd.as_deref(), &format!("fs.{method}"), at);
                     } else {
-                        self.a.file_effect(
+                        self.js_effect(
                             if method.starts_with("cp") {
                                 FileOp::Copy
                             } else {
                                 FileOp::Delete
                             },
-                            &target.as_value(),
+                            &target,
                             cwd.as_deref(),
                             at,
                         );
                     }
                 } else if matches!(method, "openSync" | "open") {
                     match arg(1) {
-                        Js::Str(flags) if flags.contains(['w', 'a', '+']) => self.a.file_effect(
-                            FileOp::Overwrite,
-                            &arg(0).as_value(),
-                            cwd.as_deref(),
-                            at,
-                        ),
+                        Js::Str(flags) if flags.contains(['w', 'a', '+']) => {
+                            self.js_effect(FileOp::Overwrite, &arg(0), cwd.as_deref(), at)
+                        }
                         Js::Str(_) => {}
                         _ if args.len() < 2 => {}
                         _ => self.unresolved(
@@ -686,36 +703,20 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 Js::Data
             }
             (Some("Bun.write"), _) => {
-                self.a
-                    .file_effect(FileOp::Overwrite, &arg(0).as_value(), cwd.as_deref(), at);
+                self.js_effect(FileOp::Overwrite, &arg(0), cwd.as_deref(), at);
                 Js::Data
             }
             (Some(name), _) if name.starts_with("Deno.") => {
                 match &name[5..] {
-                    "writeTextFile" | "writeFile" => self.a.file_effect(
-                        FileOp::Overwrite,
-                        &arg(0).as_value(),
-                        cwd.as_deref(),
-                        at,
-                    ),
-                    "remove" => {
-                        self.a
-                            .file_effect(FileOp::Delete, &arg(0).as_value(), cwd.as_deref(), at)
+                    "writeTextFile" | "writeFile" => {
+                        self.js_effect(FileOp::Overwrite, &arg(0), cwd.as_deref(), at)
                     }
+                    "remove" => self.js_effect(FileOp::Delete, &arg(0), cwd.as_deref(), at),
                     "rename" => {
-                        self.a.file_effect(
-                            FileOp::Rename,
-                            &arg(0).as_value(),
-                            cwd.as_deref(),
-                            at.clone(),
-                        );
-                        self.a
-                            .file_effect(FileOp::Rename, &arg(1).as_value(), cwd.as_deref(), at);
+                        self.js_effect(FileOp::Rename, &arg(0), cwd.as_deref(), at.clone());
+                        self.js_effect(FileOp::Rename, &arg(1), cwd.as_deref(), at);
                     }
-                    "copyFile" => {
-                        self.a
-                            .file_effect(FileOp::Copy, &arg(1).as_value(), cwd.as_deref(), at)
-                    }
+                    "copyFile" => self.js_effect(FileOp::Copy, &arg(1), cwd.as_deref(), at),
                     _ => {}
                 }
                 Js::Data
@@ -826,6 +827,15 @@ mod tests {
         model::{Limit, Target, UncertaintyKind},
         testutil::{bash, targets},
     };
+
+    #[test]
+    fn an_mkdtemp_directory_write_is_ephemeral() {
+        let a = bash(
+            "node -e \"const fs = require('fs'); const path = require('path'); const d = fs.mkdtempSync('pre'); fs.writeFileSync(path.join(d, 'out.txt'), 'x')\"",
+        );
+        assert_eq!(targets(&a), ["<ephemeral>"]);
+        assert!(a.uncertainties.is_empty(), "{:?}", a.uncertainties);
+    }
 
     fn unresolved(a: &crate::Analysis) -> bool {
         a.uncertainties
