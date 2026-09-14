@@ -393,3 +393,119 @@ fn task_runs_and_propagates_exit_codes() {
         "{missing:?}"
     );
 }
+
+#[test]
+fn task_split_passes_selected_paths_as_separate_arguments() {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[tasks.stage]
+run = ["git", "add", "--", { split = "{{ files }}", on = ";" }]
+"#,
+    )
+    .unwrap();
+    for name in ["new file.txt", "$(touch injected).txt", "unselected.txt"] {
+        std::fs::write(dir.path().join(name), name).unwrap();
+    }
+
+    let out = run_in(dir.path(), &[
+        "task",
+        "stage",
+        "--arg",
+        "files=new file.txt;$(touch injected).txt",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    let staged = devkit_common::git::Git::fixture(dir.path())
+        .args(["diff", "--cached", "--name-only", "-z"])
+        .output()
+        .unwrap();
+    assert_eq!(staged, "$(touch injected).txt\0new file.txt\0");
+    assert!(!dir.path().join("injected").exists());
+}
+
+#[test]
+fn task_split_of_an_empty_value_adds_no_arguments() {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[tasks.show]
+run = ["git", "config", "--file", "observed", "probe.value", "set", { split = "{{ extra }}", on = ";" }]
+"#,
+    )
+    .unwrap();
+    let out = run_in(dir.path(), &["task", "show", "--arg", "extra="]);
+    assert!(out.status.success(), "{out:?}");
+    let recorded = devkit_common::git::Git::fixture(dir.path())
+        .args(["config", "--file", "observed", "--get", "probe.value"])
+        .output()
+        .unwrap();
+    assert_eq!(recorded, "set\n");
+}
+
+#[test]
+fn task_split_shape_rules_are_enforced() {
+    for (run, expected) in [
+        (
+            r#"[{ split = "{{ program }}", on = ";" }, "version"]"#,
+            "program must be a plain string",
+        ),
+        (
+            r#"["git", "version", { split = "{{ program }}", on = "" }]"#,
+            "split with an empty `on`",
+        ),
+    ] {
+        let dir = setup();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            format!("[tasks.invalid]\nrun = {run}\n"),
+        )
+        .unwrap();
+        let out = run_in(dir.path(), &["task", "invalid", "--arg", "program=git"]);
+        assert!(!out.status.success(), "{run}: {out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(expected),
+            "{run}: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn task_split_template_is_scanned_for_args_and_ports() {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[apps.api]
+base_port = 39140
+path = "."
+launch = ["git", "version"]
+[tasks.show]
+run = ["git", "config", "--file", "observed", "probe.value", { split = "{{ prefix }}{{ ports['api'] }}", on = ";" }]
+require_live = ["api"]
+"#,
+    )
+    .unwrap();
+    let listing = run_in(dir.path(), &["task"]);
+    assert!(listing.status.success(), "{listing:?}");
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("prefix"));
+
+    let dry = run_in(dir.path(), &[
+        "task",
+        "show",
+        "--arg",
+        "prefix=port-",
+        "--dry-run",
+    ]);
+    assert!(dry.status.success(), "{dry:?}");
+    assert!(
+        String::from_utf8_lossy(&dry.stdout).contains("probe.value port-391"),
+        "{dry:?}"
+    );
+    assert!(!dir.path().join("observed").exists());
+
+    let gated = run_in(dir.path(), &["task", "show", "--arg", "prefix=port-"]);
+    assert!(!gated.status.success(), "{gated:?}");
+    assert!(
+        String::from_utf8_lossy(&gated.stderr).contains("no live server"),
+        "{gated:?}"
+    );
+}

@@ -9,7 +9,7 @@ pub mod tasks;
 use std::collections::{BTreeMap, HashMap};
 
 use devkit_command::{Analysis, Invocation, Value};
-use devkit_config::{AppMatch, CommandRule, Config, RuleAction, Severity};
+use devkit_config::{AppMatch, CommandRule, Config, RuleAction, RunArg, Severity};
 use norm::basename;
 
 use crate::apps::App;
@@ -217,6 +217,32 @@ fn configured(argv: &[String]) -> Option<Known> {
         .and_then(known)
 }
 
+/// A task's `run` unwrapped the same way as a typed command.
+///
+/// A split renders to an unknown number of words, so nothing after one sits at
+/// a knowable offset: a scalar following a split gives up on the task rather
+/// than matching a typed command at the wrong position. The words before the
+/// first split also have to carry the signature on their own, which takes at
+/// least two of them. `["git", { split }]` would otherwise claim every `git`.
+fn configured_task(args: &[RunArg]) -> Option<Known> {
+    let words = |args: &[RunArg]| -> Vec<String> {
+        args.iter().map(|a| a.template().to_string()).collect()
+    };
+    let Some(first_split) = args.iter().position(|a| matches!(a, RunArg::Split { .. })) else {
+        return configured(&words(args));
+    };
+    if first_split < 2
+        || args[first_split..]
+            .iter()
+            .any(|a| matches!(a, RunArg::Scalar(_)))
+    {
+        return None;
+    }
+    let mut argv: Vec<String> = words(&args[..first_split]);
+    argv.push(sig::OPAQUE.into());
+    configured(&argv)
+}
+
 struct Normalized {
     argv: Vec<String>,
     doppler: Option<norm::Doppler>,
@@ -355,7 +381,7 @@ fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
         .filter_map(|(name, task)| {
             // Both sides normalize, or a task's own runner prefix and doppler
             // wrapper make it unmatchable against the stripped typed side.
-            let cfg = configured(&task.run)?;
+            let cfg = configured_task(&task.run)?;
             let s = sig::signature(&cfg.argv)?;
             // The floor is a heuristic about bare-program tasks. A task that
             // states its own `guard` answer has already settled the question,
@@ -645,6 +671,59 @@ mod tests {
         assert!(reason(&d).contains("devrun task check"), "{}", reason(&d));
     }
 
+    #[test]
+    fn a_trailing_split_keeps_the_static_task_signature() {
+        for run in [
+            r#"["git", "add", "--", { split = "{{ files }}", on = ";" }]"#,
+            r#"["git", "add", { split = "{{ files }}", on = ";" }]"#,
+        ] {
+            let p = project(|c| {
+                c.tasks.insert(
+                    "stage".into(),
+                    toml::from_str(&format!("run = {run}\nguard = true")).unwrap(),
+                );
+            });
+            let d = decide_with("git add -- selected.txt", &BTreeMap::new(), Some(&p));
+            assert!(
+                reason(&d).contains("devrun task stage --arg files=<files>"),
+                "{run}: {}",
+                reason(&d)
+            );
+            assert!(!denies(&decide_with(
+                "git diff",
+                &BTreeMap::new(),
+                Some(&p)
+            )));
+        }
+    }
+
+    #[test]
+    fn splits_cannot_supply_a_guard_signature_or_wrapper_argument() {
+        let split = r#"{ split = "{{ args }}", on = ";" }"#;
+        for (run, typed) in [
+            (
+                format!(r#"["docker", "compose", {split}, "up"]"#),
+                "docker compose down",
+            ),
+            (format!(r#"["sudo", "-u", {split}]"#), "sudo ls"),
+            (
+                format!(r#"["doppler", "run", "-c", {split}]"#),
+                "doppler run -c dev -- git status",
+            ),
+            (format!(r#"["bun", "--", {split}]"#), "bun test"),
+            (format!(r#"["git", {split}]"#), "git status"),
+        ] {
+            let p = project(|c| {
+                c.tasks.insert(
+                    "dynamic".into(),
+                    toml::from_str(&format!("run = {run}\nguard = true")).unwrap(),
+                );
+            });
+            let d = decide_with(typed, &BTreeMap::new(), Some(&p));
+            assert!(!denies(&d), "{run}: {}", reason(&d));
+        }
+    }
+
     /// A bare-program task is normally held back from a command the catalog
     /// reads as something other than a server. An explicit `guard = true` is
     /// the project overruling that, and it has to reach the decision to do
@@ -693,7 +772,7 @@ mod tests {
             c.tasks.insert("check".into(), TaskConfig {
                 run: ["doppler", "run", "-c", "dev", "--", "bun", "test"]
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(|s| (*s).into())
                     .collect(),
                 ..Default::default()
             });
@@ -734,7 +813,7 @@ mod tests {
                 ("long", vec!["bun", "test", "unit"]),
             ] {
                 c.tasks.insert(name.into(), TaskConfig {
-                    run: run.iter().map(|s| s.to_string()).collect(),
+                    run: run.iter().map(|s| (*s).into()).collect(),
                     app: Some("web".into()),
                     ..Default::default()
                 });
@@ -856,7 +935,7 @@ mod tests {
     fn vite_task(name: &str, run: &[&str]) -> Project {
         project(|c| {
             c.tasks.insert(name.into(), TaskConfig {
-                run: run.iter().map(|s| s.to_string()).collect(),
+                run: run.iter().map(|s| (*s).into()).collect(),
                 app: Some("storefront".into()),
                 ..Default::default()
             });

@@ -696,6 +696,32 @@
       ],
       "type": "string"
     },
+    "RunArg": {
+      "anyOf": [
+        {
+          "description": "Renders to exactly one argument, whatever the result contains.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Renders, then splits on `on` into a run of separate arguments. A\ntemplate rendering empty contributes no arguments at all.",
+          "properties": {
+            "on": {
+              "type": "string"
+            },
+            "split": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "split",
+            "on"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "One entry of a task's `run`, each rendering exactly one minijinja template\nand differing only in what it does with the result.\n\n`deny_unknown_fields` because `Split` is matched untagged: without it a\nmisspelled key alongside a well-formed `split`/`on` pair deserializes\nsilently, and the typo changes nothing the author can see."
+    },
     "Severity": {
       "description": "How a diagnostic is classified for the agent.",
       "enum": [
@@ -790,9 +816,9 @@
         },
         "run": {
           "default": [],
-          "description": "The command as one argv (program + args), rendered as minijinja over\n`{{ port }}`, `ports['<app>']`, and `[templates.variables]`. Mutually\nexclusive with `steps`.",
+          "description": "The command as one argv (program + args), every entry a minijinja\ntemplate over `{{ port }}`, `ports['<app>']`, and\n`[templates.variables]`. A `{ split = \"...\", on = \"...\" }` entry spreads\nits rendered value into separate arguments. The program must be a plain\nstring. Mutually exclusive with `steps`.",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/RunArg"
           },
           "type": "array"
         },

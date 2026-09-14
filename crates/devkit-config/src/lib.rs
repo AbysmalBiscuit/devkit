@@ -459,6 +459,45 @@ pub enum Step {
     Up(String),
 }
 
+/// One entry of a task's `run`, each rendering exactly one minijinja template
+/// and differing only in what it does with the result.
+///
+/// `deny_unknown_fields` because `Split` is matched untagged: without it a
+/// misspelled key alongside a well-formed `split`/`on` pair deserializes
+/// silently, and the typo changes nothing the author can see.
+#[derive(Debug, Clone, PartialEq, JsonSchema, Deserialize, Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum RunArg {
+    /// Renders to exactly one argument, whatever the result contains.
+    Scalar(String),
+    /// Renders, then splits on `on` into a run of separate arguments. A
+    /// template rendering empty contributes no arguments at all.
+    Split { split: String, on: String },
+}
+
+impl RunArg {
+    /// The minijinja template this entry renders. Port scanning and variable
+    /// discovery read it without caring which variant produced it.
+    pub fn template(&self) -> &str {
+        match self {
+            Self::Scalar(s) => s,
+            Self::Split { split, .. } => split,
+        }
+    }
+}
+
+impl From<String> for RunArg {
+    fn from(value: String) -> Self {
+        Self::Scalar(value)
+    }
+}
+
+impl From<&str> for RunArg {
+    fn from(value: &str) -> Self {
+        Self::Scalar(value.into())
+    }
+}
+
 /// A canned oneshot invoked by name via `devrun task`: either a command
 /// (`run`, optionally scoped to an `app` for cwd + static_env) or a sequence
 /// (`steps`). Exactly one of `run`/`steps` must be set; a sequence task
@@ -472,11 +511,13 @@ pub struct TaskConfig {
     /// `static_env`. Omit to run at the repo root.
     #[serde(default)]
     pub app: Option<String>,
-    /// The command as one argv (program + args), rendered as minijinja over
-    /// `{{ port }}`, `ports['<app>']`, and `[templates.variables]`. Mutually
-    /// exclusive with `steps`.
+    /// The command as one argv (program + args), every entry a minijinja
+    /// template over `{{ port }}`, `ports['<app>']`, and
+    /// `[templates.variables]`. A `{ split = "...", on = "..." }` entry spreads
+    /// its rendered value into separate arguments. The program must be a plain
+    /// string. Mutually exclusive with `steps`.
     #[serde(default)]
-    pub run: Vec<String>,
+    pub run: Vec<RunArg>,
     /// A sequence run in order, each step either a command or an `up`. Each
     /// step re-resolves its ports immediately before it runs. Mutually
     /// exclusive with `run`.
@@ -1746,6 +1787,21 @@ launch = ["nitro", "dev", "--port", "{{ port }}"]
     }
 
     #[test]
+    fn task_split_roundtrips_and_rejects_unknown_fields() {
+        let text = r#"[tasks.stage]
+run = ["git", "add", "--", { split = "{{ files }}", on = ";" }]
+"#;
+        let config: Config = toml::from_str(text).unwrap();
+        let serialized = toml::to_string(&config).unwrap();
+        let roundtrip: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(roundtrip.tasks["stage"].run, config.tasks["stage"].run);
+        assert_eq!(config.tasks["stage"].run[3].template(), "{{ files }}");
+        assert!(toml::from_str::<Config>(&text.replace("split =", "typo =")).is_err());
+        assert!(toml::from_str::<Config>(&text.replace(", on =", ", typo =")).is_err());
+        assert!(toml::from_str::<Config>(&text.replace("{ split", "{ typo = 1, split")).is_err());
+    }
+
+    #[test]
     fn roundtrips_app_with_static_env_and_prep_files() {
         let src = format!(
             "{SAMPLE}\n\
@@ -2199,7 +2255,7 @@ steps = [
         let c = Config::parse(src).unwrap();
         let t = &c.tasks["api-prod-build"];
         assert_eq!(t.app.as_deref(), Some("api-prod"));
-        assert_eq!(t.run[0], "doppler");
+        assert_eq!(t.run[0], RunArg::Scalar("doppler".into()));
         assert_eq!(t.env["NITRO_PRESET"], "node-server");
         assert!(t.steps.is_empty());
         let s = &c.tasks["profile-lab-os"];

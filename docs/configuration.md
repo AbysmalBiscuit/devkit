@@ -239,6 +239,25 @@ steps = [
 - Sequence steps run in order and stop at the first failure. `{ up = "app" }` is `devrun up app` (a no-op for a live server). A sequence may only set `description` and `steps`, and cannot reference another sequence. The CLI `--env`/`--env-file` overlay applies to every step: command steps layer it above the task `env`, and `{ up = "app" }` steps layer it above the app's `static_env`, exactly as `devrun up --env` would.
 - `devrun task <name> --dry-run` prints each rendered plan (still resolving ports, so the printed values are real) without executing.
 
+### Splitting one value into several arguments
+
+A string in `run` renders to exactly one argument, so a caller-supplied list of paths cannot become a list of arguments. A `{ split = "...", on = "..." }` entry renders its template the way every other entry does, then cuts the result on `on` and contributes each piece as a separate argument.
+
+```toml
+[tasks.stage]
+run = ["git", "add", "--", { split = "{{ files }}", on = ";" }]
+```
+
+```sh
+devrun task stage --arg 'files=new file.txt;other.txt'
+```
+
+A template that renders empty contributes no arguments at all, which is how a task says nothing was selected. Every other piece reaches the program exactly as it was written, spaces, quotes and shell metacharacters included, because devkit execs the argv instead of handing it to a shell. Pick a delimiter the values cannot contain. An empty `on` is rejected.
+
+A split reads the same variables and port context as a scalar template, so `--arg` discovery, `require_live` scanning and port allocation all see it, and `--dry-run` prints the arguments it produced. Sequence steps re-render theirs immediately before each step runs.
+
+Two shape rules apply. The program, the first entry in `run`, must be a plain string. And a split must be the last entry or followed only by other splits, with at least two plain entries ahead of the first one. The second rule exists for the command guard, which recognizes a typed command as this task by its leading static words; a split renders to an unknown number of words, so nothing after one sits at a knowable position. A task breaking that rule still runs, it just stops being one the guard offers as a redirect.
+
 ### `[daemon]`
 
 Optional daemon-level tuning. Env overrides are listed alongside each key,

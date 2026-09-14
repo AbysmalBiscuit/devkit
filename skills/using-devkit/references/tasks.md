@@ -26,6 +26,13 @@ devrun task commit --arg msg="fix login redirect"
 - `issue`, `slug` and `branch` come from the worktree's `.devkit/issue.toml` and git. Outside an issue worktree they are undefined; supply one with `--arg issue=<id>` when the task reads it.
 - When the command guard redirects a command you typed to a task, its message spells out the required `--arg` flags. Run the task with them.
 
+An arg can spread into several arguments by declaring a delimiter to split on:
+
+```toml
+[tasks.split-task]
+run = ["exe", { split = "{{ to_split }}", on = "," }]
+```
+
 ## The `require_live` gate
 
 A task may declare `require_live = ["<app>"]`, meaning that app must have a live server **in this worktree** — a registry row with an alive pid — before the task runs. A build that bakes another app's URL into its output is the usual case.
