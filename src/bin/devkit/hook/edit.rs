@@ -209,9 +209,15 @@ mod tests {
     #[test]
     fn a_relative_target_resolves_against_the_sessions_cwd() {
         let p = serde_json::json!({ "cwd": "/repo" });
+        let got = resolve_against(&p, "src/a.rs");
+        assert_ne!(got, "src/a.rs", "a relative target is not left as it came");
+        // Compared as paths, not as strings: `join` writes the platform's
+        // separator, so a hand-spelled `/repo/src/a.rs` matches on Unix and
+        // not on Windows. `Path` equality is component-wise, and Windows
+        // treats both separators as one.
         assert_eq!(
-            resolve_against(&p, "src/a.rs"),
-            std::path::Path::new("/repo/src/a.rs").to_string_lossy()
+            std::path::Path::new(&got),
+            std::path::Path::new("/repo").join("src/a.rs")
         );
     }
 }
