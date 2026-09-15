@@ -9,12 +9,227 @@
 //! `paths::state_dir` and `secrets`.
 
 pub mod redact;
+pub mod writer;
 
 use std::path::{Path, PathBuf};
 
 use devkit_config::{Fidelity, LogSection, PromptFidelity};
+use serde::{Deserialize, Serialize};
+pub use writer::{now_rfc3339, record, record_to};
 
 use crate::{harness::parse_env_override, paths};
+
+/// Bumped when the record envelope changes shape. Every record carries it, so
+/// a reader meeting an unfamiliar one knows it rather than guessing.
+pub const SCHEMA_VERSION: u32 = 1;
+
+/// One line of the log.
+///
+/// Every record is useful by itself. Records join on their components —
+/// `(session_id, agent_id, tool_use_id)` — rather than a derived hash, because
+/// a hash is one more step between the reader and the data and hides why a join
+/// failed. Where a harness sends no `tool_use_id`, nothing joins and both
+/// records stand alone; the join adds analysis and is never a prerequisite for
+/// reading one.
+///
+/// Records are append-only and never rewritten, so pairing never mutates a
+/// prior line, no reader-writer lock is ever needed, and a process killed
+/// mid-session cannot corrupt what is already there.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Record {
+    pub schema_version: u32,
+    /// RFC 3339, UTC. File order is not logical order, so readers sort by this.
+    pub recorded_at: String,
+    pub devkit_version: String,
+    /// `devkit_command::ANALYZER_VERSION`, passed in: `devkit-common` does not
+    /// depend on `devkit-command`, which would compile six tree-sitter C
+    /// grammars into every library crate.
+    pub analyzer_version: u32,
+    pub harness: Option<String>,
+    /// The devkit verb.
+    pub event: String,
+    /// The payload's own `hook_event_name`. Both are needed because the mapping
+    /// is not injective: Codex sends `Stop` and `Interrupt` to one verb, and a
+    /// reader asking which vendor event produced a record cannot recover it
+    /// from the verb alone.
+    pub vendor_event: Option<String>,
+    pub session_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub tool_use_id: Option<String>,
+    pub cwd: Option<PathBuf>,
+    pub project_root: Option<PathBuf>,
+    #[serde(flatten)]
+    pub kind: Kind,
+}
+
+/// What this record is about. Flattened into the envelope under a `kind` tag,
+/// so a reader can select on one field and read the payload beside it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Kind {
+    /// A shell command, its analysis, and the verdict devkit reached. Boxed
+    /// because it dwarfs every other variant, and one is built per process.
+    /// `Box` is serde-transparent, so the record shape is unchanged.
+    ShellPre(Box<ShellPre>),
+    /// How that call turned out.
+    ShellPost(ShellPost),
+    /// A structured edit and the targets it named.
+    EditPre(EditPre),
+    /// A session or subagent frame.
+    Session(SessionFrame),
+    /// What the harness asked about, or what its own classifier blocked.
+    Permission(Permission),
+    /// A turn or context boundary.
+    Lifecycle,
+    /// A worktree appearing or going away.
+    Worktree(Worktree),
+    /// A submitted prompt, behind its own fidelity key.
+    Prompt(Prompt),
+}
+
+/// Which end of a frame a `session` record names. Neither is a dependency:
+/// session end does not fire on a crash or a `kill -9`, and per-call records
+/// repeat harness, project and cwd, so a missing frame costs nothing. The start
+/// record is what gives a crashed session any frame at all.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameEnd {
+    Start,
+    End,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SessionFrame {
+    pub end: FrameEnd,
+    /// Whether this frame is a subagent's rather than the session's own.
+    pub subagent: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ShellPre {
+    /// The command at the resolved fidelity. `corpus_probe` reads this key.
+    pub command: String,
+    /// Whether redaction substituted anything.
+    pub redacted: bool,
+    /// Whether the command was cut at the size cap before recording. A heredoc
+    /// carrying a whole file is not corpus signal.
+    pub truncated: bool,
+    pub tool_name: Option<String>,
+    /// The dialect the command was read in, so an offline re-analysis does not
+    /// have to infer one from harness plus platform.
+    pub dialect: Option<String>,
+    pub analysis: Option<AnalysisProjection>,
+    pub verdict: Verdict,
+}
+
+/// What devkit decided, and the full text of every message it offered. Those
+/// messages are the correction devkit gave the agent, and whether a denial was
+/// a good one is not answerable without them.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Verdict {
+    pub decision: Decision,
+    pub blocks: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Decision {
+    Allow,
+    Deny,
+    /// The guard ran and could not decide: a payload it could not read, an
+    /// analyser panic, or a write stage that missed its deadline. An analyser
+    /// panic on real traffic is the highest-value record in the corpus.
+    Undecided,
+}
+
+/// A summary of the analysis rather than the tree. The full invocation tree is
+/// reconstructable by replaying the command through `analyze`, which is what
+/// makes `analyzer_version` load-bearing: a record whose stamp differs from the
+/// current binary is a regression candidate, not stale data.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct AnalysisProjection {
+    pub resolved_writes: Vec<String>,
+    pub unresolved_writes: Vec<String>,
+    pub tree_effects: Vec<String>,
+    pub script_files: Vec<String>,
+    pub programs: Vec<String>,
+    pub uncertainties: Vec<Uncertainty>,
+    pub analyze_micros: u64,
+    /// So a cohort query can rank without reading every projection.
+    pub counts: Counts,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub invocations: usize,
+    pub resolved_writes: usize,
+    pub unresolved_writes: usize,
+    pub uncertainties: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Uncertainty {
+    pub kind: String,
+    pub detail: Option<String>,
+    /// Byte span into the command as analysed.
+    pub start: Option<usize>,
+    pub end: Option<usize>,
+}
+
+/// Each field is absent, not zero, where the harness does not supply it. Codex
+/// forces that wording: its post payload exposes `tool_response` as output text
+/// rather than a structured result, so no exit code reaches the hook.
+///
+/// Not the output itself. Command output is large and is where credentials
+/// actually surface — a `gh auth status`, a printenv, a failed curl echoing its
+/// own headers — and redaction over arbitrary program output would be theatre.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShellPost {
+    pub exit_code: Option<i64>,
+    pub duration_ms: Option<u64>,
+    pub error: Option<bool>,
+    pub interrupted: Option<bool>,
+    pub stdout_bytes: Option<usize>,
+    pub stderr_bytes: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct EditPre {
+    pub tool_name: Option<String>,
+    pub targets: Vec<String>,
+    pub verdict: Verdict,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Permission {
+    /// Whether the harness asked about this or blocked it outright.
+    pub blocked: bool,
+    pub tool_name: Option<String>,
+    pub detail: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeChange {
+    Create,
+    Remove,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Worktree {
+    pub change: WorktreeChange,
+    pub path: Option<String>,
+}
+
+/// `text` is `None` at the default fidelity, where the record says a prompt was
+/// submitted and carries none of it. A corpus can hold full command text
+/// without holding what the human typed.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    pub text: Option<String>,
+    pub chars: Option<usize>,
+}
 
 /// The env override, matching `DEVKIT_ENFORCE_WRITES`. It is the user's own
 /// environment, so it wins over a project layer's `enabled = false`.
