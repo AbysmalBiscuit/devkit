@@ -39,21 +39,65 @@ On Windows the hook runs under Git Bash when it is present and under PowerShell 
 
 ## What the hooks do
 
-Installing the plugin wires these events. The `PreToolUse` pair is what makes lock coordination automatic, so an agent working in a shared checkout does not hand-call `lockm acquire` before an edit.
+Everything a harness sends enters one verb family, `devkit hook <event>`, and the payload's own `tool_name` picks the path inside it. `pre-tool-use` is what makes lock coordination automatic, so an agent working in a shared checkout does not hand-call `lockm acquire` before an edit.
 
-| Event | Command | Effect |
-|---|---|---|
-| `SessionStart` | `devkit brief` | Injects the project summary: the canned tasks, and the library versions this checkout resolves. |
-| `PostCompact`, `CwdChanged` | `devkit brief --pins-only`, `--if-changed` | Re-injects that context after a compaction or a directory change. |
-| `PreToolUse` on `Edit`, `MultiEdit`, `Write`, `NotebookEdit` | `lockm hook pretooluse` | Claims a lock on each file the tool is about to write. |
-| `PreToolUse` on `Bash`, `PowerShell` | `devkit harness shell` | Guards the command, then claims every write target it can resolve from the command text. |
-| `SubagentStop`, `SessionEnd` | `lockm hook subagent-stop`, `session-end` | Releases what that session line claimed. |
+| devkit verb | What devkit does |
+|---|---|
+| `pre-tool-use` | Guards the command, claims the write targets it can resolve, records the attempt. |
+| `post-tool-use`, `post-tool-use-failure` | Records the outcome. |
+| `session-end` | Releases the session's claims, records, sweeps the log. |
+| `subagent-stop` | Releases the subagent's claims, records. |
+| `session-start`, `subagent-start` | Records the frame. |
+| `permission-request`, `permission-denied` | Records what the harness asked about, or what its own classifier blocked. |
+| `stop`, `stop-failure`, `pre-compact`, `post-compact`, `cwd-changed` | Records the turn or context boundary. |
+| `worktree-create`, `worktree-remove` | Records the change. |
+| `user-prompt-submit` | Records, behind its own fidelity key. |
+
+Every verb except `pre-tool-use`, `session-end` and `subagent-stop` is record-only: with logging off each is a process spawn that reads the global config, learns logging is off, and exits. `devkit brief` still runs alongside `session-start`, `post-compact` and `cwd-changed` rather than being replaced by them.
+
+Each manifest is a translation table with no logic in it. Every command carries `--harness <name>`, so identity never depends on guessing which fields a vendor sends this release.
+
+| devkit verb | Claude Code | Codex | Cursor |
+|---|---|---|---|
+| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `preToolUse` |
+| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` |
+| `post-tool-use-failure` | `PostToolUseFailure` | — | `postToolUseFailure` |
+| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` |
+| `session-end` | `SessionEnd` | `SessionEnd` | `sessionEnd` |
+| `subagent-start` | `SubagentStart` | `SubagentStart` | `subagentStart` |
+| `subagent-stop` | `SubagentStop` | `SubagentStop` | `subagentStop` |
+| `permission-request` | `PermissionRequest` | `PermissionRequest` | — |
+| `permission-denied` | `PermissionDenied` | — | — |
+| `stop` | `Stop` | `Stop`, `Interrupt` | `stop` |
+| `stop-failure` | `StopFailure` | — | — |
+| `pre-compact` | `PreCompact` | `PreCompact` | `preCompact` |
+| `post-compact` | `PostCompact` | `PostCompact` | — |
+| `cwd-changed` | `CwdChanged` | — | `workspaceOpen` |
+| `worktree-create` | `WorktreeCreate` | — | — |
+| `worktree-remove` | `WorktreeRemove` | — | — |
+| `user-prompt-submit` | `UserPromptSubmit` | `UserPromptSubmit` | `beforeSubmitPrompt` |
+
+Check the vendor before adding a verb rather than recalling it:
+
+- Claude Code: <https://code.claude.com/docs/en/hooks>, which carries the per-event payloads and the exit-code table.
+- Codex: <https://developers.openai.com/codex/config-schema.json>, and `codex-rs/protocol/src/protocol.rs` plus `codex-rs/config/src/hook_config.rs` in `openai/codex` behind it.
+- Cursor: <https://cursor.com/docs/hooks>. Not the `cursor-hooks` npm schema, which lags the product.
+
+Cursor is wired through its generic tool trio rather than its action-specific hooks, which it also offers: wiring both would fire devkit twice for one shell command, and the generic events carry `tool_use_id`, which the shell-specific pair does not. Its Tab completions edit files through `afterTabFileEdit`, which is post-only, so a Tab edit cannot be lock-guarded; that gap is noted rather than solved.
+
+**Exit codes are part of the contract.** No verb in the family ever exits 2. Exit 2 blocks the tool call on Claude Code `PreToolUse` and sets `should_block` on Codex, and clap exits 2 for a usage error, so an unrecognised verb would otherwise deny every command an agent ran. A usage error, an unknown verb and a panic all exit 1 with a message on stderr. And only `pre-tool-use` writes to stdout: `UserPromptSubmit` appends a hook's stdout to the prompt, and `Stop` and `PermissionRequest` honour a JSON decision.
+
+`devkit harness shell` and `lockm hook <event>` stay as hidden aliases for at least one release. An installed manifest can outlive the binary beside it, so the session-start bootstrap also probes for `devkit hook` once per plugin version and reports a binary too old for the manifests it is being asked to answer.
 
 Both claim paths run only where `[harness] enforce_writes` is on, resolved from the env var, the project layers, or the global config. Everywhere else they exit without effect and nothing is locked.
 
 A conflict surfaces as a denied tool call naming the holder. That is the signal to edit a different file or wait, never to `--force` past a live holder. A manual `lockm acquire` still has one use in an enforced checkout: a coarse claim over a whole subtree you are churning through, since a directory lock covers everything under it.
 
 A shell write is claimed when devkit can resolve its target statically. What happens to the rest, and which hosts get which stage, is the `[harness]` table in [configuration.md](configuration.md#harness).
+
+## Harness logging
+
+Off by default. With `[harness.log] enabled = true` in the global config, each verb writes one JSONL record of what the agent tried and what devkit decided: the command at the configured fidelity, a summary of the analysis, and the full text of every block and warning message. `devkit hook-log path` prints the directory; `devkit hook-log prune` sweeps it; `devkit doctor`'s `harness_log` row reports what is actually in force. The keys, and which of them only a global config may set, are in [configuration.md](configuration.md#harnesslog).
 
 ## Claude Code
 

@@ -9,6 +9,8 @@ mod bash;
 mod budget;
 mod catalog;
 mod context;
+#[cfg(feature = "corpus")]
+pub mod corpus;
 mod embed;
 mod fish;
 mod js;

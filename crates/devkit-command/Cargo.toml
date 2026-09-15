@@ -11,14 +11,17 @@ tree-sitter-python.workspace = true
 tree-sitter-javascript.workspace = true
 tree-sitter-typescript.workspace = true
 tree-sitter-fish.workspace = true
+# Only the `corpus` module reads records, and only offline measurement uses it.
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true
 
 [features]
 # Local measurement tools run against a shell-call corpus. Off by default so
-# builds, tests and clippy skip them.
-corpus = []
+# builds, tests and clippy skip them, and so the analyzer keeps no JSON
+# dependency on the path every hook takes.
+corpus = ["dep:serde_json"]
 
 [[example]]
 name = "corpus_probe"
