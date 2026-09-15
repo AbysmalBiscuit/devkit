@@ -12,6 +12,7 @@ mod docs;
 mod doctor;
 mod harness;
 mod hook;
+mod hook_log;
 mod issue;
 mod links;
 mod locks;
@@ -136,6 +137,9 @@ enum Cmd {
     /// Evaluate and record a coding-agent hook event.
     #[command(display_name = "devkit hook")]
     Hook(hook::HookCli),
+    /// Read and sweep the harness log.
+    #[command(display_name = "devkit hook-log")]
+    HookLog(hook_log::HookLogCli),
     /// Install the old command names as hardlinks beside this binary.
     ///
     /// Creates hardlinks such as `issue` and `devrun` beside this
@@ -404,6 +408,7 @@ fn main() -> Result<()> {
                 Cmd::Mcp(c) => mcp::run(c),
                 Cmd::Harness(c) => harness::run(c),
                 Cmd::Hook(c) => run_hook_guarded(c),
+                Cmd::HookLog(c) => hook_log::run(c),
                 Cmd::InstallLinks(a) => links::run(a),
             }
         }

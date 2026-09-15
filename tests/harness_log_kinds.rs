@@ -38,7 +38,7 @@ fn env_with(global_extra: &str) -> Env {
     std::fs::write(
         cfg.join("config.toml"),
         format!(
-            "[harness.log]\nenabled = true\nauto_prune = false\ndir = {:?}\n{global_extra}",
+            "[harness.log]\nenabled = true\ndir = {:?}\n{global_extra}",
             home.path().join("logs").to_string_lossy()
         ),
     )
@@ -317,4 +317,96 @@ fn a_verb_with_no_payload_still_lands_a_record() {
     assert_eq!(rec["kind"], "lifecycle");
     assert!(rec["session_id"].is_null());
     assert!(rec["vendor_event"].is_null());
+}
+
+/// `session-end` releases, records and sweeps, in that order: release first
+/// because it is the one step with a correctness consequence, the sweep last
+/// because it is the only one that can be skipped without loss.
+#[test]
+fn session_end_sweeps_after_it_records() {
+    let e = env_with("max_age_days = 30\n");
+    let stale = e.log_dir().join("2020-01-01");
+    std::fs::create_dir_all(&stale).unwrap();
+    let old = stale.join("gone.jsonl");
+    std::fs::write(&old, "{}\n").unwrap();
+    let f = std::fs::File::options().write(true).open(&old).unwrap();
+    f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(400 * 86_400))
+        .unwrap();
+    drop(f);
+
+    let out = run_argv(
+        &e,
+        &["hook", "session-end"],
+        &payload_for(&e, "session-end"),
+    );
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty(), "a release event emits no decision");
+    assert!(!old.exists(), "the sweep ran");
+    assert_eq!(
+        sole_record(&e.log_dir())["kind"],
+        "session",
+        "and its own record survived it"
+    );
+}
+
+/// `auto_prune = false` leaves the sweep to `devkit hook-log prune`.
+#[test]
+fn session_end_does_not_sweep_when_auto_prune_is_off() {
+    let e = env_with("max_age_days = 30\nauto_prune = false\n");
+    let stale = e.log_dir().join("2020-01-01");
+    std::fs::create_dir_all(&stale).unwrap();
+    let old = stale.join("kept.jsonl");
+    std::fs::write(&old, "{}\n").unwrap();
+    let f = std::fs::File::options().write(true).open(&old).unwrap();
+    f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(400 * 86_400))
+        .unwrap();
+    drop(f);
+
+    run_argv(
+        &e,
+        &["hook", "session-end"],
+        &payload_for(&e, "session-end"),
+    );
+    assert!(old.exists());
+}
+
+#[test]
+fn hook_log_path_prints_the_resolved_directory() {
+    let e = enabled_project();
+    let out = run_argv(&e, &["hook-log", "path"], "");
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        e.log_dir().to_string_lossy()
+    );
+}
+
+#[test]
+fn hook_log_prune_says_so_when_no_cap_is_set() {
+    let e = enabled_project();
+    let out = run_argv(&e, &["hook-log", "prune"], "");
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("no retention caps"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
+fn hook_log_prune_reports_what_it_removed() {
+    let e = env_with("max_age_days = 30\n");
+    let stale = e.log_dir().join("2020-01-01");
+    std::fs::create_dir_all(&stale).unwrap();
+    let old = stale.join("gone.jsonl");
+    std::fs::write(&old, "{}\n").unwrap();
+    let f = std::fs::File::options().write(true).open(&old).unwrap();
+    f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(400 * 86_400))
+        .unwrap();
+    drop(f);
+
+    let out = run_argv(&e, &["hook-log", "prune"], "");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("removed 1 file"), "{text}");
+    assert!(!old.exists());
 }

@@ -97,9 +97,18 @@ pub fn run(cli: HookCli) -> Result<()> {
             record_only(p, cli.event, harness);
             Ok(())
         }),
+        // Release, then record, then sweep. Release first because it is the
+        // one step with a correctness consequence; the sweep last because it is
+        // the only one that can be skipped without loss.
         HookEvent::SessionEnd => with_payload(|p| {
             edit::release_session(p)?;
-            record_only(p, cli.event, harness);
+            let settings = record_only(p, cli.event, harness);
+            if settings.auto_prune && settings.enabled {
+                // A retention cap nothing enforces is not a promise. Fail-open:
+                // the outcome is discarded, so a sweep failure never changes
+                // this hook's exit.
+                let _ = devkit_common::harness_log::prune::sweep(&settings);
+            }
             Ok(())
         }),
         // Record-only. Each reads stdin, builds one record and exits; nothing
@@ -112,12 +121,17 @@ pub fn run(cli: HookCli) -> Result<()> {
     }
 }
 
-/// Write the record a verb beyond `pre-tool-use` carries, if any.
+/// Write the record a verb beyond `pre-tool-use` carries, if any, and hand back
+/// the settings so a caller that has more to do does not resolve them twice.
 ///
 /// This reads the global config and nothing else: no project layer load, no
 /// tree-sitter. With logging off, a record-only verb is one config read on top
 /// of the process spawn, which is the whole of its cost.
-fn record_only(payload: &Value, event: HookEvent, harness: Option<Harness>) {
+fn record_only(
+    payload: &Value,
+    event: HookEvent,
+    harness: Option<Harness>,
+) -> devkit_common::harness_log::Settings {
     let cwd = payload
         .get("cwd")
         .and_then(Value::as_str)
@@ -126,11 +140,12 @@ fn record_only(payload: &Value, event: HookEvent, harness: Option<Harness>) {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let settings = devkit_common::harness_log::resolve(&cwd);
     if !settings.enabled {
-        return;
+        return settings;
     }
     let kind = record::record_only(payload, event, &settings);
     let rec = record::envelope(payload, event, harness, kind);
     devkit_common::harness_log::record(&rec);
+    settings
 }
 
 /// Read the hook payload from stdin. `None` covers both an unreadable pipe and
