@@ -1515,7 +1515,10 @@ fn dependency_edge(value: &toml::Value, location: &str) -> Result<DependencyEdge
             .with_context(|| format!("{location} contains an empty dependency edge"))?;
         let version = parts.next();
         let source = parts.collect::<Vec<_>>().join(" ");
-        if !source.is_empty() && !(source.starts_with('(') && source.ends_with(')')) {
+        // A trailing source is only ever cargo's parenthesized
+        // `(registry+...)`.
+        let parenthesized = source.starts_with('(') && source.ends_with(')');
+        if !source.is_empty() && !parenthesized {
             bail!("{location} has unsupported dependency edge `{edge}`");
         }
         return Ok(DependencyEdge {

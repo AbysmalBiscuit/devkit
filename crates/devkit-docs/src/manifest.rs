@@ -712,4 +712,40 @@ mod tests {
         let s = std::fs::read_to_string(&path).unwrap();
         assert!(s.contains("# keep me")); // untouched content survives removal too
     }
+
+    /// `patch_entry` rewrites a value in place and puts the old decor back, so
+    /// a re-registration keeps the comments *inside* the entry as well as the
+    /// ones around it, and leaves a key docm does not model alone. Decor is the
+    /// part of toml_edit most exposed to a version bump, so pin it here.
+    #[test]
+    fn re_registration_keeps_entry_comments_and_unmodeled_keys() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        let path = root.join("devkit.toml");
+        std::fs::write(
+            &path,
+            "# header\n\n\
+             [[docs.libs]]\n\
+             # why this library is here\n\
+             name = \"react\" # the id docm addresses it by\n\
+             repo = \"r1\"\n\
+             mystery = \"docm does not model this\"\n",
+        )
+        .unwrap();
+
+        let entry = LibEntry {
+            name: "react".into(),
+            repo: Some("r2".into()),
+            ..Default::default()
+        };
+        upsert_project(&path, &entry, root).unwrap();
+
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert!(s.contains("# header"), "{s}");
+        assert!(s.contains("# why this library is here"), "{s}");
+        assert!(s.contains("# the id docm addresses it by"), "{s}");
+        assert!(s.contains("mystery = \"docm does not model this\""), "{s}");
+        assert!(s.contains("repo = \"r2\""), "{s}");
+        assert!(!s.contains("\"r1\""), "{s}");
+    }
 }

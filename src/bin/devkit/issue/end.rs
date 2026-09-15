@@ -588,7 +588,8 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
     // After the summary and after the prune: a hook sees every removal
     // finished, and its progress step cannot tear the report. A run that
     // removed nothing changed nothing on disk, so nothing fires.
-    if !removed.is_empty() && !(after_worktree_remove.is_empty() && after_end.is_empty()) {
+    let no_hooks = after_worktree_remove.is_empty() && after_end.is_empty();
+    if !removed.is_empty() && !no_hooks {
         match main.as_deref() {
             Some(root) => {
                 let root = Path::new(root);

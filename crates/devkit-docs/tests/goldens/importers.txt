@@ -75,6 +75,6 @@ err debug=bun.lock has no numeric `lockfileVersion`
 
 ## cargo-malformed/./serde
 err display=parsing <ROOT>/Cargo.lock
-err alternate=parsing <ROOT>/Cargo.lock: TOML parse error at line 3, column 10\n  |\n3 | [[package\n  |          ^\ninvalid table header\nexpected `.`, `]]`\n
-err debug=parsing <ROOT>/Cargo.lock\n\nCaused by:\n    TOML parse error at line 3, column 10\n      |\n    3 | [[package\n      |          ^\n    invalid table header\n    expected `.`, `]]`\n    
+err alternate=parsing <ROOT>/Cargo.lock: TOML parse error at line 3, column 10\n  |\n3 | [[package\n  |          ^\nunclosed array table, expected `]]`\n
+err debug=parsing <ROOT>/Cargo.lock\n\nCaused by:\n    TOML parse error at line 3, column 10\n      |\n    3 | [[package\n      |          ^\n    unclosed array table, expected `]]`\n    
 
