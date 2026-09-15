@@ -1,8 +1,10 @@
 # Hook surface unification and harness logging
 
-Two parts, one change. Part A restructures how harness events enter devkit; part B adds the logging subsystem that hangs off that surface. A carries two behaviour fixes it uncovers (harness misdetection and hook exit codes) and otherwise preserves every verdict; it lands first, so B is written against a surface that is not moving.
+Two parts, one change. Part A restructures how harness events enter devkit; part B adds the logging subsystem that hangs off that surface. A carries two behaviour fixes it uncovers (harness misdetection and hook exit codes) and otherwise preserves every verdict.
 
-They ship as two pull requests against one spec. The cut is at the end of Part A: the verb family, `--harness`, the manifest migration and the `parse_event` split land and soak before any logging code exists, because Part A changes what every installed manifest invokes and Part B changes nothing a harness can see. Part A's verb table names the full family so the manifest translation is written once, but only the verbs with a consumer today (`pre-tool-use`, `post-tool-use`, `post-tool-use-failure`, `subagent-stop`, `session-end`) are wired in the manifests it ships. Part B wires each remaining verb as it gains the record kind that consumes it.
+They ship together, as one pull request, and every verb is wired in the manifests devkit installs.
+
+Shipping both at once puts the manifest flip in the same release as the verbs, which is where the skew hazard bites: a binary the plugin bootstrap did not install is never upgraded, so a manifest calling `devkit hook` can meet a binary that has no such subcommand. The exit-code rule below is what keeps that from blocking every tool call, but it only helps once the binary carries it. The session-start bootstrap therefore gains a capability probe: it runs `devkit hook --help` once per version stamp, and a binary that does not answer is reported as too old for the installed manifests, in the same place the bootstrap already reports a failed install.
 
 ## Problem
 
@@ -33,29 +35,29 @@ Both `PreToolUse` rows collapse onto one verb. The payload's own `tool_name` dec
 
 The family then grows to cover what the three harnesses actually offer. Each verb maps one-to-one onto a vendor event, so the manifest stays a translation table with no logic in it:
 
-| Verb | What devkit does | Wired by |
-|---|---|---|
-| `pre-tool-use` | guard the command, claim write targets, record the attempt | A |
-| `post-tool-use` | record the outcome | A |
-| `post-tool-use-failure` | record the failed outcome | A |
-| `session-end` | release the session's claims, record, run `auto_prune` | A |
-| `subagent-stop` | release the subagent's claims, record | A |
-| `session-start` | record the session frame | B |
-| `subagent-start` | record | B |
-| `permission-request` | record what the harness asked about | B |
-| `permission-denied` | record what the harness's own classifier blocked | B |
-| `stop` | record the turn boundary | B |
-| `stop-failure` | record an API-error turn end | B |
-| `pre-compact` | record | B |
-| `post-compact` | record | B |
-| `cwd-changed` | record | B |
-| `worktree-create` | record | B |
-| `worktree-remove` | record | B |
-| `user-prompt-submit` | record, behind its own fidelity key | B |
+| Verb | What devkit does |
+|---|---|
+| `pre-tool-use` | guard the command, claim write targets, record the attempt |
+| `post-tool-use` | record the outcome |
+| `post-tool-use-failure` | record the failed outcome |
+| `session-end` | release the session's claims, record, run `auto_prune` |
+| `subagent-stop` | release the subagent's claims, record |
+| `session-start` | record the session frame |
+| `subagent-start` | record |
+| `permission-request` | record what the harness asked about |
+| `permission-denied` | record what the harness's own classifier blocked |
+| `stop` | record the turn boundary |
+| `stop-failure` | record an API-error turn end |
+| `pre-compact` | record |
+| `post-compact` | record |
+| `cwd-changed` | record |
+| `worktree-create` | record |
+| `worktree-remove` | record |
+| `user-prompt-submit` | record, behind its own fidelity key |
 
 `post-tool-use` and `post-tool-use-failure` stay separate rather than folding into one verb with a flag. Claude Code and Cursor both split success from failure at the vendor level, and a verb per vendor event is what keeps the manifest from needing to encode which is which.
 
-Every verb except `pre-tool-use`, `session-end` and `subagent-stop` is record-only. None of them takes an action, so with logging off each is a process spawn that reads the global config, learns logging is off, and exits. That cost is real and is why Part A wires none of them: Part B wires each one as its record kind arrives, and measures the added per-event spawn on the slowest supported platform before wiring the high-frequency ones (`stop`, `user-prompt-submit`, `pre-compact`). If the measured cost does not justify the record, the verb still exists for a hand-wired manifest and simply is not in the one devkit ships.
+Every verb except `pre-tool-use`, `session-end` and `subagent-stop` is record-only. None of them takes an action, so with logging off each is a process spawn that reads the global config, learns logging is off, and exits. That cost is real, and the record-only dispatch is written to make it as small as it can be: it reads the global config and nothing else, never loading a project layer or touching tree-sitter. The per-event spawn is measured on the slowest supported platform before release, and a verb whose cost does not justify its record is dropped from the shipped manifests while staying available to a hand-wired one.
 
 `worktree-create` and `worktree-remove` are record-only, not registrations. A worktree becomes a port holder when `devrun up` allocates under it, not when the directory appears, and `registry::holder_alive` is `Path::exists`, so `prune` already reclaims every row of a removed worktree with no hook involved. There is no holder to register and nothing to release. Releasing rows from the hook would at best duplicate `prune`, and stopping the worktree's servers would drive a cross-worktree `devrun down` from a hook with no terminal, which the TTY gate exists to forbid.
 
@@ -183,7 +185,7 @@ It is replaced by three functions, `parse_write`, `parse_subagent_stop` and `par
 
 `lockm hook <event>` and `devkit harness shell` stay as hidden aliases for at least one release after the manifests move.
 
-The manifest flip waits a release behind the verbs. Release N ships `devkit hook`, the aliases, and manifests still calling `lockm hook` and `devkit harness shell`. Release N+1 flips the manifests. The reason is the skew, which is not bounded: `docs/agents.md` states that binaries the bootstrap hook did not install are recorded as externally managed and never upgraded, so a `cargo install`ed devkit stays where it is indefinitely. A manifest calling a subcommand that binary lacks is an unrecognised-subcommand error on every tool call, and the exit-code rule above is what keeps that from reading as a deny. One release of separation means the binary that a plugin update pairs with already understands the new verbs.
+The manifests flip in the same release, so the skew is handled rather than waited out. It is not bounded on its own: `docs/agents.md` states that binaries the bootstrap hook did not install are recorded as externally managed and never upgraded, so a `cargo install`ed devkit stays where it is indefinitely, and a manifest calling a subcommand that binary lacks is an unrecognised-subcommand error on every tool call. The exit-code rule above fixes that going forward but cannot reach a binary that predates it, which is why the session-start bootstrap probes for the verb family and reports a binary too old for the installed manifests.
 
 ## Part B: harness logging
 
