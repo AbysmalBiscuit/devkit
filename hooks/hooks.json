@@ -11,6 +11,125 @@
           {
             "type": "command",
             "command": "devkit brief"
+          },
+          {
+            "type": "command",
+            "command": "devkit hook session-start --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook session-end --harness claude-code",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook pre-tool-use --harness claude-code",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook post-tool-use --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook post-tool-use-failure --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook subagent-start --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook subagent-stop --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook permission-request --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook permission-denied --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook stop --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook stop-failure --harness claude-code"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook pre-compact --harness claude-code"
           }
         ]
       }
@@ -23,6 +142,10 @@
             "command": "devkit brief --pins-only",
             "timeout": 10,
             "statusMessage": "Re-injecting devkit library versions"
+          },
+          {
+            "type": "command",
+            "command": "devkit hook post-compact --harness claude-code"
           }
         ]
       }
@@ -35,39 +158,41 @@
             "command": "devkit brief --if-changed",
             "timeout": 10,
             "statusMessage": "Refreshing devkit project brief"
+          },
+          {
+            "type": "command",
+            "command": "devkit hook cwd-changed --harness claude-code"
           }
         ]
       }
     ],
-    "PreToolUse": [
+    "WorktreeCreate": [
       {
-        "matcher": "Edit|MultiEdit|Write|NotebookEdit",
-        "hooks": [
-          { "type": "command", "command": "lockm hook pretooluse" }
-        ]
-      },
-      {
-        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
-            "command": "devkit harness shell",
-            "timeout": 30
+            "command": "devkit hook worktree-create --harness claude-code"
           }
         ]
       }
     ],
-    "SubagentStop": [
+    "WorktreeRemove": [
       {
         "hooks": [
-          { "type": "command", "command": "lockm hook subagent-stop" }
+          {
+            "type": "command",
+            "command": "devkit hook worktree-remove --harness claude-code"
+          }
         ]
       }
     ],
-    "SessionEnd": [
+    "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "lockm hook session-end" }
+          {
+            "type": "command",
+            "command": "devkit hook user-prompt-submit --harness claude-code"
+          }
         ]
       }
     ]

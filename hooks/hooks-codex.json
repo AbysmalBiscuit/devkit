@@ -16,6 +16,11 @@
             "async": false,
             "timeout": 10,
             "statusMessage": "Loading the devkit project brief"
+          },
+          {
+            "type": "command",
+            "command": "devkit hook session-start --harness codex",
+            "async": false
           }
         ]
       },
@@ -32,20 +37,50 @@
         ]
       }
     ],
-    "PreToolUse": [
+    "SessionEnd": [
       {
-        "matcher": "apply_patch|Write|Edit",
-        "hooks": [
-          { "type": "command", "command": "lockm hook pretooluse" }
-        ]
-      },
-      {
-        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "devkit harness shell",
+            "command": "devkit hook session-end --harness codex",
+            "async": false,
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch|Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook pre-tool-use --harness codex",
+            "async": false,
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch|Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook post-tool-use --harness codex",
+            "async": false
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook subagent-start --harness codex",
+            "async": false
           }
         ]
       }
@@ -53,14 +88,77 @@
     "SubagentStop": [
       {
         "hooks": [
-          { "type": "command", "command": "lockm hook subagent-stop" }
+          {
+            "type": "command",
+            "command": "devkit hook subagent-stop --harness codex",
+            "async": false
+          }
         ]
       }
     ],
-    "SessionEnd": [
+    "PermissionRequest": [
       {
         "hooks": [
-          { "type": "command", "command": "lockm hook session-end" }
+          {
+            "type": "command",
+            "command": "devkit hook permission-request --harness codex",
+            "async": false
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook stop --harness codex",
+            "async": false
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook stop --harness codex",
+            "async": false
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook pre-compact --harness codex",
+            "async": false
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook post-compact --harness codex",
+            "async": false
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devkit hook user-prompt-submit --harness codex",
+            "async": false
+          }
         ]
       }
     ]

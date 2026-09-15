@@ -63,6 +63,23 @@ EOF
 chmod +x "${BIN}/devkit"
 cp "${BIN}/devkit" "${PARTIAL}/devkit"
 
+# A devkit predating the `hook` verb family: every other subcommand works, and
+# `hook` is an unrecognised subcommand. This is what an externally managed
+# binary looks like once the manifests move.
+STALE="${WORK}/stale"
+mkdir -p "$STALE"
+cat >"${STALE}/devkit" <<'EOF'
+#!/usr/bin/env bash
+echo "devkit $*" >>"$CURL_LOG"
+[ "$1" = "hook" ] && exit 2
+exit 0
+EOF
+chmod +x "${STALE}/devkit"
+for b in issue devrun portm lockm docm devkit-mcp; do
+    printf '#!/usr/bin/env bash\n' >"${STALE}/${b}"
+    chmod +x "${STALE}/${b}"
+done
+
 for b in issue devrun portm lockm docm devkit-mcp; do
     printf '#!/usr/bin/env bash\n' >"${BIN}/${b}"
     chmod +x "${BIN}/${b}"
@@ -100,6 +117,7 @@ run_hook() {
     case "$binaries" in
         with-binaries) path="${BIN}:${STUB}" ;;
         devkit-only) path="${PARTIAL}:${STUB}" ;;
+        stale-devkit) path="${STALE}:${STUB}" ;;
     esac
     rm -f "$CALLS"
     env -i HOME="$WORK" PATH="${path}:/usr/bin:/bin" XDG_STATE_HOME="$state" \
@@ -116,8 +134,21 @@ run_wrapper() {
 }
 
 stamp() { cat "${state}/devkit/bootstrap-version" 2>/dev/null || echo NONE; }
+probed() { cat "${state}/devkit/hook-verbs-probed" 2>/dev/null || echo NONE; }
+out() { cat "${WORK}/out" 2>/dev/null || echo NONE; }
+has() { case "$(out)" in *"$1"*) echo yes ;; *) echo no ;; esac; }
 marker() { cat "${state}/devkit/bootstrap-failed" 2>/dev/null || echo NONE; }
 calls() { cat "$CALLS" 2>/dev/null || echo NONE; }
+
+# The calls that leave the machine. A `devkit …` line is local — the relink and
+# the verb-family probe both run the binary already on PATH — so a check about
+# the network filters those out rather than asserting the whole log is empty.
+network() {
+    local rest
+    rest=$(grep -v '^devkit ' "$CALLS" 2>/dev/null)
+    if [ -n "$rest" ]; then printf '%s\n' "$rest"; else echo NONE; fi
+}
+called() { case "$(calls)" in *"$1"*) echo yes ;; *) echo no ;; esac; }
 set_stamp() { mkdir -p "${state}/devkit" && printf '%s\n' "$1" >"${state}/devkit/bootstrap-version"; }
 
 echo "testing hooks/bootstrap-binaries against plugin version ${VERSION}"
@@ -137,12 +168,12 @@ check "install pins the release" "$EXPECTED_CURL" "$(calls)"
 new_state
 run_hook with-binaries
 check "unstamped binaries are external" external "$(stamp)"
-check "external install skips the network" NONE "$(calls)"
+check "external install skips the network" NONE "$(network)"
 
 new_state
 set_stamp "$VERSION"
 run_hook with-binaries
-check "current version is a no-op" NONE "$(calls)"
+check "current version is a no-op" NONE "$(network)"
 check "current version keeps the stamp" "$VERSION" "$(stamp)"
 
 # The update path: a plugin update moves plugin.json's version past the stamp.
@@ -159,9 +190,29 @@ check "reinstall pins the new release" "$EXPECTED_CURL" "$(calls)"
 new_state
 set_stamp "$VERSION"
 run_hook devkit-only
-check "a missing old name relinks" "devkit install-links" "$(calls)"
+check "a missing old name relinks" yes "$(called "devkit install-links")"
+check "relinking skips the network" NONE "$(network)"
 check "relinking exits 0" 0 "$last_exit"
 check "relinking keeps the stamp" "$VERSION" "$(stamp)"
+
+# The verb-family probe. A binary the bootstrap did not install is recorded as
+# external and never upgraded, so the manifests it is asked to answer can name
+# subcommands it lacks.
+new_state
+run_hook stale-devkit
+check "a stale binary is still external" external "$(stamp)"
+check "a stale binary is reported" yes "$(has "too old for this plugin's hooks")"
+check "a stale binary exits 0" 0 "$last_exit"
+check "a failed probe is not marked done" NONE "$(probed)"
+
+new_state
+run_hook with-binaries
+check "a current binary passes the probe" "$VERSION" "$(probed)"
+check "a current binary is not reported" no "$(has "too old for this plugin's hooks")"
+
+# Probed once per plugin version, not once per session.
+run_hook stale-devkit
+check "a recorded probe is not repeated" no "$(has "too old for this plugin's hooks")"
 
 new_state
 run_hook without-binaries CURL_FAIL=1

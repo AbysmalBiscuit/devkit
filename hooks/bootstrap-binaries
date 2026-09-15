@@ -2,7 +2,7 @@
 # SessionStart hook: ensure the devkit binaries this plugin drives are present
 # and match its version, installing them from the matching GitHub release.
 #
-# The plugin's other hooks (`devkit brief`, `lockm hook …`) and its MCP server
+# The plugin's other hooks (`devkit brief`, `devkit hook …`) and its MCP server
 # (`devkit-mcp`) are resolved from PATH, but a plugin install cannot place them
 # there — Claude Code has no install lifecycle hook. This runs at session start
 # instead.
@@ -29,6 +29,22 @@ fi
 state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/devkit"
 stamp="${state_dir}/bootstrap-version"
 failed="${state_dir}/bootstrap-failed"
+probed="${state_dir}/hook-verbs-probed"
+
+# The manifests this plugin installs call `devkit hook <verb>`. A binary the
+# bootstrap did not install is recorded as external and never upgraded, so one
+# predating that verb family answers every tool call with an
+# unrecognised-subcommand error. Probe once per plugin version and report it
+# where a failed install is already reported. The marker is written only on
+# success, so the warning repeats until the binary is replaced.
+probe_hook_verbs() {
+    [ "$(cat "$probed" 2>/dev/null || true)" = "$version" ] && return 0
+    if devkit hook --help >/dev/null 2>&1; then
+        mkdir -p "$state_dir" 2>/dev/null && printf '%s\n' "$version" >"$probed" 2>/dev/null
+        return 0
+    fi
+    warn "the devkit on PATH is too old for this plugin's hooks: it has no \`devkit hook\` subcommand. Reinstall it (\`cargo install --path .\`, or see ${REPO_URL}#install)."
+}
 
 missing=""
 for bin in devkit issue devrun portm lockm docm devkit-mcp; do
@@ -46,10 +62,14 @@ if command -v devkit >/dev/null 2>&1; then
             warn "devkit install-links could not claim every name; run it yourself to see why"
     fi
     case "$(cat "$stamp" 2>/dev/null || true)" in
-        "$version") exit 0 ;;
+        "$version")
+            probe_hook_verbs
+            exit 0
+            ;;
         # Binaries we did not install (cargo, a distro package, a source build).
         # Record that and never overwrite them; upgrades stay the user's call.
         "" | external)
+            probe_hook_verbs
             mkdir -p "$state_dir" 2>/dev/null && printf 'external\n' >"$stamp" 2>/dev/null
             exit 0
             ;;
