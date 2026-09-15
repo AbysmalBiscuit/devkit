@@ -1,15 +1,31 @@
 import json
 import os
 import re
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import tomllib
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def merge_tree_takes_trees():
+    """Whether this git's merge-tree accepts trees where it wants commits.
+
+    git-commit-patch.py merges the selected and staged trees directly. Git
+    rejected tree arguments until it learned to take them, so on an older git
+    the patch commit cannot run at all and its test has nothing to assert.
+    """
+    probe = subprocess.run(
+        ["git", "-C", str(ROOT), "merge-tree", "--write-tree",
+         f"--merge-base={EMPTY_TREE}", EMPTY_TREE, EMPTY_TREE],
+        capture_output=True,
+    )
+    return probe.returncode == 0
 
 
 class CloudHooks(unittest.TestCase):
@@ -26,7 +42,10 @@ class CloudHooks(unittest.TestCase):
         self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                         GIT_AUTHOR_NAME="Cloud Test", GIT_AUTHOR_EMAIL="cloud@example.invalid",
                         GIT_COMMITTER_NAME="Cloud Test", GIT_COMMITTER_EMAIL="cloud@example.invalid")
-        subprocess.run(["git", "-C", str(self.root), "init", "-b", "test-cloud"], env=self.env, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(self.root), "init", "-b", "test-cloud"],
+            env=self.env, check=True, capture_output=True,
+        )
 
     def run_script(self, name, *args, cloud=False, **overrides):
         env = self.env.copy()
@@ -48,7 +67,8 @@ class CloudHooks(unittest.TestCase):
         binaries.mkdir(exist_ok=True)
         for name in ("git", "sh", "python3"):
             source = shutil.which(name)
-            self.assertIsNotNone(source, name)
+            if source is None:
+                self.fail(f"{name} is not on PATH")
             link = binaries / name
             if not link.exists():
                 link.symlink_to(source)
@@ -121,12 +141,16 @@ class CloudHooks(unittest.TestCase):
         self.assertLess(len(result.stdout.split()), 150)
         self.assertFalse((self.root / "AGENTS.local.md").exists())
 
+    @unittest.skipUnless(merge_tree_takes_trees(), "git merge-tree does not accept tree arguments")
     def test_devkit_commits_patch_and_preserves_unrelated_staging(self):
         self.assertEqual(self.run_script("cloud_setup.py", "--cloud").returncode, 0)
         env = dict(self.env, CLOUD_AGENT="true", DEVKIT_SKIP_AUTOLINK="1")
 
         def git(*args):
-            return subprocess.run(["git", "-C", str(self.root), *args], env=env, check=True, text=True, capture_output=True).stdout
+            return subprocess.run(
+                ["git", "-C", str(self.root), *args],
+                env=env, check=True, text=True, capture_output=True,
+            ).stdout
 
         git("init", "-b", "test-cloud")
         git("config", "user.name", "Cloud Test")
@@ -162,10 +186,16 @@ class CloudHooks(unittest.TestCase):
                             (["--author", "Wrong <wrong@example.invalid>", "-m", good], "Cloud Test"),
                             (["-m", "test: empty credit\n\nCo-authored-by:"], "Co-authored-by")):
             with self.subTest(args=args):
-                result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", *args], env=env, text=True, capture_output=True)
+                result = subprocess.run(
+                    ["git", "-C", str(self.root), "commit", "--allow-empty", *args],
+                    env=env, text=True, capture_output=True,
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(error, result.stderr)
-        result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", "-m", good], env=env, text=True, capture_output=True)
+        result = subprocess.run(
+            ["git", "-C", str(self.root), "commit", "--allow-empty", "-m", good],
+            env=env, text=True, capture_output=True,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_cloud_hook_preserves_existing_hooks_and_is_local(self):
@@ -181,13 +211,22 @@ class CloudHooks(unittest.TestCase):
         for _ in range(2):
             result = self.run_script("cloud_setup.py", "--cloud")
             self.assertEqual(result.returncode, 0, result.stderr)
-        result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", "-m", "test: local commit"], env=self.env, text=True, capture_output=True)
+        result = subprocess.run(
+            ["git", "-C", str(self.root), "commit", "--allow-empty", "-m", "test: local commit"],
+            env=self.env, text=True, capture_output=True,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr.count("existing hook"), 1)
         self.assertEqual(result.stderr.count("existing pre-commit"), 1)
         self.assertIn("existing hook", original.read_text())
-        original.write_text("#!/usr/bin/env python3\nimport sys\nprint('original rejection', file=sys.stderr)\nsys.exit(1)\n")
-        result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", "-m", "test: blocked\n\nCo-authored-by: Agent <agent@example.invalid>"], env=dict(self.env, CLOUD_AGENT="true"), text=True, capture_output=True)
+        original.write_text(
+            "#!/usr/bin/env python3\nimport sys\nprint('original rejection', file=sys.stderr)\nsys.exit(1)\n"
+        )
+        blocked = "test: blocked\n\nCo-authored-by: Agent <agent@example.invalid>"
+        result = subprocess.run(
+            ["git", "-C", str(self.root), "commit", "--allow-empty", "-m", blocked],
+            env=dict(self.env, CLOUD_AGENT="true"), text=True, capture_output=True,
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("original rejection", result.stderr)
 

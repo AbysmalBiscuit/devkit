@@ -48,6 +48,17 @@ python3 -B /absolute/path/to/repo/.agents/skills/cloud/scripts/cloud.test.py
 
 The tests require devkit on PATH and Python with tomllib. They exercise local no-op behavior, config generation in a path containing spaces, settings-based hook invocation, startup context, per-harness task tool naming, devkit reported present and absent, read-only recovery, and a patch commit through devkit that preserves unrelated staging. They use temporary directories and perform no downloads.
 
+The patch commit test additionally needs a Git whose `merge-tree` accepts tree arguments, because `git-commit-patch.py` merges the selected and staged trees directly. Git 2.43 rejects that. An older Git skips the test and names the reason instead of failing.
+
+`pyproject.toml` pins the linter and the type checker. Run both from this directory:
+
+```sh
+uv run ruff check .
+uv run pyrefly check
+```
+
+The `cloud` CI job runs the lint, the type check, and the tests on Ubuntu, against a devkit built from the commit under test rather than a published release.
+
 The Claude hook adapter is configured here. A future Codex adapter can call the shared scripts and load the same skill; Codex lifecycle hooks are not configured by these files.
 
 ## Sources
