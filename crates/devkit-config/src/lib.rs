@@ -1645,6 +1645,26 @@ fn resolve_defaults(
     Ok(())
 }
 
+/// Expand `${VAR}` and `~` in a host path key, then anchor a still-relative one
+/// to the directory that declared it, the way every other path key resolves.
+///
+/// Public because the `[harness]` probe reads its table outside the main
+/// resolver — the hook cannot afford a full config load — and a path key there
+/// must still obey the same rules. Empty stays empty: an unset optional path
+/// must not silently become a directory.
+pub fn resolve_host_path(raw: &str, key: &str, anchor: Option<&Path>) -> Result<PathBuf> {
+    let expanded = expand_vars(raw, key)?;
+    if expanded.is_empty() {
+        return Ok(PathBuf::new());
+    }
+    let p = expand_tilde(&expanded);
+    let joined = match (p.is_absolute(), anchor) {
+        (true, _) | (false, None) => p,
+        (false, Some(dir)) => dir.join(p),
+    };
+    Ok(normalize_lexically(&joined))
+}
+
 pub fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/")
         && let Some(h) = home_dir()
