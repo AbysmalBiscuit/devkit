@@ -16,9 +16,16 @@
 //! `PermissionRequest` honour a JSON decision, so a stray `println!` would
 //! change what the agent does.
 
+mod dialect;
+mod shell;
+mod writes;
+
+use std::io::Read;
+
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use devkit_common::harness::Harness;
+use serde_json::Value;
 
 #[derive(Args)]
 pub struct HookCli {
@@ -78,12 +85,9 @@ pub enum HookEvent {
 }
 
 pub fn run(cli: HookCli) -> Result<()> {
-    let _harness = cli.harness.map(Harness::from);
+    let harness = cli.harness.map(Harness::from);
     match cli.event {
-        HookEvent::PreToolUse => {
-            crate::harness::guard_shell();
-            Ok(())
-        }
+        HookEvent::PreToolUse => pre_tool_use(harness),
         HookEvent::SubagentStop => {
             crate::locks::run_hook("subagent-stop");
             Ok(())
@@ -95,5 +99,33 @@ pub fn run(cli: HookCli) -> Result<()> {
         // Record-only verbs. They take no action, and their records arrive
         // with the logging subsystem.
         _ => Ok(()),
+    }
+}
+
+/// Read the hook payload from stdin. `None` covers both an unreadable pipe and
+/// text that is not JSON — neither is a payload to judge, and the caller's
+/// fail-closed rule is the same for both.
+fn read_payload() -> Option<Value> {
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf).ok()?;
+    serde_json::from_str(&buf).ok()
+}
+
+/// The payload's own `tool_name` picks the path. The two `PreToolUse` matcher
+/// blocks each manifest used to carry existed only because two subsystems
+/// answered one event; the decision belongs here, where the payload is.
+///
+/// Dispatch happens before any config load or tree-sitter work, so an edit
+/// payload pays nothing for the shell path.
+pub(crate) fn pre_tool_use(harness: Option<Harness>) -> Result<()> {
+    let Some(payload) = read_payload() else {
+        return shell::deny_unreadable_payload(harness);
+    };
+    match payload.get("tool_name").and_then(Value::as_str) {
+        Some(t) if devkit_locks::hook::is_write_tool(t) => {
+            crate::locks::guard_write(&payload);
+            Ok(())
+        }
+        _ => shell::guard(&payload, harness),
     }
 }

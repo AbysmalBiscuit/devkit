@@ -217,22 +217,30 @@ pub(crate) fn run_hook(event: &str) {
         }
     };
 
-    let cwd = payload
-        .get("cwd")
-        .and_then(|v| v.as_str())
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-
     // The verb picks the parser, so an event nobody recognises has nowhere to
     // arrive: it reaches no parser at all rather than falling through one.
-    let action = match event {
-        "pretooluse" => hook::parse_write(&payload),
-        "subagent-stop" => hook::parse_subagent_stop(&payload),
-        "session-end" => hook::parse_session_end(&payload),
-        _ => None,
-    };
-    match action {
+    match event {
+        "pretooluse" => guard_write(&payload),
+        "subagent-stop" => release(hook::parse_subagent_stop(&payload)),
+        "session-end" => release(hook::parse_session_end(&payload)),
+        _ => {}
+    }
+}
+
+fn release(action: Option<LockAction>) {
+    if let Some(LockAction::ReleaseSubagent { holder } | LockAction::ReleaseSession { holder }) =
+        action
+    {
+        let _ = devkit_locks::release_prefix(&holder);
+    }
+}
+
+/// Claim the write targets a structured-edit payload names, before the tool
+/// runs. Fails closed: a payload that cannot be evaluated denies rather than
+/// allows.
+pub(crate) fn guard_write(payload: &serde_json::Value) {
+    let cwd = cwd_of(payload);
+    match hook::parse_write(payload) {
         Some(LockAction::Write {
             file_paths, holder, ..
         }) => {
@@ -242,7 +250,7 @@ pub(crate) fn run_hook(event: &str) {
             let mut conflicts = Vec::new();
             let mut resolver = devkit_locks::WriteResolver::new();
             for path in &file_paths {
-                let target = resolve_against(&payload, path);
+                let target = resolve_against(payload, path);
                 match resolver.decide_write(&target, &holder, Some("write-harness"), 1800) {
                     Ok(WriteDecision::Denied(c)) => conflicts.extend(c),
                     Ok(_) => {}
@@ -263,9 +271,6 @@ pub(crate) fn run_hook(event: &str) {
                 println!("{out}");
             }
         }
-        Some(LockAction::ReleaseSubagent { holder } | LockAction::ReleaseSession { holder }) => {
-            let _ = devkit_locks::release_prefix(&holder);
-        }
         Some(LockAction::Unusable { reason }) => {
             if hook::enforcement_enabled(&cwd) {
                 println!(
@@ -274,8 +279,20 @@ pub(crate) fn run_hook(event: &str) {
                 );
             }
         }
-        None => {}
+        // A tool that does not write, which is the common case.
+        Some(LockAction::ReleaseSubagent { .. } | LockAction::ReleaseSession { .. }) | None => {}
     }
+}
+
+/// Where the write would land. Paths in the payload are relative to the
+/// session, not to wherever the harness spawned this process.
+fn cwd_of(payload: &serde_json::Value) -> std::path::PathBuf {
+    payload
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 pub fn run(cli: LocksCli) -> Result<()> {

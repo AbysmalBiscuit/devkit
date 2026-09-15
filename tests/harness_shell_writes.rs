@@ -768,8 +768,12 @@ fn an_unusable_shell_payload_is_silent_when_writes_are_disabled() {
     }
 }
 
+/// One verb answers both tools now, so an edit payload reaches the edit path
+/// rather than falling off the end of the shell one. An edit naming no target
+/// is unevaluable, and the write path fails closed — which is what the retired
+/// `lockm hook pretooluse` already did with this payload.
 #[test]
-fn a_non_shell_claude_payload_stays_silent_when_writes_are_enabled() {
+fn an_edit_payload_naming_no_target_fails_closed() {
     let e = env(WRITES);
     let p = serde_json::json!({
         "hook_event_name": "PreToolUse",
@@ -779,7 +783,25 @@ fn a_non_shell_claude_payload_stays_silent_when_writes_are_enabled() {
         "tool_input": {},
         "cwd": e.project.path().to_string_lossy(),
     });
-    let out = devkit(&e, &["harness", "shell"], Some(&p.to_string()), &[]);
+    let out = devkit(&e, &["hook", "pre-tool-use"], Some(&p.to_string()), &[]);
+    let reason = denial(&out).expect("an unevaluable write denies");
+    assert!(reason.contains("names no target"), "{reason}");
+    assert!(rows(&e).is_empty(), "a denial claims nothing");
+}
+
+/// A tool this hook does not govern at all is silence, not a denial: most of
+/// what a harness sends is neither a shell command nor a write.
+#[test]
+fn a_tool_the_hook_does_not_govern_stays_silent() {
+    let e = env(WRITES);
+    let p = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "session_id": "S1",
+        "tool_input": { "file_path": "a.rs" },
+        "cwd": e.project.path().to_string_lossy(),
+    });
+    let out = devkit(&e, &["hook", "pre-tool-use"], Some(&p.to_string()), &[]);
     assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
     assert!(rows(&e).is_empty());
 }
