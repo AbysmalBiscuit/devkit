@@ -11,7 +11,8 @@ mod layers;
 pub use layers::{CONFIG_FILE, Layer, LayerKind, project_layers};
 pub mod harness;
 pub use harness::{
-    AppMatch, CommandRule, HarnessSection, PolicyAction, RuleAction, Severity, ShellSetting,
+    AppMatch, CommandRule, Fidelity, HarnessSection, LogSection, PolicyAction, PromptFidelity,
+    RuleAction, Severity, ShellSetting,
 };
 
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]

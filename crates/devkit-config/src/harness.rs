@@ -1,8 +1,9 @@
-//! The `[harness]` table: the coding-agent enforcement opt-ins.
+//! The `[harness]` table: the coding-agent enforcement opt-ins, and the
+//! `[harness.log]` table underneath it.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 /// The shell whose syntax a hook command is read in. `auto` resolves from
 /// the tool name and the harness; see `docs/configuration.md`.
@@ -51,6 +52,110 @@ pub enum Severity {
     Warning,
     #[default]
     Error,
+}
+
+/// What a logged command carries. Ordered least to most revealing, so
+/// resolving across config layers is `min` and no layer can raise it.
+#[derive(
+    Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Fidelity {
+    /// A stable digest and nothing else.
+    Hashed,
+    /// The text, with known token shapes substituted by kind.
+    Redacted,
+    /// The text verbatim.
+    Full,
+}
+
+/// What a logged prompt carries. Same ordering rule as [`Fidelity`], with an
+/// `off` below every level of it: a corpus can carry full command text without
+/// carrying what the human typed.
+#[derive(
+    Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptFidelity {
+    /// Record that a prompt was submitted, and none of its text.
+    Off,
+    Hashed,
+    Redacted,
+    Full,
+}
+
+/// Harness logging: what agents tried to run, and what devkit decided about
+/// it. Off unless the global config turns it on.
+///
+/// `enabled = true`, `dir`, `auto_prune`, `max_age_days` and `max_bytes` are
+/// read from `~/.config/devkit/config.toml` alone and ignored wherever else
+/// they appear. A project layer may do exactly two things: set
+/// `enabled = false`, and lower `command` or `prompt`. Everything a project
+/// layer can do tightens. `dir` is on that list for the same reason
+/// `enabled = true` is: a project layer setting `dir = "./.logs"` would land
+/// command text inside the checkout.
+///
+/// ```
+/// # use devkit_config::{Fidelity, HarnessSection, PromptFidelity};
+/// # let doc: toml::Table = toml::from_str(r#"
+/// [harness.log]
+/// enabled      = true              # global config only
+/// command      = "redacted"        # full | redacted | hashed
+/// prompt       = "off"             # off | hashed | redacted | full
+/// auto_prune   = true              # global config only
+/// dir          = "${HOME}/logs/devkit" # global only; defaults under state_dir
+/// max_age_days = 30                # global only; absent means unlimited
+/// max_bytes    = 2000000000        # global only; absent means unlimited
+/// # "#).unwrap();
+/// # let h: HarnessSection = doc["harness"].clone().try_into().unwrap();
+/// # assert_eq!(h.log.enabled, Some(true));
+/// # assert_eq!(h.log.command, Some(Fidelity::Redacted));
+/// # assert_eq!(h.log.prompt, Some(PromptFidelity::Off));
+/// # assert_eq!(h.log.max_age_days, Some(30));
+/// ```
+///
+/// Every leaf is `Option` so a layer that set nothing is distinguishable from
+/// one that set the default, which is what the downward clamp needs.
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, schemars::JsonSchema)]
+#[serde(default)]
+pub struct LogSection {
+    /// Turn logging on. Read from the global config alone.
+    pub enabled: Option<bool>,
+    /// How much of a command's text a record carries.
+    pub command: Option<Fidelity>,
+    /// How much of a submitted prompt a record carries.
+    pub prompt: Option<PromptFidelity>,
+    /// Sweep the log directory at session end. Global config only.
+    pub auto_prune: Option<bool>,
+    /// Where records land. Global config only; defaults under the state dir.
+    pub dir: Option<PathBuf>,
+    /// Days of records to keep. Global config only; absent means unlimited.
+    #[serde(deserialize_with = "nonzero_u32")]
+    pub max_age_days: Option<u32>,
+    /// Bytes of records to keep. Global config only; absent means unlimited.
+    #[serde(deserialize_with = "nonzero_u64")]
+    pub max_bytes: Option<u64>,
+}
+
+/// Both retention caps reject `0` by name rather than guessing at it. Unlimited
+/// and delete-everything are both plausible readings of a zero cap, and they
+/// differ by the whole corpus.
+fn nonzero_u32<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
+    match Option::<u32>::deserialize(d)? {
+        Some(0) => Err(D::Error::custom(
+            "max_age_days = 0 is ambiguous: omit the key for unlimited retention",
+        )),
+        other => Ok(other),
+    }
+}
+
+fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    match Option::<u64>::deserialize(d)? {
+        Some(0) => Err(D::Error::custom(
+            "max_bytes = 0 is ambiguous: omit the key for unlimited retention",
+        )),
+        other => Ok(other),
+    }
 }
 
 /// One `[harness.commands.<name>]` entry: a set of programs whose invocation
@@ -225,6 +330,9 @@ pub struct HarnessSection {
     /// How the guard resolves a guarded command to one of `[apps]`.
     #[serde(default)]
     pub app_match: AppMatch,
+    /// What devkit records about the events a harness sends it.
+    #[serde(default)]
+    pub log: LogSection,
 }
 
 fn block() -> PolicyAction {
@@ -246,6 +354,7 @@ impl Default for HarnessSection {
             script_files: PolicyAction::Allow,
             commands: BTreeMap::new(),
             app_match: AppMatch::default(),
+            log: LogSection::default(),
         }
     }
 }
@@ -293,5 +402,39 @@ mod tests {
         assert_eq!(parsed.shell, ShellSetting::Powershell);
         assert_eq!(parsed.script_files, PolicyAction::Warn);
         assert_eq!(parsed.unresolved_writes, PolicyAction::Block);
+    }
+
+    #[test]
+    fn fidelity_orders_from_least_to_most_revealing() {
+        assert!(Fidelity::Hashed < Fidelity::Redacted);
+        assert!(Fidelity::Redacted < Fidelity::Full);
+        assert!(PromptFidelity::Off < PromptFidelity::Hashed);
+        assert!(PromptFidelity::Hashed < PromptFidelity::Redacted);
+        assert!(PromptFidelity::Redacted < PromptFidelity::Full);
+    }
+
+    #[test]
+    fn a_zero_cap_is_rejected_rather_than_guessed() {
+        let err = toml::from_str::<HarnessSection>("[log]\nmax_age_days = 0\n").unwrap_err();
+        assert!(format!("{err}").contains("max_age_days"), "{err}");
+        let err = toml::from_str::<HarnessSection>("[log]\nmax_bytes = 0\n").unwrap_err();
+        assert!(format!("{err}").contains("max_bytes"), "{err}");
+    }
+
+    #[test]
+    fn an_unset_key_stays_none() {
+        let h: HarnessSection = toml::from_str("[log]\nenabled = true\n").unwrap();
+        assert_eq!(h.log.enabled, Some(true));
+        assert_eq!(
+            h.log.command, None,
+            "an unset key must not read as its default"
+        );
+        assert_eq!(h.log.max_age_days, None, "absent means unlimited");
+    }
+
+    #[test]
+    fn logging_is_absent_by_default() {
+        assert_eq!(HarnessSection::default().log, LogSection::default());
+        assert_eq!(LogSection::default().enabled, None);
     }
 }
