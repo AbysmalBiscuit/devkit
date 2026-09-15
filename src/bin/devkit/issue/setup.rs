@@ -540,6 +540,11 @@ pub fn run(args: SetupArgs) -> Result<()> {
             .args([
                 "worktree",
                 "add",
+                // The baseline target is a remote-tracking branch, which git
+                // would mark as the new branch's upstream. That leaves it
+                // tracking `origin/main`, and a plain `git push` in the
+                // worktree then refuses on the name mismatch.
+                "--no-track",
                 "-b",
                 &branch,
                 worktree.to_str().unwrap(),
