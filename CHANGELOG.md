@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.4](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.3...v0.14.4) (2026-09-15)
+
+
+### Features
+
+* **agents:** add cloud setup workflow ([#74](https://github.com/AbysmalBiscuit/devkit/issues/74)) ([752fe42](https://github.com/AbysmalBiscuit/devkit/commit/752fe42bade227748936fbcff402f47fbd066bb9))
+
+
+### Bug Fixes
+
+* **issue:** branch the worktree with no upstream ([#71](https://github.com/AbysmalBiscuit/devkit/issues/71)) ([8b9c04c](https://github.com/AbysmalBiscuit/devkit/commit/8b9c04cc3897da248dae795d11de1eb79f93ea25))
+
 ## [0.14.3](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.2...v0.14.3) (2026-09-14)
 
 
