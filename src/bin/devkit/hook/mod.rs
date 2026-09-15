@@ -17,6 +17,7 @@
 //! change what the agent does.
 
 mod dialect;
+mod edit;
 mod shell;
 mod writes;
 
@@ -88,14 +89,8 @@ pub fn run(cli: HookCli) -> Result<()> {
     let harness = cli.harness.map(Harness::from);
     match cli.event {
         HookEvent::PreToolUse => pre_tool_use(harness),
-        HookEvent::SubagentStop => {
-            crate::locks::run_hook("subagent-stop");
-            Ok(())
-        }
-        HookEvent::SessionEnd => {
-            crate::locks::run_hook("session-end");
-            Ok(())
-        }
+        HookEvent::SubagentStop => with_payload(edit::release_subagent),
+        HookEvent::SessionEnd => with_payload(edit::release_session),
         // Record-only verbs. They take no action, and their records arrive
         // with the logging subsystem.
         _ => Ok(()),
@@ -111,6 +106,29 @@ fn read_payload() -> Option<Value> {
     serde_json::from_str(&buf).ok()
 }
 
+/// Run a verb over the payload, or do nothing when there is none to read. A
+/// verb reached here has no verdict to fail toward, so an unreadable payload
+/// is silence rather than a denial.
+fn with_payload(f: impl FnOnce(&Value) -> Result<()>) -> Result<()> {
+    match read_payload() {
+        Some(payload) => f(&payload),
+        None => Ok(()),
+    }
+}
+
+/// The retired `lockm hook <event>` spelling. Kept because an installed plugin
+/// manifest can outlive the binary it was installed beside.
+pub(crate) fn legacy_lock_event(event: &str) -> Result<()> {
+    match event {
+        "pretooluse" => pre_tool_use(None),
+        "subagent-stop" => with_payload(edit::release_subagent),
+        "session-end" => with_payload(edit::release_session),
+        other => {
+            anyhow::bail!("unknown lock hook event `{other}`");
+        }
+    }
+}
+
 /// The payload's own `tool_name` picks the path. The two `PreToolUse` matcher
 /// blocks each manifest used to carry existed only because two subsystems
 /// answered one event; the decision belongs here, where the payload is.
@@ -122,10 +140,7 @@ pub(crate) fn pre_tool_use(harness: Option<Harness>) -> Result<()> {
         return shell::deny_unreadable_payload(harness);
     };
     match payload.get("tool_name").and_then(Value::as_str) {
-        Some(t) if devkit_locks::hook::is_write_tool(t) => {
-            crate::locks::guard_write(&payload);
-            Ok(())
-        }
+        Some(t) if devkit_locks::hook::is_write_tool(t) => edit::guard(&payload),
         _ => shell::guard(&payload, harness),
     }
 }
