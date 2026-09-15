@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -21,20 +22,37 @@ class CloudHooks(unittest.TestCase):
         self.env.pop("CLAUDE_CODE_REMOTE", None)
         self.env.pop("DEVKIT_CLOUD", None)
         self.env.pop("CLOUD_AGENT", None)
+        self.env.pop("CLOUD_AGENT_TYPE", None)
         self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                         GIT_AUTHOR_NAME="Cloud Test", GIT_AUTHOR_EMAIL="cloud@example.invalid",
                         GIT_COMMITTER_NAME="Cloud Test", GIT_COMMITTER_EMAIL="cloud@example.invalid")
         subprocess.run(["git", "-C", str(self.root), "init", "-b", "test-cloud"], env=self.env, check=True, capture_output=True)
 
-    def run_script(self, name, *args, cloud=False):
+    def run_script(self, name, *args, cloud=False, **overrides):
         env = self.env.copy()
         if cloud:
             env["CLOUD_AGENT"] = "true"
+        for key, value in overrides.items():
+            env.pop(key, None) if value is None else env.update({key: value})
+        # An absolute interpreter keeps the script reachable when a test
+        # narrows PATH to prove what the hook finds on it.
         return subprocess.run(
-            ["python3", str(self.root / ".agents/skills/cloud/scripts" / name), *args],
+            [sys.executable, str(self.root / ".agents/skills/cloud/scripts" / name), *args],
             cwd="/tmp", env=env, input='{"hook_event_name":"SessionStart"}',
             text=True, capture_output=True,
         )
+
+    def path_without_devkit(self):
+        """A PATH carrying what the hooks themselves run, and no devkit."""
+        binaries = self.root / "path without devkit"
+        binaries.mkdir(exist_ok=True)
+        for name in ("git", "sh", "python3"):
+            source = shutil.which(name)
+            self.assertIsNotNone(source, name)
+            link = binaries / name
+            if not link.exists():
+                link.symlink_to(source)
+        return str(binaries)
 
     def test_local_hooks_leave_checkout_alone(self):
         config = self.root / "devkit.local.toml"
@@ -179,6 +197,62 @@ class CloudHooks(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Set GIT_AUTHOR_NAME", result.stderr)
         self.assertFalse((self.root / ".git/devkit-cloud-hooks").exists())
+
+    def test_startup_names_the_harness_task_tools(self):
+        result = self.run_script("cloud_startup.py", cloud=True, CLOUD_AGENT_TYPE="claude")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for tool in ("TaskCreate", "TaskUpdate", "TaskList", "TaskGet"):
+            self.assertIn(tool, result.stdout)
+
+    def test_startup_falls_back_to_generic_task_tools(self):
+        for value in (None, "", "   ", "codex", "gemini"):
+            with self.subTest(value=value):
+                result = self.run_script("cloud_startup.py", cloud=True, CLOUD_AGENT_TYPE=value)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("task tracking tools", result.stdout)
+                self.assertNotIn("TaskCreate", result.stdout)
+
+    def test_startup_reads_the_agent_type_case_insensitively(self):
+        result = self.run_script("cloud_startup.py", cloud=True, CLOUD_AGENT_TYPE="  Claude ")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("TaskCreate", result.stdout)
+
+    def test_startup_ignores_the_agent_type_outside_the_cloud(self):
+        result = self.run_script("cloud_startup.py", CLOUD_AGENT_TYPE="claude")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_startup_reports_installed_devkit(self):
+        result = self.run_script("cloud_startup.py", cloud=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, r"devkit \d+\.\d+\.\d+ is on PATH")
+        self.assertNotIn("--install", result.stdout)
+
+    def test_startup_reports_missing_devkit_with_its_install_command(self):
+        result = self.run_script("cloud_startup.py", cloud=True, PATH=self.path_without_devkit())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("issue", result.stdout)
+        self.assertIn("cloud_setup.py --cloud --install", result.stdout)
+
+    def test_startup_counts_devkit_that_resolves_but_does_not_run_as_missing(self):
+        binaries = Path(self.path_without_devkit())
+        for name in ("devkit", "issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"):
+            broken = binaries / name
+            broken.write_text("#!/bin/sh\nexit 3\n")
+            broken.chmod(0o755)
+        result = self.run_script("cloud_startup.py", cloud=True, PATH=str(binaries))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("cloud_setup.py --cloud --install", result.stdout)
+
+    def test_compaction_reports_devkit_only_when_it_is_missing(self):
+        missing = self.run_script("cloud_compact.py", cloud=True, PATH=self.path_without_devkit())
+        self.assertEqual(missing.returncode, 0, missing.stderr)
+        self.assertIn("cloud_setup.py --cloud --install", missing.stdout)
+        self.assertIn("Continue", missing.stdout)
+        self.assertLess(len(missing.stdout.split()), 150)
+        present = self.run_script("cloud_compact.py", cloud=True)
+        self.assertEqual(present.returncode, 0, present.stderr)
+        self.assertNotIn("--install", present.stdout)
 
 
 if __name__ == "__main__":
