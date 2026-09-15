@@ -9,38 +9,81 @@
 //! answer would be read.
 
 use anyhow::Result;
+use devkit_common::harness_log::{self, Decision, EditPre, Kind, Verdict};
 use devkit_locks::{
     hook::{self, LockAction},
     model::{Conflict, WriteDecision},
 };
 use serde_json::Value;
 
+use super::{HookEvent, record};
+
 /// Claim the write targets a structured-edit payload names, before the tool
 /// runs.
 pub fn guard(payload: &Value) -> Result<()> {
     let cwd = cwd_of(payload);
-    match hook::parse_write(payload) {
+    let (targets, blocks) = match hook::parse_write(payload) {
         Some(LockAction::Write {
             file_paths, holder, ..
-        }) => claim(payload, &cwd, &file_paths, &holder),
+        }) => {
+            let blocks = claim(payload, &cwd, &file_paths, &holder);
+            (file_paths, blocks)
+        }
         Some(LockAction::Unusable { reason }) => {
+            let message = format!("devkit write-harness: {reason} (fail-closed)");
             if hook::enforcement_enabled(&cwd) {
-                println!(
-                    "{}",
-                    hook::deny_json(&format!("devkit write-harness: {reason} (fail-closed)"))
-                );
+                println!("{}", hook::deny_json(&message));
             }
+            (Vec::new(), vec![message])
         }
         // A tool that does not write, which is the common case. The release
         // variants never come back from `parse_write`.
-        Some(LockAction::ReleaseSubagent { .. } | LockAction::ReleaseSession { .. }) | None => {}
+        Some(LockAction::ReleaseSubagent { .. } | LockAction::ReleaseSession { .. }) | None => {
+            return Ok(());
+        }
+    };
+    // Envelope first, then the record: a stall on the log directory before the
+    // envelope exists runs into the manifest timeout, and a harness timeout
+    // allows the call.
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let settings = harness_log::resolve(&cwd);
+    if settings.enabled {
+        let rec = record::envelope(
+            payload,
+            HookEvent::PreToolUse,
+            None,
+            Kind::EditPre(EditPre {
+                tool_name: payload
+                    .get("tool_name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                targets,
+                verdict: Verdict {
+                    decision: if blocks.is_empty() {
+                        Decision::Allow
+                    } else {
+                        Decision::Deny
+                    },
+                    blocks,
+                    warnings: Vec::new(),
+                },
+            }),
+        );
+        harness_log::record(&rec);
     }
     Ok(())
 }
 
-fn claim(payload: &Value, cwd: &std::path::Path, file_paths: &[String], holder: &str) {
+/// Claim each target, returning the messages that denied the write. An empty
+/// return is an allow.
+fn claim(
+    payload: &Value,
+    cwd: &std::path::Path,
+    file_paths: &[String],
+    holder: &str,
+) -> Vec<String> {
     if !hook::enforcement_enabled(cwd) {
-        return; // no opt-in (env, project layers, or global config) → no enforcement
+        return Vec::new(); // no opt-in (env, project layers, or global config) → no enforcement
     }
     let mut conflicts = Vec::new();
     let mut resolver = devkit_locks::WriteResolver::new();
@@ -52,19 +95,23 @@ fn claim(payload: &Value, cwd: &std::path::Path, file_paths: &[String], holder: 
             Err(e) => {
                 // fail closed: a registry error must not silently reopen the
                 // window
-                println!(
-                    "{}",
-                    hook::deny_json(&format!(
-                        "devkit write-harness: registry error (fail-closed): {e:#}"
-                    ))
-                );
-                return;
+                let message = format!("devkit write-harness: registry error (fail-closed): {e:#}");
+                println!("{}", hook::deny_json(&message));
+                return vec![message];
             }
         }
     }
-    if !conflicts.is_empty() {
-        println!("{}", conflict_envelope(&conflicts));
+    if conflicts.is_empty() {
+        return Vec::new();
     }
+    let envelope = conflict_envelope(&conflicts);
+    println!("{envelope}");
+    vec![
+        envelope["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    ]
 }
 
 pub fn release_subagent(payload: &Value) -> Result<()> {
@@ -87,7 +134,7 @@ fn release(action: Option<LockAction>) {
 
 /// The deny envelope naming every holder in the way. `Acquired` and
 /// `AllowedByOwnership` emit nothing: an allow is silence.
-fn conflict_envelope(conflicts: &[Conflict]) -> Value {
+fn conflict_envelope(conflicts: &[Conflict]) -> serde_json::Value {
     let who = conflicts
         .iter()
         .map(|c| format!("{} (held by {})", c.path, c.held_by))

@@ -13,11 +13,14 @@ use std::{io::Write, sync::OnceLock, time::Duration};
 
 use anyhow::Result;
 use devkit_command::{Context, Limits, PathStyle};
-use devkit_common::harness::{self, Harness, ShellPayload};
+use devkit_common::{
+    harness::{self, Harness, ShellPayload},
+    harness_log::{self, Decision, Kind, Record, ShellPre, Verdict},
+};
 use devkit_ports::guard::{self, Project};
 use serde_json::Value;
 
-use super::{dialect, writes};
+use super::{HookEvent, dialect, record, writes};
 
 // The fail-open contract below is `catch_unwind`, which catches nothing under
 // an aborting panic strategy. Nothing else ties the compile profile to this
@@ -38,6 +41,37 @@ enum Response {
     Envelope(serde_json::Value),
 }
 
+/// What the guard decided, and the record of it. The record is `None` when
+/// logging is off, which is the default.
+struct Outcome {
+    response: Response,
+    record: Option<Box<Record>>,
+}
+
+impl Outcome {
+    fn silent() -> Self {
+        Outcome {
+            response: Response::Silent,
+            record: None,
+        }
+    }
+
+    fn with(mut self, record: Option<Box<Record>>) -> Self {
+        self.record = record;
+        self
+    }
+}
+
+/// Carried out of the `catch_unwind` closure so the panic arm's record can name
+/// the call rather than only the stage. An analyser panic on real traffic is
+/// the highest-value record in the corpus, and today it produces one stderr
+/// line that scrolls away.
+#[derive(Clone)]
+struct PanicContext {
+    harness: Option<Harness>,
+    settings: harness_log::Settings,
+}
+
 /// The harness the manifest named, else the payload's own shape. A manifest
 /// devkit wrote already knows which harness reads it, so passing that in beats
 /// inferring it from which fields a vendor happens to send this release.
@@ -49,39 +83,130 @@ fn resolve_harness(declared: Option<Harness>, shell: &ShellPayload) -> Harness {
 /// the command unless the write stage had started, in which case it denies.
 pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
     let write_stage: OnceLock<Harness> = OnceLock::new();
+    let panic_ctx: OnceLock<PanicContext> = OnceLock::new();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        respond(payload, declared, &write_stage)
+        respond(payload, declared, &write_stage, &panic_ctx)
     }));
     match outcome {
-        Ok(Response::Envelope(v)) => print_envelope(&v),
-        Ok(Response::Silent) => {}
-        Err(_) => match write_stage.get() {
-            Some(h) => print_envelope(&harness::deny_shell_json(
-                *h,
-                "devkit write-harness: internal failure while evaluating a shell write (fail-closed)",
-            )),
-            None => warn("command guard panicked; allowing the command"),
-        },
+        Ok(out) => {
+            if let Response::Envelope(v) = &out.response {
+                print_envelope(v);
+            }
+            finish(out.record.as_deref());
+        }
+        Err(_) => {
+            match write_stage.get() {
+                Some(h) => print_envelope(&harness::deny_shell_json(
+                    *h,
+                    "devkit write-harness: internal failure while evaluating a shell write (fail-closed)",
+                )),
+                None => warn("command guard panicked; allowing the command"),
+            }
+            let panicked = panic_ctx.get().map(|ctx| {
+                undecided_record(
+                    payload,
+                    ctx.harness,
+                    &ctx.settings,
+                    "the command guard panicked while evaluating this command",
+                )
+            });
+            finish(panicked.as_deref());
+        }
     }
     Ok(())
+}
+
+/// Flush the envelope, then write the record.
+///
+/// The order is the contract. `harness_log::record` catches its own panics but
+/// cannot be made block-safe, and the log directory is configurable to a
+/// network home, so `create_dir_all` and the first append can stall. A stall
+/// before the envelope exists runs into the manifest's 30-second timeout, and a
+/// harness timeout *allows* the call — which would turn a denial the write
+/// stage had already decided into an allow. Printing first costs nothing: a
+/// closed stdout pipe fails the write immediately rather than blocking, and the
+/// record still lands afterwards.
+fn finish(rec: Option<&Record>) {
+    let _ = std::io::stdout().flush();
+    if let Some(rec) = rec {
+        harness_log::record(rec);
+    }
 }
 
 /// A payload devkit could not read at all: an unreadable pipe or text that is
 /// not JSON. The signature of a harness format change, and an unevaluable write
 /// fails closed.
+///
+/// A payload devkit could not read is precisely what the log exists for, so
+/// this is a log-then-return rather than a bare return.
 pub fn deny_unreadable_payload(declared: Option<Harness>) -> Result<()> {
-    if harness::writes_enabled(&current_cwd()) {
+    let cwd = current_cwd();
+    if harness::writes_enabled(&cwd) {
         let envelope = match declared {
             Some(h) => harness::deny_shell_json(h, UNUSABLE_SHELL_REASON),
             None => harness::deny_json(UNUSABLE_SHELL_REASON),
         };
         print_envelope(&envelope);
     }
+    let settings = harness_log::resolve(&cwd);
+    let rec = settings.enabled.then(|| {
+        undecided_record(
+            &Value::Null,
+            declared,
+            &settings,
+            "the hook payload could not be read as JSON",
+        )
+    });
+    finish(rec.as_deref());
     Ok(())
 }
 
-fn deny(which: Harness, reasons: &[String]) -> Response {
-    Response::Envelope(harness::deny_shell_json(which, &reasons.join("\n")))
+/// A record for a call the guard could not decide: an unreadable payload, a
+/// panic, or a write stage that missed its deadline. Each of these is one of
+/// the operational signals the log exists to collect, and each would otherwise
+/// leave at most one stderr line that scrolls away.
+fn undecided_record(
+    payload: &Value,
+    declared: Option<Harness>,
+    settings: &harness_log::Settings,
+    reason: &str,
+) -> Box<Record> {
+    let command = payload
+        .get("tool_input")
+        .and_then(|ti| ti.get("command"))
+        .or_else(|| payload.get("command"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let (command, truncated) = record::truncate(command);
+    let (command, redacted) = harness_log::redact::apply(&command, settings.command);
+    record::envelope(
+        payload,
+        HookEvent::PreToolUse,
+        declared,
+        Kind::ShellPre(Box::new(ShellPre {
+            command,
+            redacted,
+            truncated,
+            tool_name: payload
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            dialect: None,
+            analysis: None,
+            verdict: Verdict {
+                decision: Decision::Undecided,
+                blocks: vec![reason.to_string()],
+                warnings: Vec::new(),
+            },
+        })),
+    )
+}
+
+fn deny(which: Harness, reasons: &[String]) -> Outcome {
+    Outcome {
+        response: Response::Envelope(harness::deny_shell_json(which, &reasons.join("\n"))),
+        record: None,
+    }
 }
 
 fn current_cwd() -> std::path::PathBuf {
@@ -130,18 +255,44 @@ fn respond(
     payload: &Value,
     declared: Option<Harness>,
     write_stage: &OnceLock<Harness>,
-) -> Response {
+    panic_ctx: &OnceLock<PanicContext>,
+) -> Outcome {
     let Some(shell) = harness::parse_shell_payload(payload) else {
-        return deny_unusable_shell(payload, declared);
+        let response = deny_unusable_shell(payload, declared);
+        let settings = harness_log::resolve(&current_cwd());
+        let rec = settings.enabled.then(|| {
+            undecided_record(
+                payload,
+                declared,
+                &settings,
+                "the payload did not parse as a shell command",
+            )
+        });
+        return Outcome {
+            response,
+            record: rec,
+        };
     };
     let which = resolve_harness(declared, &shell);
     let Some(cwd) = shell.cwd.clone().or_else(|| std::env::current_dir().ok()) else {
-        return Response::Silent;
+        // There is no directory to resolve config against, so there is nothing
+        // to log to either: `resolve` needs one to find the project layers.
+        return Outcome::silent();
     };
+    let settings = harness_log::resolve(&cwd);
+    let _ = panic_ctx.set(PanicContext {
+        harness: Some(which),
+        settings: settings.clone(),
+    });
+
     let commands_on = harness::commands_enabled(&cwd);
     let writes_on = which != Harness::Cursor && harness::writes_enabled(&cwd);
-    if !commands_on && !writes_on {
-        return Response::Silent;
+    // With logging on and both gates off, the analysis runs anyway and this
+    // early return is skipped: a record with an empty verdict is half a record.
+    // That is the accepted trade, bounded by logging being off by default and
+    // enablable only from the global config.
+    if !commands_on && !writes_on && !settings.enabled {
+        return Outcome::silent();
     }
     if writes_on {
         let _ = write_stage.set(which);
@@ -151,13 +302,14 @@ fn respond(
     for w in &warnings {
         warn(w);
     }
+    let dialect = dialect::resolve(
+        rules.policy.shell,
+        which,
+        shell.tool_name.as_deref(),
+        cfg!(windows),
+    );
     let ctx = Context {
-        dialect: dialect::resolve(
-            rules.policy.shell,
-            which,
-            shell.tool_name.as_deref(),
-            cfg!(windows),
-        ),
+        dialect,
         cwd: shell.cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
         path_style: if cfg!(windows) {
             PathStyle::Windows
@@ -166,7 +318,9 @@ fn respond(
         },
         limits: Limits::default(),
     };
+    let started = std::time::Instant::now();
     let analysis = devkit_command::analyze(&shell.command, &ctx);
+    let analyze_micros = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
 
     let mut blocks: Vec<String> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
@@ -176,16 +330,35 @@ fn respond(
         blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
         notes.extend(verdict.warnings.into_iter().map(|f| f.message));
     }
+    // Everything the record needs that the write stage may consume.
+    let shell_record = |decision, blocks: &[String], notes: &[String]| {
+        settings.enabled.then(|| {
+            shell_pre_record(
+                payload,
+                &shell,
+                declared,
+                &settings,
+                dialect,
+                Some(record::projection(&analysis, analyze_micros)),
+                Verdict {
+                    decision,
+                    blocks: blocks.to_vec(),
+                    warnings: notes.to_vec(),
+                },
+            )
+        })
+    };
     if writes_on {
         let evaluation = writes::evaluate(&analysis, &rules.policy);
         blocks.extend(evaluation.blocks.iter().cloned());
         notes.extend(evaluation.warnings.iter().cloned());
         if blocks.is_empty() && evaluation.needs_registry() {
             let Some(session) = shell.session_id.clone() else {
-                return deny(which, &[
+                let reason =
                     "devkit write-harness: shell write payload carries no session_id (fail-closed)"
-                        .into(),
-                ]);
+                        .to_string();
+                let rec = shell_record(Decision::Deny, std::slice::from_ref(&reason), &notes);
+                return deny(which, &[reason]).with(rec);
             };
             let holder =
                 devkit_locks::hook::holder_from_fields(&session, shell.agent_id.as_deref());
@@ -204,27 +377,66 @@ fn respond(
                         .into(),
                 ),
                 Err(writes::StageError::TimedOut) => {
-                    print_envelope(&harness::deny_shell_json(
-                        which,
-                        &format!(
-                            "devkit write-harness: the lock registry did not answer within {}s (fail-closed). Retry; if it persists, check `lockm status` and `devkit doctor`.",
-                            WRITE_STAGE_DEADLINE.as_secs()
-                        ),
-                    ));
-                    // The worker is still blocked on the registry; exiting the
-                    // process is what ends it.
+                    let reason = format!(
+                        "devkit write-harness: the lock registry did not answer within {}s (fail-closed). Retry; if it persists, check `lockm status` and `devkit doctor`.",
+                        WRITE_STAGE_DEADLINE.as_secs()
+                    );
+                    print_envelope(&harness::deny_shell_json(which, &reason));
+                    // A deadline miss is one of the operational signals this
+                    // log exists to collect, and the one path that would
+                    // otherwise never reach it. Envelope, then record, then
+                    // exit: the worker is still blocked on the registry, and
+                    // exiting the process is what ends it.
+                    let rec = shell_record(Decision::Deny, std::slice::from_ref(&reason), &notes);
+                    finish(rec.as_deref());
                     std::process::exit(0);
                 }
             }
         }
     }
     if !blocks.is_empty() {
-        return deny(which, &blocks);
+        let rec = shell_record(Decision::Deny, &blocks, &notes);
+        return deny(which, &blocks).with(rec);
     }
+    let rec = shell_record(Decision::Allow, &[], &notes);
     if notes.is_empty() {
-        return Response::Silent;
+        return Outcome::silent().with(rec);
     }
-    harness::warn_shell_json(which, &notes.join("\n")).map_or(Response::Silent, Response::Envelope)
+    let response = harness::warn_shell_json(which, &notes.join("\n"))
+        .map_or(Response::Silent, Response::Envelope);
+    Outcome {
+        response,
+        record: rec,
+    }
+}
+
+/// The `shell_pre` record for a call the guard actually evaluated.
+#[allow(clippy::too_many_arguments)]
+fn shell_pre_record(
+    payload: &Value,
+    shell: &ShellPayload,
+    declared: Option<Harness>,
+    settings: &harness_log::Settings,
+    dialect: devkit_command::Dialect,
+    analysis: Option<devkit_common::harness_log::AnalysisProjection>,
+    verdict: Verdict,
+) -> Box<Record> {
+    let (command, truncated) = record::truncate(&shell.command);
+    let (command, redacted) = harness_log::redact::apply(&command, settings.command);
+    record::envelope(
+        payload,
+        HookEvent::PreToolUse,
+        declared,
+        Kind::ShellPre(Box::new(ShellPre {
+            command,
+            redacted,
+            truncated,
+            tool_name: shell.tool_name.clone(),
+            dialect: Some(format!("{dialect:?}").to_lowercase()),
+            analysis,
+            verdict,
+        })),
+    )
 }
 
 /// Write a deny envelope to stdout. A closed pipe or a full disk on the

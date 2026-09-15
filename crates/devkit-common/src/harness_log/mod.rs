@@ -150,7 +150,11 @@ pub enum Decision {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct AnalysisProjection {
     pub resolved_writes: Vec<String>,
-    pub unresolved_writes: Vec<String>,
+    /// Where the analyser reached a write and could not name its target. The
+    /// path is what could not be determined, so only the span survives — and
+    /// the span is the signal: it points at the construct to teach the parser
+    /// next.
+    pub unresolved_writes: Vec<UnresolvedWrite>,
     pub tree_effects: Vec<String>,
     pub script_files: Vec<String>,
     pub programs: Vec<String>,
@@ -166,6 +170,15 @@ pub struct Counts {
     pub resolved_writes: usize,
     pub unresolved_writes: usize,
     pub uncertainties: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedWrite {
+    /// The file operation, as the analyser classified it.
+    pub op: String,
+    /// Byte span into the command as analysed.
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
