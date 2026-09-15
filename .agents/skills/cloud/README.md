@@ -1,6 +1,6 @@
 # Cloud setup
 
-The shared cloud bundle lives under `.agents/skills/cloud`, exposed through the `.claude/skills` symlink. Its skill has invocation disabled; agents read the file through a pointer in the generated instructions. Claude settings call the Python scripts under `.agents/skills/cloud/scripts`.
+The shared cloud bundle lives under `.agents/skills/cloud`. Agents read its skill file directly through a pointer in the generated instructions. Claude settings call the Python scripts under `.agents/skills/cloud/scripts`.
 
 ## Provision the VM
 
