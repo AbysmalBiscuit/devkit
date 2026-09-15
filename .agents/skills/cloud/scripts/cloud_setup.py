@@ -55,7 +55,7 @@ def main():
         install_devkit()
     configure()
     if args.handoff:
-        print(f"Cloud configuration generated in {ROOT}. Read {SKILL / 'SKILL.md'} before continuing the task.")
+        print(f"Cloud configuration generated in {ROOT}. Read {ROOT / 'AGENTS.local.md'} before continuing the task.")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 interface:
   display_name: cloud
-  short_description: Use when starting issue or feature work in a cloud agent session, or recovering that work after resume or compaction.
+  short_description: Find existing issue work and select a cloud execution workflow.
 policy:
   allow_implicit_invocation: false

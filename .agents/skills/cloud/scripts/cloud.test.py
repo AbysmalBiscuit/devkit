@@ -47,7 +47,7 @@ class CloudHooks(unittest.TestCase):
     def test_setup_generates_config_with_bundled_helper(self):
         result = self.run_script("cloud_setup.py", "--cloud", "--handoff")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(str(self.root / ".agents/skills/cloud/SKILL.md"), result.stdout)
+        self.assertIn(str(self.root / "AGENTS.local.md"), result.stdout)
         config = tomllib.loads((self.root / "devkit.local.toml").read_text())
         self.assertEqual(config["defaults"]["pr_create_state"], "draft")
         self.assertTrue(config["harness"]["enforce_commands"])
@@ -65,8 +65,9 @@ class CloudHooks(unittest.TestCase):
     def test_startup_loads_workflow_without_network(self):
         result = self.run_script("cloud_startup.py", cloud=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Find existing work", result.stdout)
-        self.assertIn("draft PR", result.stdout)
+        self.assertIn("AGENTS.local.md", result.stdout)
+        self.assertNotIn("Find existing work", result.stdout)
+        self.assertIn("draft PR", (self.root / "AGENTS.local.md").read_text())
         self.assertTrue((self.root / "devkit.local.toml").exists())
 
     def test_settings_route_startup_and_recovery_from_another_directory(self):
@@ -82,7 +83,8 @@ class CloudHooks(unittest.TestCase):
             outputs[source] = result.stdout
         self.assertEqual(outputs["startup"], outputs["clear"])
         self.assertEqual(outputs["resume"], outputs["compact"])
-        self.assertLess(len(outputs["compact"]), len(outputs["startup"]))
+        self.assertIn("AGENTS.local.md", outputs["startup"])
+        self.assertIn("Continue", outputs["compact"])
 
     def test_compaction_only_emits_recovery(self):
         config = self.root / "devkit.local.toml"

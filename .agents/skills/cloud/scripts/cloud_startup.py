@@ -1,14 +1,13 @@
-"""Load the cloud workflow at startup or after clearing context."""
+"""Generate cloud preferences and point the session to its standing rules."""
 
-from cloud_setup import SKILL, configure, in_cloud
+from cloud_setup import ROOT, configure, in_cloud
 
 
 def main():
     if not in_cloud():
         return
     configure()
-    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-    print(skill.split("---", 2)[2].lstrip())
+    print(f"Read {ROOT / 'AGENTS.local.md'} before continuing the task.")
 
 
 if __name__ == "__main__":
