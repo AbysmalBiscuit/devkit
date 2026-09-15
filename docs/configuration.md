@@ -2,6 +2,8 @@
 
 devkit's engine is project-agnostic; every project- and machine-specific detail lives in a single TOML config. That config is **personal** (it holds your worktree paths, app catalog, local secrets, and teammate handles), so it lives outside the repo. This document is the canonical reference for the config *shape*; copy the example below to a local file and adjust it.
 
+devkit parses the config with the TOML 1.1 grammar, so a `devkit.toml` may use what 1.1 added: newlines and a trailing comma inside an inline table, and the `\e` escape in a basic string. Nothing in devkit requires any of it. Editors, linters and other tools reading the same file may still be on 1.0, so a config that has to stay portable is safer written as 1.0.
+
 ## Location
 
 The config is resolved from the first of:
