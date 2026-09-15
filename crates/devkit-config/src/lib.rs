@@ -67,6 +67,26 @@ pub struct Config {
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the
 /// crash-loop, memory, and health policies it applies to supervised servers.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [daemon]
+/// enabled         = true
+/// memory_warn_mb  = 1024
+/// memory_limit_mb = 2048   # soft: SIGTERM, then the crash path respawns
+/// memory_action   = "restart"
+/// memory_max_mb   = 4096   # hard: the kernel OOM-kills the tree
+/// # "#).unwrap();
+/// # assert!(cfg.daemon.enabled);
+/// # assert_eq!(cfg.daemon.memory_action, "restart");
+/// # assert!(cfg.daemon.memory_max_mb > cfg.daemon.memory_limit_mb);
+/// # assert_eq!(cfg.daemon.max_restarts, 5);
+/// ```
+///
+/// The ordering in that example is the one to keep: the soft action is the
+/// graceful first responder, and the kernel cap is the backstop for a spike
+/// too fast for the poll loop.
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DaemonConfig {
@@ -127,6 +147,18 @@ impl Default for DaemonConfig {
 /// one line rather than a hook-wiring task. A section with nothing to report
 /// is omitted whatever its switch says; a switch turned off suppresses the
 /// section even when the checkout has something to put in it.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [brief]
+/// locks = false
+/// pins  = false
+/// # "#).unwrap();
+/// # assert!(!cfg.brief.locks);
+/// # assert!(cfg.brief.enabled);
+/// # assert!(cfg.brief.apps);
+/// ```
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct BriefConfig {
@@ -164,6 +196,22 @@ impl Default for BriefConfig {
 /// for. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and
 /// globs are not available. A hook that fails to render, spawn, or exit zero
 /// warns on stderr and the remaining hooks still run.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [hooks]
+/// after_worktree_create = [["zoxide", "add", "{{ worktree }}"]]
+/// after_worktree_remove = [["zoxide", "remove", "{{ worktree }}"]]
+/// after_end             = [["alacritree", "project", "refresh"]]
+/// # "#).unwrap();
+/// # assert_eq!(cfg.hooks.after_worktree_create[0][0], "zoxide");
+/// # assert_eq!(cfg.hooks.after_worktree_create[0][2], "{{ worktree }}");
+/// # assert_eq!(cfg.hooks.after_end.len(), 1);
+/// ```
+///
+/// Each key is an array, so a deeper `devkit.toml` replaces the whole list
+/// rather than appending to it.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HooksConfig {
@@ -200,6 +248,27 @@ pub struct HooksConfig {
 /// `deny_unknown_fields` because a misspelled `required` would otherwise be
 /// consumed silently, leaving the entry fail-open while the user believes the
 /// files are protected.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [preserve.scratch]
+/// from     = [".scratch/"]
+/// to       = "{{ worktree_root }}/archive/{{ issue }}/scratch"
+/// required = true
+///
+/// [preserve.notes]
+/// from = ["docs/notes/*.md"]
+/// to   = "{{ primary }}/.devkit/archive/{{ issue }}"
+/// # "#).unwrap();
+/// # assert!(cfg.preserve["scratch"].required);
+/// # assert!(!cfg.preserve["notes"].required);
+/// # assert_eq!(cfg.preserve["notes"].from, ["docs/notes/*.md"]);
+/// ```
+///
+/// `scratch` is `required`, so a failure there keeps the worktree, its branch
+/// and its summary instead of removing them. `notes` warns and the worktree
+/// goes.
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreserveConfig {
@@ -217,6 +286,18 @@ pub struct PreserveConfig {
 }
 
 /// Linear lookups that cost an extra API round trip, so each is opt-in.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [linear]
+/// resolve_pr_links = true
+/// # "#).unwrap();
+/// # assert!(cfg.linear.resolve_pr_links);
+/// ```
+///
+/// The lookup authenticates with `LINEAR_API_KEY` from the environment or
+/// `~/.config/devkit/secrets.toml`; no token lives in this table.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct LinearConfig {
@@ -232,6 +313,18 @@ pub struct LinearConfig {
 ///
 /// This table is not under `[tracker]`: a project on Linear with a fork
 /// workflow needs `pr_repo` just as much as a GitHub one does.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [github]
+/// issues_repo = "org/planning"
+/// pr_repo     = "upstream/app"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.github.issues_repo.as_deref(), Some("org/planning"));
+/// # assert_eq!(cfg.github.pr_repo.as_deref(), Some("upstream/app"));
+/// # assert!(Config::parse("[github]\nissue_repo = \"org/planning\"\n").is_err());
+/// ```
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GithubConfig {
@@ -269,6 +362,19 @@ impl std::fmt::Display for TrackerKind {
 }
 
 /// The `[tracker]` table.
+///
+/// ```
+/// # use devkit_config::{Config, TrackerKind};
+/// # let cfg = Config::parse(r#"
+/// [tracker]
+/// kind = "github"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.tracker.kind, Some(TrackerKind::Github));
+/// # assert_eq!(Config::parse("").unwrap().tracker.kind, None);
+/// ```
+///
+/// Naming the kind is what stops a `LINEAR_API_KEY` exported machine-wide from
+/// resolving Linear for a project that does not use it.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TrackerConfig {
@@ -279,6 +385,16 @@ pub struct TrackerConfig {
 /// Width of the shared worker pool. Machine tuning rather than a project
 /// convention, so it belongs in the personal layer at
 /// `~/.config/devkit/config.toml` rather than a repository's `devkit.toml`.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [parallelism]
+/// threads = 8
+/// # "#).unwrap();
+/// # assert_eq!(cfg.parallelism.threads.unwrap().get(), 8);
+/// # assert!(Config::parse("[parallelism]\nthreads = 0\n").is_err());
+/// ```
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ParallelismConfig {
@@ -315,6 +431,25 @@ impl std::fmt::Display for PrCreateState {
 /// documented default) when unset; an empty path or branch key is not
 /// validated at config load, and what happens when it is used is up to the
 /// feature that reads it.
+///
+/// A relative path anchors to the layer that declared it, so a project can
+/// commit this table as it stands and have it hold on every machine:
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [defaults]
+/// worktree_root = "../myproject_worktrees"
+/// baseline_dir  = "../myproject_worktrees/_baselines"
+/// baseline_ref  = "origin/main"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.defaults.baseline_ref, "origin/main");
+/// # assert_eq!(cfg.defaults.apps_dir, "apps");
+/// # assert!(cfg.defaults.branch_prefix.is_empty());
+/// ```
+///
+/// Only `branch_prefix` is personal. Put it in `devkit.local.toml`, or write
+/// `"${USER}/"`.
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct Defaults {
     /// Directory issue worktrees are created under. `~` is expanded. Names a
@@ -423,6 +558,17 @@ fn default_stray_scan_width() -> u16 {
 }
 
 /// A team member's handle mapping (Slack user-id, GitHub login, etc.).
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [people.alice]
+/// slack  = "U0XXXXXXXXX"
+/// github = "alice-gh"
+/// # "#).unwrap();
+/// # assert_eq!(cfg.people["alice"].slack, "U0XXXXXXXXX");
+/// # assert_eq!(cfg.people["alice"].github.as_deref(), Some("alice-gh"));
+/// ```
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct Person {
     /// Slack user or channel id, e.g. `U0XXXXXXXXX`.
@@ -437,6 +583,25 @@ pub struct Person {
 /// app's `setup` commands run. `content` is written verbatim — no format
 /// assembly or newline injection. Parent directories are created. Existing
 /// files are left untouched unless `overwrite` is set.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [apps.web]
+/// base_port = 4100
+/// launch    = ["next", "dev", "-p", "{{ port }}"]
+///
+/// [[apps.web.prep_files]]
+/// path    = ".env.local"
+/// content = """
+/// SOME_FEATURE_FLAG=dummy
+/// """
+/// # "#).unwrap();
+/// # let prep = &cfg.apps["web"].prep_files[0];
+/// # assert_eq!(prep.path, ".env.local");
+/// # assert_eq!(prep.content, "SOME_FEATURE_FLAG=dummy\n");
+/// # assert!(!prep.overwrite);
+/// ```
 #[derive(Debug, Clone, JsonSchema, Deserialize, Serialize)]
 pub struct PrepFile {
     /// Target path, relative to the app's directory.
@@ -449,6 +614,18 @@ pub struct PrepFile {
 }
 
 /// One step of a sequence task: run a sibling command task, or bring an app up.
+///
+/// ```
+/// # use devkit_config::{Config, Step};
+/// # let cfg = Config::parse(r#"
+/// [tasks.stack]
+/// steps = [{ task = "api-build" }, { up = "api" }]
+/// # "#).unwrap();
+/// # assert_eq!(
+/// #     cfg.tasks["stack"].steps,
+/// #     vec![Step::Task("api-build".into()), Step::Up("api".into())],
+/// # );
+/// ```
 #[derive(Debug, Clone, JsonSchema, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Step {
@@ -465,6 +642,21 @@ pub enum Step {
 /// `deny_unknown_fields` because `Split` is matched untagged: without it a
 /// misspelled key alongside a well-formed `split`/`on` pair deserializes
 /// silently, and the typo changes nothing the author can see.
+///
+/// ```
+/// # use devkit_config::{Config, RunArg};
+/// # let cfg = Config::parse(r#"
+/// [tasks.stage]
+/// run = ["git", "add", "--", { split = "{{ files }}", on = ";" }]
+/// # "#).unwrap();
+/// # let run = &cfg.tasks["stage"].run;
+/// # assert_eq!(run[0], RunArg::from("git"));
+/// # assert_eq!(run[3], RunArg::Split { split: "{{ files }}".into(), on: ";".into() });
+/// ```
+///
+/// `devrun task stage --arg 'files=new file.txt;other.txt'` reaches `git` as
+/// four arguments, the space in the first filename included, because devkit
+/// execs the argv rather than handing it to a shell.
 #[derive(Debug, Clone, PartialEq, JsonSchema, Deserialize, Serialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum RunArg {
@@ -502,6 +694,38 @@ impl From<&str> for RunArg {
 /// (`run`, optionally scoped to an `app` for cwd + static_env) or a sequence
 /// (`steps`). Exactly one of `run`/`steps` must be set; a sequence task
 /// carries no `app`/`env`. Validated at resolution, not at parse.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [tasks.api-prod-build]
+/// description = "prod nitro build (node-server preset)"
+/// app = "api-prod"        # run in this app's dir, inherit its static_env
+/// run = ["doppler", "run", "-c", "dev_local",
+///        "--preserve-env=NITRO_PRESET", "--", "bun", "nitro", "build"]
+/// env = { NITRO_PRESET = "node-server" }
+///
+/// [tasks.commit]
+/// run = ["git", "commit", "-m", "{% if issue is defined %}{{ issue }}: {% endif %}{{ msg }}"]
+/// guard = true            # redirect an agent's own `git commit` here
+///
+/// [tasks.profile-lab-os]
+/// description = "prod api + profiled lab-os, wired together"
+/// steps = [
+///   { task = "api-prod-build" },
+///   { up = "api-prod" },
+/// ]
+/// # "#).unwrap();
+/// # let build = &cfg.tasks["api-prod-build"];
+/// # assert_eq!(build.app.as_deref(), Some("api-prod"));
+/// # assert_eq!(build.env["NITRO_PRESET"], "node-server");
+/// # assert_eq!(cfg.tasks["commit"].guard, Some(true));
+/// # assert!(cfg.tasks["profile-lab-os"].run.is_empty());
+/// # assert_eq!(cfg.tasks["profile-lab-os"].steps.len(), 2);
+/// ```
+///
+/// `msg` is an arg of the `commit` task: no `[templates.variables]` entry
+/// supplies it, so `devrun task commit --arg msg=...` is required.
 #[derive(Debug, Default, Clone, JsonSchema, Deserialize, Serialize)]
 pub struct TaskConfig {
     /// One line shown in `devrun task --list` and the session brief.
@@ -598,6 +822,30 @@ const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
 /// `None` field falls back to its `DEFAULT_*` constant, which reproduces the
 /// historical hardcoded output. `variables` are user constants merged under
 /// every render context.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [templates]
+/// branch             = "{{ prefix }}{{ issue }}-{{ slug }}"
+/// worktree_dir       = "{{ slug }}"
+/// pr_title           = "{{ issue }}: {{ input }}"
+/// pr_body            = "Closes {{ issue }}.\n\n{{ input }}"
+/// issue_summary_path = "{{ worktree }}/.devkit/issue.md"
+///
+/// [templates.variables]
+/// team = "platform"
+/// # "#).unwrap();
+/// # let t = &cfg.templates;
+/// # assert_eq!(t.branch(), "{{ prefix }}{{ issue }}-{{ slug }}");
+/// # assert_eq!(t.pr_body(), "Closes {{ issue }}.\n\n{{ input }}");
+/// # assert_eq!(t.worktree_dir_max(), 24);
+/// # assert_eq!(t.variables["team"], "platform");
+/// ```
+///
+/// `issue_summary_path` renders `{{ worktree }}` here, which keeps the summary
+/// inside the worktree where a `[preserve]` pattern can name it; left relative
+/// it is taken from `defaults.worktree_root` instead.
 #[derive(Debug, JsonSchema, Deserialize, Serialize, Default)]
 pub struct Templates {
     /// Branch name created by `issue setup`. Context: `prefix`, `issue`,
@@ -724,6 +972,31 @@ pub const DEFAULT_APP_URL: &str = "http://localhost:{{ port }}";
 
 /// One runnable app. `base_port` and `launch` are required; `path` is required
 /// too whenever `defaults.doppler_yaml` cannot infer the directory.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [apps.api]
+/// base_port    = 9100
+/// launch       = ["doppler", "run", "-c", "dev_local", "--", "nitro", "dev", "--port", "{{ port }}"]
+/// url_env      = "API_BASE_URL"
+/// provides_url = true
+/// static_env   = { SOME_JWT_SECRET = "local-dev-placeholder-value" }
+///
+/// [apps.web]
+/// base_port = 4100
+/// path      = "apps/web"
+/// launch    = ["next", "dev", "-p", "{{ port }}"]
+/// url_env   = "API_BASE_URL"
+/// # "#).unwrap();
+/// # assert!(cfg.apps["api"].provides_url);
+/// # assert_eq!(cfg.apps["web"].path.as_deref(), Some("apps/web"));
+/// # assert_eq!(cfg.apps["web"].launch.last().unwrap(), "{{ port }}");
+/// # assert_eq!(cfg.apps["api"].static_env["SOME_JWT_SECRET"], "local-dev-placeholder-value");
+/// ```
+///
+/// `web` names the provider through `url_env` rather than by port, so the two
+/// apps stay wired together in every worktree.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct AppConfig {
     /// Start of the app's port band. Each worktree is allocated its own port
@@ -940,6 +1213,16 @@ pub fn home_config_path() -> Option<PathBuf> {
 /// rather than through `Config`, because it decides which layers exist before
 /// there is a merged config to deserialize; this type exists so the published
 /// JSON Schema can still describe it.
+///
+/// ```
+/// # use devkit_config::LayerMarker;
+/// # let doc: toml::Table = toml::from_str(r#"
+/// [config]
+/// root = true
+/// # "#).unwrap();
+/// # let marker: LayerMarker = doc["config"].clone().try_into().unwrap();
+/// # assert!(marker.root);
+/// ```
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct LayerMarker {
     /// Stop walking upward at this file, and drop

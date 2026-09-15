@@ -117,3 +117,60 @@ fn the_harness_schema_exposes_runtime_defaults() {
     assert_eq!(harness["unsupported_language"]["default"], "block");
     assert_eq!(harness["script_files"]["default"], "allow");
 }
+
+/// The examples on the config types are doctests, so their `Config::parse`
+/// scaffolding sits on rustdoc-hidden `#` lines inside a Rust fence. Nothing in
+/// schemars drops those, so `devkit schema` does it — an editor hovering a key
+/// must show the TOML, not the Rust expression wrapped around it.
+#[test]
+fn an_example_reaches_the_schema_as_the_toml_it_is() {
+    let s: serde_json::Value = serde_json::from_str(&generated()).unwrap();
+
+    let github = s["$defs"]["GithubConfig"]["description"].as_str().unwrap();
+    assert!(
+        github.contains("```toml\n[github]\nissues_repo = \"org/planning\""),
+        "the [github] example did not survive as TOML:\n{github}"
+    );
+
+    let mut checked = 0;
+    let mut descriptions = Vec::new();
+    collect_descriptions(&s, &mut descriptions);
+    for desc in &descriptions {
+        for line in desc.lines() {
+            let t = line.trim_start();
+            assert!(
+                !(t == "#" || t.starts_with("# ")),
+                "doctest scaffolding leaked into a description:\n{desc}"
+            );
+        }
+        assert!(
+            !desc.contains("Config::parse"),
+            "doctest scaffolding leaked into a description:\n{desc}"
+        );
+        if desc.contains("```") {
+            checked += 1;
+        }
+    }
+    // A guard against the walk quietly finding nothing: the config types carry
+    // an example each, so a run reaching zero fenced descriptions means the
+    // collector broke, not that the examples went away.
+    assert!(
+        checked >= 15,
+        "only {checked} descriptions carry an example"
+    );
+}
+
+fn collect_descriptions(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                match (key.as_str(), value) {
+                    ("description", serde_json::Value::String(d)) => out.push(d.clone()),
+                    _ => collect_descriptions(value, out),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|i| collect_descriptions(i, out)),
+        _ => {}
+    }
+}

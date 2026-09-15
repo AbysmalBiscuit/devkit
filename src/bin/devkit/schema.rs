@@ -50,9 +50,76 @@ struct Document {
     harness: devkit_config::HarnessSection,
 }
 
+/// Rustdoc's own rule for a doctest line it renders rather than hides: a
+/// leading `#` (alone, or followed by a space) marks scaffolding. The examples
+/// on the config types put `Config::parse` on those lines so the reader sees
+/// TOML and the compiler still sees Rust.
+fn is_hidden(line: &str) -> bool {
+    let t = line.trim_start();
+    t == "#" || t.starts_with("# ")
+}
+
+/// Rewrite the fenced examples in a description the way rustdoc renders them.
+///
+/// A doc comment reaches the schema verbatim, and every config example is a
+/// doctest — a bare fence, the TOML body, and the parse-and-assert scaffolding
+/// on hidden lines. Rustdoc drops those lines when it renders the page; nothing
+/// drops them here, so an editor hovering a key would show a Rust expression
+/// wrapped around the example the reader came for. This drops the same lines
+/// and retags the fence as the TOML the body actually is.
+///
+/// Because a hidden line is a leading `#`, an example annotates itself with
+/// trailing comments — a line-leading TOML comment would be scaffolding.
+fn render_example(desc: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut fenced = false;
+    for line in desc.lines() {
+        match line.trim_start().strip_prefix("```") {
+            Some(info) if !fenced => {
+                fenced = true;
+                let info = info.trim();
+                let lang = if info.is_empty() || info == "rust" {
+                    "toml"
+                } else {
+                    info
+                };
+                out.push(format!("```{lang}"));
+            }
+            Some(_) => {
+                fenced = false;
+                out.push("```".into());
+            }
+            None if fenced && is_hidden(line) => {}
+            None => out.push(line.into()),
+        }
+    }
+    out.join("\n")
+}
+
+/// Apply `render_example` to every `description` in the document. schemars
+/// emits them at every depth — root, `$defs`, each property — so the walk is
+/// the only way to reach them all.
+fn render_examples(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, v) in map.iter_mut() {
+                match (key.as_str(), &*v) {
+                    ("description", serde_json::Value::String(desc)) => {
+                        *v = render_example(desc).into();
+                    }
+                    _ => render_examples(v),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(render_examples),
+        _ => {}
+    }
+}
+
 /// The schema document, pretty-printed with a trailing newline.
 pub fn document() -> Result<String> {
     let mut schema = serde_json::to_value(schemars::schema_for!(Document))?;
+    render_examples(&mut schema);
     let obj = schema
         .as_object_mut()
         .expect("a struct schema is a JSON object");

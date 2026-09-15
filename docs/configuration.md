@@ -24,6 +24,8 @@ Two escapes bypass the walk:
 - `[config] root = true` in a `devkit.toml` or `devkit.local.toml` stops the upward walk at that directory and drops every shallower layer, the home config included. Full isolation.
 - `--config <path>` or `$DEVKIT_CONFIG` selects a single file verbatim, with no layering and no home base.
 
+Example: [`LayerMarker`](../crates/devkit-config/src/lib.rs).
+
 App `path` is normally inferred from the repo's `doppler.yaml`; individual `[apps.<name>]` sections may override it with an explicit `path`. `launch` is run verbatim, so a Doppler wrapper lives in each app's `launch`. devkit refuses to start a Doppler launch whose config resolves to `prd`, so it cannot run against production secrets.
 
 ## Secrets
@@ -106,6 +108,8 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 
 ## Sections
 
+Each section that describes a table ends in an `Example:` line naming the Rust type that carries its worked example. They live there rather than here because a doc comment is the one place an example can be executed: every one is a doctest, so an example that stops parsing fails `cargo test --workspace --doc` instead of quietly misleading a reader. Follow the link to read one in the source, or run `devkit schema`, whose descriptions carry the same text verbatim and are what an editor shows when you hover a key. `cargo doc -p devkit-config --open` puts them all on one page. The full config this reference builds up to is at the end.
+
 ### `[defaults]`
 
 | Key | Required | Meaning |
@@ -136,16 +140,9 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 
 `branch_prefix` gets step 1 only.
 
-Step 3 is what lets a project commit its `devkit.toml`:
+Step 3 is what lets a project commit its `devkit.toml`: a relative `worktree_root` and `baseline_dir` are correct on every machine and for every developer. Only `branch_prefix` is personal — put it in `devkit.local.toml`, or write `"${USER}/"`.
 
-```toml
-[defaults]
-worktree_root = "../myproject_worktrees"
-baseline_dir  = "../myproject_worktrees/_baselines"
-baseline_ref  = "origin/main"
-```
-
-That is correct on every machine and for every developer. Only `branch_prefix` is personal — put it in `devkit.local.toml`, or write `"${USER}/"`.
+Example: [`Defaults`](../crates/devkit-config/src/lib.rs).
 
 ### Baselines
 
@@ -197,39 +194,18 @@ Before starting such a server, devkit refuses a launch that resolves to the `prd
 
 **Migration:** earlier configs set `[defaults].doppler_config` and let devkit prepend `doppler run`. Move that wrapper into each app's `launch`, and delete the `doppler_config`, `doppler_project`, and `preserve_env` keys (fold any `--preserve-env=…` into `launch`).
 
+Example: [`AppConfig`](../crates/devkit-config/src/lib.rs) and [`PrepFile`](../crates/devkit-config/src/lib.rs).
+
 To enforce a hard per-app memory cap *without* the daemon restarting the server, set a runtime or OS limit through the app's `static_env` — e.g. `static_env = { NODE_OPTIONS = "--max-old-space-size=2048" }`, or wrap `launch` in a `ulimit -v` shell. The runtime/OS aborts the process on breach and the daemon's crash-restart recovers it; this keeps enforcement in the runtime rather than the daemon's `memory_action`. On Linux with cgroup-v2 delegation the daemon also supports a first-class `memory_max_mb` kernel cap — see the `[daemon]` section below.
 
 ## Tasks
 
 `[tasks.<name>]` defines canned oneshots run by `devrun task <name>` (`devrun task` lists them). A task is either a **command** (`run`) or a **sequence** (`steps`), never both.
 
-```toml
-[tasks.api-prod-build]
-description = "prod nitro build (node-server preset)"
-app = "api-prod"        # run in this app's dir, inherit its static_env
-run = ["doppler", "run", "-p", "api-foundry", "-c", "dev_local",
-       "--preserve-env=NITRO_PRESET", "--", "bun", "nitro", "build"]
-env = { NITRO_PRESET = "node-server" }
-
-[tasks.profile-lab-os]
-description = "prod api + profiled lab-os, wired together"
-steps = [
-  { task = "api-prod-build" },
-  { up = "api-prod" },
-  { task = "lab-os-build" },
-  { up = "lab-os-prod" },
-]
-```
+Example: [`TaskConfig`](../crates/devkit-config/src/lib.rs) and [`Step`](../crates/devkit-config/src/lib.rs).
 
 - Command tasks run in the foreground with inherited stdio; the exit code is propagated. `run` and `env` values are minijinja templates with the same `port`/`ports` context as launches; `{{ ports['x'] }}` resolves from the port registry (issue role), writing a pid-less reservation when `x` isn't running. Env layering, low to high: app `static_env` → task `env` → CLI `--env-file` → `--env`. Tasks do not get `url_env` provider wiring — reference the app you need explicitly via `ports[...]`. Doppler invocations go through the same `prd` guard as launches.
-- `run` and `env` also read `[templates.variables]`, plus `issue` and `slug` from the worktree's `.devkit/issue.toml` and `branch` from git. `devrun task <name> --arg key=value` (repeatable) sets a variable for one run, over both. Any other name a task's `run` or `env` reads is an arg of that task: optional when `[templates.variables]` gives it a value, required otherwise. A `| default(...)` or `is defined` in the template does not make an arg optional. A missing required arg, or an `--arg` that no template reads and `[templates.variables]` does not declare, fails before anything resolves, and for a sequence the check covers every step. `devrun task` lists each task's args with optional ones in brackets, and the command guard's redirect names the required ones. An issue field with no source is undefined rather than empty, so `{{ issue }}` fails outside an issue worktree; write `{% if issue is defined %}` for a task that runs in both.
-
-  ```toml
-  [tasks.commit]
-  run = ["git", "commit", "-m", "{% if issue is defined %}{{ issue }}: {% endif %}{{ msg }}"]
-  guard = true   # redirect an agent's `git commit` here
-  ```
-
+- `run` and `env` also read `[templates.variables]`, plus `issue` and `slug` from the worktree's `.devkit/issue.toml` and `branch` from git. `devrun task <name> --arg key=value` (repeatable) sets a variable for one run, over both. Any other name a task's `run` or `env` reads is an arg of that task: optional when `[templates.variables]` gives it a value, required otherwise. A `| default(...)` or `is defined` in the template does not make an arg optional. A missing required arg, or an `--arg` that no template reads and `[templates.variables]` does not declare, fails before anything resolves, and for a sequence the check covers every step. `devrun task` lists each task's args with optional ones in brackets, and the command guard's redirect names the required ones. An issue field with no source is undefined rather than empty, so `{{ issue }}` fails outside an issue worktree; write `{% if issue is defined %}` for a task that runs in both. The `commit` task on `TaskConfig` is that shape, and sets `guard = true` to claim an agent's typed `git commit`.
 - `require_live = ["app", …]` (command tasks only): each listed app must have a live devrun-managed server in this worktree when the task *executes*, or the task fails before spawning:
 
       require_live: `api-serve` has no live server in this worktree (devrun up api-serve)
@@ -243,14 +219,7 @@ steps = [
 
 A string in `run` renders to exactly one argument, so a caller-supplied list of paths cannot become a list of arguments. A `{ split = "...", on = "..." }` entry renders its template the way every other entry does, then cuts the result on `on` and contributes each piece as a separate argument.
 
-```toml
-[tasks.stage]
-run = ["git", "add", "--", { split = "{{ files }}", on = ";" }]
-```
-
-```sh
-devrun task stage --arg 'files=new file.txt;other.txt'
-```
+Example: [`RunArg`](../crates/devkit-config/src/lib.rs), which shows the `stage` task a `devrun task stage --arg 'files=new file.txt;other.txt'` drives.
 
 A template that renders empty contributes no arguments at all, which is how a task says nothing was selected. Every other piece reaches the program exactly as it was written, spaces, quotes and shell metacharacters included, because devkit execs the argv instead of handing it to a shell. Pick a delimiter the values cannot contain. An empty `on` is rejected.
 
@@ -299,6 +268,8 @@ Cap setup is **fail-open**: any cgroup error logs once and proceeds uncapped rat
 
 **macOS / Windows**: `memory_max_mb` is documented but has no effect. The daemon stays silent (no warning) — the soft `memory_action` path remains available on all platforms.
 
+Example: [`DaemonConfig`](../crates/devkit-config/src/lib.rs).
+
 ### `[parallelism]`
 
 Width of the worker pool devkit shares across its parallel work: the
@@ -320,6 +291,8 @@ The default is sized for file copying, past which added threads return little.
 Raising it helps most on a filesystem where a stat is slow and concurrency hides
 the latency, such as a Windows drive mounted under WSL.
 
+Example: [`ParallelismConfig`](../crates/devkit-config/src/lib.rs).
+
 ### `[docs]`
 
 Per-project overlay on the global docs manifest at `~/.config/devkit/docs.toml`.
@@ -338,6 +311,8 @@ referenced and pruned.
 | `src_dir` | no | Source directory inside the checkout, overriding layout detection. |
 | `docs_dir` | no | Docs directory inside the checkout, overriding layout detection. |
 | `notes` | no | Freeform note surfaced by `docm info` and `docm list`: what this library is here for. |
+
+Example: [`DocsManifest`](../crates/devkit-docs/src/manifest.rs).
 
 ### `[harness]`
 
@@ -380,14 +355,9 @@ A write devkit cannot resolve is not treated as covered. `unresolved_writes`, `u
 - *`lockm` absent from `PATH`*: the hook invocation fails silently and the write proceeds. This is fail-open to avoid blocking agents on machines that do not have the binary installed.
 - *Registry error when the harness is on*: the hook denies the write rather than allowing it through silently (fail-closed). The deny message includes the error so the agent can report it.
 
-**Example** — enforce everywhere via the global config (`~/.config/devkit/config.toml`):
+**Turning it on.** Put `enforce_writes = true` under `[harness]` in the global config (`~/.config/devkit/config.toml`) to enforce everywhere. Or per-checkout, add the same table to that checkout's own `devkit.toml`; only the `[harness]` table is read, so it may be an otherwise-empty file or a full project config. Or skip both files and set `DEVKIT_ENFORCE_WRITES=1` in the environment.
 
-```toml
-[harness]
-enforce_writes = true
-```
-
-Or per-checkout, add the same table to that checkout's own `devkit.toml`; only the `[harness]` table is read, so it may be an otherwise-empty file or a full project config. Or skip both files and set `DEVKIT_ENFORCE_WRITES=1` in the environment.
+Example: [`HarnessSection`](../crates/devkit-config/src/harness.rs), [`CommandRule`](../crates/devkit-config/src/harness.rs) and [`AppMatch`](../crates/devkit-config/src/harness.rs).
 
 ### `[brief]`
 
@@ -406,6 +376,8 @@ A section is omitted when the checkout has nothing to report, whatever its switc
 Live servers have no switch. A port this worktree holds is a fact about the machine rather than a listing the brief chose to carry, so the server table appears whenever the registry has rows for the worktree — and it keeps the `devrun down` and `portm status` lines relevant even under `apps = false`.
 
 Set it in `~/.config/devkit/config.toml` as a personal default and override it per project in that project's `devkit.toml`. A malformed `[brief]` table falls back to these defaults rather than withholding the brief.
+
+Example: [`BriefConfig`](../crates/devkit-config/src/lib.rs).
 
 ### `[tracker]`
 
@@ -429,6 +401,8 @@ Detection landing on no tracker holds the verdict open too. Declaring `kind = "n
 
 Everything that asks a tracker a question goes through the resolved one: `issue setup`'s title-derived slug and summary file, `issue pr checkout`'s disambiguation of a bare number, `issue dashboard`'s issue timeline, and the ISSUE column in `issue prs`. So each answers from the tracker this project declared rather than from whatever `LINEAR_API_KEY` happens to be exported in the shell. What stays Linear-specific is `LINEAR_WORKSPACE`, which supplies the workspace slug for clickable Linear issue links without a lookup, and `[linear] resolve_pr_links` below.
 
+Example: [`TrackerConfig`](../crates/devkit-config/src/lib.rs).
+
 ### `[github]`
 
 Which GitHub repositories this project's issues and pull requests live in.
@@ -448,11 +422,7 @@ An SSH-alias remote counts. A remote spelled `gh:owner/repo.git` names a `~/.ssh
 
 **Unknown keys in this table are rejected — `[github]` and `[preserve.<name>]` are the only two tables in this file that do.** A misspelled `issue_repo` silently ignored would leave the project resolving a *different* repository than it declared — devkit would default from `origin` and query someone else's issues while the config appeared to say otherwise. Failing the config load is the smaller harm, so this table refuses what it does not recognise.
 
-```toml
-[github]
-issues_repo = "org/planning"
-pr_repo = "upstream/app"
-```
+Example: [`GithubConfig`](../crates/devkit-config/src/lib.rs).
 
 `issue prs --repo owner/name` overrides `pr_repo` for a single invocation (as does the `repo` argument of the `issue.prs` MCP action); it does not touch `issues_repo`. Every repository-scoped `gh` invocation devkit makes carries the resolved repository explicitly, so an ambient `GH_REPO` cannot redirect it.
 
@@ -468,10 +438,7 @@ The lookup authenticates with `LINEAR_API_KEY` (environment or `~/.config/devkit
 
 The flag gates Linear alone: it is a `[linear]` key, and a Linear key does not become a global switch. Under the GitHub tracker the ISSUE column carries each PR's closing issues whether or not this is set, at the cost of a batched round trip of its own.
 
-```toml
-[linear]
-resolve_pr_links = true
-```
+Example: [`LinearConfig`](../crates/devkit-config/src/lib.rs).
 
 ### `[hooks]`
 
@@ -493,12 +460,7 @@ Failures are **fail-open**: a hook that cannot be rendered, cannot be spawned, o
 
 As an array, a deeper `devkit.toml` replaces the whole list rather than appending — set machine-wide hooks in `~/.config/devkit/config.toml` and expect a project that defines the same key to take over entirely.
 
-```toml
-[hooks]
-after_worktree_create = [["zoxide", "add", "{{ worktree }}"]]
-after_worktree_remove = [["zoxide", "remove", "{{ worktree }}"]]
-after_end = [["alacritree", "project", "refresh"]]
-```
+Example: [`HooksConfig`](../crates/devkit-config/src/lib.rs).
 
 ### `[preserve.<name>]`
 
@@ -512,16 +474,7 @@ destination, so one run can archive different files to different places.
 | `to` | yes | Destination directory, rendered as a minijinja template. Must render to a non-empty absolute path. It is created when the first file lands in it, so an entry that matches nothing leaves no directory behind. |
 | `required` | no (default `false`) | Keep the worktree instead of removing it when this entry warns. |
 
-```toml
-[preserve.scratch]
-from     = [".scratch/"]
-to       = "{{ worktree_root }}/archive/{{ issue }}/scratch"
-required = true
-
-[preserve.notes]
-from = ["docs/notes/*.md"]
-to   = "{{ primary }}/.devkit/archive/{{ issue }}"
-```
+Example: [`PreserveConfig`](../crates/devkit-config/src/lib.rs).
 
 Render context: `worktree`, `branch`, `issue`, `slug`, `apps`, `prefix`,
 `worktree_root` (the resolved `defaults.worktree_root`), `primary` (the primary
@@ -586,25 +539,15 @@ Teammate handle aliases used by `issue review` (`--to <alias>`). The alias maps 
 | `slack` | yes | Slack user (or channel) id, e.g. `U0XXXXXXXXX`. |
 | `github` | no | GitHub login used as the default PR reviewer for this person. |
 
+Example: [`Person`](../crates/devkit-config/src/lib.rs).
+
 ### `[templates]`
 
 `issue setup` and `issue review` render seven strings from optional minijinja templates. Each unset key falls back to a default that matches the historical hardcoded output.
 
 Three further keys cap how long the rendered result may be: `branch_max` (default 46), `worktree_dir_max` (default 24), and `checkout_worktree_dir_max` (default 46). A branch that cannot fit falls back to the shortest slug still worth reading; a worktree directory name that cannot fit is an error, because a limit on a filesystem path that silently does not hold is the reason these keys exist.
 
-```toml
-[templates]
-branch          = "{{ prefix }}{{ issue }}-{{ slug }}"
-worktree_dir    = "{{ slug }}"
-pr_title        = "{{ issue }}: {{ input }}"
-pr_body         = "Closes {{ issue }}.\n\n{{ input }}"
-review_request  = "{{ input }} {{ pr_url }}"
-review_finish   = "{{ input }} {{ pr_url }}"
-issue_summary_path = "{{ worktree }}/.devkit/issue.md"   # or "notes/{{ issue }}.md", from worktree_root
-
-[templates.variables]            # constants; a context field of the same name wins
-team = "platform"
-```
+Example: [`Templates`](../crates/devkit-config/src/lib.rs). A `[templates.variables]` entry is a constant a context field of the same name wins over.
 
 `role` and `sha` are reserved: devkit supplies them when it renders a worktree's templates and hooks — `role` for every worktree it creates, `sha` for a baseline, whose fork-point commit it names — so a `[templates.variables]` entry of either name could never be read there, and is rejected when the config resolves rather than silently ignored at render time. The names that were already context keys — `issue`, `slug`, `branch`, `apps`, `prefix` — stay shadowable.
 
@@ -629,6 +572,10 @@ Summary base context for `issue_summary_path` and `issue_summary`: `issue` (the 
 Review base context for `review_request`: `branch`, `issue`/`slug`/`apps` from the `.devkit/issue.toml` record `issue setup` writes in the worktree, plus `pr_url`, `pr_title`, and per-recipient `name`/`slack_id`. `issue setup` also adds `.devkit/` to your global gitignore (`--no-gitignore` skips it). An undefined variable is an error (strict mode), so typos surface immediately.
 
 ## Example
+
+The one example this file still carries, because a whole config reads as more
+than its tables do separately. A test parses it out of this document on every
+run, so it cannot drift either.
 
 ```toml
 [defaults]
