@@ -18,6 +18,7 @@
 
 mod dialect;
 mod edit;
+pub mod record;
 mod shell;
 mod writes;
 
@@ -89,12 +90,47 @@ pub fn run(cli: HookCli) -> Result<()> {
     let harness = cli.harness.map(Harness::from);
     match cli.event {
         HookEvent::PreToolUse => pre_tool_use(harness),
-        HookEvent::SubagentStop => with_payload(edit::release_subagent),
-        HookEvent::SessionEnd => with_payload(edit::release_session),
-        // Record-only verbs. They take no action, and their records arrive
-        // with the logging subsystem.
-        _ => Ok(()),
+        // The two verbs that release, which is the half with a correctness
+        // consequence, so it runs before the record.
+        HookEvent::SubagentStop => with_payload(|p| {
+            edit::release_subagent(p)?;
+            record_only(p, cli.event, harness);
+            Ok(())
+        }),
+        HookEvent::SessionEnd => with_payload(|p| {
+            edit::release_session(p)?;
+            record_only(p, cli.event, harness);
+            Ok(())
+        }),
+        // Record-only. Each reads stdin, builds one record and exits; nothing
+        // reaches stdout, because `UserPromptSubmit` appends a hook's stdout to
+        // the prompt and `Stop` and `PermissionRequest` honour a JSON decision.
+        event => with_payload(|p| {
+            record_only(p, event, harness);
+            Ok(())
+        }),
     }
+}
+
+/// Write the record a verb beyond `pre-tool-use` carries, if any.
+///
+/// This reads the global config and nothing else: no project layer load, no
+/// tree-sitter. With logging off, a record-only verb is one config read on top
+/// of the process spawn, which is the whole of its cost.
+fn record_only(payload: &Value, event: HookEvent, harness: Option<Harness>) {
+    let cwd = payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let settings = devkit_common::harness_log::resolve(&cwd);
+    if !settings.enabled {
+        return;
+    }
+    let kind = record::record_only(payload, event, &settings);
+    let rec = record::envelope(payload, event, harness, kind);
+    devkit_common::harness_log::record(&rec);
 }
 
 /// Read the hook payload from stdin. `None` covers both an unreadable pipe and
@@ -109,11 +145,11 @@ fn read_payload() -> Option<Value> {
 /// Run a verb over the payload, or do nothing when there is none to read. A
 /// verb reached here has no verdict to fail toward, so an unreadable payload
 /// is silence rather than a denial.
+///
+/// An absent payload is read as an empty object rather than skipped, so a verb
+/// a harness fires with no body still records that it fired.
 fn with_payload(f: impl FnOnce(&Value) -> Result<()>) -> Result<()> {
-    match read_payload() {
-        Some(payload) => f(&payload),
-        None => Ok(()),
-    }
+    f(&read_payload().unwrap_or_else(|| Value::Object(serde_json::Map::new())))
 }
 
 /// The retired `lockm hook <event>` spelling. Kept because an installed plugin

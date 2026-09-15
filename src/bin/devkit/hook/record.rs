@@ -14,9 +14,12 @@ use devkit_command::{
 use devkit_common::{
     harness::Harness,
     harness_log::{
-        AnalysisProjection, Counts, Kind, Record, SCHEMA_VERSION, UnresolvedWrite, now_rfc3339,
+        self, AnalysisProjection, Counts, FrameEnd, Kind, Permission, Prompt, Record,
+        SCHEMA_VERSION, SessionFrame, ShellPost, UnresolvedWrite, Worktree, WorktreeChange,
+        now_rfc3339,
     },
 };
+use devkit_config::{Fidelity, PromptFidelity};
 use serde_json::Value as Json;
 
 use super::HookEvent;
@@ -109,6 +112,121 @@ pub fn envelope(
         project_root,
         kind,
     })
+}
+
+/// The record a verb beyond `pre-tool-use` writes: a thin mapping from the
+/// payload, with no analysis and no action. `None` when the verb records
+/// nothing of its own.
+pub fn record_only(payload: &Json, event: HookEvent, settings: &harness_log::Settings) -> Kind {
+    match event {
+        HookEvent::PostToolUse | HookEvent::PostToolUseFailure => {
+            Kind::ShellPost(shell_post(payload, event))
+        }
+        HookEvent::SessionStart => Kind::Session(SessionFrame {
+            end: FrameEnd::Start,
+            subagent: false,
+        }),
+        HookEvent::SessionEnd => Kind::Session(SessionFrame {
+            end: FrameEnd::End,
+            subagent: false,
+        }),
+        HookEvent::SubagentStart => Kind::Session(SessionFrame {
+            end: FrameEnd::Start,
+            subagent: true,
+        }),
+        HookEvent::SubagentStop => Kind::Session(SessionFrame {
+            end: FrameEnd::End,
+            subagent: true,
+        }),
+        HookEvent::PermissionRequest | HookEvent::PermissionDenied => {
+            Kind::Permission(Permission {
+                blocked: event == HookEvent::PermissionDenied,
+                tool_name: text(payload, "tool_name"),
+                detail: text(payload, "permission_suggestions")
+                    .or_else(|| text(payload, "reason"))
+                    .or_else(|| text(payload, "message")),
+            })
+        }
+        HookEvent::WorktreeCreate | HookEvent::WorktreeRemove => Kind::Worktree(Worktree {
+            change: if event == HookEvent::WorktreeCreate {
+                WorktreeChange::Create
+            } else {
+                WorktreeChange::Remove
+            },
+            path: text(payload, "worktree_path").or_else(|| text(payload, "path")),
+        }),
+        HookEvent::UserPromptSubmit => Kind::Prompt(prompt(payload, settings)),
+        // Turn and context boundaries carry nothing beyond the envelope, which
+        // already names the verb, the vendor event, the session and the cwd.
+        HookEvent::Stop
+        | HookEvent::StopFailure
+        | HookEvent::PreCompact
+        | HookEvent::PostCompact
+        | HookEvent::CwdChanged => Kind::Lifecycle,
+        // Its own path, which analyses and reaches a verdict.
+        HookEvent::PreToolUse => Kind::Lifecycle,
+    }
+}
+
+/// Each field is absent, not zero, where the harness does not supply it. Codex
+/// forces that wording: its post payload exposes `tool_response` as output text
+/// rather than a structured result, so no exit code reaches the hook. Byte
+/// length and duration still land; the output itself never does.
+fn shell_post(payload: &Json, event: HookEvent) -> ShellPost {
+    let response = payload
+        .get("tool_response")
+        .or_else(|| payload.get("tool_output"));
+    let num = |v: Option<&Json>, key: &str| v.and_then(|r| r.get(key)).and_then(Json::as_i64);
+    let bytes = |key: &str| {
+        response
+            .and_then(|r| r.get(key))
+            .and_then(Json::as_str)
+            .map(str::len)
+            // Codex hands back the model-facing output body as a bare string
+            // rather than a structured result, so its length is all there is.
+            .or_else(|| response.and_then(Json::as_str).map(str::len))
+    };
+    ShellPost {
+        exit_code: num(response, "exit_code").or_else(|| num(response, "exitCode")),
+        duration_ms: response
+            .and_then(|r| r.get("duration_ms"))
+            .and_then(Json::as_u64),
+        // A failure verb is an error whatever the payload says, and a success
+        // verb takes the payload's word for it.
+        error: Some(event == HookEvent::PostToolUseFailure)
+            .filter(|failed| *failed)
+            .or_else(|| {
+                response
+                    .and_then(|r| r.get("error"))
+                    .and_then(Json::as_bool)
+            }),
+        interrupted: response
+            .and_then(|r| r.get("interrupted"))
+            .and_then(Json::as_bool),
+        stdout_bytes: bytes("stdout"),
+        stderr_bytes: response
+            .and_then(|r| r.get("stderr"))
+            .and_then(Json::as_str)
+            .map(str::len),
+    }
+}
+
+/// Prompt text is gated by its own fidelity key, defaulting to `off`, where the
+/// record says a prompt was submitted and carries none of it. A corpus can hold
+/// full command text without holding what the human typed.
+fn prompt(payload: &Json, settings: &harness_log::Settings) -> Prompt {
+    let raw = text(payload, "prompt")
+        .or_else(|| text(payload, "user_prompt"))
+        .or_else(|| text(payload, "text"))
+        .unwrap_or_default();
+    let chars = Some(raw.chars().count());
+    let text = match settings.prompt {
+        PromptFidelity::Off => None,
+        PromptFidelity::Hashed => Some(harness_log::redact::digest(&raw)),
+        PromptFidelity::Redacted => Some(harness_log::redact::apply(&raw, Fidelity::Redacted).0),
+        PromptFidelity::Full => Some(raw),
+    };
+    Prompt { text, chars }
 }
 
 /// Cut a command to the size cap, on a character boundary so the text stays
