@@ -21,6 +21,10 @@ class CloudHooks(unittest.TestCase):
         self.env.pop("CLAUDE_CODE_REMOTE", None)
         self.env.pop("DEVKIT_CLOUD", None)
         self.env.pop("CLOUD_AGENT", None)
+        self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                        GIT_AUTHOR_NAME="Cloud Test", GIT_AUTHOR_EMAIL="cloud@example.invalid",
+                        GIT_COMMITTER_NAME="Cloud Test", GIT_COMMITTER_EMAIL="cloud@example.invalid")
+        subprocess.run(["git", "-C", str(self.root), "init", "-b", "test-cloud"], env=self.env, check=True, capture_output=True)
 
     def run_script(self, name, *args, cloud=False):
         env = self.env.copy()
@@ -43,6 +47,7 @@ class CloudHooks(unittest.TestCase):
                 self.assertEqual(result.stderr, "")
         self.assertEqual(config.read_text(), "# local preferences\n")
         self.assertFalse((self.root / "AGENTS.local.md").exists())
+        self.assertFalse((self.root / ".git/devkit-cloud-hooks").exists())
 
     def test_setup_generates_config_with_bundled_helper(self):
         result = self.run_script("cloud_setup.py", "--cloud", "--handoff")
@@ -100,7 +105,7 @@ class CloudHooks(unittest.TestCase):
 
     def test_devkit_commits_patch_and_preserves_unrelated_staging(self):
         self.assertEqual(self.run_script("cloud_setup.py", "--cloud").returncode, 0)
-        env = dict(self.env, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", DEVKIT_SKIP_AUTOLINK="1")
+        env = dict(self.env, CLOUD_AGENT="true", DEVKIT_SKIP_AUTOLINK="1")
 
         def git(*args):
             return subprocess.run(["git", "-C", str(self.root), *args], env=env, check=True, text=True, capture_output=True).stdout
@@ -113,7 +118,7 @@ class CloudHooks(unittest.TestCase):
         selected.write_text("before\n")
         unrelated.write_text("before\n")
         git("add", "--", "selected.txt", "unrelated.txt")
-        git("commit", "-m", "test: initialize fixture")
+        git("commit", "-m", "test: initialize fixture\n\nCo-authored-by: Agent <agent@example.invalid>")
         selected.write_text("selected change\n")
         unrelated.write_text("unrelated change\n")
         git("add", "--", "unrelated.txt")
@@ -121,7 +126,8 @@ class CloudHooks(unittest.TestCase):
         patch.write_text(git("diff", "--", "selected.txt"))
         result = subprocess.run(
             ["devkit", "run", "-C", str(self.root), "--config", str(self.root / "devkit.local.toml"),
-             "task", "commit-patch", "--arg", f"patch={patch}", "--arg", "commit_subject=fix: commit selected patch"],
+             "task", "commit-patch", "--arg", f"patch={patch}", "--arg", "commit_subject=fix: commit selected patch",
+             "--arg", "coauthors=Agent <agent@example.invalid>"],
             env=env, text=True, capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -129,6 +135,50 @@ class CloudHooks(unittest.TestCase):
         self.assertEqual(git("show", "HEAD:unrelated.txt"), "before\n")
         self.assertEqual(git("diff", "--cached", "--name-only").strip(), "unrelated.txt")
         self.assertEqual(git("diff", "--name-only"), "")
+
+    def test_cloud_commit_hook_enforces_author_and_trailer(self):
+        self.assertEqual(self.run_script("cloud_setup.py", "--cloud").returncode, 0)
+        env = dict(self.env, CLOUD_AGENT="true")
+        good = "test: cloud commit\n\nCo-authored-by: Agent <agent@example.invalid>"
+        for args, error in ((["-m", "test: missing credit"], "Co-authored-by"),
+                            (["--author", "Wrong <wrong@example.invalid>", "-m", good], "Cloud Test"),
+                            (["-m", "test: empty credit\n\nCo-authored-by:"], "Co-authored-by")):
+            with self.subTest(args=args):
+                result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", *args], env=env, text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(error, result.stderr)
+        result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", "-m", good], env=env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_cloud_hook_preserves_existing_hooks_and_is_local(self):
+        hooks = self.root / "existing hooks"
+        hooks.mkdir()
+        original = hooks / "commit-msg"
+        original.write_text("#!/usr/bin/env python3\nimport sys\nprint('existing hook', file=sys.stderr)\n")
+        original.chmod(0o755)
+        pre_commit = hooks / "pre-commit"
+        pre_commit.write_text("#!/usr/bin/env python3\nimport sys\nprint('existing pre-commit', file=sys.stderr)\n")
+        pre_commit.chmod(0o755)
+        subprocess.run(["git", "-C", str(self.root), "config", "core.hooksPath", str(hooks)], env=self.env, check=True)
+        for _ in range(2):
+            result = self.run_script("cloud_setup.py", "--cloud")
+            self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", "-m", "test: local commit"], env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr.count("existing hook"), 1)
+        self.assertEqual(result.stderr.count("existing pre-commit"), 1)
+        self.assertIn("existing hook", original.read_text())
+        original.write_text("#!/usr/bin/env python3\nimport sys\nprint('original rejection', file=sys.stderr)\nsys.exit(1)\n")
+        result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", "-m", "test: blocked\n\nCo-authored-by: Agent <agent@example.invalid>"], env=dict(self.env, CLOUD_AGENT="true"), text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("original rejection", result.stderr)
+
+    def test_cloud_setup_requires_expected_author(self):
+        self.env.pop("GIT_AUTHOR_NAME")
+        result = self.run_script("cloud_setup.py", "--cloud")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Set GIT_AUTHOR_NAME", result.stderr)
+        self.assertFalse((self.root / ".git/devkit-cloud-hooks").exists())
 
 
 if __name__ == "__main__":

@@ -36,4 +36,6 @@ Keep living documentation timeless. Include changing counts only when necessary,
 
 When committing, stage only your changes and inspect the staged diff. Use Conventional Commits with an imperative, lowercase description. Keep generated local configuration and instruction files out of commits.
 
+Preserve the author identity configured in the VM environment. Pass your agent name and email through the commit task's `coauthors` argument, then confirm the resulting commit includes its `Co-authored-by` trailer. Keep the installed commit hooks enabled.
+
 Once your work is done, push and open a draft PR so CI can run. Follow the repository template, link the issue, explain the problem and fix briefly, and identify the model and harness. Leave any "## TL;DR (human written)" section empty.

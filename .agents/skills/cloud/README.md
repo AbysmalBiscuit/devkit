@@ -4,6 +4,8 @@ The shared cloud bundle lives under `.agents/skills/cloud`. Agents read its skil
 
 ## Provision the VM
 
+Set `CLOUD_AGENT=true` and your `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL` in the VM environment. Use an email associated with your GitHub account. Setup requires `GIT_AUTHOR_NAME` to capture the expected commit author.
+
 In the Claude cloud environment's setup-script field, run this from the cloned repository root:
 
 ```sh
@@ -23,6 +25,14 @@ The command also generates `devkit.local.toml`, `AGENTS.local.md`, and `CLAUDE.l
 The devkit plugin owns the command and write guards and the project brief. These scripts own cloud workflow instructions and configuration. Claude settings declare devkit and Superpowers as plugins. A config flag only activates enforcement when the devkit plugin's hooks are loaded.
 
 Standing rules belong in `assets/AGENTS.local.md`, which setup copies to the repository root. Workflow selection belongs in `SKILL.md`, reached when starting an issue or feature. Recovery instructions belong in `references/recovery.md`, emitted on resume and compaction. Keep each rule in its owning file.
+
+## Cloud commit hook
+
+Setup creates a private hooks directory under Git's metadata directory and selects it with repository-local `core.hooksPath`. It forwards existing hooks and runs the original `commit-msg` hook before checking attribution. Repeated setup preserves the original hook location. The installed hooks and configuration remain outside version control; local sessions do not install them.
+
+With `CLOUD_AGENT=true`, the hook requires the author name captured from `GIT_AUTHOR_NAME` during setup and a `Co-authored-by: Name <email>` trailer. It rejects either missing requirement, including an author changed with `--author`. Supply agent credit through the commit task's `coauthors` argument. Other environments run only the original hooks.
+
+This is a commit-time check, not a security boundary: Git's `--no-verify` and commands that bypass commit hooks can skip it.
 
 The `Setup` hook is an optional CLI entry point for configuration; it runs with explicit Claude initialization flags. It is separate from the hosted environment's setup-script field. Hosted setup is cached, so startup regenerates the checkout-local files even when provisioning was skipped.
 

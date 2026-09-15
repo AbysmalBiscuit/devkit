@@ -15,7 +15,41 @@ def in_cloud():
     return os.environ.get("CLOUD_AGENT") == "true"
 
 
+def install_commit_hook():
+    expected = os.environ.get("GIT_AUTHOR_NAME", "").strip()
+    if not expected:
+        raise RuntimeError("Set GIT_AUTHOR_NAME in the cloud VM environment before setup.")
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(ROOT), *args], text=True).strip()
+
+    hooks = Path(git("rev-parse", "--absolute-git-dir")) / "devkit-cloud-hooks"
+    original = Path(git("rev-parse", "--path-format=absolute", "--git-path", "hooks"))
+    source = hooks / "original-path.json"
+    if original == hooks:
+        original = Path(json.loads(source.read_text(encoding="utf-8")))
+    hooks.mkdir(exist_ok=True)
+    source.write_text(json.dumps(str(original)), encoding="utf-8")
+    if original.is_dir():
+        for entry in original.iterdir():
+            target = hooks / entry.name
+            if entry.name != "commit-msg" and not target.exists() and not target.is_symlink():
+                target.symlink_to(entry)
+    script = Path(__file__).with_name("cloud_commit.py")
+    command = ["python3", str(script), expected, str(original / "commit-msg")]
+    wrapper = hooks / "commit-msg"
+    wrapper.write_text(
+        "#!/usr/bin/env python3\nimport os\nimport sys\n"
+        f"command = {command!r} + sys.argv[1:]\n"
+        "os.execvp(command[0], command)\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    git("config", "--local", "core.hooksPath", str(hooks))
+
+
 def configure():
+    install_commit_hook()
     helper = Path(__file__).resolve().with_name("git-commit-patch.py")
     template = (SKILL / "assets/devkit.local.toml").read_text(encoding="utf-8")
     config = template.replace("@COMMIT_HELPER@", json.dumps(str(helper)))
