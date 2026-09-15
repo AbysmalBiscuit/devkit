@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "extraKnownMarketplaces": {
+    "devkit": {
+      "source": {
+        "source": "github",
+        "repo": "AbysmalBiscuit/devkit"
+      }
+    },
+    "mcpls": {
+      "source": {
+        "source": "github",
+        "repo": "AbysmalBiscuit/mcpls"
+      }
+    },
+    "superpowers-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "obra/superpowers-marketplace"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "devkit@devkit": true,
+    "mcpls@mcpls": true,
+    "superpowers@superpowers-marketplace": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"$CLAUDE_PROJECT_DIR/.agents/skills/cloud/scripts/cloud_startup.py\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"$CLAUDE_PROJECT_DIR/.agents/skills/cloud/scripts/cloud_compact.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Setup": [
+      {
+        "matcher": "init|maintenance",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"$CLAUDE_PROJECT_DIR/.agents/skills/cloud/scripts/cloud_setup.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

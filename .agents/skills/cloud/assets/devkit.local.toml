@@ -1,0 +1,213 @@
+[defaults]
+pr_create_state = "draft"
+
+[harness]
+enforce_writes = true
+enforce_commands = true
+
+[harness.commands.worktree-add]
+programs = ["git"]
+args = ["worktree", "add"]
+reason = "Use devkit's issue binary to create worktrees: issue setup --summary --slug [branch-name]"
+
+[harness.commands.worktree-remove]
+programs = ["git"]
+args = ["worktree", "remove"]
+reason = "Use devkit's issue binary to remove worktrees: issue end [branch-name]"
+
+# Explicit rules take priority over derived task guards and explain the
+# arguments needed to select commit contents.
+[harness.commands.git-commit]
+programs = ["git"]
+args = ["commit"]
+reason = """Name the paths and commit them in one step:
+  devrun task commit --arg files='src/a.rs,src/b.rs' --arg commit_subject='fix(scope): imperative subject'
+`files` is comma-separated, with whitespace preserved in each path. Unrelated staged paths stay staged. \
+Optional: `--arg commit_body='why this change is needed'` and `--arg coauthors='Name <email>; Other <email>'`, `;`-separated. \
+To commit part of a file, write a patch against HEAD and run `devrun task commit-patch --arg patch=<file>` with the same message args. \
+To rewrite the last commit, `devrun task commit-amend` with the message args and no files."""
+
+[harness.commands.git-add]
+programs = ["git"]
+args = ["add"]
+reason = """`devrun task commit` stages the paths it commits, so there is nothing to stage first:
+  devrun task commit --arg files='src/a.rs,src/b.rs' --arg commit_subject='fix(scope): imperative subject'
+To commit part of a file, write those hunks to a patch and pass it instead:
+  devrun task commit-patch --arg patch=/tmp/partial.diff --arg commit_subject='fix(scope): imperative subject'
+The patch must apply to HEAD. The task commits its hunks and preserves unrelated staged changes, including independent hunks in the same file."""
+
+[harness.commands.pr-create]
+programs = ["gh"]
+args = ["pr", "create"]
+reason = """Open the PR with devkit: `issue pr create --pr-title 'type(scope): subject' --pr-body '<markdown>'`.
+It opens as a draft. `issue pr create -h` lists the rest.
+`--pr-body` becomes the agent summary. This worktree's own issue comes from `.devkit/issue.toml` and the template writes its closing line, so mention only other issues, and leave the TL;DR section for a human to fill.
+Each template variable is passed as `--arg key=value`:
+  agent_model='<actual model>' and agent_harness='[Claude Code](https://claude.com/claude-code)' render the attribution block; omitting both leaves the PR body with no agent credit
+  refs='Closes ADA-124; Refs #90' names every other issue, `;`-separated, each carrying its own keyword
+  issue_magic_word=Refs when this branch does not finish its own issue (default Closes)
+  implemented_by='<who did which part>' adds one prose line above the credit"""
+
+[templates]
+branch = """
+{%- set id = (issue | lower ~ "-") if issue else "" -%}
+{{ id }}{{ (slug | trim | lower | replace(" ", "-"))[:46 - (id | length)] | trim("-") }}
+"""
+worktree_dir = """
+{%- set id = (issue | lower ~ "-") if issue else "" -%}
+{{ id }}{{ (slug | trim | lower | replace(" ", "-"))[:46 - (id | length)] | trim("-") }}
+"""
+pr_body = '''
+{%- set own = (issue_magic_word ~ " " ~ ("#" if issue and issue[0] in "0123456789" else "") ~ issue) if issue else "" -%}
+{%- set ref_lines = ((own ~ ";" ~ refs) if own else refs) | split(";") | map("trim") | reject("eq", "") | list -%}
+{%- set agent = agent_model or agent_harness -%}
+## TL;DR (human written)
+{{ human_tldr }}
+{%- if ref_lines %}
+
+---
+
+{{ ref_lines | join("\n") }}
+{%- endif %}
+{%- if agent %}
+
+---
+
+## Agent summary
+{%- endif %}
+
+{{ input | trim }}
+{%- if agent %}
+
+---
+{%- if implemented_by | trim %}
+
+Implemented by {{ implemented_by | trim }}
+{%- endif %}
+
+🤖 Generated with {{ agent_model }}{% if agent_model and agent_harness %} via {% endif %}{{ agent_harness }}
+{%- endif %}
+'''
+
+[templates.variables]
+agent_harness = ""
+agent_model = ""
+coauthors = ""
+commit_body = ""
+commit_subject = ""
+git_commit_patch = @COMMIT_HELPER@
+human_tldr = ""
+implemented_by = ""
+issue = ""
+issue_magic_word = "Closes"
+python = "python3"
+refs = ""
+
+[tasks.commit-amend]
+description = "Rewrite the last commit message while preserving staged changes"
+run = [
+    "git",
+    "commit",
+    "--amend",
+    "--only",
+    "-m",
+    """
+{{- commit_subject | trim }}
+{%- if commit_body | trim %}
+
+{{ commit_body | trim }}
+{%- endif %}
+{%- if coauthors | trim(" ;") %}
+{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
+Co-authored-by: {{ c }}
+{%- endfor %}
+{%- endif %}
+""",
+]
+steps = []
+require_live = []
+guard = false
+
+[tasks.commit-stage]
+description = "Stage exactly the given paths, new files included"
+run = [
+    "git",
+    "--literal-pathspecs",
+    "add",
+    "--",
+    { split = "{{ files }}", on = "," },
+]
+steps = []
+require_live = []
+guard = false
+
+[tasks.commit-stage.env]
+
+[tasks.commit-write]
+description = "Commit the selected paths while preserving unrelated staging"
+run = [
+    "git",
+    "--literal-pathspecs",
+    "commit",
+    "--only",
+    "-m",
+    """
+{{- commit_subject | trim }}
+{%- if commit_body | trim %}
+
+{{ commit_body | trim }}
+{%- endif %}
+{%- if coauthors | trim(" ;") %}
+{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
+Co-authored-by: {{ c }}
+{%- endfor %}
+{%- endif %}
+""",
+    "--",
+    { split = "{{ files }}", on = "," },
+]
+steps = []
+require_live = []
+guard = false
+
+[tasks.commit-write.env]
+
+[tasks.commit]
+description = "Stage the given paths and commit them with a Conventional Commits message"
+run = []
+require_live = []
+
+[[tasks.commit.steps]]
+task = "commit-stage"
+
+[[tasks.commit.steps]]
+task = "commit-write"
+
+[tasks.commit.env]
+
+[tasks.commit-patch]
+description = "Commit a patch against HEAD while preserving unrelated staging"
+run = [
+    "{{ python }}",
+    "{{ git_commit_patch }}",
+    "--patch",
+    "{{ patch }}",
+    "--message",
+    """
+{{- commit_subject | trim }}
+{%- if commit_body | trim %}
+
+{{ commit_body | trim }}
+{%- endif %}
+{%- if coauthors | trim(" ;") %}
+{% for c in coauthors | split(";") | map("trim") | reject("eq", "") %}
+Co-authored-by: {{ c }}
+{%- endfor %}
+{%- endif %}
+""",
+]
+steps = []
+require_live = []
+guard = false
+
+[tasks.commit-patch.env]

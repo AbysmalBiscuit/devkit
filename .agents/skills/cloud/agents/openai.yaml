@@ -1,0 +1,5 @@
+interface:
+  display_name: cloud
+  short_description: Find existing issue work and select a cloud execution workflow.
+policy:
+  allow_implicit_invocation: false

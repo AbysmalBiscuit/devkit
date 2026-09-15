@@ -7,6 +7,14 @@
 # in docs/ instead — see docs/configuration.md.
 /configs/*.toml
 devkit.local.toml
+/AGENTS.local.md
+/CLAUDE.local.md
+/.agents/**/__pycache__/
+
+# Cloud setup templates are source files.
+!/.agents/skills/cloud/assets/devkit.local.toml
+!/.agents/skills/cloud/assets/AGENTS.local.md
+!/.agents/skills/cloud/assets/CLAUDE.local.md
 
 # Subagent-driven-development progress ledger (local scratch)
 /.superpowers/
