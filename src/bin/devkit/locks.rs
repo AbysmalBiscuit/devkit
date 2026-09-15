@@ -200,7 +200,7 @@ fn deny_unparsable(event: &str, err: &serde_json::Error) {
     }
 }
 
-fn run_hook(event: &str) {
+pub(crate) fn run_hook(event: &str) {
     use std::io::Read;
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_err() {

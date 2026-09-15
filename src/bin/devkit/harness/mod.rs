@@ -63,7 +63,7 @@ enum Response {
 
 /// Never returns an error. A panic allows the command unless the write stage
 /// had started, in which case it denies.
-fn guard_shell() {
+pub(crate) fn guard_shell() {
     let write_stage: OnceLock<Harness> = OnceLock::new();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| respond(&write_stage)));
     match outcome {
