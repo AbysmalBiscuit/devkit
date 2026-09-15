@@ -8,6 +8,8 @@
 //! It lives in `devkit-common` rather than a crate of its own because it needs
 //! `paths::state_dir` and `secrets`.
 
+pub mod redact;
+
 use std::path::{Path, PathBuf};
 
 use devkit_config::{Fidelity, LogSection, PromptFidelity};

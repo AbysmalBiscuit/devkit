@@ -376,6 +376,7 @@ dependencies = [
  "minijinja",
  "nix",
  "rayon",
+ "ring",
  "serde",
  "serde_json",
  "supports-hyperlinks",

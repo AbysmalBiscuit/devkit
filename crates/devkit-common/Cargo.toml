@@ -18,6 +18,7 @@ jwalk.workspace = true
 console.workspace = true
 supports-hyperlinks.workspace = true
 ureq.workspace = true
+ring.workspace = true
 minijinja.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
