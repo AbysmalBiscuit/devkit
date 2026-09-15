@@ -138,7 +138,15 @@ fn the_gate_off_allows_everything() {
 fn a_cursor_payload_gets_the_cursor_envelope() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(GUARDED);
-    let payload = serde_json::json!({ "command": "node server.js" }).to_string();
+    // `cursor_version` is what names the harness now: Cursor sends
+    // `hook_event_name` and `model` like the other two, so its identity can no
+    // longer be read off the absence of either.
+    let payload = serde_json::json!({
+        "hook_event_name": "beforeShellExecution",
+        "cursor_version": "1.7.0",
+        "command": "node server.js"
+    })
+    .to_string();
     let out = run_hook(proj.path(), home.path(), &payload);
     assert!(denied(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
