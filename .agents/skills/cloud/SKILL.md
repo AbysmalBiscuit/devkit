@@ -1,7 +1,7 @@
 ---
 name: cloud
 description: Use when starting issue or feature work in a cloud agent session, or recovering that work after resume or compaction.
-disable-model-invocation: false
+disable-model-invocation: true
 user-invocable: false
 ---
 
