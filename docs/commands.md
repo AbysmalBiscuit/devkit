@@ -125,6 +125,8 @@ Without `--slug`, a Linear URL supplies the slug from its own `…/issue/<ID>/<t
 
 The tracker fetch happens before anything is created, so a missing credential or an unknown issue fails with no worktree left behind, and it reuses the same round trip the slug lookup already needed. It does not reserve ports — `devrun up` allocates them dynamically when the worktree's servers start.
 
+The branch is created with no upstream. Its start point is the baseline target, a remote-tracking branch, which git's default `branch.autoSetupMerge` would otherwise mark as the upstream, leaving the branch tracking `origin/main`, where a plain `git push` refuses on the name mismatch. With `push.autoSetupRemote` set, the first push from the worktree creates `origin/<branch>` and points the branch at it.
+
 Each `[hooks] after_worktree_create` command runs last, in the new worktree's root, after the result has been reported. A hook that cannot render, cannot spawn, or exits non-zero warns and the rest still run: the worktree is already usable, so a missing program must not fail the command that created it. `docs/configuration.md` covers the table.
 
 ### `pr status`

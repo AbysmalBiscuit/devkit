@@ -86,3 +86,33 @@ fn setup_resolves_the_primary_checkout_by_git_not_by_name() {
         "worktree should exist under the resolved checkout: {stderr}"
     );
 }
+
+/// The baseline target is a remote-tracking branch, and git's default
+/// `branch.autoSetupMerge` marks such a start point as the new branch's
+/// upstream. That leaves every issue branch tracking `origin/main`, so a plain
+/// `git push` in the worktree refuses on the name mismatch. The branch has to
+/// start with no upstream, which is what lets `push.autoSetupRemote` create
+/// its own remote branch on the first push.
+#[test]
+fn setup_leaves_the_new_branch_without_an_upstream() {
+    let t = project();
+    let state = tempfile::tempdir().unwrap();
+    let out = run(t.path(), state.path(), &[
+        "setup",
+        "ENG-2",
+        "--slug",
+        "fix-export",
+        "--no-gitignore",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "setup failed: {stderr}");
+    let wt = t.path().join("app/wts/fix-export");
+    let tracked = devkit_common::git::Git::fixture(&wt)
+        .args(["rev-parse", "--verify", "--quiet", "@{upstream}"])
+        .success()
+        .unwrap();
+    assert!(
+        !tracked,
+        "the new branch must not inherit an upstream from the baseline target"
+    );
+}
