@@ -18,7 +18,7 @@ The command also generates `devkit.local.toml`, `AGENTS.local.md`, and `CLAUDE.l
 
 - Startup and clear regenerate the local files and inject the full skill.
 - Resume and compact inject only `references/recovery.md`. They preserve local configuration and progress.
-- Outside Claude cloud, hooks exit silently. Another cloud harness can set `DEVKIT_CLOUD=1` to use the same scripts.
+- Set `CLOUD_AGENT=true` in the cloud VM environment for any harness. Without this value, hooks exit silently.
 
 The devkit plugin owns the command and write guards and the project brief. These scripts own cloud workflow instructions and configuration. Claude settings declare devkit and Superpowers as plugins. A config flag only activates enforcement when the devkit plugin's hooks are loaded.
 

@@ -12,7 +12,7 @@ ROOT = SKILL.parents[2]
 
 
 def in_cloud():
-    return os.environ.get("CLAUDE_CODE_REMOTE") == "true" or os.environ.get("DEVKIT_CLOUD") == "1"
+    return os.environ.get("CLOUD_AGENT") == "true"
 
 
 def configure():

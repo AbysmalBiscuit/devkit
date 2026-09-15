@@ -20,11 +20,12 @@ class CloudHooks(unittest.TestCase):
         self.env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         self.env.pop("CLAUDE_CODE_REMOTE", None)
         self.env.pop("DEVKIT_CLOUD", None)
+        self.env.pop("CLOUD_AGENT", None)
 
     def run_script(self, name, *args, cloud=False):
         env = self.env.copy()
         if cloud:
-            env["CLAUDE_CODE_REMOTE"] = "true"
+            env["CLOUD_AGENT"] = "true"
         return subprocess.run(
             ["python3", str(self.root / ".agents/skills/cloud/scripts" / name), *args],
             cwd="/tmp", env=env, input='{"hook_event_name":"SessionStart"}',
@@ -70,7 +71,7 @@ class CloudHooks(unittest.TestCase):
 
     def test_settings_route_startup_and_recovery_from_another_directory(self):
         settings = json.loads((ROOT / ".claude/settings.json").read_text())
-        env = dict(self.env, CLAUDE_CODE_REMOTE="true", CLAUDE_PROJECT_DIR=str(self.root))
+        env = dict(self.env, CLOUD_AGENT="true", CLAUDE_PROJECT_DIR=str(self.root))
         outputs = {}
         for source in ("startup", "clear", "fork", "resume", "compact"):
             entries = [entry for entry in settings["hooks"]["SessionStart"] if re.fullmatch(entry["matcher"], source)]
