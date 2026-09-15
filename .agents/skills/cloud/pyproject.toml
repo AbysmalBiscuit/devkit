@@ -1,0 +1,24 @@
+# The cloud bundle is a scripts directory, not a distributable package: this
+# project exists so CI has one place to pin the linter and type checker it runs
+# over those scripts.
+[project]
+name = "devkit-cloud"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["pyrefly>=1.3", "ruff>=0.16"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["assets"]
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "RUF", "SIM", "UP", "W"]
+
+[tool.pyrefly]
+# The hooks import each other by module name because Claude runs them as
+# scripts from this directory, so it is the import root rather than a package.
+project-includes = ["scripts"]
+search-path = ["scripts"]

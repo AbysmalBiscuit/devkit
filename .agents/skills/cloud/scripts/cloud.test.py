@@ -1,14 +1,31 @@
 import json
 import os
 import re
-from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def merge_tree_takes_trees():
+    """Whether this git's merge-tree accepts trees where it wants commits.
+
+    git-commit-patch.py merges the selected and staged trees directly. Git
+    rejected tree arguments until it learned to take them, so on an older git
+    the patch commit cannot run at all and its test has nothing to assert.
+    """
+    probe = subprocess.run(
+        ["git", "-C", str(ROOT), "merge-tree", "--write-tree",
+         f"--merge-base={EMPTY_TREE}", EMPTY_TREE, EMPTY_TREE],
+        capture_output=True,
+    )
+    return probe.returncode == 0
 
 
 class CloudHooks(unittest.TestCase):
@@ -21,20 +38,41 @@ class CloudHooks(unittest.TestCase):
         self.env.pop("CLAUDE_CODE_REMOTE", None)
         self.env.pop("DEVKIT_CLOUD", None)
         self.env.pop("CLOUD_AGENT", None)
+        self.env.pop("CLOUD_AGENT_TYPE", None)
         self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                         GIT_AUTHOR_NAME="Cloud Test", GIT_AUTHOR_EMAIL="cloud@example.invalid",
                         GIT_COMMITTER_NAME="Cloud Test", GIT_COMMITTER_EMAIL="cloud@example.invalid")
-        subprocess.run(["git", "-C", str(self.root), "init", "-b", "test-cloud"], env=self.env, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(self.root), "init", "-b", "test-cloud"],
+            env=self.env, check=True, capture_output=True,
+        )
 
-    def run_script(self, name, *args, cloud=False):
+    def run_script(self, name, *args, cloud=False, **overrides):
         env = self.env.copy()
         if cloud:
             env["CLOUD_AGENT"] = "true"
+        for key, value in overrides.items():
+            env.pop(key, None) if value is None else env.update({key: value})
+        # An absolute interpreter keeps the script reachable when a test
+        # narrows PATH to prove what the hook finds on it.
         return subprocess.run(
-            ["python3", str(self.root / ".agents/skills/cloud/scripts" / name), *args],
+            [sys.executable, str(self.root / ".agents/skills/cloud/scripts" / name), *args],
             cwd="/tmp", env=env, input='{"hook_event_name":"SessionStart"}',
             text=True, capture_output=True,
         )
+
+    def path_without_devkit(self):
+        """A PATH carrying what the hooks themselves run, and no devkit."""
+        binaries = self.root / "path without devkit"
+        binaries.mkdir(exist_ok=True)
+        for name in ("git", "sh", "python3"):
+            source = shutil.which(name)
+            if source is None:
+                self.fail(f"{name} is not on PATH")
+            link = binaries / name
+            if not link.exists():
+                link.symlink_to(source)
+        return str(binaries)
 
     def test_local_hooks_leave_checkout_alone(self):
         config = self.root / "devkit.local.toml"
@@ -103,12 +141,16 @@ class CloudHooks(unittest.TestCase):
         self.assertLess(len(result.stdout.split()), 150)
         self.assertFalse((self.root / "AGENTS.local.md").exists())
 
+    @unittest.skipUnless(merge_tree_takes_trees(), "git merge-tree does not accept tree arguments")
     def test_devkit_commits_patch_and_preserves_unrelated_staging(self):
         self.assertEqual(self.run_script("cloud_setup.py", "--cloud").returncode, 0)
         env = dict(self.env, CLOUD_AGENT="true", DEVKIT_SKIP_AUTOLINK="1")
 
         def git(*args):
-            return subprocess.run(["git", "-C", str(self.root), *args], env=env, check=True, text=True, capture_output=True).stdout
+            return subprocess.run(
+                ["git", "-C", str(self.root), *args],
+                env=env, check=True, text=True, capture_output=True,
+            ).stdout
 
         git("init", "-b", "test-cloud")
         git("config", "user.name", "Cloud Test")
@@ -144,10 +186,16 @@ class CloudHooks(unittest.TestCase):
                             (["--author", "Wrong <wrong@example.invalid>", "-m", good], "Cloud Test"),
                             (["-m", "test: empty credit\n\nCo-authored-by:"], "Co-authored-by")):
             with self.subTest(args=args):
-                result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", *args], env=env, text=True, capture_output=True)
+                result = subprocess.run(
+                    ["git", "-C", str(self.root), "commit", "--allow-empty", *args],
+                    env=env, text=True, capture_output=True,
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(error, result.stderr)
-        result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", "-m", good], env=env, text=True, capture_output=True)
+        result = subprocess.run(
+            ["git", "-C", str(self.root), "commit", "--allow-empty", "-m", good],
+            env=env, text=True, capture_output=True,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_cloud_hook_preserves_existing_hooks_and_is_local(self):
@@ -163,13 +211,22 @@ class CloudHooks(unittest.TestCase):
         for _ in range(2):
             result = self.run_script("cloud_setup.py", "--cloud")
             self.assertEqual(result.returncode, 0, result.stderr)
-        result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", "-m", "test: local commit"], env=self.env, text=True, capture_output=True)
+        result = subprocess.run(
+            ["git", "-C", str(self.root), "commit", "--allow-empty", "-m", "test: local commit"],
+            env=self.env, text=True, capture_output=True,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr.count("existing hook"), 1)
         self.assertEqual(result.stderr.count("existing pre-commit"), 1)
         self.assertIn("existing hook", original.read_text())
-        original.write_text("#!/usr/bin/env python3\nimport sys\nprint('original rejection', file=sys.stderr)\nsys.exit(1)\n")
-        result = subprocess.run(["git", "-C", str(self.root), "commit", "--allow-empty", "-m", "test: blocked\n\nCo-authored-by: Agent <agent@example.invalid>"], env=dict(self.env, CLOUD_AGENT="true"), text=True, capture_output=True)
+        original.write_text(
+            "#!/usr/bin/env python3\nimport sys\nprint('original rejection', file=sys.stderr)\nsys.exit(1)\n"
+        )
+        blocked = "test: blocked\n\nCo-authored-by: Agent <agent@example.invalid>"
+        result = subprocess.run(
+            ["git", "-C", str(self.root), "commit", "--allow-empty", "-m", blocked],
+            env=dict(self.env, CLOUD_AGENT="true"), text=True, capture_output=True,
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("original rejection", result.stderr)
 
@@ -179,6 +236,62 @@ class CloudHooks(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Set GIT_AUTHOR_NAME", result.stderr)
         self.assertFalse((self.root / ".git/devkit-cloud-hooks").exists())
+
+    def test_startup_names_the_harness_task_tools(self):
+        result = self.run_script("cloud_startup.py", cloud=True, CLOUD_AGENT_TYPE="claude")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for tool in ("TaskCreate", "TaskUpdate", "TaskList", "TaskGet"):
+            self.assertIn(tool, result.stdout)
+
+    def test_startup_falls_back_to_generic_task_tools(self):
+        for value in (None, "", "   ", "codex", "gemini"):
+            with self.subTest(value=value):
+                result = self.run_script("cloud_startup.py", cloud=True, CLOUD_AGENT_TYPE=value)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("task tracking tools", result.stdout)
+                self.assertNotIn("TaskCreate", result.stdout)
+
+    def test_startup_reads_the_agent_type_case_insensitively(self):
+        result = self.run_script("cloud_startup.py", cloud=True, CLOUD_AGENT_TYPE="  Claude ")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("TaskCreate", result.stdout)
+
+    def test_startup_ignores_the_agent_type_outside_the_cloud(self):
+        result = self.run_script("cloud_startup.py", CLOUD_AGENT_TYPE="claude")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_startup_reports_installed_devkit(self):
+        result = self.run_script("cloud_startup.py", cloud=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, r"devkit \d+\.\d+\.\d+ is on PATH")
+        self.assertNotIn("--install", result.stdout)
+
+    def test_startup_reports_missing_devkit_with_its_install_command(self):
+        result = self.run_script("cloud_startup.py", cloud=True, PATH=self.path_without_devkit())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("issue", result.stdout)
+        self.assertIn("cloud_setup.py --cloud --install", result.stdout)
+
+    def test_startup_counts_devkit_that_resolves_but_does_not_run_as_missing(self):
+        binaries = Path(self.path_without_devkit())
+        for name in ("devkit", "issue", "devrun", "portm", "lockm", "docm", "devkit-mcp"):
+            broken = binaries / name
+            broken.write_text("#!/bin/sh\nexit 3\n")
+            broken.chmod(0o755)
+        result = self.run_script("cloud_startup.py", cloud=True, PATH=str(binaries))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("cloud_setup.py --cloud --install", result.stdout)
+
+    def test_compaction_reports_devkit_only_when_it_is_missing(self):
+        missing = self.run_script("cloud_compact.py", cloud=True, PATH=self.path_without_devkit())
+        self.assertEqual(missing.returncode, 0, missing.stderr)
+        self.assertIn("cloud_setup.py --cloud --install", missing.stdout)
+        self.assertIn("Continue", missing.stdout)
+        self.assertLess(len(missing.stdout.split()), 150)
+        present = self.run_script("cloud_compact.py", cloud=True)
+        self.assertEqual(present.returncode, 0, present.stderr)
+        self.assertNotIn("--install", present.stdout)
 
 
 if __name__ == "__main__":

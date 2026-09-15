@@ -68,3 +68,36 @@ jobs:
         run: cargo test --workspace --doc
       - name: Build without default features
         run: cargo build --workspace --no-default-features
+
+  cloud:
+    name: cloud agent scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The hooks are tested against the devkit this commit builds rather than
+      # the last release, so a change that breaks a commit task fails here
+      # instead of after a tag. `install-links` supplies the command names the
+      # startup presence check looks for.
+      - name: Build devkit and its command links
+        run: |
+          cargo build --bin devkit
+          target/debug/devkit install-links
+          echo "$GITHUB_WORKSPACE/target/debug" >> "$GITHUB_PATH"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Lint
+        working-directory: .agents/skills/cloud
+        run: uv run --frozen ruff check .
+      - name: Type check
+        working-directory: .agents/skills/cloud
+        run: uv run --frozen pyrefly check
+      # The system interpreter, not uv's virtualenv: that is how Claude runs
+      # these hooks on a cloud VM, and the scripts depend on nothing installed.
+      # Verbose output so a skipped test names the capability it wanted.
+      - name: Test cloud hooks
+        run: python3 -B .agents/skills/cloud/scripts/cloud.test.py -v

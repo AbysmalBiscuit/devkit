@@ -10,6 +10,7 @@ devkit.local.toml
 /AGENTS.local.md
 /CLAUDE.local.md
 /.agents/**/__pycache__/
+/.agents/**/.venv/
 
 # Cloud setup templates are source files.
 !/.agents/skills/cloud/assets/devkit.local.toml

@@ -1,10 +1,10 @@
 """Validate cloud commit attribution after the existing commit-msg hook."""
 
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 
 def main():
@@ -25,7 +25,11 @@ def main():
     ).decode("utf-8", errors="replace")
     if not any(re.fullmatch(r"Co-authored-by:\s+[^<>\n]+\s+<[^<>\s]+@[^<>\s]+>\s*", line, re.IGNORECASE)
                for line in trailers.splitlines()):
-        print("Cloud commit refused: add Co-authored-by: Agent Name <email> via --arg coauthors='Agent Name <email>'.", file=sys.stderr)
+        print(
+            "Cloud commit refused: add Co-authored-by: Agent Name <email> "
+            "via --arg coauthors='Agent Name <email>'.",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

@@ -6,6 +6,8 @@ The shared cloud bundle lives under `.agents/skills/cloud`. Agents read its skil
 
 Set `CLOUD_AGENT=true` and your `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL` in the VM environment. Use an email associated with your GitHub account. Setup requires `GIT_AUTHOR_NAME` to capture the expected commit author.
 
+Set `CLOUD_AGENT_TYPE` to the harness running the session so startup can name that harness's own task tracking tools. `claude` is recognized today; any other value, including `codex`, falls back to a generic instruction until that harness's tool names are confirmed.
+
 In the Claude cloud environment's setup-script field, run this from the cloned repository root:
 
 ```sh
@@ -18,13 +20,13 @@ The command also generates `devkit.local.toml`, `AGENTS.local.md`, and `CLAUDE.l
 
 ## Session hooks
 
-- Startup, clear, and fork regenerate the local files and point the agent to `AGENTS.local.md`.
-- Resume and compact inject only `references/recovery.md`. They preserve local configuration and progress.
+- Startup, clear, and fork regenerate the local files, point the agent to `AGENTS.local.md`, name the harness's task tracking tools, and report whether devkit's commands are on PATH.
+- Resume and compact inject `references/recovery.md`, and the devkit install command when those commands are missing. They preserve local configuration and progress.
 - Set `CLOUD_AGENT=true` in the cloud VM environment for any harness. Without this value, hooks exit silently.
 
 The devkit plugin owns the command and write guards and the project brief. These scripts own cloud workflow instructions and configuration. Claude settings declare devkit and Superpowers as plugins. A config flag only activates enforcement when the devkit plugin's hooks are loaded.
 
-Standing rules belong in `assets/AGENTS.local.md`, which setup copies to the repository root. Workflow selection belongs in `SKILL.md`, reached when starting an issue or feature. Recovery instructions belong in `references/recovery.md`, emitted on resume and compaction. Keep each rule in its owning file.
+Standing rules belong in `assets/AGENTS.local.md`, which setup copies to the repository root. Workflow selection belongs in `SKILL.md`, reached when starting an issue or feature. Recovery instructions belong in `references/recovery.md`, emitted on resume and compaction. Context that differs between sessions, the harness's task tools and whether devkit is installed, belongs in `scripts/cloud_context.py`, because a copied template cannot vary. Keep each rule in its owning file.
 
 ## Cloud commit hook
 
@@ -44,7 +46,18 @@ Run the hook tests from any directory:
 python3 -B /absolute/path/to/repo/.agents/skills/cloud/scripts/cloud.test.py
 ```
 
-The tests require devkit on PATH and Python with tomllib. They exercise local no-op behavior, config generation in a path containing spaces, settings-based hook invocation, startup context, read-only recovery, and a patch commit through devkit that preserves unrelated staging. They use temporary directories and perform no downloads.
+The tests require devkit on PATH and Python with tomllib. They exercise local no-op behavior, config generation in a path containing spaces, settings-based hook invocation, startup context, per-harness task tool naming, devkit reported present and absent, read-only recovery, and a patch commit through devkit that preserves unrelated staging. They use temporary directories and perform no downloads.
+
+The patch commit test additionally needs a Git whose `merge-tree` accepts tree arguments, because `git-commit-patch.py` merges the selected and staged trees directly. Git 2.43 rejects that. An older Git skips the test and names the reason instead of failing.
+
+`pyproject.toml` pins the linter and the type checker. Run both from this directory:
+
+```sh
+uv run ruff check .
+uv run pyrefly check
+```
+
+The `cloud` CI job runs the lint, the type check, and the tests on Ubuntu, against a devkit built from the commit under test rather than a published release.
 
 The Claude hook adapter is configured here. A future Codex adapter can call the shared scripts and load the same skill; Codex lifecycle hooks are not configured by these files.
 
