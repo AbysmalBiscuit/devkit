@@ -81,6 +81,29 @@ impl LibEntry {
 
 /// Libraries whose source is checked out at the version this project resolves.
 /// A project's `[docs]` section overlays the global `docs.toml` entry by entry.
+///
+/// ```
+/// # use devkit_docs::manifest::{DocsManifest, Ecosystem};
+/// # let doc: toml::Table = toml::from_str(r#"
+/// [[docs.libs]]
+/// name  = "minijinja"
+/// notes = "template syntax for [tasks] and [templates]"
+///
+/// [[docs.libs]]
+/// name      = "node-types"
+/// ecosystem = "js"
+/// package   = "@types/node"
+/// # "#).unwrap();
+/// # let m: DocsManifest = doc["docs"].clone().try_into().unwrap();
+/// # assert_eq!(m.libs[0].name, "minijinja");
+/// # assert_eq!(m.libs[0].ecosystem, None);
+/// # assert_eq!(m.libs[1].ecosystem, Some(Ecosystem::Js));
+/// # assert_eq!(m.libs[1].package.as_deref(), Some("@types/node"));
+/// ```
+///
+/// The first entry names nothing but the library, so its ecosystem and version
+/// both come from the project's own lockfiles. The second overrides the
+/// registry name, which is the only thing `name` cannot also serve as.
 #[derive(Debug, Default, PartialEq, Serialize, JsonSchema, Deserialize)]
 pub struct DocsManifest {
     /// One entry per managed library. Every field except `name` is optional so

@@ -1,7 +1,7 @@
 {
   "$defs": {
     "AppConfig": {
-      "description": "One runnable app. `base_port` and `launch` are required; `path` is required\ntoo whenever `defaults.doppler_yaml` cannot infer the directory.",
+      "description": "One runnable app. `base_port` and `launch` are required; `path` is required\ntoo whenever `defaults.doppler_yaml` cannot infer the directory.\n\n```toml\n[apps.api]\nbase_port    = 9100\nlaunch       = [\"doppler\", \"run\", \"-c\", \"dev_local\", \"--\", \"nitro\", \"dev\", \"--port\", \"{{ port }}\"]\nurl_env      = \"API_BASE_URL\"\nprovides_url = true\nstatic_env   = { SOME_JWT_SECRET = \"local-dev-placeholder-value\" }\n\n[apps.web]\nbase_port = 4100\npath      = \"apps/web\"\nlaunch    = [\"next\", \"dev\", \"-p\", \"{{ port }}\"]\nurl_env   = \"API_BASE_URL\"\n```\n\n`web` names the provider through `url_env` rather than by port, so the two\napps stay wired together in every worktree.",
       "properties": {
         "base_port": {
           "description": "Start of the app's port band. Each worktree is allocated its own port\nfrom here by the registry, so two worktrees never collide.",
@@ -81,7 +81,7 @@
       "type": "object"
     },
     "AppMatch": {
-      "description": "`[harness.app_match]`: how the guard turns a hint into an app name.\n\nExact-name, exact-path and path-under-path matching are unconditional and\ntake no configuration. This table tunes only the fuzzy rung that runs when\nnone of those resolve, which is the one place the guard guesses.\n\n`#[serde(default)]` sits on the container so a layer naming one key inherits\nthe other two rather than zeroing them.",
+      "description": "`[harness.app_match]`: how the guard turns a hint into an app name.\n\nExact-name, exact-path and path-under-path matching are unconditional and\ntake no configuration. This table tunes only the fuzzy rung that runs when\nnone of those resolve, which is the one place the guard guesses.\n\n`#[serde(default)]` sits on the container so a layer naming one key inherits\nthe other two rather than zeroing them.\n\n```toml\n[harness.app_match]\nfuzzy     = false   # name no app rather than guess one\nmin_score = 75\n```",
       "properties": {
         "fuzzy": {
           "default": true,
@@ -108,7 +108,7 @@
       "type": "object"
     },
     "BriefConfig": {
-      "description": "What `devkit brief` emits. All default on: the hooks ship enabled and\nconfig decides whether they produce anything, so turning the output off is\none line rather than a hook-wiring task. A section with nothing to report\nis omitted whatever its switch says; a switch turned off suppresses the\nsection even when the checkout has something to put in it.",
+      "description": "What `devkit brief` emits. All default on: the hooks ship enabled and\nconfig decides whether they produce anything, so turning the output off is\none line rather than a hook-wiring task. A section with nothing to report\nis omitted whatever its switch says; a switch turned off suppresses the\nsection even when the checkout has something to put in it.\n\n```toml\n[brief]\nlocks = false\npins  = false\n```",
       "properties": {
         "apps": {
           "default": true,
@@ -139,7 +139,7 @@
       "type": "object"
     },
     "CommandRule": {
-      "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Parsing the command, unwrapping wrappers and\nrunners, and removing a program's own global options (`git -C`) are\ndevkit's job; a rule that had to restate them would get them wrong.",
+      "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Parsing the command, unwrapping wrappers and\nrunners, and removing a program's own global options (`git -C`) are\ndevkit's job; a rule that had to restate them would get them wrong.\n\n```toml\n[harness.commands.git-worktree]\nprograms = [\"git\"]\nargs     = [\"worktree\", \"add\"]\nreason   = \"use `issue setup <id>`, which records the worktree\"\n```\n\n`args` matches the typed arguments after the program's own global options\nare removed, so `git -C /repo worktree add` fires this rule and\n`git worktree list` does not.",
       "properties": {
         "action": {
           "$ref": "#/$defs/RuleAction",
@@ -179,7 +179,7 @@
       "type": "object"
     },
     "DaemonConfig": {
-      "description": "The `devkitd` supervisor: whether it starts, how long it lingers, and the\ncrash-loop, memory, and health policies it applies to supervised servers.",
+      "description": "The `devkitd` supervisor: whether it starts, how long it lingers, and the\ncrash-loop, memory, and health policies it applies to supervised servers.\n\n```toml\n[daemon]\nenabled         = true\nmemory_warn_mb  = 1024\nmemory_limit_mb = 2048   # soft: SIGTERM, then the crash path respawns\nmemory_action   = \"restart\"\nmemory_max_mb   = 4096   # hard: the kernel OOM-kills the tree\n```\n\nThe ordering in that example is the one to keep: the soft action is the\ngraceful first responder, and the kernel cap is the backstop for a spike\ntoo fast for the poll loop.",
       "properties": {
         "enabled": {
           "default": false,
@@ -258,7 +258,7 @@
       "type": "object"
     },
     "Defaults": {
-      "description": "Project-wide paths and branch conventions. Each key is independently\noptional and empty (or, for `apps_dir`/`pr_base`/`stray_scan_width`, its own\ndocumented default) when unset; an empty path or branch key is not\nvalidated at config load, and what happens when it is used is up to the\nfeature that reads it.",
+      "description": "Project-wide paths and branch conventions. Each key is independently\noptional and empty (or, for `apps_dir`/`pr_base`/`stray_scan_width`, its own\ndocumented default) when unset; an empty path or branch key is not\nvalidated at config load, and what happens when it is used is up to the\nfeature that reads it.\n\nA relative path anchors to the layer that declared it, so a project can\ncommit this table as it stands and have it hold on every machine:\n\n```toml\n[defaults]\nworktree_root = \"../myproject_worktrees\"\nbaseline_dir  = \"../myproject_worktrees/_baselines\"\nbaseline_ref  = \"origin/main\"\n```\n\nOnly `branch_prefix` is personal. Put it in `devkit.local.toml`, or write\n`\"${USER}/\"`.",
       "properties": {
         "apps_dir": {
           "default": "apps",
@@ -338,7 +338,7 @@
       "type": "object"
     },
     "DocsManifest": {
-      "description": "Libraries whose source is checked out at the version this project resolves.\nA project's `[docs]` section overlays the global `docs.toml` entry by entry.",
+      "description": "Libraries whose source is checked out at the version this project resolves.\nA project's `[docs]` section overlays the global `docs.toml` entry by entry.\n\n```toml\n[[docs.libs]]\nname  = \"minijinja\"\nnotes = \"template syntax for [tasks] and [templates]\"\n\n[[docs.libs]]\nname      = \"node-types\"\necosystem = \"js\"\npackage   = \"@types/node\"\n```\n\nThe first entry names nothing but the library, so its ecosystem and version\nboth come from the project's own lockfiles. The second overrides the\nregistry name, which is the only thing `name` cannot also serve as.",
       "properties": {
         "libs": {
           "default": [],
@@ -371,7 +371,7 @@
     },
     "GithubConfig": {
       "additionalProperties": false,
-      "description": "Which GitHub repositories this project uses. Both default to the `origin`\nremote. They are separate because a fork opens its PRs upstream while its\nissues may sit on either side, and because a project may track issues in a\nrepository separate from its code.\n\nThis table is not under `[tracker]`: a project on Linear with a fork\nworkflow needs `pr_repo` just as much as a GitHub one does.",
+      "description": "Which GitHub repositories this project uses. Both default to the `origin`\nremote. They are separate because a fork opens its PRs upstream while its\nissues may sit on either side, and because a project may track issues in a\nrepository separate from its code.\n\nThis table is not under `[tracker]`: a project on Linear with a fork\nworkflow needs `pr_repo` just as much as a GitHub one does.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\npr_repo     = \"upstream/app\"\n```",
       "properties": {
         "issues_repo": {
           "default": null,
@@ -393,7 +393,7 @@
       "type": "object"
     },
     "HarnessSection": {
-      "description": "The `[harness]` table of a checkout's `devkit.toml`.\n\nThis is the shape `devkit schema` renders. Nothing at runtime deserializes\nthe table through it: the probe reads each key independently so one bad key\ncannot take the others down with it.",
+      "description": "The `[harness]` table of a checkout's `devkit.toml`.\n\nThis is the shape `devkit schema` renders. Nothing at runtime deserializes\nthe table through it: the probe reads each key independently so one bad key\ncannot take the others down with it.\n\n```toml\n[harness]\nenforce_writes   = true\nenforce_commands = true\nscript_files     = \"warn\"\n```\n\nThe same two lines in `~/.config/devkit/config.toml` enforce across every\ncheckout, with no per-project file at all.",
       "properties": {
         "app_match": {
           "$ref": "#/$defs/AppMatch",
@@ -440,7 +440,7 @@
       "type": "object"
     },
     "HooksConfig": {
-      "description": "Commands run on a devkit lifecycle event. Most keys are named\n`{before,after}_<event>` after the state change rather than the command\nthat reached it; `after_end` is the exception and names its run, because a\nrun-level event has exactly one caller and no worktree state to be named\nfor. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and\nglobs are not available. A hook that fails to render, spawn, or exit zero\nwarns on stderr and the remaining hooks still run.",
+      "description": "Commands run on a devkit lifecycle event. Most keys are named\n`{before,after}_<event>` after the state change rather than the command\nthat reached it; `after_end` is the exception and names its run, because a\nrun-level event has exactly one caller and no worktree state to be named\nfor. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and\nglobs are not available. A hook that fails to render, spawn, or exit zero\nwarns on stderr and the remaining hooks still run.\n\n```toml\n[hooks]\nafter_worktree_create = [[\"zoxide\", \"add\", \"{{ worktree }}\"]]\nafter_worktree_remove = [[\"zoxide\", \"remove\", \"{{ worktree }}\"]]\nafter_end             = [[\"alacritree\", \"project\", \"refresh\"]]\n```\n\nEach key is an array, so a deeper `devkit.toml` replaces the whole list\nrather than appending to it.",
       "properties": {
         "after_end": {
           "default": [],
@@ -479,7 +479,7 @@
       "type": "object"
     },
     "LayerMarker": {
-      "description": "The `[config]` table. Read straight off the raw layer by `is_root_layer`\nrather than through `Config`, because it decides which layers exist before\nthere is a merged config to deserialize; this type exists so the published\nJSON Schema can still describe it.",
+      "description": "The `[config]` table. Read straight off the raw layer by `is_root_layer`\nrather than through `Config`, because it decides which layers exist before\nthere is a merged config to deserialize; this type exists so the published\nJSON Schema can still describe it.\n\n```toml\n[config]\nroot = true\n```",
       "properties": {
         "root": {
           "default": false,
@@ -556,7 +556,7 @@
       "type": "object"
     },
     "LinearConfig": {
-      "description": "Linear lookups that cost an extra API round trip, so each is opt-in.",
+      "description": "Linear lookups that cost an extra API round trip, so each is opt-in.\n\n```toml\n[linear]\nresolve_pr_links = true\n```\n\nThe lookup authenticates with `LINEAR_API_KEY` from the environment or\n`~/.config/devkit/secrets.toml`; no token lives in this table.",
       "properties": {
         "resolve_pr_links": {
           "default": false,
@@ -567,7 +567,7 @@
       "type": "object"
     },
     "ParallelismConfig": {
-      "description": "Width of the shared worker pool. Machine tuning rather than a project\nconvention, so it belongs in the personal layer at\n`~/.config/devkit/config.toml` rather than a repository's `devkit.toml`.",
+      "description": "Width of the shared worker pool. Machine tuning rather than a project\nconvention, so it belongs in the personal layer at\n`~/.config/devkit/config.toml` rather than a repository's `devkit.toml`.\n\n```toml\n[parallelism]\nthreads = 8\n```",
       "properties": {
         "threads": {
           "default": null,
@@ -583,7 +583,7 @@
       "type": "object"
     },
     "Person": {
-      "description": "A team member's handle mapping (Slack user-id, GitHub login, etc.).",
+      "description": "A team member's handle mapping (Slack user-id, GitHub login, etc.).\n\n```toml\n[people.alice]\nslack  = \"U0XXXXXXXXX\"\ngithub = \"alice-gh\"\n```",
       "properties": {
         "github": {
           "default": null,
@@ -639,7 +639,7 @@
       ]
     },
     "PrepFile": {
-      "description": "A file written into an app's directory during `issue setup`, before the\napp's `setup` commands run. `content` is written verbatim — no format\nassembly or newline injection. Parent directories are created. Existing\nfiles are left untouched unless `overwrite` is set.",
+      "description": "A file written into an app's directory during `issue setup`, before the\napp's `setup` commands run. `content` is written verbatim — no format\nassembly or newline injection. Parent directories are created. Existing\nfiles are left untouched unless `overwrite` is set.\n\n```toml\n[apps.web]\nbase_port = 4100\nlaunch    = [\"next\", \"dev\", \"-p\", \"{{ port }}\"]\n\n[[apps.web.prep_files]]\npath    = \".env.local\"\ncontent = \"\"\"\nSOME_FEATURE_FLAG=dummy\n\"\"\"\n```",
       "properties": {
         "content": {
           "description": "File contents, written byte-for-byte.",
@@ -663,7 +663,7 @@
     },
     "PreserveConfig": {
       "additionalProperties": false,
-      "description": "Files copied out of a worktree before `issue end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. Rendering, path rules, and the fail-open contract are in\n`docs/configuration.md`.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.",
+      "description": "Files copied out of a worktree before `issue end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. Rendering, path rules, and the fail-open contract are in\n`docs/configuration.md`.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ issue }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ issue }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
       "properties": {
         "from": {
           "description": "Glob patterns for the files to copy, relative to the worktree root and\nrendered as minijinja. A pattern that renders empty is skipped; one that\nmatches nothing is not a failure.",
@@ -720,7 +720,7 @@
           "type": "object"
         }
       ],
-      "description": "One entry of a task's `run`, each rendering exactly one minijinja template\nand differing only in what it does with the result.\n\n`deny_unknown_fields` because `Split` is matched untagged: without it a\nmisspelled key alongside a well-formed `split`/`on` pair deserializes\nsilently, and the typo changes nothing the author can see."
+      "description": "One entry of a task's `run`, each rendering exactly one minijinja template\nand differing only in what it does with the result.\n\n`deny_unknown_fields` because `Split` is matched untagged: without it a\nmisspelled key alongside a well-formed `split`/`on` pair deserializes\nsilently, and the typo changes nothing the author can see.\n\n```toml\n[tasks.stage]\nrun = [\"git\", \"add\", \"--\", { split = \"{{ files }}\", on = \";\" }]\n```\n\n`devrun task stage --arg 'files=new file.txt;other.txt'` reaches `git` as\nfour arguments, the space in the first filename included, because devkit\nexecs the argv rather than handing it to a shell."
     },
     "Severity": {
       "description": "How a diagnostic is classified for the agent.",
@@ -741,7 +741,7 @@
       "type": "string"
     },
     "Step": {
-      "description": "One step of a sequence task: run a sibling command task, or bring an app up.",
+      "description": "One step of a sequence task: run a sibling command task, or bring an app up.\n\n```toml\n[tasks.stack]\nsteps = [{ task = \"api-build\" }, { up = \"api\" }]\n```",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -772,7 +772,7 @@
       ]
     },
     "TaskConfig": {
-      "description": "A canned oneshot invoked by name via `devrun task`: either a command\n(`run`, optionally scoped to an `app` for cwd + static_env) or a sequence\n(`steps`). Exactly one of `run`/`steps` must be set; a sequence task\ncarries no `app`/`env`. Validated at resolution, not at parse.",
+      "description": "A canned oneshot invoked by name via `devrun task`: either a command\n(`run`, optionally scoped to an `app` for cwd + static_env) or a sequence\n(`steps`). Exactly one of `run`/`steps` must be set; a sequence task\ncarries no `app`/`env`. Validated at resolution, not at parse.\n\n```toml\n[tasks.api-prod-build]\ndescription = \"prod nitro build (node-server preset)\"\napp = \"api-prod\"        # run in this app's dir, inherit its static_env\nrun = [\"doppler\", \"run\", \"-c\", \"dev_local\",\n       \"--preserve-env=NITRO_PRESET\", \"--\", \"bun\", \"nitro\", \"build\"]\nenv = { NITRO_PRESET = \"node-server\" }\n\n[tasks.commit]\nrun = [\"git\", \"commit\", \"-m\", \"{% if issue is defined %}{{ issue }}: {% endif %}{{ msg }}\"]\nguard = true            # redirect an agent's own `git commit` here\n\n[tasks.profile-lab-os]\ndescription = \"prod api + profiled lab-os, wired together\"\nsteps = [\n  { task = \"api-prod-build\" },\n  { up = \"api-prod\" },\n]\n```\n\n`msg` is an arg of the `commit` task: no `[templates.variables]` entry\nsupplies it, so `devrun task commit --arg msg=...` is required.",
       "properties": {
         "app": {
           "default": null,
@@ -834,7 +834,7 @@
       "type": "object"
     },
     "Templates": {
-      "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context.",
+      "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ issue }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ issue }}: {{ input }}\"\npr_body            = \"Closes {{ issue }}.\\n\\n{{ input }}\"\nissue_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`issue_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
       "properties": {
         "branch": {
           "description": "Branch name created by `issue setup`. Context: `prefix`, `issue`,\n`slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.",
@@ -938,7 +938,7 @@
       "type": "object"
     },
     "TrackerConfig": {
-      "description": "The `[tracker]` table.",
+      "description": "The `[tracker]` table.\n\n```toml\n[tracker]\nkind = \"github\"\n```\n\nNaming the kind is what stops a `LINEAR_API_KEY` exported machine-wide from\nresolving Linear for a project that does not use it.",
       "properties": {
         "kind": {
           "anyOf": [

@@ -59,6 +59,26 @@ pub enum Severity {
 /// Deliberately not a regex. Parsing the command, unwrapping wrappers and
 /// runners, and removing a program's own global options (`git -C`) are
 /// devkit's job; a rule that had to restate them would get them wrong.
+///
+/// ```
+/// # use devkit_config::{CommandRule, RuleAction, Severity};
+/// # let doc: toml::Table = toml::from_str(r#"
+/// [harness.commands.git-worktree]
+/// programs = ["git"]
+/// args     = ["worktree", "add"]
+/// reason   = "use `issue setup <id>`, which records the worktree"
+/// # "#).unwrap();
+/// # let rule: CommandRule =
+/// #     doc["harness"]["commands"]["git-worktree"].clone().try_into().unwrap();
+/// # assert_eq!(rule.args, ["worktree", "add"]);
+/// # assert!(rule.enabled);
+/// # assert_eq!(rule.action, RuleAction::Block);
+/// # assert_eq!(rule.severity, Severity::Error);
+/// ```
+///
+/// `args` matches the typed arguments after the program's own global options
+/// are removed, so `git -C /repo worktree add` fires this rule and
+/// `git worktree list` does not.
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
 pub struct CommandRule {
     /// Program names this rule refuses, matched against the segment's command
@@ -110,6 +130,19 @@ impl Default for CommandRule {
 ///
 /// `#[serde(default)]` sits on the container so a layer naming one key inherits
 /// the other two rather than zeroing them.
+///
+/// ```
+/// # use devkit_config::AppMatch;
+/// # let doc: toml::Table = toml::from_str(r#"
+/// [harness.app_match]
+/// fuzzy     = false   # name no app rather than guess one
+/// min_score = 75
+/// # "#).unwrap();
+/// # let m: AppMatch = doc["harness"]["app_match"].clone().try_into().unwrap();
+/// # assert!(!m.fuzzy);
+/// # assert_eq!(m.min_score, 75);
+/// # assert_eq!(m.max_typos, 1);
+/// ```
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(default)]
 pub struct AppMatch {
@@ -144,6 +177,23 @@ impl Default for AppMatch {
 /// This is the shape `devkit schema` renders. Nothing at runtime deserializes
 /// the table through it: the probe reads each key independently so one bad key
 /// cannot take the others down with it.
+///
+/// ```
+/// # use devkit_config::{HarnessSection, PolicyAction};
+/// # let doc: toml::Table = toml::from_str(r#"
+/// [harness]
+/// enforce_writes   = true
+/// enforce_commands = true
+/// script_files     = "warn"
+/// # "#).unwrap();
+/// # let h: HarnessSection = doc["harness"].clone().try_into().unwrap();
+/// # assert!(h.enforce_writes);
+/// # assert_eq!(h.script_files, PolicyAction::Warn);
+/// # assert_eq!(h.unresolved_writes, PolicyAction::Block);
+/// ```
+///
+/// The same two lines in `~/.config/devkit/config.toml` enforce across every
+/// checkout, with no per-project file at all.
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
 pub struct HarnessSection {
     /// Refuse writes to paths this checkout has not claimed with `lockm`.
