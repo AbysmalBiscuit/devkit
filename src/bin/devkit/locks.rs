@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use devkit::completions::Shell;
 use devkit_locks::{
-    hook::{self, HookEvent},
+    hook::{self, LockAction},
     model::{Conflict, LockEntry, Refusal, RefusedBecause, WriteDecision},
 };
 
@@ -224,11 +224,18 @@ fn run_hook(event: &str) {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    let event = hook::parse_event(event, &payload);
-    match event {
-        HookEvent::Write {
+    // The verb picks the parser, so an event nobody recognises has nowhere to
+    // arrive: it reaches no parser at all rather than falling through one.
+    let action = match event {
+        "pretooluse" => hook::parse_write(&payload),
+        "subagent-stop" => hook::parse_subagent_stop(&payload),
+        "session-end" => hook::parse_session_end(&payload),
+        _ => None,
+    };
+    match action {
+        Some(LockAction::Write {
             file_paths, holder, ..
-        } => {
+        }) => {
             if !hook::enforcement_enabled(&cwd) {
                 return; // no opt-in (env, project layers, or global config) → no enforcement
             }
@@ -256,10 +263,10 @@ fn run_hook(event: &str) {
                 println!("{out}");
             }
         }
-        HookEvent::ReleaseSubagent { holder } | HookEvent::ReleaseSession { holder } => {
+        Some(LockAction::ReleaseSubagent { holder } | LockAction::ReleaseSession { holder }) => {
             let _ = devkit_locks::release_prefix(&holder);
         }
-        HookEvent::Unusable { reason } => {
+        Some(LockAction::Unusable { reason }) => {
             if hook::enforcement_enabled(&cwd) {
                 println!(
                     "{}",
@@ -267,7 +274,7 @@ fn run_hook(event: &str) {
                 );
             }
         }
-        HookEvent::Ignore => {}
+        None => {}
     }
 }
 
