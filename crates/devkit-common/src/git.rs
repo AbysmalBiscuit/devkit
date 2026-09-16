@@ -432,6 +432,11 @@ impl Checkout {
         }
     }
 
+    /// The directory this was resolved from.
+    pub fn dir(&self) -> &Path {
+        &self.start
+    }
+
     fn resolved(&self) -> &Resolved {
         self.resolved.get_or_init(|| {
             let out = match Git::at(&self.start)

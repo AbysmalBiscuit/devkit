@@ -25,7 +25,7 @@ use super::{HookEvent, record};
 /// Claim the write targets a structured-edit payload names, before the tool
 /// runs.
 pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
-    let cwd = cwd_of(payload);
+    let cwd = record::payload_cwd(payload);
     // One `git worktree list` for the whole invocation, shared by the
     // enforcement gate, the lock scoping and the log settings. It resolves
     // lazily, so a tool that writes nothing spawns nothing.
@@ -60,6 +60,7 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
             payload,
             HookEvent::PreToolUse,
             declared,
+            &checkout,
             Kind::EditPre(EditPre {
                 tool_name: payload
                     .get("tool_name")
@@ -153,17 +154,6 @@ fn conflict_envelope(conflicts: &[Conflict]) -> serde_json::Value {
         "devkit write-harness: {who} — locked by another agent; \
          coordinate or wait for it to finish"
     ))
-}
-
-/// Where the write would land. Paths in the payload are relative to the
-/// session, not to wherever the harness spawned this process.
-fn cwd_of(payload: &Value) -> std::path::PathBuf {
-    payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 /// Resolve a payload path against the session's own working directory, so a

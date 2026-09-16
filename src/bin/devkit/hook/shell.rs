@@ -69,6 +69,7 @@ impl Outcome {
 #[derive(Clone)]
 struct PanicContext {
     harness: Option<Harness>,
+    checkout: Checkout,
     settings: harness_log::Settings,
 }
 
@@ -107,6 +108,7 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
                 undecided_record(
                     payload,
                     ctx.harness,
+                    &ctx.checkout,
                     &ctx.settings,
                     "the command guard panicked while evaluating this command",
                 )
@@ -155,6 +157,7 @@ pub fn deny_unreadable_payload(declared: Option<Harness>) -> Result<()> {
         undecided_record(
             &Value::Null,
             declared,
+            &checkout,
             &settings,
             "the hook payload could not be read as JSON",
         )
@@ -170,6 +173,7 @@ pub fn deny_unreadable_payload(declared: Option<Harness>) -> Result<()> {
 fn undecided_record(
     payload: &Value,
     declared: Option<Harness>,
+    checkout: &Checkout,
     settings: &harness_log::Settings,
     reason: &str,
 ) -> Box<Record> {
@@ -185,6 +189,7 @@ fn undecided_record(
         payload,
         HookEvent::PreToolUse,
         declared,
+        checkout,
         Kind::ShellPre(Box::new(ShellPre {
             command,
             redacted,
@@ -219,10 +224,7 @@ fn current_cwd() -> std::path::PathBuf {
 /// shell payload. With `--harness` the identity half is already settled, so
 /// this is left deciding only whether the event is about a shell command at
 /// all, and where it would have run.
-fn raw_shell_context(
-    payload: &serde_json::Value,
-    declared: Option<Harness>,
-) -> Option<(Harness, Option<std::path::PathBuf>)> {
+fn raw_shell_context(payload: &serde_json::Value, declared: Option<Harness>) -> Option<Harness> {
     payload
         .get("hook_event_name")
         .and_then(serde_json::Value::as_str)?;
@@ -232,21 +234,18 @@ fn raw_shell_context(
     if !harness::SHELL_TOOLS.contains(&tool) {
         return None;
     }
-    let harness = declared.unwrap_or_else(|| harness::infer_harness(payload));
-    let cwd = payload
-        .get("cwd")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from);
-    Some((harness, cwd))
+    Some(declared.unwrap_or_else(|| harness::infer_harness(payload)))
 }
 
-fn deny_unusable_shell(payload: &serde_json::Value, declared: Option<Harness>) -> Response {
-    let Some((which, cwd)) = raw_shell_context(payload, declared) else {
+fn deny_unusable_shell(
+    payload: &serde_json::Value,
+    declared: Option<Harness>,
+    checkout: &Checkout,
+) -> Response {
+    let Some(which) = raw_shell_context(payload, declared) else {
         return Response::Silent;
     };
-    let cwd = cwd.unwrap_or_else(current_cwd);
-    if harness::writes_enabled(&Checkout::at(&cwd), &cwd) {
+    if harness::writes_enabled(checkout, checkout.dir()) {
         Response::Envelope(harness::deny_shell_json(which, UNUSABLE_SHELL_REASON))
     } else {
         Response::Silent
@@ -260,18 +259,21 @@ fn respond(
     panic_ctx: &OnceLock<PanicContext>,
 ) -> Outcome {
     let Some(shell) = harness::parse_shell_payload(payload) else {
-        let response = deny_unusable_shell(payload, declared);
-        let settings = harness_log::resolve(&current_cwd());
+        let checkout = Checkout::at(&record::payload_cwd(payload));
+        let response = deny_unusable_shell(payload, declared, &checkout);
+        let settings = harness_log::resolve_in(&checkout, checkout.dir());
         let rec = settings.enabled.then(|| {
             undecided_record(
                 payload,
                 declared,
+                &checkout,
                 &settings,
                 "the payload did not parse as a shell command",
             )
         });
         let _ = panic_ctx.set(PanicContext {
             harness: declared,
+            checkout,
             settings,
         });
         return Outcome {
@@ -294,6 +296,7 @@ fn respond(
     let settings = harness_log::resolve_in(&checkout, &cwd);
     let _ = panic_ctx.set(PanicContext {
         harness: Some(which),
+        checkout: checkout.clone(),
         settings: settings.clone(),
     });
 
@@ -349,6 +352,7 @@ fn respond(
                 payload,
                 &shell,
                 declared,
+                &checkout,
                 &settings,
                 dialect,
                 Some(record::projection(&analysis, analyze_micros)),
@@ -431,6 +435,7 @@ fn shell_pre_record(
     payload: &Value,
     shell: &ShellPayload,
     declared: Option<Harness>,
+    checkout: &Checkout,
     settings: &harness_log::Settings,
     dialect: devkit_command::Dialect,
     analysis: Option<devkit_common::harness_log::AnalysisProjection>,
@@ -442,6 +447,7 @@ fn shell_pre_record(
         payload,
         HookEvent::PreToolUse,
         declared,
+        checkout,
         Kind::ShellPre(Box::new(ShellPre {
             command,
             redacted,

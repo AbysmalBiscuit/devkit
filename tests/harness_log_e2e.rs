@@ -384,3 +384,94 @@ fn a_subagent_writes_beside_its_session_not_into_it() {
     names.sort();
     assert_eq!(names, ["s1-a1.jsonl", "s1.jsonl"]);
 }
+
+/// Every `git` the hook spawns, one argument line per spawn, read through a
+/// wrapper that logs and then hands off to the real git. Unix-only: the wrapper
+/// is a shell script, and a Windows spawn of `git` looks only for `git.exe`.
+#[cfg(unix)]
+fn git_spawns(e: &Env, argv: &[&str], payload: &str) -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path)
+        .map(|dir| dir.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git on PATH");
+    let bin = tempfile::tempdir().unwrap();
+    let trace = bin.path().join("spawns");
+    let wrapper = bin.path().join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            trace.to_string_lossy(),
+            real.to_string_lossy(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut dirs = vec![bin.path().to_path_buf()];
+    dirs.extend(std::env::split_paths(&path));
+    let joined = std::env::join_paths(dirs).unwrap();
+
+    run_argv_env(e, argv, payload, &[("PATH", &joined.to_string_lossy())]);
+    std::fs::read_to_string(&trace)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// With logging and both enforcement flags on, a guarded shell command asks git
+/// about its checkout once. The log settings, the gates, the rule layers, the
+/// config load, the lock scoping and the record's project root all share it.
+#[cfg(unix)]
+#[test]
+fn a_logged_shell_command_spawns_git_once() {
+    let e = env_with(
+        "[harness]\nenforce_commands = true\nenforce_writes = true\n",
+        "",
+    );
+    let spawns = git_spawns(
+        &e,
+        &["hook", "pre-tool-use"],
+        &claude_payload(&e, "echo hi > out.txt"),
+    );
+    assert_eq!(spawns.len(), 1, "{spawns:#?}");
+    assert_eq!(sole_record(&e.log_dir())["verdict"]["decision"], "allow");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_logged_edit_spawns_git_once() {
+    let e = env_with("[harness]\nenforce_writes = true\n", "");
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "session_id": "s1",
+        "cwd": e.project.path().to_string_lossy(),
+        "tool_input": { "file_path": "src/a.rs" }
+    })
+    .to_string();
+    let spawns = git_spawns(&e, &["hook", "pre-tool-use"], &payload);
+    assert_eq!(spawns.len(), 1, "{spawns:#?}");
+    assert_eq!(sole_record(&e.log_dir())["kind"], "edit_pre");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_logged_record_only_verb_spawns_git_once() {
+    let e = enabled_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "session_id": "s1",
+        "cwd": e.project.path().to_string_lossy(),
+        "tool_input": { "command": "ls" },
+        "tool_response": { "stdout": "", "stderr": "", "interrupted": false }
+    })
+    .to_string();
+    let spawns = git_spawns(&e, &["hook", "post-tool-use"], &payload);
+    assert_eq!(spawns.len(), 1, "{spawns:#?}");
+    assert!(sole_record(&e.log_dir())["project_root"].is_string());
+}
