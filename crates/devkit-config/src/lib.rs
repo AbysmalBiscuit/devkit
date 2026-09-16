@@ -896,7 +896,7 @@ impl VariableDecl {
     /// The marking exactly as written, `None` when the author wrote none.
     /// Only load-time validation needs this distinction; resolution reads
     /// `required()`.
-    pub fn declared_required(&self) -> Option<Required> {
+    pub fn written_required(&self) -> Option<Required> {
         match self {
             VariableDecl::Value(_) => None,
             VariableDecl::Table { required, .. } => *required,
@@ -1589,7 +1589,7 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
 /// required by the derived rule.
 fn reject_never_without_default(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
     for (name, decl) in &cfg.templates.variables {
-        if decl.declared_required() != Some(Required::Never) || decl.default_value().is_some() {
+        if decl.written_required() != Some(Required::Never) || decl.default_value().is_some() {
             continue;
         }
         let key = format!("templates.variables.{name}");
@@ -1924,7 +1924,7 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
             .expect("declaring a name without marking it is how an arg is made passable");
         let decl = &cfg.templates.variables["ticket"];
         assert_eq!(decl.default_value(), None);
-        assert_eq!(decl.declared_required(), None);
+        assert_eq!(decl.written_required(), None);
         assert_eq!(decl.required(), Required::Never);
     }
 
