@@ -83,9 +83,23 @@ pub fn missing_args(
         .filter(|n| is_required(cfg, task, n, caller))
         .map(|n| Missing {
             name: n.clone(),
-            reason: declared_required(cfg, task, n),
+            reason: binding_reason(cfg, task, n, caller),
         })
         .collect()
+}
+
+/// The marking that bound this name for this caller, `Never` when the derived
+/// rule did. A marking names its audience only when it is what made the arg
+/// required. An arg with no default is required of everyone, so a `humans`
+/// marking on one would otherwise tell an agent the arg is "required for
+/// humans" while refusing the agent's own run.
+fn binding_reason(cfg: &Config, task: Option<&str>, name: &str, caller: Caller) -> Required {
+    let declared = declared_required(cfg, task, name);
+    if binds(declared, caller) {
+        declared
+    } else {
+        Required::Never
+    }
 }
 
 #[cfg(test)]
@@ -183,6 +197,44 @@ mod tests {
             Caller::Human,
         );
         assert_eq!(out[0].hint(), "--arg ticket=...");
+    }
+
+    #[test]
+    fn a_marking_that_did_not_bind_this_caller_is_left_out_of_the_hint() {
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
+             [templates.variables]\n\
+             humans_no_default = { required = 'humans' }\n\
+             [tasks.t]\n\
+             run = ['x', '{{ humans_no_default }}']\n";
+        let c = Config::parse(s).unwrap();
+        let out = missing_args(
+            &c,
+            Some("t"),
+            &names(&["humans_no_default"]),
+            &BTreeMap::new(),
+            Caller::Agent,
+        );
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(
+            out[0].hint(),
+            "--arg humans_no_default=...",
+            "the derived floor refused this agent, so naming the humans \
+             marking would contradict the refusal it is attached to"
+        );
+        assert_eq!(out[0].reason, Required::Never);
+    }
+
+    #[test]
+    fn a_marking_that_bound_this_caller_still_names_its_audience() {
+        let c = cfg("");
+        let out = missing_args(
+            &c,
+            Some("commit"),
+            &names(&["msg"]),
+            &BTreeMap::new(),
+            Caller::Agent,
+        );
+        assert_eq!(out[0].hint(), "--arg msg=... (required for agents)");
     }
 
     /// The design spec's truth table, crossed with both callers. Row eight
