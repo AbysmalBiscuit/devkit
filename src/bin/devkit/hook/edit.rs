@@ -9,7 +9,10 @@
 //! answer would be read.
 
 use anyhow::Result;
-use devkit_common::harness_log::{self, Decision, EditPre, Kind, Verdict};
+use devkit_common::{
+    harness::Harness,
+    harness_log::{self, Decision, EditPre, Kind, Verdict},
+};
 use devkit_locks::{
     hook::{self, LockAction},
     model::{Conflict, WriteDecision},
@@ -20,7 +23,7 @@ use super::{HookEvent, record};
 
 /// Claim the write targets a structured-edit payload names, before the tool
 /// runs.
-pub fn guard(payload: &Value) -> Result<()> {
+pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
     let cwd = cwd_of(payload);
     let (targets, blocks) = match hook::parse_write(payload) {
         Some(LockAction::Write {
@@ -51,7 +54,7 @@ pub fn guard(payload: &Value) -> Result<()> {
         let rec = record::envelope(
             payload,
             HookEvent::PreToolUse,
-            None,
+            declared,
             Kind::EditPre(EditPre {
                 tool_name: payload
                     .get("tool_name")

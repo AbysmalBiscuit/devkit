@@ -190,7 +190,7 @@ pub(crate) fn pre_tool_use(harness: Option<Harness>) -> Result<()> {
         return shell::deny_unreadable_payload(harness);
     };
     match payload.get("tool_name").and_then(Value::as_str) {
-        Some(t) if devkit_locks::hook::is_write_tool(t) => edit::guard(&payload),
+        Some(t) if devkit_locks::hook::is_write_tool(t) => edit::guard(&payload, harness),
         _ => shell::guard(&payload, harness),
     }
 }

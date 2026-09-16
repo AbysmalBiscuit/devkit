@@ -309,6 +309,29 @@ fn an_edit_payload_lands_an_edit_record() {
     assert_eq!(rec["targets"][0], "src/a.rs");
 }
 
+/// The payload carries none of the fields inference reads for Codex, so only
+/// the declared harness can name it.
+#[test]
+fn an_edit_record_names_the_harness_the_manifest_declared() {
+    let e = env_with("[harness]\nenforce_writes = true\n", "");
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "session_id": "s1",
+        "cwd": e.project.path().to_string_lossy(),
+        "tool_input": { "file_path": "src/a.rs" }
+    })
+    .to_string();
+    run_argv(
+        &e,
+        &["hook", "pre-tool-use", "--harness", "codex"],
+        &payload,
+    );
+    let rec = sole_record(&e.log_dir());
+    assert_eq!(rec["kind"], "edit_pre");
+    assert_eq!(rec["harness"], "codex");
+}
+
 /// A subagent writes to its own file: parallel subagents share a session id and
 /// would otherwise contend on one.
 #[test]
