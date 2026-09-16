@@ -14,6 +14,10 @@ pub struct Action {
 }
 
 /// All registered actions. Adding a binary's actions is one `extend` line.
+///
+/// Killing servers outside the registry stays off this list. `devrun reap`
+/// requires an interactive terminal, which an MCP caller never has, so strays
+/// are exposed read-only through `ports.strays`.
 pub fn actions() -> Vec<Action> {
     let mut v = Vec::new();
     v.extend(crate::ports::actions());

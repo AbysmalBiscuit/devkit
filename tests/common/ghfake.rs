@@ -5,6 +5,12 @@
 //! It answers each verb from a file in the same directory, so a test that wants
 //! a different answer writes one before the run.
 //!
+//! It is a compiled binary rather than a script because a Windows spawn of
+//! `gh` looks for `gh.exe` and consults no PATHEXT, so a `.cmd` would never be
+//! found. It is an example rather than a workspace member because
+//! `cargo test --no-run` builds examples but skips the bins of a member crate
+//! with no tests of its own.
+//!
 //! Compile-time unused helpers are expected: different test binaries include
 //! this module via `#[path]` and use different subsets of it.
 #![allow(dead_code)]
