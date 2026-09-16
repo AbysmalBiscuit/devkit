@@ -79,6 +79,20 @@ pub enum FileOp {
     Copy,
 }
 
+impl FileOp {
+    /// The name a record stores. Stable across renames of the variant.
+    pub fn name(self) -> &'static str {
+        match self {
+            FileOp::Create => "create",
+            FileOp::Overwrite => "overwrite",
+            FileOp::Append => "append",
+            FileOp::Delete => "delete",
+            FileOp::Rename => "rename",
+            FileOp::Copy => "copy",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
     Path(String),
@@ -138,6 +152,19 @@ pub enum Limit {
     Depth,
     Nodes,
     ValueSize,
+}
+
+impl Limit {
+    /// The name a record stores. Stable across renames of the variant.
+    pub fn name(self) -> &'static str {
+        match self {
+            Limit::OuterSource => "outer_source",
+            Limit::CumulativeSource => "cumulative_source",
+            Limit::Depth => "depth",
+            Limit::Nodes => "nodes",
+            Limit::ValueSize => "value_size",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

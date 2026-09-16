@@ -309,6 +309,29 @@ fn an_edit_payload_lands_an_edit_record() {
     assert_eq!(rec["targets"][0], "src/a.rs");
 }
 
+/// The dialect a record names parses back through `Dialect::from_name`, the
+/// function the corpus reader uses, so renaming a variant cannot orphan a
+/// recorded corpus.
+#[test]
+fn a_recorded_dialect_reads_back_as_the_same_dialect() {
+    use devkit_command::Dialect;
+    for (tool, want) in [("Bash", Dialect::Bash), ("PowerShell", Dialect::PowerShell)] {
+        let e = enabled_project();
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": tool,
+            "session_id": "s1",
+            "cwd": e.project.path().to_string_lossy(),
+            "tool_input": { "command": "ls" }
+        })
+        .to_string();
+        run_argv(&e, &["hook", "pre-tool-use"], &payload);
+        let rec = sole_record(&e.log_dir());
+        let name = rec["dialect"].as_str().unwrap_or_default();
+        assert_eq!(Dialect::from_name(name), Some(want), "{tool}: {name}");
+    }
+}
+
 /// The payload carries none of the fields inference reads for Codex, so only
 /// the declared harness can name it.
 #[test]

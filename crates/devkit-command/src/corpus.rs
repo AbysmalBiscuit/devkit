@@ -24,11 +24,7 @@ pub fn command_of(record: &Value) -> Option<&str> {
 /// record knows, so a reader should not re-derive it from harness plus
 /// platform and risk reading the command in a shell it was never parsed as.
 pub fn dialect_of(record: &Value) -> Option<Dialect> {
-    match record.get("dialect").and_then(Value::as_str)? {
-        "bash" => Some(Dialect::Bash),
-        "powershell" => Some(Dialect::PowerShell),
-        _ => None,
-    }
+    Dialect::from_name(record.get("dialect").and_then(Value::as_str)?)
 }
 
 /// The dialect to infer when a record does not carry one, from whatever the
@@ -76,7 +72,7 @@ mod tests {
     fn an_unknown_dialect_name_is_none_not_a_default() {
         // A reader that silently fell back to bash would report a PowerShell
         // corpus as a parser regression.
-        assert_eq!(dialect_of(&parse(r#"{"dialect":"fish"}"#)), None);
+        assert_eq!(dialect_of(&parse(r#"{"dialect":"zsh"}"#)), None);
         assert_eq!(dialect_of(&parse("{}")), None);
     }
 

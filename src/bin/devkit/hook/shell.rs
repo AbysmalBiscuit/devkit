@@ -436,7 +436,7 @@ fn shell_pre_record(
             redacted,
             truncated,
             tool_name: shell.tool_name.clone(),
-            dialect: Some(format!("{dialect:?}").to_lowercase()),
+            dialect: Some(dialect.name().to_string()),
             analysis,
             verdict,
         })),

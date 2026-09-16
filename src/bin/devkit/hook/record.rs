@@ -263,7 +263,7 @@ pub fn projection(analysis: &Analysis, analyze_micros: u64) -> AnalysisProjectio
         .iter()
         .filter(|e| e.target == Target::Unresolved)
         .map(|e| UnresolvedWrite {
-            op: format!("{:?}", e.op).to_lowercase(),
+            op: e.op.name().to_string(),
             start: e.location.outer.start,
             end: e.location.outer.end,
         })
@@ -328,7 +328,7 @@ fn kind_name(k: &UncertaintyKind) -> String {
         UncertaintyKind::UnresolvedWrite => "unresolved_write".into(),
         UncertaintyKind::UnsupportedLanguage(lang) => format!("unsupported_language:{lang}"),
         UncertaintyKind::ParseError => "parse_error".into(),
-        UncertaintyKind::LimitExhausted(limit) => format!("limit_exhausted:{limit:?}"),
+        UncertaintyKind::LimitExhausted(limit) => format!("limit_exhausted:{}", limit.name()),
         UncertaintyKind::UnresolvedInvocation => "unresolved_invocation".into(),
     }
 }

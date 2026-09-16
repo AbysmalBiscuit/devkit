@@ -463,16 +463,17 @@ fn harness_log_row() -> Row {
     let settings = devkit_common::harness_log::resolve(&cwd);
     let global = devkit_common::harness::global_config_path().filter(|p| p.exists());
     let bytes = log_dir_bytes(&settings.dir);
-    let command = format!("{:?}", settings.command).to_lowercase();
-    let prompt = format!("{:?}", settings.prompt).to_lowercase();
+    // Through serde, so the names are the ones `config.toml` spells.
     let data = serde_json::json!({
         "enabled": settings.enabled,
-        "command": command,
-        "prompt": prompt,
+        "command": settings.command,
+        "prompt": settings.prompt,
         "dir": settings.dir.to_string_lossy(),
         "bytes": bytes,
         "global_config": global.is_some(),
     });
+    let command = data["command"].as_str().unwrap_or_default();
+    let prompt = data["prompt"].as_str().unwrap_or_default();
     let detail = format!(
         "command={command} prompt={prompt}, {bytes} bytes in {}",
         settings.dir.display()
