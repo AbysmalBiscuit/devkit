@@ -97,7 +97,7 @@ fn rule_match(inv: &Invocation, rule: &CommandRule) -> Match {
     let mut possible = false;
     for (index, expected) in rule.args.iter().enumerate() {
         match inv.semantic_args.get(index) {
-            Some(Value::Known(actual)) if actual == expected => {}
+            Some(Value::Known(actual)) if wildcard_matches(expected, actual) => {}
             Some(Value::Known(_)) | None => return Match::No,
             Some(Value::Unknown | Value::Ephemeral(_)) => possible = true,
         }
@@ -107,6 +107,26 @@ fn rule_match(inv: &Invocation, rule: &CommandRule) -> Match {
     } else {
         Match::Yes
     }
+}
+
+/// Whether `text` matches `pattern`, where each `*` stands for any run of
+/// characters, `/` included. A pattern without `*` matches exactly.
+fn wildcard_matches(pattern: &str, text: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let head = parts.next().unwrap_or_default();
+    let Some(mut rest) = text.strip_prefix(head) else {
+        return false;
+    };
+    let Some(tail) = parts.next_back() else {
+        return rest.is_empty();
+    };
+    for part in parts {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.ends_with(tail)
 }
 
 /// Decide over an analysis. Every invocation is checked, nested ones
@@ -650,6 +670,71 @@ mod tests {
         assert!(denies(&decide_with("docker-compose up -d", &r, None)));
         assert!(!denies(&decide_with("docker-compose logs", &r, None)));
         assert!(!denies(&decide_with("docker-compose", &r, None)));
+    }
+
+    #[test]
+    fn a_star_in_rule_args_matches_any_run_of_characters() {
+        let bin = rule(&["node"], &["*/nitro", "dev"], |_| {});
+        for command in [
+            "node node_modules/.bin/nitro dev --port 9200",
+            "node ./node_modules/.bin/nitro dev",
+            "node /abs/apps/api/node_modules/.bin/nitro dev",
+        ] {
+            assert!(denies(&decide_with(command, &bin, None)), "{command}");
+        }
+        for command in [
+            "node node_modules/.bin/nitro build",
+            "node scripts/nitro-helper.mjs dev",
+            "node nitro dev",
+        ] {
+            assert!(!denies(&decide_with(command, &bin, None)), "{command}");
+        }
+
+        let cli = rule(&["node"], &["*/nitropack/*", "dev"], |_| {});
+        assert!(denies(&decide_with(
+            "node node_modules/nitropack/dist/cli/index.mjs dev",
+            &cli,
+            None
+        )));
+        assert!(!denies(&decide_with(
+            "node node_modules/nitropack/dist/cli/index.mjs build",
+            &cli,
+            None
+        )));
+    }
+
+    #[test]
+    fn a_lone_star_still_needs_an_argument() {
+        let any = rule(&["node"], &["*"], |_| {});
+        assert!(denies(&decide_with("node server.js", &any, None)));
+        assert!(!denies(&decide_with("node", &any, None)));
+    }
+
+    #[test]
+    fn wildcard_matching() {
+        for (pattern, text) in [
+            ("dev", "dev"),
+            ("*", ""),
+            ("*", "anything/at/all"),
+            ("*/nitro", "a/b/nitro"),
+            ("node_modules/*", "node_modules/x"),
+            ("*/nitropack/*", "node_modules/nitropack/dist/cli.mjs"),
+            ("a*b*c", "abc"),
+            ("a*b*c", "aXbYbZc"),
+            ("**", "x"),
+        ] {
+            assert!(wildcard_matches(pattern, text), "{pattern} ~ {text}");
+        }
+        for (pattern, text) in [
+            ("dev", "devx"),
+            ("*/nitro", "nitro"),
+            ("*/nitro", "a/nitro/b"),
+            ("a*a", "a"),
+            ("a*b*c", "acb"),
+            ("x*", "yx"),
+        ] {
+            assert!(!wildcard_matches(pattern, text), "{pattern} !~ {text}");
+        }
     }
 
     #[test]

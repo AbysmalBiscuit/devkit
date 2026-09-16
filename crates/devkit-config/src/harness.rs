@@ -172,6 +172,11 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 /// programs = ["git"]
 /// args     = ["worktree", "add"]
 /// reason   = "use `issue setup <id>`, which records the worktree"
+///
+/// [harness.commands.nitro-via-node]
+/// programs = ["node"]
+/// args     = ["*/nitro", "dev"] # any path to the binary: node_modules/.bin/nitro, /abs/.../nitro
+/// reason   = "start the api with `devrun up api`"
 /// # "#).unwrap();
 /// # let rule: CommandRule =
 /// #     doc["harness"]["commands"]["git-worktree"].clone().try_into().unwrap();
@@ -179,11 +184,16 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 /// # assert!(rule.enabled);
 /// # assert_eq!(rule.action, RuleAction::Block);
 /// # assert_eq!(rule.severity, Severity::Error);
+/// # let glob: CommandRule =
+/// #     doc["harness"]["commands"]["nitro-via-node"].clone().try_into().unwrap();
+/// # assert_eq!(glob.args, ["*/nitro", "dev"]);
 /// ```
 ///
 /// `args` matches the typed arguments after the program's own global options
-/// are removed, so `git -C /repo worktree add` fires this rule and
-/// `git worktree list` does not.
+/// are removed, so `git -C /repo worktree add` fires the first rule and
+/// `git worktree list` does not. A `*` in an `args` entry matches any run of
+/// characters, `/` included, so the second rule refuses
+/// `node ./node_modules/.bin/nitro dev` and allows `nitro build`.
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
 pub struct CommandRule {
     /// Program names this rule refuses, matched against the segment's command
@@ -192,7 +202,9 @@ pub struct CommandRule {
     #[serde(default)]
     pub programs: Vec<String>,
     /// Arguments that must appear, in order, at the head of the typed
-    /// arguments for the rule to fire. Empty matches any arguments.
+    /// arguments for the rule to fire. Empty matches any arguments. `*`
+    /// matches any run of characters, `/` included; `"*"` alone still needs
+    /// an argument in its place.
     #[serde(default)]
     pub args: Vec<String>,
     /// Shown to the agent verbatim when the rule denies. Name the replacement
