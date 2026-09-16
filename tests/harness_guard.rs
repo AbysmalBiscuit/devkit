@@ -108,6 +108,60 @@ reason = "This workspace is bun-only."
 "#;
 
 #[test]
+fn a_rule_arg_glob_denies_through_the_binary() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.nitro-via-node]
+programs = ["node"]
+args = ["*/nitro", "dev"]
+reason = "Start the api with devrun up api."
+"#,
+    );
+    let launch = "doppler run -c dev -- node ./node_modules/.bin/nitro dev --port 9200";
+    assert!(denied(&run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload(launch)
+    )));
+    assert!(!denied(&run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("node ./node_modules/.bin/nitro build")
+    )));
+}
+
+#[test]
+fn a_double_star_rule_arg_skips_runner_options_through_the_binary() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(
+        r#"
+[harness]
+enforce_commands = true
+
+[harness.commands.nitro-dev]
+programs = ["bun"]
+args = ["**", "nitro", "dev"]
+reason = "Start the api with devrun up api."
+"#,
+    );
+    let launch = "doppler run -c dev -- bun --cwd /abs/apps/api nitro dev --port 9200";
+    assert!(denied(&run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload(launch)
+    )));
+    assert!(!denied(&run_hook(
+        proj.path(),
+        home.path(),
+        &claude_payload("bun --cwd /abs/apps/api nitro build")
+    )));
+}
+
+#[test]
 fn a_user_rule_denies_through_the_binary() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(GUARDED);

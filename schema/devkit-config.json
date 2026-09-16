@@ -139,7 +139,7 @@
       "type": "object"
     },
     "CommandRule": {
-      "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Parsing the command, unwrapping wrappers and\nrunners, and removing a program's own global options (`git -C`) are\ndevkit's job; a rule that had to restate them would get them wrong.\n\n```toml\n[harness.commands.git-worktree]\nprograms = [\"git\"]\nargs     = [\"worktree\", \"add\"]\nreason   = \"use `issue setup <id>`, which records the worktree\"\n```\n\n`args` matches the typed arguments after the program's own global options\nare removed, so `git -C /repo worktree add` fires this rule and\n`git worktree list` does not.",
+      "description": "One `[harness.commands.<name>]` entry: a set of programs whose invocation\nthe guard refuses, and the correction it offers instead.\n\nDeliberately not a regex. Parsing the command, unwrapping wrappers and\nrunners, and removing a program's own global options (`git -C`) are\ndevkit's job; a rule that had to restate them would get them wrong.\n\n```toml\n[harness.commands.git-worktree]\nprograms = [\"git\"]\nargs     = [\"worktree\", \"add\"]\nreason   = \"use `issue setup <id>`, which records the worktree\"\n\n[harness.commands.nitro-dev]\nprograms = [\"bun\", \"node\"]\nargs     = [\"**\", \"*nitro\", \"dev\"] # bun --cwd . nitro dev, node node_modules/.bin/nitro dev\nreason   = \"start the api with `devrun up api`\"\n```\n\n`args` matches the typed arguments after the program's own global options\nare removed, so `git -C /repo worktree add` fires the first rule and\n`git worktree list` does not. In the second rule, `**` skips any flags\nbefore the server and `*nitro` matches the binary at any path, so it\nrefuses `bun --filter=api nitro dev` and allows `bun nitro build`.",
       "properties": {
         "action": {
           "$ref": "#/$defs/RuleAction",
@@ -147,7 +147,7 @@
         },
         "args": {
           "default": [],
-          "description": "Arguments that must appear, in order, at the head of the typed\narguments for the rule to fire. Empty matches any arguments.",
+          "description": "Arguments that must appear, in order, at the head of the typed\narguments for the rule to fire. Empty matches any arguments. `*`\nmatches any run of characters, `/` included, within one argument; an\nentry that is exactly `\"**\"` matches zero or more whole arguments. A\nleading `\"**\"` also skips a script path, so `[\"**\", \"*nitro\", \"dev\"]`\nfires on `node server.js --name nitro dev` too.",
           "items": {
             "type": "string"
           },
