@@ -1586,10 +1586,10 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
     Ok(())
 }
 
-/// Refuse `required = "never"` on a variable with no default. The derived rule
-/// already requires such a name, `never` cannot lower that floor, and
-/// honouring it would replace a named error with minijinja's strict-undefined
-/// chain, which never mentions the arg.
+/// Refuse `never` on an arg with no default, on a variable or in a task's
+/// `required_args`. The derived rule already requires such a name, `never`
+/// cannot lower that floor, and honouring it would replace a named error with
+/// minijinja's strict-undefined chain, which never mentions the arg.
 ///
 /// Only a marking the author wrote is refused. A valueless entry carrying no
 /// marking is the ordinary way to declare a name as passable, and stays
@@ -1599,6 +1599,30 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
 /// variable's marking, and with no default underneath there is no marking to
 /// relax.
 fn reject_never_without_default(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
+    let has_default = |name: &str| {
+        cfg.templates
+            .variables
+            .get(name)
+            .and_then(VariableDecl::default_value)
+            .is_some()
+    };
+    for (task, t) in &cfg.tasks {
+        for (name, r) in &t.required_args {
+            if *r != Required::Never || has_default(name) {
+                continue;
+            }
+            let declared = origin
+                .get(&format!("tasks.{task}.required_args.{name}"))
+                .map(|p| format!(" (declared in {})", p.display()))
+                .unwrap_or_default();
+            anyhow::bail!(
+                "task `{task}`{declared} sets `required_args = {{ {name} = \"never\" }}`, \
+                 but `{name}` has no `default` in [templates.variables]. An arg with \
+                 nothing to fall back on is required either way; give it a `default` \
+                 or drop the entry."
+            );
+        }
+    }
     for (name, decl) in &cfg.templates.variables {
         if decl.written_required() != Some(Required::Never) || decl.default_value().is_some() {
             continue;
@@ -1936,15 +1960,29 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         assert!(msg.contains("role"), "{msg}");
     }
 
-    #[test]
-    fn never_without_a_default_is_rejected() {
+    /// Resolve `body` as the only, root config layer.
+    fn resolve_root(body: &str) -> Result<Config> {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("devkit.toml"),
-            "[config]\nroot = true\n[templates.variables]\nticket = { required = 'never' }\n",
+            format!("[config]\nroot = true\n{body}"),
         )
         .unwrap();
-        let err = resolve_with_home(None, dir.path(), None, None, None, None).unwrap_err();
+        resolve_with_home(None, dir.path(), None, None, None, None).map(|(cfg, _)| cfg)
+    }
+
+    /// Parse `body` under a `[defaults]` table that satisfies validation.
+    fn parse_with_defaults(body: &str) -> Config {
+        Config::parse(&format!(
+            "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n{body}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn never_without_a_default_is_rejected() {
+        let err =
+            resolve_root("[templates.variables]\nticket = { required = 'never' }\n").unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("ticket"),
@@ -1954,14 +1992,34 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
     }
 
     #[test]
-    fn a_valueless_entry_with_no_marking_is_accepted() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("devkit.toml"),
-            "[config]\nroot = true\n[templates.variables]\nticket = {}\n",
+    fn a_task_never_on_an_arg_without_a_default_is_rejected() {
+        for variables in ["", "[templates.variables]\nticket = {}\n"] {
+            let err = resolve_root(&format!(
+                "{variables}[tasks.commit]\nrun = ['git', '{{{{ ticket }}}}']\n\
+                 required_args = {{ ticket = 'never' }}\n"
+            ))
+            .unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("commit") && msg.contains("ticket") && msg.contains("never"),
+                "the error names the task, the arg and the marking: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_task_never_relaxing_a_defaulted_variable_is_accepted() {
+        let cfg = resolve_root(
+            "[templates.variables]\nmsg = { default = 'wip', required = 'always' }\n\
+             [tasks.commit]\nrun = ['git', '{{ msg }}']\nrequired_args = { msg = 'never' }\n",
         )
         .unwrap();
-        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None)
+        assert_eq!(cfg.tasks["commit"].required_args["msg"], Required::Never);
+    }
+
+    #[test]
+    fn a_valueless_entry_with_no_marking_is_accepted() {
+        let cfg = resolve_root("[templates.variables]\nticket = {}\n")
             .expect("declaring a name without marking it is how an arg is made passable");
         let decl = &cfg.templates.variables["ticket"];
         assert_eq!(decl.default_value(), None);
@@ -2002,26 +2060,15 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
 
     #[test]
     fn never_with_a_default_is_accepted() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("devkit.toml"),
-            "[config]\nroot = true\n\
-             [templates.variables]\nmsg = { default = 'wip', required = 'never' }\n",
-        )
-        .unwrap();
-        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
+        let cfg =
+            resolve_root("[templates.variables]\nmsg = { default = 'wip', required = 'never' }\n")
+                .unwrap();
         assert_eq!(cfg.templates.variables["msg"].default_value(), Some("wip"));
     }
 
     #[test]
     fn an_ordinary_template_variable_is_still_accepted() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("devkit.toml"),
-            "[config]\nroot = true\n[templates.variables]\nregion = 'eu'\n",
-        )
-        .unwrap();
-        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
+        let cfg = resolve_root("[templates.variables]\nregion = 'eu'\n").unwrap();
         assert_eq!(
             cfg.templates.variables["region"].default_value(),
             Some("eu")
@@ -2030,12 +2077,12 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
 
     #[test]
     fn variable_declarations_parse_in_all_three_forms() {
-        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
-                 [templates.variables]\n\
-                 team = 'platform'\n\
-                 msg = { default = 'wip', required = 'agents' }\n\
-                 ticket = { required = 'always' }\n";
-        let c = Config::parse(s).unwrap();
+        let c = parse_with_defaults(
+            "[templates.variables]\n\
+             team = 'platform'\n\
+             msg = { default = 'wip', required = 'agents' }\n\
+             ticket = { required = 'always' }\n",
+        );
         let v = &c.templates.variables;
         assert_eq!(v["team"].default_value(), Some("platform"));
         assert_eq!(v["team"].required(), Required::Never);
@@ -2054,11 +2101,11 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
 
     #[test]
     fn defaults_omits_valueless_entries_and_declared_keeps_them() {
-        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
-                 [templates.variables]\n\
-                 team = 'platform'\n\
-                 ticket = { required = 'always' }\n";
-        let c = Config::parse(s).unwrap();
+        let c = parse_with_defaults(
+            "[templates.variables]\n\
+             team = 'platform'\n\
+             ticket = { required = 'always' }\n",
+        );
         let d = c.templates.defaults();
         assert_eq!(d.get("team").map(String::as_str), Some("platform"));
         assert!(
