@@ -18,11 +18,12 @@ pub enum Caller {
 
 /// The classification, with the reads done by the caller so this stays pure.
 ///
-/// A harness session id is positive evidence of a coding agent, so it leads: a
-/// pipe, a cron job and `devrun task foo < /dev/null` are not agents. The
-/// terminal check stays as a backstop because the list above covers Claude
-/// Code and Codex, while Cursor is recognised from a hook payload field rather
-/// than the environment.
+/// A harness session id is positive evidence of a coding agent, so it marks
+/// one even when stdin is a terminal. The terminal check is the backstop for
+/// harnesses the list above does not cover (Cursor is recognised from a hook
+/// payload field rather than the environment), and it cannot tell an agent
+/// from other non-interactive runs: a pipe, a cron job and
+/// `devrun task foo < /dev/null` all classify as `Agent`.
 ///
 /// The classification leans toward `Agent`. An agent misread as human means a
 /// marking never fires and the default is taken silently, which is the defect

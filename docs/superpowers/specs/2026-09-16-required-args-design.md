@@ -173,12 +173,14 @@ through, the tri-state shape `harness::parse_env_override` already uses), else
 `Agent` when any `HARNESS_SESSION_VARS` entry is set, else `Agent` when
 `std::io::stdin()` is not a terminal, else `Human`.
 
-The harness variable leads because it is positive evidence of a coding agent
-rather than the absence of a terminal, so a pipe, a cron job and
-`devrun task foo < /dev/null` stop being mistaken for agents. The TTY check
-stays as a backstop, because `HARNESS_SESSION_VARS` lists only Claude Code and
-Codex while the hook family also serves Cursor, which is recognised by a
-payload field rather than an environment variable.
+The harness variable is positive evidence of a coding agent, so it classifies
+one as `Agent` even when its stdin is a terminal. The TTY check stays as a
+backstop, because `HARNESS_SESSION_VARS` lists only Claude Code and Codex while
+the hook family also serves Cursor, which is recognised by a payload field
+rather than an environment variable. The backstop cannot tell an agent from any
+other non-interactive run, so a pipe, a cron job and
+`devrun task foo < /dev/null` all classify as `Agent`. `DEVKIT_CALLER=human`
+is the way out for those.
 
 The classification leans toward `Agent` on purpose. An agent misread as human
 means the `agents` requirement never fires and the agent silently takes the
