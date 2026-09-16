@@ -188,7 +188,9 @@ github = "sweeper[bot]"
 /// Copy the `ghfake` example binary into `bin_dir` under the name `gh`, so a
 /// `PATH` carrying that directory resolves it the way `Command::new("gh")`
 /// looks: exact name plus the platform's executable suffix, never a script.
-fn install_fake_gh(bin_dir: &Path) {
+/// `pub(crate)` so another test binary's own fixture (built around a plain
+/// project directory rather than `Fake`) can install the same stand-in.
+pub(crate) fn install_fake_gh(bin_dir: &Path) {
     let name = format!("ghfake{}", std::env::consts::EXE_SUFFIX);
     let built = Path::new(env!("CARGO_BIN_EXE_devkit"))
         .parent()

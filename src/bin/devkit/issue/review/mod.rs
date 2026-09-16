@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
-use devkit_common::{progress::Steps, slack};
-use devkit_config::Person;
+use devkit_common::{caller::Caller, progress::Steps, slack};
+use devkit_config::{Config, Person};
 
 pub(crate) mod finish;
 pub(crate) mod request;
@@ -97,22 +97,58 @@ pub(crate) fn is_human_login(login: &str) -> bool {
 }
 
 /// Parse repeated `--arg key=value` pairs, validating each key against the
-/// declared `[templates.variables]` allowlist.
+/// declared `[templates.variables]` allowlist. `allowed` is `declared()`, not
+/// `defaults()`: a variable declared only to carry a `required` marking has no
+/// default value and so is absent from `defaults()`, which would otherwise
+/// make it undeclarable — and therefore unpassable, defeating the point of
+/// marking it required.
 pub(crate) fn parse_args(
     pairs: &[String],
-    allowed: &BTreeMap<String, String>,
+    allowed: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, String>> {
     let mut out = BTreeMap::new();
     for pair in pairs {
         let (k, v) = pair
             .split_once('=')
             .with_context(|| format!("--arg must be key=value, got `{pair}`"))?;
-        if !allowed.contains_key(k) {
+        if !allowed.contains(k) {
             bail!("--arg `{k}` is not declared in [templates.variables]");
         }
         out.insert(k.to_string(), v.to_string());
     }
     Ok(out)
+}
+
+/// Refuse a required `--arg` this run's templates read and the caller did not
+/// supply. `templates` are the ones this command can render, taken statically:
+/// `issue pr` builds title and body in closures `ensure` may not call, and
+/// gating on that would move the error after the push.
+///
+/// `reads` is intersected with the declared names because `parse_args` rejects
+/// an `--arg` for anything else, so an undeclared name could not be supplied
+/// even if it were asked for. Those stay the strict-undefined render error.
+pub(crate) fn check_required(
+    surface: &str,
+    cfg: &Config,
+    templates: &[&str],
+    context_keys: &[&str],
+    given: &BTreeMap<String, String>,
+    caller: Caller,
+) -> Result<()> {
+    let declared = cfg.templates.declared();
+    let mut reads = devkit_common::template::undeclared(templates)?;
+    reads.retain(|n| declared.contains(n) && !context_keys.contains(&n.as_str()));
+    let missing = devkit_common::required::missing_args(cfg, None, &reads, given, caller);
+    anyhow::ensure!(
+        missing.is_empty(),
+        "{surface} needs {}",
+        missing
+            .iter()
+            .map(devkit_common::required::Missing::hint)
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    Ok(())
 }
 
 /// Clone `base` and add extra fields for a single template render.
@@ -207,7 +243,7 @@ pub(crate) fn deliver(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
 
     use devkit_config::Person;
 
@@ -288,11 +324,21 @@ mod tests {
 
     #[test]
     fn parse_args_validates_against_allowlist() {
-        let allowed = BTreeMap::from([("team".to_string(), "platform".to_string())]);
+        let allowed = BTreeSet::from(["team".to_string()]);
         let ok = parse_args(&["team=infra".to_string()], &allowed).unwrap();
         assert_eq!(ok.get("team").map(String::as_str), Some("infra"));
         assert!(parse_args(&["ghost=x".to_string()], &allowed).is_err());
         assert!(parse_args(&["noeq".to_string()], &allowed).is_err());
+    }
+
+    #[test]
+    fn parse_args_allows_a_valueless_declared_variable() {
+        // `ticket` is declared only to carry a `required` marking, so it has
+        // no default and is absent from `defaults()`. The allowlist must
+        // still accept it, or a required variable could never be supplied.
+        let allowed = BTreeSet::from(["ticket".to_string()]);
+        let ok = parse_args(&["ticket=eng-1".to_string()], &allowed).unwrap();
+        assert_eq!(ok.get("ticket").map(String::as_str), Some("eng-1"));
     }
 
     #[test]

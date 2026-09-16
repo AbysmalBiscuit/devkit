@@ -10,8 +10,8 @@ use super::{
     reviewer_logins,
 };
 use crate::issue::review::{
-    PrAction, Target, action_for, base_ctx, finish, guard_branch, parse_args, render_review,
-    resolve_target, with_fields,
+    PrAction, Target, action_for, base_ctx, check_required, finish, guard_branch, parse_args,
+    render_review, resolve_target, with_fields,
 };
 
 pub struct Args {
@@ -201,8 +201,20 @@ pub fn run(args: Args) -> Result<()> {
     let tmpls = &loaded.config.templates;
     let repos = github::Repos::resolve(&loaded.config.github, &start, None);
 
+    let caller = devkit_common::caller::caller();
     let mut vars = tmpls.defaults();
-    vars.extend(parse_args(&args.args, &tmpls.defaults())?);
+    let given = parse_args(&args.args, &tmpls.declared())?;
+    check_required(
+        "issue pr",
+        &loaded.config,
+        &[tmpls.pr_title(), tmpls.pr_body()],
+        &[
+            "input", "pr_title", "issue", "slug", "branch", "apps", "prefix",
+        ],
+        &given,
+        caller,
+    )?;
+    vars.extend(given);
 
     let branch = devkit_common::git::branch(Path::new(&start))?;
     guard_branch(&branch)?;
