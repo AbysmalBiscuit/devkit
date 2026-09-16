@@ -58,13 +58,18 @@ def configure():
         (ROOT / name).write_text((SKILL / "assets" / name).read_text(encoding="utf-8"), encoding="utf-8")
 
 
-def install_devkit():
-    url = "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-installer.sh"
+def run_installer(app):
+    url = f"https://github.com/AbysmalBiscuit/{app}/releases/latest/download/{app}-installer.sh"
     with urllib.request.urlopen(url, timeout=30) as response:
         installer = response.read()
     env = dict(os.environ, CARGO_DIST_FORCE_INSTALL_DIR="/usr/local")
     subprocess.run(["sh"], input=installer, env=env, check=True, timeout=240)
+
+
+def install_tools():
+    run_installer("devkit")
     subprocess.run(["/usr/local/bin/devkit", "install-links"], check=True)
+    run_installer("mcpls")
 
 
 def main():
@@ -77,7 +82,7 @@ def main():
     parser.add_argument(
         "--install",
         action="store_true",
-        help="Install the latest devkit release into /usr/local/bin",
+        help="Install the latest devkit and mcpls releases into /usr/local/bin",
     )
     parser.add_argument(
         "--handoff", action="store_true", help="Print the final handoff message for the agent"
@@ -86,7 +91,7 @@ def main():
     if not (args.cloud or in_cloud()):
         return
     if args.install:
-        install_devkit()
+        install_tools()
     configure()
     if args.handoff:
         print(f"Cloud configuration generated in {ROOT}. Read {ROOT / 'AGENTS.local.md'} before continuing the task.")
