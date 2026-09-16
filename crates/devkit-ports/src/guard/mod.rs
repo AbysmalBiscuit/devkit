@@ -816,6 +816,33 @@ mod tests {
     }
 
     #[test]
+    fn a_redirect_names_an_arg_marked_for_agents_over_its_default() {
+        let p = project(|c| {
+            c.templates
+                .variables
+                .insert("msg".into(), devkit_config::VariableDecl::Table {
+                    default: Some("wip".into()),
+                    required: Some(devkit_config::Required::Agents),
+                });
+            c.tasks.insert(
+                "commit".into(),
+                toml::from_str("run = [\"git\", \"commit\", \"-m\", \"{{ msg }}\"]\nguard = true")
+                    .unwrap(),
+            );
+        });
+        let d = decide_with("git commit -m wip", &BTreeMap::new(), Some(&p));
+        // The hint is built with Caller::Agent rather than detection, so it
+        // names what the redirected command will actually be refused for. A
+        // default would otherwise make this arg look optional here and then
+        // fail the run the redirect sends the agent to.
+        assert!(
+            reason(&d).contains("devrun task commit --arg msg=<msg>"),
+            "{}",
+            reason(&d)
+        );
+    }
+
+    #[test]
     fn a_trailing_split_keeps_the_static_task_signature() {
         for run in [
             r#"["git", "add", "--", { split = "{{ files }}", on = ";" }]"#,
