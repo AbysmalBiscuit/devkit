@@ -867,8 +867,12 @@ pub enum VariableDecl {
     Table {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         default: Option<String>,
-        #[serde(default)]
-        required: Required,
+        /// `None` is a marking the author did not write, which is not the same
+        /// as one written as `never`: an unmarked valueless entry is required
+        /// by the derived rule, while `required = "never"` on the same entry
+        /// asks to relax that and is refused at load.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        required: Option<Required>,
     },
 }
 
@@ -881,10 +885,20 @@ impl VariableDecl {
         }
     }
 
-    /// The marking. A bare string carries none.
+    /// The marking, defaulted for an entry that carries none.
     pub fn required(&self) -> Required {
         match self {
             VariableDecl::Value(_) => Required::Never,
+            VariableDecl::Table { required, .. } => required.unwrap_or_default(),
+        }
+    }
+
+    /// The marking exactly as written, `None` when the author wrote none.
+    /// Only load-time validation needs this distinction; resolution reads
+    /// `required()`.
+    pub fn declared_required(&self) -> Option<Required> {
+        match self {
+            VariableDecl::Value(_) => None,
             VariableDecl::Table { required, .. } => *required,
         }
     }
@@ -1502,6 +1516,7 @@ pub(crate) fn resolve_with_home(
         .try_into()
         .context("deserializing merged devkit config")?;
     reject_reserved_variables(&cfg, &origin)?;
+    reject_never_without_default(&cfg, &origin)?;
     resolve_defaults(&mut cfg, &origin, checkout_root, default_worktree_root)?;
     Ok((cfg, Provenance {
         layers: order,
@@ -1559,6 +1574,33 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
             "`[templates.variables] {name}`{declared} is a reserved name: \
              devkit supplies `{name}` to every render context, so this value \
              would never be used. Rename the variable."
+        );
+    }
+    Ok(())
+}
+
+/// Refuse `required = "never"` on a variable with no default. The derived rule
+/// already requires such a name, `never` cannot lower that floor, and
+/// honouring it would replace a named error with minijinja's strict-undefined
+/// chain, which never mentions the arg.
+///
+/// Only a marking the author wrote is refused. A valueless entry carrying no
+/// marking is the ordinary way to declare a name as passable, and stays
+/// required by the derived rule.
+fn reject_never_without_default(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
+    for (name, decl) in &cfg.templates.variables {
+        if decl.declared_required() != Some(Required::Never) || decl.default_value().is_some() {
+            continue;
+        }
+        let key = format!("templates.variables.{name}");
+        let declared = origin
+            .get(&key)
+            .map(|p| format!(" (declared in {})", p.display()))
+            .unwrap_or_default();
+        anyhow::bail!(
+            "`[templates.variables] {name}`{declared} sets `required = \"never\"` \
+             with no `default`. An arg with nothing to fall back on is required \
+             either way; give it a `default` or drop the marking."
         );
     }
     Ok(())
@@ -1851,6 +1893,52 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         let err = resolve_with_home(None, dir.path(), None, None, None, None).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("role"), "{msg}");
+    }
+
+    #[test]
+    fn never_without_a_default_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n[templates.variables]\nticket = { required = 'never' }\n",
+        )
+        .unwrap();
+        let err = resolve_with_home(None, dir.path(), None, None, None, None).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("ticket"),
+            "the error names the variable: {msg}"
+        );
+        assert!(msg.contains("never"), "the error names the marking: {msg}");
+    }
+
+    #[test]
+    fn a_valueless_entry_with_no_marking_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n[templates.variables]\nticket = {}\n",
+        )
+        .unwrap();
+        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None)
+            .expect("declaring a name without marking it is how an arg is made passable");
+        let decl = &cfg.templates.variables["ticket"];
+        assert_eq!(decl.default_value(), None);
+        assert_eq!(decl.declared_required(), None);
+        assert_eq!(decl.required(), Required::Never);
+    }
+
+    #[test]
+    fn never_with_a_default_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n\
+             [templates.variables]\nmsg = { default = 'wip', required = 'never' }\n",
+        )
+        .unwrap();
+        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
+        assert_eq!(cfg.templates.variables["msg"].default_value(), Some("wip"));
     }
 
     #[test]

@@ -1114,8 +1114,15 @@
               ]
             },
             "required": {
-              "$ref": "#/$defs/Required",
-              "default": "never"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Required"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`None` is a marking the author did not write, which is not the same\nas one written as `never`: an unmarked valueless entry is required\nby the derived rule, while `required = \"never\"` on the same entry\nasks to relax that and is refused at load."
             }
           },
           "type": "object"
