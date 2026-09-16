@@ -58,17 +58,44 @@ def configure():
         (ROOT / name).write_text((SKILL / "assets" / name).read_text(encoding="utf-8"), encoding="utf-8")
 
 
+def plugin_version(app):
+    """The version of the user-scope `app@app` plugin, as its bootstrap hook reads it."""
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    installed = json.loads((config / "plugins/installed_plugins.json").read_text(encoding="utf-8"))
+    for record in installed["plugins"].get(f"{app}@{app}", []):
+        if record["scope"] == "user":
+            manifest = Path(record["installPath"]) / ".claude-plugin/plugin.json"
+            return json.loads(manifest.read_text(encoding="utf-8"))["version"]
+    raise RuntimeError(f"The {app}@{app} plugin is not installed at user scope.")
+
+
+def install_dir(app):
+    # The plugin bootstrap reruns the installer without a directory, so only
+    # this variable in the VM environment sends its upgrades to the same place.
+    variable = f"{app.upper()}_INSTALL_DIR"
+    if not os.environ.get(variable):
+        raise RuntimeError(f"Set {variable} in the cloud VM environment before setup.")
+    return Path(os.environ[variable])
+
+
 def run_installer(app):
-    url = f"https://github.com/AbysmalBiscuit/{app}/releases/latest/download/{app}-installer.sh"
+    """Install the release matching the plugin and record it as the bootstrap's own install."""
+    version = plugin_version(app)
+    url = f"https://github.com/AbysmalBiscuit/{app}/releases/download/v{version}/{app}-installer.sh"
     with urllib.request.urlopen(url, timeout=30) as response:
         installer = response.read()
-    env = dict(os.environ, CARGO_DIST_FORCE_INSTALL_DIR="/usr/local")
-    subprocess.run(["sh"], input=installer, env=env, check=True, timeout=240)
+    subprocess.run(["sh"], input=installer, check=True, timeout=240)
+    # Without this stamp the bootstrap records the binary as external and never upgrades it.
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / app
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "bootstrap-version").write_text(f"{version}\n", encoding="utf-8")
 
 
 def install_tools():
+    devkit_dir = install_dir("devkit")
+    install_dir("mcpls")
     run_installer("devkit")
-    subprocess.run(["/usr/local/bin/devkit", "install-links"], check=True)
+    subprocess.run([str(devkit_dir / "bin/devkit"), "install-links"], check=True)
     run_installer("mcpls")
 
 
@@ -82,7 +109,7 @@ def main():
     parser.add_argument(
         "--install",
         action="store_true",
-        help="Install the latest devkit and mcpls releases into /usr/local/bin",
+        help="Install the devkit and mcpls releases matching their plugins into their *_INSTALL_DIR",
     )
     parser.add_argument(
         "--handoff", action="store_true", help="Print the final handoff message for the agent"

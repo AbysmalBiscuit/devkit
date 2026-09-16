@@ -6,6 +6,8 @@ The shared cloud bundle lives under `.agents/skills/cloud`. Agents read its skil
 
 Set `CLOUD_AGENT=true` and your `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL` in the VM environment. Use an email associated with your GitHub account. Setup requires `GIT_AUTHOR_NAME` to capture the expected commit author.
 
+With `--install`, setup also requires `DEVKIT_INSTALL_DIR` and `MCPLS_INSTALL_DIR`, usually both `/usr/local`. The published installers read these variables, and the binaries land in their `bin` directory.
+
 Set `CLOUD_AGENT_TYPE` to the harness running the session so startup can name that harness's own task tracking tools. `claude` is recognized today; any other value, including `codex`, falls back to a generic instruction until that harness's tool names are confirmed.
 
 In the Claude cloud environment's setup-script field, run this from the cloned repository root:
@@ -14,7 +16,9 @@ In the Claude cloud environment's setup-script field, run this from the cloned r
 python3 -B .agents/skills/cloud/scripts/cloud_setup.py --cloud --install
 ```
 
-The Python entry point downloads and runs devkit's published installer, which requires `sh`, and explicitly installs its command links. It then runs mcpls's published installer, because the `mcpls` plugin's MCP server and hooks run `mcpls` from PATH and the plugin's own bootstrap only installs it after the first session has started. The binaries land in `/usr/local/bin`; this install requires the root account supplied by Claude's hosted setup environment. The commit helper runs from the checkout with `python3`.
+The Python entry point runs devkit's published installer, which requires `sh`, and explicitly installs its command links. It then runs mcpls's published installer, because the `mcpls` plugin's MCP server and hooks run `mcpls` from PATH and the plugin's own bootstrap only installs it after the first session has started. Each install is the release matching the version of its user-scope plugin, which Claude installs before the setup script runs, so the skills and hooks always match their binaries. A system directory like `/usr/local` requires the root account supplied by Claude's hosted setup environment. The commit helper runs from the checkout with `python3`.
+
+Setup writes each plugin bootstrap's `bootstrap-version` stamp under `$XDG_STATE_HOME` (default `~/.local/state`). The stamp marks the binaries as the bootstrap's own install. Hosted setup is cached, so a later plugin release reaches a cached VM before the binaries do. The bootstrap sees that its stamp no longer matches and reruns the installer at session start. Because the install-dir variables are set in the VM environment, that upgrade replaces these binaries instead of adding a second copy in `~/.cargo/bin`, where PATH order would decide which one runs. Without the stamp, the bootstrap records the binaries as external and never upgrades them.
 
 The command also generates `devkit.local.toml`, `AGENTS.local.md`, and `CLAUDE.local.md` from the templates in `assets/`. To regenerate these files without downloading binaries, omit `--install`. The generated config points to this checkout's bundled commit helper. Edit `assets/devkit.local.toml` to change the defaults, then rerun setup. This template's `@COMMIT_HELPER@` marker becomes a quoted absolute path during generation.
 

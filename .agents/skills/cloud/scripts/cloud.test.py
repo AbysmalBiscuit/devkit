@@ -1,3 +1,5 @@
+import importlib.util
+import io
 import json
 import os
 import re
@@ -8,6 +10,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[4]
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -236,6 +239,63 @@ class CloudHooks(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Set GIT_AUTHOR_NAME", result.stderr)
         self.assertFalse((self.root / ".git/devkit-cloud-hooks").exists())
+
+    def load_setup(self, home, **env):
+        """Import the copied setup script with network installs replaced by a local fake."""
+        spec = importlib.util.spec_from_file_location(
+            "cloud_setup", self.root / ".agents/skills/cloud/scripts/cloud_setup.py"
+        )
+        assert spec and spec.loader
+        setup = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(setup)
+        environ = {k: v for k, v in os.environ.items() if k not in ("XDG_STATE_HOME", "CLAUDE_CONFIG_DIR")}
+        environ.update(HOME=str(home), **env)
+        self.enterContext(mock.patch.dict(os.environ, environ, clear=True))
+        requested = []
+
+        def urlopen(url, timeout):
+            requested.append(url)
+            app = url.rsplit("/", 1)[-1].removesuffix("-installer.sh")
+            bin_dir = f'"${app.upper()}_INSTALL_DIR/bin"'
+            script = f'mkdir -p {bin_dir} && printf "#!/bin/sh\\n" > {bin_dir}/{app} && chmod +x {bin_dir}/{app}'
+            return io.BytesIO(script.encode())
+
+        self.enterContext(mock.patch.object(setup.urllib.request, "urlopen", urlopen))
+        return setup, requested
+
+    def install_plugins(self, home, versions):
+        plugins = home / ".claude/plugins"
+        records = {}
+        for app, version in versions.items():
+            path = plugins / "cache" / app / app / version
+            (path / ".claude-plugin").mkdir(parents=True)
+            (path / ".claude-plugin/plugin.json").write_text(json.dumps({"name": app, "version": version}))
+            records[f"{app}@{app}"] = [{"scope": "user", "installPath": str(path), "version": version}]
+        (plugins / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": records}))
+
+    def test_setup_installs_plugin_versions_and_hands_them_to_the_bootstraps(self):
+        home = self.root / "home"
+        prefix = self.root / "prefix"
+        self.install_plugins(home, {"devkit": "0.14.4", "mcpls": "0.3.11"})
+        setup, requested = self.load_setup(home, DEVKIT_INSTALL_DIR=str(prefix), MCPLS_INSTALL_DIR=str(prefix))
+        setup.install_tools()
+        self.assertEqual(requested, [
+            "https://github.com/AbysmalBiscuit/devkit/releases/download/v0.14.4/devkit-installer.sh",
+            "https://github.com/AbysmalBiscuit/mcpls/releases/download/v0.3.11/mcpls-installer.sh",
+        ])
+        self.assertTrue((prefix / "bin/devkit").is_file())
+        self.assertTrue((prefix / "bin/mcpls").is_file())
+        state = home / ".local/state"
+        self.assertEqual((state / "devkit/bootstrap-version").read_text(), "0.14.4\n")
+        self.assertEqual((state / "mcpls/bootstrap-version").read_text(), "0.3.11\n")
+
+    def test_setup_refuses_an_install_dir_the_bootstrap_would_not_share(self):
+        home = self.root / "home"
+        self.install_plugins(home, {"devkit": "0.14.4", "mcpls": "0.3.11"})
+        setup, requested = self.load_setup(home, MCPLS_INSTALL_DIR=str(self.root / "prefix"))
+        with self.assertRaisesRegex(RuntimeError, "DEVKIT_INSTALL_DIR"):
+            setup.install_tools()
+        self.assertEqual(requested, [])
 
     def test_startup_names_the_harness_task_tools(self):
         result = self.run_script("cloud_startup.py", cloud=True, CLOUD_AGENT_TYPE="claude")
