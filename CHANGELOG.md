@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.14.4](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.3...v0.14.4) (2026-09-16)
+
+
+### Features
+
+* **agents:** add cloud setup workflow ([#74](https://github.com/AbysmalBiscuit/devkit/issues/74)) ([752fe42](https://github.com/AbysmalBiscuit/devkit/commit/752fe42bade227748936fbcff402f47fbd066bb9))
+* **agents:** inject task-tool and devkit-presence context at cloud startup ([#77](https://github.com/AbysmalBiscuit/devkit/issues/77)) ([4ce4020](https://github.com/AbysmalBiscuit/devkit/commit/4ce4020585b3947ed204379e330fde90fa7146d1))
+* **cloud:** install mcpls in cloud setup ([#94](https://github.com/AbysmalBiscuit/devkit/issues/94)) ([2f8b78f](https://github.com/AbysmalBiscuit/devkit/commit/2f8b78f6e3eaa5822ead2a7d81c0a50cfba3f169))
+* **guard:** match command rule args with * and ** globs ([#92](https://github.com/AbysmalBiscuit/devkit/issues/92)) ([1da3565](https://github.com/AbysmalBiscuit/devkit/commit/1da3565c5c530d68c5a21595c3cc8565721b848f))
+* **hook:** unify the harness hook surface and add harness logging ([#78](https://github.com/AbysmalBiscuit/devkit/issues/78)) ([73e15f9](https://github.com/AbysmalBiscuit/devkit/commit/73e15f964f86d8616b54164283426e782cfe8897))
+* let config mark args required per caller ([#83](https://github.com/AbysmalBiscuit/devkit/issues/83)) ([b9af3c9](https://github.com/AbysmalBiscuit/devkit/commit/b9af3c92be41afbdd9d10f8be29075a638aef0e1))
+
+
+### Bug Fixes
+
+* **hook:** fit manifest timeouts to the hook deadlines ([#88](https://github.com/AbysmalBiscuit/devkit/issues/88)) ([40fbf24](https://github.com/AbysmalBiscuit/devkit/commit/40fbf249c05241290347aac57af9fabfd572a2a2))
+* **issue:** branch the worktree with no upstream ([#71](https://github.com/AbysmalBiscuit/devkit/issues/71)) ([8b9c04c](https://github.com/AbysmalBiscuit/devkit/commit/8b9c04cc3897da248dae795d11de1eb79f93ea25))
+
+
+### Performance Improvements
+
+* **hook:** resolve the checkout once per hook invocation ([#82](https://github.com/AbysmalBiscuit/devkit/issues/82)) ([f08587e](https://github.com/AbysmalBiscuit/devkit/commit/f08587e6491fe77d77d860ead45d00576689eecc))
+
 ## [0.14.3](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.2...v0.14.3) (2026-09-14)
 
 

@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "devkit"
-version = "0.14.3"
+version = "0.14.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-command"
-version = "0.14.3"
+version = "0.14.4"
 dependencies = [
  "serde_json",
  "tree-sitter",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-common"
-version = "0.14.3"
+version = "0.14.4"
 dependencies = [
  "anstyle",
  "anyhow",
@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-config"
-version = "0.14.3"
+version = "0.14.4"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-docs"
-version = "0.14.3"
+version = "0.14.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-issue"
-version = "0.14.3"
+version = "0.14.4"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-locks"
-version = "0.14.3"
+version = "0.14.4"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-mcp"
-version = "0.14.3"
+version = "0.14.4"
 dependencies = [
  "anyhow",
  "devkit-common",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "devkit-ports"
-version = "0.14.3"
+version = "0.14.4"
 dependencies = [
  "anyhow",
  "clap",
