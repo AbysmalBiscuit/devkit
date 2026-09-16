@@ -329,7 +329,7 @@ pub fn ensure(
     };
     locks::with_slot(&root, &name, || {
         let ctx = bootstrap_context(sha, apps, &cfg.defaults.branch_prefix);
-        let vars = &cfg.templates.variables;
+        let vars = &cfg.templates.defaults();
         let includes = &cfg.defaults.worktree_include;
         let primary_s = primary
             .to_str()

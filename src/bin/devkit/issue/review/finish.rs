@@ -179,8 +179,8 @@ pub fn run(args: Args) -> Result<()> {
     let repos = github::Repos::resolve(&loaded.config.github, &start, None);
     let pr_repo = repos.prs()?;
 
-    let mut vars = tmpls.variables.clone();
-    vars.extend(parse_args(&args.args, &tmpls.variables)?);
+    let mut vars = tmpls.defaults();
+    vars.extend(parse_args(&args.args, &tmpls.defaults())?);
 
     let steps = Steps::persistent();
     let branch = devkit_common::git::branch(std::path::Path::new(&start)).ok();

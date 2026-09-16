@@ -221,7 +221,7 @@ fn variables(
     worktree_root: &Path,
     args: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
-    let mut vars = cfg.templates.variables.clone();
+    let mut vars = cfg.templates.defaults();
     if let Some(r) = record::read(worktree_root) {
         vars.insert("issue".into(), r.issue);
         vars.insert("slug".into(), r.slug);

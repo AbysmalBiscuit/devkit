@@ -813,6 +813,16 @@
         }
       ]
     },
+    "Required": {
+      "description": "Who must supply an `--arg` even though a default exists. `Never` is the\nabsence of a marking, not a licence to omit: the derived rule (an arg with\nno default is required) is a floor this enum sits on top of and cannot\nlower. `Never` is therefore meaningful only as a task-level override of a\nvariable-level marking.",
+      "enum": [
+        "never",
+        "humans",
+        "agents",
+        "always"
+      ],
+      "type": "string"
+    },
     "RuleAction": {
       "description": "What a matching command rule does. A rule that should not act is disabled\nwith `enabled = false`, so there is no `allow`.",
       "enum": [
@@ -1037,10 +1047,10 @@
         },
         "variables": {
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/$defs/VariableDecl"
           },
           "default": {},
-          "description": "Constants available to every template above. A context field of the same\nname wins, and `--arg key=value` overrides either.",
+          "description": "Constants available to every template above. A context field of the same\nname wins, and `--arg key=value` overrides either. An entry may instead\nbe a table carrying a `default` and a `required` marking.",
           "type": "object"
         },
         "worktree_dir": {
@@ -1088,6 +1098,30 @@
         "none"
       ],
       "type": "string"
+    },
+    "VariableDecl": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "required": {
+              "$ref": "#/$defs/Required",
+              "default": "never"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "One `[templates.variables]` entry: a bare string, or a table carrying a\n`default` and a `required` marking.\n\n`deny_unknown_fields` for the reason `RunArg` documents: under untagged\nmatching a misspelled key beside a well-formed pair deserializes silently,\nand the author sees no diagnostic while their guard does nothing.\n\n```toml\n[templates.variables]\nteam = \"platform\"                              # a constant, never required\nmsg = { default = \"wip\", required = \"agents\" } # defaulted, but agents must pass it\nticket = { required = \"always\" }               # declared, no default, always required\n```\n\n`default` is the fallback used when nothing else supplies the name, which\nis what these entries have always been: `template::render` merges them\nunderneath the context, and `--arg` overwrites them. Note that minijinja's\nown `default` filter is a different thing and does not affect whether an\narg is required."
     }
   },
   "$id": "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json",

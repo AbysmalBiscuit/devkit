@@ -394,7 +394,7 @@ fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
             }
             tasks::redirect_worth_it(
                 task,
-                &p.config.templates.variables,
+                &p.config.templates.defaults(),
                 n.doppler.as_ref(),
                 cfg.doppler.as_ref(),
             )

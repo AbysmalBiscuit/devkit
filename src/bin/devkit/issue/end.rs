@@ -470,7 +470,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
     let vars = sel
         .config
         .as_ref()
-        .map(|c| c.templates.variables.clone())
+        .map(|c| c.templates.defaults())
         .unwrap_or_default();
     let (wt_root, prefix) = sel
         .config

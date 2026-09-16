@@ -90,7 +90,7 @@ pub(crate) fn plan_path(
     slug: &str,
     apps: &[String],
 ) -> Result<PathBuf> {
-    let vars = &cfg.templates.variables;
+    let vars = &cfg.templates.defaults();
     let ctx = context(d, worktree, branch, slug, &cfg.defaults.branch_prefix, apps);
     resolve_path(
         cfg.templates.issue_summary_path(),
@@ -111,7 +111,7 @@ pub(crate) fn write(
     slug: &str,
     apps: &[String],
 ) -> Result<(PathBuf, bool)> {
-    let vars = &cfg.templates.variables;
+    let vars = &cfg.templates.defaults();
     let ctx = context(d, worktree, branch, slug, &cfg.defaults.branch_prefix, apps);
     let path = resolve_path(
         cfg.templates.issue_summary_path(),

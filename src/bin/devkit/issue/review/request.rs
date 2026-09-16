@@ -97,8 +97,8 @@ pub fn run(args: Args) -> Result<()> {
     let tmpls = &loaded.config.templates;
     let repos = github::Repos::resolve(&loaded.config.github, &start, None);
 
-    let mut vars = tmpls.variables.clone();
-    vars.extend(parse_args(&args.args, &tmpls.variables)?);
+    let mut vars = tmpls.defaults();
+    vars.extend(parse_args(&args.args, &tmpls.defaults())?);
 
     let branch = devkit_common::git::branch(std::path::Path::new(&start))?;
     guard_branch(&branch)?;

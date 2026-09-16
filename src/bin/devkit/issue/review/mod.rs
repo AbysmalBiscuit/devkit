@@ -250,7 +250,7 @@ mod tests {
     fn default_review_request_appends_url() {
         let t = devkit_config::Templates::default();
         let ctx = serde_json::json!({"input": "please review", "pr_url": "https://gh/pr/1"});
-        let out = devkit_common::template::render(t.review_request(), &ctx, &t.variables).unwrap();
+        let out = devkit_common::template::render(t.review_request(), &ctx, &t.defaults()).unwrap();
         assert_eq!(out, "please review https://gh/pr/1");
     }
 

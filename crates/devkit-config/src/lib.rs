@@ -819,6 +819,83 @@ pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
 /// purpose.
 const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
 
+/// Who must supply an `--arg` even though a default exists. `Never` is the
+/// absence of a marking, not a licence to omit: the derived rule (an arg with
+/// no default is required) is a floor this enum sits on top of and cannot
+/// lower. `Never` is therefore meaningful only as a task-level override of a
+/// variable-level marking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Required {
+    #[default]
+    Never,
+    Humans,
+    Agents,
+    Always,
+}
+
+/// One `[templates.variables]` entry: a bare string, or a table carrying a
+/// `default` and a `required` marking.
+///
+/// `deny_unknown_fields` for the reason `RunArg` documents: under untagged
+/// matching a misspelled key beside a well-formed pair deserializes silently,
+/// and the author sees no diagnostic while their guard does nothing.
+///
+/// ```
+/// # use devkit_config::{Config, Required};
+/// # let cfg = Config::parse(r#"
+/// [templates.variables]
+/// team = "platform"                              # a constant, never required
+/// msg = { default = "wip", required = "agents" } # defaulted, but agents must pass it
+/// ticket = { required = "always" }               # declared, no default, always required
+/// # "#).unwrap();
+/// # let v = &cfg.templates.variables;
+/// # assert_eq!(v["team"].required(), Required::Never);
+/// # assert_eq!(v["msg"].default_value(), Some("wip"));
+/// # assert_eq!(v["ticket"].default_value(), None);
+/// ```
+///
+/// `default` is the fallback used when nothing else supplies the name, which
+/// is what these entries have always been: `template::render` merges them
+/// underneath the context, and `--arg` overwrites them. Note that minijinja's
+/// own `default` filter is a different thing and does not affect whether an
+/// arg is required.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum VariableDecl {
+    Value(String),
+    Table {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+        #[serde(default)]
+        required: Required,
+    },
+}
+
+impl VariableDecl {
+    /// The fallback value, absent for a declaration that only marks a name.
+    pub fn default_value(&self) -> Option<&str> {
+        match self {
+            VariableDecl::Value(v) => Some(v),
+            VariableDecl::Table { default, .. } => default.as_deref(),
+        }
+    }
+
+    /// The marking. A bare string carries none.
+    pub fn required(&self) -> Required {
+        match self {
+            VariableDecl::Value(_) => Required::Never,
+            VariableDecl::Table { required, .. } => *required,
+        }
+    }
+}
+
+impl From<&str> for VariableDecl {
+    fn from(v: &str) -> Self {
+        VariableDecl::Value(v.to_string())
+    }
+}
+
 /// Config-driven minijinja templates for the issue-lifecycle strings. Each
 /// `None` field falls back to its `DEFAULT_*` constant, which reproduces the
 /// historical hardcoded output. `variables` are user constants merged under
@@ -841,7 +918,7 @@ const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
 /// # assert_eq!(t.branch(), "{{ prefix }}{{ issue }}-{{ slug }}");
 /// # assert_eq!(t.pr_body(), "Closes {{ issue }}.\n\n{{ input }}");
 /// # assert_eq!(t.worktree_dir_max(), 24);
-/// # assert_eq!(t.variables["team"], "platform");
+/// # assert_eq!(t.variables["team"].default_value(), Some("platform"));
 /// ```
 ///
 /// `issue_summary_path` renders `{{ worktree }}` here, which keeps the summary
@@ -902,9 +979,10 @@ pub struct Templates {
     /// has nothing there.
     pub issue_summary: Option<String>,
     /// Constants available to every template above. A context field of the same
-    /// name wins, and `--arg key=value` overrides either.
+    /// name wins, and `--arg key=value` overrides either. An entry may instead
+    /// be a table carrying a `default` and a `required` marking.
     #[serde(default)]
-    pub variables: std::collections::BTreeMap<String, String>,
+    pub variables: std::collections::BTreeMap<String, VariableDecl>,
 }
 
 impl Templates {
@@ -965,6 +1043,23 @@ impl Templates {
         self.review_finish
             .as_deref()
             .unwrap_or(DEFAULT_REVIEW_FINISH)
+    }
+
+    /// Name to value, for building a render context. A declaration with no
+    /// `default` is omitted, so a template reading it hits strict-undefined
+    /// until a caller supplies the name.
+    pub fn defaults(&self) -> std::collections::BTreeMap<String, String> {
+        self.variables
+            .iter()
+            .filter_map(|(k, d)| d.default_value().map(|v| (k.clone(), v.to_string())))
+            .collect()
+    }
+
+    /// Every declared name, valueless ones included. This is the `--arg`
+    /// allowlist: without it a name declared only to be marked required would
+    /// be unpassable.
+    pub fn declared(&self) -> std::collections::BTreeSet<String> {
+        self.variables.keys().cloned().collect()
     }
 }
 
@@ -1767,7 +1862,62 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         )
         .unwrap();
         let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
-        assert_eq!(cfg.templates.variables["region"], "eu");
+        assert_eq!(
+            cfg.templates.variables["region"].default_value(),
+            Some("eu")
+        );
+    }
+
+    #[test]
+    fn variable_declarations_parse_in_all_three_forms() {
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
+                 [templates.variables]\n\
+                 team = 'platform'\n\
+                 msg = { default = 'wip', required = 'agents' }\n\
+                 ticket = { required = 'always' }\n";
+        let c = Config::parse(s).unwrap();
+        let v = &c.templates.variables;
+        assert_eq!(v["team"].default_value(), Some("platform"));
+        assert_eq!(v["team"].required(), Required::Never);
+        assert_eq!(v["msg"].default_value(), Some("wip"));
+        assert_eq!(v["msg"].required(), Required::Agents);
+        assert_eq!(v["ticket"].default_value(), None);
+        assert_eq!(v["ticket"].required(), Required::Always);
+
+        // A plain string must still round-trip as a bare string.
+        let out = toml::to_string(&c).unwrap();
+        assert!(out.contains("team = \"platform\""), "{out}");
+        let c2 = Config::parse(&out).unwrap();
+        assert_eq!(c2.templates.variables["msg"].required(), Required::Agents);
+        assert_eq!(c2.templates.variables["ticket"].default_value(), None);
+    }
+
+    #[test]
+    fn defaults_omits_valueless_entries_and_declared_keeps_them() {
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
+                 [templates.variables]\n\
+                 team = 'platform'\n\
+                 ticket = { required = 'always' }\n";
+        let c = Config::parse(s).unwrap();
+        let d = c.templates.defaults();
+        assert_eq!(d.get("team").map(String::as_str), Some("platform"));
+        assert!(
+            !d.contains_key("ticket"),
+            "a valueless entry must not reach the render context"
+        );
+        let declared = c.templates.declared();
+        assert!(declared.contains("team") && declared.contains("ticket"));
+    }
+
+    #[test]
+    fn a_misspelled_key_in_a_variable_table_is_rejected() {
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
+                 [templates.variables]\n\
+                 msg = { deafult = 'wip', required = 'agents' }\n";
+        assert!(
+            Config::parse(s).is_err(),
+            "deny_unknown_fields must catch the typo"
+        );
     }
 
     #[test]
@@ -2492,7 +2642,9 @@ overwrite = true
     fn templates_variables_parse() {
         let t: Templates = toml::from_str("[variables]\nteam = \"platform\"\n").unwrap();
         assert_eq!(
-            t.variables.get("team").map(String::as_str),
+            t.variables
+                .get("team")
+                .and_then(VariableDecl::default_value),
             Some("platform")
         );
     }

@@ -861,7 +861,7 @@ fn cmd_up(
     let mut rows: Vec<Row> = Vec::new();
     for (grp_role, holder, base_dir) in &groups {
         let ports =
-            run::resolve_ports(catalog, &apps, holder, *grp_role, &cfg.templates.variables)?;
+            run::resolve_ports(catalog, &apps, holder, *grp_role, &cfg.templates.defaults())?;
         let plans = run::plan_group(
             catalog,
             &apps,
@@ -870,7 +870,7 @@ fn cmd_up(
             base_dir,
             *grp_role,
             &user,
-            &cfg.templates.variables,
+            &cfg.templates.defaults(),
         )?;
 
         if dry_run {
@@ -1303,7 +1303,7 @@ fn status_urls_by_holder(
                     data,
                     Some(holder),
                     &l.catalog,
-                    &l.config.templates.variables,
+                    &l.config.templates.defaults(),
                 ));
             }
             continue;
@@ -1317,7 +1317,7 @@ fn status_urls_by_holder(
             data,
             Some(holder),
             &l.catalog,
-            &l.config.templates.variables,
+            &l.config.templates.defaults(),
         ));
     }
     urls
