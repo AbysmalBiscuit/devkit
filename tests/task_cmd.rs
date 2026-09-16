@@ -88,18 +88,26 @@ required_args = { nope = "always" }
 }
 
 fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
-    let state = dir.join("state");
-    devkit_run()
+    devkit_run_in(dir)
         .args(args)
-        .current_dir(dir)
+        .output()
+        .expect("run devkit run")
+}
+
+/// `devkit run` sandboxed to `dir`, with no caller override inherited from the
+/// developer's shell.
+fn devkit_run_in(dir: &Path) -> Command {
+    let state = dir.join("state");
+    let mut cmd = devkit_run();
+    cmd.current_dir(dir)
         .env("HOME", dir)
         .env("XDG_STATE_HOME", &state)
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("LOCALAPPDATA", &state) // Windows: keep the registry off the real one
         .env("USERPROFILE", dir) // Windows: keep config resolution off the real home
         .env("DEVKIT_SKIP_AUTOLINK", "1")
-        .output()
-        .expect("run devkit run")
+        .env_remove("DEVKIT_CALLER");
+    cmd
 }
 
 #[test]
@@ -409,16 +417,8 @@ fn an_agents_marking_binds_a_run_with_no_terminal() {
 #[test]
 fn the_same_run_as_a_human_takes_the_default() {
     let dir = setup();
-    let state = dir.path().join("state");
-    let out = devkit_run()
+    let out = devkit_run_in(dir.path())
         .args(["task", "pinned-commit", "--arg", "msg=fix", "--dry-run"])
-        .current_dir(dir.path())
-        .env("HOME", dir.path())
-        .env("XDG_STATE_HOME", &state)
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("LOCALAPPDATA", &state)
-        .env("USERPROFILE", dir.path())
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .env("DEVKIT_CALLER", "human")
         .output()
         .expect("run devkit run");

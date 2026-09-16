@@ -183,6 +183,7 @@ github = "sweeper[bot]"
             .env_remove("GH_HOST")
             .env_remove("GH_REPO")
             .env_remove("SLACK_TOKEN")
+            .env_remove("DEVKIT_CALLER")
             .args(["issue", "-C"])
             .arg(self.project.path())
             .args(args)
