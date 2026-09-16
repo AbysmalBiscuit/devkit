@@ -59,23 +59,25 @@ Each manifest is a translation table with no logic in it. Every command carries 
 
 | devkit verb | Claude Code | Codex | Cursor |
 |---|---|---|---|
-| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `preToolUse` |
+| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `beforeShellExecution` |
 | `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` |
-| `post-tool-use-failure` | `PostToolUseFailure` | — | `postToolUseFailure` |
+| `post-tool-use-failure` | `PostToolUseFailure` | | `postToolUseFailure` |
 | `session-start` | `SessionStart` | `SessionStart` | `sessionStart` |
 | `session-end` | `SessionEnd` | `SessionEnd` | `sessionEnd` |
-| `subagent-start` | `SubagentStart` | `SubagentStart` | `subagentStart` |
+| `subagent-start` | `SubagentStart` | `SubagentStart` | |
 | `subagent-stop` | `SubagentStop` | `SubagentStop` | `subagentStop` |
-| `permission-request` | `PermissionRequest` | `PermissionRequest` | — |
-| `permission-denied` | `PermissionDenied` | — | — |
+| `permission-request` | `PermissionRequest` | `PermissionRequest` | |
+| `permission-denied` | `PermissionDenied` | | |
 | `stop` | `Stop` | `Stop`, `Interrupt` | `stop` |
-| `stop-failure` | `StopFailure` | — | — |
+| `stop-failure` | `StopFailure` | | |
 | `pre-compact` | `PreCompact` | `PreCompact` | `preCompact` |
-| `post-compact` | `PostCompact` | `PostCompact` | — |
-| `cwd-changed` | `CwdChanged` | — | `workspaceOpen` |
-| `worktree-create` | `WorktreeCreate` | — | — |
-| `worktree-remove` | `WorktreeRemove` | — | — |
-| `user-prompt-submit` | `UserPromptSubmit` | `UserPromptSubmit` | `beforeSubmitPrompt` |
+| `post-compact` | `PostCompact` | `PostCompact` | |
+| `cwd-changed` | `CwdChanged` | | `workspaceOpen` |
+| `worktree-create` | `WorktreeCreate` | | |
+| `worktree-remove` | `WorktreeRemove` | | |
+| `user-prompt-submit` | `UserPromptSubmit` | `UserPromptSubmit` | |
+
+A blank cell is an event that harness does not send, or one devkit leaves unwired.
 
 Check the vendor before adding a verb rather than recalling it:
 
@@ -83,7 +85,7 @@ Check the vendor before adding a verb rather than recalling it:
 - Codex: <https://developers.openai.com/codex/config-schema.json>, and `codex-rs/protocol/src/protocol.rs` plus `codex-rs/config/src/hook_config.rs` in `openai/codex` behind it.
 - Cursor: <https://cursor.com/docs/hooks>. Not the `cursor-hooks` npm schema, which lags the product.
 
-Cursor is wired through its generic tool trio rather than its action-specific hooks, which it also offers: wiring both would fire devkit twice for one shell command, and the generic events carry `tool_use_id`, which the shell-specific pair does not. Its Tab completions edit files through `afterTabFileEdit`, which is post-only, so a Tab edit cannot be lock-guarded; that gap is noted rather than solved.
+Cursor reads a decision from the stdout of `preToolUse`, `subagentStart` and `beforeSubmitPrompt`, and devkit answers an allow with nothing. Empty stdout is a proven allow only on `beforeShellExecution`, so the guard rides that event, and the other three stay unwired until a captured Cursor payload shows silence is an allow there too. Cursor's `postToolUse` and `postToolUseFailure` match `Shell`, the calls the guard saw. Its Tab completions edit files through `afterTabFileEdit`, which is post-only, so a Tab edit cannot be lock-guarded; that gap is noted rather than solved.
 
 **Exit codes are part of the contract.** No verb in the family ever exits 2. Exit 2 blocks the tool call on Claude Code `PreToolUse` and sets `should_block` on Codex, and clap exits 2 for a usage error, so an unrecognised verb would otherwise deny every command an agent ran. A usage error, an unknown verb and a panic all exit 1 with a message on stderr. And only `pre-tool-use` writes to stdout: `UserPromptSubmit` appends a hook's stdout to the prompt, and `Stop` and `PermissionRequest` honour a JSON decision.
 

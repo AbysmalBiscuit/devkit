@@ -22,7 +22,7 @@
         "timeout": 15
       }
     ],
-    "preToolUse": [
+    "beforeShellExecution": [
       {
         "type": "command",
         "command": "devkit hook pre-tool-use --harness cursor",
@@ -32,19 +32,15 @@
     "postToolUse": [
       {
         "type": "command",
-        "command": "devkit hook post-tool-use --harness cursor"
+        "command": "devkit hook post-tool-use --harness cursor",
+        "matcher": "Shell"
       }
     ],
     "postToolUseFailure": [
       {
         "type": "command",
-        "command": "devkit hook post-tool-use-failure --harness cursor"
-      }
-    ],
-    "subagentStart": [
-      {
-        "type": "command",
-        "command": "devkit hook subagent-start --harness cursor"
+        "command": "devkit hook post-tool-use-failure --harness cursor",
+        "matcher": "Shell"
       }
     ],
     "subagentStop": [
@@ -69,12 +65,6 @@
       {
         "type": "command",
         "command": "devkit hook cwd-changed --harness cursor"
-      }
-    ],
-    "beforeSubmitPrompt": [
-      {
-        "type": "command",
-        "command": "devkit hook user-prompt-submit --harness cursor"
       }
     ]
   }

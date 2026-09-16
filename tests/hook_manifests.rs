@@ -78,6 +78,45 @@ fn every_verb_a_manifest_names_parses() {
     }
 }
 
+/// Cursor reads a decision from these events' stdout, and devkit's allow is
+/// silence. Silence is a proven allow only on `beforeShellExecution`, so that
+/// is the one decision event the guard rides.
+#[test]
+fn cursor_wires_no_decision_event_but_the_shell_one() {
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string("hooks/hooks-cursor.json").unwrap()).unwrap();
+    let hooks = v["hooks"].as_object().unwrap();
+    for event in [
+        "preToolUse",
+        "subagentStart",
+        "beforeSubmitPrompt",
+        "beforeMCPExecution",
+        "beforeReadFile",
+    ] {
+        assert!(
+            !hooks.contains_key(event),
+            "hooks-cursor.json wires {event}"
+        );
+    }
+    assert_eq!(
+        hooks["beforeShellExecution"][0]["command"],
+        "devkit hook pre-tool-use --harness cursor"
+    );
+}
+
+/// Without a matcher a tool hook spawns devkit on every Read, Grep and MCP
+/// call.
+#[test]
+fn every_cursor_tool_hook_keeps_a_matcher() {
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string("hooks/hooks-cursor.json").unwrap()).unwrap();
+    for event in ["postToolUse", "postToolUseFailure"] {
+        for entry in v["hooks"][event].as_array().unwrap() {
+            assert_eq!(entry["matcher"], "Shell", "{event}: {entry}");
+        }
+    }
+}
+
 /// The merged `PreToolUse` block needs a matcher covering both tool families,
 /// or it spawns on every Read, Grep, Glob, MCP and Agent call as well.
 #[test]
@@ -85,8 +124,7 @@ fn the_merged_pre_tool_use_block_keeps_a_matcher() {
     for (f, _) in MANIFESTS {
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
-        // Cursor's manifest is a flat map of event to command list and carries
-        // no matchers at all; only the two that take them are checked.
+        // Cursor has no merged block: its guard rides `beforeShellExecution`.
         let Some(blocks) = v["hooks"]["PreToolUse"].as_array() else {
             continue;
         };
