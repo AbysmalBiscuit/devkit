@@ -19,14 +19,14 @@
       {
         "type": "command",
         "command": "devkit hook session-end --harness cursor",
-        "timeout": 15
+        "timeout": 3
       }
     ],
     "beforeShellExecution": [
       {
         "type": "command",
         "command": "devkit hook pre-tool-use --harness cursor",
-        "timeout": 30
+        "timeout": 4
       }
     ],
     "postToolUse": [

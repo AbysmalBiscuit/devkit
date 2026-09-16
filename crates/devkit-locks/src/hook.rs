@@ -5,12 +5,18 @@
 
 use std::path::Path;
 
+use devkit_common::git::Checkout;
 pub use devkit_common::harness::deny_json;
 use serde_json::Value;
 
 /// Whether write enforcement is active for a write originating at `cwd`.
-pub fn enforcement_enabled(cwd: &Path) -> bool {
-    devkit_common::harness::enforcement_enabled(cwd, "enforce_writes", "DEVKIT_ENFORCE_WRITES")
+pub fn enforcement_enabled_in(checkout: &Checkout, cwd: &Path) -> bool {
+    devkit_common::harness::enforcement_enabled_in(
+        checkout,
+        cwd,
+        "enforce_writes",
+        "DEVKIT_ENFORCE_WRITES",
+    )
 }
 
 /// Tool names whose writes the harness governs. The Claude Code names carry one

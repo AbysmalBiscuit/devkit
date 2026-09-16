@@ -150,7 +150,10 @@ fn session_end_asks_for_a_budget_of_its_own() {
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         let mut timeouts = Vec::new();
         find_timeouts(&v, "hook session-end", &mut timeouts);
-        assert_eq!(timeouts, vec![15], "{f}: session-end needs its own timeout");
+        assert!(
+            matches!(timeouts[..], [t] if t >= 2),
+            "{f}: session-end needs its own timeout above 1.5 seconds: {timeouts:?}"
+        );
     }
 }
 

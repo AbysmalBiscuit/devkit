@@ -5,6 +5,8 @@ use std::path::Path;
 use anyhow::Result;
 use devkit_config::{Config, Provenance};
 
+use crate::git::Checkout;
+
 /// Resolve the `devkit.toml` layers discovered from `start` — or the single
 /// file `explicit` names — and size the shared worker pool from the result.
 ///
@@ -14,33 +16,35 @@ use devkit_config::{Config, Provenance};
 /// at each config load, where one of them would be forgotten. The `Result` is
 /// handed back untouched, so a caller can still classify it with
 /// `devkit_config::Health::of`.
+///
+/// Resolves a [`Checkout`] of its own. A caller already holding one — the
+/// hook path, where several helpers need the same answer — passes it to
+/// [`resolve_in`] instead.
 pub fn resolve(explicit: Option<&Path>, start: &Path) -> Result<(Config, Provenance)> {
-    // Outside a repository the failed root settles the main checkout too,
-    // since `worktree list` cannot report a checkout where `rev-parse` found
-    // none.
-    let checkout_root = crate::git::checkout_root(start).ok();
-    // One `worktree list` answers both of the questions below. Asking through
-    // `main_checkout_from` and `non_bare_main` would run the listing twice for
-    // one config load.
-    let main_worktree = crate::git::worktrees(start)
-        .ok()
-        .and_then(|all| all.into_iter().next())
-        .filter(|w| !w.bare);
-    let main_checkout = match (&main_worktree, checkout_root.as_deref()) {
-        (Some(w), Some(here)) if !crate::git::same_path(&w.path, here) => Some(w.path.clone()),
-        _ => None,
-    };
+    resolve_in(&Checkout::at(start), explicit, start)
+}
+
+/// [`resolve`] against a checkout the caller has already resolved.
+///
+/// `start` is still read on its own: a `devkit.toml` in a directory between
+/// the checkout root and `start` is a layer, so the checkout does not stand in
+/// for the working directory.
+pub fn resolve_in(
+    checkout: &Checkout,
+    explicit: Option<&Path>,
+    start: &Path,
+) -> Result<(Config, Provenance)> {
     // Keyed off the main worktree alone: a bare repository has no directory to
     // put a `_worktrees` sibling beside, and falling back to the caller's own
     // checkout would give every linked worktree a different root.
-    let derived = main_worktree
-        .as_ref()
-        .and_then(|w| crate::git::derived_worktree_root(&w.path));
+    let derived = checkout
+        .main_worktree()
+        .and_then(crate::git::derived_worktree_root);
     let resolved = devkit_config::resolve(
         explicit,
         start,
-        main_checkout.as_deref(),
-        checkout_root.as_deref(),
+        checkout.main_checkout(),
+        checkout.root(),
         derived.as_deref(),
     );
     if let Ok((cfg, _)) = &resolved {

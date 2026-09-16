@@ -12,6 +12,7 @@ use devkit_command::{
     ANALYZER_VERSION, Analysis, Location, Target, Uncertainty, UncertaintyKind, Value,
 };
 use devkit_common::{
+    git::Checkout,
     harness::Harness,
     harness_log::{
         self, AnalysisProjection, Counts, FrameEnd, Kind, Permission, Prompt, Record,
@@ -73,16 +74,10 @@ fn text(p: &Json, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The envelope, filled in from whatever the payload carries. Every field a
-/// harness did not send stays `None`: nothing here is guessed from the hook
-/// process's own environment except `cwd`, which a record is useless without.
-pub fn envelope(
-    payload: &Json,
-    event: HookEvent,
-    harness: Option<Harness>,
-    kind: Kind,
-) -> Box<Record> {
-    let cwd = text(payload, "cwd")
+/// Where the hook fired: the payload's `cwd`, else Cursor's
+/// `tool_input.working_directory`, else this process's own directory.
+pub fn payload_cwd(payload: &Json) -> std::path::PathBuf {
+    text(payload, "cwd")
         .map(std::path::PathBuf::from)
         .or_else(|| {
             payload
@@ -91,10 +86,21 @@ pub fn envelope(
                 .as_str()
                 .map(std::path::PathBuf::from)
         })
-        .or_else(|| std::env::current_dir().ok());
-    let project_root = cwd
-        .as_deref()
-        .and_then(|c| devkit_common::git::checkout_root(c).ok());
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// The envelope, filled in from whatever the payload carries. Every field a
+/// harness did not send stays `None`. `cwd` and `project_root` come from the
+/// caller's `checkout`, which the rest of the invocation already resolved, so
+/// the record costs no git of its own.
+pub fn envelope(
+    payload: &Json,
+    event: HookEvent,
+    harness: Option<Harness>,
+    checkout: &Checkout,
+    kind: Kind,
+) -> Box<Record> {
     Box::new(Record {
         schema_version: SCHEMA_VERSION,
         recorded_at: now_rfc3339(),
@@ -108,8 +114,8 @@ pub fn envelope(
         session_id: text(payload, "session_id").or_else(|| text(payload, "conversation_id")),
         agent_id: text(payload, "agent_id").or_else(|| text(payload, "parent_conversation_id")),
         tool_use_id: text(payload, "tool_use_id").or_else(|| text(payload, "tool_call_id")),
-        cwd,
-        project_root,
+        cwd: Some(checkout.dir().to_path_buf()),
+        project_root: checkout.root().map(std::path::Path::to_path_buf),
         kind,
     })
 }
@@ -416,6 +422,7 @@ mod tests {
             &payload,
             HookEvent::Stop,
             Some(Harness::Codex),
+            &Checkout::at(&payload_cwd(&payload)),
             Kind::Lifecycle,
         );
         assert_eq!(r.event, "stop");
@@ -434,7 +441,13 @@ mod tests {
             "tool_use_id": "u1",
             "tool_input": { "working_directory": "/w" }
         });
-        let r = envelope(&payload, HookEvent::PreToolUse, None, Kind::Lifecycle);
+        let r = envelope(
+            &payload,
+            HookEvent::PreToolUse,
+            None,
+            &Checkout::at(&payload_cwd(&payload)),
+            Kind::Lifecycle,
+        );
         assert_eq!(r.session_id.as_deref(), Some("c1"));
         assert_eq!(r.agent_id.as_deref(), Some("p1"));
         assert_eq!(r.tool_use_id.as_deref(), Some("u1"));

@@ -131,18 +131,14 @@ fn record_only(
     event: HookEvent,
     harness: Option<Harness>,
 ) -> devkit_common::harness_log::Settings {
-    let cwd = payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let settings = devkit_common::harness_log::resolve(&cwd);
+    let cwd = record::payload_cwd(payload);
+    let checkout = devkit_common::git::Checkout::at(&cwd);
+    let settings = devkit_common::harness_log::resolve_in(&checkout, &cwd);
     if !settings.enabled {
         return settings;
     }
     let kind = record::record_only(payload, event, &settings);
-    let rec = record::envelope(payload, event, harness, kind);
+    let rec = record::envelope(payload, event, harness, &checkout, kind);
     devkit_common::harness_log::record(&settings, &rec);
     settings
 }

@@ -10,6 +10,7 @@
 
 use anyhow::Result;
 use devkit_common::{
+    git::Checkout,
     harness::Harness,
     harness_log::{self, Decision, EditPre, Kind, Verdict},
 };
@@ -24,17 +25,21 @@ use super::{HookEvent, record};
 /// Claim the write targets a structured-edit payload names, before the tool
 /// runs.
 pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
-    let cwd = cwd_of(payload);
+    let cwd = record::payload_cwd(payload);
+    // One `git worktree list` for the whole invocation, shared by the
+    // enforcement gate, the lock scoping and the log settings. It resolves
+    // lazily, so a tool that writes nothing spawns nothing.
+    let checkout = Checkout::at(&cwd);
     let (targets, blocks) = match hook::parse_write(payload) {
         Some(LockAction::Write {
             file_paths, holder, ..
         }) => {
-            let blocks = claim(payload, &cwd, &file_paths, &holder);
+            let blocks = claim(payload, &checkout, &cwd, &file_paths, &holder);
             (file_paths, blocks)
         }
         Some(LockAction::Unusable { reason }) => {
             let message = format!("devkit write-harness: {reason} (fail-closed)");
-            if hook::enforcement_enabled(&cwd) {
+            if hook::enforcement_enabled_in(&checkout, &cwd) {
                 println!("{}", hook::deny_json(&message));
             }
             (Vec::new(), vec![message])
@@ -49,12 +54,13 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
     // envelope exists runs into the manifest timeout, and a harness timeout
     // allows the call.
     let _ = std::io::Write::flush(&mut std::io::stdout());
-    let settings = harness_log::resolve(&cwd);
+    let settings = harness_log::resolve_in(&checkout, &cwd);
     if settings.enabled {
         let rec = record::envelope(
             payload,
             HookEvent::PreToolUse,
             declared,
+            &checkout,
             Kind::EditPre(EditPre {
                 tool_name: payload
                     .get("tool_name")
@@ -81,15 +87,16 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
 /// return is an allow.
 fn claim(
     payload: &Value,
+    checkout: &Checkout,
     cwd: &std::path::Path,
     file_paths: &[String],
     holder: &str,
 ) -> Vec<String> {
-    if !hook::enforcement_enabled(cwd) {
+    if !hook::enforcement_enabled_in(checkout, cwd) {
         return Vec::new(); // no opt-in (env, project layers, or global config) → no enforcement
     }
     let mut conflicts = Vec::new();
-    let mut resolver = devkit_locks::WriteResolver::new();
+    let mut resolver = devkit_locks::WriteResolver::with_checkout(checkout.clone());
     for path in file_paths {
         let target = resolve_against(payload, path);
         match resolver.decide_write(&target, holder, Some("write-harness"), 1800) {
@@ -147,17 +154,6 @@ fn conflict_envelope(conflicts: &[Conflict]) -> serde_json::Value {
         "devkit write-harness: {who} — locked by another agent; \
          coordinate or wait for it to finish"
     ))
-}
-
-/// Where the write would land. Paths in the payload are relative to the
-/// session, not to wherever the harness spawned this process.
-fn cwd_of(payload: &Value) -> std::path::PathBuf {
-    payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 /// Resolve a payload path against the session's own working directory, so a

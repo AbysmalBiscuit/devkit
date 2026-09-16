@@ -14,7 +14,7 @@
             "type": "command",
             "command": "devkit brief --additional-context",
             "async": false,
-            "timeout": 10,
+            "timeout": 3,
             "statusMessage": "Loading the devkit project brief"
           },
           {
@@ -31,7 +31,7 @@
             "type": "command",
             "command": "devkit brief --additional-context --pins-only",
             "async": false,
-            "timeout": 10,
+            "timeout": 3,
             "statusMessage": "Re-injecting devkit library versions"
           }
         ]
@@ -44,7 +44,7 @@
             "type": "command",
             "command": "devkit hook session-end --harness codex",
             "async": false,
-            "timeout": 15
+            "timeout": 3
           }
         ]
       }
@@ -57,7 +57,7 @@
             "type": "command",
             "command": "devkit hook pre-tool-use --harness codex",
             "async": false,
-            "timeout": 30
+            "timeout": 4
           }
         ]
       }

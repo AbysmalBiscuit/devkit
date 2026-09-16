@@ -25,7 +25,7 @@
           {
             "type": "command",
             "command": "devkit hook session-end --harness claude-code",
-            "timeout": 15
+            "timeout": 3
           }
         ]
       }
@@ -37,7 +37,7 @@
           {
             "type": "command",
             "command": "devkit hook pre-tool-use --harness claude-code",
-            "timeout": 30
+            "timeout": 4
           }
         ]
       }
@@ -140,7 +140,7 @@
           {
             "type": "command",
             "command": "devkit brief --pins-only",
-            "timeout": 10,
+            "timeout": 3,
             "statusMessage": "Re-injecting devkit library versions"
           },
           {
@@ -156,7 +156,7 @@
           {
             "type": "command",
             "command": "devkit brief --if-changed",
-            "timeout": 10,
+            "timeout": 3,
             "statusMessage": "Refreshing devkit project brief"
           },
           {

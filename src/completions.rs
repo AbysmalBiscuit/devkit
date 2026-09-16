@@ -1,4 +1,9 @@
 //! The `<bin> completions <shell>` argument every devkit CLI takes.
+//!
+//! Help text reaches these scripts verbatim, so it stays ASCII. Windows
+//! PowerShell 5.1 reads a BOM-less `.ps1` as cp1252, where the trailing byte of
+//! an em dash, ellipsis or arrow becomes a curly quote PowerShell accepts as a
+//! string delimiter, closing a help string early.
 
 use std::io::{Error, Write};
 

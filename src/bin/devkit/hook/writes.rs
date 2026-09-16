@@ -7,7 +7,7 @@
 use std::{sync::mpsc, time::Duration};
 
 use devkit_command::{Analysis, FileOp, Target, TreeReach, UncertaintyKind, Value};
-use devkit_common::harness::HarnessPolicy;
+use devkit_common::{git::Checkout, harness::HarnessPolicy};
 use devkit_config::PolicyAction;
 use devkit_locks::model::{Conflict, WriteDecision};
 
@@ -164,8 +164,12 @@ fn op_name(op: FileOp) -> &'static str {
 /// Check every scope, then claim every target. A scope conflict stops before
 /// any claim; a claim conflict leaves the claims already made to the normal
 /// release lifecycle.
-pub fn enforce(evaluation: &Evaluation, holder: &str) -> anyhow::Result<Vec<Conflict>> {
-    let mut resolver = devkit_locks::WriteResolver::new();
+pub fn enforce(
+    evaluation: &Evaluation,
+    holder: &str,
+    checkout: Checkout,
+) -> anyhow::Result<Vec<Conflict>> {
+    let mut resolver = devkit_locks::WriteResolver::with_checkout(checkout);
     let mut conflicts = Vec::new();
     for check in &evaluation.scopes {
         conflicts.extend(match check {

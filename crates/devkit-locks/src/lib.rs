@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use devkit_common::git::Checkout;
 use model::{AcquireOutcome, Conflict, LockEntry, Refusal};
 
 /// Try a running daemon over `locks.sock`. `Ok(None)` = no daemon (caller uses
@@ -52,13 +53,34 @@ pub fn find_root_from(start: &Path) -> PathBuf {
     match devkit_common::git::checkout_root_opt(start) {
         Ok(Some(root)) => root,
         Ok(None) => start.to_path_buf(),
-        Err(e) => {
-            eprintln!(
-                "warning: git could not be run ({e:#}); scoping locks to {}",
-                start.display()
-            );
-            start.to_path_buf()
-        }
+        Err(e) => unscoped(start, &format!("{e:#}")),
+    }
+}
+
+fn unscoped(start: &Path, why: &str) -> PathBuf {
+    eprintln!(
+        "warning: git could not be run ({why}); scoping locks to {}",
+        start.display()
+    );
+    start.to_path_buf()
+}
+
+/// [`find_root_from`] against a checkout the caller has already resolved,
+/// answering from it where it can and asking git otherwise.
+///
+/// A resolved checkout only answers for the worktrees it lists; a `start`
+/// outside them — or inside a nested repository it cannot see — still costs a
+/// git call, because scoping a lock to the wrong root is worse than the spawn.
+/// A git that could not be run at all is the exception: it will not run for
+/// `start` either, so that fallback is taken here rather than paid for with a
+/// second doomed spawn.
+fn find_root_in(checkout: &Checkout, start: &Path) -> PathBuf {
+    match checkout.checkout_of(start) {
+        Some(root) => root.to_path_buf(),
+        None => match checkout.error() {
+            Some(why) => unscoped(start, why),
+            None => find_root_from(start),
+        },
     }
 }
 
@@ -498,6 +520,11 @@ pub fn decide_write(
 #[derive(Default)]
 pub struct WriteResolver {
     roots: std::collections::HashMap<PathBuf, PathBuf>,
+    /// The checkout the hook already resolved for its own working directory.
+    /// Every path in a batch that lands inside it is answered from here, so
+    /// the common batch — files in the worktree the agent is working in —
+    /// costs no `git` call of its own.
+    checkout: Option<Checkout>,
 }
 
 impl WriteResolver {
@@ -505,11 +532,22 @@ impl WriteResolver {
         Self::default()
     }
 
+    /// A resolver that answers from `checkout` wherever it can.
+    pub fn with_checkout(checkout: Checkout) -> Self {
+        Self {
+            checkout: Some(checkout),
+            ..Self::default()
+        }
+    }
+
     fn root_for(&mut self, start: &Path) -> PathBuf {
         if let Some(root) = self.roots.get(start) {
             return root.clone();
         }
-        let root = find_root_from(start);
+        let root = match &self.checkout {
+            Some(checkout) => find_root_in(checkout, start),
+            None => find_root_from(start),
+        };
         self.roots.insert(start.to_path_buf(), root.clone());
         root
     }
@@ -730,6 +768,56 @@ mod tests {
         assert_eq!(
             std::fs::canonicalize(find_root_from(&deep)).unwrap(),
             std::fs::canonicalize(root.path()).unwrap()
+        );
+    }
+
+    /// A resolver seeded with the hook's own checkout answers for a
+    /// directory inside it without asking git again.
+    #[test]
+    fn a_seeded_resolver_answers_from_the_checkout_it_was_given() {
+        let root = tempfile::tempdir().unwrap();
+        init_repo(root.path());
+        let deep = root.path().join("a/b");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        assert_eq!(
+            std::fs::canonicalize(find_root_in(&Checkout::at(root.path()), &deep)).unwrap(),
+            std::fs::canonicalize(root.path()).unwrap()
+        );
+    }
+
+    /// A submodule is its own repository, and git scopes a write inside it to
+    /// the submodule. A seeded checkout that answered with the enclosing
+    /// worktree would key the lock under the wrong root, so it defers.
+    #[test]
+    fn a_seeded_resolver_defers_to_git_inside_a_nested_repository() {
+        let outer = tempfile::tempdir().unwrap();
+        init_repo(outer.path());
+        let inner = outer.path().join("vendor/lib");
+        std::fs::create_dir_all(&inner).unwrap();
+        init_repo(&inner);
+        let deep = inner.join("src");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        assert_eq!(
+            std::fs::canonicalize(find_root_in(&Checkout::at(outer.path()), &deep)).unwrap(),
+            std::fs::canonicalize(&inner).unwrap()
+        );
+    }
+
+    /// A batch can name a file in a repository the hook's checkout knows
+    /// nothing about; that path still gets its own root.
+    #[test]
+    fn a_seeded_resolver_scopes_a_foreign_repository_to_itself() {
+        let here = tempfile::tempdir().unwrap();
+        init_repo(here.path());
+        let elsewhere = tempfile::tempdir().unwrap();
+        init_repo(elsewhere.path());
+
+        assert_eq!(
+            std::fs::canonicalize(find_root_in(&Checkout::at(here.path()), elsewhere.path()))
+                .unwrap(),
+            std::fs::canonicalize(elsewhere.path()).unwrap()
         );
     }
 
