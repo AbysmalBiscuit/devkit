@@ -1,3 +1,9 @@
+//! The port registry. A holder is a worktree's root path and lives while that
+//! directory exists, so removing a worktree frees its ports at the next prune.
+//! Callers use the facade functions, which keep liveness syscalls outside the
+//! exclusive lock. A running `devkitd` serves the registry from memory, and the
+//! direct path refuses to write behind it (`DaemonHoldsLock`).
+
 #[cfg(test)]
 use std::path::Path;
 use std::{
@@ -420,7 +426,8 @@ impl Data {
     }
 
     /// Reserve a port for one app (idempotent per holder+app+role). pid stays
-    /// None.
+    /// None. The pid-less row is written before anything binds the port, which
+    /// is what stops two concurrent callers being handed the same one.
     pub fn alloc_one(&mut self, holder: &str, app: &str, base: u16, role: Role) -> u16 {
         if let Some(p) = self.holds(holder, app, role) {
             return p;

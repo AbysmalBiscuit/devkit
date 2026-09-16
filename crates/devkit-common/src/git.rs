@@ -401,6 +401,10 @@ pub fn derived_worktree_root(primary: &Path) -> Option<PathBuf> {
 /// server outlive the worktrees they serve and a cached listing would answer
 /// with a checkout that has since been removed.
 ///
+/// Helpers on the hook paths (`devkit hook`, `devkit brief`) take the caller's
+/// `Checkout` rather than calling [`checkout_root`] or [`main_checkout`], so
+/// an invocation spawns git once.
+///
 /// The whole listing is kept rather than two paths, so that
 /// [`Checkout::checkout_of`] can answer for a sibling worktree of the same
 /// repository without a second git call.
