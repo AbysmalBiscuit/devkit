@@ -23,6 +23,34 @@ const INFO_FLAGS: [&str; 2] = ["--version", "--help"];
 /// 0.0.0.0` starts a server.
 const SHORT_INFO_FLAGS: [&str; 2] = ["-v", "-h"];
 
+/// Programs that run a package binary named somewhere later in their argv.
+const RUNNERS: [&str; 6] = ["bun", "bunx", "npm", "npx", "pnpm", "yarn"];
+
+/// Runner verbs that manage packages, so a catalog name after one is a package
+/// being installed rather than a server being started.
+const PACKAGE_VERBS: [&str; 20] = [
+    "install",
+    "i",
+    "ci",
+    "add",
+    "a",
+    "remove",
+    "rm",
+    "uninstall",
+    "update",
+    "up",
+    "upgrade",
+    "outdated",
+    "link",
+    "unlink",
+    "info",
+    "view",
+    "why",
+    "publish",
+    "create",
+    "init",
+];
+
 /// Whether the guard has an opinion about this program at all.
 pub fn is_known_program(prog: &str) -> bool {
     let p = basename(prog);
@@ -51,6 +79,30 @@ pub fn is_dev_server(argv: &[String]) -> bool {
         "vite" => !rest.iter().any(|a| VITE_NON_SERVER.contains(a)),
         _ => false,
     }
+}
+
+/// Whether a runner starts a catalog dev server anywhere after its own word.
+///
+/// Reads past options the analyzer does not model and runner verbs it does
+/// not unwrap (`yarn workspace api nitro dev`), so an unfamiliar spelling
+/// still reaches the catalog.
+pub fn runner_starts_dev_server(words: &[String]) -> bool {
+    if !words
+        .first()
+        .is_some_and(|w| RUNNERS.contains(&basename(w)))
+    {
+        return false;
+    }
+    let rest = &words[1..];
+    for (i, word) in rest.iter().enumerate() {
+        if PACKAGE_VERBS.contains(&word.as_str()) {
+            return false;
+        }
+        if is_known_program(word) && is_dev_server(&rest[i..]) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

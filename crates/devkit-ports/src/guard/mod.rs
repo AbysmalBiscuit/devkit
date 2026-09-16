@@ -67,6 +67,8 @@ pub struct Verdict {
 struct Known {
     argv: Vec<String>,
     doppler: Option<norm::Doppler>,
+    /// A runner among the wrappers or the program starts a catalog dev server.
+    runner_server: bool,
 }
 
 fn known(inv: &Invocation) -> Option<Known> {
@@ -75,9 +77,28 @@ fn known(inv: &Invocation) -> Option<Known> {
         argv.push(arg.known()?.to_string());
     }
     Some(Known {
+        runner_server: runner_server(inv, &argv),
         argv,
         doppler: norm::doppler_of(inv),
     })
+}
+
+fn runner_server(inv: &Invocation, argv: &[String]) -> bool {
+    let mut words = Vec::new();
+    let mut layer_starts = Vec::new();
+    for layer in &inv.wrappers {
+        layer_starts.push(words.len());
+        words.extend(
+            layer
+                .iter()
+                .map(|value| value.known().unwrap_or_default().to_string()),
+        );
+    }
+    layer_starts.push(words.len());
+    words.extend_from_slice(argv);
+    layer_starts
+        .into_iter()
+        .any(|start| catalog::runner_starts_dev_server(&words[start..]))
 }
 
 enum Match {
@@ -246,12 +267,14 @@ fn configured_task(args: &[RunArg]) -> Option<Known> {
 struct Normalized {
     argv: Vec<String>,
     doppler: Option<norm::Doppler>,
+    runner_server: bool,
 }
 
 fn norm_view(known: &Known) -> Normalized {
     Normalized {
         argv: known.argv.clone(),
         doppler: known.doppler.clone(),
+        runner_server: known.runner_server,
     }
 }
 
@@ -299,21 +322,27 @@ fn project_hit(typed: &[String], n: &Normalized, prog: &str, p: &Project) -> Opt
         if !hits.is_empty() {
             return Some(up_message(typed, &narrowed_apps(n, &hits, p)));
         }
-        return Some(match searched_app(n, p) {
-            Some(app) => catalog_message(typed, &app),
-            None => format!(
-                "`{}` starts a dev server. Start it with `devrun up <app>` so its port is \
-                 registered and `devrun down`/`logs`/`status` can see it. \
-                 `devkit config apps` lists the apps.",
-                typed.join(" ")
-            ),
-        });
+        return Some(server_message(typed, n, p));
     }
 
-    if hits.is_empty() {
-        return None;
+    if !hits.is_empty() {
+        return Some(up_message(typed, &narrowed_apps(n, &hits, p)));
     }
-    Some(up_message(typed, &narrowed_apps(n, &hits, p)))
+    n.runner_server.then(|| server_message(typed, n, p))
+}
+
+/// For a dev server no app's `launch` claimed: names the app a hint resolves,
+/// else the listing command.
+fn server_message(typed: &[String], n: &Normalized, p: &Project) -> String {
+    match searched_app(n, p) {
+        Some(app) => catalog_message(typed, &app),
+        None => format!(
+            "`{}` starts a dev server. Start it with `devrun up <app>` so its port is \
+             registered and `devrun down`/`logs`/`status` can see it. \
+             `devkit config apps` lists the apps.",
+            typed.join(" ")
+        ),
+    }
 }
 
 /// The launch match narrowed to one app, or every app tied on that launch.
@@ -913,6 +942,71 @@ mod tests {
         });
         let d = decide_with("nitro dev", &BTreeMap::new(), Some(&p));
         assert!(reason(&d).contains("devrun up web"), "{}", reason(&d));
+    }
+
+    #[test]
+    fn bun_options_do_not_hide_an_app_server() {
+        let p = project(|c| {
+            c.apps.insert("api".into(), AppConfig {
+                base_port: 9200,
+                launch: [
+                    "doppler",
+                    "run",
+                    "--",
+                    "bun",
+                    "nitro",
+                    "dev",
+                    "--port",
+                    "{{ port }}",
+                ]
+                .iter()
+                .map(|s| (*s).into())
+                .collect(),
+                ..Default::default()
+            });
+        });
+        for command in [
+            "bun nitro dev --port 9200",
+            "bun --cwd . nitro dev --port 9200",
+            "bun --filter=@adaptyv/api nitro dev --port 9200",
+            "doppler run -p api-foundry -c dev_local -- bun --cwd /abs/apps/api nitro dev --port \
+             9200",
+        ] {
+            let d = decide_with(command, &BTreeMap::new(), Some(&p));
+            assert!(denies(&d), "{command}: {d:?}");
+        }
+    }
+
+    #[test]
+    fn a_catalog_server_behind_unmodeled_runner_options_denies() {
+        let p = project(|_| {});
+        for command in [
+            "bun --unmodeled value nitro dev",
+            "yarn workspace api nitro dev",
+            "pnpm --filter api nitro dev",
+            "doppler run -- npm --prefix apps/web exec next dev",
+        ] {
+            let d = decide_with(command, &BTreeMap::new(), Some(&p));
+            assert!(
+                reason(&d).contains("starts a dev server"),
+                "{command}: {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_runner_managing_packages_is_not_a_server() {
+        let p = project(|_| {});
+        for command in [
+            "bun add vite",
+            "npm install --save-dev vite",
+            "pnpm add -D nitro",
+            "bun --cwd apps/web install vite",
+            "echo nitro dev",
+        ] {
+            let d = decide_with(command, &BTreeMap::new(), Some(&p));
+            assert!(!denies(&d), "{command}: {d:?}");
+        }
     }
 
     #[test]
