@@ -5,8 +5,8 @@ use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
 use devkit_config::Person;
 
 use super::{
-    Target, base_ctx, deliver, guard_branch, is_human_login, parse_args, person_by_login,
-    resolve_target, target_from_person, with_fields,
+    REVIEW_REQUEST_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, guard_branch,
+    is_human_login, parse_args, person_by_login, resolve_target, target_from_person, with_fields,
 };
 use crate::issue::pr::{
     add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr,
@@ -97,8 +97,18 @@ pub fn run(args: Args) -> Result<()> {
     let tmpls = &loaded.config.templates;
     let repos = github::Repos::resolve(&loaded.config.github, &start, None);
 
-    let mut vars = tmpls.variables.clone();
-    vars.extend(parse_args(&args.args, &tmpls.variables)?);
+    let caller = devkit_common::caller::caller();
+    let mut vars = tmpls.defaults();
+    let given = parse_args(&args.args, &tmpls.declared())?;
+    check_required(
+        "issue review request",
+        &loaded.config,
+        &[tmpls.review_request()],
+        REVIEW_REQUEST_CONTEXT_KEYS,
+        &given,
+        caller,
+    )?;
+    vars.extend(given);
 
     let branch = devkit_common::git::branch(std::path::Path::new(&start))?;
     guard_branch(&branch)?;

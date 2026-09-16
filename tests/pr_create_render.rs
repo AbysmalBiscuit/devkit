@@ -66,3 +66,38 @@ fn the_reviewer_gate_refuses_before_a_template_can_fail() {
         fake.calls()
     );
 }
+
+/// A project whose `pr_title` and `pr_body` are `templates`, with `ticket`
+/// defaulted but required of agents, reusing an open PR.
+fn fake_with(templates: &str) -> ghfake::Fake {
+    ghfake::Fake::new(
+        &format!(
+            "{templates}\n[templates.variables]\nticket = {{ default = \"NONE\", required = \"agents\" }}\n"
+        ),
+        &ghfake::Pr {
+            number: 7,
+            state: "OPEN",
+            is_draft: true,
+            author: "LevValle",
+        },
+    )
+}
+
+#[test]
+fn issue_pr_refuses_a_required_arg_the_agent_did_not_pass() {
+    let fake = fake_with("[templates]\npr_title = \"{{ ticket }}: {{ input }}\"");
+    let out = fake.issue(&["pr", "create", "--no-push", "--pr-title", "add a thing"]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--arg ticket=..."), "{stderr}");
+    assert!(stderr.contains("required for agents"), "{stderr}");
+}
+
+#[test]
+fn a_name_only_another_surfaces_template_reads_does_not_bind() {
+    // `pr_title`/`pr_body` default to `{{ input }}` and read no `ticket`,
+    // so the marking is irrelevant to this command.
+    let fake = fake_with("[templates]\nreview_finish = \"{{ ticket }} {{ pr_url }}\"");
+    let out = fake.issue(&["pr", "create", "--no-push", "--pr-title", "add a thing"]);
+    assert!(out.status.success(), "{out:?}");
+}

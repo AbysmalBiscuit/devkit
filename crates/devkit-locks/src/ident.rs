@@ -1,9 +1,6 @@
 //! Session identity resolution and anchor-PID policy.
 
-/// Environment variables carrying the harness's own session id, one per
-/// harness. `CODEX_THREAD_ID` is excluded deliberately: it holds the same value
-/// as `CODEX_SESSION_ID`, so listing it would manufacture a false ambiguity.
-pub const HARNESS_SESSION_VARS: [&str; 2] = ["CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID"];
+pub use devkit_common::caller::HARNESS_SESSION_VARS;
 
 /// One harness's answer to "which session is this": the variable it came from
 /// and the value it held. The variable name travels with the value so a refusal

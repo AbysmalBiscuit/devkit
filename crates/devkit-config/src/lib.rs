@@ -763,6 +763,13 @@ pub struct TaskConfig {
     /// process at all.
     #[serde(default)]
     pub guard: Option<bool>,
+    /// Args this task requires beyond what `[templates.variables]` markings
+    /// say, as name to marking. A task entry beats a variable entry, including
+    /// relaxing one to `never`. Neither can lower the derived floor: an arg
+    /// with no default is required whatever this says. Each name must be an
+    /// arg the task reads.
+    #[serde(default)]
+    pub required_args: std::collections::BTreeMap<String, Required>,
 }
 
 /// Longest branch `issue setup` renders before it shortens the slug to fit,
@@ -819,6 +826,97 @@ pub const DEFAULT_CHECKOUT_WORKTREE_DIR: &str =
 /// purpose.
 const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
 
+/// Who must supply an `--arg` even though a default exists. `Never` is the
+/// absence of a marking, not a licence to omit: the derived rule (an arg with
+/// no default is required) is a floor this enum sits on top of and cannot
+/// lower. `Never` is therefore meaningful only as a task-level override of a
+/// variable-level marking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Required {
+    #[default]
+    Never,
+    Humans,
+    Agents,
+    Always,
+}
+
+/// One `[templates.variables]` entry: a bare string, or a table carrying a
+/// `default` and a `required` marking.
+///
+/// `deny_unknown_fields` for the reason `RunArg` documents: under untagged
+/// matching a misspelled key beside a well-formed pair deserializes silently,
+/// and the author sees no diagnostic while their guard does nothing.
+///
+/// ```
+/// # use devkit_config::{Config, Required};
+/// # let cfg = Config::parse(r#"
+/// [templates.variables]
+/// team = "platform"                              # a constant, never required
+/// msg = { default = "wip", required = "agents" } # defaulted, but agents must pass it
+/// ticket = { required = "always" }               # declared, no default, always required
+/// # "#).unwrap();
+/// # let v = &cfg.templates.variables;
+/// # assert_eq!(v["team"].required(), Required::Never);
+/// # assert_eq!(v["msg"].default_value(), Some("wip"));
+/// # assert_eq!(v["ticket"].default_value(), None);
+/// ```
+///
+/// `default` is the fallback used when nothing else supplies the name, which
+/// is what these entries have always been: `template::render` merges them
+/// underneath the context, and `--arg` overwrites them. Note that minijinja's
+/// own `default` filter is a different thing and does not affect whether an
+/// arg is required.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum VariableDecl {
+    Value(String),
+    Table {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+        /// `None` is a marking the author did not write, which is not the same
+        /// as one written as `never`: an unmarked valueless entry is required
+        /// by the derived rule, while `required = "never"` on the same entry
+        /// asks to relax that and is refused at load.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        required: Option<Required>,
+    },
+}
+
+impl VariableDecl {
+    /// The fallback value, absent for a declaration that only marks a name.
+    pub fn default_value(&self) -> Option<&str> {
+        match self {
+            VariableDecl::Value(v) => Some(v),
+            VariableDecl::Table { default, .. } => default.as_deref(),
+        }
+    }
+
+    /// The marking, defaulted for an entry that carries none.
+    pub fn required(&self) -> Required {
+        match self {
+            VariableDecl::Value(_) => Required::Never,
+            VariableDecl::Table { required, .. } => required.unwrap_or_default(),
+        }
+    }
+
+    /// The marking exactly as written, `None` when the author wrote none.
+    /// Only load-time validation needs this distinction; resolution reads
+    /// `required()`.
+    pub fn written_required(&self) -> Option<Required> {
+        match self {
+            VariableDecl::Value(_) => None,
+            VariableDecl::Table { required, .. } => *required,
+        }
+    }
+}
+
+impl From<&str> for VariableDecl {
+    fn from(v: &str) -> Self {
+        VariableDecl::Value(v.to_string())
+    }
+}
+
 /// Config-driven minijinja templates for the issue-lifecycle strings. Each
 /// `None` field falls back to its `DEFAULT_*` constant, which reproduces the
 /// historical hardcoded output. `variables` are user constants merged under
@@ -841,7 +939,7 @@ const RESERVED_VARIABLES: [&str; 2] = ["role", "sha"];
 /// # assert_eq!(t.branch(), "{{ prefix }}{{ issue }}-{{ slug }}");
 /// # assert_eq!(t.pr_body(), "Closes {{ issue }}.\n\n{{ input }}");
 /// # assert_eq!(t.worktree_dir_max(), 24);
-/// # assert_eq!(t.variables["team"], "platform");
+/// # assert_eq!(t.variables["team"].default_value(), Some("platform"));
 /// ```
 ///
 /// `issue_summary_path` renders `{{ worktree }}` here, which keeps the summary
@@ -902,9 +1000,10 @@ pub struct Templates {
     /// has nothing there.
     pub issue_summary: Option<String>,
     /// Constants available to every template above. A context field of the same
-    /// name wins, and `--arg key=value` overrides either.
+    /// name wins, and `--arg key=value` overrides either. An entry may instead
+    /// be a table carrying a `default` and a `required` marking.
     #[serde(default)]
-    pub variables: std::collections::BTreeMap<String, String>,
+    pub variables: std::collections::BTreeMap<String, VariableDecl>,
 }
 
 impl Templates {
@@ -965,6 +1064,23 @@ impl Templates {
         self.review_finish
             .as_deref()
             .unwrap_or(DEFAULT_REVIEW_FINISH)
+    }
+
+    /// Name to value, for building a render context. A declaration with no
+    /// `default` is omitted, so a template reading it hits strict-undefined
+    /// until a caller supplies the name.
+    pub fn defaults(&self) -> std::collections::BTreeMap<String, String> {
+        self.variables
+            .iter()
+            .filter_map(|(k, d)| d.default_value().map(|v| (k.clone(), v.to_string())))
+            .collect()
+    }
+
+    /// Every declared name, valueless ones included. This is the `--arg`
+    /// allowlist: without it a name declared only to be marked required would
+    /// be unpassable.
+    pub fn declared(&self) -> std::collections::BTreeSet<String> {
+        self.variables.keys().cloned().collect()
     }
 }
 
@@ -1407,6 +1523,7 @@ pub(crate) fn resolve_with_home(
         .try_into()
         .context("deserializing merged devkit config")?;
     reject_reserved_variables(&cfg, &origin)?;
+    reject_never_without_default(&cfg, &origin)?;
     resolve_defaults(&mut cfg, &origin, checkout_root, default_worktree_root)?;
     Ok((cfg, Provenance {
         layers: order,
@@ -1467,6 +1584,67 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
         );
     }
     Ok(())
+}
+
+/// Refuse `required = "never"` on a variable with no default. The derived rule
+/// already requires such a name, `never` cannot lower that floor, and
+/// honouring it would replace a named error with minijinja's strict-undefined
+/// chain, which never mentions the arg.
+///
+/// Only a marking the author wrote is refused. A valueless entry carrying no
+/// marking is the ordinary way to declare a name as passable, and stays
+/// required by the derived rule.
+///
+/// A task's `required_args` is checked the same way: `never` there relaxes a
+/// variable's marking, and with no default underneath there is no marking to
+/// relax.
+fn reject_never_without_default(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
+    for (name, decl) in &cfg.templates.variables {
+        if decl.written_required() != Some(Required::Never) || decl.default_value().is_some() {
+            continue;
+        }
+        // Provenance records the leaf that was written, and for a table entry
+        // that is the `required` key rather than the variable itself.
+        let declared = layer_note(origin, &format!("templates.variables.{name}.required"));
+        anyhow::bail!(
+            "`[templates.variables] {name}`{declared} sets `required = \"never\"` \
+             with no `default`. An arg with nothing to fall back on is required \
+             either way; give it a `default` or drop the marking."
+        );
+    }
+    for (task, t) in &cfg.tasks {
+        for (name, marking) in &t.required_args {
+            if *marking != Required::Never {
+                continue;
+            }
+            let has_default = cfg
+                .templates
+                .variables
+                .get(name)
+                .and_then(|d| d.default_value())
+                .is_some();
+            if has_default {
+                continue;
+            }
+            let declared = layer_note(origin, &format!("tasks.{task}.required_args.{name}"));
+            anyhow::bail!(
+                "`[tasks.{task}] required_args.{name}`{declared} is `\"never\"`, but \
+                 `{name}` has no `default` in `[templates.variables]`. A task can relax \
+                 a marking, not the derived rule underneath it; give `{name}` a \
+                 `default` or drop the entry."
+            );
+        }
+    }
+    Ok(())
+}
+
+/// ` (declared in <layer>)` when provenance knows which layer wrote `key`, and
+/// nothing when it does not. An error that cannot name the layer still reads.
+fn layer_note(origin: &HashMap<String, PathBuf>, key: &str) -> String {
+    origin
+        .get(key)
+        .map(|p| format!(" (declared in {})", p.display()))
+        .unwrap_or_default()
 }
 
 /// Expand `${VAR}` references in a config value. `$$` is a literal `$`; a `$`
@@ -1758,16 +1936,140 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         assert!(msg.contains("role"), "{msg}");
     }
 
-    #[test]
-    fn an_ordinary_template_variable_is_still_accepted() {
+    /// Resolve `body` as the only, root config layer.
+    fn resolve_root(body: &str) -> Result<Config> {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("devkit.toml"),
-            "[config]\nroot = true\n[templates.variables]\nregion = 'eu'\n",
+            format!("[config]\nroot = true\n{body}"),
         )
         .unwrap();
-        let (cfg, _) = resolve_with_home(None, dir.path(), None, None, None, None).unwrap();
-        assert_eq!(cfg.templates.variables["region"], "eu");
+        resolve_with_home(None, dir.path(), None, None, None, None).map(|(cfg, _)| cfg)
+    }
+
+    /// Parse `body` under a `[defaults]` table that satisfies validation.
+    fn parse_with_defaults(body: &str) -> Config {
+        Config::parse(&format!(
+            "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n{body}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn never_without_a_default_is_rejected() {
+        let err =
+            resolve_root("[templates.variables]\nticket = { required = 'never' }\n").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("ticket"),
+            "the error names the variable: {msg}"
+        );
+        assert!(msg.contains("never"), "the error names the marking: {msg}");
+    }
+
+    #[test]
+    fn a_task_never_on_an_arg_without_a_default_is_rejected() {
+        for variables in ["", "[templates.variables]\nticket = {}\n"] {
+            let err = resolve_root(&format!(
+                "{variables}[tasks.commit]\nrun = ['git', '{{{{ ticket }}}}']\n\
+                 required_args = {{ ticket = 'never' }}\n"
+            ))
+            .unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("commit") && msg.contains("ticket") && msg.contains("never"),
+                "the error names the task, the arg and the marking: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_task_never_relaxing_a_defaulted_variable_is_accepted() {
+        let cfg = resolve_root(
+            "[templates.variables]\nmsg = { default = 'wip', required = 'always' }\n\
+             [tasks.commit]\nrun = ['git', '{{ msg }}']\nrequired_args = { msg = 'never' }\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.tasks["commit"].required_args["msg"], Required::Never);
+    }
+
+    #[test]
+    fn a_valueless_entry_with_no_marking_is_accepted() {
+        let cfg = resolve_root("[templates.variables]\nticket = {}\n")
+            .expect("declaring a name without marking it is how an arg is made passable");
+        let decl = &cfg.templates.variables["ticket"];
+        assert_eq!(decl.default_value(), None);
+        assert_eq!(decl.written_required(), None);
+        assert_eq!(decl.required(), Required::Never);
+    }
+
+    #[test]
+    fn never_with_a_default_is_accepted() {
+        let cfg =
+            resolve_root("[templates.variables]\nmsg = { default = 'wip', required = 'never' }\n")
+                .unwrap();
+        assert_eq!(cfg.templates.variables["msg"].default_value(), Some("wip"));
+    }
+
+    #[test]
+    fn an_ordinary_template_variable_is_still_accepted() {
+        let cfg = resolve_root("[templates.variables]\nregion = 'eu'\n").unwrap();
+        assert_eq!(
+            cfg.templates.variables["region"].default_value(),
+            Some("eu")
+        );
+    }
+
+    #[test]
+    fn variable_declarations_parse_in_all_three_forms() {
+        let c = parse_with_defaults(
+            "[templates.variables]\n\
+             team = 'platform'\n\
+             msg = { default = 'wip', required = 'agents' }\n\
+             ticket = { required = 'always' }\n",
+        );
+        let v = &c.templates.variables;
+        assert_eq!(v["team"].default_value(), Some("platform"));
+        assert_eq!(v["team"].required(), Required::Never);
+        assert_eq!(v["msg"].default_value(), Some("wip"));
+        assert_eq!(v["msg"].required(), Required::Agents);
+        assert_eq!(v["ticket"].default_value(), None);
+        assert_eq!(v["ticket"].required(), Required::Always);
+
+        // A plain string must still round-trip as a bare string.
+        let out = toml::to_string(&c).unwrap();
+        assert!(out.contains("team = \"platform\""), "{out}");
+        let c2 = Config::parse(&out).unwrap();
+        assert_eq!(c2.templates.variables["msg"].required(), Required::Agents);
+        assert_eq!(c2.templates.variables["ticket"].default_value(), None);
+    }
+
+    #[test]
+    fn defaults_omits_valueless_entries_and_declared_keeps_them() {
+        let c = parse_with_defaults(
+            "[templates.variables]\n\
+             team = 'platform'\n\
+             ticket = { required = 'always' }\n",
+        );
+        let d = c.templates.defaults();
+        assert_eq!(d.get("team").map(String::as_str), Some("platform"));
+        assert!(
+            !d.contains_key("ticket"),
+            "a valueless entry must not reach the render context"
+        );
+        let declared = c.templates.declared();
+        assert!(declared.contains("team") && declared.contains("ticket"));
+    }
+
+    #[test]
+    fn a_misspelled_key_in_a_variable_table_is_rejected() {
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
+                 [templates.variables]\n\
+                 msg = { deafult = 'wip', required = 'agents' }\n";
+        assert!(
+            Config::parse(s).is_err(),
+            "deny_unknown_fields must catch the typo"
+        );
     }
 
     #[test]
@@ -2492,7 +2794,9 @@ overwrite = true
     fn templates_variables_parse() {
         let t: Templates = toml::from_str("[variables]\nteam = \"platform\"\n").unwrap();
         assert_eq!(
-            t.variables.get("team").map(String::as_str),
+            t.variables
+                .get("team")
+                .and_then(VariableDecl::default_value),
             Some("platform")
         );
     }

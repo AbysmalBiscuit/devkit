@@ -76,7 +76,7 @@ fn up(ctx: &ServerCtx, args: Value) -> Result<Value> {
     run::ensure_provider(catalog, &mut apps);
 
     let user = a.env.unwrap_or_default();
-    let vars = &loaded.config.templates.variables;
+    let vars = &loaded.config.templates.defaults();
     let ports = run::resolve_ports(catalog, &apps, &a.root, Role::Issue, vars)?;
     let provider = catalog
         .iter()

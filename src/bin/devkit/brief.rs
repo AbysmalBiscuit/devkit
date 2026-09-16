@@ -406,7 +406,7 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
             };
             apps.sort();
             let mut tasks: Vec<(String, String, String, String, String)> = if settings.tasks {
-                task::list(&loaded.config)
+                task::list(&loaded.config, devkit_common::caller::caller())
                     .into_iter()
                     .map(|r| {
                         let args = task::args_text(&r.args);
@@ -714,7 +714,7 @@ fn devrun_sections(
     settings: &BriefConfig,
 ) -> Option<DevrunBrief> {
     let loaded = devrun_project(checkout, root, cwd)?;
-    let rows = task::list(&loaded.config);
+    let rows = task::list(&loaded.config, devkit_common::caller::caller());
     let sections = DevrunBrief {
         apps: settings.apps.then(|| apps_line(&loaded.catalog)).flatten(),
         tasks: (settings.tasks && !rows.is_empty()).then(|| task::tasks_text(&rows)),

@@ -1,3 +1,4 @@
+pub mod caller;
 pub mod cmd;
 pub mod config;
 #[cfg(feature = "daemon")]
@@ -14,6 +15,7 @@ pub mod pool;
 pub mod progress;
 pub mod record;
 pub mod report;
+pub mod required;
 pub mod secrets;
 pub mod slack;
 pub mod slug;

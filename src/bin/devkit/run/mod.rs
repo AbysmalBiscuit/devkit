@@ -630,9 +630,10 @@ fn cmd_task(
 ) -> Result<()> {
     use devkit_ports::task::{self, Resolved, SeqItem};
 
+    let caller = devkit_common::caller::caller();
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     let Some(name) = name else {
-        let rows = task::list(&loaded.config);
+        let rows = task::list(&loaded.config, caller);
         print!("{}", task::tasks_text(&rows));
         return Ok(());
     };
@@ -648,6 +649,7 @@ fn cmd_task(
         name,
         &user,
         &args,
+        caller,
     )?;
     let root_path = Path::new(&root);
     match resolved {
@@ -861,7 +863,7 @@ fn cmd_up(
     let mut rows: Vec<Row> = Vec::new();
     for (grp_role, holder, base_dir) in &groups {
         let ports =
-            run::resolve_ports(catalog, &apps, holder, *grp_role, &cfg.templates.variables)?;
+            run::resolve_ports(catalog, &apps, holder, *grp_role, &cfg.templates.defaults())?;
         let plans = run::plan_group(
             catalog,
             &apps,
@@ -870,7 +872,7 @@ fn cmd_up(
             base_dir,
             *grp_role,
             &user,
-            &cfg.templates.variables,
+            &cfg.templates.defaults(),
         )?;
 
         if dry_run {
@@ -1303,7 +1305,7 @@ fn status_urls_by_holder(
                     data,
                     Some(holder),
                     &l.catalog,
-                    &l.config.templates.variables,
+                    &l.config.templates.defaults(),
                 ));
             }
             continue;
@@ -1317,7 +1319,7 @@ fn status_urls_by_holder(
             data,
             Some(holder),
             &l.catalog,
-            &l.config.templates.variables,
+            &l.config.templates.defaults(),
         ));
     }
     urls

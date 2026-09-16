@@ -9,6 +9,7 @@ pub mod tasks;
 use std::collections::{BTreeMap, HashMap};
 
 use devkit_command::{Analysis, Invocation, Value};
+use devkit_common::caller::Caller;
 use devkit_config::{AppMatch, CommandRule, Config, RuleAction, RunArg, Severity};
 use norm::basename;
 
@@ -308,10 +309,14 @@ fn project_hit(typed: &[String], n: &Normalized, prog: &str, p: &Project) -> Opt
     };
 
     if let Some(name) = best_task(n, p, min_sig) {
-        let usage: String = crate::task::required_args(&p.config, &name)
+        // The guard only ever fires because a coding agent acted, and its
+        // stdin is a harness pipe, so the TTY says nothing. Name the set the
+        // agent will actually be asked for.
+        let usage: String = crate::task::task_args(&p.config, &name, Caller::Agent)
             .unwrap_or_default()
             .iter()
-            .map(|a| format!(" --arg {a}=<{a}>"))
+            .filter(|a| a.required)
+            .map(|a| format!(" --arg {0}=<{0}>", a.name))
             .collect();
         return Some(format!(
             "`{}` is the `{name}` task. Run `devrun task {name}{usage}` so it gets its app \
@@ -428,7 +433,7 @@ fn best_task(n: &Normalized, p: &Project, min_sig: usize) -> Option<String> {
             }
             tasks::redirect_worth_it(
                 task,
-                &p.config.templates.variables,
+                &p.config.templates.defaults(),
                 n.doppler.as_ref(),
                 cfg.doppler.as_ref(),
             )
@@ -809,6 +814,33 @@ mod tests {
         });
         let d = decide_with("bun test", &BTreeMap::new(), Some(&p));
         assert!(reason(&d).contains("devrun task check"), "{}", reason(&d));
+    }
+
+    #[test]
+    fn a_redirect_names_an_arg_marked_for_agents_over_its_default() {
+        let p = project(|c| {
+            c.templates
+                .variables
+                .insert("msg".into(), devkit_config::VariableDecl::Table {
+                    default: Some("wip".into()),
+                    required: Some(devkit_config::Required::Agents),
+                });
+            c.tasks.insert(
+                "commit".into(),
+                toml::from_str("run = [\"git\", \"commit\", \"-m\", \"{{ msg }}\"]\nguard = true")
+                    .unwrap(),
+            );
+        });
+        let d = decide_with("git commit -m wip", &BTreeMap::new(), Some(&p));
+        // The hint is built with Caller::Agent rather than detection, so it
+        // names what the redirected command will actually be refused for. A
+        // default would otherwise make this arg look optional here and then
+        // fail the run the redirect sends the agent to.
+        assert!(
+            reason(&d).contains("devrun task commit --arg msg=<msg>"),
+            "{}",
+            reason(&d)
+        );
     }
 
     #[test]

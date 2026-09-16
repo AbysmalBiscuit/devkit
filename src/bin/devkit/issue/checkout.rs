@@ -346,7 +346,7 @@ fn dir_ctx(
             "linear_id": linear_id,
             "linear_title": "",
         }),
-        &templates.variables,
+        &templates.defaults(),
         &names,
         max,
         "checkout_worktree_dir_max",
@@ -422,7 +422,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             let wt_name = devkit_common::template::render(
                 cfg.templates.checkout_worktree_dir(),
                 &ctx,
-                &cfg.templates.variables,
+                &cfg.templates.defaults(),
             )
             .context("rendering `checkout_worktree_dir` template")?
             .trim()
@@ -518,7 +518,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
                 &args.apps,
                 catalog,
                 &setup_ctx,
-                &cfg.templates.variables,
+                &cfg.templates.defaults(),
             )
         })?;
     }
@@ -538,7 +538,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
         &worktree,
         &cfg.hooks.after_worktree_create,
         &hook_ctx,
-        &cfg.templates.variables,
+        &cfg.templates.defaults(),
         &[],
         &steps,
     );
@@ -880,8 +880,8 @@ mod tests {
             None,
         )
         .unwrap();
-        let name =
-            devkit_common::template::render(t.checkout_worktree_dir(), &ctx, &t.variables).unwrap();
+        let name = devkit_common::template::render(t.checkout_worktree_dir(), &ctx, &t.defaults())
+            .unwrap();
         assert_eq!(name, "142-group-sync-includes-file-lists_[ENG-1234]");
         assert!(name.chars().count() <= t.checkout_worktree_dir_max());
     }
@@ -899,8 +899,8 @@ mod tests {
             None,
         )
         .unwrap();
-        let name =
-            devkit_common::template::render(t.checkout_worktree_dir(), &ctx, &t.variables).unwrap();
+        let name = devkit_common::template::render(t.checkout_worktree_dir(), &ctx, &t.defaults())
+            .unwrap();
         assert_eq!(name, "142-group-sync-includes-file-lists-in-the");
         assert_eq!(ctx["linear_title"], "");
     }
@@ -975,7 +975,7 @@ mod tests {
             "pr_number": 3340, "pr_title": "fix-login", "linear_id": "", "linear_title": ""
         });
         assert_eq!(
-            devkit_common::template::render(t.checkout_worktree_dir(), &pr_only, &t.variables)
+            devkit_common::template::render(t.checkout_worktree_dir(), &pr_only, &t.defaults())
                 .unwrap(),
             "3340-fix-login"
         );
@@ -983,7 +983,7 @@ mod tests {
             "pr_number": 3340, "pr_title": "fix-login", "linear_id": "ENG-42", "linear_title": "x"
         });
         assert_eq!(
-            devkit_common::template::render(t.checkout_worktree_dir(), &with_linear, &t.variables)
+            devkit_common::template::render(t.checkout_worktree_dir(), &with_linear, &t.defaults())
                 .unwrap(),
             "3340-fix-login_[ENG-42]"
         );

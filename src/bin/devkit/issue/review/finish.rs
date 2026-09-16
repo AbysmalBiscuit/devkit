@@ -6,8 +6,8 @@ use devkit_config::Person;
 use serde::Deserialize;
 
 use super::{
-    Target, base_ctx, deliver, parse_args, person_by_login, resolve_target, target_from_person,
-    with_fields,
+    REVIEW_FINISH_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, parse_args,
+    person_by_login, resolve_target, target_from_person, with_fields,
 };
 
 pub struct Args {
@@ -179,8 +179,18 @@ pub fn run(args: Args) -> Result<()> {
     let repos = github::Repos::resolve(&loaded.config.github, &start, None);
     let pr_repo = repos.prs()?;
 
-    let mut vars = tmpls.variables.clone();
-    vars.extend(parse_args(&args.args, &tmpls.variables)?);
+    let caller = devkit_common::caller::caller();
+    let mut vars = tmpls.defaults();
+    let given = parse_args(&args.args, &tmpls.declared())?;
+    check_required(
+        "issue review finish",
+        &loaded.config,
+        &[tmpls.review_finish()],
+        REVIEW_FINISH_CONTEXT_KEYS,
+        &given,
+        caller,
+    )?;
+    vars.extend(given);
 
     let steps = Steps::persistent();
     let branch = devkit_common::git::branch(std::path::Path::new(&start)).ok();

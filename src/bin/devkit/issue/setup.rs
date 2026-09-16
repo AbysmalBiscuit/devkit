@@ -464,7 +464,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let t = resolved.tracker.as_ref();
     let issue_ref = parse_input(&resolved, &args.issue)?;
     let issue = issue_ref.id.clone();
-    let vars = &cfg.templates.variables;
+    let vars = &cfg.templates.defaults();
     let budget = branch_budget(cfg, vars, &issue, &args.apps)?;
     let details = want_summary(&args, cfg)
         .then(|| fetch_details(t, &issue))
@@ -927,7 +927,7 @@ mod tests {
     fn default_branch_renders_prefix_and_slug() {
         let t = Templates::default();
         let ctx = json!({"prefix": "lev/", "issue": "eng-1", "slug": "fix"});
-        let out = devkit_common::template::render(t.branch(), &ctx, &t.variables).unwrap();
+        let out = devkit_common::template::render(t.branch(), &ctx, &t.defaults()).unwrap();
         assert_eq!(out, "lev/fix");
     }
 
@@ -935,7 +935,7 @@ mod tests {
     fn default_worktree_dir_renders_slug() {
         let t = Templates::default();
         let ctx = json!({"prefix": "lev/", "issue": "eng-1", "slug": "fix"});
-        let out = devkit_common::template::render(t.worktree_dir(), &ctx, &t.variables).unwrap();
+        let out = devkit_common::template::render(t.worktree_dir(), &ctx, &t.defaults()).unwrap();
         assert_eq!(out, "fix");
     }
 
