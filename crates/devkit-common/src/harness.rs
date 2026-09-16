@@ -10,6 +10,8 @@ use devkit_config::{AppMatch, CommandRule, PolicyAction, ShellSetting};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::git::Checkout;
+
 /// The Claude Code / Codex `PreToolUse` deny envelope. `reason` reaches the
 /// agent.
 pub fn deny_json(reason: &str) -> Value {
@@ -76,9 +78,8 @@ pub fn resolve_enforcement(
 /// Combined with `any` rather than by precedence: enforcement ratchets on, and
 /// only the env override turns it off, so one layer opting in must win even if
 /// a closer layer leaves the flag unset.
-fn harness_enabled(cwd: &Path, flag: &str) -> bool {
-    let main = crate::git::main_checkout(cwd).ok().flatten();
-    let Ok(layers) = devkit_config::project_layers(cwd, main.as_deref()) else {
+fn harness_enabled(checkout: &Checkout, cwd: &Path, flag: &str) -> bool {
+    let Ok(layers) = devkit_config::project_layers(cwd, checkout.main_checkout()) else {
         return false;
     };
     layers.iter().any(|layer| {
@@ -97,15 +98,23 @@ fn global_harness_enabled(flag: &str) -> bool {
 
 /// Whether the named `[harness]` flag is active for an action originating at
 /// `cwd`, across the env override, the project layers, and the global config.
-/// Takes the working directory rather than a pre-resolved checkout root, so a
-/// declaration in a directory between the root and the action is part of the
-/// answer.
-pub fn enforcement_enabled(cwd: &Path, flag: &str, env_var: &str) -> bool {
+/// Takes the working directory as well as the checkout, so a declaration in a
+/// directory between the root and the action is part of the answer.
+///
+/// The checkout stays behind the thunk `resolve_enforcement` takes: an
+/// explicit env override answers on its own, and a [`Checkout`] resolves
+/// lazily, so a harness switched off by environment still spawns no git.
+pub fn enforcement_enabled_in(checkout: &Checkout, cwd: &Path, flag: &str, env_var: &str) -> bool {
     resolve_enforcement(
         parse_env_override(std::env::var(env_var).ok().as_deref()),
-        || harness_enabled(cwd, flag),
+        || harness_enabled(checkout, cwd, flag),
         || global_harness_enabled(flag),
     )
+}
+
+/// [`enforcement_enabled_in`] for a caller with no checkout of its own.
+pub fn enforcement_enabled(cwd: &Path, flag: &str, env_var: &str) -> bool {
+    enforcement_enabled_in(&Checkout::at(cwd), cwd, flag, env_var)
 }
 
 /// The policy keys the shell hook reads.
@@ -261,7 +270,7 @@ fn value_names_programs(v: &toml::Value) -> bool {
 /// Warnings are returned rather than printed. This runs inside the shared gate,
 /// which `lockm hook pretooluse` also calls, and a rule warning printed here
 /// would fire on every `Edit` as well as every `Bash`.
-pub fn resolve_rules(cwd: &Path) -> (HarnessRules, Vec<String>) {
+pub fn resolve_rules_in(checkout: &Checkout, cwd: &Path) -> (HarnessRules, Vec<String>) {
     let mut layers: Vec<(PathBuf, toml::Table)> = Vec::new();
     if let Some(p) = global_config_path()
         && let Ok(body) = std::fs::read_to_string(&p)
@@ -269,8 +278,7 @@ pub fn resolve_rules(cwd: &Path) -> (HarnessRules, Vec<String>) {
     {
         layers.push((p, t));
     }
-    let main = crate::git::main_checkout(cwd).ok().flatten();
-    if let Ok(project) = devkit_config::project_layers(cwd, main.as_deref()) {
+    if let Ok(project) = devkit_config::project_layers(cwd, checkout.main_checkout()) {
         for layer in project {
             if let Ok(body) = std::fs::read_to_string(&layer.path)
                 && let Ok(t) = toml::from_str::<toml::Table>(&body)
@@ -282,9 +290,14 @@ pub fn resolve_rules(cwd: &Path) -> (HarnessRules, Vec<String>) {
     merge_rules(&layers)
 }
 
+/// [`resolve_rules_in`] for a caller with no checkout of its own.
+pub fn resolve_rules(cwd: &Path) -> (HarnessRules, Vec<String>) {
+    resolve_rules_in(&Checkout::at(cwd), cwd)
+}
+
 /// Whether the command guard is active for a command originating at `cwd`.
-pub fn commands_enabled(cwd: &Path) -> bool {
-    enforcement_enabled(cwd, "enforce_commands", "DEVKIT_ENFORCE_COMMANDS")
+pub fn commands_enabled(checkout: &Checkout, cwd: &Path) -> bool {
+    enforcement_enabled_in(checkout, cwd, "enforce_commands", "DEVKIT_ENFORCE_COMMANDS")
 }
 
 /// Which harness sent a payload, and therefore which envelope answers it and
@@ -408,8 +421,8 @@ pub fn warn_shell_json(harness: Harness, context: &str) -> Option<Value> {
 }
 
 /// Whether the shell hook's write stage is active for a command at `cwd`.
-pub fn writes_enabled(cwd: &Path) -> bool {
-    enforcement_enabled(cwd, "enforce_writes", "DEVKIT_ENFORCE_WRITES")
+pub fn writes_enabled(checkout: &Checkout, cwd: &Path) -> bool {
+    enforcement_enabled_in(checkout, cwd, "enforce_writes", "DEVKIT_ENFORCE_WRITES")
 }
 
 #[cfg(test)]
@@ -462,21 +475,37 @@ mod tests {
             "[harness]\nenforce_writes = true\n",
         )
         .unwrap();
-        assert!(harness_enabled(dir.path(), "enforce_writes"));
+        assert!(harness_enabled(
+            &Checkout::at(dir.path()),
+            dir.path(),
+            "enforce_writes"
+        ));
         std::fs::write(
             dir.path().join("devkit.toml"),
             "[harness]\nenforce_writes = false\n",
         )
         .unwrap();
-        assert!(!harness_enabled(dir.path(), "enforce_writes"));
+        assert!(!harness_enabled(
+            &Checkout::at(dir.path()),
+            dir.path(),
+            "enforce_writes"
+        ));
         std::fs::write(
             dir.path().join("devkit.toml"),
             "[defaults]\nworktree_root = \"x\"\n",
         )
         .unwrap();
-        assert!(!harness_enabled(dir.path(), "enforce_writes")); // missing section → off, despite unrelated keys
+        assert!(!harness_enabled(
+            &Checkout::at(dir.path()),
+            dir.path(),
+            "enforce_writes"
+        )); // missing section → off, despite unrelated keys
         let _ = std::fs::remove_file(dir.path().join("devkit.toml"));
-        assert!(!harness_enabled(dir.path(), "enforce_writes")); // no devkit.toml → off
+        assert!(!harness_enabled(
+            &Checkout::at(dir.path()),
+            dir.path(),
+            "enforce_writes"
+        )); // no devkit.toml → off
     }
 
     #[test]
@@ -520,8 +549,16 @@ mod tests {
         )
         .unwrap();
 
-        assert!(harness_enabled(&nested, "enforce_writes"));
-        assert!(!harness_enabled(repo.path(), "enforce_writes"));
+        assert!(harness_enabled(
+            &Checkout::at(&nested),
+            &nested,
+            "enforce_writes"
+        ));
+        assert!(!harness_enabled(
+            &Checkout::at(repo.path()),
+            repo.path(),
+            "enforce_writes"
+        ));
     }
 
     /// A linked worktree inherits its main checkout's `[harness]` declaration:
@@ -567,7 +604,11 @@ mod tests {
         )
         .unwrap();
 
-        assert!(harness_enabled(&linked, "enforce_writes"));
+        assert!(harness_enabled(
+            &Checkout::at(&linked),
+            &linked,
+            "enforce_writes"
+        ));
     }
 
     #[test]

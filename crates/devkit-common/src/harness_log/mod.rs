@@ -18,7 +18,7 @@ use devkit_config::{Fidelity, LogSection, PromptFidelity};
 use serde::{Deserialize, Serialize};
 pub use writer::{now_rfc3339, record};
 
-use crate::{harness::parse_env_override, paths};
+use crate::{git::Checkout, harness::parse_env_override, paths};
 
 /// Bumped when the record envelope changes shape. Every record carries it, so
 /// a reader meeting an unfamiliar one knows it rather than guessing.
@@ -263,13 +263,23 @@ pub fn default_dir() -> PathBuf {
 
 /// Resolve the settings for a hook firing at `cwd`.
 pub fn resolve(cwd: &Path) -> Settings {
-    resolve_at(crate::harness::global_config_path().as_deref(), cwd)
+    resolve_in(&Checkout::at(cwd), cwd)
+}
+
+/// [`resolve`] against a checkout the caller has already resolved. Logging off
+/// reads no project layer, so the checkout is never asked and spawns nothing.
+pub fn resolve_in(checkout: &Checkout, cwd: &Path) -> Settings {
+    resolve_at(
+        crate::harness::global_config_path().as_deref(),
+        checkout,
+        cwd,
+    )
 }
 
 /// [`resolve`] against an explicit global config path, so a caller — and a test
 /// on a machine that has none — can say where the global layer is rather than
 /// rearranging the environment to move it.
-pub fn resolve_at(global_path: Option<&Path>, cwd: &Path) -> Settings {
+pub fn resolve_at(global_path: Option<&Path>, checkout: &Checkout, cwd: &Path) -> Settings {
     let global = global_path.and_then(|p| {
         let section = read_section(p)?;
         // A relative `dir` anchors to the directory that declared it, the way
@@ -277,7 +287,7 @@ pub fn resolve_at(global_path: Option<&Path>, cwd: &Path) -> Settings {
         Some(anchor_dir(section, p.parent()))
     });
     let env = parse_env_override(std::env::var(ENV_OVERRIDE).ok().as_deref());
-    resolve_from(global.as_ref(), || project_sections(cwd), env)
+    resolve_from(global.as_ref(), || project_sections(checkout, cwd), env)
 }
 
 /// Combine the global table, the project layers and the env override.
@@ -353,9 +363,8 @@ fn anchor_dir(mut section: LogSection, anchor: Option<&Path>) -> LogSection {
 /// Every project layer applying at `cwd`, lowest precedence first. Order does
 /// not matter to any key here — the two a project may set resolve by `min` and
 /// by `any` — but it is what `resolve_rules` produces, so the two agree.
-fn project_sections(cwd: &Path) -> Vec<LogSection> {
-    let main = crate::git::main_checkout(cwd).ok().flatten();
-    let Ok(layers) = devkit_config::project_layers(cwd, main.as_deref()) else {
+fn project_sections(checkout: &Checkout, cwd: &Path) -> Vec<LogSection> {
+    let Ok(layers) = devkit_config::project_layers(cwd, checkout.main_checkout()) else {
         return Vec::new();
     };
     layers
@@ -507,7 +516,7 @@ mod tests {
             "[config]\nroot = true\n[harness.log]\nenabled = true\ncommand = \"full\"\ndir = \"./.logs\"\n",
         )
         .unwrap();
-        let s = resolve_at(None, project.path());
+        let s = resolve_at(None, &Checkout::at(project.path()), project.path());
         assert!(!s.enabled, "only the global config turns logging on");
         assert_eq!(s.command, Fidelity::Redacted, "and cannot raise fidelity");
         assert_eq!(s.dir, default_dir(), "or move the directory");
@@ -530,7 +539,11 @@ mod tests {
             "[harness.log]\nenabled = true\ncommand = \"full\"\n",
         )
         .unwrap();
-        let s = resolve_at(Some(&global_path), project.path());
+        let s = resolve_at(
+            Some(&global_path),
+            &Checkout::at(project.path()),
+            project.path(),
+        );
         assert!(s.enabled);
         assert_eq!(s.command, Fidelity::Hashed);
     }
@@ -545,7 +558,11 @@ mod tests {
         )
         .unwrap();
         let project = tempfile::tempdir().unwrap();
-        let s = resolve_at(Some(&global_path), project.path());
+        let s = resolve_at(
+            Some(&global_path),
+            &Checkout::at(project.path()),
+            project.path(),
+        );
         assert_eq!(s.dir, global.path().join("logs"));
     }
 

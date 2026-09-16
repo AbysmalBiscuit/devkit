@@ -1,6 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::Result;
+use devkit_common::git::Checkout;
 use devkit_config::{self as config, Config, Provenance};
 
 use crate::{
@@ -24,7 +25,12 @@ pub struct Loaded {
 /// Reports unresolvable apps on stderr. Use [`load_quiet`] when the config
 /// being read is not the one the caller is working in.
 pub fn load(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
-    let loaded = load_quiet(explicit, start)?;
+    load_in(&Checkout::at(start), explicit, start)
+}
+
+/// [`load`] against a checkout the caller has already resolved.
+pub fn load_in(checkout: &Checkout, explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
+    let loaded = load_quiet_in(checkout, explicit, start)?;
     for name in &loaded.skipped {
         eprintln!(
             "note: skipping app `{name}` — no path in config and none inferrable from doppler.yaml"
@@ -37,7 +43,14 @@ pub fn load(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
 /// not grounds for printing that config's gaps on this terminal, where they
 /// read as faults in the project the caller is actually in.
 pub fn load_quiet(explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
-    let (cfg, provenance) = devkit_common::config::resolve(explicit, start)?;
+    load_quiet_in(&Checkout::at(start), explicit, start)
+}
+
+/// [`load_quiet`] against a checkout the caller has already resolved, so the
+/// hook path pays for one `git worktree list` across every helper that needs
+/// one rather than one apiece.
+pub fn load_quiet_in(checkout: &Checkout, explicit: Option<&Path>, start: &Path) -> Result<Loaded> {
+    let (cfg, provenance) = devkit_common::config::resolve_in(checkout, explicit, start)?;
     let yaml_path = config::expand_tilde(&cfg.defaults.doppler_yaml);
     let p2p = match std::fs::read_to_string(&yaml_path) {
         Ok(y) => doppler::path_to_project(&y)?,
