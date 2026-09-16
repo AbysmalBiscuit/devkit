@@ -31,9 +31,10 @@ compile_error!(
     "`devkit hook pre-tool-use` fails open through catch_unwind; the release profile must unwind"
 );
 
-/// Longer than a healthy registry ever takes and well inside the manifest's
-/// 30-second timeout, which allows the call when it fires.
-const WRITE_STAGE_DEADLINE: Duration = Duration::from_secs(5);
+/// Far longer than a healthy registry takes, and below the manifest timeout,
+/// which allows the call when it fires. Keep the manifest at this plus the
+/// record deadline plus a second or two of process startup.
+const WRITE_STAGE_DEADLINE: Duration = Duration::from_secs(2);
 const UNUSABLE_SHELL_REASON: &str =
     "devkit write-harness: shell payload could not be evaluated (fail-closed)";
 
@@ -124,7 +125,7 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
 /// The order is the contract. `harness_log::record` catches its own panics but
 /// cannot be made block-safe, and the log directory is configurable to a
 /// network home, so `create_dir_all` and the first append can stall. A stall
-/// before the envelope exists runs into the manifest's 30-second timeout, and a
+/// before the envelope exists runs into the manifest's timeout, and a
 /// harness timeout *allows* the call — which would turn a denial the write
 /// stage had already decided into an allow. Printing first costs nothing: a
 /// closed stdout pipe fails the write immediately rather than blocking, and the
