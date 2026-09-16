@@ -13,6 +13,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
@@ -386,6 +387,187 @@ pub fn primary_checkout(start: &Path) -> Result<PathBuf> {
 pub fn derived_worktree_root(primary: &Path) -> Option<PathBuf> {
     let name = primary.file_name()?.to_str()?;
     Some(primary.parent()?.join(format!("{name}_worktrees")))
+}
+
+/// One directory's answer to both of the questions every hook-path helper asks
+/// about a checkout — where is the working tree containing it, and where is
+/// the repository's main worktree — resolved by a single
+/// `git worktree list --porcelain` and shared by the callers that used to ask
+/// git for themselves.
+///
+/// Resolution is lazy: a caller that turns out not to need a checkout (an
+/// enforcement flag switched off by environment, say) spawns no git at all.
+/// It is also per-value and never process-wide, because `devkitd` and the MCP
+/// server outlive the worktrees they serve and a cached listing would answer
+/// with a checkout that has since been removed.
+///
+/// The whole listing is kept rather than two paths, so that
+/// [`Checkout::checkout_of`] can answer for a sibling worktree of the same
+/// repository without a second git call.
+#[derive(Debug, Clone)]
+pub struct Checkout {
+    start: PathBuf,
+    resolved: OnceLock<Resolved>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Resolved {
+    /// Every worktree of `start`'s repository, main first. Empty when git
+    /// reported no repository, and when git could not be run.
+    worktrees: Vec<Worktree>,
+    /// Index into `worktrees` of the one containing `start`.
+    here: Option<usize>,
+    /// Why git could not be run at all, which is a different answer from git
+    /// running and reporting no repository — a caller that folds the two
+    /// scopes itself to the wrong root whenever git is merely unavailable.
+    error: Option<String>,
+}
+
+impl Checkout {
+    /// A checkout resolved from `start` when something first asks for it.
+    pub fn at(start: &Path) -> Self {
+        Self {
+            start: start.to_path_buf(),
+            resolved: OnceLock::new(),
+        }
+    }
+
+    /// The directory this was resolved from.
+    pub fn dir(&self) -> &Path {
+        &self.start
+    }
+
+    fn resolved(&self) -> &Resolved {
+        self.resolved.get_or_init(|| {
+            let out = match Git::at(&self.start)
+                .args(["worktree", "list", "--porcelain"])
+                .wait()
+            {
+                Ok(out) => out,
+                Err(e) => {
+                    return Resolved {
+                        error: Some(format!("{e:#}")),
+                        ..Resolved::default()
+                    };
+                }
+            };
+            // A non-zero exit is git answering "no repository here", the same
+            // reading `checkout_root_opt` gives `rev-parse --show-toplevel`.
+            if !out.status.success() {
+                return Resolved::default();
+            }
+            let worktrees = parse_porcelain(&String::from_utf8_lossy(&out.stdout));
+            let here = longest_containing(&worktrees, &self.start);
+            Resolved {
+                worktrees,
+                here,
+                error: None,
+            }
+        })
+    }
+
+    /// The working tree containing the directory this was resolved from, or
+    /// `None` outside one. The counterpart of [`checkout_root_opt`].
+    pub fn root(&self) -> Option<&Path> {
+        let r = self.resolved();
+        r.here.map(|i| r.worktrees[i].path.as_path())
+    }
+
+    /// Why git could not be run, when that is why [`Checkout::root`] is
+    /// `None`. `None` here means git ran: either it found a checkout or it
+    /// reported none.
+    pub fn error(&self) -> Option<&str> {
+        self.resolved().error.as_deref()
+    }
+
+    /// The repository's main worktree, or `None` when it is bare and when git
+    /// could not answer. The counterpart of [`non_bare_main`].
+    pub fn main_worktree(&self) -> Option<&Path> {
+        self.resolved()
+            .worktrees
+            .first()
+            .filter(|w| !w.bare)
+            .map(|w| w.path.as_path())
+    }
+
+    /// The main worktree as [`main_checkout`] reports it: `None` when the
+    /// directory this was resolved from is already in it. Read off the
+    /// listing's index rather than by comparing paths, so two spellings of
+    /// one directory cannot read as two checkouts.
+    pub fn main_checkout(&self) -> Option<&Path> {
+        (self.resolved().here != Some(0))
+            .then(|| self.main_worktree())
+            .flatten()
+    }
+
+    /// The working tree containing `dir`, for a `dir` that need not be the
+    /// one this was resolved from — the file a write claims, say, which can
+    /// sit in any worktree of this repository or in none of them.
+    ///
+    /// `None` means this listing does not settle the question and the caller
+    /// must ask git about `dir` itself. That covers `dir` outside every listed
+    /// worktree, and `dir` inside a nested repository — a submodule, most of
+    /// all — which git would discover before the enclosing worktree and which
+    /// this listing does not describe. A nested repository is found by the
+    /// `.git` entry at its root, which is git's own discovery rule once the
+    /// environment that could override it has been scrubbed.
+    pub fn checkout_of(&self, dir: &Path) -> Option<&Path> {
+        let r = self.resolved();
+        let root = r
+            .worktrees
+            .get(longest_containing(&r.worktrees, dir)?)?
+            .path
+            .as_path();
+        let (parent, child) = containment(root, dir, std::fs::canonicalize(dir).ok().as_deref())?;
+        child
+            .ancestors()
+            .take_while(|d| *d != parent)
+            .all(|d| !d.join(".git").exists())
+            .then_some(root)
+    }
+}
+
+/// The index of the deepest non-bare worktree containing `dir`, measuring
+/// depth by how far `dir` sits below it so that two listings in different
+/// spellings still compare.
+fn longest_containing(all: &[Worktree], dir: &Path) -> Option<usize> {
+    let canon = std::fs::canonicalize(dir).ok();
+    let mut best: Option<(usize, usize)> = None;
+    for (i, w) in all.iter().enumerate() {
+        if w.bare {
+            continue;
+        }
+        let Some((parent, child)) = containment(&w.path, dir, canon.as_deref()) else {
+            continue;
+        };
+        let below = child
+            .strip_prefix(&parent)
+            .map_or(usize::MAX, |rel| rel.components().count());
+        if best.is_none_or(|(_, seen)| below < seen) {
+            best = Some((i, below));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// `parent` and `child` in one spelling that shows the containment, or `None`
+/// when `parent` does not contain `child`. A lexical answer settles the common
+/// case without touching the filesystem; a symlinked working directory — which
+/// git reports resolved, since it reads the directory rather than the spelling
+/// used to reach it — needs both sides resolved before they compare.
+fn containment(
+    parent: &Path,
+    child: &Path,
+    child_canon: Option<&Path>,
+) -> Option<(PathBuf, PathBuf)> {
+    if child.starts_with(parent) {
+        return Some((parent.to_path_buf(), child.to_path_buf()));
+    }
+    let resolved_parent = std::fs::canonicalize(parent).ok()?;
+    let resolved_child = child_canon?;
+    resolved_child
+        .starts_with(&resolved_parent)
+        .then(|| (resolved_parent, resolved_child.to_path_buf()))
 }
 
 /// The repository's main worktree, or `None` when it is bare. Distinct from
@@ -818,6 +1000,181 @@ mod tests {
     fn checkout_root_opt_distinguishes_no_repository_from_a_git_error() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(checkout_root_opt(dir.path()).unwrap(), None);
+    }
+
+    /// One listing has to answer what `rev-parse --show-toplevel` and
+    /// `worktree list` used to answer separately, in both directions.
+    #[test]
+    fn checkout_answers_root_and_main_from_one_listing() {
+        let repo = repo_with_commit();
+        let holder = tempfile::tempdir().unwrap();
+        let linked = holder.path().join("wt");
+        run(
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "side",
+            ],
+            repo.path(),
+        )
+        .unwrap();
+
+        let here = Checkout::at(repo.path());
+        assert_eq!(
+            std::fs::canonicalize(here.root().unwrap()).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+        assert_eq!(here.main_checkout(), None);
+
+        let there = Checkout::at(&linked);
+        assert_eq!(
+            std::fs::canonicalize(there.root().unwrap()).unwrap(),
+            std::fs::canonicalize(&linked).unwrap()
+        );
+        assert_eq!(
+            std::fs::canonicalize(there.main_checkout().unwrap()).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+    }
+
+    /// A directory below the checkout resolves to the checkout, not to itself.
+    #[test]
+    fn checkout_resolves_a_nested_directory_to_its_working_tree() {
+        let repo = repo_with_commit();
+        let nested = repo.path().join("a/b");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(Checkout::at(&nested).root().unwrap()).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+    }
+
+    /// git reports the directory it resolved, not the spelling used to reach
+    /// it, so a symlinked start compares only once both sides are resolved.
+    #[cfg(unix)]
+    #[test]
+    fn checkout_resolves_a_symlinked_start() {
+        let repo = repo_with_commit();
+        let holder = tempfile::tempdir().unwrap();
+        let link = holder.path().join("link");
+        std::os::unix::fs::symlink(repo.path(), &link).unwrap();
+
+        let checkout = Checkout::at(&link);
+        assert_eq!(
+            std::fs::canonicalize(checkout.root().unwrap()).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+        assert_eq!(checkout.main_checkout(), None);
+    }
+
+    /// A bare main worktree has no working tree to name, and it is not a
+    /// candidate for the enclosing checkout either.
+    #[test]
+    fn checkout_of_a_linked_worktree_of_a_bare_repository_has_no_main() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("b.git");
+        Git::fixture(dir.path())
+            .args(["init", "-q", "--bare", bare.to_str().unwrap()])
+            .output()
+            .unwrap();
+        // A bare repository has no commit to branch from until one is pushed
+        // into it, so the fixture clones a populated repository instead.
+        let src = repo_with_commit();
+        Git::fixture(&bare)
+            .args(["fetch", src.path().to_str().unwrap(), "main:main"])
+            .output()
+            .unwrap();
+        let linked = dir.path().join("wt");
+        Git::fixture(&bare)
+            .args(["worktree", "add", "-q", linked.to_str().unwrap(), "main"])
+            .output()
+            .unwrap();
+
+        let checkout = Checkout::at(&linked);
+        assert_eq!(
+            std::fs::canonicalize(checkout.root().unwrap()).unwrap(),
+            std::fs::canonicalize(&linked).unwrap()
+        );
+        assert_eq!(checkout.main_worktree(), None);
+        assert_eq!(checkout.main_checkout(), None);
+    }
+
+    /// Outside a repository git runs and answers nothing, which is not the
+    /// same as git failing to run — `error` stays empty.
+    #[test]
+    fn checkout_outside_a_repository_is_empty_without_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = Checkout::at(dir.path());
+        assert_eq!(checkout.root(), None);
+        assert_eq!(checkout.main_worktree(), None);
+        assert_eq!(checkout.error(), None);
+    }
+
+    /// The listing answers for any directory inside the worktrees it names,
+    /// so a write into a sibling worktree costs no second git call.
+    #[test]
+    fn checkout_of_answers_for_a_sibling_worktree() {
+        let repo = repo_with_commit();
+        let holder = tempfile::tempdir().unwrap();
+        let linked = holder.path().join("wt");
+        run(
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().unwrap(),
+                "-b",
+                "side",
+            ],
+            repo.path(),
+        )
+        .unwrap();
+        let nested = linked.join("a");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let checkout = Checkout::at(repo.path());
+        assert_eq!(
+            std::fs::canonicalize(checkout.checkout_of(&nested).unwrap()).unwrap(),
+            std::fs::canonicalize(&linked).unwrap()
+        );
+    }
+
+    /// A submodule is a repository of its own that git discovers before the
+    /// enclosing worktree, and this listing does not describe it. Answering
+    /// with the enclosing checkout would scope its files to the wrong root, so
+    /// the question is handed back to the caller.
+    #[test]
+    fn checkout_of_declines_a_nested_repository() {
+        let repo = repo_with_commit();
+        let inner = repo.path().join("vendor/lib");
+        std::fs::create_dir_all(&inner).unwrap();
+        Git::fixture(&inner)
+            .args(["init", "-q", "-b", "main"])
+            .output()
+            .unwrap();
+
+        let checkout = Checkout::at(repo.path());
+        assert_eq!(checkout.checkout_of(&inner), None);
+        assert_eq!(checkout.checkout_of(&inner.join("src")), None);
+        // The directory above the nested repository is still answerable.
+        assert_eq!(
+            std::fs::canonicalize(checkout.checkout_of(&repo.path().join("vendor")).unwrap())
+                .unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
+    }
+
+    #[test]
+    fn checkout_of_declines_a_directory_outside_every_worktree() {
+        let repo = repo_with_commit();
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert_eq!(
+            Checkout::at(repo.path()).checkout_of(elsewhere.path()),
+            None
+        );
     }
 
     #[test]

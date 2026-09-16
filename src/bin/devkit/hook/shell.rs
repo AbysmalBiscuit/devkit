@@ -14,6 +14,7 @@ use std::{io::Write, sync::OnceLock, time::Duration};
 use anyhow::Result;
 use devkit_command::{Context, Limits, PathStyle};
 use devkit_common::{
+    git::Checkout,
     harness::{self, Harness, ShellPayload},
     harness_log::{self, Decision, Kind, Record, ShellPre, Verdict},
 };
@@ -68,6 +69,7 @@ impl Outcome {
 #[derive(Clone)]
 struct PanicContext {
     harness: Option<Harness>,
+    checkout: Checkout,
     settings: harness_log::Settings,
 }
 
@@ -106,6 +108,7 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
                 undecided_record(
                     payload,
                     ctx.harness,
+                    &ctx.checkout,
                     &ctx.settings,
                     "the command guard panicked while evaluating this command",
                 )
@@ -141,18 +144,20 @@ fn finish(rec: Option<&Record>, settings: Option<&harness_log::Settings>) {
 /// this is a log-then-return rather than a bare return.
 pub fn deny_unreadable_payload(declared: Option<Harness>) -> Result<()> {
     let cwd = current_cwd();
-    if harness::writes_enabled(&cwd) {
+    let checkout = Checkout::at(&cwd);
+    if harness::writes_enabled(&checkout, &cwd) {
         let envelope = match declared {
             Some(h) => harness::deny_shell_json(h, UNUSABLE_SHELL_REASON),
             None => harness::deny_json(UNUSABLE_SHELL_REASON),
         };
         print_envelope(&envelope);
     }
-    let settings = harness_log::resolve(&cwd);
+    let settings = harness_log::resolve_in(&checkout, &cwd);
     let rec = settings.enabled.then(|| {
         undecided_record(
             &Value::Null,
             declared,
+            &checkout,
             &settings,
             "the hook payload could not be read as JSON",
         )
@@ -168,6 +173,7 @@ pub fn deny_unreadable_payload(declared: Option<Harness>) -> Result<()> {
 fn undecided_record(
     payload: &Value,
     declared: Option<Harness>,
+    checkout: &Checkout,
     settings: &harness_log::Settings,
     reason: &str,
 ) -> Box<Record> {
@@ -183,6 +189,7 @@ fn undecided_record(
         payload,
         HookEvent::PreToolUse,
         declared,
+        checkout,
         Kind::ShellPre(Box::new(ShellPre {
             command,
             redacted,
@@ -217,10 +224,7 @@ fn current_cwd() -> std::path::PathBuf {
 /// shell payload. With `--harness` the identity half is already settled, so
 /// this is left deciding only whether the event is about a shell command at
 /// all, and where it would have run.
-fn raw_shell_context(
-    payload: &serde_json::Value,
-    declared: Option<Harness>,
-) -> Option<(Harness, Option<std::path::PathBuf>)> {
+fn raw_shell_context(payload: &serde_json::Value, declared: Option<Harness>) -> Option<Harness> {
     payload
         .get("hook_event_name")
         .and_then(serde_json::Value::as_str)?;
@@ -230,21 +234,18 @@ fn raw_shell_context(
     if !harness::SHELL_TOOLS.contains(&tool) {
         return None;
     }
-    let harness = declared.unwrap_or_else(|| harness::infer_harness(payload));
-    let cwd = payload
-        .get("cwd")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from);
-    Some((harness, cwd))
+    Some(declared.unwrap_or_else(|| harness::infer_harness(payload)))
 }
 
-fn deny_unusable_shell(payload: &serde_json::Value, declared: Option<Harness>) -> Response {
-    let Some((which, cwd)) = raw_shell_context(payload, declared) else {
+fn deny_unusable_shell(
+    payload: &serde_json::Value,
+    declared: Option<Harness>,
+    checkout: &Checkout,
+) -> Response {
+    let Some(which) = raw_shell_context(payload, declared) else {
         return Response::Silent;
     };
-    let cwd = cwd.unwrap_or_else(current_cwd);
-    if harness::writes_enabled(&cwd) {
+    if harness::writes_enabled(checkout, checkout.dir()) {
         Response::Envelope(harness::deny_shell_json(which, UNUSABLE_SHELL_REASON))
     } else {
         Response::Silent
@@ -258,18 +259,21 @@ fn respond(
     panic_ctx: &OnceLock<PanicContext>,
 ) -> Outcome {
     let Some(shell) = harness::parse_shell_payload(payload) else {
-        let response = deny_unusable_shell(payload, declared);
-        let settings = harness_log::resolve(&current_cwd());
+        let checkout = Checkout::at(&record::payload_cwd(payload));
+        let response = deny_unusable_shell(payload, declared, &checkout);
+        let settings = harness_log::resolve_in(&checkout, checkout.dir());
         let rec = settings.enabled.then(|| {
             undecided_record(
                 payload,
                 declared,
+                &checkout,
                 &settings,
                 "the payload did not parse as a shell command",
             )
         });
         let _ = panic_ctx.set(PanicContext {
             harness: declared,
+            checkout,
             settings,
         });
         return Outcome {
@@ -283,14 +287,21 @@ fn respond(
         // to log to either: `resolve` needs one to find the project layers.
         return Outcome::silent();
     };
-    let settings = harness_log::resolve(&cwd);
+    // One `git worktree list` for the whole invocation. The log settings, the
+    // two enforcement gates, the rule layers, the config load and the write
+    // stage's lock scoping all read this checkout instead of asking git for
+    // themselves. Resolution is lazy, so a harness switched off by environment
+    // still spawns nothing.
+    let checkout = Checkout::at(&cwd);
+    let settings = harness_log::resolve_in(&checkout, &cwd);
     let _ = panic_ctx.set(PanicContext {
         harness: Some(which),
+        checkout: checkout.clone(),
         settings: settings.clone(),
     });
 
-    let commands_on = harness::commands_enabled(&cwd);
-    let writes_on = which != Harness::Cursor && harness::writes_enabled(&cwd);
+    let commands_on = harness::commands_enabled(&checkout, &cwd);
+    let writes_on = which != Harness::Cursor && harness::writes_enabled(&checkout, &cwd);
     // With logging on and both gates off, the analysis runs anyway and this
     // early return is skipped: a record with an empty verdict is half a record.
     // That is the accepted trade, bounded by logging being off by default and
@@ -302,7 +313,7 @@ fn respond(
         let _ = write_stage.set(which);
     }
 
-    let (rules, warnings) = harness::resolve_rules(&cwd);
+    let (rules, warnings) = harness::resolve_rules_in(&checkout, &cwd);
     for w in &warnings {
         warn(w);
     }
@@ -329,7 +340,7 @@ fn respond(
     let mut blocks: Vec<String> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
     if commands_on {
-        let project = load_project(&cwd, rules.app_match.clone());
+        let project = load_project(&checkout, &cwd, rules.app_match.clone());
         let verdict = guard::decide(&analysis, &rules.commands, project.as_ref());
         blocks.extend(verdict.blocks.into_iter().map(|f| f.message));
         notes.extend(verdict.warnings.into_iter().map(|f| f.message));
@@ -341,6 +352,7 @@ fn respond(
                 payload,
                 &shell,
                 declared,
+                &checkout,
                 &settings,
                 dialect,
                 Some(record::projection(&analysis, analyze_micros)),
@@ -366,8 +378,11 @@ fn respond(
             };
             let holder =
                 devkit_locks::hook::holder_from_fields(&session, shell.agent_id.as_deref());
+            // The stage runs on its own thread, so it takes a clone of the
+            // already-resolved checkout rather than a borrow.
+            let checkout = checkout.clone();
             match writes::with_deadline(WRITE_STAGE_DEADLINE, move || {
-                writes::enforce(&evaluation, &holder)
+                writes::enforce(&evaluation, &holder, checkout)
             }) {
                 Ok(Ok(conflicts)) if conflicts.is_empty() => {}
                 Ok(Ok(conflicts)) => blocks.push(writes::conflict_message(&conflicts)),
@@ -420,6 +435,7 @@ fn shell_pre_record(
     payload: &Value,
     shell: &ShellPayload,
     declared: Option<Harness>,
+    checkout: &Checkout,
     settings: &harness_log::Settings,
     dialect: devkit_command::Dialect,
     analysis: Option<devkit_common::harness_log::AnalysisProjection>,
@@ -431,6 +447,7 @@ fn shell_pre_record(
         payload,
         HookEvent::PreToolUse,
         declared,
+        checkout,
         Kind::ShellPre(Box::new(ShellPre {
             command,
             redacted,
@@ -465,8 +482,12 @@ fn warn(msg: &str) {
 /// parse or deserialize is different: it silently drops the task- and
 /// app-aware guard sources while leaving `[harness.commands]` rules working,
 /// so that case is worth a line on stderr naming what broke.
-fn load_project(cwd: &std::path::Path, app_match: devkit_config::AppMatch) -> Option<Project> {
-    let loaded = match devkit_ports::load::load_quiet(None, cwd) {
+fn load_project(
+    checkout: &Checkout,
+    cwd: &std::path::Path,
+    app_match: devkit_config::AppMatch,
+) -> Option<Project> {
+    let loaded = match devkit_ports::load::load_quiet_in(checkout, None, cwd) {
         Ok(loaded) => loaded,
         Err(e) if e.downcast_ref::<devkit_config::NoConfig>().is_some() => return None,
         Err(e) => {
@@ -481,11 +502,11 @@ fn load_project(cwd: &std::path::Path, app_match: devkit_config::AppMatch) -> Op
             return None;
         }
     };
-    // `checkout_root`, not `main_checkout`: the latter is `None` when this *is*
-    // the primary clone, and in a linked worktree it names a directory the cwd
-    // is never under, so the relative path would never resolve anywhere.
-    let cwd_rel = devkit_common::git::checkout_root(cwd)
-        .ok()
+    // `root`, not `main_checkout`: the latter is `None` when this *is* the
+    // primary clone, and in a linked worktree it names a directory the cwd is
+    // never under, so the relative path would never resolve anywhere.
+    let cwd_rel = checkout
+        .root()
         .and_then(|r| cwd.strip_prefix(r).ok().map(|p| p.to_path_buf()))
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .filter(|s| !s.is_empty());
