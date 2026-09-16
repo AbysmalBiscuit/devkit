@@ -337,11 +337,11 @@ Opt-in for the agent write-access harness.
 
 With the env var unset, enforcement is on when **either** a project layer **or** the global config opts in. Set `enforce_writes = true` in the global config for a machine-wide default; drop a per-checkout `devkit.toml` only when you want to opt a single checkout in (or, with the global default on, set the env var to `off` to opt a session out). The global-config and env routes need **no** per-worktree file — so they avoid shadowing the global config in `devrun`/`portm` discovery.
 
-**What enforcement gates.** The write hook intercepts `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, and Codex's `apply_patch`. Shell tools (`Bash` and Claude Code's `PowerShell`, on Claude Code and Codex) go through `devkit harness shell`, which parses the command and the scripts it runs and claims every write target it can resolve before the command runs. It understands redirects, `tee`, `cp`, `mv`, `rm`, `touch`, `dd`, `sed -i`, `perl -i`, the git verbs that rewrite files, and common formatters; inline Python, JavaScript and TypeScript file APIs, including a target passed as `sys.argv` or `process.argv` from a literal shell variable; and PowerShell's content and item cmdlets and `System.IO.File`. A whole-tree writer such as `cargo fmt` or `git checkout` claims nothing and is refused while another session holds a lock under the tree. A program devkit does not model, including build tools and package managers, is not treated as a writer. `devrun task <name>` is not expanded, so a task that formats the tree is not checked. Cursor keeps the command guard only; its shell calls claim nothing.
+**What enforcement gates.** The write hook intercepts `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, and Codex's `apply_patch`. Shell tools (`Bash` and Claude Code's `PowerShell`, on Claude Code and Codex, and Cursor's `Shell`) go through the shell path of `devkit hook pre-tool-use`, which parses the command and the scripts it runs and claims every write target it can resolve before the command runs. It understands redirects, `tee`, `cp`, `mv`, `rm`, `touch`, `dd`, `sed -i`, `perl -i`, the git verbs that rewrite files, and common formatters; inline Python, JavaScript and TypeScript file APIs, including a target passed as `sys.argv` or `process.argv` from a literal shell variable; and PowerShell's content and item cmdlets and `System.IO.File`. A whole-tree writer such as `cargo fmt` or `git checkout` claims nothing and is refused while another session holds a lock under the tree. A program devkit does not model, including build tools and package managers, is not treated as a writer. `devrun task <name>` is not expanded, so a task that formats the tree is not checked. Cursor keeps the command guard only; its shell calls claim nothing.
 
 A write devkit cannot resolve is not treated as covered. `unresolved_writes`, `unsupported_language`, and `script_files` decide what happens: `block` refuses the call and says how to make the target explicit, `warn` allows it and tells the agent what was not checked, `allow` says nothing. A warning cannot override a conflict on a target devkit did resolve. Holding a lock on some other path is never taken as covering an unresolved write.
 
-**What the command guard gates.** `Bash` (Claude Code and Codex) and `beforeShellExecution` (Cursor). A command is refused when it matches a `[harness.commands.*]` rule, retypes a `[tasks]` entry that devkit would run differently, launches an app the way its `[apps] launch` does, or starts a dev server devkit knows by name. devkit's own commands — `devkit`, `devrun`, `lockm`, `portm`, `docm` — are never refused, even by a rule that names one, because they are what a refusal redirects to. Everything else runs. Unlike write enforcement, the guard fails **open**: a config it cannot read, a rule it cannot parse, or an internal error warns on stderr and lets the command through. `DEVKIT_ENFORCE_COMMANDS=0` turns it off for a session.
+**What the command guard gates.** Every shell tool call that reaches `devkit hook pre-tool-use`: `Bash` and `PowerShell` on Claude Code, `Bash` on Codex, and every shell command on Cursor. A command is refused when it matches a `[harness.commands.*]` rule, retypes a `[tasks]` entry that devkit would run differently, launches an app the way its `[apps] launch` does, or starts a dev server devkit knows by name. devkit's own commands — `devkit`, `devrun`, `lockm`, `portm`, `docm` — are never refused, even by a rule that names one, because they are what a refusal redirects to. Everything else runs. Unlike write enforcement, the guard fails **open**: a config it cannot read, a rule it cannot parse, or an internal error warns on stderr and lets the command through. `DEVKIT_ENFORCE_COMMANDS=0` turns it off for a session.
 
 **Command rules.** A `[harness.commands.<name>]` rule matches a parsed invocation: `programs` against the program's basename, `args` against its leading arguments after the program's own global options are removed, so `git -C /repo worktree add` meets `args = ["worktree", "add"]` and `git worktree list` does not. Rules see nested commands (`bash -c '...'`, a Python `subprocess.run([...])`), never quoted text that only mentions one. `enabled = false` turns an inherited rule off. `action` is `block` (default) or `warn`; `severity` is `info`, `warning`, or `error` (default) and classifies the message. When an argument cannot be resolved (`git "$verb" add`), a rule that might match warns and allows. `shell`, `unresolved_writes`, `unsupported_language`, and `script_files` take the closest layer's value; `enforce_writes` and `enforce_commands` still turn on if any layer sets them.
 
@@ -349,15 +349,54 @@ A write devkit cannot resolve is not treated as covered. `unresolved_writes`, `u
 
 **Naming the app.** When the guard refuses a dev-server command it names the app to run instead, resolving the app from a workspace path in the command, a `--filter`/`--dir`/`-C` value, or the shell's directory. Exact names and paths resolve first; a fuzzy match then rescues near-misses such as `lab-tools` against an app declared `lab_tools`. `[harness.app_match]` tunes that last step: `fuzzy` (default `true`) turns it off, `max_typos` (default `1`) is how many character differences it forgives, and `min_score` (default `60`) is the score below which no app is named and the message falls back to `devkit config apps`. Raising `max_typos` buys wrong app names; a project that would rather see the listing than a guess sets `fuzzy = false`.
 
-**Activation requires `lockm` and `devkit` on `PATH`.** The hooks invoke bare `lockm hook <event>` — the same command as `devkit locks hook <event>` — and bare `devkit harness shell`. Install `devkit` via `cargo install --path .`; its first run creates the `lockm` link automatically (or run `devkit install-links` directly). The resolved names must be reachable from the shell that runs hook commands.
+**Activation requires `devkit` on `PATH`.** The hooks invoke bare `devkit hook <event>`. Install `devkit` via `cargo install --path .`; the resolved name must be reachable from the shell that runs hook commands. The retired `lockm hook <event>` and `devkit harness shell` spellings still resolve, so a manifest installed before this release keeps working; the session-start bootstrap probes the other way round, and reports a `devkit` too old for the manifests it is being asked to answer.
 
 **Fail-open / fail-closed behaviour.**
 
 - *Harness off* (no opt-in from any source — env unset, no checkout `devkit.toml` flag, and no global-config flag): the hook exits 0 immediately. No locks are taken; zero overhead.
-- *`lockm` absent from `PATH`*: the hook invocation fails silently and the write proceeds. This is fail-open to avoid blocking agents on machines that do not have the binary installed.
+- *`devkit` absent from `PATH`*: the hook invocation fails silently and the write proceeds. This is fail-open to avoid blocking agents on machines that do not have the binary installed.
 - *Registry error when the harness is on*: the hook denies the write rather than allowing it through silently (fail-closed). The deny message includes the error so the agent can report it.
 
 **Turning it on.** Put `enforce_writes = true` under `[harness]` in the global config (`~/.config/devkit/config.toml`) to enforce everywhere. Or per-checkout, add the same table to that checkout's own `devkit.toml`; only the `[harness]` table is read, so it may be an otherwise-empty file or a full project config. Or skip both files and set `DEVKIT_ENFORCE_WRITES=1` in the environment.
+
+### `[harness.log]`
+
+What devkit records about the events a harness sends it: the command the agent tried to run, the analysis devkit made of it, and the verdict it reached. **Off by default.**
+
+```toml
+[harness.log]
+enabled      = true                   # global config only
+command      = "redacted"             # full | redacted | hashed
+prompt       = "off"                  # off | hashed | redacted | full
+auto_prune   = true                   # global config only
+dir          = "${HOME}/logs/devkit"  # global config only; defaults under the state dir
+max_age_days = 30                     # global config only; absent means unlimited
+max_bytes    = 2000000000             # global config only; absent means unlimited
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Whether anything is recorded at all. |
+| `command` | `"hashed"` \| `"redacted"` \| `"full"` | `"redacted"` | How much of a command's text a record carries. |
+| `prompt` | `"off"` \| `"hashed"` \| `"redacted"` \| `"full"` | `"off"` | How much of a submitted prompt a record carries. |
+| `auto_prune` | bool | `true` | Sweep the log at session end. |
+| `dir` | path | `<state dir>/harness-log` | Where records land. |
+| `max_age_days` | int > 0 | unlimited | Days of records to keep. |
+| `max_bytes` | int > 0 | unlimited | Bytes of records to keep. |
+
+**Five keys are global-only.** `enabled = true`, `dir`, `auto_prune`, `max_age_days` and `max_bytes` are read from the global config alone and ignored wherever else they appear. A project layer may do exactly two things: set `enabled = false`, and *lower* `command` or `prompt`. Everything a project layer can do tightens. `dir` is on that list for the same reason `enabled = true` is: a project layer setting `dir = "./.logs"` would land command text inside the checkout, which is the one outcome the boundary exists to prevent.
+
+That boundary is honest but narrow. The global config path honours `$DEVKIT_CONFIG`, which can point anywhere including into a repository, so it is a real boundary against a `devkit.toml` a project ships to its contributors, and not against your own environment.
+
+**Fidelity clamps downward.** Both keys resolve as the minimum of the global value and every project layer's value. Minimum is order-independent, so layer precedence does not apply to these two and no project can raise the fidelity from anywhere in the chain. Neither unsafe mode is reached by accident: `command` defaults to `redacted` and `prompt` to `off`.
+
+**Redaction is best effort.** It matches the environment variable names devkit resolves credentials from (`LINEAR_API_KEY`, `LINEAR_WORKSPACE`, `SLACK_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`) and the token prefixes of the services it talks to, substituting a placeholder that names the kind so the command's structure survives. It will miss a novel format, a credential passed under a name devkit does not know, and anything a command reads from a file. `redacted` reduces exposure; it is not a guarantee, and a corpus produced under it is not safe to hand to a third party on the strength of this alone.
+
+**`DEVKIT_HARNESS_LOG`** overrides, the same way `DEVKIT_ENFORCE_WRITES` does. It is your own environment, so it wins over a project layer's `enabled = false`.
+
+**A zero retention cap is rejected**, by name, rather than guessed at: unlimited and delete-everything are both plausible readings of `max_age_days = 0`, and they differ by the whole corpus. Omit the key for unlimited.
+
+**Checking what is in force.** `devkit doctor`'s `harness_log` row reports the effective mode after any clamp, the resolved directory and its size, and whether a global config was found at all. That row is the mechanism that catches a misspelled key: the runtime probe reads each `[harness]` key independently so one bad key cannot take the others down, which means a typo changes nothing and reports nothing. `devkit hook-log path` and `devkit hook-log prune` are in [commands.md](commands.md#hook-log-the-harness-log).
 
 Example: [`HarnessSection`](../crates/devkit-config/src/harness.rs), [`CommandRule`](../crates/devkit-config/src/harness.rs) and [`AppMatch`](../crates/devkit-config/src/harness.rs).
 

@@ -516,3 +516,111 @@ fn nested_harness_refuses_to_guess_on_acquire_and_release() {
     let ok = nested(&["acquire", "src/a.rs", "--as", "inner-session"]);
     assert!(ok.status.success(), "--as resolves it");
 }
+
+/// The retired spelling and the current one claim the same lock for the same
+/// payload. The manifests move to the new one in the same release, so an
+/// equivalence that is merely intended is not enough.
+#[test]
+fn both_spellings_claim_the_same_lock() {
+    use std::io::Write;
+
+    let state = tempfile::tempdir().unwrap();
+    let (proj, target) = enforced_project();
+
+    let feed = |exe: &Path, argv: &[&str], session: &str| -> Output {
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": session,
+            "cwd": proj.path().to_string_lossy(),
+            "tool_name": "Write",
+            "tool_input": { "file_path": target.to_string_lossy() },
+        });
+        let mut cmd = Command::new(exe);
+        cmd.args(argv)
+            .env("XDG_STATE_HOME", state.path())
+            .env("HOME", state.path())
+            .env("DEVKIT_SKIP_AUTOLINK", "1")
+            .env_remove("DEVKIT_ENFORCE_WRITES")
+            .env_remove("DEVKIT_CONFIG");
+        testenv::scrub_identity(&mut cmd);
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the hook");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        child.wait_with_output().expect("hook output")
+    };
+
+    let (_dir, link) = shimtest::linked("lockm");
+    let devkit = Path::new(env!("CARGO_BIN_EXE_devkit"));
+
+    // `sess-a` claims through the current spelling.
+    let claimed = feed(devkit, &["hook", "pre-tool-use"], "sess-a");
+    assert!(
+        !is_deny("new spelling claim", &claimed),
+        "the first write of a session is allowed"
+    );
+
+    // `sess-b` is denied that same target through the retired spelling, which
+    // is only possible if the claim above actually landed in the registry.
+    let blocked = feed(&link, &["hook", "pretooluse"], "sess-b");
+    assert!(
+        is_deny("old spelling sees the new spelling's claim", &blocked),
+        "one registry, one row, whichever spelling wrote it"
+    );
+}
+
+/// `session-end` releases under the current spelling too, and still emits no
+/// decision: a release event carries nothing a harness would read.
+#[test]
+fn the_new_session_end_releases_and_stays_silent() {
+    use std::io::Write;
+
+    let state = tempfile::tempdir().unwrap();
+    let (proj, target) = enforced_project();
+    let (_dir, link) = shimtest::linked("lockm");
+
+    let claimed = run_hook(&link, proj.path(), state.path(), "sess-end", &target);
+    assert!(!is_deny("claim", &claimed));
+
+    let devkit = Path::new(env!("CARGO_BIN_EXE_devkit"));
+    let mut cmd = Command::new(devkit);
+    cmd.args(["hook", "session-end"])
+        .current_dir(proj.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("HOME", state.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env_remove("DEVKIT_ENFORCE_WRITES")
+        .env_remove("DEVKIT_CONFIG");
+    testenv::scrub_identity(&mut cmd);
+    let mut child = cmd
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"hook_event_name":"SessionEnd","session_id":"sess-end"}"#)
+        .unwrap();
+    let end = child.wait_with_output().unwrap();
+    assert!(end.status.success());
+    assert!(
+        end.stdout.is_empty(),
+        "a release event has no decision to emit: {}",
+        String::from_utf8_lossy(&end.stdout)
+    );
+
+    // Released, so another session may now take it.
+    let after = run_hook(&link, proj.path(), state.path(), "other", &target);
+    assert!(!is_deny("after release", &after), "the row is gone");
+}

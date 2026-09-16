@@ -9,6 +9,8 @@ mod bash;
 mod budget;
 mod catalog;
 mod context;
+#[cfg(feature = "corpus")]
+pub mod corpus;
 mod embed;
 mod fish;
 mod js;
@@ -24,6 +26,17 @@ pub use model::{
     Analysis, FileEffect, FileOp, Invocation, Language, Limit, Location, ScriptFileInvocation,
     Target, TempLocation, TreeEffect, TreeReach, Uncertainty, UncertaintyKind, Value,
 };
+
+/// The analysis semantics a record was produced under, bumped by hand when
+/// they change. A record whose stamp differs from the current binary is a
+/// regression candidate rather than stale data, which is what lets an
+/// accumulated corpus gate a parser change.
+///
+/// It cannot be the crate version: every crate here is stamped by
+/// release-please, so that number moves on every release whether the parser
+/// changed or not, and a regression diff keyed on it would call the whole
+/// corpus stale at each one.
+pub const ANALYZER_VERSION: u32 = 1;
 
 /// Analyze a command in `ctx.dialect`.
 pub fn analyze(source: &str, ctx: &Context) -> Analysis {

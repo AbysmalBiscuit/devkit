@@ -283,9 +283,31 @@ The library table answers for the directory it runs in. At a workspace root — 
 
 `--pins-only` emits just the library table. `--if-changed` prints nothing when this session already received the same brief, keyed on the `session_id` in the hook's stdin JSON. A full brief records itself against that key, so the first `--if-changed` after one stays silent. `--pins-only` does not record: it carries only the library table, and a full brief is still owed. The plugin runs all three: `SessionStart` (full), `PostCompact` (`--pins-only`), and `CwdChanged` (`--if-changed`). `--additional-context` wraps whichever of those a run emits in the JSON envelope Codex and Cursor read a hook's context from; Claude Code injects plain stdout and takes the brief without it.
 
-## `harness`: command guard
+## `hook`: coding-agent events
 
-`devkit harness shell` is the pre-execution hook entry point for shell tools. It reads the hook payload on stdin, parses the command and any script it runs, and answers on stdout with a denial, a warning, or nothing. With `enforce_commands` on it refuses commands devkit already has a wired-up path for, and fails open. With `enforce_writes` on, for Claude Code and Codex, it claims the files the command writes before it runs, using the session's lock identity, and fails closed: an unresolved write, a registry error, or a registry that does not answer within 5 seconds is a denial. It always exits 0 and never runs the command. Wired into the plugin's `PreToolUse` hooks for `Bash` and `PowerShell` (Claude Code and Codex) and `beforeShellExecution` (Cursor, command guard only); see [configuration.md](configuration.md#harness).
+`devkit hook <event>` is where every event a harness sends enters devkit. Each verb reads the payload as JSON on stdin and takes `--harness <claude-code|codex|cursor>`, which each installed manifest passes so identity never depends on guessing which fields a vendor sends; without it, the payload's own shape is inferred. The full per-harness mapping is in [agents.md](agents.md#what-the-hooks-do).
+
+`devkit hook pre-tool-use` is the pre-execution guard. The payload's `tool_name` picks the path: an edit tool claims the files the payload names, and a shell tool has its command parsed along with any script it runs. It answers on stdout with a denial, a warning, or nothing. With `enforce_commands` on it refuses commands devkit already has a wired-up path for, and fails open. With `enforce_writes` on, for Claude Code and Codex, it claims the files the command writes before it runs, using the session's lock identity, and fails closed: an unresolved write, a registry error, or a registry that does not answer within 5 seconds is a denial. It never runs the command. See [configuration.md](configuration.md#harness).
+
+`devkit hook session-end` and `devkit hook subagent-stop` release what that session line claimed; `session-end` also sweeps the log when `auto_prune` is on. Every other verb is record-only.
+
+**No verb ever exits 2**, and only `pre-tool-use` writes to stdout. Both are contracts rather than observations: exit 2 blocks the tool call on Claude Code and Codex, and a stray line on stdout would be appended to a `UserPromptSubmit` prompt or read as a `Stop` decision. A usage error, an unknown verb and a panic all exit 1 with a message on stderr.
+
+`devkit harness shell` and `lockm hook <event>` remain as hidden aliases for the invocations that were retired in favour of these.
+
+## `hook-log`: the harness log
+
+Off by default, and enablable only from the global config; see [configuration.md](configuration.md#harnesslog). When on, each verb appends one JSONL record of what the agent tried and what devkit decided, under `<dir>/<YYYY-MM-DD>/<session_id>[-<agent_id>].jsonl`.
+
+```sh
+devkit hook-log path                 # the resolved directory, for piping into jq
+devkit hook-log prune                # sweep it against the configured caps
+devkit hook-log prune --dry-run      # say what would be swept
+```
+
+`prune` deletes whole files and never rewrites one, so a reader never sees a partial record: first any day directory whose UTC name is older than `max_age_days`, then oldest-first until the total is under `max_bytes`. Three things it never touches: the current UTC day, a file modified within the last hour (writers take no lock, so this is what stands between a sweep and a live session), and anything at all while another pruner holds `prune.lock`. A sweep that cannot reach the cap without crossing one of those says so and stops.
+
+`devkit doctor`'s `harness_log` row reports what is actually in force — the effective fidelity after any project layer lowered it, the resolved directory and its size, and whether a global config was found at all. Cohort analysis of a corpus stays offline, in `crates/devkit-command/examples/corpus_probe.rs` behind the `corpus` feature.
 
 ## `docm`: library docs
 

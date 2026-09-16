@@ -1,10 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
 use devkit::completions::Shell;
-use devkit_locks::{
-    hook::{self, HookEvent},
-    model::{Conflict, LockEntry, Refusal, RefusedBecause, WriteDecision},
-};
+use devkit_locks::model::{Conflict, LockEntry, Refusal, RefusedBecause};
 
 #[derive(clap::Args)]
 pub struct LocksCli {
@@ -146,131 +143,6 @@ fn print_refusals(refused: &[Refusal]) {
     }
 }
 
-/// Anchor a write target to the session's own cwd. `apply_patch` names paths
-/// relative to the session, not to wherever the harness spawned the hook
-/// process.
-fn resolve_against(payload: &serde_json::Value, path: &str) -> String {
-    let p = std::path::Path::new(path);
-    if p.is_absolute() {
-        return path.to_string();
-    }
-    payload
-        .get("cwd")
-        .and_then(|v| v.as_str())
-        .map(|cwd| {
-            std::path::Path::new(cwd)
-                .join(p)
-                .to_string_lossy()
-                .into_owned()
-        })
-        .unwrap_or_else(|| path.to_string())
-}
-
-/// Map a write decision to the optional stdout envelope. `None` = allow
-/// silently.
-fn write_output(d: &WriteDecision) -> Option<serde_json::Value> {
-    match d {
-        WriteDecision::Acquired | WriteDecision::AllowedByOwnership => None,
-        WriteDecision::Denied(conflicts) => {
-            let who = conflicts
-                .iter()
-                .map(|c| format!("{} (held by {})", c.path, c.held_by))
-                .collect::<Vec<_>>()
-                .join(", ");
-            Some(hook::deny_json(&format!(
-                "devkit write-harness: {who} — locked by another agent; \
-                 coordinate or wait for it to finish"
-            )))
-        }
-    }
-}
-
-/// Deny a write whose payload would not parse. A payload devkit cannot read is
-/// the signature of a harness format change, and an unevaluable write fails
-/// closed; the release events carry no permission decision to emit.
-fn deny_unparsable(event: &str, err: &serde_json::Error) {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    if event == "pretooluse" && hook::enforcement_enabled(&cwd) {
-        println!(
-            "{}",
-            hook::deny_json(&format!(
-                "devkit write-harness: hook payload did not parse ({err}) (fail-closed)"
-            ))
-        );
-    }
-}
-
-fn run_hook(event: &str) {
-    use std::io::Read;
-    let mut buf = String::new();
-    if std::io::stdin().read_to_string(&mut buf).is_err() {
-        // An unreadable pipe is a transport fault rather than a payload to
-        // judge, and denying every write in a session over one is the
-        // worse failure.
-        return;
-    }
-    let payload = match serde_json::from_str::<serde_json::Value>(&buf) {
-        Ok(v) => v,
-        Err(e) => {
-            deny_unparsable(event, &e);
-            return;
-        }
-    };
-
-    let cwd = payload
-        .get("cwd")
-        .and_then(|v| v.as_str())
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-
-    let event = hook::parse_event(event, &payload);
-    match event {
-        HookEvent::Write {
-            file_paths, holder, ..
-        } => {
-            if !hook::enforcement_enabled(&cwd) {
-                return; // no opt-in (env, project layers, or global config) → no enforcement
-            }
-            let mut conflicts = Vec::new();
-            let mut resolver = devkit_locks::WriteResolver::new();
-            for path in &file_paths {
-                let target = resolve_against(&payload, path);
-                match resolver.decide_write(&target, &holder, Some("write-harness"), 1800) {
-                    Ok(WriteDecision::Denied(c)) => conflicts.extend(c),
-                    Ok(_) => {}
-                    Err(e) => {
-                        // fail closed: a registry error must not silently
-                        // reopen the window
-                        let out = hook::deny_json(&format!(
-                            "devkit write-harness: registry error (fail-closed): {e:#}"
-                        ));
-                        println!("{out}");
-                        return;
-                    }
-                }
-            }
-            if !conflicts.is_empty()
-                && let Some(out) = write_output(&WriteDecision::Denied(conflicts))
-            {
-                println!("{out}");
-            }
-        }
-        HookEvent::ReleaseSubagent { holder } | HookEvent::ReleaseSession { holder } => {
-            let _ = devkit_locks::release_prefix(&holder);
-        }
-        HookEvent::Unusable { reason } => {
-            if hook::enforcement_enabled(&cwd) {
-                println!(
-                    "{}",
-                    hook::deny_json(&format!("devkit write-harness: {reason} (fail-closed)"))
-                );
-            }
-        }
-        HookEvent::Ignore => {}
-    }
-}
-
 pub fn run(cli: LocksCli) -> Result<()> {
     match cli.cmd {
         Cmd::Acquire {
@@ -368,10 +240,7 @@ pub fn run(cli: LocksCli) -> Result<()> {
             Ok(())
         }
         Cmd::Completions { shell } => crate::emit_completions(shell, "locks", "lockm"),
-        Cmd::Hook { event } => {
-            run_hook(&event);
-            Ok(())
-        }
+        Cmd::Hook { event } => crate::hook::legacy_lock_event(&event),
     }
 }
 
@@ -416,37 +285,4 @@ fn status_table(locks: &[LockEntry], all: bool) -> String {
         t.add_row(row);
     }
     format!("{t}\n")
-}
-
-#[cfg(test)]
-mod tests {
-    use devkit_locks::model::{Conflict, WriteDecision};
-
-    use super::*;
-
-    #[test]
-    fn allowed_decisions_emit_nothing() {
-        assert_eq!(write_output(&WriteDecision::Acquired), None);
-        assert_eq!(write_output(&WriteDecision::AllowedByOwnership), None);
-    }
-
-    #[test]
-    fn denied_decision_emits_deny_with_holder() {
-        let d = WriteDecision::Denied(vec![Conflict {
-            path: "src/a.rs".into(),
-            held_by: "S/b2".into(),
-            age_secs: 5,
-            note: None,
-        }]);
-        let out = write_output(&d).expect("deny json");
-        assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
-        let reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-            .as_str()
-            .unwrap();
-        assert!(reason.contains("S/b2"), "reason names the holder: {reason}");
-        assert!(
-            reason.contains("src/a.rs"),
-            "reason names the path: {reason}"
-        );
-    }
 }

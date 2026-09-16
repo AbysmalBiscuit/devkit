@@ -369,6 +369,26 @@
         }
       ]
     },
+    "Fidelity": {
+      "description": "What a logged command carries. Ordered least to most revealing, so\nresolving across config layers is `min` and no layer can raise it.",
+      "oneOf": [
+        {
+          "const": "hashed",
+          "description": "A stable digest and nothing else.",
+          "type": "string"
+        },
+        {
+          "const": "redacted",
+          "description": "The text, with known token shapes substituted by kind.",
+          "type": "string"
+        },
+        {
+          "const": "full",
+          "description": "The text verbatim.",
+          "type": "string"
+        }
+      ]
+    },
     "GithubConfig": {
       "additionalProperties": false,
       "description": "Which GitHub repositories this project uses. Both default to the `origin`\nremote. They are separate because a fork opens its PRs upstream while its\nissues may sit on either side, and because a project may track issues in a\nrepository separate from its code.\n\nThis table is not under `[tracker]`: a project on Linear with a fork\nworkflow needs `pr_repo` just as much as a GitHub one does.\n\n```toml\n[github]\nissues_repo = \"org/planning\"\npr_repo     = \"upstream/app\"\n```",
@@ -415,6 +435,19 @@
           "default": false,
           "description": "Refuse writes to paths this checkout has not claimed with `lockm`.",
           "type": "boolean"
+        },
+        "log": {
+          "$ref": "#/$defs/LogSection",
+          "default": {
+            "auto_prune": null,
+            "command": null,
+            "dir": null,
+            "enabled": null,
+            "max_age_days": null,
+            "max_bytes": null,
+            "prompt": null
+          },
+          "description": "What devkit records about the events a harness sends it."
         },
         "script_files": {
           "$ref": "#/$defs/PolicyAction",
@@ -566,6 +599,80 @@
       },
       "type": "object"
     },
+    "LogSection": {
+      "description": "Harness logging: what agents tried to run, and what devkit decided about\nit. Off unless the global config turns it on.\n\n`enabled = true`, `dir`, `auto_prune`, `max_age_days` and `max_bytes` are\nread from `~/.config/devkit/config.toml` alone and ignored wherever else\nthey appear. A project layer may do exactly two things: set\n`enabled = false`, and lower `command` or `prompt`. Everything a project\nlayer can do tightens. `dir` is on that list for the same reason\n`enabled = true` is: a project layer setting `dir = \"./.logs\"` would land\ncommand text inside the checkout.\n\n```toml\n[harness.log]\nenabled      = true              # global config only\ncommand      = \"redacted\"        # full | redacted | hashed\nprompt       = \"off\"             # off | hashed | redacted | full\nauto_prune   = true              # global config only\ndir          = \"${HOME}/logs/devkit\" # global only; defaults under state_dir\nmax_age_days = 30                # global only; absent means unlimited\nmax_bytes    = 2000000000        # global only; absent means unlimited\n```\n\nEvery leaf is `Option` so a layer that set nothing is distinguishable from\none that set the default, which is what the downward clamp needs.",
+      "properties": {
+        "auto_prune": {
+          "default": null,
+          "description": "Sweep the log directory at session end. Global config only.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fidelity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How much of a command's text a record carries."
+        },
+        "dir": {
+          "default": null,
+          "description": "Where records land. Global config only; defaults under the state dir.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": null,
+          "description": "Turn logging on. Read from the global config alone.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_age_days": {
+          "default": null,
+          "description": "Days of records to keep. Global config only; absent means unlimited.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_bytes": {
+          "default": null,
+          "description": "Bytes of records to keep. Global config only; absent means unlimited.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prompt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptFidelity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How much of a submitted prompt a record carries."
+        }
+      },
+      "type": "object"
+    },
     "ParallelismConfig": {
       "description": "Width of the shared worker pool. Machine tuning rather than a project\nconvention, so it belongs in the personal layer at\n`~/.config/devkit/config.toml` rather than a repository's `devkit.toml`.\n\n```toml\n[parallelism]\nthreads = 8\n```",
       "properties": {
@@ -687,6 +794,24 @@
         "to"
       ],
       "type": "object"
+    },
+    "PromptFidelity": {
+      "description": "What a logged prompt carries. Same ordering rule as [`Fidelity`], with an\n`off` below every level of it: a corpus can carry full command text without\ncarrying what the human typed.",
+      "oneOf": [
+        {
+          "enum": [
+            "hashed",
+            "redacted",
+            "full"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "description": "Record that a prompt was submitted, and none of its text.",
+          "type": "string"
+        }
+      ]
     },
     "RuleAction": {
       "description": "What a matching command rule does. A rule that should not act is disabled\nwith `enabled = false`, so there is no `allow`.",

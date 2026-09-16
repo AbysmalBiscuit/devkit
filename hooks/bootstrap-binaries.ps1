@@ -30,9 +30,28 @@ $stateRoot = if ($env:XDG_STATE_HOME) { $env:XDG_STATE_HOME } else { Join-Path $
 $stateDir = Join-Path $stateRoot 'devkit'
 $stamp = Join-Path $stateDir 'bootstrap-version'
 $failed = Join-Path $stateDir 'bootstrap-failed'
+$probed = Join-Path $stateDir 'hook-verbs-probed'
 
 function Read-Marker($path) {
     try { (Get-Content -Raw -ErrorAction Stop $path).Trim() } catch { '' }
+}
+
+# The manifests this plugin installs call `devkit hook <verb>`. A binary the
+# bootstrap did not install is recorded as external and never upgraded, so one
+# predating that verb family answers every tool call with an
+# unrecognised-subcommand error. Probe once per plugin version and report it
+# where a failed install is already reported. The marker is written only on
+# success, so the warning repeats until the binary is replaced.
+function Test-HookVerbs {
+    if ((Read-Marker $probed) -eq $version) { return }
+    $global:LASTEXITCODE = 0
+    try { & devkit hook --help *> $null } catch { $global:LASTEXITCODE = 1 }
+    if ($LASTEXITCODE -eq 0) {
+        New-Item -ItemType Directory -Force -Path $stateDir -ErrorAction SilentlyContinue | Out-Null
+        Set-Content -Path $probed -Value $version -ErrorAction SilentlyContinue
+        return
+    }
+    Write-Note "the devkit on PATH is too old for this plugin's hooks: it has no ``devkit hook`` subcommand. Reinstall it (``cargo install --path .``, or see $repoUrl#install)."
 }
 
 $names = @('devkit', 'issue', 'devrun', 'portm', 'lockm', 'docm', 'devkit-mcp')
@@ -52,10 +71,14 @@ if (Get-Command devkit -ErrorAction SilentlyContinue) {
         }
     }
     switch (Read-Marker $stamp) {
-        $version { exit 0 }
+        $version {
+            Test-HookVerbs
+            exit 0
+        }
         # Binaries we did not install (cargo, a source build). Record that and
         # never overwrite them; upgrades stay the user's call.
         { $_ -eq '' -or $_ -eq 'external' } {
+            Test-HookVerbs
             New-Item -ItemType Directory -Force -Path $stateDir -ErrorAction SilentlyContinue | Out-Null
             Set-Content -Path $stamp -Value 'external' -ErrorAction SilentlyContinue
             exit 0

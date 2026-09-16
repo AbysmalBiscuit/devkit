@@ -100,6 +100,9 @@ indicatif = "0.17"
 console = "0.15"
 supports-hyperlinks = "3"
 ureq = { version = "2", features = ["json"] }
+# Already in the tree under ureq's TLS stack, so taking it directly for
+# `harness_log`'s digest adds no crate to the lock.
+ring = "0.17"
 rpassword = "7"
 rayon = "1.12"
 tracing = "0.1"

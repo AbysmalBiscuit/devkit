@@ -296,8 +296,9 @@ pub enum Harness {
     Cursor,
 }
 
-/// Tool names whose `tool_input.command` is a shell command.
-const SHELL_TOOLS: [&str; 2] = ["Bash", "PowerShell"];
+/// Tool names whose `tool_input.command` is a shell command. `Shell` is
+/// Cursor's spelling on its generic `preToolUse`.
+pub const SHELL_TOOLS: [&str; 3] = ["Bash", "PowerShell", "Shell"];
 
 /// A pre-execution shell payload. Fields the harness did not send stay
 /// `None`; nothing here is filled in from the hook process's environment.
@@ -315,9 +316,25 @@ pub struct ShellPayload {
 /// shell command, which is not a failure: harnesses send events this hook does
 /// not model.
 ///
-/// Claude Code and Codex send a string `hook_event_name`; Cursor does not.
-/// Codex's payload carries `turn_id` and `model`, which Claude Code's does not,
-/// and that is what separates the two.
+/// All three harnesses send `hook_event_name`, and Cursor sends `model` as
+/// well, so identity is read from a field each one *sends* rather than one it
+/// omits: `cursor_version` is Cursor's, and `turn_id` or `model` without it is
+/// Codex's. Positive evidence does not rot when a vendor adds a key, which the
+/// earlier absence-based reading did the moment Cursor started sending both.
+///
+/// This is the fallback. A hook invoked from one of devkit's own manifests is
+/// told which harness it is answering, and that wins over anything inferred
+/// here.
+pub fn infer_harness(p: &Value) -> Harness {
+    if p.get("cursor_version").is_some() {
+        Harness::Cursor
+    } else if p.get("turn_id").is_some() || p.get("model").is_some() {
+        Harness::Codex
+    } else {
+        Harness::ClaudeCode
+    }
+}
+
 pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
     let text = |key: &str| {
         p.get(key)
@@ -325,11 +342,7 @@ pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     };
-    let harness = match p.get("hook_event_name").and_then(Value::as_str) {
-        None => Harness::Cursor,
-        Some(_) if p.get("turn_id").is_some() || p.get("model").is_some() => Harness::Codex,
-        Some(_) => Harness::ClaudeCode,
-    };
+    let harness = infer_harness(p);
     let tool_name = text("tool_name");
     if harness != Harness::Cursor
         && !tool_name
@@ -344,13 +357,22 @@ pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
         .or_else(|| p.get("tool_input")?.get("command")?.as_str())
         .filter(|s| !s.trim().is_empty())?
         .to_string();
+    // Cursor names the directory inside the tool input and the session a
+    // conversation, so each identity field falls back to Cursor's spelling of
+    // it. The order is harness-independent: no harness sends both.
+    let working_dir = p
+        .get("tool_input")
+        .and_then(|ti| ti.get("working_directory"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
     Some(ShellPayload {
         harness,
         tool_name,
         command,
-        cwd: text("cwd").map(PathBuf::from),
-        session_id: text("session_id"),
-        agent_id: text("agent_id"),
+        cwd: text("cwd").map(PathBuf::from).or(working_dir),
+        session_id: text("session_id").or_else(|| text("conversation_id")),
+        agent_id: text("agent_id").or_else(|| text("parent_conversation_id")),
     })
 }
 
@@ -718,18 +740,83 @@ programs = "node"
 
     #[test]
     fn a_cursor_payload_carries_its_command_at_the_top_level() {
-        let p = serde_json::json!({ "command": "vite dev", "cwd": "/repo" });
+        let p = serde_json::json!({
+            "hook_event_name": "beforeShellExecution",
+            "cursor_version": "1.7.0",
+            "command": "vite dev",
+            "cwd": "/repo"
+        });
         let parsed = parse_shell_payload(&p).expect("a Cursor payload parses");
         assert_eq!(parsed.harness, Harness::Cursor);
         assert_eq!(parsed.command, "vite dev");
     }
 
+    /// The payload that misresolved: Cursor sends `hook_event_name` and `model`
+    /// like the other two, so reading it as the absence of either answered it
+    /// with an envelope Cursor rejects.
     #[test]
-    fn a_cursor_generic_tool_payload_is_still_cursor() {
-        // Cursor's generic preToolUse also carries tool_input, so the presence
-        // of that key cannot be the discriminator.
-        let p = serde_json::json!({ "tool_name": "Shell", "tool_input": { "command": "vite" } });
-        assert_eq!(parse_shell_payload(&p).unwrap().harness, Harness::Cursor);
+    fn a_cursor_payload_is_not_codex() {
+        let p = serde_json::json!({
+            "hook_event_name": "preToolUse",
+            "cursor_version": "1.7.0",
+            "model": "claude-4.5-sonnet",
+            "conversation_id": "c1",
+            "tool_name": "Shell",
+            "tool_input": {"command": "npm install", "working_directory": "/w"}
+        });
+        let parsed = parse_shell_payload(&p).expect("a Shell payload is a shell payload");
+        assert_eq!(parsed.harness, Harness::Cursor);
+        assert_eq!(parsed.session_id.as_deref(), Some("c1"));
+        assert_eq!(parsed.cwd.as_deref(), Some(std::path::Path::new("/w")));
+    }
+
+    #[test]
+    fn a_cursor_subagent_is_named_by_its_parent_conversation() {
+        let p = serde_json::json!({
+            "hook_event_name": "preToolUse",
+            "cursor_version": "1.7.0",
+            "conversation_id": "c1",
+            "parent_conversation_id": "p1",
+            "tool_name": "Shell",
+            "tool_input": {"command": "ls"}
+        });
+        let parsed = parse_shell_payload(&p).unwrap();
+        assert_eq!(parsed.agent_id.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn codex_is_still_codex() {
+        let p = serde_json::json!({
+            "hook_event_name": "PreToolUse", "turn_id": "t1", "model": "gpt-5",
+            "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "/w"
+        });
+        assert_eq!(parse_shell_payload(&p).unwrap().harness, Harness::Codex);
+    }
+
+    #[test]
+    fn claude_code_is_still_claude_code() {
+        let p = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "/w"
+        });
+        assert_eq!(
+            parse_shell_payload(&p).unwrap().harness,
+            Harness::ClaudeCode
+        );
+    }
+
+    /// `cwd` wins where a harness sends both, so the Cursor fallback cannot
+    /// displace the field the other two send.
+    #[test]
+    fn an_explicit_cwd_beats_the_tool_inputs_working_directory() {
+        let p = serde_json::json!({
+            "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": "/repo",
+            "tool_input": {"command": "ls", "working_directory": "/elsewhere"}
+        });
+        assert_eq!(
+            parse_shell_payload(&p).unwrap().cwd.as_deref(),
+            Some(std::path::Path::new("/repo"))
+        );
     }
 
     #[test]

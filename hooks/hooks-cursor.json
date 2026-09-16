@@ -9,13 +9,62 @@
       {
         "type": "command",
         "command": "devkit brief --additional-context"
+      },
+      {
+        "type": "command",
+        "command": "devkit hook session-start --harness cursor"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "command": "devkit hook session-end --harness cursor",
+        "timeout": 15
       }
     ],
     "beforeShellExecution": [
       {
         "type": "command",
-        "command": "devkit harness shell",
-        "timeout": 10
+        "command": "devkit hook pre-tool-use --harness cursor",
+        "timeout": 30
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "command": "devkit hook post-tool-use --harness cursor",
+        "matcher": "Shell"
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "type": "command",
+        "command": "devkit hook post-tool-use-failure --harness cursor",
+        "matcher": "Shell"
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "command": "devkit hook subagent-stop --harness cursor"
+      }
+    ],
+    "stop": [
+      {
+        "type": "command",
+        "command": "devkit hook stop --harness cursor"
+      }
+    ],
+    "preCompact": [
+      {
+        "type": "command",
+        "command": "devkit hook pre-compact --harness cursor"
+      }
+    ],
+    "workspaceOpen": [
+      {
+        "type": "command",
+        "command": "devkit hook cwd-changed --harness cursor"
       }
     ]
   }

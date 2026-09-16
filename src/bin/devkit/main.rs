@@ -11,6 +11,8 @@ mod config;
 mod docs;
 mod doctor;
 mod harness;
+mod hook;
+mod hook_log;
 mod issue;
 mod links;
 mod locks;
@@ -132,6 +134,12 @@ enum Cmd {
     /// Coding-agent harness hooks.
     #[command(display_name = "devkit harness")]
     Harness(harness::HarnessCli),
+    /// Evaluate and record a coding-agent hook event.
+    #[command(display_name = "devkit hook")]
+    Hook(hook::HookCli),
+    /// Read and sweep the harness log.
+    #[command(display_name = "devkit hook-log")]
+    HookLog(hook_log::HookLogCli),
     /// Install the old command names as hardlinks beside this binary.
     ///
     /// Creates hardlinks such as `issue` and `devrun` beside this
@@ -283,6 +291,44 @@ fn intercept_help(root: &clap::Command, args: &[OsString]) -> Result<bool> {
     }
 }
 
+/// Whether this argument vector is addressing the `hook` family, read off the
+/// raw argv because clap has not resolved a subcommand yet — and, on a parse
+/// error, never will.
+fn is_hook_invocation(args: &[OsString]) -> bool {
+    args.get(1).map(OsString::as_os_str) == Some(std::ffi::OsStr::new("hook"))
+}
+
+/// Parse, with the `hook` family's exit-code rule applied to a failure.
+///
+/// clap exits 2 for a usage error, and exit 2 blocks the tool call on Claude
+/// Code `PreToolUse` and sets `should_block` on Codex. So an unrecognised verb,
+/// an unrecognised `--harness` or a missing argument would deny every command
+/// the agent ran. The error still reaches stderr and the exit is still
+/// non-zero: what changes is that it no longer reads as a deny.
+///
+/// `use_stderr` is the discriminator rather than the error kind, because
+/// `--help` and `--version` arrive here as errors too and are not failures.
+fn parse_cli(args: &[OsString]) -> Cli {
+    match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) if e.use_stderr() && is_hook_invocation(args) => {
+            let _ = e.print();
+            std::process::exit(1);
+        }
+        Err(e) => e.exit(),
+    }
+}
+
+/// Run a hook verb with a panic caught. An escaping panic exits 101, which
+/// aborts a Claude Code `WorktreeCreate` and reads as a failure on every other
+/// verb; the panic hook has already reported it by the time this is reached.
+fn run_hook_guarded(cli: hook::HookCli) -> Result<()> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook::run(cli))) {
+        Ok(r) => r,
+        Err(_) => std::process::exit(1),
+    }
+}
+
 fn main() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().collect();
     // The marker probe `links::answers_probe_marker` uses: answered before
@@ -332,7 +378,7 @@ fn main() -> Result<()> {
     match shim {
         Some(s) => dispatch_shim(s, args),
         None => {
-            let cli = Cli::parse();
+            let cli = parse_cli(&args);
             match cli.cmd {
                 Cmd::Auth { provider, token } => auth::run(provider, token),
                 Cmd::Brief {
@@ -361,6 +407,8 @@ fn main() -> Result<()> {
                 Cmd::Issue(c) => issue::run(c),
                 Cmd::Mcp(c) => mcp::run(c),
                 Cmd::Harness(c) => harness::run(c),
+                Cmd::Hook(c) => run_hook_guarded(c),
+                Cmd::HookLog(c) => hook_log::run(c),
                 Cmd::InstallLinks(a) => links::run(a),
             }
         }

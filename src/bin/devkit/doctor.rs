@@ -19,12 +19,18 @@ struct Row {
     key: &'static str,
     source: Source,
     check: Check,
+    /// Extra fields for `--json`, merged into this row's object. The human view
+    /// says the same things in prose; a machine reader should not have to parse
+    /// it back out. `Null` on every row that has nothing structured to add.
+    data: serde_json::Value,
 }
 
 const HINT_LINEAR: &str = "run: devkit auth linear   (https://linear.app/settings/api)";
 const HINT_SLACK: &str = "run: devkit auth slack    (Slack app → OAuth & Permissions)";
 const HINT_WORKSPACE: &str = "optional — falls back to the Linear API for issue links";
 const HINT_GITHUB: &str = "run: gh auth login   (or set GH_TOKEN/GITHUB_TOKEN)";
+const HINT_HARNESS_LOG: &str =
+    "off — set [harness.log] enabled = true in ~/.config/devkit/config.toml";
 
 /// Exit non-zero when a credential that is set fails validation, or when a
 /// config exists that does not load. An unset credential is a warning; an
@@ -318,6 +324,7 @@ fn shim_rows() -> Vec<Row> {
             };
             Row {
                 key: s.name,
+                data: serde_json::Value::Null,
                 // Doctor's non-credential rows already use `Unset`; a shim has
                 // no env or secrets.toml origin to report.
                 source: Source::Unset,
@@ -356,6 +363,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
     let mut rows = vec![
         Row {
             key: "linear_api_key",
+            data: serde_json::Value::Null,
             source: secrets::source("LINEAR_API_KEY"),
             check: match secrets::resolve("LINEAR_API_KEY") {
                 Some(v) => steps.during("Validating Linear API key…", || validate_linear(&v)),
@@ -364,6 +372,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
         },
         Row {
             key: "linear_workspace",
+            data: serde_json::Value::Null,
             source: secrets::source("LINEAR_WORKSPACE"),
             check: match secrets::resolve("LINEAR_WORKSPACE") {
                 Some(v) => Check::Ok(v),
@@ -372,6 +381,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
         },
         Row {
             key: "slack_token",
+            data: serde_json::Value::Null,
             source: secrets::source("SLACK_TOKEN"),
             check: match secrets::resolve("SLACK_TOKEN") {
                 Some(v) => steps.during("Validating Slack token…", || validate_slack(&v)),
@@ -380,6 +390,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
         },
         Row {
             key: "binary_version",
+            data: serde_json::Value::Null,
             source: Source::Unset,
             check: version_skew_check(
                 env!("CARGO_PKG_VERSION"),
@@ -390,21 +401,25 @@ fn gather(steps: &Steps) -> Vec<Row> {
         },
         Row {
             key: "config",
+            data: serde_json::Value::Null,
             source: Source::Unset,
             check: config_check(std::path::Path::new(".")),
         },
         Row {
             key: "tracker",
+            data: serde_json::Value::Null,
             source: Source::Unset,
             check: tracker_check(&resolve_tracker(std::path::Path::new("."))),
         },
         Row {
             key: "devrun_strays",
+            data: serde_json::Value::Null,
             source: Source::Unset,
             check: stray_check(count_strays()),
         },
         Row {
             key: "harness_identity",
+            data: serde_json::Value::Null,
             source: Source::Unset,
             check: {
                 let present = devkit_locks::ident::harness_env_present();
@@ -415,6 +430,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
         },
         Row {
             key: "baseline_orphans",
+            data: serde_json::Value::Null,
             source: Source::Unset,
             check: {
                 let (count, bytes, unreadable) = baseline_orphans();
@@ -423,12 +439,80 @@ fn gather(steps: &Steps) -> Vec<Row> {
         },
         Row {
             key: "docs_cache",
+            data: serde_json::Value::Null,
             source: Source::Unset,
             check: docs_cache_check(),
         },
+        harness_log_row(),
     ];
     rows.extend(shim_rows());
     rows
+}
+
+/// What harness logging is actually doing, rather than what a config says.
+///
+/// The runtime probe reads each `[harness]` key independently so one bad key
+/// cannot take the others down, which means a misspelled key changes nothing
+/// and reports nothing: `HarnessSection` carries no `deny_unknown_fields`, and
+/// adding one would not help, because nothing deserialises through the struct
+/// on that path. A row printing what you are actually getting is the mechanism
+/// that catches it — so it reports the *effective* mode, after the downward
+/// clamp every project layer can apply, not the configured one.
+fn harness_log_row() -> Row {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let settings = devkit_common::harness_log::resolve(&cwd);
+    let global = devkit_common::harness::global_config_path().filter(|p| p.exists());
+    let bytes = log_dir_bytes(&settings.dir);
+    // Through serde, so the names are the ones `config.toml` spells.
+    let data = serde_json::json!({
+        "enabled": settings.enabled,
+        "command": settings.command,
+        "prompt": settings.prompt,
+        "dir": settings.dir.to_string_lossy(),
+        "bytes": bytes,
+        "global_config": global.is_some(),
+    });
+    let command = data["command"].as_str().unwrap_or_default();
+    let prompt = data["prompt"].as_str().unwrap_or_default();
+    let detail = format!(
+        "command={command} prompt={prompt}, {bytes} bytes in {}",
+        settings.dir.display()
+    );
+    let check = if !settings.enabled {
+        Check::Unset(HINT_HARNESS_LOG)
+    } else if settings.command == devkit_config::Fidelity::Full {
+        Check::Warn(format!(
+            "{detail} — full command text is recorded verbatim, secrets included"
+        ))
+    } else {
+        Check::Ok(detail)
+    };
+    Row {
+        key: "harness_log",
+        data,
+        source: if global.is_some() {
+            Source::File
+        } else {
+            Source::Unset
+        },
+        check,
+    }
+}
+
+/// The log's size on disk. Unreadable is zero rather than an error: this is a
+/// report, and a directory that cannot be read is reported as the rest of the
+/// row's facts, not instead of them.
+fn log_dir_bytes(dir: &std::path::Path) -> u64 {
+    let Ok(days) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    days.filter_map(Result::ok)
+        .filter_map(|day| std::fs::read_dir(day.path()).ok())
+        .flat_map(|files| files.filter_map(Result::ok))
+        .filter_map(|f| f.metadata().ok())
+        .filter(std::fs::Metadata::is_file)
+        .map(|m| m.len())
+        .sum()
 }
 
 fn source_label(s: &Source) -> &'static str {
@@ -448,7 +532,13 @@ fn print_human(rows: &[Row]) {
             Check::Unreachable => ("?", "unreachable".to_string()),
             Check::Unset(hint) => ("·", format!("unset — {hint}")),
         };
-        println!("{mark} {:16} {:5} {detail}", r.key, source_label(&r.source));
+        let line = format!("{mark} {:16} {:5} {detail}", r.key, source_label(&r.source));
+        // The only colour in this report. `ui::yellow` is a no-op off a
+        // terminal, so `--json` and a piped run are unchanged.
+        match r.check {
+            Check::Warn(_) => println!("{}", devkit_common::ui::yellow(&line)),
+            _ => println!("{line}"),
+        }
     }
 }
 
@@ -463,12 +553,21 @@ fn print_json(rows: &[Row]) {
                 Check::Unreachable => ("unreachable", None),
                 Check::Unset(h) => ("unset", Some((*h).to_string())),
             };
-            serde_json::json!({
+            let mut obj = serde_json::json!({
                 "key": r.key,
                 "source": source_label(&r.source),
                 "status": status,
                 "detail": detail,
-            })
+            });
+            // A row's own fields, merged rather than nested: a reader asking
+            // for the effective mode should not have to know which rows carry
+            // a sub-object.
+            if let (Some(target), Some(extra)) = (obj.as_object_mut(), r.data.as_object()) {
+                for (k, v) in extra {
+                    target.insert(k.clone(), v.clone());
+                }
+            }
+            obj
         })
         .collect();
     println!("{}", serde_json::to_string_pretty(&arr).unwrap());
@@ -500,6 +599,7 @@ mod tests {
     fn row(check: Check) -> Row {
         Row {
             key: "x",
+            data: serde_json::Value::Null,
             source: Source::Unset,
             check,
         }

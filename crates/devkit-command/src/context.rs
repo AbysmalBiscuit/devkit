@@ -7,6 +7,23 @@ pub enum Dialect {
     Fish,
 }
 
+impl Dialect {
+    /// The name a record stores. Stable across renames of the variant.
+    pub fn name(self) -> &'static str {
+        match self {
+            Dialect::Bash => "bash",
+            Dialect::PowerShell => "powershell",
+            Dialect::Fish => "fish",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Dialect> {
+        [Dialect::Bash, Dialect::PowerShell, Dialect::Fish]
+            .into_iter()
+            .find(|d| d.name() == name)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathStyle {
     Unix,
@@ -40,4 +57,17 @@ pub struct Context {
     pub cwd: Option<String>,
     pub path_style: PathStyle,
     pub limits: Limits,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_dialect_name_parses_back() {
+        for d in [Dialect::Bash, Dialect::PowerShell, Dialect::Fish] {
+            assert_eq!(Dialect::from_name(d.name()), Some(d));
+        }
+        assert_eq!(Dialect::from_name("zsh"), None);
+    }
 }

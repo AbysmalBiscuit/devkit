@@ -26,9 +26,22 @@ fn run_hook(project: &Path, home: &Path, payload: &str) -> Output {
 /// setup, so a caller can force the enforcement env var one way or the other
 /// without losing the isolation every test relies on.
 fn run_hook_with(project: &Path, home: &Path, payload: &str, extra_env: &[(&str, &str)]) -> Output {
+    run_argv(project, home, &["hook", "pre-tool-use"], payload, extra_env)
+}
+
+/// The same run under an argument vector of the caller's choosing, so each
+/// case can be driven through the retired spelling as well as the current one
+/// for as long as the alias exists.
+fn run_argv(
+    project: &Path,
+    home: &Path,
+    argv: &[&str],
+    payload: &str,
+    extra_env: &[(&str, &str)],
+) -> Output {
     let exe = Path::new(env!("CARGO_BIN_EXE_devkit"));
     let mut cmd = Command::new(exe);
-    cmd.args(["harness", "shell"])
+    cmd.args(argv)
         .current_dir(project)
         .env("HOME", home)
         .env("XDG_STATE_HOME", home)
@@ -42,7 +55,7 @@ fn run_hook_with(project: &Path, home: &Path, payload: &str, extra_env: &[(&str,
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
-    let mut child = cmd.spawn().expect("spawn devkit harness shell");
+    let mut child = cmd.spawn().expect("spawn the devkit hook");
     child
         .stdin
         .take()
@@ -138,7 +151,15 @@ fn the_gate_off_allows_everything() {
 fn a_cursor_payload_gets_the_cursor_envelope() {
     let home = tempfile::tempdir().unwrap();
     let proj = project(GUARDED);
-    let payload = serde_json::json!({ "command": "node server.js" }).to_string();
+    // `cursor_version` is what names the harness now: Cursor sends
+    // `hook_event_name` and `model` like the other two, so its identity can no
+    // longer be read off the absence of either.
+    let payload = serde_json::json!({
+        "hook_event_name": "beforeShellExecution",
+        "cursor_version": "1.7.0",
+        "command": "node server.js"
+    })
+    .to_string();
     let out = run_hook(proj.path(), home.path(), &payload);
     assert!(denied(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
@@ -258,4 +279,86 @@ fn the_cwd_names_the_app_for_a_catalog_hit() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("devrun up web"));
+}
+
+/// Every case the retired spelling covers must answer identically under the
+/// current one, because the manifests move to it in the same release.
+#[test]
+fn both_spellings_answer_identically() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GUARDED);
+    let payload = claude_payload("node server.js");
+    let forced = [("DEVKIT_ENFORCE_COMMANDS", "1")];
+    let old = run_argv(
+        proj.path(),
+        home.path(),
+        &["harness", "shell"],
+        &payload,
+        &forced,
+    );
+    let new = run_argv(
+        proj.path(),
+        home.path(),
+        &["hook", "pre-tool-use"],
+        &payload,
+        &forced,
+    );
+    assert!(
+        denied(&new),
+        "the guard still denies under the new spelling"
+    );
+    assert_eq!(old.status.code(), new.status.code());
+    assert_eq!(
+        String::from_utf8_lossy(&old.stdout),
+        String::from_utf8_lossy(&new.stdout)
+    );
+}
+
+/// The alias spelled the way every installed `lockm hook` manifest spells it.
+#[test]
+fn the_one_word_alias_answers_the_same_way() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GUARDED);
+    let payload = claude_payload("node server.js");
+    let forced = [("DEVKIT_ENFORCE_COMMANDS", "1")];
+    let kebab = run_argv(
+        proj.path(),
+        home.path(),
+        &["hook", "pre-tool-use"],
+        &payload,
+        &forced,
+    );
+    let one_word = run_argv(
+        proj.path(),
+        home.path(),
+        &["hook", "pretooluse"],
+        &payload,
+        &forced,
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&kebab.stdout),
+        String::from_utf8_lossy(&one_word.stdout)
+    );
+}
+
+/// `--harness` wins over inference, and the envelope is the named harness's.
+#[test]
+fn the_declared_harness_picks_the_envelope() {
+    let home = tempfile::tempdir().unwrap();
+    let proj = project(GUARDED);
+    // A Claude Code-shaped payload, answered as Cursor because the manifest
+    // said so. Inference alone would read this as Claude Code.
+    let out = run_argv(
+        proj.path(),
+        home.path(),
+        &["hook", "pre-tool-use", "--harness", "cursor"],
+        &claude_payload("node server.js"),
+        &[("DEVKIT_ENFORCE_COMMANDS", "1")],
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+    assert_eq!(
+        v["permission"], "deny",
+        "the Cursor envelope, not clauded's"
+    );
+    assert!(v["agent_message"].is_string());
 }
