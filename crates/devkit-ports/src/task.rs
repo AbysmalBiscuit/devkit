@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use devkit_common::{
     caller::Caller,
     git, record,
-    required::{Missing, missing_args},
+    required::{ensure_supplied, missing_args},
     template,
 };
 use devkit_config::{Config, RunArg, Step, TaskConfig};
@@ -74,31 +74,16 @@ pub fn list(cfg: &Config, caller: Caller) -> Vec<TaskRow> {
         .tasks
         .iter()
         .map(|(name, t)| {
-            // Both, not just `args`: a `required_args` naming something the
-            // task never reads is a typo the listing has to show, the same way
-            // it shows a template that will not compile.
-            let resolved = match (args(cfg, name), required_args(cfg, name, caller)) {
-                (Ok(all), Ok(required)) => Some((all, required)),
-                _ => None,
-            };
+            let args = task_args(cfg, name, caller);
             TaskRow {
                 name: name.clone(),
-                kind: match (!t.run.is_empty(), !t.steps.is_empty(), resolved.is_some()) {
+                kind: match (!t.run.is_empty(), !t.steps.is_empty(), args.is_ok()) {
                     (true, false, true) => "command",
                     (false, true, true) => "sequence",
                     _ => "invalid",
                 },
                 app: t.app.clone().unwrap_or_else(|| "-".into()),
-                args: resolved
-                    .map(|(all, required)| {
-                        all.into_iter()
-                            .map(|name| TaskArg {
-                                required: required.contains(&name),
-                                name,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                args: args.unwrap_or_default(),
                 description: t.description.clone().unwrap_or_default(),
             }
         })
@@ -173,44 +158,55 @@ fn read_names(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
 
 /// The variables task `name` takes from `[templates.variables]` or `--arg`.
 pub fn args(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
-    let mut names = read_names(cfg, name)?;
-    names.retain(|n| !PORT_NAMES.contains(&n.as_str()) && !ISSUE_FIELDS.contains(&n.as_str()));
-    Ok(names)
+    Ok(args_among(read_names(cfg, name)?))
 }
 
-/// The args task `name` cannot run without, for this caller. Errors when
-/// `required_args` names something the task never reads: an entry that
-/// silently guards nothing leaves the author believing it does.
-pub fn required_args(cfg: &Config, name: &str, caller: Caller) -> Result<BTreeSet<String>> {
+/// `reads` minus the names the render context supplies itself.
+fn args_among(mut reads: BTreeSet<String>) -> BTreeSet<String> {
+    reads.retain(|n| !PORT_NAMES.contains(&n.as_str()) && !ISSUE_FIELDS.contains(&n.as_str()));
+    reads
+}
+
+/// Every arg task `name` takes, each marked required or not for this caller.
+pub fn task_args(cfg: &Config, name: &str, caller: Caller) -> Result<Vec<TaskArg>> {
     let all = args(cfg, name)?;
-    for n in declared_required_names(cfg, name)? {
-        ensure!(
-            all.contains(&n),
-            "task `{name}` lists `{n}` in required_args but reads no such arg"
-        );
-    }
+    check_required_names(cfg, name, &all)?;
+    let required: BTreeSet<String> = missing_args(cfg, Some(name), &all, &BTreeMap::new(), caller)
+        .into_iter()
+        .map(|m| m.name)
+        .collect();
     Ok(all
         .into_iter()
-        .filter(|n| devkit_common::required::is_required(cfg, Some(name), n, caller))
+        .map(|name| TaskArg {
+            required: required.contains(&name),
+            name,
+        })
         .collect())
 }
 
-/// Names the task's own `required_args` declares, plus those of every command
-/// task its steps name. A sub-task's marking holds however it is reached.
-fn declared_required_names(cfg: &Config, name: &str) -> Result<BTreeSet<String>> {
+/// Refuse a `required_args` entry naming something the task never reads: an
+/// entry that silently guards nothing leaves the author believing it does.
+/// The task's own entries count, and so do those of every command task its
+/// steps name.
+fn check_required_names(cfg: &Config, name: &str, args: &BTreeSet<String>) -> Result<()> {
     let t = cfg
         .tasks
         .get(name)
         .ok_or_else(|| anyhow!("unknown task `{name}` (run `devrun task` to list)"))?;
-    let mut names: BTreeSet<String> = t.required_args.keys().cloned().collect();
-    for step in &t.steps {
-        if let Step::Task(r) = step
-            && let Some(sub) = cfg.tasks.get(r)
-        {
-            names.extend(sub.required_args.keys().cloned());
-        }
+    let steps = t.steps.iter().filter_map(|step| match step {
+        Step::Task(r) => cfg.tasks.get(r),
+        Step::Up(_) => None,
+    });
+    for n in std::iter::once(t)
+        .chain(steps)
+        .flat_map(|t| t.required_args.keys())
+    {
+        ensure!(
+            args.contains(n),
+            "task `{name}` lists `{n}` in required_args but reads no such arg"
+        );
     }
-    Ok(names)
+    Ok(())
 }
 
 fn command_reads(t: &TaskConfig) -> Result<BTreeSet<String>> {
@@ -240,30 +236,18 @@ fn check_args(
     given: &BTreeMap<String, String>,
     caller: Caller,
 ) -> Result<()> {
-    let all_reads = read_names(cfg, name)?;
+    let reads = read_names(cfg, name)?;
     for k in given.keys() {
         ensure!(
-            (all_reads.contains(k) && !PORT_NAMES.contains(&k.as_str()))
+            (reads.contains(k) && !PORT_NAMES.contains(&k.as_str()))
                 || cfg.templates.variables.contains_key(k),
             "task `{name}` reads no variable `{k}`"
         );
     }
-    // Validate `required_args` before hunting for missing ones, so a name it
-    // pins that the task never reads surfaces as its own error rather than
-    // silently guarding nothing.
-    let reads = args(cfg, name)?;
-    required_args(cfg, name, caller)?;
-    let missing = missing_args(cfg, Some(name), &reads, given, caller);
-    ensure!(
-        missing.is_empty(),
-        "task `{name}` needs {}",
-        missing
-            .iter()
-            .map(Missing::hint)
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    Ok(())
+    let args = args_among(reads);
+    check_required_names(cfg, name, &args)?;
+    let missing = missing_args(cfg, Some(name), &args, given, caller);
+    ensure_supplied(&format!("task `{name}`"), &missing)
 }
 
 /// The variables task templates render over, lowest first:
@@ -517,12 +501,7 @@ fn resolve_command(
 /// fresh render, `require_live` enforced. Sequences call this per step at
 /// execution time so a long-running earlier step cannot expire the ports an
 /// upfront render used; standalone commands call it right before exec. `args`
-/// were checked by [`resolve`] against the task the user named, caller
-/// included, which for a sequence is not this step but already covers it:
-/// `declared_required_names` unions every step's `required_args` into that
-/// upfront check. `caller` is accepted rather than re-derived, matching
-/// [`resolve`]'s signature, but is not read again here.
-#[allow(clippy::too_many_arguments)]
+/// were already checked by [`resolve`].
 pub fn resolve_step(
     cfg: &Config,
     catalog: &HashMap<String, App>,
@@ -531,7 +510,6 @@ pub fn resolve_step(
     name: &str,
     user_env: &BTreeMap<String, String>,
     args: &BTreeMap<String, String>,
-    _caller: Caller,
 ) -> Result<CommandPlan> {
     let t = cfg
         .tasks
@@ -963,7 +941,6 @@ mod tests {
             "seq",
             &BTreeMap::new(),
             &BTreeMap::new(),
-            Caller::Agent,
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("not a command task"));

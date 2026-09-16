@@ -665,7 +665,6 @@ fn cmd_task(
                 name,
                 &user,
                 &args,
-                caller,
             )?;
             run_task_step(&fresh, false)
         }
@@ -684,7 +683,6 @@ fn cmd_task(
                                 &plan.name,
                                 &user,
                                 &args,
-                                caller,
                             )?;
                             run_task_step(&fresh, false)?;
                         }

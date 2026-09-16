@@ -137,7 +137,8 @@ pub(crate) const REVIEW_FINISH_CONTEXT_KEYS: &[&str] = &[
 /// Refuse a required `--arg` this run's templates read and the caller did not
 /// supply. `templates` are the ones this command can render, taken statically:
 /// `issue pr` builds title and body in closures `ensure` may not call, and
-/// gating on that would move the error after the push.
+/// gating on that would move the error after the push. `context_keys` are the
+/// names the command's render context binds, which no `--arg` can supply.
 ///
 /// `reads` is intersected with the declared names because `parse_args` rejects
 /// an `--arg` for anything else, so an undeclared name could not be supplied
@@ -154,16 +155,7 @@ pub(crate) fn check_required(
     let mut reads = devkit_common::template::undeclared(templates)?;
     reads.retain(|n| declared.contains(n) && !context_keys.contains(&n.as_str()));
     let missing = devkit_common::required::missing_args(cfg, None, &reads, given, caller);
-    anyhow::ensure!(
-        missing.is_empty(),
-        "{surface} needs {}",
-        missing
-            .iter()
-            .map(devkit_common::required::Missing::hint)
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    Ok(())
+    devkit_common::required::ensure_supplied(surface, &missing)
 }
 
 /// Clone `base` and add extra fields for a single template render.

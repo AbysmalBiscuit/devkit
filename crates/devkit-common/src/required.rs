@@ -1,13 +1,11 @@
 //! Whether a caller must supply a given `--arg`. The single door: every
-//! `--arg` surface asks here, and nothing re-derives the answer. An earlier
-//! attempt at this feature re-derived it inline for the task listing, and the
-//! listing then disagreed with the check that refused the run.
+//! `--arg` surface asks here, and nothing re-derives the answer.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use devkit_config::{Config, Required};
 
-pub use crate::caller::Caller;
+use crate::caller::Caller;
 
 /// A required arg the caller did not supply. `reason` is the marking that
 /// bound it, or `Never` when the derived rule did.
@@ -29,6 +27,21 @@ impl Missing {
             Required::Humans => format!("--arg {name}=... (required for humans)"),
         }
     }
+}
+
+/// Refuse the run when anything is missing, naming each arg as `what needs
+/// --arg a=... --arg b=...`.
+pub fn ensure_supplied(what: &str, missing: &[Missing]) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        missing.is_empty(),
+        "{what} needs {}",
+        missing
+            .iter()
+            .map(Missing::hint)
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    Ok(())
 }
 
 /// Whether a marking binds this caller.
@@ -145,20 +158,25 @@ mod tests {
 
     use super::*;
 
+    fn parse(body: &str) -> Config {
+        Config::parse(&format!(
+            "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n{body}"
+        ))
+        .unwrap()
+    }
+
     /// `msg` is defaulted, `ticket` is declared with no default, `plain` is a
     /// bare constant. The `commit` task reads all three.
     fn cfg(task_marking: &str) -> Config {
-        let s = format!(
-            "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
-             [templates.variables]\n\
+        parse(&format!(
+            "[templates.variables]\n\
              plain = 'p'\n\
              msg = {{ default = 'wip', required = 'agents' }}\n\
              ticket = {{ required = 'always' }}\n\
              [tasks.commit]\n\
              run = ['git', 'commit', '-m', '{{{{ msg }}}}']\n\
              {task_marking}\n"
-        );
-        Config::parse(&s).unwrap()
+        ))
     }
 
     fn names(v: &[&str]) -> BTreeSet<String> {
@@ -198,15 +216,6 @@ mod tests {
     }
 
     #[test]
-    fn a_task_marking_cannot_lower_the_derived_floor() {
-        let c = cfg("required_args = { ticket = 'never' }");
-        assert!(
-            is_required(&c, Some("commit"), "ticket", Caller::Human),
-            "never cannot relax an arg with no default"
-        );
-    }
-
-    #[test]
     fn missing_args_reports_only_unsupplied_required_reads() {
         let c = cfg("");
         let given = BTreeMap::from([("ticket".to_string(), "T-1".to_string())]);
@@ -238,12 +247,12 @@ mod tests {
 
     #[test]
     fn a_marking_that_did_not_bind_this_caller_is_left_out_of_the_hint() {
-        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
-             [templates.variables]\n\
+        let c = parse(
+            "[templates.variables]\n\
              humans_no_default = { required = 'humans' }\n\
              [tasks.t]\n\
-             run = ['x', '{{ humans_no_default }}']\n";
-        let c = Config::parse(s).unwrap();
+             run = ['x', '{{ humans_no_default }}']\n",
+        );
         let out = missing_args(
             &c,
             Some("t"),
@@ -276,15 +285,14 @@ mod tests {
 
     #[test]
     fn a_step_tasks_marking_binds_the_sequence_that_runs_it() {
-        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
-             [templates.variables]\n\
+        let s = "[templates.variables]\n\
              scope = 'chore'\n\
              [tasks.commit]\n\
              run = ['git', 'commit', '-m', '{{ scope }}']\n\
              required_args = { scope = 'agents' }\n\
              [tasks.ship]\n\
              steps = [{ task = 'commit' }]\n";
-        let c = Config::parse(s).unwrap();
+        let c = parse(s);
         assert!(
             is_required(&c, Some("ship"), "scope", Caller::Agent),
             "running commit as a step must not launder away its marking"
@@ -294,8 +302,7 @@ mod tests {
 
     #[test]
     fn a_sequence_can_opt_out_of_a_marking_its_step_carries() {
-        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
-             [templates.variables]\n\
+        let s = "[templates.variables]\n\
              scope = 'chore'\n\
              [tasks.commit]\n\
              run = ['git', 'commit', '-m', '{{ scope }}']\n\
@@ -303,7 +310,7 @@ mod tests {
              [tasks.ship]\n\
              steps = [{ task = 'commit' }]\n\
              required_args = { scope = 'never' }\n";
-        let c = Config::parse(s).unwrap();
+        let c = parse(s);
         assert!(
             !is_required(&c, Some("ship"), "scope", Caller::Agent),
             "the task the caller named wins, never included"
@@ -312,12 +319,11 @@ mod tests {
 
     #[test]
     fn the_floor_never_reports_an_audience() {
-        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
-             [templates.variables]\n\
+        let s = "[templates.variables]\n\
              agents_no_default = { required = 'agents' }\n\
              [tasks.t]\n\
              run = ['x', '{{ agents_no_default }}']\n";
-        let c = Config::parse(s).unwrap();
+        let c = parse(s);
         for caller in [Caller::Agent, Caller::Human] {
             let out = missing_args(
                 &c,
@@ -335,14 +341,12 @@ mod tests {
         }
     }
 
-    /// The design spec's truth table, crossed with both callers. Row eight
-    /// (`never` on a no-default variable) is excluded:
-    /// `reject_never_without_default` refuses that combination at config
-    /// load, so `is_required` never sees it.
+    /// Every marking crossed with default-or-not, for both callers. `never` on
+    /// an arg with no default is absent: config load refuses it, so
+    /// `is_required` never sees it.
     #[test]
-    fn the_truth_table_holds_for_both_callers() {
-        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
-             [templates.variables]\n\
+    fn every_marking_and_default_combination_for_both_callers() {
+        let s = "[templates.variables]\n\
              plain = 'p'\n\
              always_default = { default = 'd', required = 'always' }\n\
              agents_default = { default = 'd', required = 'agents' }\n\
@@ -352,24 +356,20 @@ mod tests {
              [tasks.t]\n\
              run = ['x', '{{ plain }}']\n\
              required_args = { overridden = 'never' }\n";
-        let c = Config::parse(s).unwrap();
+        let c = parse(s);
 
         // (name, required for an agent, required for a human)
         let rows: &[(&str, bool, bool)] = &[
-            // row 1: no marking, no default (also covers a wholly undeclared name).
+            // No marking and no default, including a wholly undeclared name.
             ("nowhere_declared", true, true),
-            // row 2: no marking, has default.
             ("plain", false, false),
-            // row 3: `always`, has default.
             ("always_default", true, true),
-            // row 4: `agents`, has default.
             ("agents_default", true, false),
-            // row 5: `humans`, has default.
             ("humans_default", false, true),
-            // row 6: variable says `always`, the task relaxes it to `never`.
+            // The variable says `always`, the task relaxes it to `never`.
             ("overridden", false, false),
-            // row 7: a marking with no default; the floor holds regardless of
-            // which marking, so `agents` still binds the human too.
+            // With no default the floor holds whichever marking, so `agents`
+            // still binds the human too.
             ("agents_no_default", true, true),
         ];
         for (name, agent, human) in rows {

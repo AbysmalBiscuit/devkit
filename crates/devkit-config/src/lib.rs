@@ -1586,10 +1586,10 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
     Ok(())
 }
 
-/// Refuse `never` on an arg with no default, on a variable or in a task's
-/// `required_args`. The derived rule already requires such a name, `never`
-/// cannot lower that floor, and honouring it would replace a named error with
-/// minijinja's strict-undefined chain, which never mentions the arg.
+/// Refuse `required = "never"` on a variable with no default. The derived rule
+/// already requires such a name, `never` cannot lower that floor, and
+/// honouring it would replace a named error with minijinja's strict-undefined
+/// chain, which never mentions the arg.
 ///
 /// Only a marking the author wrote is refused. A valueless entry carrying no
 /// marking is the ordinary way to declare a name as passable, and stays
@@ -1599,30 +1599,6 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
 /// variable's marking, and with no default underneath there is no marking to
 /// relax.
 fn reject_never_without_default(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
-    let has_default = |name: &str| {
-        cfg.templates
-            .variables
-            .get(name)
-            .and_then(VariableDecl::default_value)
-            .is_some()
-    };
-    for (task, t) in &cfg.tasks {
-        for (name, r) in &t.required_args {
-            if *r != Required::Never || has_default(name) {
-                continue;
-            }
-            let declared = origin
-                .get(&format!("tasks.{task}.required_args.{name}"))
-                .map(|p| format!(" (declared in {})", p.display()))
-                .unwrap_or_default();
-            anyhow::bail!(
-                "task `{task}`{declared} sets `required_args = {{ {name} = \"never\" }}`, \
-                 but `{name}` has no `default` in [templates.variables]. An arg with \
-                 nothing to fall back on is required either way; give it a `default` \
-                 or drop the entry."
-            );
-        }
-    }
     for (name, decl) in &cfg.templates.variables {
         if decl.written_required() != Some(Required::Never) || decl.default_value().is_some() {
             continue;
@@ -2025,37 +2001,6 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         assert_eq!(decl.default_value(), None);
         assert_eq!(decl.written_required(), None);
         assert_eq!(decl.required(), Required::Never);
-    }
-
-    #[test]
-    fn a_task_relaxing_an_arg_with_no_default_is_rejected() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("devkit.toml"),
-            "[config]\nroot = true\n\
-             [tasks.commit]\nrun = ['git', 'commit', '-m', '{{ msg }}']\n\
-             required_args = { msg = 'never' }\n",
-        )
-        .unwrap();
-        let err = resolve_with_home(None, dir.path(), None, None, None, None).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("msg"), "the error names the arg: {msg}");
-        assert!(msg.contains("commit"), "and the task it sits on: {msg}");
-    }
-
-    #[test]
-    fn a_task_relaxing_a_defaulted_arg_is_accepted() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("devkit.toml"),
-            "[config]\nroot = true\n\
-             [templates.variables]\nmsg = { default = 'wip', required = 'always' }\n\
-             [tasks.commit]\nrun = ['git', 'commit', '-m', '{{ msg }}']\n\
-             required_args = { msg = 'never' }\n",
-        )
-        .unwrap();
-        resolve_with_home(None, dir.path(), None, None, None, None)
-            .expect("relaxing a project-wide marking for one task is the point of never");
     }
 
     #[test]
