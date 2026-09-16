@@ -763,6 +763,13 @@ pub struct TaskConfig {
     /// process at all.
     #[serde(default)]
     pub guard: Option<bool>,
+    /// Args this task requires beyond what `[templates.variables]` markings
+    /// say, as name to marking. A task entry beats a variable entry, including
+    /// relaxing one to `never`. Neither can lower the derived floor: an arg
+    /// with no default is required whatever this says. Each name must be an
+    /// arg the task reads.
+    #[serde(default)]
+    pub required_args: std::collections::BTreeMap<String, Required>,
 }
 
 /// Longest branch `issue setup` renders before it shortens the slug to fit,

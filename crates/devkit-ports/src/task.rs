@@ -261,7 +261,7 @@ pub fn resolve(
     };
     ensure!(
         !is_sequence || (t.app.is_none() && t.env.is_empty() && t.require_live.is_empty()),
-        "sequence task `{name}` may only set `description` and `steps`"
+        "sequence task `{name}` may only set `description`, `steps`, and `required_args`"
     );
     check_args(cfg, name, args)?;
     let vars = variables(cfg, worktree_root, args);
