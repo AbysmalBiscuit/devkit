@@ -204,7 +204,9 @@ pub struct CommandRule {
     /// Arguments that must appear, in order, at the head of the typed
     /// arguments for the rule to fire. Empty matches any arguments. `*`
     /// matches any run of characters, `/` included, within one argument; an
-    /// entry that is exactly `"**"` matches zero or more whole arguments.
+    /// entry that is exactly `"**"` matches zero or more whole arguments. A
+    /// leading `"**"` also skips a script path, so `["**", "*nitro", "dev"]`
+    /// fires on `node server.js --name nitro dev` too.
     #[serde(default)]
     pub args: Vec<String>,
     /// Shown to the agent verbatim when the rule denies. Name the replacement

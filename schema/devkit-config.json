@@ -147,7 +147,7 @@
         },
         "args": {
           "default": [],
-          "description": "Arguments that must appear, in order, at the head of the typed\narguments for the rule to fire. Empty matches any arguments. `*`\nmatches any run of characters, `/` included, within one argument; an\nentry that is exactly `\"**\"` matches zero or more whole arguments.",
+          "description": "Arguments that must appear, in order, at the head of the typed\narguments for the rule to fire. Empty matches any arguments. `*`\nmatches any run of characters, `/` included, within one argument; an\nentry that is exactly `\"**\"` matches zero or more whole arguments. A\nleading `\"**\"` also skips a script path, so `[\"**\", \"*nitro\", \"dev\"]`\nfires on `node server.js --name nitro dev` too.",
           "items": {
             "type": "string"
           },
