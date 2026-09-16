@@ -188,7 +188,7 @@ pub fn run(args: Args) -> Result<()> {
         &[tmpls.review_finish()],
         &[
             "input", "pr_url", "pr_title", "name", "slack_id", "issue", "slug", "branch", "apps",
-            "prefix", "author",
+            "author",
         ],
         &given,
         caller,

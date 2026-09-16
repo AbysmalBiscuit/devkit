@@ -106,7 +106,6 @@ pub fn run(args: Args) -> Result<()> {
         &[tmpls.review_request()],
         &[
             "input", "pr_url", "pr_title", "name", "slack_id", "issue", "slug", "branch", "apps",
-            "prefix",
         ],
         &given,
         caller,

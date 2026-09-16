@@ -208,9 +208,7 @@ pub fn run(args: Args) -> Result<()> {
         "issue pr",
         &loaded.config,
         &[tmpls.pr_title(), tmpls.pr_body()],
-        &[
-            "input", "pr_title", "issue", "slug", "branch", "apps", "prefix",
-        ],
+        &["input", "pr_title", "issue", "slug", "branch", "apps"],
         &given,
         caller,
     )?;
