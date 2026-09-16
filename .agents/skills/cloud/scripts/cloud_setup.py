@@ -7,8 +7,10 @@ import subprocess
 import urllib.request
 from pathlib import Path
 
-SKILL = Path(__file__).resolve().parents[1]
-ROOT = SKILL.parents[2]
+# `.parent` rather than `parents[n]`: the hosted setup script runs a lone
+# download of this file before the clone, where the checkout's depth is absent.
+SKILL = Path(__file__).resolve().parent.parent
+ROOT = SKILL.parent.parent.parent
 
 
 def in_cloud():
@@ -118,7 +120,9 @@ def main():
     if not (args.cloud or in_cloud()):
         return
     if args.install:
+        # The checkout does not exist yet; the startup hook configures it.
         install_tools()
+        return
     configure()
     if args.handoff:
         print(f"Cloud configuration generated in {ROOT}. Read {ROOT / 'AGENTS.local.md'} before continuing the task.")

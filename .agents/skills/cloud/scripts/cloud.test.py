@@ -240,10 +240,10 @@ class CloudHooks(unittest.TestCase):
         self.assertIn("Set GIT_AUTHOR_NAME", result.stderr)
         self.assertFalse((self.root / ".git/devkit-cloud-hooks").exists())
 
-    def load_setup(self, home, **env):
+    def load_setup(self, home, script=None, **env):
         """Import the copied setup script with network installs replaced by a local fake."""
         spec = importlib.util.spec_from_file_location(
-            "cloud_setup", self.root / ".agents/skills/cloud/scripts/cloud_setup.py"
+            "cloud_setup", script or self.root / ".agents/skills/cloud/scripts/cloud_setup.py"
         )
         assert spec and spec.loader
         setup = importlib.util.module_from_spec(spec)
@@ -288,6 +288,21 @@ class CloudHooks(unittest.TestCase):
         state = home / ".local/state"
         self.assertEqual((state / "devkit/bootstrap-version").read_text(), "0.14.4\n")
         self.assertEqual((state / "mcpls/bootstrap-version").read_text(), "0.3.11\n")
+
+    def test_setup_installs_from_a_lone_download_before_the_clone(self):
+        home = self.root / "home"
+        prefix = self.root / "prefix"
+        self.install_plugins(home, {"devkit": "0.14.4", "mcpls": "0.3.11"})
+        lone = self.root / "cloud_setup.py"
+        shutil.copy(self.root / ".agents/skills/cloud/scripts/cloud_setup.py", lone)
+        setup, requested = self.load_setup(
+            home, script=lone, DEVKIT_INSTALL_DIR=str(prefix), MCPLS_INSTALL_DIR=str(prefix)
+        )
+        with mock.patch.object(sys, "argv", [str(lone), "--cloud", "--install"]):
+            setup.main()
+        self.assertEqual(len(requested), 2)
+        self.assertTrue((prefix / "bin/mcpls").is_file())
+        self.assertFalse((self.root / "AGENTS.local.md").exists())
 
     def test_setup_refuses_an_install_dir_the_bootstrap_would_not_share(self):
         home = self.root / "home"
