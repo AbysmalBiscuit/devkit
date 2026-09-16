@@ -80,10 +80,13 @@ fn known(inv: &Invocation) -> Option<Known> {
     })
 }
 
+/// Ordered from weakest to strongest, so combining alternatives takes the
+/// maximum and combining a sequence takes the minimum.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Match {
-    Yes,
-    Possible,
     No,
+    Possible,
+    Yes,
 }
 
 fn rule_match(inv: &Invocation, rule: &CommandRule) -> Match {
@@ -94,19 +97,30 @@ fn rule_match(inv: &Invocation, rule: &CommandRule) -> Match {
     if !rule.programs.iter().any(|p| basename(p) == program) {
         return Match::No;
     }
-    let mut possible = false;
-    for (index, expected) in rule.args.iter().enumerate() {
-        match inv.semantic_args.get(index) {
-            Some(Value::Known(actual)) if wildcard_matches(expected, actual) => {}
-            Some(Value::Known(_)) | None => return Match::No,
-            Some(Value::Unknown | Value::Ephemeral(_)) => possible = true,
-        }
+    args_match(&rule.args, &inv.semantic_args)
+}
+
+/// Whether `args` starts with `patterns`. A `"**"` entry stands for zero or
+/// more whole arguments; every other entry matches one argument.
+fn args_match(patterns: &[String], args: &[Value]) -> Match {
+    let Some((pattern, patterns)) = patterns.split_first() else {
+        return Match::Yes;
+    };
+    if pattern == "**" {
+        return (0..=args.len())
+            .map(|skipped| args_match(patterns, &args[skipped..]))
+            .max()
+            .unwrap_or(Match::No);
     }
-    if possible {
-        Match::Possible
-    } else {
-        Match::Yes
-    }
+    let Some((arg, args)) = args.split_first() else {
+        return Match::No;
+    };
+    let here = match arg {
+        Value::Known(actual) if wildcard_matches(pattern, actual) => Match::Yes,
+        Value::Known(_) => return Match::No,
+        Value::Unknown | Value::Ephemeral(_) => Match::Possible,
+    };
+    here.min(args_match(patterns, args))
 }
 
 /// Whether `text` matches `pattern`, where each `*` stands for any run of
@@ -708,6 +722,47 @@ mod tests {
         let any = rule(&["node"], &["*"], |_| {});
         assert!(denies(&decide_with("node server.js", &any, None)));
         assert!(!denies(&decide_with("node", &any, None)));
+    }
+
+    #[test]
+    fn a_double_star_rule_arg_skips_any_number_of_arguments() {
+        let server = rule(&["bun"], &["**", "nitro", "dev"], |_| {});
+        for command in [
+            "bun nitro dev",
+            "bun --cwd . nitro dev --port 9200",
+            "bun --filter=@adaptyv/api --smol nitro dev",
+        ] {
+            assert!(denies(&decide_with(command, &server, None)), "{command}");
+        }
+        for command in [
+            "bun nitro build",
+            "bun dev nitro",
+            "bun --cwd . nitro",
+            "bun",
+        ] {
+            assert!(!denies(&decide_with(command, &server, None)), "{command}");
+        }
+
+        let bin = rule(&["node"], &["**", "*/nitro", "dev"], |_| {});
+        assert!(denies(&decide_with(
+            "node --inspect node_modules/.bin/nitro dev",
+            &bin,
+            None
+        )));
+
+        let trailing = rule(&["git"], &["worktree", "**"], |_| {});
+        assert!(denies(&decide_with("git worktree", &trailing, None)));
+        assert!(!denies(&decide_with("git status", &trailing, None)));
+    }
+
+    #[test]
+    fn a_double_star_rule_arg_warns_when_only_an_unresolved_argument_could_match() {
+        let server = rule(&["bun"], &["**", "nitro", "dev"], |_| {});
+        let skipped = verdict(r#"bun "$FLAG" nitro dev"#, &server);
+        assert_eq!(skipped.blocks.len(), 1);
+        let unresolved = verdict(r#"bun --cwd . "$NAME" dev"#, &server);
+        assert!(unresolved.blocks.is_empty());
+        assert_eq!(unresolved.warnings.len(), 1);
     }
 
     #[test]

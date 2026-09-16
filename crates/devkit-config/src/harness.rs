@@ -173,9 +173,9 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 /// args     = ["worktree", "add"]
 /// reason   = "use `issue setup <id>`, which records the worktree"
 ///
-/// [harness.commands.nitro-via-node]
-/// programs = ["node"]
-/// args     = ["*/nitro", "dev"] # any path to the binary: node_modules/.bin/nitro, /abs/.../nitro
+/// [harness.commands.nitro-dev]
+/// programs = ["bun", "node"]
+/// args     = ["**", "*nitro", "dev"] # bun --cwd . nitro dev, node node_modules/.bin/nitro dev
 /// reason   = "start the api with `devrun up api`"
 /// # "#).unwrap();
 /// # let rule: CommandRule =
@@ -185,15 +185,15 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 /// # assert_eq!(rule.action, RuleAction::Block);
 /// # assert_eq!(rule.severity, Severity::Error);
 /// # let glob: CommandRule =
-/// #     doc["harness"]["commands"]["nitro-via-node"].clone().try_into().unwrap();
-/// # assert_eq!(glob.args, ["*/nitro", "dev"]);
+/// #     doc["harness"]["commands"]["nitro-dev"].clone().try_into().unwrap();
+/// # assert_eq!(glob.args, ["**", "*nitro", "dev"]);
 /// ```
 ///
 /// `args` matches the typed arguments after the program's own global options
 /// are removed, so `git -C /repo worktree add` fires the first rule and
-/// `git worktree list` does not. A `*` in an `args` entry matches any run of
-/// characters, `/` included, so the second rule refuses
-/// `node ./node_modules/.bin/nitro dev` and allows `nitro build`.
+/// `git worktree list` does not. In the second rule, `**` skips any flags
+/// before the server and `*nitro` matches the binary at any path, so it
+/// refuses `bun --filter=api nitro dev` and allows `bun nitro build`.
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
 pub struct CommandRule {
     /// Program names this rule refuses, matched against the segment's command
@@ -203,8 +203,8 @@ pub struct CommandRule {
     pub programs: Vec<String>,
     /// Arguments that must appear, in order, at the head of the typed
     /// arguments for the rule to fire. Empty matches any arguments. `*`
-    /// matches any run of characters, `/` included; `"*"` alone still needs
-    /// an argument in its place.
+    /// matches any run of characters, `/` included, within one argument; an
+    /// entry that is exactly `"**"` matches zero or more whole arguments.
     #[serde(default)]
     pub args: Vec<String>,
     /// Shown to the agent verbatim when the rule denies. Name the replacement
