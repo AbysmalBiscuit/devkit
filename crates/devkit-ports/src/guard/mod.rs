@@ -9,6 +9,7 @@ pub mod tasks;
 use std::collections::{BTreeMap, HashMap};
 
 use devkit_command::{Analysis, Invocation, Value};
+use devkit_common::caller::Caller;
 use devkit_config::{AppMatch, CommandRule, Config, RuleAction, RunArg, Severity};
 use norm::basename;
 
@@ -274,7 +275,10 @@ fn project_hit(typed: &[String], n: &Normalized, prog: &str, p: &Project) -> Opt
     };
 
     if let Some(name) = best_task(n, p, min_sig) {
-        let usage: String = crate::task::required_args(&p.config, &name)
+        // The guard only ever fires because a coding agent acted, and its
+        // stdin is a harness pipe, so the TTY says nothing. Name the set the
+        // agent will actually be asked for.
+        let usage: String = crate::task::required_args(&p.config, &name, Caller::Agent)
             .unwrap_or_default()
             .iter()
             .map(|a| format!(" --arg {a}=<{a}>"))

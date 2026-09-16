@@ -117,7 +117,7 @@ fn apps(explicit: Option<&Path>, cwd: &str, json: bool) -> Result<()> {
 /// `devkit config tasks [--json]` — a pure readout of the merged `[tasks]`.
 fn tasks(explicit: Option<&Path>, cwd: &str, json: bool) -> Result<()> {
     let loaded = load::load(explicit, Path::new(cwd))?;
-    let rows = task::list(&loaded.config);
+    let rows = task::list(&loaded.config, devkit_common::caller::caller());
     if json {
         println!("{}", serde_json::to_string_pretty(&tasks_json(&rows))?);
     } else {

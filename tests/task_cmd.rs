@@ -72,6 +72,15 @@ run = ["git", "--msg={{ msg "]
 
 [tasks.tagged]
 run = ["git", "--tag={% if issue is defined %}{{ issue }}/{{ slug }}@{{ branch }}{% else %}none{% endif %}", "version"]
+
+[tasks.pinned-commit]
+description = "commit that will not take the default scope"
+run = ["git", "--msg={{ scope }}: {{ msg }}", "version"]
+required_args = { scope = "agents" }
+
+[tasks.typo-required]
+run = ["git", "--msg={{ msg }}", "version"]
+required_args = { nope = "always" }
 "#,
     )
     .expect("write devkit.toml");
@@ -375,6 +384,83 @@ fn task_listing_shows_the_args_a_task_reads() {
         .find(|l| l.contains("commit with a scope"))
         .unwrap_or_else(|| panic!("commit row missing: {stdout}"));
     assert!(commit.contains("msg"), "{commit}");
+}
+
+#[test]
+fn an_agents_marking_binds_a_run_with_no_terminal() {
+    let dir = setup();
+    // The test harness has no TTY, so the run classifies as an agent.
+    let out = run_in(dir.path(), &[
+        "task",
+        "pinned-commit",
+        "--arg",
+        "msg=fix",
+        "--dry-run",
+    ]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--arg scope=..."), "{stderr}");
+    assert!(
+        stderr.contains("required for agents"),
+        "the audience is named: {stderr}"
+    );
+}
+
+#[test]
+fn the_same_run_as_a_human_takes_the_default() {
+    let dir = setup();
+    let state = dir.path().join("state");
+    let out = devkit_run()
+        .args(["task", "pinned-commit", "--arg", "msg=fix", "--dry-run"])
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("XDG_STATE_HOME", &state)
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("LOCALAPPDATA", &state)
+        .env("USERPROFILE", dir.path())
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env("DEVKIT_CALLER", "human")
+        .output()
+        .expect("run devkit run");
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("argv: git --msg=devkit: fix version"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn the_listing_is_caller_relative() {
+    let dir = setup();
+    let agent = run_in(dir.path(), &["task"]);
+    let stdout = String::from_utf8_lossy(&agent.stdout);
+    let row = stdout
+        .lines()
+        .find(|l| l.contains("will not take the default scope"))
+        .unwrap_or_else(|| panic!("row missing: {stdout}"));
+    assert!(
+        row.contains("scope") && !row.contains("[scope]"),
+        "agent sees it required: {row}"
+    );
+}
+
+#[test]
+fn a_required_args_name_the_task_never_reads_is_invalid() {
+    let dir = setup();
+    let out = run_in(dir.path(), &["task", "typo-required", "--arg", "msg=x"]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("nope"),
+        "{out:?}"
+    );
+
+    let listing = run_in(dir.path(), &["task"]);
+    let stdout = String::from_utf8_lossy(&listing.stdout);
+    let row = stdout
+        .lines()
+        .find(|l| l.contains("typo-required"))
+        .unwrap_or_else(|| panic!("row missing: {stdout}"));
+    assert!(row.contains("invalid"), "{row}");
 }
 
 #[test]

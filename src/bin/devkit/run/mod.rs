@@ -630,9 +630,10 @@ fn cmd_task(
 ) -> Result<()> {
     use devkit_ports::task::{self, Resolved, SeqItem};
 
+    let caller = devkit_common::caller::caller();
     let loaded = load::load(cli.config.as_deref().map(Path::new), Path::new(cwd))?;
     let Some(name) = name else {
-        let rows = task::list(&loaded.config);
+        let rows = task::list(&loaded.config, caller);
         print!("{}", task::tasks_text(&rows));
         return Ok(());
     };
@@ -648,6 +649,7 @@ fn cmd_task(
         name,
         &user,
         &args,
+        caller,
     )?;
     let root_path = Path::new(&root);
     match resolved {
@@ -663,6 +665,7 @@ fn cmd_task(
                 name,
                 &user,
                 &args,
+                caller,
             )?;
             run_task_step(&fresh, false)
         }
@@ -681,6 +684,7 @@ fn cmd_task(
                                 &plan.name,
                                 &user,
                                 &args,
+                                caller,
                             )?;
                             run_task_step(&fresh, false)?;
                         }
