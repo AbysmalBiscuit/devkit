@@ -5,8 +5,8 @@ use devkit_common::{cmd::gh_capture, git::Git, github, progress::Steps};
 use devkit_config::Person;
 
 use super::{
-    Target, base_ctx, check_required, deliver, guard_branch, is_human_login, parse_args,
-    person_by_login, resolve_target, target_from_person, with_fields,
+    REVIEW_REQUEST_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, guard_branch,
+    is_human_login, parse_args, person_by_login, resolve_target, target_from_person, with_fields,
 };
 use crate::issue::pr::{
     add_reviewers, gate_ready, requested_reviewer_logins, require_existing_pr,
@@ -104,9 +104,7 @@ pub fn run(args: Args) -> Result<()> {
         "issue review request",
         &loaded.config,
         &[tmpls.review_request()],
-        &[
-            "input", "pr_url", "pr_title", "name", "slack_id", "issue", "slug", "branch", "apps",
-        ],
+        REVIEW_REQUEST_CONTEXT_KEYS,
         &given,
         caller,
     )?;

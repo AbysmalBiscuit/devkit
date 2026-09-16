@@ -1594,23 +1594,57 @@ fn reject_reserved_variables(cfg: &Config, origin: &HashMap<String, PathBuf>) ->
 /// Only a marking the author wrote is refused. A valueless entry carrying no
 /// marking is the ordinary way to declare a name as passable, and stays
 /// required by the derived rule.
+///
+/// A task's `required_args` is checked the same way: `never` there relaxes a
+/// variable's marking, and with no default underneath there is no marking to
+/// relax.
 fn reject_never_without_default(cfg: &Config, origin: &HashMap<String, PathBuf>) -> Result<()> {
     for (name, decl) in &cfg.templates.variables {
         if decl.written_required() != Some(Required::Never) || decl.default_value().is_some() {
             continue;
         }
-        let key = format!("templates.variables.{name}");
-        let declared = origin
-            .get(&key)
-            .map(|p| format!(" (declared in {})", p.display()))
-            .unwrap_or_default();
+        // Provenance records the leaf that was written, and for a table entry
+        // that is the `required` key rather than the variable itself.
+        let declared = layer_note(origin, &format!("templates.variables.{name}.required"));
         anyhow::bail!(
             "`[templates.variables] {name}`{declared} sets `required = \"never\"` \
              with no `default`. An arg with nothing to fall back on is required \
              either way; give it a `default` or drop the marking."
         );
     }
+    for (task, t) in &cfg.tasks {
+        for (name, marking) in &t.required_args {
+            if *marking != Required::Never {
+                continue;
+            }
+            let has_default = cfg
+                .templates
+                .variables
+                .get(name)
+                .and_then(|d| d.default_value())
+                .is_some();
+            if has_default {
+                continue;
+            }
+            let declared = layer_note(origin, &format!("tasks.{task}.required_args.{name}"));
+            anyhow::bail!(
+                "`[tasks.{task}] required_args.{name}`{declared} is `\"never\"`, but \
+                 `{name}` has no `default` in `[templates.variables]`. A task can relax \
+                 a marking, not the derived rule underneath it; give `{name}` a \
+                 `default` or drop the entry."
+            );
+        }
+    }
     Ok(())
+}
+
+/// ` (declared in <layer>)` when provenance knows which layer wrote `key`, and
+/// nothing when it does not. An error that cannot name the layer still reads.
+fn layer_note(origin: &HashMap<String, PathBuf>, key: &str) -> String {
+    origin
+        .get(key)
+        .map(|p| format!(" (declared in {})", p.display()))
+        .unwrap_or_default()
 }
 
 /// Expand `${VAR}` references in a config value. `$$` is a literal `$`; a `$`
@@ -1933,6 +1967,37 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         assert_eq!(decl.default_value(), None);
         assert_eq!(decl.written_required(), None);
         assert_eq!(decl.required(), Required::Never);
+    }
+
+    #[test]
+    fn a_task_relaxing_an_arg_with_no_default_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n\
+             [tasks.commit]\nrun = ['git', 'commit', '-m', '{{ msg }}']\n\
+             required_args = { msg = 'never' }\n",
+        )
+        .unwrap();
+        let err = resolve_with_home(None, dir.path(), None, None, None, None).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("msg"), "the error names the arg: {msg}");
+        assert!(msg.contains("commit"), "and the task it sits on: {msg}");
+    }
+
+    #[test]
+    fn a_task_relaxing_a_defaulted_arg_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("devkit.toml"),
+            "[config]\nroot = true\n\
+             [templates.variables]\nmsg = { default = 'wip', required = 'always' }\n\
+             [tasks.commit]\nrun = ['git', 'commit', '-m', '{{ msg }}']\n\
+             required_args = { msg = 'never' }\n",
+        )
+        .unwrap();
+        resolve_with_home(None, dir.path(), None, None, None, None)
+            .expect("relaxing a project-wide marking for one task is the point of never");
     }
 
     #[test]

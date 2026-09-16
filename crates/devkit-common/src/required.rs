@@ -41,30 +41,65 @@ pub fn binds(r: Required, caller: Caller) -> bool {
     }
 }
 
-/// The marking in force: the task's entry, else the variable's, else none.
-pub fn declared_required(cfg: &Config, task: Option<&str>, name: &str) -> Required {
-    if let Some(t) = task.and_then(|t| cfg.tasks.get(t))
-        && let Some(r) = t.required_args.get(name)
-    {
-        return *r;
+/// Every marking that applies to `name` under `task`, in precedence order.
+///
+/// The task's own entry wins alone when it has one, `never` included, so a
+/// sequence can opt out of a marking its own steps carry. Failing that, the
+/// steps' entries all apply: a command task's marking holds however it is
+/// reached, and running it as one step of a sequence is a way of reaching it.
+/// Failing that, the variable's own marking.
+fn applicable(cfg: &Config, task: Option<&str>, name: &str) -> Vec<Required> {
+    if let Some(t) = task.and_then(|t| cfg.tasks.get(t)) {
+        if let Some(r) = t.required_args.get(name) {
+            return vec![*r];
+        }
+        let from_steps: Vec<Required> = t
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                devkit_config::Step::Task(r) => cfg.tasks.get(r),
+                devkit_config::Step::Up(_) => None,
+            })
+            .filter_map(|sub| sub.required_args.get(name).copied())
+            .collect();
+        if !from_steps.is_empty() {
+            return from_steps;
+        }
     }
     cfg.templates
         .variables
         .get(name)
         .map(|d| d.required())
+        .into_iter()
+        .collect()
+}
+
+/// The marking in force: the task's entry, else a step-task's, else the
+/// variable's, else none. Where several steps mark one name, the first in
+/// step order stands in for the set; `is_required` consults them all.
+pub fn declared_required(cfg: &Config, task: Option<&str>, name: &str) -> Required {
+    applicable(cfg, task, name)
+        .into_iter()
+        .next()
         .unwrap_or_default()
+}
+
+/// Whether `name` carries a default anywhere in `[templates.variables]`.
+fn has_default(cfg: &Config, name: &str) -> bool {
+    cfg.templates
+        .variables
+        .get(name)
+        .and_then(|d| d.default_value())
+        .is_some()
 }
 
 /// The derived rule ORed with the marking. The derived rule is a floor, so a
 /// marking can only add a requirement, never remove one.
 pub fn is_required(cfg: &Config, task: Option<&str>, name: &str, caller: Caller) -> bool {
-    let has_default = cfg
-        .templates
-        .variables
-        .get(name)
-        .and_then(|d| d.default_value())
-        .is_some();
-    !has_default || binds(declared_required(cfg, task, name), caller)
+    !has_default(cfg, name)
+        || applicable(cfg, task, name)
+            .into_iter()
+            .any(|r| binds(r, caller))
 }
 
 /// The required names this run's templates read and the caller did not supply.
@@ -90,16 +125,18 @@ pub fn missing_args(
 
 /// The marking that bound this name for this caller, `Never` when the derived
 /// rule did. A marking names its audience only when it is what made the arg
-/// required. An arg with no default is required of everyone, so a `humans`
-/// marking on one would otherwise tell an agent the arg is "required for
-/// humans" while refusing the agent's own run.
+/// required, which means only when a default exists for it to override. An
+/// arg with no default is required of everyone whatever it is marked, so
+/// naming an audience there would tell one caller the requirement is theirs
+/// alone while the other is refused just the same.
 fn binding_reason(cfg: &Config, task: Option<&str>, name: &str, caller: Caller) -> Required {
-    let declared = declared_required(cfg, task, name);
-    if binds(declared, caller) {
-        declared
-    } else {
-        Required::Never
+    if !has_default(cfg, name) {
+        return Required::Never;
     }
+    applicable(cfg, task, name)
+        .into_iter()
+        .find(|r| binds(*r, caller))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -235,6 +272,67 @@ mod tests {
             Caller::Agent,
         );
         assert_eq!(out[0].hint(), "--arg msg=... (required for agents)");
+    }
+
+    #[test]
+    fn a_step_tasks_marking_binds_the_sequence_that_runs_it() {
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
+             [templates.variables]\n\
+             scope = 'chore'\n\
+             [tasks.commit]\n\
+             run = ['git', 'commit', '-m', '{{ scope }}']\n\
+             required_args = { scope = 'agents' }\n\
+             [tasks.ship]\n\
+             steps = [{ task = 'commit' }]\n";
+        let c = Config::parse(s).unwrap();
+        assert!(
+            is_required(&c, Some("ship"), "scope", Caller::Agent),
+            "running commit as a step must not launder away its marking"
+        );
+        assert!(!is_required(&c, Some("ship"), "scope", Caller::Human));
+    }
+
+    #[test]
+    fn a_sequence_can_opt_out_of_a_marking_its_step_carries() {
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
+             [templates.variables]\n\
+             scope = 'chore'\n\
+             [tasks.commit]\n\
+             run = ['git', 'commit', '-m', '{{ scope }}']\n\
+             required_args = { scope = 'agents' }\n\
+             [tasks.ship]\n\
+             steps = [{ task = 'commit' }]\n\
+             required_args = { scope = 'never' }\n";
+        let c = Config::parse(s).unwrap();
+        assert!(
+            !is_required(&c, Some("ship"), "scope", Caller::Agent),
+            "the task the caller named wins, never included"
+        );
+    }
+
+    #[test]
+    fn the_floor_never_reports_an_audience() {
+        let s = "[defaults]\nworktree_root='w'\nbranch_prefix='x/'\nbaseline_ref='m'\n\
+             [templates.variables]\n\
+             agents_no_default = { required = 'agents' }\n\
+             [tasks.t]\n\
+             run = ['x', '{{ agents_no_default }}']\n";
+        let c = Config::parse(s).unwrap();
+        for caller in [Caller::Agent, Caller::Human] {
+            let out = missing_args(
+                &c,
+                Some("t"),
+                &names(&["agents_no_default"]),
+                &BTreeMap::new(),
+                caller,
+            );
+            assert_eq!(
+                out[0].hint(),
+                "--arg agents_no_default=...",
+                "with no default both callers are refused, so neither is told \
+                 the requirement belongs to the other"
+            );
+        }
     }
 
     /// The design spec's truth table, crossed with both callers. Row eight

@@ -10,8 +10,8 @@ use super::{
     reviewer_logins,
 };
 use crate::issue::review::{
-    PrAction, Target, action_for, base_ctx, check_required, finish, guard_branch, parse_args,
-    render_review, resolve_target, with_fields,
+    PR_CONTEXT_KEYS, PrAction, Target, action_for, base_ctx, check_required, finish, guard_branch,
+    parse_args, render_review, resolve_target, with_fields,
 };
 
 pub struct Args {
@@ -208,7 +208,7 @@ pub fn run(args: Args) -> Result<()> {
         "issue pr",
         &loaded.config,
         &[tmpls.pr_title(), tmpls.pr_body()],
-        &["input", "pr_title", "issue", "slug", "branch", "apps"],
+        PR_CONTEXT_KEYS,
         &given,
         caller,
     )?;

@@ -6,8 +6,8 @@ use devkit_config::Person;
 use serde::Deserialize;
 
 use super::{
-    Target, base_ctx, check_required, deliver, parse_args, person_by_login, resolve_target,
-    target_from_person, with_fields,
+    REVIEW_FINISH_CONTEXT_KEYS, Target, base_ctx, check_required, deliver, parse_args,
+    person_by_login, resolve_target, target_from_person, with_fields,
 };
 
 pub struct Args {
@@ -186,10 +186,7 @@ pub fn run(args: Args) -> Result<()> {
         "issue review finish",
         &loaded.config,
         &[tmpls.review_finish()],
-        &[
-            "input", "pr_url", "pr_title", "name", "slack_id", "issue", "slug", "branch", "apps",
-            "author",
-        ],
+        REVIEW_FINISH_CONTEXT_KEYS,
         &given,
         caller,
     )?;
