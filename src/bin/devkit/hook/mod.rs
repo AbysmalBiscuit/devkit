@@ -124,9 +124,8 @@ pub fn run(cli: HookCli) -> Result<()> {
 /// Write the record a verb beyond `pre-tool-use` carries, if any, and hand back
 /// the settings so a caller that has more to do does not resolve them twice.
 ///
-/// This reads the global config and nothing else: no project layer load, no
-/// tree-sitter. With logging off, a record-only verb is one config read on top
-/// of the process spawn, which is the whole of its cost.
+/// With logging off this is one global config read: no project layer, no git,
+/// no tree-sitter.
 fn record_only(
     payload: &Value,
     event: HookEvent,
@@ -144,7 +143,7 @@ fn record_only(
     }
     let kind = record::record_only(payload, event, &settings);
     let rec = record::envelope(payload, event, harness, kind);
-    devkit_common::harness_log::record(&rec);
+    devkit_common::harness_log::record(&settings, &rec);
     settings
 }
 

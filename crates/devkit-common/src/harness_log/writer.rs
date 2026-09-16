@@ -25,7 +25,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 
-use super::{Record, Settings, resolve};
+use super::{Record, Settings};
 
 /// Well under a second. Nothing downstream waits on a record, and the log
 /// directory is user-configurable to a network home, so a hung mount must not
@@ -36,22 +36,10 @@ const RECORD_DEADLINE: Duration = Duration::from_millis(250);
 /// it to: `guard_shell` turns a panic raised after its write stage is live into
 /// a denial, so a logging panic here would deny a command the guard had already
 /// allowed. Logging that can change a verdict is worse than no logging.
-pub fn record(rec: &Record) {
+pub fn record(settings: &Settings, rec: &Record) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let cwd = rec
-            .cwd
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
-        let settings = resolve(&cwd);
-        record_to(&settings, rec);
+        record_faulted(settings, rec, env_fault());
     }));
-}
-
-/// [`record`] against settings the caller already resolved, so a verb that has
-/// them in hand does not resolve them twice.
-pub fn record_to(settings: &Settings, rec: &Record) {
-    record_faulted(settings, rec, env_fault());
 }
 
 /// The fault knob is read here and passed down rather than reached for inside
@@ -292,8 +280,8 @@ mod tests {
     fn a_record_lands_and_parses() {
         let dir = tempfile::tempdir().unwrap();
         let s = settings_at(dir.path());
-        record_to(&s, &a_record());
-        record_to(&s, &a_record());
+        record(&s, &a_record());
+        record(&s, &a_record());
         let path = file_for(&s, Some("s1"), None, SystemTime::now());
         let body = std::fs::read_to_string(&path).expect("the record file");
         let lines: Vec<_> = body.lines().collect();
@@ -309,7 +297,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut s = settings_at(dir.path());
         s.enabled = false;
-        record_to(&s, &a_record());
+        record(&s, &a_record());
         assert!(
             std::fs::read_dir(dir.path()).unwrap().next().is_none(),
             "off means no file at all, not an empty one"

@@ -69,7 +69,7 @@ pub fn guard(payload: &Value) -> Result<()> {
                 },
             }),
         );
-        harness_log::record(&rec);
+        harness_log::record(&settings, &rec);
     }
     Ok(())
 }

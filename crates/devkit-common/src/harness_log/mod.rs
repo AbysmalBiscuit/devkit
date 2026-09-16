@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use devkit_config::{Fidelity, LogSection, PromptFidelity};
 use serde::{Deserialize, Serialize};
-pub use writer::{now_rfc3339, record, record_to};
+pub use writer::{now_rfc3339, record};
 
 use crate::{harness::parse_env_override, paths};
 
@@ -24,18 +24,11 @@ use crate::{harness::parse_env_override, paths};
 /// a reader meeting an unfamiliar one knows it rather than guessing.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// One line of the log.
+/// One line of the log, useful by itself and never rewritten.
 ///
-/// Every record is useful by itself. Records join on their components —
-/// `(session_id, agent_id, tool_use_id)` — rather than a derived hash, because
-/// a hash is one more step between the reader and the data and hides why a join
-/// failed. Where a harness sends no `tool_use_id`, nothing joins and both
-/// records stand alone; the join adds analysis and is never a prerequisite for
-/// reading one.
-///
-/// Records are append-only and never rewritten, so pairing never mutates a
-/// prior line, no reader-writer lock is ever needed, and a process killed
-/// mid-session cannot corrupt what is already there.
+/// Records join on `(session_id, agent_id, tool_use_id)` rather than a derived
+/// hash, which would hide why a join failed. Where a harness sends no
+/// `tool_use_id`, both records stand alone.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Record {
     pub schema_version: u32,
@@ -283,27 +276,28 @@ pub fn resolve_at(global_path: Option<&Path>, cwd: &Path) -> Settings {
         // every other path key resolves.
         Some(anchor_dir(section, p.parent()))
     });
-    let layers = project_sections(cwd);
     let env = parse_env_override(std::env::var(ENV_OVERRIDE).ok().as_deref());
-    resolve_from(global.as_ref(), &layers, env)
+    resolve_from(global.as_ref(), || project_sections(cwd), env)
 }
 
-/// The global table is carried separately rather than read by index.
-/// `resolve_rules` pushes a global layer only when `global_config_path()`
-/// resolves and the file parses, so on a machine with no global config index 0
-/// is a project layer, and an index-based read would let a project enable
-/// logging and move its directory.
+/// Combine the global table, the project layers and the env override.
 ///
-/// The boundary this draws is honest but narrow: `global_config_path()` honours
-/// `DEVKIT_CONFIG`, which can point anywhere including into a repository. It is
-/// a real boundary against a `devkit.toml` a project ships to its
-/// contributors, and not against a user's own environment.
+/// The global table is passed separately rather than read by index: with no
+/// global config, index 0 of `resolve_rules` is a project layer. `layers` is a
+/// thunk because reading them runs git and walks the filesystem.
 pub fn resolve_from(
     global: Option<&LogSection>,
-    layers: &[LogSection],
+    layers: impl FnOnce() -> Vec<LogSection>,
     env: Option<bool>,
 ) -> Settings {
     let enabled_globally = global.and_then(|g| g.enabled).unwrap_or(false);
+    // A project layer can only disable or clamp, so with nothing turning
+    // logging on it has no say, and logging off costs one global config read.
+    let layers = if env.unwrap_or(enabled_globally) {
+        layers()
+    } else {
+        Vec::new()
+    };
     let disabled_anywhere = layers.iter().any(|l| l.enabled == Some(false));
     let enabled = env.unwrap_or(enabled_globally && !disabled_anywhere);
 
@@ -387,7 +381,7 @@ mod tests {
             enabled: Some(true),
             ..Default::default()
         };
-        let s = resolve_from(None, &[project], None);
+        let s = resolve_from(None, || vec![project], None);
         assert!(!s.enabled, "only the global config turns logging on");
     }
 
@@ -397,7 +391,7 @@ mod tests {
             enabled: Some(false),
             ..Default::default()
         };
-        assert!(!resolve_from(Some(&enabled_global()), &[project], None).enabled);
+        assert!(!resolve_from(Some(&enabled_global()), || vec![project], None).enabled);
     }
 
     #[test]
@@ -417,7 +411,7 @@ mod tests {
             auto_prune: Some(true),
             ..Default::default()
         };
-        let s = resolve_from(Some(&global), &[project], None);
+        let s = resolve_from(Some(&global), || vec![project], None);
         assert_eq!(s.dir, PathBuf::from("/global/logs"));
         assert_eq!(s.max_bytes, Some(10));
         assert_eq!(s.max_age_days, Some(7));
@@ -439,8 +433,8 @@ mod tests {
             command: Some(Fidelity::Redacted),
             ..Default::default()
         };
-        let a = resolve_from(Some(&global), &[lower.clone(), mid.clone()], None).command;
-        let b = resolve_from(Some(&global), &[mid, lower], None).command;
+        let a = resolve_from(Some(&global), || vec![lower.clone(), mid.clone()], None).command;
+        let b = resolve_from(Some(&global), || vec![mid, lower], None).command;
         assert_eq!(a, Fidelity::Hashed);
         assert_eq!(
             a, b,
@@ -461,7 +455,7 @@ mod tests {
             prompt: Some(PromptFidelity::Full),
             ..Default::default()
         };
-        let s = resolve_from(Some(&global), &[greedy], None);
+        let s = resolve_from(Some(&global), || vec![greedy], None);
         assert_eq!(s.command, Fidelity::Hashed);
         assert_eq!(s.prompt, PromptFidelity::Off);
     }
@@ -472,16 +466,28 @@ mod tests {
             enabled: Some(false),
             ..Default::default()
         };
-        assert!(resolve_from(Some(&enabled_global()), &[project], Some(true)).enabled);
+        assert!(resolve_from(Some(&enabled_global()), || vec![project], Some(true)).enabled);
         assert!(
-            !resolve_from(Some(&enabled_global()), &[], Some(false)).enabled,
+            !resolve_from(Some(&enabled_global()), Vec::new, Some(false)).enabled,
             "and turns it off where the global config turned it on"
         );
     }
 
     #[test]
+    fn logging_off_never_reads_a_project_layer() {
+        let unread = || -> Vec<LogSection> { panic!("a project layer was read with logging off") };
+        let disabled = LogSection {
+            enabled: Some(false),
+            ..Default::default()
+        };
+        assert!(!resolve_from(None, unread, None).enabled);
+        assert!(!resolve_from(Some(&disabled), unread, None).enabled);
+        assert!(!resolve_from(Some(&enabled_global()), unread, Some(false)).enabled);
+    }
+
+    #[test]
     fn neither_unsafe_mode_is_reached_by_accident() {
-        let s = resolve_from(Some(&enabled_global()), &[], None);
+        let s = resolve_from(Some(&enabled_global()), Vec::new, None);
         assert_eq!(s.command, Fidelity::Redacted);
         assert_eq!(s.prompt, PromptFidelity::Off);
         assert!(s.auto_prune, "a retention promise nothing enforces is none");

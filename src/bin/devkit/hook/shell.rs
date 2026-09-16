@@ -62,10 +62,9 @@ impl Outcome {
     }
 }
 
-/// Carried out of the `catch_unwind` closure so the panic arm's record can name
-/// the call rather than only the stage. An analyser panic on real traffic is
-/// the highest-value record in the corpus, and today it produces one stderr
-/// line that scrolls away.
+/// What `respond` resolved, carried out of the `catch_unwind` closure: the
+/// panic arm's record names the call, and every record lands against settings
+/// resolved once.
 #[derive(Clone)]
 struct PanicContext {
     harness: Option<Harness>,
@@ -92,7 +91,7 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
             if let Response::Envelope(v) = &out.response {
                 print_envelope(v);
             }
-            finish(out.record.as_deref());
+            finish(out.record.as_deref(), panic_ctx.get().map(|c| &c.settings));
         }
         Err(_) => {
             match write_stage.get() {
@@ -102,7 +101,8 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
                 )),
                 None => warn("command guard panicked; allowing the command"),
             }
-            let panicked = panic_ctx.get().map(|ctx| {
+            let ctx = panic_ctx.get();
+            let panicked = ctx.map(|ctx| {
                 undecided_record(
                     payload,
                     ctx.harness,
@@ -110,7 +110,7 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
                     "the command guard panicked while evaluating this command",
                 )
             });
-            finish(panicked.as_deref());
+            finish(panicked.as_deref(), ctx.map(|c| &c.settings));
         }
     }
     Ok(())
@@ -126,10 +126,10 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
 /// stage had already decided into an allow. Printing first costs nothing: a
 /// closed stdout pipe fails the write immediately rather than blocking, and the
 /// record still lands afterwards.
-fn finish(rec: Option<&Record>) {
+fn finish(rec: Option<&Record>, settings: Option<&harness_log::Settings>) {
     let _ = std::io::stdout().flush();
-    if let Some(rec) = rec {
-        harness_log::record(rec);
+    if let (Some(rec), Some(settings)) = (rec, settings) {
+        harness_log::record(settings, rec);
     }
 }
 
@@ -157,7 +157,7 @@ pub fn deny_unreadable_payload(declared: Option<Harness>) -> Result<()> {
             "the hook payload could not be read as JSON",
         )
     });
-    finish(rec.as_deref());
+    finish(rec.as_deref(), Some(&settings));
     Ok(())
 }
 
@@ -267,6 +267,10 @@ fn respond(
                 &settings,
                 "the payload did not parse as a shell command",
             )
+        });
+        let _ = panic_ctx.set(PanicContext {
+            harness: declared,
+            settings,
         });
         return Outcome {
             response,
@@ -388,7 +392,7 @@ fn respond(
                     // exit: the worker is still blocked on the registry, and
                     // exiting the process is what ends it.
                     let rec = shell_record(Decision::Deny, std::slice::from_ref(&reason), &notes);
-                    finish(rec.as_deref());
+                    finish(rec.as_deref(), Some(&settings));
                     std::process::exit(0);
                 }
             }
