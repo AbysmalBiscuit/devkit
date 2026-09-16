@@ -14,7 +14,7 @@ In the Claude cloud environment's setup-script field, run this from the cloned r
 python3 -B .agents/skills/cloud/scripts/cloud_setup.py --cloud --install
 ```
 
-The Python entry point downloads and runs devkit's published installer, which requires `sh`, and explicitly installs its command links. The binaries land in `/usr/local/bin`; this install requires the root account supplied by Claude's hosted setup environment. The commit helper runs from the checkout with `python3`.
+The Python entry point downloads and runs devkit's published installer, which requires `sh`, and explicitly installs its command links. It then runs mcpls's published installer, because the `mcpls` plugin's MCP server and hooks run `mcpls` from PATH and the plugin's own bootstrap only installs it after the first session has started. The binaries land in `/usr/local/bin`; this install requires the root account supplied by Claude's hosted setup environment. The commit helper runs from the checkout with `python3`.
 
 The command also generates `devkit.local.toml`, `AGENTS.local.md`, and `CLAUDE.local.md` from the templates in `assets/`. To regenerate these files without downloading binaries, omit `--install`. The generated config points to this checkout's bundled commit helper. Edit `assets/devkit.local.toml` to change the defaults, then rerun setup. This template's `@COMMIT_HELPER@` marker becomes a quoted absolute path during generation.
 
