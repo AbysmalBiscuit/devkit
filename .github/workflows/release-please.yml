@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           # A PAT (not the default GITHUB_TOKEN) so the release PR is attributed
@@ -35,7 +35,7 @@ jobs:
       # would drop the step. The tag is checked out, not `main`, so the asset
       # matches the code that release ships.
       - if: ${{ steps.release.outputs.release_created }}
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.release.outputs.tag_name }}
 
