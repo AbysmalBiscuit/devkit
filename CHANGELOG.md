@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.5](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.4...v0.14.5) (2026-09-17)
+
+
+### Performance Improvements
+
+* **doctor:** devkit doctor no longer looks hung ([#100](https://github.com/AbysmalBiscuit/devkit/issues/100)) ([d8e5f57](https://github.com/AbysmalBiscuit/devkit/commit/d8e5f57c08583783012ce31931ffe725d58cee36))
+
 ## [0.14.4](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.3...v0.14.4) (2026-09-16)
 
 
