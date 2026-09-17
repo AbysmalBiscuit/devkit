@@ -415,7 +415,9 @@ fn gather(steps: &Steps) -> Vec<Row> {
             key: "devrun_strays",
             data: serde_json::Value::Null,
             source: Source::Unset,
-            check: stray_check(count_strays()),
+            check: steps.during("Scanning for stray servers...", || {
+                stray_check(count_strays())
+            }),
         },
         Row {
             key: "harness_identity",
@@ -432,20 +434,20 @@ fn gather(steps: &Steps) -> Vec<Row> {
             key: "baseline_orphans",
             data: serde_json::Value::Null,
             source: Source::Unset,
-            check: {
+            check: steps.during("Checking baselines...", || {
                 let (count, bytes, unreadable) = baseline_orphans();
                 baseline_orphan_check(count, bytes, unreadable)
-            },
+            }),
         },
         Row {
             key: "docs_cache",
             data: serde_json::Value::Null,
             source: Source::Unset,
-            check: docs_cache_check(),
+            check: steps.during("Scanning the docs cache...", docs_cache_check),
         },
         harness_log_row(),
     ];
-    rows.extend(shim_rows());
+    rows.extend(steps.during("Checking shim links...", shim_rows));
     rows
 }
 
@@ -573,10 +575,11 @@ fn print_json(rows: &[Row]) {
     println!("{}", serde_json::to_string_pretty(&arr).unwrap());
 }
 
+/// Unnumbered steps: how many run depends on which credentials are set, so a
+/// fixed `[i/N]` would either be wrong or have to be kept in sync with every
+/// row added here.
 pub fn run(json: bool) -> Result<()> {
-    let total = usize::from(secrets::resolve("LINEAR_API_KEY").is_some())
-        + usize::from(secrets::resolve("SLACK_TOKEN").is_some());
-    let steps = Steps::with_total(total);
+    let steps = Steps::new();
     let rows = gather(&steps);
     steps.clear();
     if json {
