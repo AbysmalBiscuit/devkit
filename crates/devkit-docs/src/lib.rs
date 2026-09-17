@@ -13,9 +13,10 @@ pub mod resolve;
 pub mod tags;
 pub mod upgrade;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use rayon::prelude::*;
 
 use crate::manifest::{Ecosystem, LibEntry};
 
@@ -207,7 +208,7 @@ pub struct DocsDoctor {
 pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
     let mut out = DocsDoctor {
         libs: 0,
-        bytes: cache::dir_size(cache_root),
+        bytes: devkit_common::disk::dir_size(cache_root),
         unreferenced: 0,
         problems: Vec::new(),
     };
@@ -220,6 +221,7 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
     let Ok(rd) = std::fs::read_dir(cache_root) else {
         return out;
     };
+    let mut checkouts: Vec<Checkout> = Vec::new();
     for e in rd.flatten() {
         if !e.path().is_dir() {
             continue;
@@ -246,14 +248,37 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
             if !referenced.contains(&(name.clone(), wt.clone())) {
                 out.unreferenced += 1;
             }
-            out.problems.extend(inspect(
-                &format!("{dirname}/{wt}"),
-                &path,
-                meta.worktrees.get(&wt),
-            ));
+            let recorded = meta.worktrees.get(&wt).cloned();
+            checkouts.push(Checkout {
+                label: format!("{dirname}/{wt}"),
+                path,
+                recorded,
+            });
         }
     }
+    out.problems.extend(sweep(&checkouts));
     out
+}
+
+/// One materialized checkout, addressed the way the report names it.
+struct Checkout {
+    label: String,
+    path: PathBuf,
+    recorded: Option<cache::WorktreeMeta>,
+}
+
+/// Inspect every checkout on the shared pool. Each [`inspect`] is two git
+/// subprocesses and a cache holding a few dozen libraries makes this the
+/// slowest thing `devkit doctor` does, so the calls overlap. rayon's `collect`
+/// is ordered, so the report stays in cache order rather than falling into
+/// whichever order the git calls finished in.
+fn sweep(checkouts: &[Checkout]) -> Vec<String> {
+    devkit_common::pool::install(|| {
+        checkouts
+            .par_iter()
+            .flat_map_iter(|c| inspect(&c.label, &c.path, c.recorded.as_ref()))
+            .collect()
+    })
 }
 
 /// What is wrong with one materialized checkout, if anything: source that
@@ -320,6 +345,35 @@ mod tests {
         assert_eq!(s.libs, 1);
         assert_eq!(s.unreferenced, 2); // 2.0.0 and default; repo.git is not a checkout
         assert!(s.bytes > 0);
+    }
+
+    /// The sweep inspects every checkout concurrently, so the report has to
+    /// name all of them and stay in cache order rather than in whichever order
+    /// the git calls happened to finish. None of these directories is a git
+    /// repository, which is what makes every one of them a problem line.
+    #[test]
+    fn the_sweep_reports_every_checkout_in_cache_order() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        let expected: Vec<String> = ["axum", "serde", "tokio"]
+            .iter()
+            .flat_map(|lib| {
+                std::fs::create_dir_all(root.join(lib).join("repo.git")).unwrap();
+                ["1.0.0", "2.0.0"].iter().map(move |wt| {
+                    std::fs::create_dir_all(root.join(lib).join(wt)).unwrap();
+                    format!("{lib}/{wt}")
+                })
+            })
+            .collect();
+
+        let s = doctor_summary(root);
+
+        let labels: Vec<&str> = s
+            .problems
+            .iter()
+            .map(|p| p.split_whitespace().next().unwrap_or_default())
+            .collect();
+        assert_eq!(labels, expected, "{:#?}", s.problems);
     }
 
     #[test]
