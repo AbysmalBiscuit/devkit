@@ -43,23 +43,6 @@ fn migrate_legacy_root(root: &Path, legacy: &Path) {
     }
 }
 
-/// Recursive byte count; used by the doctor row.
-pub fn dir_size(p: &Path) -> u64 {
-    let Ok(rd) = std::fs::read_dir(p) else {
-        return 0;
-    };
-    rd.flatten()
-        .map(|e| {
-            let path = e.path();
-            if path.is_dir() {
-                dir_size(&path)
-            } else {
-                path.metadata().map(|m| m.len()).unwrap_or(0)
-            }
-        })
-        .sum()
-}
-
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorktreeMeta {
     pub raw_ref: String,

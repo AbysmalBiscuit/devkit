@@ -79,10 +79,10 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     // --- Issues by status over time ---
     let use_cache = !args.no_cache;
     let steps = devkit_common::progress::Steps::new();
-    let pb = steps.spinner(&format!("Loading {} issue history…", tracker.kind()));
+    let pb = steps.spinner(&format!("Loading {} issue history...", tracker.kind()));
     let issues = data::issues(tracker, &scope, use_cache, |n| {
         pb.set_message(format!(
-            "Loading {} issue history… {n} issues",
+            "Loading {} issue history... {n} issues",
             tracker.kind()
         ));
     });
@@ -205,8 +205,8 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     // and commit history above and below it still render.
     let pr_repo = repos.prs().ok();
     let steps = devkit_common::progress::Steps::new();
-    let _b1 = steps.spinner("[1/2] Loading PR history…");
-    let _b2 = steps.spinner("[2/2] Loading commit history…");
+    let _b1 = steps.spinner("[1/2] Loading PR history...");
+    let _b2 = steps.spinner("[2/2] Loading commit history...");
     let (opened, merged, add, del, commits) = std::thread::scope(|s| {
         let pr_t = s.spawn(|| data::pr_timeline(args.all_roles, use_cache, pr_repo, &scope));
         let commit_t = s.spawn(|| data::commit_dates(primary, &author));

@@ -901,7 +901,11 @@ fn cmd_up(
             .map(|p| (p.app.clone(), p.url.clone()))
             .collect();
         let statuses = steps.during(
-            &format!("Starting {} server(s) [{}]…", apps.len(), grp_role.as_str()),
+            &format!(
+                "Starting {} server(s) [{}]...",
+                apps.len(),
+                grp_role.as_str()
+            ),
             || run::launch(&plans, holder, *grp_role, supervise, true),
         )?;
         for s in statuses {

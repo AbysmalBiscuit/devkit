@@ -126,7 +126,7 @@ pub fn run(
         // Live, but the target is the main clone (no associated PR/issue): only
         // the issue-link base is worth resolving for rendering.
         let steps = devkit_common::progress::Steps::new();
-        info.link_base = steps.during("Resolving issue links…", || tracker.issue_url(""));
+        info.link_base = steps.during("Resolving issue links...", || tracker.issue_url(""));
     }
 
     if json {

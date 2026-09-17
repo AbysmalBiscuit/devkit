@@ -214,7 +214,7 @@ fn resolve(
             // A pasted issue URL spells the title slug out, and the worktree
             // template slugifies whatever it is given, so the slug stands in
             // for the title and spares a lookup.
-            steps.during_result(&format!("Resolving issue {}…", r.id), || {
+            steps.during_result(&format!("Resolving issue {}...", r.id), || {
                 resolve_issue(&r.id, r.slug.clone(), t)
             })
         }
@@ -222,7 +222,7 @@ fn resolve(
             let n = loc.number;
             let repo = loc.resolve(repos)?;
             // Probe both sides under a spinner; clear it before any prompt.
-            let (exists, decision) = steps.during_result(&format!("Resolving {n}…"), || {
+            let (exists, decision) = steps.during_result(&format!("Resolving {n}..."), || {
                 let exists = pr_exists(n, cwd, &repo)?;
                 let is_tty = std::io::stdin().is_terminal();
                 Ok::<_, anyhow::Error>((exists, decide_fuzzy_via(t, n, exists, is_tty)))
@@ -399,7 +399,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     let pr_repo = resolved.loc.resolve(&repos)?;
 
     let meta: PrMeta = steps
-        .during_result(&format!("Fetching PR #{}…", resolved.loc.number), || {
+        .during_result(&format!("Fetching PR #{}...", resolved.loc.number), || {
             fetch_pr_meta(resolved.loc.number, primary_s, &pr_repo)
         })
         .with_context(|| format!("fetching PR #{}", resolved.loc.number))?;
@@ -438,10 +438,10 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     );
     let worktree_s = worktree.to_str().context("worktree path not UTF-8")?;
 
-    steps.during_result("Fetching from origin…", || {
+    steps.during_result("Fetching from origin...", || {
         gitfetch::fetch("origin", primary_s)
     })?;
-    steps.during_result("Creating worktree…", || {
+    steps.during_result("Creating worktree...", || {
         Git::at(Path::new(primary_s))
             .args(["worktree", "add", "--detach", worktree_s, &baseline_target])
             .timeout(devkit_common::git::SLOW_TIMEOUT)
@@ -454,7 +454,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     // worktree or with nothing.
     let issue = with_cleanup(&worktree, primary_s, || {
         steps
-            .during_result(&format!("Checking out PR #{}…", meta.number), || {
+            .during_result(&format!("Checking out PR #{}...", meta.number), || {
                 gh_capture(
                     &["pr", "checkout", &meta.number.to_string()],
                     &pr_repo,
@@ -511,7 +511,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
             "apps": args.apps,
             "role": "issue",
         });
-        steps.during_result("Preparing apps…", || {
+        steps.during_result("Preparing apps...", || {
             crate::issue::setup::prep_apps(
                 &worktree,
                 &meta.head_ref_name,

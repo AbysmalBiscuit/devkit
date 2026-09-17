@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use devkit_common::{
+    disk::dir_size,
     git::Git,
     progress::Steps,
     record::RecordState,
@@ -372,7 +373,7 @@ pub fn ensure(
                 .collect();
             if !stale.is_empty() {
                 let branch = format!("baseline-{}", short(sha));
-                steps.during_result("Preparing apps…", || {
+                steps.during_result("Preparing apps...", || {
                     prep_apps(&path, &branch, &stale, catalog, &ctx, vars)
                 })?;
             }
@@ -471,7 +472,7 @@ fn create(primary: &Path, path: &Path, sha: &str, steps: &Steps) -> Result<()> {
     // A directory removed by hand leaves a registration behind; `worktree add`
     // refuses over it until the registration is pruned.
     let _ = Git::at(primary).args(["worktree", "prune"]).output();
-    steps.during_result("Creating baseline worktree…", || {
+    steps.during_result("Creating baseline worktree...", || {
         Git::at(primary)
             .args(["worktree", "add", "--detach", path_s, sha])
             .timeout(devkit_common::git::SLOW_TIMEOUT)
@@ -1345,28 +1346,6 @@ pub fn prune_all(
             refused,
         })
     })
-}
-
-/// Total bytes under `path`. Walked in parallel because a baseline holds a full
-/// dependency tree; `jwalk_parallelism` is evaluated here, on the thread that
-/// builds the walk, since inside `pool::install` it would see itself as nested
-/// and silently go serial.
-///
-/// jwalk's `skip_hidden` default is true and would fail quietly here: a
-/// baseline's `.venv`, `.next`, `.turbo` and its own `.devkit` are dotfiles, so
-/// the default reports a fraction of the tree, or nothing at all. Symlinks stay
-/// unfollowed so a link into a tree already counted is not counted twice.
-fn dir_size(path: &Path) -> u64 {
-    let parallelism = devkit_common::pool::jwalk_parallelism();
-    jwalk::WalkDir::new(path)
-        .skip_hidden(false)
-        .parallelism(parallelism)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter_map(|e| e.metadata().ok())
-        .filter(|m| m.is_file())
-        .map(|m| m.len())
-        .sum()
 }
 
 /// Point a worktree's record at a baseline, leaving its other fields alone.
@@ -2821,27 +2800,6 @@ mod tests {
             .unwrap_err();
             assert!(format!("{err:#}").contains("not UTF-8"), "{err:#}");
         }
-    }
-
-    /// A baseline's biggest directories are dotted — `.venv`, `.next`,
-    /// `.turbo`, and the `.devkit` marker itself — and jwalk skips hidden
-    /// entries by default, so a size that ignored them would report a fraction
-    /// of the tree or nothing at all.
-    #[test]
-    fn a_size_counts_hidden_files_and_directories() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("visible"), vec![b'x'; 100]).unwrap();
-        assert_eq!(dir_size(dir.path()), 100);
-
-        std::fs::create_dir_all(dir.path().join(".venv").join("lib")).unwrap();
-        std::fs::write(dir.path().join(".venv").join("lib").join("f"), vec![
-            b'x';
-            500
-        ])
-        .unwrap();
-        std::fs::write(dir.path().join(".dotfile"), vec![b'x'; 7]).unwrap();
-
-        assert_eq!(dir_size(dir.path()), 607, "hidden entries were skipped");
     }
 
     /// The lock directory lives among the slots, and a baseline directory that

@@ -40,7 +40,7 @@ pub fn run(provider: Provider, token: Option<String>) -> Result<()> {
     match provider {
         Provider::Linear => {
             let id = steps
-                .during("Validating Linear API key…", || linear::validate(&token))
+                .during("Validating Linear API key...", || linear::validate(&token))
                 .context("validating Linear API key")?;
             store_linear(&path, &token, &id)?;
             println!(
@@ -50,7 +50,7 @@ pub fn run(provider: Provider, token: Option<String>) -> Result<()> {
         }
         Provider::Slack => {
             let id = steps
-                .during("Validating Slack token…", || slack::validate(&token))
+                .during("Validating Slack token...", || slack::validate(&token))
                 .context("validating Slack token")?;
             store_slack(&path, &token)?;
             println!("✓ slack: team \"{}\" (user {})", id.team, id.user);

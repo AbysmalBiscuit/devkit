@@ -363,11 +363,11 @@ pub fn run(
             want_reviews,
         ));
         format!(
-            "Fetching PRs from GitHub… {}",
+            "Fetching PRs from GitHub... {}",
             ui::Paint::on(ui::Stream::Stderr).dim("(table is as of the last run)")
         )
     } else {
-        "Fetching PRs from GitHub…".to_string()
+        "Fetching PRs from GitHub...".to_string()
     };
     let _fetch_spin = live.spinner(&spin_msg);
 

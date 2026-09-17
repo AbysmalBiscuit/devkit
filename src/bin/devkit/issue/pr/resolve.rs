@@ -160,7 +160,7 @@ pub(crate) struct Found {
 pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found> {
     if !args.no_push {
         args.steps
-            .during_result("Pushing branch…", || {
+            .during_result("Pushing branch...", || {
                 Git::at(Path::new(args.start))
                     .args(["push", "-u", "origin", args.branch])
                     .timeout(devkit_common::git::SLOW_TIMEOUT)
@@ -177,7 +177,7 @@ pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found> {
         Some(loc) => {
             let pr = args
                 .steps
-                .during_result(&format!("Fetching PR #{}…", loc.number), || {
+                .during_result(&format!("Fetching PR #{}...", loc.number), || {
                     github::pr_meta_full(&repo, loc.number)
                 })
                 .with_context(|| fetch_context(loc.number, args.explicit_pr.is_none()))?;
@@ -188,7 +188,7 @@ pub(crate) fn resolve_existing(args: &Existing<'_>) -> Result<Found> {
             })
         }
         None => {
-            let pr = args.steps.during_result("Looking up existing PR…", || {
+            let pr = args.steps.during_result("Looking up existing PR...", || {
                 existing_pr(args.branch, args.start, &repo)
             })?;
             let locator = pr.as_ref().map(|p| github::PrLocator {

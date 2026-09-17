@@ -13,9 +13,10 @@ pub mod resolve;
 pub mod tags;
 pub mod upgrade;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use rayon::prelude::*;
 
 use crate::manifest::{Ecosystem, LibEntry};
 
@@ -207,7 +208,7 @@ pub struct DocsDoctor {
 pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
     let mut out = DocsDoctor {
         libs: 0,
-        bytes: cache::dir_size(cache_root),
+        bytes: devkit_common::disk::dir_size(cache_root),
         unreferenced: 0,
         problems: Vec::new(),
     };
@@ -220,6 +221,7 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
     let Ok(rd) = std::fs::read_dir(cache_root) else {
         return out;
     };
+    let mut checkouts: Vec<Checkout> = Vec::new();
     for e in rd.flatten() {
         if !e.path().is_dir() {
             continue;
@@ -246,14 +248,37 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
             if !referenced.contains(&(name.clone(), wt.clone())) {
                 out.unreferenced += 1;
             }
-            out.problems.extend(inspect(
-                &format!("{dirname}/{wt}"),
-                &path,
-                meta.worktrees.get(&wt),
-            ));
+            let recorded = meta.worktrees.get(&wt).cloned();
+            checkouts.push(Checkout {
+                label: format!("{dirname}/{wt}"),
+                path,
+                recorded,
+            });
         }
     }
+    out.problems.extend(sweep(&checkouts));
     out
+}
+
+/// One materialized checkout, addressed the way the report names it.
+struct Checkout {
+    label: String,
+    path: PathBuf,
+    recorded: Option<cache::WorktreeMeta>,
+}
+
+/// Inspect every checkout on the shared pool. Each [`inspect`] is two git
+/// subprocesses and a cache holding a few dozen libraries makes this the
+/// slowest thing `devkit doctor` does, so the calls overlap. rayon's `collect`
+/// is ordered, so the report stays in cache order rather than falling into
+/// whichever order the git calls finished in.
+fn sweep(checkouts: &[Checkout]) -> Vec<String> {
+    devkit_common::pool::install(|| {
+        checkouts
+            .par_iter()
+            .flat_map_iter(|c| inspect(&c.label, &c.path, c.recorded.as_ref()))
+            .collect()
+    })
 }
 
 /// What is wrong with one materialized checkout, if anything: source that
@@ -320,6 +345,49 @@ mod tests {
         assert_eq!(s.libs, 1);
         assert_eq!(s.unreferenced, 2); // 2.0.0 and default; repo.git is not a checkout
         assert!(s.bytes > 0);
+    }
+
+    /// Asserts the set and the grouping, not a sequence: `read_dir` is sorted
+    /// on NTFS and hash-ordered on ext4. None of these dirs is a git repo,
+    /// which is what makes every one a problem line.
+    #[test]
+    fn the_sweep_names_every_checkout_and_keeps_each_library_together() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        let libs = ["axum", "serde", "tokio"];
+        let mut expected: Vec<String> = Vec::new();
+        for lib in libs {
+            std::fs::create_dir_all(root.join(lib).join("repo.git")).unwrap();
+            for wt in ["1.0.0", "2.0.0"] {
+                std::fs::create_dir_all(root.join(lib).join(wt)).unwrap();
+                expected.push(format!("{lib}/{wt}"));
+            }
+        }
+        expected.sort();
+
+        let s = doctor_summary(root);
+
+        let labels: Vec<String> = s
+            .problems
+            .iter()
+            .map(|p| p.split_whitespace().next().unwrap_or_default().to_string())
+            .collect();
+        let mut named = labels.clone();
+        named.sort();
+        assert_eq!(named, expected, "{:#?}", s.problems);
+
+        let runs = labels.iter().fold(Vec::new(), |mut acc: Vec<&str>, label| {
+            let lib = label.split('/').next().unwrap_or_default();
+            if acc.last() != Some(&lib) {
+                acc.push(lib);
+            }
+            acc
+        });
+        assert_eq!(
+            runs.len(),
+            libs.len(),
+            "a library's checkouts were split apart: {labels:?}"
+        );
     }
 
     #[test]
