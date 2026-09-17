@@ -347,33 +347,47 @@ mod tests {
         assert!(s.bytes > 0);
     }
 
-    /// The sweep inspects every checkout concurrently, so the report has to
-    /// name all of them and stay in cache order rather than in whichever order
-    /// the git calls happened to finish. None of these directories is a git
-    /// repository, which is what makes every one of them a problem line.
+    /// Asserts the set and the grouping, not a sequence: `read_dir` is sorted
+    /// on NTFS and hash-ordered on ext4. None of these dirs is a git repo,
+    /// which is what makes every one a problem line.
     #[test]
-    fn the_sweep_reports_every_checkout_in_cache_order() {
+    fn the_sweep_names_every_checkout_and_keeps_each_library_together() {
         let root_dir = tempfile::tempdir().unwrap();
         let root = root_dir.path();
-        let expected: Vec<String> = ["axum", "serde", "tokio"]
-            .iter()
-            .flat_map(|lib| {
-                std::fs::create_dir_all(root.join(lib).join("repo.git")).unwrap();
-                ["1.0.0", "2.0.0"].iter().map(move |wt| {
-                    std::fs::create_dir_all(root.join(lib).join(wt)).unwrap();
-                    format!("{lib}/{wt}")
-                })
-            })
-            .collect();
+        let libs = ["axum", "serde", "tokio"];
+        let mut expected: Vec<String> = Vec::new();
+        for lib in libs {
+            std::fs::create_dir_all(root.join(lib).join("repo.git")).unwrap();
+            for wt in ["1.0.0", "2.0.0"] {
+                std::fs::create_dir_all(root.join(lib).join(wt)).unwrap();
+                expected.push(format!("{lib}/{wt}"));
+            }
+        }
+        expected.sort();
 
         let s = doctor_summary(root);
 
-        let labels: Vec<&str> = s
+        let labels: Vec<String> = s
             .problems
             .iter()
-            .map(|p| p.split_whitespace().next().unwrap_or_default())
+            .map(|p| p.split_whitespace().next().unwrap_or_default().to_string())
             .collect();
-        assert_eq!(labels, expected, "{:#?}", s.problems);
+        let mut named = labels.clone();
+        named.sort();
+        assert_eq!(named, expected, "{:#?}", s.problems);
+
+        let runs = labels.iter().fold(Vec::new(), |mut acc: Vec<&str>, label| {
+            let lib = label.split('/').next().unwrap_or_default();
+            if acc.last() != Some(&lib) {
+                acc.push(lib);
+            }
+            acc
+        });
+        assert_eq!(
+            runs.len(),
+            libs.len(),
+            "a library's checkouts were split apart: {labels:?}"
+        );
     }
 
     #[test]
