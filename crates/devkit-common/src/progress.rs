@@ -366,8 +366,8 @@ mod tests {
     #[test]
     fn steps_bars_hidden_off_tty() {
         let steps = Steps::new();
-        assert!(steps.spinner("working…").is_hidden());
-        assert!(steps.bar("counting…", 10).is_hidden());
+        assert!(steps.spinner("working...").is_hidden());
+        assert!(steps.bar("counting...", 10).is_hidden());
         steps.clear();
     }
 
@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn persistent_bars_hidden_off_tty() {
         let steps = Steps::persistent();
-        assert!(steps.spinner("working…").is_hidden());
+        assert!(steps.spinner("working...").is_hidden());
         steps.during("quiet", || ());
         steps.clear();
     }

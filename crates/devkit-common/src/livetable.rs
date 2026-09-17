@@ -373,7 +373,7 @@ mod tests {
         ));
         ll.set_lines(&["one".into(), "two".into()]);
         assert!(term.contents().contains("one"));
-        let _sp = ll.spinner("working…");
+        let _sp = ll.spinner("working...");
         ll.clear();
         assert_eq!(term.contents(), "");
         // The final screen ends up blank either way (each drop's repaint is

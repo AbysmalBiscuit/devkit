@@ -388,7 +388,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
             !ids.is_empty(),
             "--clean-worktree needs one or more selectors (issue id, branch, or worktree path)"
         );
-        let report = steps.during_result("Fetching PR + issue status…", || {
+        let report = steps.during_result("Fetching PR + issue status...", || {
             gather_with(start, &[], &tracker, &repos)
         })?;
         render(&report, false);
@@ -403,7 +403,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
         );
         t
     } else {
-        let report = steps.during_result("Fetching PR + issue status…", || {
+        let report = steps.during_result("Fetching PR + issue status...", || {
             gather_with(start, ids, &tracker, &repos)
         })?;
         render(&report, false);
@@ -518,7 +518,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
                 &wt_root,
                 primary,
             );
-            let out = steps.during_ok(&format!("Preserving {label}…"), || {
+            let out = steps.during_ok(&format!("Preserving {label}..."), || {
                 let out =
                     crate::issue::preserve::run_for(wt, &entries, &ctx, &vars, &removal_roots);
                 let ok = out.required_failure.is_none();
@@ -549,7 +549,7 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
             let branch_lock = &branch_lock;
             let removed = &removed;
             s.spawn(move || {
-                match steps.during_result(&format!("Removing {label}…"), || {
+                match steps.during_result(&format!("Removing {label}..."), || {
                     cleanup(&row.worktree, &row.issue_id, force, branch_lock)
                 }) {
                     Ok(()) => {

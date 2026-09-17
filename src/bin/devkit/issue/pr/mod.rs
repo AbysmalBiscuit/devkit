@@ -192,7 +192,7 @@ pub(crate) fn add_reviewers(
     }
     let joined = logins.join(",");
     steps
-        .during_result("Adding reviewers…", || {
+        .during_result("Adding reviewers...", || {
             gh_capture(
                 &["pr", "edit", &number.to_string(), "--add-reviewer", &joined],
                 repo,
@@ -225,7 +225,7 @@ pub(crate) fn gate_ready(
     if !needs_reviewer_lookup(added, required, author) {
         return Ok(());
     }
-    let already = steps.during_result("Resolving the PR's reviewers…", || {
+    let already = steps.during_result("Resolving the PR's reviewers...", || {
         reviewer_logins_on(number, cwd, repo)
     })?;
     require_reviewer_for_ready(&already, added, required, author)

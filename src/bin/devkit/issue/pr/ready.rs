@@ -91,7 +91,7 @@ pub fn run(args: Args) -> Result<()> {
             &steps,
         )?;
         steps
-            .during_result("Marking ready for review…", || {
+            .during_result("Marking ready for review...", || {
                 gh_capture(&["pr", "ready", &number], &repo, &start)
             })
             .context("gh pr ready failed")?;

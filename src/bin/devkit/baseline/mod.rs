@@ -373,7 +373,7 @@ pub fn ensure(
                 .collect();
             if !stale.is_empty() {
                 let branch = format!("baseline-{}", short(sha));
-                steps.during_result("Preparing apps…", || {
+                steps.during_result("Preparing apps...", || {
                     prep_apps(&path, &branch, &stale, catalog, &ctx, vars)
                 })?;
             }
@@ -472,7 +472,7 @@ fn create(primary: &Path, path: &Path, sha: &str, steps: &Steps) -> Result<()> {
     // A directory removed by hand leaves a registration behind; `worktree add`
     // refuses over it until the registration is pruned.
     let _ = Git::at(primary).args(["worktree", "prune"]).output();
-    steps.during_result("Creating baseline worktree…", || {
+    steps.during_result("Creating baseline worktree...", || {
         Git::at(primary)
             .args(["worktree", "add", "--detach", path_s, sha])
             .timeout(devkit_common::git::SLOW_TIMEOUT)

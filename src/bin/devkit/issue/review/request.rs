@@ -164,7 +164,7 @@ pub fn run(args: Args) -> Result<()> {
     // for.
     let targets = match pinned_targets(&explicit, args.no_notify) {
         Some(t) => t,
-        None => steps.during_result("Resolving reviewers…", || {
+        None => steps.during_result("Resolving reviewers...", || {
             resolve_request_targets(&explicit, pr.number, &start, &repo, people)
         })?,
     };
@@ -184,7 +184,7 @@ pub fn run(args: Args) -> Result<()> {
             &steps,
         )?;
         steps
-            .during_result("Marking ready for review…", || {
+            .during_result("Marking ready for review...", || {
                 gh_capture(&["pr", "ready", &number], &repo, &start)
             })
             .context("gh pr ready failed")?;
@@ -200,7 +200,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let full = steps
-        .during_result("Fetching PR title…", || {
+        .during_result("Fetching PR title...", || {
             super::finish::fetch_pr_full(pr.number, &start, &repo)
         })
         .context("fetching the PR's title")?;

@@ -194,7 +194,7 @@ impl IncludeRender<'_> {
             E::Found { files } => {
                 if self.discovery && self.due(files) {
                     self.step.activity(&format!(
-                        "[1/{}] discovering files… ({files} found)",
+                        "[1/{}] discovering files... ({files} found)",
                         self.subs
                     ));
                 }
@@ -274,7 +274,7 @@ pub fn backfill_includes(
     let discovery = devkit_common::worktree::needs_discovery(patterns);
     let subs = patterns.len() + usize::from(discovery);
 
-    let warnings = steps.during_step("Copying worktree includes…", |step| {
+    let warnings = steps.during_step("Copying worktree includes...", |step| {
         let render = IncludeRender {
             step,
             discovery,
@@ -283,7 +283,7 @@ pub fn backfill_includes(
             drawn: std::sync::atomic::AtomicUsize::new(0),
         };
         if discovery {
-            step.activity(&format!("[1/{subs}] discovering files… (0 found)"));
+            step.activity(&format!("[1/{subs}] discovering files... (0 found)"));
         }
         let (copied, linked, warnings) = devkit_common::worktree::copy_includes_with(
             std::path::Path::new(primary),
@@ -526,7 +526,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
         + cfg.hooks.after_worktree_create.len()
         + usize::from(!cfg.defaults.worktree_include.is_empty());
     let steps = Steps::persistent_with_total(total);
-    steps.during_result("Fetching from origin…", || {
+    steps.during_result("Fetching from origin...", || {
         gitfetch::fetch("origin", primary_s)
     })?;
     if Git::at(Path::new(primary_s))
@@ -535,7 +535,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     {
         anyhow::bail!("branch {branch} already exists — let /issue-setup decide how to proceed");
     }
-    steps.during_result("Creating worktree…", || {
+    steps.during_result("Creating worktree...", || {
         Git::at(Path::new(primary_s))
             .args([
                 "worktree",
@@ -592,7 +592,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     if args.apps.is_empty() {
         prep_apps(&worktree, &branch, &args.apps, catalog, &ctx, vars)?;
     } else {
-        steps.during_result("Preparing apps…", || {
+        steps.during_result("Preparing apps...", || {
             prep_apps(&worktree, &branch, &args.apps, catalog, &ctx, vars)
         })?;
     }

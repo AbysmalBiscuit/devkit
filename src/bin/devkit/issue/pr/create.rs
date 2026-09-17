@@ -164,7 +164,7 @@ pub(crate) fn ensure(args: Ensure<'_>) -> Result<Resolved> {
                 PrCreateState::Ready => {}
             }
             let out = steps
-                .during_result("Creating PR…", || {
+                .during_result("Creating PR...", || {
                     gh_capture(&gh_args, &found.repo, start)
                 })
                 .context("gh pr create failed")?;

@@ -366,7 +366,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
             data: serde_json::Value::Null,
             source: secrets::source("LINEAR_API_KEY"),
             check: match secrets::resolve("LINEAR_API_KEY") {
-                Some(v) => steps.during("Validating Linear API key…", || validate_linear(&v)),
+                Some(v) => steps.during("Validating Linear API key...", || validate_linear(&v)),
                 None => Check::Unset(HINT_LINEAR),
             },
         },
@@ -384,7 +384,7 @@ fn gather(steps: &Steps) -> Vec<Row> {
             data: serde_json::Value::Null,
             source: secrets::source("SLACK_TOKEN"),
             check: match secrets::resolve("SLACK_TOKEN") {
-                Some(v) => steps.during("Validating Slack token…", || validate_slack(&v)),
+                Some(v) => steps.during("Validating Slack token...", || validate_slack(&v)),
                 None => Check::Unset(HINT_SLACK),
             },
         },

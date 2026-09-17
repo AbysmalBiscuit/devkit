@@ -210,7 +210,7 @@ pub fn run(args: Args) -> Result<()> {
         None => {
             let branch_pr = branch.as_deref().and_then(|b| {
                 steps
-                    .during_result("Looking up PR for branch…", || {
+                    .during_result("Looking up PR for branch...", || {
                         branch_pr_number(b, &start, pr_repo)
                     })
                     .ok()
@@ -226,7 +226,7 @@ pub fn run(args: Args) -> Result<()> {
     // again. Requiring the PR's head to equal `HEAD` would refuse the ordinary
     // flow. Nothing here mutates the PR or the record — the effect is a Slack
     // message to the author.
-    let view: PrFull = steps.during_result(&format!("Fetching PR #{number}…"), || {
+    let view: PrFull = steps.during_result(&format!("Fetching PR #{number}..."), || {
         fetch_pr_full(number, &start, &repo)
     })?;
     let author_login = view.author.login;
