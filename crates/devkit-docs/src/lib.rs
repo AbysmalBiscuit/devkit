@@ -202,19 +202,7 @@ fn restore(
 pub fn refresh_sizes(cache_root: &Path, name: &str) -> Result<usize> {
     locks::with_lib(cache_root, name, || {
         let lib = cache::LibCache::new(cache_root, name)?;
-        let mut meta = cache::read_meta(&lib.dir)?;
-        let mut measured = 0;
-        for (worktree, path) in lib.version_worktrees() {
-            let Some(record) = meta.worktrees.get_mut(&worktree) else {
-                continue;
-            };
-            record.bytes = Some(devkit_common::disk::dir_size(&path));
-            measured += 1;
-        }
-        if measured > 0 {
-            cache::write_meta(&lib.dir, &meta)?;
-        }
-        Ok(measured)
+        lib.record_sizes(cache::SizeMeasurement::All)
     })
 }
 
@@ -304,11 +292,9 @@ struct Checkout {
     recorded: Option<cache::WorktreeMeta>,
 }
 
-/// Inspect every checkout on the shared pool. Each [`inspect`] is two git
-/// subprocesses and a cache holding a few dozen libraries makes this the
-/// slowest thing `devkit doctor` does, so the calls overlap. rayon's `collect`
-/// is ordered, so the report stays in cache order rather than falling into
-/// whichever order the git calls finished in.
+/// Inspect every checkout on the shared pool, using one git process per
+/// checkout. Ordered collection keeps the report in cache order regardless
+/// of which git calls finish first.
 fn sweep(checkouts: &[Checkout]) -> Vec<String> {
     devkit_common::pool::install(|| {
         checkouts
@@ -318,22 +304,10 @@ fn sweep(checkouts: &[Checkout]) -> Vec<String> {
     })
 }
 
-/// What is wrong with one materialized checkout, if anything: source that
-/// differs from the commit, or a HEAD that is not the recorded one. Reported
-/// rather than repaired — `doctor` diagnoses, it does not mutate the cache.
-///
-/// The sweep takes no library lock, so it reads a checkout a concurrent
-/// `docm` is still materializing. Blocking a diagnostic behind a network
-/// clone costs more than a warning the reader can re-run, so the drift row
-/// says it may be transient rather than claiming a settled mismatch.
-///
-/// Both answers come from one `git status`. The v2 format's `--branch` header
-/// carries the full HEAD oid, so the commit comparison reads off the same
-/// output as the cleanliness check instead of costing a second process per
-/// checkout. One consequence: a `git status` that cannot run now ends the
-/// inspection, where the separate `rev-parse` used to still report drift. A
-/// checkout git cannot read has nothing trustworthy left to say, and the
-/// failure itself is the row worth reading.
+/// Report local modifications and commit drift from one porcelain v2 status.
+/// The sweep takes no library lock to avoid blocking behind a network clone,
+/// so drift may be transient during concurrent materialization. A failed
+/// status reports only the inspection error. No repairs are attempted.
 fn inspect(label: &str, path: &Path, recorded: Option<&cache::WorktreeMeta>) -> Vec<String> {
     let mut problems = Vec::new();
     let status = match devkit_common::git::Git::at(path)

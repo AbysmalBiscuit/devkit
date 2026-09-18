@@ -497,23 +497,11 @@ fn backfill_origin(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
 /// once: a cache carried over from a docm that recorded no sizes pays for the
 /// walk here rather than on every later report.
 fn backfill_sizes(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
-    let lib_dir = cache_root.join(dirname);
-    let mut meta = cache::read_meta(&lib_dir)?;
-    let mut measured = 0usize;
-    for (worktree, path) in checkouts(cache_root, dirname) {
-        let Some(record) = meta.worktrees.get_mut(&worktree) else {
-            continue;
-        };
-        if record.bytes.is_some() {
-            continue;
-        }
-        record.bytes = Some(devkit_common::disk::dir_size(&path));
-        measured += 1;
-    }
+    let lib = cache::LibCache::from_dir(cache_root, dirname);
+    let measured = lib.record_sizes(cache::SizeMeasurement::Missing)?;
     if measured == 0 {
         return Ok(Vec::new());
     }
-    cache::write_meta(&lib_dir, &meta)?;
     Ok(vec![format!(
         "recorded the size of {measured} checkout(s) of {dirname}"
     )])

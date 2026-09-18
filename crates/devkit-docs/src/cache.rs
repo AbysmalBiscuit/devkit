@@ -157,6 +157,11 @@ pub struct LibCache {
     pub dir: PathBuf,
 }
 
+pub(crate) enum SizeMeasurement {
+    Missing,
+    All,
+}
+
 impl LibCache {
     pub fn new(cache_root: &Path, name: &str) -> Result<Self> {
         Ok(Self {
@@ -421,6 +426,27 @@ impl LibCache {
             .filter(|e| e.file_name() != "repo.git")
             .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
             .collect()
+    }
+
+    /// Measure recorded checkouts and persist their sizes. The caller holds
+    /// this library's lock across measurement and the sidecar write.
+    pub(crate) fn record_sizes(&self, measurement: SizeMeasurement) -> Result<usize> {
+        let mut meta = read_meta(&self.dir)?;
+        let mut measured = 0;
+        for (worktree, path) in self.version_worktrees() {
+            let Some(record) = meta.worktrees.get_mut(&worktree) else {
+                continue;
+            };
+            if matches!(measurement, SizeMeasurement::Missing) && record.bytes.is_some() {
+                continue;
+            }
+            record.bytes = Some(devkit_common::disk::dir_size(&path));
+            measured += 1;
+        }
+        if measured > 0 {
+            write_meta(&self.dir, &meta)?;
+        }
+        Ok(measured)
     }
 
     /// Remove one checkout. The caller holds this library's lock, which is what

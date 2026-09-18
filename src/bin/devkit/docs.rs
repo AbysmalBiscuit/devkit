@@ -352,17 +352,13 @@ fn cmd_list(json: bool, project: bool, refresh: bool) -> Result<()> {
     }
     let d = discovered()?;
     let root = cache::docs_root();
-    if refresh {
-        // Before either rendering path, so the table and the JSON report the
-        // measurement this run just took rather than the record it replaced.
-        //
-        // One library that cannot be re-measured is a line on stderr, not the
-        // end of the listing: `--refresh` is what a reader reaches for when the
-        // cache is already suspect, which is exactly when refusing to print
-        // anything helps least.
-        for l in &d.manifest.libs {
-            if let Err(error) = devkit_docs::refresh_sizes(&root, &l.name)
-                .with_context(|| format!("re-measuring the checkouts of `{}`", l.name))
+    if refresh && root.is_dir() {
+        // Doctor counts the shared cache, including libraries absent from
+        // the current manifest.
+        for dirname in refs::scan_cache(&root)?.libs {
+            let name = devkit_docs::names::decode(&dirname);
+            if let Err(error) = devkit_docs::refresh_sizes(&root, &name)
+                .with_context(|| format!("re-measuring the checkouts of `{name}`"))
             {
                 eprintln!("docm: {error:#}");
             }
