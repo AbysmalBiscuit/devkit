@@ -347,7 +347,9 @@ Resolving a library from a project records a *reference*: the project root, the 
 
 ### Checkout sizes
 
-Every checkout is measured when it is materialized, and the number is recorded beside its commit in the library's `meta.toml`. `docm list` shows it per version, and `devkit doctor` sums the records rather than walking the cache again. A cache carried over from a docm that recorded no sizes fills them in on its next `docm` command.
+Every checkout is measured when it is materialized or re-pointed, and the number is recorded beside its commit in the library's `meta.toml`. `docm list` shows it per version, and `devkit doctor` sums the records rather than walking the cache again. A cache carried over from a docm that recorded no sizes fills them in on its next `docm` command.
+
+Re-resolving a checkout that is already at its pinned commit leaves the recorded number alone. `docm path` and `docm info` re-resolve on every invocation, so measuring there would put a walk of the whole tree on the commands run most.
 
 The record is a snapshot of a tree pinned at a fixed commit, so it goes stale if the checkout grows. Growth that the repository's own `.gitignore` covers goes unnoticed twice over: the cleanliness sweep does not report ignored files either. `docm list --refresh` re-measures every checkout and writes the new numbers down.
 

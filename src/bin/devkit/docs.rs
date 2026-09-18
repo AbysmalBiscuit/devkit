@@ -79,7 +79,11 @@ pub(crate) enum Cmd {
         project: bool,
         /// Re-measure every checkout and record what it finds, instead of
         /// reporting the size taken when each was materialized.
-        #[arg(long)]
+        ///
+        /// Refused with `--project`, which reports pins rather than checkouts
+        /// and has no size to re-measure: accepting it there would write
+        /// nothing while reading as though it had.
+        #[arg(long, conflicts_with = "project")]
         refresh: bool,
     },
     /// Fetch, re-resolve, re-materialize and verify registered libraries.
@@ -351,9 +355,17 @@ fn cmd_list(json: bool, project: bool, refresh: bool) -> Result<()> {
     if refresh {
         // Before either rendering path, so the table and the JSON report the
         // measurement this run just took rather than the record it replaced.
+        //
+        // One library that cannot be re-measured is a line on stderr, not the
+        // end of the listing: `--refresh` is what a reader reaches for when the
+        // cache is already suspect, which is exactly when refusing to print
+        // anything helps least.
         for l in &d.manifest.libs {
-            devkit_docs::refresh_sizes(&root, &l.name)
-                .with_context(|| format!("re-measuring the checkouts of `{}`", l.name))?;
+            if let Err(error) = devkit_docs::refresh_sizes(&root, &l.name)
+                .with_context(|| format!("re-measuring the checkouts of `{}`", l.name))
+            {
+                eprintln!("docm: {error:#}");
+            }
         }
     }
     if json {

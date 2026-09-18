@@ -326,10 +326,14 @@ fn sweep(checkouts: &[Checkout]) -> Vec<String> {
 /// `docm` is still materializing. Blocking a diagnostic behind a network
 /// clone costs more than a warning the reader can re-run, so the drift row
 /// says it may be transient rather than claiming a settled mismatch.
+///
 /// Both answers come from one `git status`. The v2 format's `--branch` header
 /// carries the full HEAD oid, so the commit comparison reads off the same
 /// output as the cleanliness check instead of costing a second process per
-/// checkout.
+/// checkout. One consequence: a `git status` that cannot run now ends the
+/// inspection, where the separate `rev-parse` used to still report drift. A
+/// checkout git cannot read has nothing trustworthy left to say, and the
+/// failure itself is the row worth reading.
 fn inspect(label: &str, path: &Path, recorded: Option<&cache::WorktreeMeta>) -> Vec<String> {
     let mut problems = Vec::new();
     let status = match devkit_common::git::Git::at(path)
@@ -385,13 +389,27 @@ fn entry_line(line: &str) -> Option<String> {
     let (kind, rest) = line.split_once(' ')?;
     let (xy, path) = match kind {
         // `1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>`
-        "1" => (rest.split(' ').next()?, rest.splitn(8, ' ').nth(7)?),
+        "1" => (
+            rest.split(' ').next()?.to_string(),
+            rest.splitn(8, ' ').nth(7)?,
+        ),
         // `2` adds a rename score before the path, and joins the path to the
         // one it came from with a tab.
-        "2" => (rest.split(' ').next()?, rest.splitn(9, ' ').nth(8)?),
+        "2" => (
+            rest.split(' ').next()?.to_string(),
+            rest.splitn(9, ' ').nth(8)?,
+        ),
         // `u` carries three stages of mode and object id instead of two.
-        "u" => (rest.split(' ').next()?, rest.splitn(10, ' ').nth(9)?),
-        "?" | "!" => (kind, rest),
+        "u" => (
+            rest.split(' ').next()?.to_string(),
+            rest.splitn(10, ' ').nth(9)?,
+        ),
+        // v2 marks these with one character where v1 wrote `??` and `!!`.
+        // Doubling it back keeps the column two wide for every record type,
+        // which is what the indented block is read down. `!` needs `--ignored`
+        // to appear at all, which the sweep does not pass; handling it here
+        // keeps turning that flag on a one-line change.
+        "?" | "!" => (format!("{kind}{kind}"), rest),
         _ => return None,
     };
     Some(format!("{xy} {}", path.replace('\t', " <- ")))
@@ -422,9 +440,10 @@ mod tests {
         );
         assert_eq!(
             entry_line("? untracked.rs").as_deref(),
-            Some("? untracked.rs")
+            Some("?? untracked.rs"),
+            "v1 wrote these two wide, and the block is read down the column"
         );
-        assert_eq!(entry_line("! ignored.rs").as_deref(), Some("! ignored.rs"));
+        assert_eq!(entry_line("! ignored.rs").as_deref(), Some("!! ignored.rs"));
         assert_eq!(entry_line("x something git grew later"), None);
     }
 

@@ -154,11 +154,17 @@ fn the_sweep_never_descends_into_a_control_directory() {
 /// bytes more after a report than before it.
 #[test]
 fn the_size_comes_from_the_recorded_checkout() {
-    let (_base, cache, checkout) = materialize("v1.0.0");
+    let (_base, cache, _) = materialize("v1.0.0");
     let lib_dir = cache.join("up");
     let mut meta = devkit_docs::cache::read_meta(&lib_dir).unwrap();
     meta.worktrees.get_mut("v1.0.0").unwrap().bytes = Some(9_000_000);
     devkit_docs::cache::write_meta(&lib_dir, &meta).unwrap();
+    // A directory of known size that no record covers, planted where only the
+    // walk can find it. Asserting the total carries it is what proves the rest
+    // of the cache is still walked, rather than leaving that to whether the
+    // fixture's object store happens to outweigh a two-file checkout.
+    std::fs::create_dir_all(cache.join("up/stray")).unwrap();
+    std::fs::write(cache.join("up/stray/f"), vec![b'x'; 4096]).unwrap();
 
     let claimed = devkit_docs::doctor_summary(&cache).bytes;
 
@@ -167,8 +173,8 @@ fn the_size_comes_from_the_recorded_checkout() {
         "the recorded number did not replace the walk of the checkout: {claimed}"
     );
     assert!(
-        claimed - 9_000_000 > devkit_common::disk::dir_size(&checkout),
-        "the shared object store and sidecars fell out of the total: {claimed}"
+        claimed >= 9_000_000 + 4096,
+        "a directory no record covers fell out of the total: {claimed}"
     );
 }
 

@@ -25,22 +25,13 @@ pub fn dir_size(path: &Path) -> u64 {
 /// dropped.
 ///
 /// A recorded directory that is no longer on disk contributes nothing, because
-/// the substitution happens where the walk meets the entry. That is what keeps
-/// a stale record from inventing bytes a deleted checkout no longer holds.
+/// the substitution happens only where the walk meets the entry — `path` itself
+/// is always walked, whatever `known` says about it. That is what keeps a stale
+/// record from inventing bytes a deleted checkout no longer holds.
 pub fn dir_size_with_known(path: &Path, known: &HashMap<PathBuf, u64>) -> u64 {
-    if let Some(bytes) = known.get(path) {
-        return *bytes;
-    }
     crate::pool::install(|| walk(path, known))
 }
 
-/// Sizes come from the directory read itself. `DirEntry::file_type` and
-/// `DirEntry::metadata` answer from what the read already returned, where a
-/// fresh `fs::metadata` per path costs a file open apiece on Windows. That is
-/// what rules out jwalk here, whose `DirEntry::metadata` always re-stats.
-///
-/// Recursion runs on the shared pool, entered once by [`dir_size`]; rayon
-/// work-stealing joins the nested `par_iter`s to it.
 /// The trees devkit sizes are dependency trees and source checkouts, so MiB is
 /// the useful unit until one is small enough for it to read as nothing at all.
 pub fn human_size(bytes: u64) -> String {
@@ -53,6 +44,13 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
+/// Sizes come from the directory read itself. `DirEntry::file_type` and
+/// `DirEntry::metadata` answer from what the read already returned, where a
+/// fresh `fs::metadata` per path costs a file open apiece on Windows. That is
+/// what rules out jwalk here, whose `DirEntry::metadata` always re-stats.
+///
+/// Recursion runs on the shared pool, entered once by [`dir_size`]; rayon
+/// work-stealing joins the nested `par_iter`s to it.
 fn walk(dir: &Path, known: &HashMap<PathBuf, u64>) -> u64 {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return 0;
