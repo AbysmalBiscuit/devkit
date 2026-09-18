@@ -160,6 +160,7 @@ fn meta_round_trips() {
         raw_ref: "v1.0.0".into(),
         resolved_ref: "refs/tags/v1.0.0".into(),
         commit: "0123456789012345678901234567890123456789".into(),
+        bytes: Some(4096),
     });
     cache::write_meta(tmp, &m).unwrap();
     assert_eq!(cache::read_meta(tmp).unwrap(), m);
@@ -167,6 +168,25 @@ fn meta_round_trips() {
         cache::read_meta(&tmp.join("missing")).unwrap(),
         Meta::default()
     );
+}
+
+/// A sidecar written before checkout sizes were recorded. The size reads as
+/// absent rather than zero: zero is a checkout holding nothing, and a reader
+/// that cannot tell the two apart reports an empty cache as the truth.
+#[test]
+fn meta_without_a_recorded_size_reads_it_as_absent() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
+    std::fs::write(
+        tmp.join("meta.toml"),
+        "[worktrees.\"v1.0.0\"]\nraw_ref = \"v1.0.0\"\nresolved_ref = \"refs/tags/v1.0.0\"\n\
+         commit = \"0123456789012345678901234567890123456789\"\n",
+    )
+    .unwrap();
+
+    let meta = cache::read_meta(tmp).unwrap();
+
+    assert_eq!(meta.worktrees["v1.0.0"].bytes, None);
 }
 
 #[test]

@@ -322,6 +322,7 @@ docm add h3 --src-dir src --docs-dir docs   # override the detected checkout lay
 docm add tokio --notes "async runtime we copy patterns from"  # shown by info/list
 docm list                         # merged catalog: name, ecosystem, ref, origin
 docm list --project               # only what this checkout evidences; --json emits {pins, dropped}
+docm list --refresh               # re-measure every checkout instead of reporting its recorded size
 docm info tokio                   # path + version + layout map + notes
 docm path tokio                   # just the checkout path
 docm sync                         # fetch, re-resolve, re-materialize, verify
@@ -343,6 +344,12 @@ When nothing pins a version — no tag matches the lockfile's version, no import
 ### References and pruning
 
 Resolving a library from a project records a *reference*: the project root, the library, and the checkout it received. A reference holds that checkout against `docm prune`, and puts the library in the project's `docm list --project` table even when nothing here declares it — which is how a `--ref` pin, or a library since dropped from the manifest, keeps appearing for a checkout that never used it. `docm forget <lib>` releases this project's reference and leaves the checkout for `prune` to reclaim once nothing references it.
+
+### Checkout sizes
+
+Every checkout is measured when it is materialized, and the number is recorded beside its commit in the library's `meta.toml`. `docm list` shows it per version, and `devkit doctor` sums the records rather than walking the cache again. A cache carried over from a docm that recorded no sizes fills them in on its next `docm` command.
+
+The record is a snapshot of a tree pinned at a fixed commit, so it goes stale if the checkout grows. Growth that the repository's own `.gitignore` covers goes unnoticed twice over: the cleanliness sweep does not report ignored files either. `docm list --refresh` re-measures every checkout and writes the new numbers down.
 
 ### Reserved names
 

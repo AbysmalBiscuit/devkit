@@ -198,8 +198,11 @@ fn docs_cache_check() -> Check {
         return Check::Ok("empty".into());
     }
     let s = devkit_docs::doctor_summary(&root);
+    // The size is summed from what each checkout recorded when it was
+    // materialized, so a tree that has grown since reads low. Naming the flag
+    // here is what gives a reader who doubts the number somewhere to go.
     let msg = format!(
-        "{} libs, {} MiB, {} unreferenced checkouts",
+        "{} libs, {} MiB (recorded; `docm list --refresh` re-measures), {} unreferenced checkouts",
         s.libs,
         s.bytes / (1024 * 1024),
         s.unreferenced

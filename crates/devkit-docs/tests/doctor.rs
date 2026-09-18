@@ -144,3 +144,78 @@ fn the_sweep_never_descends_into_a_control_directory() {
     assert_eq!(summary.libs, 1);
     assert!(summary.problems.is_empty(), "{:?}", summary.problems);
 }
+
+/// The checkout is taken from its record rather than walked, and the rest of
+/// the cache is still walked. Rewriting the record with a number no fixture
+/// could hold proves both halves at once.
+///
+/// The totals of two separate runs are not compared: the sweep's `git status`
+/// rewrites each worktree's index, so the shared object store weighs a few
+/// bytes more after a report than before it.
+#[test]
+fn the_size_comes_from_the_recorded_checkout() {
+    let (_base, cache, checkout) = materialize("v1.0.0");
+    let lib_dir = cache.join("up");
+    let mut meta = devkit_docs::cache::read_meta(&lib_dir).unwrap();
+    meta.worktrees.get_mut("v1.0.0").unwrap().bytes = Some(9_000_000);
+    devkit_docs::cache::write_meta(&lib_dir, &meta).unwrap();
+
+    let claimed = devkit_docs::doctor_summary(&cache).bytes;
+
+    assert!(
+        claimed > 9_000_000,
+        "the recorded number did not replace the walk of the checkout: {claimed}"
+    );
+    assert!(
+        claimed - 9_000_000 > devkit_common::disk::dir_size(&checkout),
+        "the shared object store and sidecars fell out of the total: {claimed}"
+    );
+}
+
+/// A checkout that grew after it was measured. The report keeps its word until
+/// something re-measures, which is exactly the trade the record makes, and
+/// `refresh_sizes` is the way out of it.
+#[test]
+fn a_refresh_re_measures_a_checkout_that_grew() {
+    let (_base, cache, checkout) = materialize("v1.0.0");
+    let lib_dir = cache.join("up");
+    let recorded = || {
+        devkit_docs::cache::read_meta(&lib_dir).unwrap().worktrees["v1.0.0"]
+            .bytes
+            .unwrap()
+    };
+    let before = recorded();
+
+    std::fs::write(checkout.join("added"), vec![b'x'; 100_000]).unwrap();
+
+    assert_eq!(
+        recorded(),
+        before,
+        "a checkout that grew is reported at its recorded size until something re-measures"
+    );
+
+    assert_eq!(devkit_docs::refresh_sizes(&cache, "up").unwrap(), 1);
+
+    assert_eq!(
+        recorded(),
+        before + 100_000,
+        "the re-measurement was not written back"
+    );
+}
+
+/// A record left behind by a checkout `prune` has since deleted. Believing it
+/// would report bytes the disk has already given back.
+#[test]
+fn a_recorded_size_for_a_deleted_checkout_is_not_counted() {
+    let (_base, cache, checkout) = materialize("v1.0.0");
+    let lib_dir = cache.join("up");
+    let mut meta = devkit_docs::cache::read_meta(&lib_dir).unwrap();
+    meta.worktrees.get_mut("v1.0.0").unwrap().bytes = Some(9_000_000);
+    devkit_docs::cache::write_meta(&lib_dir, &meta).unwrap();
+    std::fs::remove_dir_all(&checkout).unwrap();
+
+    assert!(
+        devkit_docs::doctor_summary(&cache).bytes < 9_000_000,
+        "a record outliving its checkout invented the bytes it used to hold"
+    );
+}

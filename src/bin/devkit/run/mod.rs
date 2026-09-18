@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
 use devkit::completions::Shell;
-use devkit_common::{git::Git, progress::Steps, supervise, ui};
+use devkit_common::{disk::human_size, git::Git, progress::Steps, supervise, ui};
 use devkit_ports::{
     load,
     registry::{self, Role},
@@ -530,18 +530,6 @@ fn baseline_scope(cli: &RunCli, cwd: &str) -> Result<(PathBuf, String)> {
     let dir = crate::baseline::dir(&loaded.config)?;
     let repo = devkit_common::git::primary_checkout(Path::new(cwd))?;
     Ok((dir, repo.to_string_lossy().into_owned()))
-}
-
-/// A baseline holds a dependency tree, so MiB is the useful unit until the tree
-/// is small enough for it to read as nothing at all.
-fn human_size(bytes: u64) -> String {
-    const KIB: u64 = 1024;
-    const MIB: u64 = KIB * KIB;
-    match bytes {
-        b if b >= MIB => format!("{} MiB", b / MIB),
-        b if b >= KIB => format!("{} KiB", b / KIB),
-        b => format!("{b} B"),
-    }
 }
 
 fn cmd_baseline_list(cli: &RunCli, cwd: &str) -> Result<()> {
@@ -1537,19 +1525,6 @@ mod tests {
         assert_eq!(parse_age("1d").unwrap(), 86400);
         assert_eq!(parse_age("45").unwrap(), 45, "bare number is seconds");
         assert!(parse_age("nope").is_err());
-    }
-
-    /// The unit changes at each boundary and the division truncates, so a tree
-    /// just short of the next unit must not round up into it.
-    #[test]
-    fn human_size_changes_unit_at_each_boundary() {
-        use super::human_size;
-        assert_eq!(human_size(0), "0 B");
-        assert_eq!(human_size(1023), "1023 B");
-        assert_eq!(human_size(1024), "1 KiB");
-        assert_eq!(human_size(1024 * 1024 - 1), "1023 KiB");
-        assert_eq!(human_size(1024 * 1024), "1 MiB");
-        assert_eq!(human_size(2 * 1024 * 1024 - 1), "1 MiB");
     }
 
     #[test]

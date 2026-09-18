@@ -219,11 +219,15 @@ pub fn resolve_locked(
             "tag {git_ref} moved {previous_commit} → {commit} upstream; {worktree} re-pointed"
         ));
     }
+    // Sized here, where the tree has just been written, `assert_clean` has
+    // verified it and the library lock is already held. Measuring it anywhere
+    // later means walking it again from cold.
     meta.worktrees
         .insert(worktree.clone(), cache::WorktreeMeta {
             raw_ref: git_ref.clone(),
             resolved_ref: canonical,
             commit: commit.clone(),
+            bytes: Some(devkit_common::disk::dir_size(&path)),
         });
     let status = if repaired {
         Status::Repaired

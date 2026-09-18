@@ -779,3 +779,39 @@ fn a_missing_importer_manifest_is_a_hard_error_naming_the_manifest() {
         "the old diagnosis named a lockfile that does not exist here: {err}"
     );
 }
+
+/// Materialization is the one moment a checkout's size is free: the tree has
+/// just been written, `assert_clean` has verified it, and the library lock is
+/// already held. Every later reader sums what is recorded here rather than
+/// walking the cache again.
+#[test]
+fn materializing_a_checkout_records_its_size() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
+    let repo = fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let entry = LibEntry {
+        name: "mylib".into(),
+        ecosystem: Some(Ecosystem::Git),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let r = resolve(&entry, &project, &cache_root, &Options::default()).unwrap();
+
+    let lib = devkit_docs::cache::LibCache::new(&cache_root, "mylib").unwrap();
+    let meta = devkit_docs::cache::read_meta(&lib.dir).unwrap();
+    let recorded = meta.worktrees[&r.worktree]
+        .bytes
+        .expect("materialization recorded no size");
+
+    assert_eq!(
+        recorded,
+        devkit_common::disk::dir_size(&r.path),
+        "the recorded size must be the tree that was just written"
+    );
+    assert!(recorded > 0, "the fixture checkout is not empty");
+}

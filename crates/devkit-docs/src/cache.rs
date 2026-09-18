@@ -48,6 +48,18 @@ pub struct WorktreeMeta {
     pub raw_ref: String,
     pub resolved_ref: String,
     pub commit: String,
+    /// Bytes the checkout held when it was last materialized or refreshed,
+    /// which is what spares every reader a walk of a tree pinned at a fixed
+    /// commit. Absent, not zero, when nothing has measured it: zero is a
+    /// checkout that holds nothing, and a reader that cannot tell the two
+    /// apart reports an unmeasured cache as an empty one.
+    ///
+    /// The number goes stale if a checkout grows, and the growth most likely
+    /// to do it is invisible to the cleanliness sweep as well, because `git
+    /// status` does not report ignored files. `docm list --refresh` is what
+    /// re-measures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
 }
 
 /// Per-lib sidecar: repository identity and detected state per worktree.

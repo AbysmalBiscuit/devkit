@@ -863,3 +863,45 @@ fn every_unreadable_sidecar_is_named_in_one_run() {
     }
     devkit_docs::upgrade::run(&cache).unwrap();
 }
+
+/// A cache carried over from a docm that recorded no sizes. The first run
+/// measures each checkout under the library lock and writes the number down.
+/// The second has to find nothing to do: a probe that stayed true would take
+/// the lock and walk the cache again on every command.
+#[test]
+fn a_checkout_with_no_recorded_size_is_measured_once() {
+    let base_dir = tempfile::tempdir().unwrap();
+    let base = base_dir.path();
+    let repo = common::fixture_repo(&base.join("src"));
+    let cache = base.join("cache");
+    let lib = cache.join("up");
+    let commits = seed_library(&repo, &lib, &["v1.0.0"]);
+
+    let mut meta = devkit_docs::cache::Meta {
+        origin: Some(repo.clone()),
+        ..Default::default()
+    };
+    meta.worktrees
+        .insert("v1.0.0".into(), devkit_docs::cache::WorktreeMeta {
+            raw_ref: "v1.0.0".into(),
+            resolved_ref: "refs/tags/v1.0.0".into(),
+            commit: commits[0].clone(),
+            bytes: None,
+        });
+    devkit_docs::cache::write_meta(&lib, &meta).unwrap();
+
+    let lines = devkit_docs::upgrade::run(&cache).unwrap();
+
+    assert!(
+        lines.iter().any(|line| line.contains("recorded the size")),
+        "{lines:?}"
+    );
+    assert_eq!(
+        devkit_docs::cache::read_meta(&lib).unwrap().worktrees["v1.0.0"].bytes,
+        Some(devkit_common::disk::dir_size(&lib.join("v1.0.0")))
+    );
+    assert!(
+        devkit_docs::upgrade::run(&cache).unwrap().is_empty(),
+        "the backfill asked for the library lock a second time"
+    );
+}

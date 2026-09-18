@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use devkit::completions::Shell;
+use devkit_common::disk::human_size;
 use devkit_docs::{
     ManifestTarget, cache, lookup,
     manifest::{self, Discovered, Ecosystem, LibEntry},
@@ -76,6 +77,10 @@ pub(crate) enum Cmd {
         /// each manifest and lockfile names, instead of the whole catalog.
         #[arg(long)]
         project: bool,
+        /// Re-measure every checkout and record what it finds, instead of
+        /// reporting the size taken when each was materialized.
+        #[arg(long)]
+        refresh: bool,
     },
     /// Fetch, re-resolve, re-materialize and verify registered libraries.
     Sync {
@@ -149,7 +154,11 @@ pub fn run(cli: DocsCli) -> Result<()> {
             cli.allow_default_branch,
         ),
         Cmd::Rm { name, project } => cmd_rm(&name, project),
-        Cmd::List { json, project } => cmd_list(json, project),
+        Cmd::List {
+            json,
+            project,
+            refresh,
+        } => cmd_list(json, project, refresh),
         Cmd::Sync { names } => cmd_sync(&names, cli.allow_default_branch),
         Cmd::Path { name } => cmd_path(&name, cli.allow_default_branch),
         Cmd::Info { name, json } => cmd_info(&name, json, cli.allow_default_branch),
@@ -322,7 +331,7 @@ fn short(commit: &str) -> &str {
     &commit[..commit.len().min(12)]
 }
 
-fn cmd_list(json: bool, project: bool) -> Result<()> {
+fn cmd_list(json: bool, project: bool, refresh: bool) -> Result<()> {
     if project {
         // `pins` itself takes no lock and touches no cache; `main` still runs
         // `upgrade::run` before every subcommand, including this one.
@@ -339,6 +348,14 @@ fn cmd_list(json: bool, project: bool) -> Result<()> {
     }
     let d = discovered()?;
     let root = cache::docs_root();
+    if refresh {
+        // Before either rendering path, so the table and the JSON report the
+        // measurement this run just took rather than the record it replaced.
+        for l in &d.manifest.libs {
+            devkit_docs::refresh_sizes(&root, &l.name)
+                .with_context(|| format!("re-measuring the checkouts of `{}`", l.name))?;
+        }
+    }
     if json {
         let items: Vec<serde_json::Value> = d
             .manifest
@@ -354,6 +371,7 @@ fn cmd_list(json: bool, project: bool) -> Result<()> {
                             "worktree": dirname,
                             "ref": recorded.raw_ref,
                             "commit": recorded.commit,
+                            "bytes": recorded.bytes,
                         })
                     })
                     .collect();
@@ -394,9 +412,12 @@ fn cmd_list(json: bool, project: bool) -> Result<()> {
         }
         for (dirname, recorded) in state.checkouts {
             println!(
-                "    {:<24} {:<12} {}",
+                "    {:<24} {:<12} {:>9} {}",
                 dirname,
                 short(&recorded.commit),
+                // A checkout nothing has measured yet reads as unknown rather
+                // than as empty. `docm list --refresh` is what fills it in.
+                recorded.bytes.map_or("-".into(), human_size),
                 recorded.raw_ref
             );
         }
