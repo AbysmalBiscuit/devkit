@@ -48,6 +48,18 @@ pub struct WorktreeMeta {
     pub raw_ref: String,
     pub resolved_ref: String,
     pub commit: String,
+    /// Bytes the checkout held when it was last materialized or refreshed,
+    /// which is what spares every reader a walk of a tree pinned at a fixed
+    /// commit. Absent, not zero, when nothing has measured it: zero is a
+    /// checkout that holds nothing, and a reader that cannot tell the two
+    /// apart reports an unmeasured cache as an empty one.
+    ///
+    /// The number goes stale if a checkout grows, and the growth most likely
+    /// to do it is invisible to the cleanliness sweep as well, because `git
+    /// status` does not report ignored files. `docm list --refresh` is what
+    /// re-measures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
 }
 
 /// Per-lib sidecar: repository identity and detected state per worktree.
@@ -143,6 +155,11 @@ fn collect_dir_entries(
 
 pub struct LibCache {
     pub dir: PathBuf,
+}
+
+pub(crate) enum SizeMeasurement {
+    Missing,
+    All,
 }
 
 impl LibCache {
@@ -409,6 +426,27 @@ impl LibCache {
             .filter(|e| e.file_name() != "repo.git")
             .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
             .collect()
+    }
+
+    /// Measure recorded checkouts and persist their sizes. The caller holds
+    /// this library's lock across measurement and the sidecar write.
+    pub(crate) fn record_sizes(&self, measurement: SizeMeasurement) -> Result<usize> {
+        let mut meta = read_meta(&self.dir)?;
+        let mut measured = 0;
+        for (worktree, path) in self.version_worktrees() {
+            let Some(record) = meta.worktrees.get_mut(&worktree) else {
+                continue;
+            };
+            if matches!(measurement, SizeMeasurement::Missing) && record.bytes.is_some() {
+                continue;
+            }
+            record.bytes = Some(devkit_common::disk::dir_size(&path));
+            measured += 1;
+        }
+        if measured > 0 {
+            write_meta(&self.dir, &meta)?;
+        }
+        Ok(measured)
     }
 
     /// Remove one checkout. The caller holds this library's lock, which is what

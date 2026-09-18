@@ -779,3 +779,119 @@ fn a_missing_importer_manifest_is_a_hard_error_naming_the_manifest() {
         "the old diagnosis named a lockfile that does not exist here: {err}"
     );
 }
+
+/// Materialization is the one moment a checkout's size is free: the tree has
+/// just been written, `assert_clean` has verified it, and the library lock is
+/// already held. Every later reader sums what is recorded here rather than
+/// walking the cache again.
+#[test]
+fn materializing_a_checkout_records_its_size() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
+    let repo = fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let entry = LibEntry {
+        name: "mylib".into(),
+        ecosystem: Some(Ecosystem::Git),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let r = resolve(&entry, &project, &cache_root, &Options::default()).unwrap();
+
+    let lib = devkit_docs::cache::LibCache::new(&cache_root, "mylib").unwrap();
+    let meta = devkit_docs::cache::read_meta(&lib.dir).unwrap();
+    let recorded = meta.worktrees[&r.worktree]
+        .bytes
+        .expect("materialization recorded no size");
+
+    assert_eq!(
+        recorded,
+        devkit_common::disk::dir_size(&r.path),
+        "the recorded size must be the tree that was just written"
+    );
+    assert!(recorded > 0, "the fixture checkout is not empty");
+}
+
+/// `docm path` and `docm info` re-resolve on every invocation, and a checkout
+/// already sitting at the resolved commit is left untouched. Measuring it again
+/// there would put a full walk of the tree on the commands agents run most,
+/// which is the cost this whole record exists to avoid.
+///
+/// A sentinel in the record is what proves it: a re-resolve that walked the
+/// tree would overwrite it with the real size.
+#[test]
+fn re_resolving_an_unchanged_checkout_keeps_the_size_it_recorded() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
+    let repo = fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let entry = LibEntry {
+        name: "mylib".into(),
+        ecosystem: Some(Ecosystem::Git),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let r = resolve(&entry, &project, &cache_root, &Options::default()).unwrap();
+
+    let lib = devkit_docs::cache::LibCache::new(&cache_root, "mylib").unwrap();
+    let mut meta = devkit_docs::cache::read_meta(&lib.dir).unwrap();
+    meta.worktrees.get_mut(&r.worktree).unwrap().bytes = Some(9_000_000);
+    devkit_docs::cache::write_meta(&lib.dir, &meta).unwrap();
+
+    resolve(&entry, &project, &cache_root, &Options::default()).unwrap();
+
+    assert_eq!(
+        devkit_docs::cache::read_meta(&lib.dir).unwrap().worktrees[&r.worktree].bytes,
+        Some(9_000_000),
+        "an untouched checkout was walked again"
+    );
+}
+
+/// The carry-forward above must not outlive the tree it describes. A checkout
+/// the resolve re-points to another commit is a different tree, so its size is
+/// taken again.
+#[test]
+fn re_pointing_a_checkout_measures_it_again() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp = tmp_dir.path();
+    let repo = fixture_repo(&tmp.join("upstream"));
+    let cache_root = tmp.join("cache");
+    let project = tmp.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let entry = LibEntry {
+        name: "mylib".into(),
+        ecosystem: Some(Ecosystem::Git),
+        repo: Some(repo),
+        r#ref: Some("v1.0.0".into()),
+        ..Default::default()
+    };
+    let r = resolve(&entry, &project, &cache_root, &Options::default()).unwrap();
+
+    let lib = devkit_docs::cache::LibCache::new(&cache_root, "mylib").unwrap();
+    let mut meta = devkit_docs::cache::read_meta(&lib.dir).unwrap();
+    meta.worktrees.get_mut(&r.worktree).unwrap().bytes = Some(9_000_000);
+    devkit_docs::cache::write_meta(&lib.dir, &meta).unwrap();
+
+    // Drive the checkout off its pinned commit, so the next resolve re-points
+    // it instead of finding it already correct.
+    git(
+        &["checkout", "--detach", "v1.1.0"],
+        r.path.to_str().unwrap(),
+    );
+    resolve(&entry, &project, &cache_root, &Options::default()).unwrap();
+
+    assert_eq!(
+        devkit_docs::cache::read_meta(&lib.dir).unwrap().worktrees[&r.worktree].bytes,
+        Some(devkit_common::disk::dir_size(&r.path)),
+        "a re-pointed checkout kept the size of the tree it no longer holds"
+    );
+}

@@ -587,6 +587,88 @@ fn info_and_list_report_the_ref_commit_and_clone_origin() {
     assert_eq!(lib["checkouts"][0]["commit"], serde_json::json!(head));
 }
 
+#[test]
+fn list_refresh_records_sizes_before_rendering_text_and_json() {
+    let env = Env::new();
+    let empty = env.docm(&["list", "--refresh", "--json"]);
+    assert_ran(&empty, "docm list --refresh --json on an empty cache");
+    assert_eq!(stdout(&empty).trim(), "[]");
+    assert_ran(&env.add("up", "v1.0.0"), "docm add up");
+    let lib = env.cache().join("up");
+    let before = devkit_docs::cache::read_meta(&lib).unwrap().worktrees["v1.0.0"]
+        .bytes
+        .unwrap();
+
+    for (args, added) in [
+        (vec!["list", "--refresh"], 128 * 1024),
+        (vec!["list", "--refresh", "--json"], 256 * 1024),
+    ] {
+        std::fs::write(env.checkout("up", "v1.0.0").join("added"), vec![
+            b'x';
+            added
+        ])
+        .unwrap();
+        let listed = env.docm(&args);
+        assert_ran(&listed, "docm list --refresh");
+        let expected = before + added as u64;
+        assert_eq!(
+            devkit_docs::cache::read_meta(&lib).unwrap().worktrees["v1.0.0"].bytes,
+            Some(expected)
+        );
+        if args.contains(&"--json") {
+            let items: serde_json::Value = serde_json::from_str(&stdout(&listed)).unwrap();
+            assert_eq!(items[0]["checkouts"][0]["bytes"], expected);
+        } else {
+            assert!(
+                stdout(&listed).contains(&format!("{} KiB", expected / 1024)),
+                "{}",
+                stdout(&listed)
+            );
+        }
+    }
+}
+
+#[test]
+fn list_refresh_measures_checkouts_absent_from_the_manifest() {
+    let env = Env::new();
+    assert_ran(&env.add("@scope/up", "v1.0.0"), "docm add @scope/up");
+    let lib = env.cache().join("@scope~up");
+    let before = devkit_docs::cache::read_meta(&lib).unwrap().worktrees["v1.0.0"]
+        .bytes
+        .unwrap();
+    assert_ran(&env.docm(&["rm", "@scope/up"]), "docm rm @scope/up");
+    std::fs::write(lib.join("v1.0.0/added"), vec![b'x'; 100_000]).unwrap();
+
+    let listed = env.docm(&["list", "--refresh", "--json"]);
+
+    assert_ran(&listed, "docm list --refresh --json");
+    assert_eq!(stdout(&listed).trim(), "[]");
+    assert_eq!(
+        devkit_docs::cache::read_meta(&lib).unwrap().worktrees["v1.0.0"].bytes,
+        Some(before + 100_000),
+        "a cached checkout outside the manifest kept its stale size"
+    );
+}
+
+#[test]
+fn list_refresh_refuses_project_scope_without_changing_sizes() {
+    let env = Env::new();
+    assert_ran(&env.add("up", "v1.0.0"), "docm add up");
+    let sidecar = env.cache().join("up/meta.toml");
+    let before = read(&sidecar);
+    std::fs::write(env.checkout("up", "v1.0.0").join("added"), vec![b'x'; 4096]).unwrap();
+
+    let refused = env.docm(&["list", "--refresh", "--project"]);
+
+    assert!(!refused.status.success());
+    let error = stderr(&refused);
+    assert!(
+        error.contains("--refresh") && error.contains("--project"),
+        "{error}"
+    );
+    assert_eq!(read(&sidecar), before);
+}
+
 /// `status ok` is a claim agents act on, so it must be paid for: a checkout
 /// whose source no longer matches its commit fails the command instead.
 #[test]

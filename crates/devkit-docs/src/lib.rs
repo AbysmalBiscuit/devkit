@@ -192,6 +192,20 @@ fn restore(
     }
 }
 
+/// Re-measure every materialized checkout of `name` and record what it finds,
+/// under the library lock. Returns how many were measured.
+///
+/// This is the answer to a recorded size that is no longer believable. A
+/// checkout that grew files `git status` does not report, anything ignored by
+/// the library's own `.gitignore`, has no other way of being noticed: the
+/// cleanliness sweep does not see them either.
+pub fn refresh_sizes(cache_root: &Path, name: &str) -> Result<usize> {
+    locks::with_lib(cache_root, name, || {
+        let lib = cache::LibCache::new(cache_root, name)?;
+        lib.record_sizes(cache::SizeMeasurement::All)
+    })
+}
+
 pub struct DocsDoctor {
     pub libs: usize,
     pub bytes: u64,
@@ -208,10 +222,16 @@ pub struct DocsDoctor {
 pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
     let mut out = DocsDoctor {
         libs: 0,
-        bytes: devkit_common::disk::dir_size(cache_root),
+        bytes: 0,
         unreferenced: 0,
         problems: Vec::new(),
     };
+    // Sizes recorded when each checkout was materialized, substituted into the
+    // walk below. The cache is still walked whole, so the shared object stores,
+    // sidecars, lock files and whatever a broken cache has left lying around
+    // all still land in the total.
+    let mut known: std::collections::HashMap<std::path::PathBuf, u64> =
+        std::collections::HashMap::new();
     let data = refs::RefStore::at(cache_root).snapshot();
     let referenced: std::collections::BTreeSet<(String, String)> = data
         .rows
@@ -219,6 +239,7 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
         .map(|r| (r.lib.clone(), r.version.clone()))
         .collect();
     let Ok(rd) = std::fs::read_dir(cache_root) else {
+        out.bytes = devkit_common::disk::dir_size(cache_root);
         return out;
     };
     let mut checkouts: Vec<Checkout> = Vec::new();
@@ -249,6 +270,9 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
                 out.unreferenced += 1;
             }
             let recorded = meta.worktrees.get(&wt).cloned();
+            if let Some(bytes) = recorded.as_ref().and_then(|r| r.bytes) {
+                known.insert(path.clone(), bytes);
+            }
             checkouts.push(Checkout {
                 label: format!("{dirname}/{wt}"),
                 path,
@@ -256,6 +280,7 @@ pub fn doctor_summary(cache_root: &Path) -> DocsDoctor {
             });
         }
     }
+    out.bytes = devkit_common::disk::dir_size_with_known(cache_root, &known);
     out.problems.extend(sweep(&checkouts));
     out
 }
@@ -267,11 +292,9 @@ struct Checkout {
     recorded: Option<cache::WorktreeMeta>,
 }
 
-/// Inspect every checkout on the shared pool. Each [`inspect`] is two git
-/// subprocesses and a cache holding a few dozen libraries makes this the
-/// slowest thing `devkit doctor` does, so the calls overlap. rayon's `collect`
-/// is ordered, so the report stays in cache order rather than falling into
-/// whichever order the git calls finished in.
+/// Inspect every checkout on the shared pool, using one git process per
+/// checkout. Ordered collection keeps the report in cache order regardless
+/// of which git calls finish first.
 fn sweep(checkouts: &[Checkout]) -> Vec<String> {
     devkit_common::pool::install(|| {
         checkouts
@@ -281,50 +304,144 @@ fn sweep(checkouts: &[Checkout]) -> Vec<String> {
     })
 }
 
-/// What is wrong with one materialized checkout, if anything: source that
-/// differs from the commit, or a HEAD that is not the recorded one. Reported
-/// rather than repaired — `doctor` diagnoses, it does not mutate the cache.
-///
-/// The sweep takes no library lock, so it reads a checkout a concurrent
-/// `docm` is still materializing. Blocking a diagnostic behind a network
-/// clone costs more than a warning the reader can re-run, so the drift row
-/// says it may be transient rather than claiming a settled mismatch.
+/// Report local modifications and commit drift from one porcelain v2 status.
+/// The sweep takes no library lock to avoid blocking behind a network clone,
+/// so drift may be transient during concurrent materialization. A failed
+/// status reports only the inspection error. No repairs are attempted.
 fn inspect(label: &str, path: &Path, recorded: Option<&cache::WorktreeMeta>) -> Vec<String> {
     let mut problems = Vec::new();
-    match devkit_common::git::Git::at(path)
-        .args(["status", "--porcelain"])
+    let status = match devkit_common::git::Git::at(path)
+        .args(["status", "--porcelain=v2", "--branch"])
         .output()
     {
-        Ok(status) if !status.trim().is_empty() => problems.push(format!(
+        Ok(status) => status,
+        Err(error) => {
+            problems.push(format!("{label} cannot be inspected: {error:#}"));
+            return problems;
+        }
+    };
+    let entries: Vec<String> = status.lines().filter_map(entry_line).collect();
+    if !entries.is_empty() {
+        problems.push(format!(
             "{label} has local modifications:\n    {}",
-            status.trim().replace('\n', "\n    ")
-        )),
-        Ok(_) => {}
-        Err(error) => problems.push(format!("{label} cannot be inspected: {error:#}")),
+            entries.join("\n    ")
+        ));
     }
     let Some(recorded) = recorded else {
         return problems;
     };
-    match devkit_common::git::Git::at(path)
-        .args(["rev-parse", "HEAD"])
-        .output()
-    {
-        Ok(head) if head.trim() != recorded.commit => problems.push(format!(
-            "{label} is at {}, but {} resolved to {} (may be transient during a \
+    // `(initial)` where an unborn HEAD has no commit to name. A detached
+    // checkout never has one, but comparing that word against a sha would
+    // report drift rather than the absence of a commit.
+    match head_oid(&status) {
+        Some("(initial)") => problems.push(format!("{label} has no commit at HEAD")),
+        Some(head) if head != recorded.commit => problems.push(format!(
+            "{label} is at {head}, but {} resolved to {} (may be transient during a \
              concurrent `docm` run)",
-            head.trim(),
-            recorded.raw_ref,
-            recorded.commit
+            recorded.raw_ref, recorded.commit
         )),
-        Ok(_) => {}
-        Err(error) => problems.push(format!("{label} has no readable HEAD: {error:#}")),
+        Some(_) => {}
+        None => problems.push(format!("{label} has no readable HEAD")),
     }
     problems
+}
+
+/// The commit `# branch.oid` names, which `--branch` puts ahead of the entries.
+fn head_oid(status: &str) -> Option<&str> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("# branch.oid "))
+        .map(str::trim)
+}
+
+/// One porcelain v2 entry rendered the way v1 rendered it, as the two status
+/// letters and the path. The v2 line also carries file modes, object ids and a
+/// rename score, none of which a health report has any use for. Header lines
+/// (`# ...`) and anything unrecognized yield nothing, so a format git grows a
+/// new record type for cannot turn into a phantom modification.
+fn entry_line(line: &str) -> Option<String> {
+    let (kind, rest) = line.split_once(' ')?;
+    let (xy, path) = match kind {
+        // `1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>`
+        "1" => (
+            rest.split(' ').next()?.to_string(),
+            rest.splitn(8, ' ').nth(7)?,
+        ),
+        // `2` adds a rename score before the path, and joins the path to the
+        // one it came from with a tab.
+        "2" => (
+            rest.split(' ').next()?.to_string(),
+            rest.splitn(9, ' ').nth(8)?,
+        ),
+        // `u` carries three stages of mode and object id instead of two.
+        "u" => (
+            rest.split(' ').next()?.to_string(),
+            rest.splitn(10, ' ').nth(9)?,
+        ),
+        // v2 marks these with one character where v1 wrote `??` and `!!`.
+        // Doubling it back keeps the column two wide for every record type,
+        // which is what the indented block is read down. `!` needs `--ignored`
+        // to appear at all, which the sweep does not pass; handling it here
+        // keeps turning that flag on a one-line change.
+        "?" | "!" => (format!("{kind}{kind}"), rest),
+        _ => return None,
+    };
+    Some(format!("{xy} {}", path.replace('\t', " <- ")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every v2 record type, reduced to the pair a reader acts on. The header
+    /// lines have to yield nothing: counting one as a modification would put
+    /// every clean checkout in the report.
+    #[test]
+    fn a_v2_entry_reduces_to_its_status_letters_and_path() {
+        assert_eq!(entry_line("# branch.oid abc123"), None);
+        assert_eq!(entry_line("# branch.head (detached)"), None);
+        assert_eq!(
+            entry_line("1 .M N... 100644 100644 100644 abc def src/lib.rs").as_deref(),
+            Some(".M src/lib.rs")
+        );
+        assert_eq!(
+            entry_line("2 R. N... 100644 100644 100644 abc def R100 new.rs\told.rs").as_deref(),
+            Some("R. new.rs <- old.rs")
+        );
+        assert_eq!(
+            entry_line("u UU N... 100644 100644 100644 100644 a b c both.rs").as_deref(),
+            Some("UU both.rs")
+        );
+        assert_eq!(
+            entry_line("? untracked.rs").as_deref(),
+            Some("?? untracked.rs"),
+            "v1 wrote these two wide, and the block is read down the column"
+        );
+        assert_eq!(entry_line("! ignored.rs").as_deref(), Some("!! ignored.rs"));
+        assert_eq!(entry_line("x something git grew later"), None);
+    }
+
+    /// A path with spaces. v2 leaves it unquoted and last on the line, so the
+    /// field split has to stop at the path rather than through it.
+    #[test]
+    fn a_v2_entry_keeps_a_path_that_has_spaces_in_it() {
+        assert_eq!(
+            entry_line("1 .M N... 100644 100644 100644 abc def docs/a b.md").as_deref(),
+            Some(".M docs/a b.md")
+        );
+    }
+
+    #[test]
+    fn the_head_commit_comes_from_the_branch_header() {
+        let status = "# branch.oid 4eff1fd1ee373352cca53c93b82bcd60ed7a00dc\n\
+                      # branch.head (detached)\n\
+                      ? new.rs\n";
+        assert_eq!(
+            head_oid(status),
+            Some("4eff1fd1ee373352cca53c93b82bcd60ed7a00dc")
+        );
+        assert_eq!(head_oid("? new.rs\n"), None);
+    }
 
     #[test]
     fn doctor_summary_counts_libs_and_unreferenced_worktrees() {

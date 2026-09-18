@@ -212,6 +212,11 @@ pub fn resolve_locked(
         .as_ref()
         .filter(|previous| previous.commit != commit && canonical.starts_with("refs/tags/"))
         .map(|previous| previous.commit.clone());
+    // Whether the checkout was on disk before `ensure_at` ran, which is what
+    // separates a tree this call wrote from one it found already correct.
+    // `repaired` cannot: it is false both for a worktree just created and for
+    // one left untouched.
+    let existed = lib.worktree_path(&worktree).is_dir();
     let (path, repaired) = lib.ensure_at(&worktree, &commit)?;
     lib.assert_clean(&path)?;
     if repaired && let Some(previous_commit) = moved_tag_from {
@@ -219,11 +224,31 @@ pub fn resolve_locked(
             "tag {git_ref} moved {previous_commit} → {commit} upstream; {worktree} re-pointed"
         ));
     }
+    // Sized where the tree has just been written, `assert_clean` has verified
+    // it and the library lock is already held. Measuring it anywhere later
+    // means walking it again from cold.
+    //
+    // A checkout this call neither created nor re-pointed keeps the size it
+    // already recorded. `docm path` and `docm info` re-resolve on every
+    // invocation and almost always land here, so measuring again would put a
+    // walk of the whole tree on the commands that run most — the cost the
+    // record exists to avoid. `docm list --refresh` is what re-measures.
+    let unchanged = existed
+        && !repaired
+        && previous
+            .as_ref()
+            .is_some_and(|previous| previous.commit == commit);
+    let bytes = previous
+        .as_ref()
+        .and_then(|previous| previous.bytes)
+        .filter(|_| unchanged)
+        .unwrap_or_else(|| devkit_common::disk::dir_size(&path));
     meta.worktrees
         .insert(worktree.clone(), cache::WorktreeMeta {
             raw_ref: git_ref.clone(),
             resolved_ref: canonical,
             commit: commit.clone(),
+            bytes: Some(bytes),
         });
     let status = if repaired {
         Status::Repaired

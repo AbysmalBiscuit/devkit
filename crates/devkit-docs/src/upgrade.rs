@@ -244,6 +244,9 @@ fn apply_rename(cache_root: &Path, rename: &Rename) -> Result<Vec<String>> {
 fn heal_and_backfill(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     let mut lines = heal(cache_root, dirname)?;
     lines.extend(backfill_origin(cache_root, dirname)?);
+    // After `heal`, so a rebuilt checkout is measured as it ended up rather
+    // than as the husk an interrupted run left behind.
+    lines.extend(backfill_sizes(cache_root, dirname)?);
     Ok(lines)
 }
 
@@ -254,11 +257,22 @@ fn needs_attention(cache_root: &Path, dirname: &str) -> Result<bool> {
         return Ok(true);
     }
     let lib_dir = cache_root.join(dirname);
-    if cache::read_meta(&lib_dir)?.origin.is_none() {
+    let meta = cache::read_meta(&lib_dir)?;
+    if meta.origin.is_none() {
+        return Ok(true);
+    }
+    let checkouts = checkouts(cache_root, dirname);
+    // Exactly what `backfill_sizes` will fill, so a cache it cannot finish
+    // does not ask for the lock again on every command. A checkout directory
+    // the sidecar has no record of is not one of them.
+    if checkouts
+        .iter()
+        .any(|(wt, _)| meta.worktrees.get(wt).is_some_and(|r| r.bytes.is_none()))
+    {
         return Ok(true);
     }
     let bare = lib_dir.join("repo.git");
-    Ok(checkouts(cache_root, dirname)
+    Ok(checkouts
         .iter()
         .any(|(_, path)| is_worktree(path) && !links_ok(&bare, path)))
 }
@@ -476,6 +490,21 @@ fn backfill_origin(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
     meta.origin = Some(origin.clone());
     cache::write_meta(&lib_dir, &meta)?;
     Ok(vec![format!("recorded origin {origin} for {dirname}")])
+}
+
+/// Measure every checkout the sidecar has a record for but no size on. This is
+/// the one pass that walks a tree it did not just write, and it walks each one
+/// once: a cache carried over from a docm that recorded no sizes pays for the
+/// walk here rather than on every later report.
+fn backfill_sizes(cache_root: &Path, dirname: &str) -> Result<Vec<String>> {
+    let lib = cache::LibCache::from_dir(cache_root, dirname);
+    let measured = lib.record_sizes(cache::SizeMeasurement::Missing)?;
+    if measured == 0 {
+        return Ok(Vec::new());
+    }
+    Ok(vec![format!(
+        "recorded the size of {measured} checkout(s) of {dirname}"
+    )])
 }
 
 fn checkouts(cache_root: &Path, dirname: &str) -> Vec<(String, PathBuf)> {
