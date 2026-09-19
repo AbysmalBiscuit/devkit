@@ -27,6 +27,15 @@ jobs:
           components: rustfmt
       - run: cargo +nightly fmt --all -- --check
 
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit
+
   clippy:
     name: clippy (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
