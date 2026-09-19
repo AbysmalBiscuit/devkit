@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.6](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.5...v0.14.6) (2026-09-19)
+
+
+### Performance Improvements
+
+* **docm:** size the docs cache from recorded checkout sizes ([#103](https://github.com/AbysmalBiscuit/devkit/issues/103)) ([2450c4d](https://github.com/AbysmalBiscuit/devkit/commit/2450c4d52dce0f554327616bda4444e993248003))
+
 ## [0.14.5](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.4...v0.14.5) (2026-09-17)
 
 
