@@ -29,6 +29,11 @@ programs = ["git"]
 args = ["worktree", "remove"]
 reason = "Use devkit's issue binary to remove worktrees: issue end [branch-name]"
 
+[tasks.audit]
+description = "Check Cargo.lock against the RustSec advisory database"
+run = ["cargo", "audit"]
+guard = true
+
 [tasks.build]
 description = "Build the workspace"
 run = ["cargo", "build", "--workspace", "--locked"]
