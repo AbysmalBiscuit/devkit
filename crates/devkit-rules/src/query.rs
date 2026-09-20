@@ -96,7 +96,10 @@ fn keeps(rule: &Rule, filter: &Filter) -> bool {
     if filter.min_severity.is_some_and(|floor| severity > floor) {
         return false;
     }
-    if filter.scope.is_some_and(|s| rule.scope() != Some(s)) {
+    let Some(scope) = rule.scope() else {
+        return false;
+    };
+    if filter.scope.is_some_and(|s| s != scope) {
         return false;
     }
     if !filter.paths.is_empty() && !filter.paths.iter().any(|p| governs(&rule.directory, p)) {
@@ -227,6 +230,17 @@ mod tests {
             .map(|r| r.id.as_str())
             .collect();
         assert!(!ids.contains(&"r-bad-severity"), "got {ids:?}");
+    }
+
+    #[test]
+    fn an_off_vocabulary_scope_drops_its_rule_from_every_query() {
+        let json = r#"{"repo": "/repo", "files": [], "rules": [{"id": "r-bad-scope", "title": "Bad scope", "description": "Off-vocabulary scope.", "scope": "nonexistent", "severity": "must", "tasks": ["code-generation"]}]}"#;
+        let index: RuleIndex = serde_json::from_str(json).unwrap();
+        let ids: Vec<&str> = matching(&index, &Filter::default())
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect();
+        assert!(!ids.contains(&"r-bad-scope"), "got {ids:?}");
     }
 
     #[test]
