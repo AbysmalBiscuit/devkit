@@ -14,9 +14,9 @@
 
 The three binaries being ported (read these before starting — the ports are near-verbatim moves):
 
-- `crates/issue-prep/src/main.rs` (128 lines) → `setup.rs`
-- `crates/issue-end/src/main.rs` (345 lines) → `triage.rs` + `status.rs` + `end.rs`
-- `crates/pr-status/src/main.rs` (591 lines) → `prs.rs`
+- `crates/issue-prep/src/main.rs` (128 lines) -> `setup.rs`
+- `crates/issue-end/src/main.rs` (345 lines) -> `triage.rs` + `status.rs` + `end.rs`
+- `crates/pr-status/src/main.rs` (591 lines) -> `prs.rs`
 
 The two Python dashboards being ported (the precise spec for bucketing/replay/charts):
 
@@ -132,7 +132,7 @@ git add Cargo.toml crates/issue/Cargo.toml crates/issue/src/main.rs
 git commit -m "feat(issue): scaffold consolidated issue crate"
 ```
 
-## Task 1.2: Port `issue-prep` → `setup.rs`
+## Task 1.2: Port `issue-prep` -> `setup.rs`
 
 **Files:**
 - Create: `crates/issue/src/setup.rs`
@@ -169,7 +169,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let loaded = load::load(args.config.as_deref().map(Path::new), Path::new(&start))?;
     let cfg = &loaded.config;
     let catalog = &loaded.catalog;
-    // … identical to issue-prep main body, with cli.* → args.* …
+    // … identical to issue-prep main body, with cli.* -> args.* …
 }
 ```
 
@@ -241,7 +241,7 @@ git add crates/issue/src/setup.rs crates/issue/src/main.rs
 git commit -m "feat(issue): port issue-prep to issue setup"
 ```
 
-## Task 1.3: Port `issue-end` triage core → `triage.rs`
+## Task 1.3: Port `issue-end` triage core -> `triage.rs`
 
 **Files:**
 - Create: `crates/issue/src/triage.rs`
@@ -286,7 +286,7 @@ git add crates/issue/src/triage.rs crates/issue/src/main.rs
 git commit -m "feat(issue): extract shared worktree-triage core"
 ```
 
-## Task 1.4: Port `issue status` → `status.rs`
+## Task 1.4: Port `issue status` -> `status.rs`
 
 **Files:**
 - Create: `crates/issue/src/status.rs`
@@ -349,7 +349,7 @@ git add crates/issue/src/status.rs crates/issue/src/main.rs
 git commit -m "feat(issue): port issue-end status to issue status"
 ```
 
-## Task 1.5: Port `issue end` → `end.rs`
+## Task 1.5: Port `issue end` -> `end.rs`
 
 **Files:**
 - Create: `crates/issue/src/end.rs`
@@ -391,7 +391,7 @@ Add to the `match`:
 
 - [ ] **Step 3: Build and verify the no-op clean path**
 
-Run: `cargo run -p issue -- -C ~/Git/example/monorepo end` (no worktrees finished → safe)
+Run: `cargo run -p issue -- -C ~/Git/example/monorepo end` (no worktrees finished -> safe)
 Expected: prints the table then `Nothing finished to clean up.`; exit 0. Does not remove anything.
 
 - [ ] **Step 4: Commit**
@@ -401,7 +401,7 @@ git add crates/issue/src/end.rs crates/issue/src/main.rs
 git commit -m "feat(issue): port issue-end clean to issue end"
 ```
 
-## Task 1.6: Port `pr-status` → `prs.rs`
+## Task 1.6: Port `pr-status` -> `prs.rs`
 
 **Files:**
 - Create: `crates/issue/src/prs.rs`
@@ -414,8 +414,8 @@ Move the entire `pr-status` source. Its `main()` orchestration becomes `run(mine
 Copy `crates/pr-status/src/main.rs` into `crates/issue/src/prs.rs`, then:
 - Delete `use clap::Parser;` and the `#[derive(Parser)] struct Cli {…}`.
 - Replace `fn main() -> Result<()> { … }` with `pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> Result<()> { … }`. Inside, delete the panic-hook line and the `Cli::parse()` line, and replace the derived fields:
-  - `cli.mine` → `mine`, `cli.reviews` → `reviews`, `cli.no_cache` → `no_cache`
-  - `cli.repo.as_deref()` → `repo.as_deref()`
+  - `cli.mine` -> `mine`, `cli.reviews` -> `reviews`, `cli.no_cache` -> `no_cache`
+  - `cli.repo.as_deref()` -> `repo.as_deref()`
 - Make these `pub(crate)` for reuse by the dashboard: `MinePr`, `ReviewPr`, `Check`, `Review`, `Author`, `ReviewRequest`, `fn fetch_mine`, `fn fetch_reviews`, `fn resolve_repo`, `fn mine_table`, `fn reviews_table`, and the `Me` struct.
 - Keep everything else (pure logic, diff cache, `gh_json` wrapper, the `std::thread::scope` block, the `#[cfg(test)] mod tests`) unchanged.
 
@@ -499,7 +499,7 @@ git commit -m "refactor: delete issue-prep, issue-end, pr-status (folded into is
 
 - [ ] **Step 1: Update `CLAUDE.md`**
 
-- In the `## Commands` block, change the `cargo build --release` comment from `# all five binaries → target/release` to `# all three binaries → target/release`.
+- In the `## Commands` block, change the `cargo build --release` comment from `# all five binaries -> target/release` to `# all three binaries -> target/release`.
 - In the `## Layout` table, replace the two rows:
 
 ```
@@ -517,7 +517,7 @@ with:
 
 - [ ] **Step 2: Update `README.md`**
 
-Run `rg -n "issue-prep|issue-end|pr-status|five binaries" README.md` and repoint each hit to the corresponding `issue <subcommand>` form. (Exact lines depend on the current README; replace command examples like `issue-end status` → `issue status`, `pr-status -m` → `issue prs -m`, `issue-prep --issue …` → `issue setup --issue …`.)
+Run `rg -n "issue-prep|issue-end|pr-status|five binaries" README.md` and repoint each hit to the corresponding `issue <subcommand>` form. (Exact lines depend on the current README; replace command examples like `issue-end status` -> `issue status`, `pr-status -m` -> `issue prs -m`, `issue-prep --issue …` -> `issue setup --issue …`.)
 
 - [ ] **Step 3: Verify no stale references remain in tracked docs**
 
@@ -734,7 +734,7 @@ git commit -m "feat(common): add slack chat.postMessage poster"
 - Create: `crates/issue/src/review.rs`
 - Modify: `crates/issue/src/main.rs`
 
-Build the pure functions first (branch guard, PR-state → action, reviewer/message composition), test them, then wire the git/gh/Slack plumbing.
+Build the pure functions first (branch guard, PR-state -> action, reviewer/message composition), test them, then wire the git/gh/Slack plumbing.
 
 - [ ] **Step 1: Write failing tests for the pure decision functions**
 
@@ -1461,7 +1461,7 @@ pub fn hex_rgb(hex: &str) -> (u8, u8, u8) {
 
 /// Allocate `rows` vertical cells among stacked segment `values`, scaled so the
 /// tallest possible column (`max_total`) fills `rows`. Largest-remainder rounding
-/// keeps the visible cell total faithful. Returns segment indices bottom→top.
+/// keeps the visible cell total faithful. Returns segment indices bottom->top.
 pub fn stack_column(values: &[u32], max_total: u32, rows: usize) -> Vec<usize> {
     let total: u32 = values.iter().sum();
     if total == 0 || max_total == 0 || rows == 0 {
@@ -1505,7 +1505,7 @@ mod tests {
         assert_eq!(stack_column(&[4], 4, 4).len(), 4);
         // Half-height column fills ~2 of 4 rows.
         assert_eq!(stack_column(&[2], 4, 4).len(), 2);
-        // Two segments split proportionally, indices bottom→top.
+        // Two segments split proportionally, indices bottom->top.
         assert_eq!(stack_column(&[2, 2], 4, 4), vec![0, 0, 1, 1]);
     }
     #[test]
@@ -1576,7 +1576,7 @@ pub fn render_stacked_bars(
     println!("\n{title}");
     let n = labels.len();
     let max_total: u32 = (0..n).map(|b| series.iter().map(|s| s[b]).sum::<u32>()).max().unwrap_or(0);
-    // Build each bucket's bottom→top cell stack.
+    // Build each bucket's bottom->top cell stack.
     let columns: Vec<Vec<usize>> = (0..n)
         .map(|b| stack_column(&series.iter().map(|s| s[b]).collect::<Vec<_>>(), max_total, BLOCK_HEIGHT))
         .collect();
@@ -1755,7 +1755,7 @@ git commit -m "feat(issue): live dashboard data fetch (Linear/gh/git)"
 **Files:**
 - Modify: `crates/issue/src/dashboard/mod.rs`
 
-Assemble: fetch → bucket → render the three timelines + footer. Replace the Phase-3 `// Timelines (Phase 4).` placeholder.
+Assemble: fetch -> bucket -> render the three timelines + footer. Replace the Phase-3 `// Timelines (Phase 4).` placeholder.
 
 - [ ] **Step 1: Implement timeline assembly**
 
@@ -1938,7 +1938,7 @@ git commit -m "feat(issue): assemble dashboard issue/PR/commit timelines"
 
 # Phase 5 — Migration note for external callers
 
-Inspect the external callers and write an uncommitted migration note into the **base** repo (`/home/lev/Git/lev/devkit`, not this worktree) with concrete old → new mappings. Nothing outside this worktree's tracked files is edited.
+Inspect the external callers and write an uncommitted migration note into the **base** repo (`/home/lev/Git/lev/devkit`, not this worktree) with concrete old -> new mappings. Nothing outside this worktree's tracked files is edited.
 
 ## Task 5.1: Inspect external callers and write the migration note
 
@@ -2005,7 +2005,7 @@ This note is deliberately uncommitted. Do not `git add` it. Phase 5 produces no 
 
 Checked against the spec (`2026-06-20-issue-binary-consolidation-design.md`):
 
-- **CLI surface** — every subcommand mapped: `setup` (1.2), `status` (1.4), `end` (1.5), `prs` (1.6), `dashboard` (3.1 + 4.5), `review` (2.3); bare `issue` → `status` (1.4 Step 2). ✓
+- **CLI surface** — every subcommand mapped: `setup` (1.2), `status` (1.4), `end` (1.5), `prs` (1.6), `dashboard` (3.1 + 4.5), `review` (2.3); bare `issue` -> `status` (1.4 Step 2). ✓
 - **Module layout** — matches the spec's tree: `main/setup/triage/status/end/prs/review` + `dashboard/{mod,data,bucket,chart}`. ✓
 - **Shared lib additions** — `linear::assigned_issue_history` + `viewer_created_at` (4.1), `slack::post_message` (2.2), config `[people]` + `defaults.pr_base` (2.1). ✓
 - **Reuse seams** — `triage` items `pub(crate)` (1.3); `prs` fetch/render `pub(crate)` (1.6); dashboard consumes both (3.1, 4.5). ✓

@@ -32,7 +32,7 @@ this cycle:
 - **The daemon-aware routing already exists in `devkit-locks`, but only on the CWD path.**
   `devkit_locks::{acquire,check,release,release_all,status,prune,…}` each call
   `daemon_request(…)` first and fall back to `store::*_with`. But they derive
-  `root`/`holder`/`paths` from the process CWD (`ctx()` → `std::env::current_dir()`) and
+  `root`/`holder`/`paths` from the process CWD (`ctx()` -> `std::env::current_dir()`) and
   `ident::identity()`. The MCP server's CWD is **not** the agent's worktree, and the MCP
   already receives `root`/`holder`/`paths` as explicit arguments. So the MCP cannot call
   these CWD-deriving fns; it needs explicit-context variants of the same daemon-first,
@@ -81,9 +81,9 @@ pub fn status_resolved(root: &str, all: bool) -> Result<Vec<LockEntry>>;
 - Each calls the lib-internal `now()`; callers do not pass a clock.
 - `prune` needs no variant — the existing context-free `devkit_locks::prune()` is already
   daemon-aware; the MCP handler calls it directly.
-- The daemon `Request`/`Response` mapping reuses the existing arms (`Acquire`→`Acquired`,
-  `Check`→`Conflicts`, `Release`→`Released{released,refused}`, `ReleaseAll`→`Freed`,
-  `Status`→`Locks`); `Err(e)` → `anyhow::anyhow!(e)`; an unexpected variant errors.
+- The daemon `Request`/`Response` mapping reuses the existing arms (`Acquire`->`Acquired`,
+  `Check`->`Conflicts`, `Release`->`Released{released,refused}`, `ReleaseAll`->`Freed`,
+  `Status`->`Locks`); `Err(e)` -> `anyhow::anyhow!(e)`; an unexpected variant errors.
 - When `daemon_request` returns `Ok(None)` (no daemon, or inside the daemon via
   `DEVKITD_SELF`), the fn falls back to `store::*_with(&FlockStore::new(), …, now())`.
 

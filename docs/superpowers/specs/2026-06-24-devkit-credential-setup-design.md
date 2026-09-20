@@ -76,10 +76,10 @@ pub struct Secrets {
     pub slack_token: Option<String>,
 }
 
-/// Parse `~/.config/devkit/secrets.toml`. Missing file → `Secrets::default()`.
+/// Parse `~/.config/devkit/secrets.toml`. Missing file -> `Secrets::default()`.
 pub fn load() -> Result<Secrets>;
 
-/// env var → secrets.toml → None. `env_key` is the uppercase env name
+/// env var -> secrets.toml -> None. `env_key` is the uppercase env name
 /// (`LINEAR_API_KEY`); the toml key is its lowercase form.
 pub fn resolve(env_key: &str) -> Option<String>;
 
@@ -90,7 +90,7 @@ pub fn store(toml_key: &str, value: &str) -> Result<()>;
 
 ### Resolution order
 
-Every read site applies **`$ENV` → `secrets.toml` → unset**. The environment
+Every read site applies **`$ENV` -> `secrets.toml` -> unset**. The environment
 always wins, so a shell export or a Doppler-injected var is never overridden, and
 behavior is identical to today when nothing is stored. An empty env value
 (`LINEAR_API_KEY=""`) is treated as unset, preserving the existing
@@ -115,7 +115,7 @@ without the network).
 
 ```rust
 pub struct LinearIdentity {
-    pub workspace_url_key: String, // organization.urlKey → also stored as linear_workspace
+    pub workspace_url_key: String, // organization.urlKey -> also stored as linear_workspace
     pub org_name: String,
     pub viewer_email: String,
 }
@@ -173,7 +173,7 @@ $ devkit doctor
 ✗ slack_token       file   invalid_auth — token rejected by auth.test
   unset linear_workspace would fall back to the Linear API at link time
 
-linear_api_key unset → run: devkit auth linear   (https://linear.app/settings/api)
+linear_api_key unset -> run: devkit auth linear   (https://linear.app/settings/api)
 ```
 
 **Exit code:** non-zero only when a credential that *is* set fails validation (a
@@ -236,10 +236,10 @@ TDD; `cargo test --workspace` is the merge gate.
 
 | Unit | Tests |
 |---|---|
-| `secrets::load`/`resolve`/`store` | missing file → all `None`; round-trip store→load; env wins over file; empty env treated as unset; `store` preserves sibling keys; written file is `0600` (Unix) |
-| `linear::parse_identity` | success body → identity with `urlKey`; `errors` body and `401`-shaped body → error |
-| `slack::parse_identity` | `ok:true` → identity; `ok:false` → surfaced Slack error |
-| `doctor` row computation | pure fn `(source, validation) -> Row`; covers env/file/unset × valid/invalid/unreachable; exit code derived from rows (set-but-invalid → non-zero) |
+| `secrets::load`/`resolve`/`store` | missing file -> all `None`; round-trip store->load; env wins over file; empty env treated as unset; `store` preserves sibling keys; written file is `0600` (Unix) |
+| `linear::parse_identity` | success body -> identity with `urlKey`; `errors` body and `401`-shaped body -> error |
+| `slack::parse_identity` | `ok:true` -> identity; `ok:false` -> surfaced Slack error |
+| `doctor` row computation | pure fn `(source, validation) -> Row`; covers env/file/unset × valid/invalid/unreachable; exit code derived from rows (set-but-invalid -> non-zero) |
 | `auth` core | validate-then-store given a token string: Linear stores key + workspace; invalid token stores nothing |
 
 Network calls themselves are not unit-tested (the existing modules already only
@@ -249,7 +249,7 @@ shell.
 ## Docs
 
 - `README.md`: add `devkit` to the binary list; the env-var section gains the
-  resolution order (env → `secrets.toml`) and the `devkit auth`/`doctor` commands.
+  resolution order (env -> `secrets.toml`) and the `devkit auth`/`doctor` commands.
 - `docs/configuration.md`: a "Secrets" section documenting `secrets.toml`, its
   `0600` permissions, the keys, and the resolution order.
 - `AGENTS.md`: a layout-table row for `src/bin/devkit`, and the boundary

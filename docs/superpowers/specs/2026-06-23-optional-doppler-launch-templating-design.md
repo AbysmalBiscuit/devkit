@@ -120,7 +120,7 @@ needs.
 
 - **`doppler_yaml`** in `[defaults]` — still the path to `doppler.yaml`, used for
   path inference and the guard's config fallback. Reading the file stays
-  best-effort: absent file → empty map → guard step 4 (warn) for any Doppler
+  best-effort: absent file -> empty map -> guard step 4 (warn) for any Doppler
   launch.
 - **`static_env`, `url_env`, `provides_url`** — env layering in `env_for` is
   untouched. devkit still sets these vars on the spawned process.
@@ -166,16 +166,16 @@ needs.
 ## Testing (TDD)
 
 - **run.rs — `config_from_argv_env` (pure, steps 2–3)**
-  - `["doppler","run","-c","prd","--",…]` → `Some("prd")`; same for `-c=prd`,
+  - `["doppler","run","-c","prd","--",…]` -> `Some("prd")`; same for `-c=prd`,
     `--config prd`, `--config=prd`.
-  - `-c dev_local` → `Some("dev_local")`.
-  - no flag, `env` has `DOPPLER_CONFIG=prd` → `Some("prd")`.
+  - `-c dev_local` -> `Some("dev_local")`.
+  - no flag, `env` has `DOPPLER_CONFIG=prd` -> `Some("prd")`.
   - non-Doppler launch (`basename(argv[0]) != "doppler"`), even with a literal
-    `"prd"` arg → `None` (treated as unguarded by the caller).
-  - Doppler launch, no flag, no env var → `None` (caller falls through to step 4).
+    `"prd"` arg -> `None` (treated as unguarded by the caller).
+  - Doppler launch, no flag, no env var -> `None` (caller falls through to step 4).
 - **run.rs — `assert_not_prd`**
-  - a plan whose resolved config is `prd` → `Err`.
-  - a non-Doppler plan → `Ok` regardless of args.
+  - a plan whose resolved config is `prd` -> `Err`.
+  - a non-Doppler plan -> `Ok` regardless of args.
   - (step-4 `doppler configure get` is exercised by hand / left to integration,
     since it shells out; the pure resolver carries the unit coverage.)
 - **run.rs — `plan_group`** — rewrite `plan_group_builds_doppler_wrapped_argv` to
@@ -204,7 +204,7 @@ no longer has any effect, so removing it avoids confusion.
 
 ## Resolved decisions
 
-1. **Unverifiable Doppler launch → reject (fail-safe).** When steps 2–4 cannot
+1. **Unverifiable Doppler launch -> reject (fail-safe).** When steps 2–4 cannot
    resolve a config (no flag, no `DOPPLER_CONFIG`, no local scope, or `doppler`
    absent), the guard rejects rather than warns. Under the new `launch` the
    config is almost always explicit, so this residual is rare; refusing what it

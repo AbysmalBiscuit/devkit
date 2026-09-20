@@ -103,7 +103,7 @@ pub fn launch_argv(app: &App, port: u16) -> Vec<String> {
         .collect()
 }
 
-/// Env layering (low→high): static_env → url-wiring → user overrides.
+/// Env layering (low->high): static_env -> url-wiring -> user overrides.
 /// `provider_port` is the port of the URL-providing app (the API), if it shares the run.
 pub fn env_for(
     app: &App,
@@ -157,7 +157,7 @@ pub struct ServerStatus {
     pub state: ServerState,
 }
 
-/// Classify a tracked server: listening → Ready; else live pid → Starting; else Crashed.
+/// Classify a tracked server: listening -> Ready; else live pid -> Starting; else Crashed.
 fn server_state(port: u16, pid: Option<u32>) -> ServerState {
     if registry::listening(port) {
         ServerState::Ready
@@ -1103,7 +1103,7 @@ fn devrun_status_lists_tracked_servers_for_root() {
     let arr = rows.as_array().expect("status returns an array");
     assert_eq!(arr.len(), 1, "one tracked server for this root");
     assert_eq!(arr[0]["app"], "web");
-    // Nothing is listening, no pid → crashed.
+    // Nothing is listening, no pid -> crashed.
     assert_eq!(arr[0]["state"], "crashed");
 
     let all = tool_json(&resps[2], false);
@@ -1641,15 +1641,15 @@ EOF
 ## Self-Review
 
 **1. Spec coverage:**
-- Action catalog (status/up/down/logs) → Tasks 4, 5, 6. ✓
-- Non-blocking `up` (kick-and-poll, `starting`/`ready`/`crashed`) → `run::launch(wait=false)` + `server_state` (Tasks 2, 6); states defined in `ServerState` (Task 1). ✓
-- Facade extraction, no shelling → Tasks 1–3 (`devkit-ports::run`); MCP handlers call `run::*`. ✓
-- `up` issue-role only → `up` hardcodes `Role::Issue` (Task 6). ✓
-- `down` no-role stops all roles → `bring_down(holder, None)` releases all (Task 3). ✓
-- `up` daemon-if-present else detached → `run::daemon_running()` gating (Tasks 2, 6). ✓
-- `root` explicit, holder = root → all handlers require `root`; `alloc`/`bring_down`/`read_log` use it as holder (Tasks 4–6). ✓
-- Error semantics (facade error → `isError`; `up` starting = success) → handler tests assert `isError` true/false (Tasks 4–6). ✓
-- Testing: poll-not-sleep, skip-if-no-python → `launch` unit test and `devrun.status` polling (Tasks 2, 4). ✓
+- Action catalog (status/up/down/logs) -> Tasks 4, 5, 6. ✓
+- Non-blocking `up` (kick-and-poll, `starting`/`ready`/`crashed`) -> `run::launch(wait=false)` + `server_state` (Tasks 2, 6); states defined in `ServerState` (Task 1). ✓
+- Facade extraction, no shelling -> Tasks 1–3 (`devkit-ports::run`); MCP handlers call `run::*`. ✓
+- `up` issue-role only -> `up` hardcodes `Role::Issue` (Task 6). ✓
+- `down` no-role stops all roles -> `bring_down(holder, None)` releases all (Task 3). ✓
+- `up` daemon-if-present else detached -> `run::daemon_running()` gating (Tasks 2, 6). ✓
+- `root` explicit, holder = root -> all handlers require `root`; `alloc`/`bring_down`/`read_log` use it as holder (Tasks 4–6). ✓
+- Error semantics (facade error -> `isError`; `up` starting = success) -> handler tests assert `isError` true/false (Tasks 4–6). ✓
+- Testing: poll-not-sleep, skip-if-no-python -> `launch` unit test and `devrun.status` polling (Tasks 2, 4). ✓
 
 **2. Placeholder scan:** No TBD/TODO; every code step shows complete code and exact commands. ✓
 

@@ -16,7 +16,7 @@
 
 Tasks are grouped into **waves**. Within a wave, tasks touch disjoint files and may be implemented by **parallel subagents in separate worktrees**. Across waves, order is mandatory (later waves import earlier waves' symbols).
 
-> **Note for subagent-driven-development:** that skill dispatches implementers **sequentially** (one at a time, review between). The wave grouping below is for when you run implementers in parallel git worktrees. If executing strictly sequentially, just follow task order 1→11; the dependency notes still tell you nothing is referenced before it exists.
+> **Note for subagent-driven-development:** that skill dispatches implementers **sequentially** (one at a time, review between). The wave grouping below is for when you run implementers in parallel git worktrees. If executing strictly sequentially, just follow task order 1->11; the dependency notes still tell you nothing is referenced before it exists.
 
 | Wave | Tasks | Parallel? | Touches (disjoint) |
 |---|---|---|---|
@@ -44,7 +44,7 @@ Both `devrun` and the daemon need `spawn_detached`/`wait_ready`/`stop`/`tail`. M
 - Create: `crates/devkit-common/src/supervise.rs` (moved + extended)
 - Delete: `crates/devrun/src/supervise.rs`
 - Modify: `crates/devkit-common/src/lib.rs` (add `pub mod supervise;`)
-- Modify: `crates/devrun/src/main.rs:2` (`mod supervise;` → use common)
+- Modify: `crates/devrun/src/main.rs:2` (`mod supervise;` -> use common)
 
 - [ ] **Step 1: Move the file**
 
@@ -86,7 +86,7 @@ Expected: FAIL — `cannot find function tree_rss_bytes`.
 
 - [ ] **Step 5: Implement `tree_rss_bytes`**
 
-Add to `crates/devkit-common/src/supervise.rs` (before `#[cfg(test)]`). It scans `/proc` once, builds a ppid→children map, and sums resident pages over the process subtree rooted at `root` (so a dev server's forked workers are counted, not just the parent):
+Add to `crates/devkit-common/src/supervise.rs` (before `#[cfg(test)]`). It scans `/proc` once, builds a ppid->children map, and sums resident pages over the process subtree rooted at `root` (so a dev server's forked workers are counted, not just the parent):
 
 ```rust
 /// Resident set size, in bytes, summed over the process subtree rooted at `root`
@@ -846,7 +846,7 @@ DEVKIT_DAEMON_IDLE_SECS=2 ./target/debug/devkit-portd &
 sleep 0.3
 # handshake: expect a Pong line
 printf '{"Ping":{"proto":1}}\n' | nc -U ~/.claude/state/devkit/portd.sock
-sleep 3   # exceeds idle timeout → daemon exits, socket removed
+sleep 3   # exceeds idle timeout -> daemon exits, socket removed
 test ! -S ~/.claude/state/devkit/portd.sock && echo "idle-exit OK"
 ```
 
@@ -1043,8 +1043,8 @@ impl Supervisor {
             let gone = match child.watch {
                 Watch::Owned => match waitpid(Pid::from_raw(child.pid as i32), Some(WaitPidFlag::WNOHANG)) {
                     Ok(WaitStatus::StillAlive) => false,
-                    Ok(_) => true,                 // exited/signaled → reaped
-                    Err(_) => true,                // ECHILD etc. → treat as gone
+                    Ok(_) => true,                 // exited/signaled -> reaped
+                    Err(_) => true,                // ECHILD etc. -> treat as gone
                 },
                 Watch::Adopted => !registry::pid_alive(child.pid),
             };
@@ -1101,7 +1101,7 @@ git commit -m "feat(portd): supervisor table — reap, crash-loop budget, memory
 
 **Depends on:** Tasks 4 (proto), 6 (skeleton), 7 (supervisor); reads `registry` facade. **Parallel-safe with:** Task 9 (disjoint files).
 
-Wires real handlers (registry ops + `Supervise`/`Down`/`Tail`), starts the supervision thread (reap → restart/let-die via `ports.json`, memory warnings, debounce for the legacy `down` race), and adopts survivors at startup.
+Wires real handlers (registry ops + `Supervise`/`Down`/`Tail`), starts the supervision thread (reap -> restart/let-die via `ports.json`, memory warnings, debounce for the legacy `down` race), and adopts survivors at startup.
 
 **Files:**
 - Create: `crates/devkit-portd/src/server.rs`
@@ -1480,10 +1480,10 @@ fn snapshot_flock() -> Result<Data> {
 - [ ] **Step 3: Apply the identical pattern to `alloc`, `record_pid`, `release`, `prune`**
 
 For each, rename the existing function to `<name>_flock` and add a router that maps to/from the protocol:
-- `alloc` → `Request::Alloc { holder, reqs, role }` → `Response::Ports(v)`;
-- `record_pid` → `Request::RecordPid { .. }` → `Response::Ok`;
-- `release` → `Request::Release { holder, role }` → `Response::Freed(v)`;
-- `prune` → `Request::Prune` → `Response::Freed(v)`.
+- `alloc` -> `Request::Alloc { holder, reqs, role }` -> `Response::Ports(v)`;
+- `record_pid` -> `Request::RecordPid { .. }` -> `Response::Ok`;
+- `release` -> `Request::Release { holder, role }` -> `Response::Freed(v)`;
+- `prune` -> `Request::Prune` -> `Response::Freed(v)`.
 
 Example for `alloc`:
 
@@ -1776,7 +1776,7 @@ fn ping_pong_handshake() {
 #[test]
 fn idle_exit_with_no_clients_or_children() {
     let h = Harness::start_with_idle(1);
-    // No requests, nothing supervised → exits after ~1s.
+    // No requests, nothing supervised -> exits after ~1s.
     std::thread::sleep(std::time::Duration::from_millis(2500));
     assert!(h.socket_gone(), "daemon should have idle-exited and removed its socket");
 }
@@ -1784,7 +1784,7 @@ fn idle_exit_with_no_clients_or_children() {
 #[test]
 fn second_instance_exits_immediately() {
     let h = Harness::start();
-    // A second daemon on the same HOME can't take portd.lock → exits 0, socket stays h's.
+    // A second daemon on the same HOME can't take portd.lock -> exits 0, socket stays h's.
     let bin = env!("CARGO_BIN_EXE_devkit-portd");
     let status = std::process::Command::new(bin)
         .env("HOME", &h.home)
@@ -1848,7 +1848,7 @@ Add to `lifecycle.rs` (these drive a real short-lived server; use a tiny inline 
 fn supervised_server_restarts_after_crash() {
     let mut h = Harness::start();
     let port = free_port();
-    // A server that exits after ~400ms → daemon should respawn it (budget allows).
+    // A server that exits after ~400ms -> daemon should respawn it (budget allows).
     let argv = serde_json::json!(["sh","-c",format!("sleep 0.4; exit 1")]);
     let req = serde_json::json!({"Supervise":{
         "holder":"/tmp/sup","app":"api","role":"issue",
@@ -1919,7 +1919,7 @@ git commit -m "test(portd): harness + parity/lifecycle/restart/down/idle-exit su
 - [ ] `cargo build --release` — all binaries build.
 - [ ] `cargo build -p devkit-portd && cargo test -p devkit-portd` — daemon crate green.
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` and with `--features devkit-ports/daemon` — zero warnings both ways.
-- [ ] Manual: `devrun up <app> --supervise` → kill the server process → it respawns; `devrun down` → no respawn; idle for the timeout → daemon exits.
+- [ ] Manual: `devrun up <app> --supervise` -> kill the server process -> it respawns; `devrun down` -> no respawn; idle for the timeout -> daemon exits.
 
 ---
 
@@ -1927,4 +1927,4 @@ git commit -m "test(portd): harness + parity/lifecycle/restart/down/idle-exit su
 
 1. **Restart needs the launch spec.** The plan stores `argv`/`cwd`/`env`/`base_port` on the supervisor `Child` so a crashed owned child can be respawned (Task 8, Step 3). Confirm this is acceptable memory cost (env maps can be large); if not, the alternative is persisting launch specs to a sidecar file and reloading on adoption — heavier, but enables restarting *adopted* children too. Current plan: owned children restart from memory; adopted children are monitored but only become restartable after their first daemon-owned respawn.
 2. **`status` MEM column.** The spec’s §6a calls for a `MEM` column in status output. This plan tracks tree-RSS and warns, but wiring RSS into `registry::status_table` requires the daemon to surface live RSS through `Snapshot` (the `Entry` has no RSS field). Options: (a) add an optional `rss` to the `Snapshot` response computed by the daemon, or (b) defer the column to a follow-up. Plan currently logs RSS warnings but does **not** add the column — confirm whether to add it now (extra protocol field) or defer to `next-features.md`.
-3. **Config → daemon knobs.** Task 7 reads `max_restarts`/memory thresholds from `DEVKIT_DAEMON_*` env vars (so the daemon is self-contained for tests). Production should pass the `[daemon]` config values; the cleanest path is for `client::ensure_running()` to set those env vars from the loaded `DaemonConfig` when it spawns the daemon. Confirm that approach vs. having the daemon load `devkit.toml` itself (it currently has no config-location context — the worktree cwd isn't meaningful to a long-lived daemon).
+3. **Config -> daemon knobs.** Task 7 reads `max_restarts`/memory thresholds from `DEVKIT_DAEMON_*` env vars (so the daemon is self-contained for tests). Production should pass the `[daemon]` config values; the cleanest path is for `client::ensure_running()` to set those env vars from the loaded `DaemonConfig` when it spawns the daemon. Confirm that approach vs. having the daemon load `devkit.toml` itself (it currently has no config-location context — the worktree cwd isn't meaningful to a long-lived daemon).

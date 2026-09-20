@@ -20,7 +20,7 @@
 - **Delete** `src/bin/issue/spin.rs`; **Modify** `src/bin/issue/main.rs` (drop `mod spin;`), `prs.rs`, the status module(s), and `dashboard.rs` to import `devkit_common::progress::Steps`.
 - **Modify** command handlers: `src/bin/issue/{checkout,setup,info,end,review}.rs`, `src/bin/devrun/main.rs`, `src/bin/devkit/{auth,doctor}.rs`.
 
-**Numbering policy:** Commands with a clean, prompt-free, runtime-computable step count use `Steps::with_total(N)` + auto-numbered `during` (→ `setup`, `doctor`). Commands whose flow branches or interleaves an interactive stdin prompt use plain `Steps::new()` + descriptive `during` (→ `checkout-pr`, `info`, `end`, `review`, `devrun up`, `auth`) so a spinner never sits live across a prompt and numbering never goes stale.
+**Numbering policy:** Commands with a clean, prompt-free, runtime-computable step count use `Steps::with_total(N)` + auto-numbered `during` (-> `setup`, `doctor`). Commands whose flow branches or interleaves an interactive stdin prompt use plain `Steps::new()` + descriptive `during` (-> `checkout-pr`, `info`, `end`, `review`, `devrun up`, `auth`) so a spinner never sits live across a prompt and numbering never goes stale.
 
 ---
 
@@ -280,7 +280,7 @@ fn resolve(target: &str, key: Option<&str>, repo: &str, steps: &Steps) -> Result
             })
         }
         Ident::Fuzzy(n) => {
-            // No Linear key → a bare number is a GitHub PR.
+            // No Linear key -> a bare number is a GitHub PR.
             let Some(key) = key else {
                 return Ok(Resolved {
                     pr_number: n,

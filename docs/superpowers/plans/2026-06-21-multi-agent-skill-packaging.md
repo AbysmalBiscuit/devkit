@@ -518,7 +518,7 @@ Run:
 ```bash
 rg -nw "portman|devkit-portd" skills/using-devkit/SKILL.md || echo "no stale names"
 ```
-Expected: `no stale names` (the rename session already updated it). If anything matches, replace the stale name with its current form (`portman`→`portm`, `devkit-portd`→`devkitd`) and re-run.
+Expected: `no stale names` (the rename session already updated it). If anything matches, replace the stale name with its current form (`portman`->`portm`, `devkit-portd`->`devkitd`) and re-run.
 
 - [ ] **Step 2: Grep gate — no stale binary names in any shipped doc or manifest**
 
@@ -585,15 +585,15 @@ Install the plugin in Codex and Cursor and start a fresh session in a repo. Conf
 ## Self-Review
 
 **Spec coverage:**
-- One-source / per-agent manifests → Tasks 2, 3. ✓
-- Claude plugin + self-listed marketplace → Task 2. ✓
-- Codex/Cursor manifests + SessionStart hook + Windows runner → Task 3. ✓
-- License (GPL-3.0, LICENSE + Cargo + manifest fields) → Tasks 1-3. ✓
-- Version sync via release-please extra-files → Task 4. ✓
-- MCP deferral content → Task 5. ✓
-- SKILL.md freshness + grep gate + cargo sanity → Task 6. ✓
-- Delete `~/.claude` copy after confirming load → Task 7. ✓
-- Zed/generic via `AGENTS.md` → already present; no task needed (noted in spec). ✓
+- One-source / per-agent manifests -> Tasks 2, 3. ✓
+- Claude plugin + self-listed marketplace -> Task 2. ✓
+- Codex/Cursor manifests + SessionStart hook + Windows runner -> Task 3. ✓
+- License (GPL-3.0, LICENSE + Cargo + manifest fields) -> Tasks 1-3. ✓
+- Version sync via release-please extra-files -> Task 4. ✓
+- MCP deferral content -> Task 5. ✓
+- SKILL.md freshness + grep gate + cargo sanity -> Task 6. ✓
+- Delete `~/.claude` copy after confirming load -> Task 7. ✓
+- Zed/generic via `AGENTS.md` -> already present; no task needed (noted in spec). ✓
 
 **Placeholder scan:** No "TBD"/"handle errors"/"similar to Task N". The GPL text is fetched verbatim by URL rather than pasted (it is a fixed standard document, not authored content). All hook/manifest/JSON bodies are complete.
 

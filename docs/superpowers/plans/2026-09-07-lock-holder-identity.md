@@ -122,7 +122,7 @@ In `src/bin/devkit/locks.rs`, replace the early return with a gate that applies 
             file_paths, holder, ..
         } => {
             if !hook::enforcement_enabled(&cwd) {
-                return; // no opt-in (env, project layers, or global config) → no enforcement
+                return; // no opt-in (env, project layers, or global config) -> no enforcement
             }
             let mut conflicts = Vec::new();
             let mut resolver = devkit_locks::WriteResolver::new();

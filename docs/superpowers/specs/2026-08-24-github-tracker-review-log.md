@@ -179,7 +179,7 @@ task 1 is not behaviorally safe and task 5 still has a readiness bug.
    result from both transports; acting paths propagate ambiguity, status records
    a per-row ambiguous/unknown PR and keeps the finished gate closed.
 3. **Only `checkout-pr` writes the authoritative URL.** The normal `issue setup`
-   → `issue review request` flow reads the record but never updates it when it
+   -> `issue review request` flow reads the record but never updates it when it
    finds or creates the exact PR (`request.rs:207`); replacement PRs likewise
    leave an immutable stale binding. *Fix:* make the binding updateable, persist
    it whenever review request finds or creates a PR, and provide a rebind/clear
@@ -222,7 +222,7 @@ confirmed by probing the proposed replacement rather than the claim.
   `best_pr` moves onto it too. The spec gained a section for this.
 - **Finding 3 accepted; the rebind half narrowed.** `request.rs:207` and
   `finish.rs:124` only `record::read` — nothing outside `checkout.rs`,
-  `setup.rs` and `end.rs` writes. So the ordinary `setup` → `review request`
+  `setup.rs` and `end.rs` writes. So the ordinary `setup` -> `review request`
   flow would have left the record empty and fallen back to exactly the branch
   matching the record exists to replace. `review request` now persists the URL
   whenever it resolves a PR. A separate rebind or clear command was **not**

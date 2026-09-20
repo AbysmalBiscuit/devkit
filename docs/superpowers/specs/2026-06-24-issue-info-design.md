@@ -33,11 +33,11 @@ separate cache-ignoring flag would add a mode without adding value.
 
 ## Output
 
-- **Default (live):** discover → dirty check → `gh` PR lookup → Linear state →
+- **Default (live):** discover -> dirty check -> `gh` PR lookup -> Linear state ->
   render a single-row summary through the existing `triage::render` (issue id,
   branch, tree clean/dirty, PR number + state, Linear, finished verdict). A live
   run writes the resolved PR to the cache (write-through).
-- **`--cache-only`:** discover → dirty check → PR from cache → render with
+- **`--cache-only`:** discover -> dirty check -> PR from cache -> render with
   Linear and verdict shown as `—`.
 - **`--json`:** serialize the single `IssueWorktree` struct (already
   `Serialize`). Consumers read `.pr_number` / `.issue_id`. The wrapping
@@ -89,7 +89,7 @@ issue info ──► resolve selector ──► discover (local)
 
 ## Testing (TDD)
 
-- `info_cache`: write→read round-trip; missing and corrupt files return `None`;
+- `info_cache`: write->read round-trip; missing and corrupt files return `None`;
   an atomic write leaves no temp file behind.
 - `gather_local`: rows carry `NO_PR` / `None` with correct dirty flag and issue
   id, and the call makes no `gh` or Linear request.

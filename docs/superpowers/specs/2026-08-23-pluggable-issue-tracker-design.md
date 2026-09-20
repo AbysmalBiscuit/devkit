@@ -35,9 +35,9 @@ called from eighteen sites, and most of them are thin:
 | `validate` | 2 | credential check for `auth` / `doctor` |
 | `issue_title` | 1 | slug source (`setup.rs:222`) |
 | `issue_details` | 1 | summary-file fields (`setup.rs:242`) |
-| `issue_pr` | 1 | issue → its PR (`checkout.rs:155`) |
+| `issue_pr` | 1 | issue -> its PR (`checkout.rs:155`) |
 | `issues_by_number` | 1 | disambiguate a bare number (`checkout.rs:190`) |
-| `issues_for_prs` | 1 | PR → its issues, opt-in |
+| `issues_for_prs` | 1 | PR -> its issues, opt-in |
 | `assigned_issue_history_with_progress` | 1 | dashboard timeline |
 | `viewer_created_at` | 1 | dashboard timeline origin |
 | `pr_number_from_url` | 1 | parses a *GitHub* URL; misfiled, not tracker work |
@@ -175,7 +175,7 @@ The trait, one method per existing function:
 pub trait Tracker {
     fn kind(&self) -> TrackerKind;                            // which provider
     fn ready(&self) -> bool;                                  // configured + can auth
-    fn issue_ref(&self, input: &str) -> IssueRef;             // id | #n | URL → id (+ slug)
+    fn issue_ref(&self, input: &str) -> IssueRef;             // id | #n | URL -> id (+ slug)
     fn title(&self, id: &str) -> Result<Option<String>>;
     fn details(&self, id: &str) -> Result<Option<IssueDetails>>;
     fn states(&self, ids: &[String]) -> HashMap<String, State>;

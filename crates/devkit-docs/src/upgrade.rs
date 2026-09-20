@@ -569,7 +569,7 @@ fn expected_commit(
     })
 }
 
-/// Checkout dirname → commit, read from the bare repository's worktree
+/// Checkout dirname -> commit, read from the bare repository's worktree
 /// administration. `git -C <checkout> rev-parse HEAD` needs the checkout's own
 /// `.git` link to be intact, and the checkouts whose commit most needs
 /// recording are exactly the ones whose link is broken.

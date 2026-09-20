@@ -4,7 +4,7 @@
 
 **Goal:** Move the PR lifecycle into an `issue pr` command group and make draft PR state visible everywhere devkit reads a PR.
 
-**Architecture:** Draft state is plumbed bottom-up first (`PrBrief` → `PrStatus` → render), so every later task can read it. The CLI surface then grows `issue pr` with `status` and `checkout` as pure moves, gains `create` and `ready`, and only the final task changes `issue review request`'s contract. Each task compiles and passes the full gate on its own.
+**Architecture:** Draft state is plumbed bottom-up first (`PrBrief` -> `PrStatus` -> render), so every later task can read it. The CLI surface then grows `issue pr` with `status` and `checkout` as pure moves, gains `create` and `ready`, and only the final task changes `issue review request`'s contract. Each task compiles and passes the full gate on its own.
 
 **Tech Stack:** Rust 2024, clap derive, anyhow, serde/serde_json, schemars, `gh` CLI, GitHub GraphQL + REST.
 

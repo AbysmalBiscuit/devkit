@@ -174,7 +174,7 @@ fn task_seq_dry_run_renders_up_step_plan() {
     // Sanity: dry-run never executes; `run_task_step`'s real-run branch is the
     // only place that prints an exec-marker line.
     assert!(
-        !stdout.contains("→ "),
+        !stdout.contains("-> "),
         "dry-run must not execute steps: {stdout}"
     );
 }

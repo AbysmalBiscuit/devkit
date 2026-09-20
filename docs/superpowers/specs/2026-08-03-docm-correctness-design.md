@@ -20,8 +20,8 @@ Six defects, all confirmed against the code:
 |---|---|---|
 | 1 | `info` reports a version the checkout does not have | `resolve.rs:57` materializes every `--ref` pin into a dir named `default`; `cache.rs:165` returns an existing dir without checking HEAD |
 | 2 | Monorepo version selection picks the highest, not the applicable, version | `lockfiles.rs:74`; aliased bun entries (`"h3-v2": ["h3@2.0.1-rc.20"]`) counted as the base package at `lockfiles.rs:144` |
-| 3 | Registry probe order silently wins on name collisions | `lookup.rs:40` probes crates.io → npm → PyPI regardless of the project |
-| 4 | Scoped monorepo tags never match | `tags.rs:28` strips the scope: `@hey-api/client-fetch` → `client-fetch@0.13.1` |
+| 3 | Registry probe order silently wins on name collisions | `lookup.rs:40` probes crates.io -> npm -> PyPI regardless of the project |
+| 4 | Scoped monorepo tags never match | `tags.rs:28` strips the scope: `@hey-api/client-fetch` -> `client-fetch@0.13.1` |
 | 5 | `remove` is not an alias for `rm` | `docm.rs:51` |
 | 6 | Every git-ecosystem checkout lives at `<lib>/default` | same root cause as 1 |
 
@@ -46,7 +46,7 @@ A checkout directory is named for the ref that produced it, with `/` replaced by
 h3/v1.15.11
 next/v14.2.4
 openapi-ts/@hey-api~client-fetch@0.13.1
-nitropack/v2.13.4                          # lockfile 2.13.4 → tag v2.13.4
+nitropack/v2.13.4                          # lockfile 2.13.4 -> tag v2.13.4
 some-lib/5f72330a1b2c3d4e5f6071829304a5b6c7d8e9f0
 ```
 
@@ -104,7 +104,7 @@ library directory is the stem: **`registry`, or any name beginning with
 `registry.`**. Anything the store adds later is covered without revisiting this
 section.
 
-**The injectivity argument does not transfer, and needs its own rule.** `/` → `~`
+**The injectivity argument does not transfer, and needs its own rule.** `/` -> `~`
 is injective for *refs* because git forbids `~` in a ref name. A library name is
 not a ref — it comes from `LibEntry.name`, a registry package name, or a URL
 leaf, none of which are constrained that way — so `a/b` and `a~b` would both
@@ -129,7 +129,7 @@ deletions.
 
 ### 2. Identity and verification
 
-`meta.toml` gains an `origin` field and a `worktrees` map: dirname →
+`meta.toml` gains an `origin` field and a `worktrees` map: dirname ->
 `{ raw_ref, resolved_ref, commit }`.
 
 `resolved_ref` is the *canonical* name the ref resolved to — `refs/tags/v1`, not
@@ -198,7 +198,7 @@ matches the one it resolves to is treated as a re-pin, not corruption — the
 directory is re-pointed and the move is reported on stderr and in `info`:
 
 ```
-docm: tag v1.15.11 moved 5f72330a1b2c… → 9e41a08b7d3f… upstream; h3/v1.15.11 re-pointed
+docm: tag v1.15.11 moved 5f72330a1b2c… -> 9e41a08b7d3f… upstream; h3/v1.15.11 re-pointed
 ```
 
 Reported rather than silently accepted, because a moved release tag means any
@@ -290,7 +290,7 @@ Selection order, first hit wins:
    report). Because resolution now starts from the name the workspace *declared*
    and looks up that key, an alias is only ever selected when the workspace
    declared the alias. No suffix heuristic is needed, which also closes the hole
-   in the previous rule, where a scoped alias key like `@compat/h3` → spec `h3`
+   in the previous rule, where a scoped alias key like `@compat/h3` -> spec `h3`
    ended with `/h3` and would have been wrongly kept as a nested copy.
 
 4. **Tag lookup** turns the selected version into a ref (§4). No tag is a hard
@@ -341,8 +341,8 @@ Silent degradation is replaced by hard errors:
   registries rather than stopping at the first hit. Two or more hits is an error
   naming each repo URL and demanding `--eco`. Probe *order* is biased by markers
   found walking up from CWD (`bun.lock` / `package-lock.json` / `pnpm-lock.yaml`
-  / `package.json` → js first; `Cargo.toml` → rust; `pyproject.toml` / `uv.lock`
-  → python) so the reported ecosystem matches the project when only one hits.
+  / `package.json` -> js first; `Cargo.toml` -> rust; `pyproject.toml` / `uv.lock`
+  -> python) so the reported ecosystem matches the project when only one hits.
 - **Unrepairable HEAD mismatch.** Exits non-zero printing expected and actual
   commits and the path.
 - **Case-only ref collision, oversized ref, `repo.git` dirname.** As §1.
@@ -390,7 +390,7 @@ A ref-less entry that permanently *tracks* the default branch is deliberately
 not offered. It has no friction and no visible staleness, so it would silently
 re-resolve to a newer commit on every sync while continuing to look healthy —
 the design's founding bug, re-issued as a feature.
-- `sync` becomes fetch → re-resolve → materialize → verify → record, replacing
+- `sync` becomes fetch -> re-resolve -> materialize -> verify -> record, replacing
   the blanket `sync_default` call at `docm.rs:301`. It no longer exists to
   re-point a shared directory, because there is no shared directory.
 - `rm` gains `remove` and `delete` aliases.
@@ -415,7 +415,7 @@ notes    apps/api installs 1.15.11; bun.lock also carries h3-v2 (2.0.1-rc.20) as
 declared URL — those differing is the failure §2 exists to catch, so printing the
 manifest value would hide it.
 
-- `list` gains the ref → commit mapping and the origin per lib, so the state file
+- `list` gains the ref -> commit mapping and the origin per lib, so the state file
   is the index agents read rather than inferring anything from a path.
 - `devkit doctor` gains a docs row that sweeps *every* materialized checkout for
   cleanliness and commit correctness, including ones no current workspace

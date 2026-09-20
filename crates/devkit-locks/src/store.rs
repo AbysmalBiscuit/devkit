@@ -430,7 +430,7 @@ mod seam_tests {
     fn prune_with_drops_dead_and_is_a_hard_mutation() {
         let dir = tempfile::tempdir().unwrap();
         let s = FlockStore::at(dir.path());
-        // ttl=60, ts=0 → dead at now=1000
+        // ttl=60, ts=0 -> dead at now=1000
         acquire_with(&s, "/repo", "alice", &["scenes".into()], None, None, 60, 0).unwrap();
         let dropped = prune_with(&s, 1000).unwrap();
         assert_eq!(dropped, 1);

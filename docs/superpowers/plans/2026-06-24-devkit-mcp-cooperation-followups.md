@@ -536,7 +536,7 @@ that worktree's root path.
 
 - [ ] **Step 2: Flip the next-steps bullets**
 
-In `docs/next-steps.md`, under "## MCP server for devkit" → "Deferred follow-ups", update the three resolved items.
+In `docs/next-steps.md`, under "## MCP server for devkit" -> "Deferred follow-ups", update the three resolved items.
 
 Replace the "Daemon-aware locks" bullet body with a shipped note:
 

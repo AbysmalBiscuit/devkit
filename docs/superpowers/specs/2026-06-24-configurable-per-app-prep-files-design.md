@@ -130,7 +130,7 @@ Deliberate behaviors:
 - `src/bin/issue/setup.rs` — replace the write block.
 - Test helpers building an `App` literal — `src/bin/devrun/config.rs`,
   `crates/devkit-ports/src/run.rs`, and the `apps.rs` test module
-  (`prep_env: HashMap::new()` → `prep_files: vec![]`).
+  (`prep_env: HashMap::new()` -> `prep_files: vec![]`).
 - Docs: `docs/configuration.md` (table row + example), `README.md`, the `AGENTS.md`
   prep-files line, and `docs/next-features.md` (mark RESOLVED, point here).
 - Personal config: migrate `prep_env` blocks in `~/.config/devkit/config.toml` to

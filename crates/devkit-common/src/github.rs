@@ -264,7 +264,7 @@ fn is_github_host(host: &str) -> bool {
 }
 
 /// Parse `owner/repo` from a GitHub remote URL (scp-like, `ssh://`, or https),
-/// stripping a trailing `.git`. Pure → unit-tested.
+/// stripping a trailing `.git`. Pure -> unit-tested.
 pub fn slug_from_remote_url(url: &str) -> Option<String> {
     let u = url.trim();
     let rest = if let Some((_, r)) = u.split_once("://") {

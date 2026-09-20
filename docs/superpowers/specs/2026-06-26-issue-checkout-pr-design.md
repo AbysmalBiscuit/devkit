@@ -36,9 +36,9 @@ worktree work:
 | Input shape | Routed as |
 |---|---|
 | `#3340` | GitHub PR 3340 |
-| matches `^[A-Za-z]+-\d+$` (e.g. `ENG-3340`) | Linear ID → its PR |
+| matches `^[A-Za-z]+-\d+$` (e.g. `ENG-3340`) | Linear ID -> its PR |
 | `github.com/.../pull/N` URL | GitHub PR N |
-| `linear.app/.../issue/PREFIX-N` URL | Linear ID → its PR |
+| `linear.app/.../issue/PREFIX-N` URL | Linear ID -> its PR |
 | bare `3340` (digits only, no `#`) | **probe both sides**, then disambiguate |
 | bare `3340`, Linear key absent | GitHub PR (Linear never consulted) |
 | `PREFIX-3340` / linear URL, Linear key absent | error — cannot resolve a Linear id without a key, and a `PREFIX-N` is not a numeric PR |
@@ -56,11 +56,11 @@ For a digits-only input with a Linear key present, both lookups run:
 
 Then:
 
-- only the PR hits → use it, no prompt.
-- only Linear hits → use that issue → resolve its PR, no prompt.
-- both hit → **prompt** the user to choose (one option per candidate; a Linear
+- only the PR hits -> use it, no prompt.
+- only Linear hits -> use that issue -> resolve its PR, no prompt.
+- both hit -> **prompt** the user to choose (one option per candidate; a Linear
   number that exists in several teams contributes one option per team).
-- neither hits → error: *no PR or Linear issue found for `3340`*.
+- neither hits -> error: *no PR or Linear issue found for `3340`*.
 
 **The "both hit" prompt is TTY-gated.** With no interactive terminal (an agent),
 a genuine collision is an error that names the disambiguating forms: *ambiguous
@@ -69,7 +69,7 @@ the toolkit's existing convention of TTY-gating ambiguous actions
 (cross-worktree `devrun down`). The single-hit and no-hit paths never prompt, so
 they work head-less.
 
-## Linear → PR resolution
+## Linear -> PR resolution
 
 The `linear` module gains one query. Linear exposes a PR's link to an issue as a
 GitHub *attachment*; the suggested git branch is `issue.branchName`.
@@ -127,7 +127,7 @@ checkout_worktree_dir = "{{ pr_number }}-{{ pr_title }}{% if linear_id %}_[{{ li
 ```
 
 Added as `pub checkout_worktree_dir: Option<String>` on `Templates`, resolved at
-the render site with the built-in default below (`None` → default).
+the render site with the built-in default below (`None` -> default).
 
 ### Built-in default
 
@@ -148,7 +148,7 @@ PR was reached through a Linear issue.
 | `linear_title` | Linear issue title, **slugified** | `""` (empty) |
 
 `pr_title`/`linear_title` are slugified before substitution (lowercase,
-runs of non-alphanumeric → single `-`, trimmed) because they name a directory.
+runs of non-alphanumeric -> single `-`, trimmed) because they name a directory.
 `linear_*` are empty strings on the PR-only path, so the `{% if linear_id %}`
 guard in the default drops the suffix. Strict-undefined still applies: a template
 referencing an unknown variable errors loudly.
@@ -173,17 +173,17 @@ install/dev yourself.
 
 ## Error handling
 
-- Linear issue with no PR attachment → *Linear issue `<id>` has no associated PR
+- Linear issue with no PR attachment -> *Linear issue `<id>` has no associated PR
   to check out*.
-- Bare number, no hit on either side → *no PR or Linear issue found for `<n>`*.
-- Bare number, collision, no TTY → *ambiguous `<n>` — rerun as `#<n>` or
+- Bare number, no hit on either side -> *no PR or Linear issue found for `<n>`*.
+- Bare number, collision, no TTY -> *ambiguous `<n>` — rerun as `#<n>` or
   `PREFIX-<n>`*.
-- Linear input (`PREFIX-N` / linear URL) with no Linear key → error telling the
+- Linear input (`PREFIX-N` / linear URL) with no Linear key -> error telling the
   user to set `LINEAR_API_KEY` (we cannot resolve a Linear id to a PR without
   it). A bare number with no key is simply treated as a GitHub PR.
-- `gh pr checkout` failure (PR closed with deleted branch, network) → surfaced
+- `gh pr checkout` failure (PR closed with deleted branch, network) -> surfaced
   with `.context()` naming the PR.
-- Worktree path already exists → the underlying `git worktree add` error is
+- Worktree path already exists -> the underlying `git worktree add` error is
   surfaced as-is.
 
 ## Test plan
@@ -192,11 +192,11 @@ TDD; `cargo test --workspace` is the merge gate.
 
 | Unit | Tests |
 |---|---|
-| `resolve` routing | each row of the routing table → correct PR/Linear branch; `#N`/`PREFIX-N`/URL/bare-N classification; Linear-absent forces GitHub |
-| Bare-number disambiguation | PR-only → PR; Linear-only → resolved PR; both → prompt list (incl. multi-team); neither → error; no-TTY collision → error |
-| `linear::issue_pr` | parses a captured GraphQL fixture: PR attachment present → `Some`; no attachment → `None` + title; multi-team number lookup |
+| `resolve` routing | each row of the routing table -> correct PR/Linear branch; `#N`/`PREFIX-N`/URL/bare-N classification; Linear-absent forces GitHub |
+| Bare-number disambiguation | PR-only -> PR; Linear-only -> resolved PR; both -> prompt list (incl. multi-team); neither -> error; no-TTY collision -> error |
+| `linear::issue_pr` | parses a captured GraphQL fixture: PR attachment present -> `Some`; no attachment -> `None` + title; multi-team number lookup |
 | `checkout_worktree_dir` render | PR-only drops the `_[…]` suffix; Linear path includes it; title slugification; strict-undefined on unknown var |
-| Slugify helper | spaces/punctuation/case → clean slug; idempotent |
+| Slugify helper | spaces/punctuation/case -> clean slug; idempotent |
 | Record | writes `issue`/`slug`/`apps`; `issue` falls back to head-ref id then `UNKNOWN`; `--apps` populates only with `--setup` |
 
 Pure-function tests (`resolve`, slugify, template render, fixture parsing) are

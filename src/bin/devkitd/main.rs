@@ -172,7 +172,7 @@ fn main() -> Result<()> {
 
     // Single-instance: hold devkitd.lock for the daemon's whole life. A peer
     // daemon holds it exclusive for its entire lifetime, so all retry
-    // attempts fail → exit 0 (exactly one autostart winner). A transient
+    // attempts fail -> exit 0 (exactly one autostart winner). A transient
     // shared hold by a direct writer (portm/devrun taking the gate during a
     // registry RMW) clears within ~1ms, so a brief retry distinguishes that
     // from a live peer without blocking.
@@ -184,7 +184,7 @@ fn main() -> Result<()> {
         .open(&lock_path)?;
     let mut lock = RwLock::new(lock_file);
     // Retry up to 5 times with 20ms gaps. A peer daemon holds devkitd.lock
-    // exclusive for its whole life, so all attempts fail → exit 0 (one
+    // exclusive for its whole life, so all attempts fail -> exit 0 (one
     // autostart winner). A transient shared hold by a direct registry
     // writer clears within ~1ms, so a retry succeeds without blocking
     // indefinitely.
@@ -653,12 +653,12 @@ mod tests {
 
     #[test]
     fn cap_below_soft_limit_predicate() {
-        // Both set and cap <= limit → true (misconfigured).
+        // Both set and cap <= limit -> true (misconfigured).
         assert!(cap_below_soft_limit(4096, 4096));
         assert!(cap_below_soft_limit(2048, 4096));
-        // Cap above limit → false (correct ordering).
+        // Cap above limit -> false (correct ordering).
         assert!(!cap_below_soft_limit(8192, 4096));
-        // Either unset (0) → false (not a misconfiguration to warn about).
+        // Either unset (0) -> false (not a misconfiguration to warn about).
         assert!(!cap_below_soft_limit(0, 4096));
         assert!(!cap_below_soft_limit(4096, 0));
     }

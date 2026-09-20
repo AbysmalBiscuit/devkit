@@ -24,7 +24,7 @@ table. Two costs:
    multiple bars at once.
 2. Use a **determinate fill bar** wherever we iterate over a known count; use an
    honest **spinner** where the work is a single opaque/batched network call.
-   Never fake a `0→100%` over one network call.
+   Never fake a `0->100%` over one network call.
 3. **Collapse GitHub fetches to a single request** where multiple are made
    today, so "fetch the status of all my PRs" is one round-trip.
 4. When all fetches finish, **clear the bars** and print only the table /
@@ -41,7 +41,7 @@ table. Two costs:
 
 | Operation | Known count up front? | Bar |
 |---|---|---|
-| `status` — worktree dirty-check | yes — `worktree::discover` returns M, then a `git status` per worktree | **determinate** `0→M` |
+| `status` — worktree dirty-check | yes — `worktree::discover` returns M, then a `git status` per worktree | **determinate** `0->M` |
 | `status` — `gh pr list` | no — count only known after the call; classification is in-memory | spinner |
 | `status` / `dashboard` — Linear states | id count known, but **one batched GraphQL request** returns all at once | spinner |
 | `prs` — GitHub PR fetch | no — single list/search result | spinner |
@@ -98,19 +98,19 @@ stays in the lib):
 - `assemble(Discovered, Prs, linear_states) -> StatusReport` — attaches best
   PR + Linear state + finished verdict (the existing per-row logic).
 - `gather(start, ids)` keeps its **exact signature** and stays silent, now wired
-  as `discover → fill dirty → (fetch_prs ‖ linear::states) → assemble` via
+  as `discover -> fill dirty -> (fetch_prs ‖ linear::states) -> assemble` via
   `std::thread::scope`. MCP, the dashboard's direct call, and the existing tests
   keep working — and inherit the parallelism.
 
 CLI `status.rs` orchestrates the bars over the same pieces:
 
 ```
-[1/4] Discovering worktrees…                 spinner (fast, local) → M, ids
+[1/4] Discovering worktrees…                 spinner (fast, local) -> M, ids
 then thread::scope, 3 bars concurrently:
   [2/4] Checking M worktrees   ███░ k/M      DETERMINATE fill (dirty_of loop, local)
   [3/4] Fetching PRs from GitHub…             spinner (fetch_prs)
   [4/4] Fetching Linear states…               spinner (linear::states, also workspace_url_key)
-join → Steps::clear() → assemble → render the table
+join -> Steps::clear() -> assemble -> render the table
 ```
 
 The dirty-check loop is local and independent of the network, so it fills while
@@ -143,7 +143,7 @@ Consequences:
 
 - `gather` no longer needs its internal `thread::scope` — it is one request.
 - `checks_of` switches from a per-check array to the rollup **state** enum
-  (`SUCCESS→ok`, `FAILURE`/`ERROR→fail`, `PENDING`/`EXPECTED→run`, none→`-`).
+  (`SUCCESS->ok`, `FAILURE`/`ERROR->fail`, `PENDING`/`EXPECTED->run`, none->`-`).
   Its unit tests are rewritten to the new input shape; the fail/run/ok/`-`
   contract is preserved.
 - The `reviews` / `latestReviews` / `reviewRequests` JSON structs are re-shaped
@@ -157,7 +157,7 @@ CLI `prs.rs` then runs the two independent calls concurrently:
 thread::scope, 2 bars:
   [1/2] Resolving Linear workspace…           spinner (workspace_url_key)
   [2/2] Fetching PRs from GitHub…             spinner (prs::gather — now 1 request; also resolve_repo for the cache)
-join → Steps::clear() → render the two tables
+join -> Steps::clear() -> render the two tables
 ```
 
 ### 4. `dashboard`
@@ -171,7 +171,7 @@ join → Steps::clear() → render the two tables
   per-page callback added to `linear::assigned_issue_history` (a
   `FnMut(usize)` invoked with the running total after each page); the silent
   callers pass a no-op.
-- **PR + commit history**: `pr_timeline` and `commit_dates` are independent →
+- **PR + commit history**: `pr_timeline` and `commit_dates` are independent ->
   run them in a `thread::scope` as 2 concurrent spinners.
 
 Each dashboard phase clears its own bars before the chart for that phase prints.

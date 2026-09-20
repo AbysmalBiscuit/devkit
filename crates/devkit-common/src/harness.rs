@@ -499,13 +499,13 @@ mod tests {
             &Checkout::at(dir.path()),
             dir.path(),
             "enforce_writes"
-        )); // missing section → off, despite unrelated keys
+        )); // missing section -> off, despite unrelated keys
         let _ = std::fs::remove_file(dir.path().join("devkit.toml"));
         assert!(!harness_enabled(
             &Checkout::at(dir.path()),
             dir.path(),
             "enforce_writes"
-        )); // no devkit.toml → off
+        )); // no devkit.toml -> off
     }
 
     #[test]
@@ -523,7 +523,7 @@ mod tests {
             "[defaults]\nworktree_root = \"x\"\n[harness]\nenforce_writes = true\n",
             "enforce_writes"
         ));
-        // no [harness] section, or junk → off (never panics)
+        // no [harness] section, or junk -> off (never panics)
         assert!(!harness_flag_in(
             "[defaults]\nworktree_root = \"x\"\n",
             "enforce_writes"

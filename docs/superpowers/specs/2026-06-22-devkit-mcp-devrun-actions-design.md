@@ -86,10 +86,10 @@ how `ports` and `locks` register today; the tool shape is untouched.
 
 | Action | Args | Root | Facade call |
 |---|---|---|---|
-| `devrun.status` | `all?` | required unless `all` | `snapshot` → structured per-app rows with readiness (`listening`) |
+| `devrun.status` | `all?` | required unless `all` | `snapshot` -> structured per-app rows with readiness (`listening`) |
 | `devrun.up` | `apps[]`, `env?` | **required** (holder = root) | `bring_up(root, apps, env, wait=false)` |
 | `devrun.down` | `role?` | **required** (holder = root) | `release(root, role)` + `stop(pid)` per server |
-| `devrun.logs` | `app`, `lines?`, `role?` | **required** | `snapshot` → log path + `supervise::tail(path, lines)` |
+| `devrun.logs` | `app`, `lines?`, `role?` | **required** | `snapshot` -> log path + `supervise::tail(path, lines)` |
 
 **Argument detail:**
 
@@ -152,9 +152,9 @@ when present, else spawn detached. Phase 2 does not auto-spawn `devkitd`.
 Same as v1:
 
 - **Protocol/validation failures** (malformed JSON-RPC, unknown action, schema
-  mismatch) → a JSON-RPC **error response**.
+  mismatch) -> a JSON-RPC **error response**.
 - **Action ran but failed** (a facade `anyhow` error — e.g. a port-allocation conflict,
-  an unknown app name, a missing log file) → a `tools/call` result with `isError: true`
+  an unknown app name, a missing log file) -> a `tools/call` result with `isError: true`
   and the full error chain.
 - **`up` returning before readiness is success, not error.** `state: "starting"` is the
   normal kick-and-poll outcome; the agent learns readiness from `status`, not from an

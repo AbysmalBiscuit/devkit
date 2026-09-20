@@ -462,7 +462,7 @@ mod tests {
         let k = key_for("api");
         assert_eq!(s.record_probe(&k, true, 2), None); // arm
         assert_eq!(s.record_probe(&k, false, 2), None); // failure 1
-        assert_eq!(s.record_probe(&k, false, 2), Some(7)); // failure 2 → signal pid
+        assert_eq!(s.record_probe(&k, false, 2), Some(7)); // failure 2 -> signal pid
         assert_eq!(s.record_probe(&k, false, 2), None); // counter reset: fresh run
     }
 
@@ -483,7 +483,7 @@ mod tests {
         live(&mut s, "api", 7, 9100);
         let k = key_for("api");
         s.record_probe(&k, true, 2); // armed
-        s.set_pid(&k, 99); // respawn → disarm
+        s.set_pid(&k, 99); // respawn -> disarm
         assert_eq!(s.record_probe(&k, false, 2), None); // ignored until re-armed
         assert_eq!(s.record_probe(&k, false, 2), None);
         assert_eq!(s.record_probe(&k, true, 2), None); // re-arm
@@ -582,7 +582,7 @@ mod tests {
         let pid = std::process::id();
         assert!(s.mem_limit_actions(3).is_empty()); // tick 1
         assert!(s.mem_limit_actions(3).is_empty()); // tick 2
-        let acts = s.mem_limit_actions(3); // tick 3 → restart
+        let acts = s.mem_limit_actions(3); // tick 3 -> restart
         assert!(
             matches!(acts.as_slice(), [MemAction::Restart { pid: p, .. }] if *p == pid),
             "expected one Restart for our pid, got {acts:?}"
@@ -599,7 +599,7 @@ mod tests {
         // Exhaust the budget directly.
         assert!(s.may_restart("/w", "api", Role::Issue));
         assert!(!s.may_restart("/w", "api", Role::Issue));
-        // Threshold reached → GiveUp exactly once (budget gone).
+        // Threshold reached -> GiveUp exactly once (budget gone).
         s.mem_limit_actions(2);
         let acts = s.mem_limit_actions(2);
         assert!(
@@ -619,7 +619,7 @@ mod tests {
         // `Restart`).
         s.set_pid(&k, std::process::id());
         s.mem_limit_actions(2); // re-armed tick 1
-        let rearmed = s.mem_limit_actions(2); // tick 2 → GiveUp again
+        let rearmed = s.mem_limit_actions(2); // tick 2 -> GiveUp again
         assert!(
             matches!(rearmed.as_slice(), [MemAction::GiveUp { .. }]),
             "set_pid must re-arm the give-up warning, got {rearmed:?}"
@@ -630,11 +630,11 @@ mod tests {
     fn mem_actions_skip_adopted_and_empty_when_off() {
         let mut s = sup_mem(5);
         s.insert_adopted(key_for("legacy"), std::process::id(), 9200, PathBuf::new());
-        // Adopted survivor has no launch spec → never a candidate.
+        // Adopted survivor has no launch spec -> never a candidate.
         for _ in 0..5 {
             assert!(s.mem_limit_actions(3).is_empty());
         }
-        // mem_limit == 0 → always empty.
+        // mem_limit == 0 -> always empty.
         let mut off = Supervisor::new(5, Duration::from_secs(60), 0, 0);
         off.insert_owned(
             key_for("api"),

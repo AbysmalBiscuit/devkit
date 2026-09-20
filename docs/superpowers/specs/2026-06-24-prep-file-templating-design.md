@@ -106,7 +106,7 @@ TDD; `cargo test --workspace` is the merge gate.
 
 | Unit | Tests |
 |---|---|
-| `write_prep_files` | `ISSUE={{ issue }}` → `ISSUE=ENG-123`; plain content written unchanged; `{{ app }}` → the app name; unknown var → render error; `overwrite=false` still skips an existing file (after rendering); `overwrite=true` rewrites it |
+| `write_prep_files` | `ISSUE={{ issue }}` -> `ISSUE=ENG-123`; plain content written unchanged; `{{ app }}` -> the app name; unknown var -> render error; `overwrite=false` still skips an existing file (after rendering); `overwrite=true` rewrites it |
 
 The three existing `write_prep_files` tests (`setup.rs:211-248`) are updated to pass the new
 `ctx`/`vars` arguments; their existing assertions about overwrite/skip behavior stand.

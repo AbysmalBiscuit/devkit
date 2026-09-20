@@ -768,7 +768,7 @@ Expected: FAIL, then PASS after `merge` is added.
 
 - [ ] **Step 3: Implementation** — shown above.
 
-- [ ] **Step 4: Run** `cargo test -p devkit-ports strays::` → PASS.
+- [ ] **Step 4: Run** `cargo test -p devkit-ports strays::` -> PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -935,11 +935,11 @@ mod tests {
 
 > Add the `libc` dependency to `crates/devkit-ports/Cargo.toml` under `[target.'cfg(unix)'.dependencies] libc = "0.2"`. Pin it the way the repo pins others (see how `indicatif` is locked in `crates/devkit-common`). Run `cargo tree -p devkit-ports | rg libc` to confirm a single version.
 
-- [ ] **Step 2: Run** `cargo test -p devkit-ports strays::os` → FAIL (missing libc/module) then PASS.
+- [ ] **Step 2: Run** `cargo test -p devkit-ports strays::os` -> FAIL (missing libc/module) then PASS.
 
 - [ ] **Step 3: Implementation** — shown above.
 
-- [ ] **Step 4: Run** `cargo test -p devkit-ports` → PASS; `cargo build -p devkit-ports` clean.
+- [ ] **Step 4: Run** `cargo test -p devkit-ports` -> PASS; `cargo build -p devkit-ports` clean.
 
 - [ ] **Step 5: Commit**
 
@@ -988,11 +988,11 @@ Add a test in `config.rs` `#[cfg(test)]`:
 
 > Match the existing test scaffolding: find how other config tests parse (`rg "fn parse|from_str|FULL_DEFAULTS" crates/devkit-ports/src/config.rs`) and reuse that exact helper and constant rather than inventing `parse_str`.
 
-- [ ] **Step 2: Run** `cargo test -p devkit-ports config::` → FAIL then PASS.
+- [ ] **Step 2: Run** `cargo test -p devkit-ports config::` -> FAIL then PASS.
 
 - [ ] **Step 3: Implementation** — shown above (and remove the temporary field added in Task 3 if it differs).
 
-- [ ] **Step 4: Run** `cargo test -p devkit-ports` → PASS.
+- [ ] **Step 4: Run** `cargo test -p devkit-ports` -> PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -1101,13 +1101,13 @@ Add tests in `main.rs` `#[cfg(test)]`:
     }
 ```
 
-- [ ] **Step 2: Run** `cargo test -p devkit --bin devrun` (or the workspace) → FAIL then PASS.
+- [ ] **Step 2: Run** `cargo test -p devkit --bin devrun` (or the workspace) -> FAIL then PASS.
 
 > Confirm the bin test invocation: `cargo test -p devkit` runs the root package tests including `src/bin/devrun`. Check with `rg "name = " Cargo.toml` for the root package name; use that with `-p`.
 
 - [ ] **Step 3: Implementation** — shown above.
 
-- [ ] **Step 4: Run** the tests → PASS; manually `cargo run --bin devrun -- status --all` shows the section when strays exist.
+- [ ] **Step 4: Run** the tests -> PASS; manually `cargo run --bin devrun -- status --all` shows the section when strays exist.
 
 - [ ] **Step 5: Commit**
 
@@ -1214,11 +1214,11 @@ Tests:
     }
 ```
 
-- [ ] **Step 2: Run** `cargo test -p devkit --bin devrun reap` → FAIL then PASS.
+- [ ] **Step 2: Run** `cargo test -p devkit --bin devrun reap` -> FAIL then PASS.
 
 - [ ] **Step 3: Implementation** — shown above. Reuse the existing `confirm` helper (already used by `cmd_down`).
 
-- [ ] **Step 4: Run** tests → PASS. Manual: in a terminal, `cargo run --bin devrun -- reap` lists + prompts; piped (`echo | cargo run --bin devrun -- reap`) prints the list then errors "requires an interactive terminal".
+- [ ] **Step 4: Run** tests -> PASS. Manual: in a terminal, `cargo run --bin devrun -- reap` lists + prompts; piped (`echo | cargo run --bin devrun -- reap`) prints the list then errors "requires an interactive terminal".
 
 - [ ] **Step 5: Commit**
 
@@ -1250,7 +1250,7 @@ fn stray_check(count: usize) -> Check {
 }
 ```
 
-> `Check::Unset` holds `&'static str`; a `Box::leak` is acceptable for a one-shot CLI, but prefer adding a `Check::Warn(String)` variant if you want to avoid the leak — update `worst_exit` (Warn → exit 0), `print_human` (`⚠`), and `print_json` (`"warn"`) accordingly. Pick one; the test below targets the count→severity mapping.
+> `Check::Unset` holds `&'static str`; a `Box::leak` is acceptable for a one-shot CLI, but prefer adding a `Check::Warn(String)` variant if you want to avoid the leak — update `worst_exit` (Warn -> exit 0), `print_human` (`⚠`), and `print_json` (`"warn"`) accordingly. Pick one; the test below targets the count->severity mapping.
 
 Wire it into `gather` (append a row):
 
@@ -1277,11 +1277,11 @@ Test:
     }
 ```
 
-- [ ] **Step 2: Run** `cargo test -p devkit --bin devkit doctor` → FAIL then PASS.
+- [ ] **Step 2: Run** `cargo test -p devkit --bin devkit doctor` -> FAIL then PASS.
 
 - [ ] **Step 3: Implementation** — shown above.
 
-- [ ] **Step 4: Run** tests → PASS; `cargo run --bin devkit -- doctor` shows the row.
+- [ ] **Step 4: Run** tests -> PASS; `cargo run --bin devkit -- doctor` shows the row.
 
 - [ ] **Step 5: Commit**
 
@@ -1352,11 +1352,11 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run** `cargo test -p devkit-mcp` → FAIL then PASS.
+- [ ] **Step 2: Run** `cargo test -p devkit-mcp` -> FAIL then PASS.
 
 - [ ] **Step 3: Implementation** — shown above. (No reap handler — mutation stays off MCP.)
 
-- [ ] **Step 4: Run** `cargo test -p devkit-mcp` → PASS.
+- [ ] **Step 4: Run** `cargo test -p devkit-mcp` -> PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -1408,16 +1408,16 @@ With a stray running (`cd <worktree>/apps/api && doppler run -c dev_local -- bun
 ## Self-Review
 
 **Spec coverage:**
-- Two-pass detection (port-band + process) → Tasks 3, 4, 5. ✓
-- Config-derived signatures → Task 2. ✓
-- `Stray` serializable facade → Task 1. ✓
-- Injectable test seams → Tasks 1, 6. ✓
-- `devrun status` untracked, holder-scoped + `--all` → Task 8. ✓
-- `devkit doctor` check → Task 10. ✓
-- `devrun reap` TTY-gated, no bypass, CLI-only → Task 9. ✓
-- Read-only MCP detection, no reap handler → Task 11. ✓
-- Cross-platform (`#[cfg(unix)]`/`linux` fallbacks) → Tasks 4, 6. ✓
-- `stray_scan_width` default 64 → Task 7. ✓
+- Two-pass detection (port-band + process) -> Tasks 3, 4, 5. ✓
+- Config-derived signatures -> Task 2. ✓
+- `Stray` serializable facade -> Task 1. ✓
+- Injectable test seams -> Tasks 1, 6. ✓
+- `devrun status` untracked, holder-scoped + `--all` -> Task 8. ✓
+- `devkit doctor` check -> Task 10. ✓
+- `devrun reap` TTY-gated, no bypass, CLI-only -> Task 9. ✓
+- Read-only MCP detection, no reap handler -> Task 11. ✓
+- Cross-platform (`#[cfg(unix)]`/`linux` fallbacks) -> Tasks 4, 6. ✓
+- `stray_scan_width` default 64 -> Task 7. ✓
 
 **Type consistency:** `Stray`/`Source`/`Proc`/`PortProbe`/`ProcTable` defined in Task 1, used unchanged through Tasks 3–11. `scan_with`/`scan`/`proc_table`/`os::kill_tree` signatures stable. `strays_in_scope`/`render_strays`/`reap_roots`/`reap_allowed` defined in Tasks 8–9 and reused within them.
 

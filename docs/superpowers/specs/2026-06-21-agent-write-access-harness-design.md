@@ -109,10 +109,10 @@ isolated behind a parse step.
 
 ## Lifecycle
 
-- **PreToolUse** (`Edit`, `MultiEdit`, `Write`, `NotebookEdit`) → the ownership
+- **PreToolUse** (`Edit`, `MultiEdit`, `Write`, `NotebookEdit`) -> the ownership
   check + auto-acquire above.
-- **SubagentStop** → release locks held by that sub-agent's holder id.
-- **SessionEnd** → release locks held by the session's holder id, including any
+- **SubagentStop** -> release locks held by that sub-agent's holder id.
+- **SessionEnd** -> release locks held by the session's holder id, including any
   orphaned descendant segments.
 - **Backstop:** the existing `lockm prune` / reservation-grace machinery still
   reclaims locks from a crashed agent that never fired its stop hook.
@@ -142,8 +142,8 @@ src/bin/lockm.rs            EDIT — add `hook <event>` subcommand (pretooluse |
 crates/devkit-locks/        EDIT — ancestor-or-self decision + holder-tree release,
                                    exposed through the facade; unit-tested
 hooks/
-  enforce-write            NEW  — shim: run-hook.cmd → `lockm hook pretooluse`
-  release-locks            NEW  — shim: run-hook.cmd → `lockm hook stop`
+  enforce-write            NEW  — shim: run-hook.cmd -> `lockm hook pretooluse`
+  release-locks            NEW  — shim: run-hook.cmd -> `lockm hook stop`
   run-hook.cmd             EXISTS — Windows-safe runner shim, reused
 .claude-plugin/
   (hooks wiring)           NEW/EDIT — PreToolUse + SubagentStop + SessionEnd
@@ -156,16 +156,16 @@ facade), so a later Codex/Cursor port is hook wiring only, not a logic rewrite.
 
 ## Failure modes
 
-- **devkit / `lockm` not on PATH** → shim exits `0` (allow), logged. The harness
+- **devkit / `lockm` not on PATH** -> shim exits `0` (allow), logged. The harness
   can't enforce what isn't installed; bricking every write in a non-devkit repo is
   worse than a missed lock.
-- **Harness disabled** (no opt-in marker) → exit `0` immediately, before any
+- **Harness disabled** (no opt-in marker) -> exit `0` immediately, before any
   registry work.
-- **Registry / daemon error mid-check** → **fail closed** (deny, with a clear
+- **Registry / daemon error mid-check** -> **fail closed** (deny, with a clear
   reason). Once a checkout has opted into enforcement, a registry hiccup must not
   silently reopen the clobbering window. This is the deliberate difference between
   "harness off" (open) and "harness on but broken" (closed).
-- **Malformed or absent `file_path`** in the payload → allow (not a structured
+- **Malformed or absent `file_path`** in the payload -> allow (not a structured
   write the harness governs).
 
 ## Agent scope
@@ -180,7 +180,7 @@ subcommand — verified against each agent's then-current spec.
 
 `cargo test --workspace` is the merge gate.
 
-- **Decision logic (unit):** self / ancestor / sibling / free → allow / deny /
+- **Decision logic (unit):** self / ancestor / sibling / free -> allow / deny /
   auto-acquire, fed canned payloads including a real captured Claude Code
   PreToolUse JSON.
 - **Ancestor-prefix matching:** `S/a` may write a file held by `S`; `S/a` is

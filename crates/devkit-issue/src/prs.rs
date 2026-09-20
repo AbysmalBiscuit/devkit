@@ -262,7 +262,7 @@ fn merge_linked(ids: &mut Vec<String>, linked: &[String]) {
     }
 }
 
-/// Union the Linear-linked issue ids (url → ids) into every view row.
+/// Union the Linear-linked issue ids (url -> ids) into every view row.
 fn apply_linked(report: &mut PrsReport, linked: &HashMap<String, Vec<String>>) {
     for pr in &mut report.mine {
         if let Some(ids) = linked.get(&pr.url) {
@@ -672,7 +672,7 @@ search(query: \"repo:{repo} is:pr is:open {}\", type: ISSUE, first: {size}{curso
     )
 }
 
-/// Turn one GraphQL response into the report. Pure → unit-tested. `ignored`
+/// Turn one GraphQL response into the report. Pure -> unit-tested. `ignored`
 /// holds the check-name globs discounted from each PR's CHECK verdict.
 fn classify(data: GqlData, want_mine: bool, want_reviews: bool, ignored: &[String]) -> PrsReport {
     let me = data.viewer.login;
@@ -785,7 +785,7 @@ fn backoff(attempt: u32) -> std::time::Duration {
 }
 
 /// One page, retried up to `retries` times. Both transports are tried on every
-/// attempt (`fetch_graphql` already falls back HTTP → `gh`), so a retry covers
+/// attempt (`fetch_graphql` already falls back HTTP -> `gh`), so a retry covers
 /// a 504 from either. The last error is what surfaces.
 fn fetch_page(query: &str, root: &str, retries: u32) -> Result<PageResp> {
     let mut attempt = 0;

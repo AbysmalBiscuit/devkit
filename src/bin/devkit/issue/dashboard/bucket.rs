@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn choose_bucket_widens_with_span() {
         let first = dt("2026-01-01T00:00:00Z");
-        // width 100 → max_bars = max(8, (100-12)/2) = 44.
+        // width 100 -> max_bars = max(8, (100-12)/2) = 44.
         assert_eq!(choose_bucket(first, dt("2026-01-05T00:00:00Z"), 100), "day"); // 5-day span ≤ 44
         assert_eq!(
             choose_bucket(first, dt("2026-06-01T00:00:00Z"), 100),

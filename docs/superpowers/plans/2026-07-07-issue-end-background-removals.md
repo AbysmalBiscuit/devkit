@@ -14,7 +14,7 @@
 
 ## File Structure
 
-- **Modify `crates/devkit-common/src/progress.rs`** — swap `Steps.n: Cell<usize>` → `AtomicUsize`; add `Steps::suspend`; add a compile-time `Send + Sync` assertion and a concurrent smoke test. This is the enabler that lets `&Steps` cross a thread boundary.
+- **Modify `crates/devkit-common/src/progress.rs`** — swap `Steps.n: Cell<usize>` -> `AtomicUsize`; add `Steps::suspend`; add a compile-time `Send + Sync` assertion and a concurrent smoke test. This is the enabler that lets `&Steps` cross a thread boundary.
 - **Modify `src/bin/issue/end.rs`** — change `cleanup`'s signature to take `&Mutex<()>` and serialize only `git branch -D`; drop the per-removal `git worktree prune`; add a `main_repo` helper; rewrite the removal loop in `run` as a `thread::scope` that spawns one removal thread per confirmation and prunes once after the join.
 
 ---
@@ -347,14 +347,14 @@ git commit -m "feat(issue): run issue end removals in parallel background tasks"
 ## Self-Review
 
 **Spec coverage:**
-- Enabler (thread-safe `Steps` + `suspend`) → Task 1. ✓
-- `thread::scope` dispatch, `suspend`ed prompt, per-confirmation `spawn`, post-join join → Task 2 Step 3. ✓
-- Parallel `git worktree remove` + file unlinks, `branch -D` under `Mutex`, single post-join `prune` → Task 2 Steps 2-3. ✓
-- No concurrency cap (D2) → unbounded `s.spawn`. ✓
-- All paths inherit (D3) → the rewritten loop is the shared tail after both the `--clean-worktree` and finished-gate branches, so `--pr-only` and `--clean-worktree` get the behavior for free. ✓
-- Off-TTY / `--yes` → `MultiProgress` hidden off-TTY (unchanged), `yes` short-circuits `confirm`. ✓
-- Error handling (dirty → `--force` hint, else error), `Removed X of Y.` tally via atomic → Task 2 Step 3. ✓
-- Testing surface (compile-time `Send+Sync` + concurrent smoke) → Task 1 Steps 1-4. ✓
+- Enabler (thread-safe `Steps` + `suspend`) -> Task 1. ✓
+- `thread::scope` dispatch, `suspend`ed prompt, per-confirmation `spawn`, post-join join -> Task 2 Step 3. ✓
+- Parallel `git worktree remove` + file unlinks, `branch -D` under `Mutex`, single post-join `prune` -> Task 2 Steps 2-3. ✓
+- No concurrency cap (D2) -> unbounded `s.spawn`. ✓
+- All paths inherit (D3) -> the rewritten loop is the shared tail after both the `--clean-worktree` and finished-gate branches, so `--pr-only` and `--clean-worktree` get the behavior for free. ✓
+- Off-TTY / `--yes` -> `MultiProgress` hidden off-TTY (unchanged), `yes` short-circuits `confirm`. ✓
+- Error handling (dirty -> `--force` hint, else error), `Removed X of Y.` tally via atomic -> Task 2 Step 3. ✓
+- Testing surface (compile-time `Send+Sync` + concurrent smoke) -> Task 1 Steps 1-4. ✓
 
 **Placeholder scan:** none — every code step shows complete code; no TBD/TODO/"similar to".
 

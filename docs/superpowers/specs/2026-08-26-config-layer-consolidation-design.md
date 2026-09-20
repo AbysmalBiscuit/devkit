@@ -167,7 +167,7 @@ sites call `checkout_root`. `docs::upgrade`'s hand-rolled `.git` inspection
 **`devkit-config` does not call git.** It stays a leaf crate with no internal
 dependencies, and receives the main checkout as a parameter — see step 1. This
 is what lets the module live in `devkit-common` without inverting the
-`common` → `config` edge.
+`common` -> `config` edge.
 
 `devkit-docs::resolve::project_root` (`resolve.rs:73`) is not a git question and
 stays. It asks for the nearest ancestor holding a `devkit.toml`, and its answer

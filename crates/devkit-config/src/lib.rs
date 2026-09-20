@@ -1172,11 +1172,11 @@ impl Config {
 /// Per-leaf record of which config layer supplied each value.
 #[derive(Debug, Default)]
 pub struct Provenance {
-    /// Resolved layer files, lowest→highest precedence.
+    /// Resolved layer files, lowest->highest precedence.
     pub layers: Vec<PathBuf>,
-    /// Dotted config path (e.g. `apps.api.base_port`) → file that supplied it.
+    /// Dotted config path (e.g. `apps.api.base_port`) -> file that supplied it.
     pub origin: HashMap<String, PathBuf>,
-    /// Dotted config path → the layers a higher one overrode, lowest first.
+    /// Dotted config path -> the layers a higher one overrode, lowest first.
     /// A leaf only one layer sets has no entry here.
     pub shadowed: HashMap<String, Vec<Shadow>>,
 }
@@ -1190,7 +1190,7 @@ pub struct Shadow {
     pub value: toml::Value,
 }
 
-/// Deep-merge parsed layers given lowest→highest precedence. Tables merge key
+/// Deep-merge parsed layers given lowest->highest precedence. Tables merge key
 /// by key; every non-table value (scalar or array) is replaced wholesale by a
 /// higher layer. Records, per leaf dotted-path, the highest layer that set it.
 ///
@@ -1357,7 +1357,7 @@ pub(crate) fn is_root_layer(t: &toml::Table) -> bool {
         .unwrap_or(false)
 }
 
-/// Build the ordered layer list (lowest→highest precedence): the home config
+/// Build the ordered layer list (lowest->highest precedence): the home config
 /// (unless a `root = true` marker cuts it off), then the project layers
 /// `project_layers` finds for `start`. An explicit path or `$DEVKIT_CONFIG` is
 /// the sole layer.

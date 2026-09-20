@@ -134,7 +134,7 @@ pub fn states_query(slug: &str, ids: &[String]) -> Option<(String, HashMap<Strin
     ))
 }
 
-/// From a `states_query` response: id → state, keyed through `aliases`. An
+/// From a `states_query` response: id -> state, keyed through `aliases`. An
 /// alias with no `state` (a deleted issue behind a stale number) has no entry.
 pub fn parse_states(
     resp: &serde_json::Value,
@@ -450,7 +450,7 @@ pub fn issues_for_prs_queries(urls: &[String]) -> Vec<(String, HashMap<String, S
         .collect()
 }
 
-/// From one `issues_for_prs_queries` response: PR url → the ids of the issues
+/// From one `issues_for_prs_queries` response: PR url -> the ids of the issues
 /// it closes. An issue in `slug`, the tracker's own issues repository, is a
 /// bare number; one anywhere else is `owner/name#number`, since GitHub lets a
 /// PR close an issue across a repository boundary and a bare number there

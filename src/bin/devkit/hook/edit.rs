@@ -93,7 +93,7 @@ fn claim(
     holder: &str,
 ) -> Vec<String> {
     if !hook::enforcement_enabled_in(checkout, cwd) {
-        return Vec::new(); // no opt-in (env, project layers, or global config) → no enforcement
+        return Vec::new(); // no opt-in (env, project layers, or global config) -> no enforcement
     }
     let mut conflicts = Vec::new();
     let mut resolver = devkit_locks::WriteResolver::with_checkout(checkout.clone());

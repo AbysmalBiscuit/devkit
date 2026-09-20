@@ -131,7 +131,7 @@ fn cached() -> &'static Secrets {
     CACHE.get_or_init(|| load().unwrap_or_default())
 }
 
-/// Resolve a credential: `$<env_key>` → `secrets.toml[<lowercased key>]` →
+/// Resolve a credential: `$<env_key>` -> `secrets.toml[<lowercased key>]` ->
 /// `None`.
 pub fn resolve(env_key: &str) -> Option<String> {
     let env_val = std::env::var(env_key).ok();

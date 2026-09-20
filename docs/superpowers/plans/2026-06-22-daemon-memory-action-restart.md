@@ -15,12 +15,12 @@ Copy these values verbatim; every task implicitly includes them.
 - **Spec:** `docs/superpowers/specs/2026-06-22-daemon-memory-action-restart-design.md` is the source of truth.
 - **Defaults:** `memory_limit_ticks` default `3`; `memory_action` default `"warn"`; `memory_limit_mb` default `0` (off). Env vars: `DEVKIT_DAEMON_MEMORY_ACTION` (string), `DEVKIT_DAEMON_MEM_LIMIT_MB` (u64 MB, already read), `DEVKIT_DAEMON_MEM_LIMIT_TICKS` (u32, default 3).
 - **Invariant — crash path only.** A memory-triggered restart only ever SIGTERMs; the reap tick respawns it. The memory path never calls `restart` or respawns. (Generalizes the phase-2 health-probe invariant.)
-- **Budget counted once.** Peek with `can_restart` (no record) in the memory path; the sole record stays in `restart()` via `may_restart`. Single supervision thread → peek-then-record is consistent.
+- **Budget counted once.** Peek with `can_restart` (no record) in the memory path; the sole record stays in `restart()` via `may_restart`. Single supervision thread -> peek-then-record is consistent.
 - **`Supervisor::new` signature is unchanged.** The action string and tick count are owned by `main` (the tick loop only calls `mem_limit_actions` when `memory_action == "restart"`), mirroring how `main` only spawns the probe thread when probing is enabled.
 - **Commits:** Conventional Commits. Footer is exactly one trailer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` — no `Claude-Session`, no other trailers.
 - **Comments are timeless** — describe behavior, never the change/PR/task; no "now"/"previously"/"used to".
 - **Tooling:** `rg`/`fd`, never `grep`/`find`. No real project names — `example`/`exampleuser` placeholders only.
-- **Gate per task:** `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` (zero warnings). Unix-gated integration tests (`#![cfg(unix)]`) are verified RED→GREEN on WSL; on Windows they compile out.
+- **Gate per task:** `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` (zero warnings). Unix-gated integration tests (`#![cfg(unix)]`) are verified RED->GREEN on WSL; on Windows they compile out.
 - **CI rule:** tests that spawn/reap processes poll for the expected state — never sleep a fixed interval and assert.
 
 ## File Structure
@@ -225,7 +225,7 @@ Add to the `tests` module in `src/bin/devkitd/supervisor.rs` (after the Task 2 t
         let pid = std::process::id();
         assert!(s.mem_limit_actions(3).is_empty()); // tick 1
         assert!(s.mem_limit_actions(3).is_empty()); // tick 2
-        let acts = s.mem_limit_actions(3); // tick 3 → restart
+        let acts = s.mem_limit_actions(3); // tick 3 -> restart
         assert!(
             matches!(acts.as_slice(), [MemAction::Restart { pid: p, .. }] if *p == pid),
             "expected one Restart for our pid, got {acts:?}"
@@ -242,7 +242,7 @@ Add to the `tests` module in `src/bin/devkitd/supervisor.rs` (after the Task 2 t
         // Exhaust the budget directly.
         assert!(s.may_restart("/w", "api", Role::Issue));
         assert!(!s.may_restart("/w", "api", Role::Issue));
-        // Threshold reached → GiveUp exactly once (budget gone).
+        // Threshold reached -> GiveUp exactly once (budget gone).
         s.mem_limit_actions(2);
         let acts = s.mem_limit_actions(2);
         assert!(
@@ -266,11 +266,11 @@ Add to the `tests` module in `src/bin/devkitd/supervisor.rs` (after the Task 2 t
     fn mem_actions_skip_adopted_and_empty_when_off() {
         let mut s = sup_mem(5);
         s.insert_adopted(key_for("legacy"), std::process::id(), 9200, PathBuf::new());
-        // Adopted survivor has no launch spec → never a candidate.
+        // Adopted survivor has no launch spec -> never a candidate.
         for _ in 0..5 {
             assert!(s.mem_limit_actions(3).is_empty());
         }
-        // mem_limit == 0 → always empty.
+        // mem_limit == 0 -> always empty.
         let mut off = Supervisor::new(5, Duration::from_secs(60), 0, 0);
         off.insert_owned(
             key_for("api"),
@@ -442,7 +442,7 @@ git commit -m "feat(devkitd): detect memory-limit breaches and decide restarts" 
 - Consumes: `mem_limit_actions`, `MemAction` (Task 3); `supervise::stop`; `log_line`; `env_u32`.
 - Produces: the live behavior; `Harness::start_with_memory(idle_secs, limit_mb, ticks, max_restarts)`.
 
-- [ ] **Step 1: Write the failing integration test (the balloon-restart RED→GREEN)**
+- [ ] **Step 1: Write the failing integration test (the balloon-restart RED->GREEN)**
 
 Add to `tests/common/mod.rs` after `start_with_health` (~90):
 
@@ -804,7 +804,7 @@ git commit -m "docs: document memory_action restart and escape hatch" \
 
 ## Self-Review notes
 
-- **Spec coverage:** activation/config (Task 1, 4) → spec §5; debounce + state (Task 3) → §2/§3; budget peek (Task 2) → §3.2; tick integration + misconfig warn (Task 4) → §4/§5.1; tests (Task 3 unit, Task 4 integration) → §9; escape hatch + invariant + resolved status (Task 5) → §8/§11.
+- **Spec coverage:** activation/config (Task 1, 4) -> spec §5; debounce + state (Task 3) -> §2/§3; budget peek (Task 2) -> §3.2; tick integration + misconfig warn (Task 4) -> §4/§5.1; tests (Task 3 unit, Task 4 integration) -> §9; escape hatch + invariant + resolved status (Task 5) -> §8/§11.
 - **Type consistency:** `MemAction { Restart { key, pid, rss }, GiveUp { key, rss } }`, `mem_limit_actions(&mut self, limit_ticks: u32) -> Vec<MemAction>`, `can_restart(&mut self, holder: &str, app: &str, role: Role) -> bool`, `memory_limit_ticks: u32` — used identically in every task that references them.
 - **Test-process pid trick:** the unit tests register the test process's own pid as the child so `tree_rss_bytes` returns a real RSS over a 1-byte limit, exercising the state machine without spawning anything — the same spirit as the existing `tree_rss_bytes(self) > 0` test.
 

@@ -94,7 +94,7 @@ exclusive with each other, but either combines freely with the scope/confirm fla
   `--older-than <dur>` (`30m`, `2h`, `90s`; rows whose `now - ts` exceeds the
   threshold).
 
-**No scope flag and no filter → unchanged default:** stop every server in the
+**No scope flag and no filter -> unchanged default:** stop every server in the
 current worktree (today's behavior).
 
 The selection logic lives in `devkit-ports` (library, unit-testable), not in the
@@ -124,10 +124,10 @@ After resolving the selection to ports, the CLI partitions them by holder and
 computes whether any matched row's holder differs from the current worktree's
 toplevel.
 
-- **All matches are in the current worktree** → behave exactly as today: stop +
+- **All matches are in the current worktree** -> behave exactly as today: stop +
   release, no prompt. (This preserves the existing UX and means an agent's
   in-worktree `down` is never blocked.)
-- **The selection touches a foreign holder** → confirm interactively before
+- **The selection touches a foreign holder** -> confirm interactively before
   stopping anything. Two confirm modes:
   - **Per-worktree (default):** for each foreign worktree, print its matched rows
     (a `status_table` slice) and prompt `Stop N server(s) in <worktree>? [y/N]`, so
@@ -151,16 +151,16 @@ collapses the prompts into one, it does not suppress them.
 The whole operation reduces to "stop + release a set of ports," computed
 client-side from the ungated `snapshot()`:
 
-1. `snapshot()` → `select(...)` → `Vec<u16>` ports (+ the matched `Entry` rows for
+1. `snapshot()` -> `select(...)` -> `Vec<u16>` ports (+ the matched `Entry` rows for
    the preview/partition).
 2. Gate (above).
 3. Execute:
-   - **Daemon running** → send the new `Request::DownPorts { ports }`. The daemon,
+   - **Daemon running** -> send the new `Request::DownPorts { ports }`. The daemon,
      which holds the entries in memory, performs an *intentional* stop for each
      port (removing the supervision-table key before signalling, per the existing
      crash-vs-stop invariant) and releases the reservations, returning
      `Response::Freed(ports)`.
-   - **No daemon** → `registry::with_lock`: for each selected port still present,
+   - **No daemon** -> `registry::with_lock`: for each selected port still present,
      `supervise::stop(pid)` if it has a pid, then remove the entry. No prune first
      (the still-running-but-stale invariant). Return the freed ports.
 
@@ -206,19 +206,19 @@ requires a terminal.
 
 ## Error handling
 
-- **Empty selection** (no rows match) → print `no tracked servers match
+- **Empty selection** (no rows match) -> print `no tracked servers match
   <selector>` and exit zero (nothing to do; not an error). The no-arg default with
   an empty current worktree stays as today.
-- **Positional + column filters both given** → clap-level conflict error. (Scope
+- **Positional + column filters both given** -> clap-level conflict error. (Scope
   flags `--all`/`--others`/`--holder` and `--batch` are *not* in the conflict set;
   they combine with either.)
 - **Scope flag implies the gate, even if it resolves to zero foreign rows** — e.g.
   `--others` when no other worktree has servers is just an empty selection (exit
   zero), never an error.
-- **`--holder` path with no git toplevel** → resolve best-effort to the given path;
+- **`--holder` path with no git toplevel** -> resolve best-effort to the given path;
   if it matches no rows, falls through to the empty-selection message.
-- **Bad `--older-than`** → parse error naming the accepted forms.
-- **Daemon proto mismatch** (old daemon without `DownPorts`) → the handshake
+- **Bad `--older-than`** -> parse error naming the accepted forms.
+- **Daemon proto mismatch** (old daemon without `DownPorts`) -> the handshake
   version check already fails the connection; surface the existing daemon-version
   error rather than silently falling back to a write the daemon's lock forbids.
 

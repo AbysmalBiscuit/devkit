@@ -14,7 +14,7 @@
 
 | File | Change | Responsibility |
 |---|---|---|
-| `crates/devkit-common/src/livetable.rs` | create | `FRAMES`, `Cell`, `LiveLines` (rewritable stderr block + status bars), `LiveTable` (cells → rendered lines), pure `render_lines` |
+| `crates/devkit-common/src/livetable.rs` | create | `FRAMES`, `Cell`, `LiveLines` (rewritable stderr block + status bars), `LiveTable` (cells -> rendered lines), pure `render_lines` |
 | `crates/devkit-common/src/lib.rs` | modify | register `pub mod livetable;` |
 | `crates/devkit-common/src/progress.rs` | modify | `Steps` persistent mode: `persistent()`, `persistent_with_total`, `during_result`, `✓/✗ n. msg (elapsed)` lines |
 | `crates/devkit-issue/src/status.rs` | modify | `Prs::empty()`, `dirty_stream` (per-path streaming dirty checks) |
@@ -102,7 +102,7 @@ mod tests {
     fn issue_cell_unknown_is_plain() {
         let mut r = row("OPEN");
         r.issue_id = "UNKNOWN".into();
-        // No workspace / no linear state → bare id (colour is a passthrough here).
+        // No workspace / no linear state -> bare id (colour is a passthrough here).
         assert_eq!(issue_cell(&r, None), "UNKNOWN");
         assert_eq!(issue_cell(&row("OPEN"), Some("acme")), "ENG-1");
     }
@@ -744,7 +744,7 @@ pub(crate) const COL_PR: usize = 3;
 pub(crate) const COL_LINEAR: usize = 4;
 pub(crate) const COL_VERDICT: usize = 5;
 
-/// Discovery index → display row, matching `triage::render`'s sort (by
+/// Discovery index -> display row, matching `triage::render`'s sort (by
 /// issue id, stable on ties).
 fn display_order(rows: &[IssueWorktree]) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..rows.len()).collect();
@@ -1227,7 +1227,7 @@ In `src/bin/issue/prs.rs`, replace the `// diff cache` section (`Snap`/`cache_pa
 ```rust
 // snapshot cache -----------------------------------------------------------------
 // One file per repo: the previous run's full rows (for the stale-while-
-// revalidate render) plus the per-PR diff values (for `old → new` cells).
+// revalidate render) plus the per-PR diff values (for `old -> new` cells).
 
 type Snap = BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>;
 
@@ -1529,7 +1529,7 @@ Expected: PASS.
 
 - [ ] **Step 6: Verify by eye**
 
-In the monorepo: run `cargo run --bin issue -- prs` twice. First run: spinner only (old cache format reads as empty), fresh tables print, snapshot saved. Second run: dimmed previous tables + banner appear instantly, replaced ~5s later by fresh tables with `old → new` cells where things changed. `--no-cache`: no stale table. Piped: no animation.
+In the monorepo: run `cargo run --bin issue -- prs` twice. First run: spinner only (old cache format reads as empty), fresh tables print, snapshot saved. Second run: dimmed previous tables + banner appear instantly, replaced ~5s later by fresh tables with `old -> new` cells where things changed. `--no-cache`: no stale table. Piped: no animation.
 
 - [ ] **Step 7: Commit**
 
@@ -1741,8 +1741,8 @@ git commit -m "feat(common): persistent step-log mode for Steps"
 
 - [ ] **Step 1: Swap constructors**
 
-- `Steps::new()` → `Steps::persistent()` in `checkout.rs:310`, `end.rs:135`, `review/request.rs:181`, `review/finish.rs:107`.
-- `Steps::with_total(total)` → `Steps::persistent_with_total(total)` in `setup.rs:159`.
+- `Steps::new()` -> `Steps::persistent()` in `checkout.rs:310`, `end.rs:135`, `review/request.rs:181`, `review/finish.rs:107`.
+- `Steps::with_total(total)` -> `Steps::persistent_with_total(total)` in `setup.rs:159`.
 
 Do **not** touch `Steps::new()` in `info.rs` (its remaining use is a transient workspace spinner) or anywhere outside these step-driven flows.
 
@@ -1800,6 +1800,6 @@ git commit -m "docs: describe live table and step-log rendering"
 
 ## Self-review notes
 
-- **Spec coverage:** D1 → Tasks 4 (status), 5 (info), 6+7 (prs SWR, dim stale via `stale_lines`/`Cell::Stale`); D2 → Task 3 (`FRAMES`, `tick`) driven by the `recv_timeout` loops in Tasks 4/5/7; D3 → every live path clears then renders via the untouched stdout printers, checked by existing tests and the piped eye-checks; D4 → Tasks 8+9. Formatter extraction and `dirty_stream` are the spec's phases 1 and 3 prerequisites (Tasks 1–2).
+- **Spec coverage:** D1 -> Tasks 4 (status), 5 (info), 6+7 (prs SWR, dim stale via `stale_lines`/`Cell::Stale`); D2 -> Task 3 (`FRAMES`, `tick`) driven by the `recv_timeout` loops in Tasks 4/5/7; D3 -> every live path clears then renders via the untouched stdout printers, checked by existing tests and the piped eye-checks; D4 -> Tasks 8+9. Formatter extraction and `dirty_stream` are the spec's phases 1 and 3 prerequisites (Tasks 1–2).
 - **Cell::Stale note:** the `prs` SWR path renders stale content through `stale_lines` + `LiveLines` (whole-block swap) rather than per-cell `Cell::Stale`; the variant still exists for `LiveTable` users and is tested, but no current caller mixes stale and pending cells in one grid.
 - **Type consistency:** `LiveState.apply_*` all return `Vec<(usize, usize, String)>` (discovery index, column, content); `disp` maps to display rows only at the `lt.set` boundary. `triage::HEADERS` is the single header source for `render`, status, and info.

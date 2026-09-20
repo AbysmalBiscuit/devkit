@@ -1,4 +1,4 @@
-//! Version → git tag probing. Repos tag `v1.2.3`, `1.2.3`, `pkg-1.2.3`,
+//! Version -> git tag probing. Repos tag `v1.2.3`, `1.2.3`, `pkg-1.2.3`,
 //! `pkg-v1.2.3`, or `pkg@1.2.3`; a prior match helps preserve probe ordering.
 
 use serde::{Deserialize, Serialize};

@@ -230,14 +230,14 @@ One-line fix: Pass the original payload CWD to `enforcement_enabled`, let `proje
 
 ### 3. The cutoff rule contradicts both precedence and existing `root` semantics
 
-What breaks: The stack is ordered `Ancestor → MainCheckout → Checkout`, but [the cutoff rule](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/docs/superpowers/specs/2026-08-26-config-layer-consolidation-design.md:190) says:
+What breaks: The stack is ordered `Ancestor -> MainCheckout -> Checkout`, but [the cutoff rule](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/docs/superpowers/specs/2026-08-26-config-layer-consolidation-design.md:190) says:
 
 - An `Ancestor` root removes the higher-precedence main layer.
 - A `MainCheckout` root is ignored, leaving lower-precedence ancestors active.
 
 That is backwards. Existing behavior stops walking upward at the root marker while retaining layers closer to `start`, as shown by [config discovery](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/crates/devkit-config/src/lib.rs:718).
 
-For example, with `outer ancestor → inner ancestor(root) → main → checkout`, the inner ancestor should remove only the outer ancestor. It must not suppress main or checkout. Conversely, a root marker in main should remove ancestor project layers; otherwise the same main config excludes ancestors in the main checkout but inherits them from every linked worktree.
+For example, with `outer ancestor -> inner ancestor(root) -> main -> checkout`, the inner ancestor should remove only the outer ancestor. It must not suppress main or checkout. Conversely, a root marker in main should remove ancestor project layers; otherwise the same main config excludes ancestors in the main checkout but inherits them from every linked worktree.
 
 Why it matters: A broad ancestor config can suppress the repository’s `[harness]`, while a repository boundary marked in main fails to isolate linked worktrees from outer executable config.
 
@@ -257,7 +257,7 @@ One-line fix: Specify that canonicalization is used only as a dedupe key, preser
 
 ## What now holds
 
-- The dependency inversion is genuinely gone rather than relocated. Adding direct `devkit-locks → devkit-config` and `devkit-docs → devkit-config` edges is acyclic; both currently reach config transitively through [devkit-common](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/crates/devkit-common/Cargo.toml:8).
+- The dependency inversion is genuinely gone rather than relocated. Adding direct `devkit-locks -> devkit-config` and `devkit-docs -> devkit-config` edges is acyclic; both currently reach config transitively through [devkit-common](/home/lev/Git/lev/devkit-worktrees/config-layer-consolidation/crates/devkit-common/Cargo.toml:8).
 - Source and graph inspection confirm the three config parsers are still `devkit-config::discover`, the lock hook, and docs manifest discovery. `docs::resolve::project_root` is another `devkit.toml` path search, but it is project identity rather than config resolution and is correctly retained.
 - No remaining move touches `expand_tilde`, `TrackerKind`, or `GithubConfig`. `find_root_from` is the only moved symbol; the re-export covers its existing lock-context, status, write-normalization, and `lockm` callers.
 - Steps 0 and 3 are independently landable. Step 1 is not behaviorally green because of the hook caller, and Step 2’s proposed gate misses the two `.git`-named bare/separate layouts and invalid backpointers.

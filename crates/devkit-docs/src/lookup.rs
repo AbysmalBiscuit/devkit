@@ -1,4 +1,4 @@
-//! Package-registry lookups: package name → repo URL, resolved once at
+//! Package-registry lookups: package name -> repo URL, resolved once at
 //! `docm add` time and stored in the manifest. HTTP sits behind a trait so
 //! tests stub it and nothing else ever touches the network.
 

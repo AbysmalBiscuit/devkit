@@ -73,8 +73,8 @@ pub(crate) fn hyperlinks_enabled_on(stream: Stream) -> bool {
     supports_hyperlinks::on(s)
 }
 
-/// Parse a tri-state boolean env value. `1`/`true`/`on`/`always`/`yes` → on,
-/// `0`/`false`/`off`/`never`/`no` → off (case- and whitespace-insensitive);
+/// Parse a tri-state boolean env value. `1`/`true`/`on`/`always`/`yes` -> on,
+/// `0`/`false`/`off`/`never`/`no` -> off (case- and whitespace-insensitive);
 /// anything else — including empty — is `None`, meaning "no opinion, detect".
 fn parse_flag(v: &str) -> Option<bool> {
     match v.trim().to_ascii_lowercase().as_str() {
@@ -393,7 +393,7 @@ impl Paint {
         )
     }
 
-    /// `s` dimmed and struck through — the superseded half of an `old → new`
+    /// `s` dimmed and struck through — the superseded half of an `old -> new`
     /// diff.
     pub fn dim_strike(&self, s: &str) -> String {
         self.paint(s, Style::new().dimmed().strikethrough())
@@ -444,7 +444,7 @@ pub fn bold_cyan(s: &str) -> String {
     stdout_paint().bold_cyan(s)
 }
 
-/// `s` dimmed and struck through — the superseded half of an `old → new` diff.
+/// `s` dimmed and struck through — the superseded half of an `old -> new` diff.
 pub fn dim_strike(s: &str) -> String {
     stdout_paint().dim_strike(s)
 }
@@ -538,7 +538,7 @@ mod tests {
         for off in ["0", "false", "off", "never", "no", "Never"] {
             assert_eq!(parse_flag(off), Some(false), "{off:?} should force off");
         }
-        // No opinion → fall back to terminal detection.
+        // No opinion -> fall back to terminal detection.
         for none in ["", "  ", "maybe", "auto"] {
             assert_eq!(parse_flag(none), None, "{none:?} should defer to detection");
         }

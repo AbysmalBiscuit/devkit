@@ -133,7 +133,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert!(!fetched, "within ttl → skipped");
+        assert!(!fetched, "within ttl -> skipped");
         assert!(!called.get(), "fetch closure not invoked when fresh");
     }
 
@@ -147,7 +147,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert!(fetched && called.get(), "past ttl → fetched");
+        assert!(fetched && called.get(), "past ttl -> fetched");
         // marker advanced to `now`
         assert!(is_fresh(&p, 60, 1200));
     }
@@ -180,7 +180,7 @@ mod tests {
         assert!(r.is_err());
         assert!(
             !p.exists(),
-            "no marker written on failure → next call retries"
+            "no marker written on failure -> next call retries"
         );
     }
 

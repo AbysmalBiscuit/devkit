@@ -151,7 +151,7 @@ TDD, pure unit tests in `timing.rs`:
 - `summarize`: overlapping ops counted once (`io_busy < serial_sum`); disjoint
   ops no overlap; per-op count/total/max/p50; `hottest` = longest op.
 - `fmt_dur` unit scaling; `record_json` round-trips.
-- `parse_env_mode`: `DEVKIT_TIMING` string → `Mode`.
+- `parse_env_mode`: `DEVKIT_TIMING` string -> `Mode`.
 - End-to-end layer test: open/close an `io_span` under a scoped subscriber, assert
   one `Record` with the right `op` is collected.
 

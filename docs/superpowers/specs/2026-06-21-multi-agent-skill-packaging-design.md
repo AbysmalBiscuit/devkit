@@ -54,7 +54,7 @@ duplicated; only metadata is per-agent.
 devkit/
   skills/using-devkit/SKILL.md      # canonical skill (already exists)
   AGENTS.md                          # canonical context file (already exists)
-  CLAUDE.md                          # pointer → AGENTS.md (already exists)
+  CLAUDE.md                          # pointer -> AGENTS.md (already exists)
   LICENSE                            # NEW — GPL-3.0
   .claude-plugin/
     plugin.json                      # NEW — Claude Code plugin manifest
@@ -74,7 +74,7 @@ devkit/
 
 | Agent | Mechanism | Notes |
 |---|---|---|
-| Claude Code | `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` | Native skill discovery from `skills/`. Install: `/plugin marketplace add AbysmalBiscuit/devkit` → `/plugin install devkit`. |
+| Claude Code | `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` | Native skill discovery from `skills/`. Install: `/plugin marketplace add AbysmalBiscuit/devkit` -> `/plugin install devkit`. |
 | Codex | `.codex-plugin/plugin.json` (`"skills"`, `"hooks"`, `interface` block) + `hooks/hooks-codex.json` | Manifest is metadata; the `SessionStart` hook is what actually surfaces the skill. |
 | Cursor | `.cursor-plugin/plugin.json` (`"skills"`, `"hooks"`) + `hooks/hooks-cursor.json` | Same — the `sessionStart` hook surfaces the skill. |
 | Zed | `AGENTS.md` (already present) | Zed has no skill-plugin manifest; it reads `AGENTS.md`. This is the documented ceiling, not a gap. |
@@ -157,7 +157,7 @@ at `.`, currently `0.1.0`). Add an `extra-files` entry per manifest to the `.`
 package so a release bumps them alongside `Cargo.toml`:
 
 ```jsonc
-// release-please-config.json → packages["."]
+// release-please-config.json -> packages["."]
 "extra-files": [
   { "type": "json", "path": ".claude-plugin/plugin.json",   "jsonpath": "$.version" },
   { "type": "json", "path": ".claude-plugin/marketplace.json", "jsonpath": "$.plugins[0].version" },
@@ -179,7 +179,7 @@ copyleft, so downstreams distributing modified devkit must release their changes
 under GPL-3.0 — acceptable for a personal tool, worth knowing if it is ever
 embedded elsewhere.)
 
-## MCP deferral → `docs/next-steps.md`
+## MCP deferral -> `docs/next-steps.md`
 
 Replace the brief MCP stub in `docs/next-steps.md` with the analysis from this
 brainstorm so the future pass starts ahead:

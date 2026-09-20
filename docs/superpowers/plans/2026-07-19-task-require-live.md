@@ -493,7 +493,7 @@ Add `enforce_live: bool` as the last parameter of `resolve_command`; update the 
     }
 ```
 
-(This requires `refs` computed before the gate; keep the order: static validation → effective scan (`refs`) → gate → allocation.)
+(This requires `refs` computed before the gate; keep the order: static validation -> effective scan (`refs`) -> gate -> allocation.)
 
 Add the public entry point:
 
@@ -615,7 +615,7 @@ fn gate_waiver_scoping_and_lazy_resolution() {
     let cat = catalog();
     let none = BTreeMap::new();
 
-    // Gate: no reservation at all → loud error, and no reservation minted.
+    // Gate: no reservation at all -> loud error, and no reservation minted.
     let err = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none).unwrap_err();
     assert!(format!("{err:#}").contains("no live server"), "{err:#}");
     assert!(registry::snapshot().unwrap().entries.is_empty());
@@ -914,7 +914,7 @@ baked=$(jq -r '[.rewrites[].destination // empty | scan("localhost:[0-9]+")] | u
 [ -n "$baked" ] || { echo "no localhost destination baked in routes-manifest.json"; exit 1; }
 [ "$baked" = "$want" ] || { echo "baked port $baked != live api-serve $want — rebuild (devrun task lab-os-profile-build)"; exit 1; }
 curl -s -o /dev/null "http://localhost:$want/" || { echo "api-serve on $want is not answering"; exit 1; }
-echo "bake OK: routes-manifest → localhost:$want (live)"
+echo "bake OK: routes-manifest -> localhost:$want (live)"
 """,
 ]
 ```

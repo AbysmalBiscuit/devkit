@@ -183,7 +183,7 @@ gain assertions for both fields.
 
 ### 8.1 Unit (deterministic, no processes) — supervisor.rs
 
-- failures before the first success return `None` (unarmed → ignored);
+- failures before the first success return `None` (unarmed -> ignored);
 - after a success, the `K`-th consecutive failure returns `Some(pid)` exactly
   once, and the count resets (the next failure starts a fresh run);
 - a success mid-run resets the count;
@@ -208,7 +208,7 @@ test:
 3. polls `ports.json` for a **pid change**, asserting the daemon SIGTERM'd the
    hung process and respawned it.
 
-This test is `#![cfg(unix)]` and compiled out on Windows; RED→GREEN is
+This test is `#![cfg(unix)]` and compiled out on Windows; RED->GREEN is
 observed on WSL, as for the liveness-authority phase.
 
 The fixture stays alive but stops accepting (rather than a `SIGSTOP`, which
@@ -223,7 +223,7 @@ ends it cleanly and the reap path respawns deterministically.
 - A probe-specific backoff — the crash-loop budget already bounds repeated
   hang-restarts.
 - Wiring `DaemonConfig` through to the daemon binary — the binary reads env
-  vars today; bridging config→env is a separate, pre-existing gap not widened
+  vars today; bridging config->env is a separate, pre-existing gap not widened
   here.
 
 ## 10. Files touched

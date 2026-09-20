@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the hardcoded `prep_env` → `.env.local` dotenv write in `issue setup` with a configurable, multi-file `prep_files` step where each file declares its own path, verbatim content, and overwrite policy.
+**Goal:** Replace the hardcoded `prep_env` -> `.env.local` dotenv write in `issue setup` with a configurable, multi-file `prep_files` step where each file declares its own path, verbatim content, and overwrite policy.
 
 **Architecture:** Add a typed `PrepFile { path, content, overwrite }` to `devkit-ports::config`, carry a `Vec<PrepFile>` through the `App` catalog, and have `issue setup` write each file (parent dirs created, write-if-absent unless `overwrite`) before running the app's `setup` commands. The change lands additively (new field alongside the old), then the old `prep_env` field is removed once nothing reads it.
 

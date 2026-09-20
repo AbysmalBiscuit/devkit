@@ -319,7 +319,7 @@ fn two_session_ids_do_not_share_a_watermark() {
 #[test]
 fn no_session_id_emits_every_time() {
     // Falling back to a per-cwd key makes concurrent sessions share one
-    // watermark, so A → B → A would suppress A's re-injection even though B
+    // watermark, so A -> B -> A would suppress A's re-injection even though B
     // displaced it. A duplicate brief is the acceptable failure.
     let project = Project::docs_only();
     assert!(

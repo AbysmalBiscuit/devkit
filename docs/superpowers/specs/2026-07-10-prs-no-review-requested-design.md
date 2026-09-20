@@ -41,13 +41,13 @@ fn review_in_flight(pr: &PrNode) -> bool {
 After the existing draft / changes-requested / approved arms, the
 fall-through splits on the predicate:
 
-- review in flight → today's behavior: `awaiting review`
+- review in flight -> today's behavior: `awaiting review`
   (`awaiting review; rebase` on conflict).
-- not in flight → the PR is yours to move; mirror the approved arm's
+- not in flight -> the PR is yours to move; mirror the approved arm's
   CI/conflict gating so "you can merge" is never claimed falsely:
-  - merge conflict → `rebase -> merge (unreviewed)`
-  - CI failing (non-ignored) → `fix CI -> merge (unreviewed)`
-  - otherwise → `MERGE (unreviewed)`
+  - merge conflict -> `rebase -> merge (unreviewed)`
+  - CI failing (non-ignored) -> `fix CI -> merge (unreviewed)`
+  - otherwise -> `MERGE (unreviewed)`
 
 The `(unreviewed)` qualifier keeps plain `MERGE` reserved for approved PRs:
 the repo may not *require* review while the team still *wants* one, so an
@@ -57,9 +57,9 @@ unreviewed merge stays visibly distinct.
 
 When there is no standing decision:
 
-- `REVIEW_REQUIRED` or pending `reviewRequests` → `awaiting`
-- submitted reviews exist (comments) → `commented` (as today)
-- none of the above → `not requested` (new; replaces the misleading
+- `REVIEW_REQUIRED` or pending `reviewRequests` -> `awaiting`
+- submitted reviews exist (comments) -> `commented` (as today)
+- none of the above -> `not requested` (new; replaces the misleading
   `awaiting`)
 
 `review_text` gains access to `reviewRequests`, which it currently ignores.
@@ -97,22 +97,22 @@ no schema change. After the upgrade, `diff_cell` shows a one-time
 
 New, written first and watched fail:
 
-- `mine_action`, null decision, no requests, no reviews, CI green →
+- `mine_action`, null decision, no requests, no reviews, CI green ->
   `MERGE (unreviewed)`
-- same with failing CI → `fix CI -> merge (unreviewed)`
-- same with `CONFLICTING` → `rebase -> merge (unreviewed)`
-- null decision + a pending `reviewRequests` entry → `awaiting review`
-- `REVIEW_REQUIRED`, no requests → `awaiting review`
-- bot `COMMENTED` review, no requests → `MERGE (unreviewed)`
+- same with failing CI -> `fix CI -> merge (unreviewed)`
+- same with `CONFLICTING` -> `rebase -> merge (unreviewed)`
+- null decision + a pending `reviewRequests` entry -> `awaiting review`
+- `REVIEW_REQUIRED`, no requests -> `awaiting review`
+- bot `COMMENTED` review, no requests -> `MERGE (unreviewed)`
 - `review_text`: the four-way mapping above, including the new
   `not requested` and the request-wins-over-comment precedence
 
 Existing tests that flip deliberately (the behavior change is the point):
 
-- `review_text(&mine_node(None, ...))` expecting `awaiting` →
+- `review_text(&mine_node(None, ...))` expecting `awaiting` ->
   `not requested`
 - any `mine_action` test on a null-decision, request-less node expecting
-  `awaiting review` → the new label
+  `awaiting review` -> the new label
 
 The `mine_node` helper builds nodes with empty `reviewRequests`; add a
 variant (or parameter) that populates them.

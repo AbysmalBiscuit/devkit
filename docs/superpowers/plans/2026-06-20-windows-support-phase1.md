@@ -7,7 +7,7 @@
 > document — is the source of truth; the unchecked `- [ ]` boxes are preserved as
 > the plan that was followed, not outstanding work. The only item not yet done is
 > adding Windows targets to the release build matrix (see the design doc's
-> Delivery → Open).
+> Delivery -> Open).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -54,7 +54,7 @@
 - Create: `crates/devkit-common/src/sys/mod.rs`
 - Create: `crates/devkit-common/src/sys/unix.rs`
 - Modify: `crates/devkit-common/src/lib.rs` (add `pub mod sys;`)
-- Modify: `crates/devkit-common/Cargo.toml` (`nix` → cfg(unix) target)
+- Modify: `crates/devkit-common/Cargo.toml` (`nix` -> cfg(unix) target)
 - Modify: `crates/devkit-ports/src/registry.rs` (`pid_alive` body)
 - Modify: `crates/devkit-ports/Cargo.toml` (drop `nix`)
 - Modify: `crates/devkit-locks/src/model.rs` (`pid_alive` body)
@@ -316,8 +316,8 @@ pub(super) fn reap_owned(pid: u32) -> bool {
     }
     match waitpid(Pid::from_raw(pid as i32), Some(WaitPidFlag::WNOHANG)) {
         Ok(WaitStatus::StillAlive) => false,
-        Ok(_) => true,  // exited/signaled → reaped
-        Err(_) => true, // ECHILD etc. → treat as gone
+        Ok(_) => true,  // exited/signaled -> reaped
+        Err(_) => true, // ECHILD etc. -> treat as gone
     }
 }
 ```
@@ -508,7 +508,7 @@ git commit -m "refactor(sys): parent-pid and tty behind the boundary; nix now de
 
 ---
 
-## Task 5: Daemon transport → `interprocess`
+## Task 5: Daemon transport -> `interprocess`
 
 **Files:**
 - Modify: `Cargo.toml` (root, workspace deps) + `crates/devkit-ports/Cargo.toml` + root `[dependencies]`

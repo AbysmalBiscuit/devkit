@@ -495,7 +495,7 @@ fn decide_write_at(
 
 /// Enforced-write decision for `path_in` by an explicit `holder` (the hook
 /// derives the holder from the agent payload; identity is not resolved here).
-/// Free → acquire; self/ancestor → allow; otherwise deny. Resolves its own
+/// Free -> acquire; self/ancestor -> allow; otherwise deny. Resolves its own
 /// checkout root on every call; a caller deciding several paths in one batch
 /// should use [`WriteResolver`] instead so paths sharing a directory share one
 /// resolution.

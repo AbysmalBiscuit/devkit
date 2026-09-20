@@ -707,7 +707,7 @@ fn run_task_step(plan: &devkit_ports::task::CommandPlan, dry_run: bool) -> Resul
         println!("  env:  {}", envs.join(" "));
         return Ok(());
     }
-    eprintln!("→ {}: {}", plan.name, plan.argv.join(" "));
+    eprintln!("-> {}: {}", plan.name, plan.argv.join(" "));
     let status = devkit_ports::task::exec(plan)?;
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));

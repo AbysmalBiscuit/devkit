@@ -109,10 +109,10 @@ same `registry::with_lock`-based code. The supervision requests
 **Client connect logic** (`daemon::client`):
 
 1. Try to connect to the socket.
-2. **Connected** → send `Ping`. If `proto` matches → use this daemon. If it
-   **mismatches** (old daemon after a binary upgrade) → send `Shutdown`, wait for
+2. **Connected** -> send `Ping`. If `proto` matches -> use this daemon. If it
+   **mismatches** (old daemon after a binary upgrade) -> send `Shutdown`, wait for
    the socket to disappear (bounded), then go to step 3 to start a fresh one.
-3. **Not connected** → if the run gate is on, **autostart**: fork-exec
+3. **Not connected** -> if the run gate is on, **autostart**: fork-exec
    `devkit-portd`, wait for the socket to accept (bounded poll), connect. If the
    run gate is off, return `NotAvailable` (caller falls back to flock).
 
@@ -120,7 +120,7 @@ same `registry::with_lock`-based code. The supervision requests
 
 1. Acquire an exclusive `fd-lock` on `daemon_lock_file()`
    (`portd.lock` — *separate* from the registry's `ports.lock`). If it can't, a
-   daemon is already running → exit 0. This makes autostart races safe: two
+   daemon is already running -> exit 0. This makes autostart races safe: two
    clients may both spawn a daemon; exactly one wins the lock, the other exits.
 2. Holding the lock, `unlink` any stale `portd.sock`, then `bind`. Stale-socket
    ambiguity is gone because the lock guarantees no live daemon owns it.
@@ -140,7 +140,7 @@ is still present in `ports.json` and it is not marked stopping. The shared
 `ports.json` row *is* the cross-tool signal — no extra IPC needed for a
 daemon-unaware tool to say "stop."
 
-- **Child crashes.** `waitpid` reaps it; row still present → respawn, `record_pid`
+- **Child crashes.** `waitpid` reaps it; row still present -> respawn, `record_pid`
   with the new pid. Restart uses exponential backoff with a crash-loop guard:
   at most `max_restarts` within `restart_window_secs`, then give up, leave the
   row with `pid=None`, and log. Never respawn an instantly-crashing server
@@ -204,8 +204,8 @@ When a fresh daemon starts (after crash, upgrade, or a suppressed idle-exit it
 never took), it **adopts** survivors: read `ports.json`, and for each row with a
 live pid that it did not spawn, monitor via `pid_alive` polling instead of
 `waitpid` (you cannot `waitpid` a non-child). The restart rule is unchanged
-("pid dead + row present → restart"); a *restarted* child becomes a real child
-again and reverts to `waitpid`. This is the asymmetry: **own → waitpid, adopt →
+("pid dead + row present -> restart"); a *restarted* child becomes a real child
+again and reverts to `waitpid`. This is the asymmetry: **own -> waitpid, adopt ->
 poll.**
 
 ## 9. Client fallback is safe because the facade is idempotent
@@ -218,7 +218,7 @@ every facade op is idempotent:
 - `release` removing an absent row is a no-op;
 - `record_pid` is an upsert.
 
-So: `NotAvailable` → silent flock fallback; any other daemon error → log with
+So: `NotAvailable` -> silent flock fallback; any other daemon error -> log with
 context, then retry on flock. No double-alloc, no orphaned rows.
 
 ## 10. Error handling & reporting
@@ -252,17 +252,17 @@ All fields `#[serde(default)]` so existing configs keep working untouched.
   socket, drives `alloc`/`release`/`snapshot`/`prune` through the client, and
   asserts results identical to the flock path. This is what keeps the two paths
   from drifting (the explicit cost of optionality).
-- **Single-instance race.** Two clients autostart concurrently → exactly one
+- **Single-instance race.** Two clients autostart concurrently -> exactly one
   daemon survives (`portd.lock`), mirroring the existing multiprocess flock test.
-- **Restart-on-crash.** Supervise a child that exits → asserted respawn; a
-  crash-looping child → backoff then give-up with `pid=None` + log.
-- **Stop coordination.** `Down` RPC → no restart; external flock `down` removing
-  the row → daemon does not respawn (debounce re-check).
-- **Adoption.** Pre-seed `ports.json` with a live non-child pid → new daemon
-  monitors it by poll; kill it → restart fires.
+- **Restart-on-crash.** Supervise a child that exits -> asserted respawn; a
+  crash-looping child -> backoff then give-up with `pid=None` + log.
+- **Stop coordination.** `Down` RPC -> no restart; external flock `down` removing
+  the row -> daemon does not respawn (debounce re-check).
+- **Adoption.** Pre-seed `ports.json` with a live non-child pid -> new daemon
+  monitors it by poll; kill it -> restart fires.
 - **Idle-exit.** Daemon with zero children and no clients exits after the
   (test-shortened) timeout; suppressed while a child is supervised.
-- **Handshake/version skew.** `Ping` proto mismatch → client decides to
+- **Handshake/version skew.** `Ping` proto mismatch -> client decides to
   `Shutdown` + respawn (unit-testable decision).
 - **Memory tracking.** Supervise a child that forks a worker; assert the reported
   tree-RSS includes the worker (sum over the process tree, not just the child),

@@ -245,7 +245,7 @@ In `legend_lines` (`src/bin/issue/prs.rs:166-178`), add the new label to the gre
         ),
 ```
 
-(Only the second `format!` positional segment changes: `{} (MERGE · done)` → `{} (MERGE · MERGE (unreviewed) · done)`.)
+(Only the second `format!` positional segment changes: `{} (MERGE · done)` -> `{} (MERGE · MERGE (unreviewed) · done)`.)
 
 - [ ] **Step 2: Run the full gate**
 

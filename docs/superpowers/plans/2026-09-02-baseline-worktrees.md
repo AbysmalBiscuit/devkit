@@ -1906,7 +1906,7 @@ git commit -m "feat(issue): keep baselines out of worktree discovery"
 
 ```rust
 pub struct References {
-    /// Baseline path → the worktrees naming it.
+    /// Baseline path -> the worktrees naming it.
     pub by_baseline: BTreeMap<PathBuf, Vec<PathBuf>>,
     /// Worktrees whose record exists and does not parse. Which baseline each
     /// names is unknown, so no baseline is provably unreferenced while any of

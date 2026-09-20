@@ -187,7 +187,7 @@ Add `--setup [--apps a,b]` to also run the per-app prep pipeline, exactly as `is
 
 ### `prs` and `dashboard`
 
-- **`prs`**: GitHub PR triage of your open PRs and PRs awaiting your review, with a per-repo diff cache that renders `old → new` for anything changed since the last run. The three searches (authored, review-requested, reviewed-by) run concurrently, each paged at `--batch-size` (default 25) and followed to exhaustion, so the table is complete however many PRs are open. Lower the batch size if GitHub answers a page with HTTP 504 — the per-PR check and review selections are what make a page expensive. `--retries <N>` (default 0) re-attempts a failed page with backoff.
+- **`prs`**: GitHub PR triage of your open PRs and PRs awaiting your review, with a per-repo diff cache that renders `old -> new` for anything changed since the last run. The three searches (authored, review-requested, reviewed-by) run concurrently, each paged at `--batch-size` (default 25) and followed to exhaustion, so the table is complete however many PRs are open. Lower the batch size if GitHub answers a page with HTTP 504 — the per-PR check and review selections are what make a page expensive. `--retries <N>` (default 0) re-attempts a failed page with backoff.
 - **`dashboard`**: the triage + PR tables, plus terminal timelines of the issues assigned to you by status, PRs opened/merged, and commits over time (`--chart bar` or `line`). The issue timeline comes from whichever tracker this project uses. The timeline fetches (tracker + GitHub) are cached under `~/.cache/devkit/dashboard` for a few minutes so reruns are fast; the live triage/PR panel is never cached. `--no-plots` shows only the tables; `--no-cache` forces a fresh fetch.
 
 ### `review request`
@@ -219,7 +219,7 @@ Whichever way the PR is resolved, its head commit must be this worktree's `HEAD`
 Announce over Slack that you finished reviewing. Posts nothing to GitHub.
 
 ```sh
-issue review finish "LGTM, merging after CI"          # inside the PR's worktree → notifies the author
+issue review finish "LGTM, merging after CI"          # inside the PR's worktree -> notifies the author
 issue review finish --pr 1234 --to lev                # from anywhere, explicit PR + recipient
 ```
 
