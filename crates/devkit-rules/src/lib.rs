@@ -5,7 +5,9 @@
 //! harnesses, hook payloads or sessions, because it has three callers: the
 //! `pre-tool-use` stage, `devkit rules context`, and `devkit rules query`.
 
+pub mod context;
 pub mod index;
 pub mod model;
 pub mod query;
+pub mod render;
 pub mod vocab;
