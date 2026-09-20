@@ -1,0 +1,30 @@
+{
+  "repo": "/repo",
+  "files": [
+    {"path": "AGENTS.md", "tier": 1, "applies_to": ""},
+    {"path": "crates/foo/AGENTS.md", "tier": 1, "applies_to": "crates/foo"}
+  ],
+  "rules": [
+    {"id": "r-root-must", "title": "Root must", "description": "Applies everywhere.",
+     "category": "security", "tasks": ["code-generation"], "languages": ["all"],
+     "scope": "repo", "severity": "must", "source_file": "AGENTS.md", "directory": ""},
+    {"id": "r-foo-should", "title": "Foo should", "description": "Rust only, under crates/foo.",
+     "category": "code_style", "tasks": ["code-generation"], "languages": ["rust"],
+     "scope": "directory", "severity": "should", "source_file": "crates/foo/AGENTS.md",
+     "directory": "crates/foo"},
+    {"id": "r-foo-can", "title": "Foo can", "description": "Optional, under crates/foo.",
+     "category": "readability", "topics": ["readability"], "tasks": ["code-generation"],
+     "languages": ["all"],
+     "scope": "directory", "severity": "can", "source_file": "crates/foo/AGENTS.md",
+     "directory": "crates/foo"},
+    {"id": "r-untagged", "title": "Untagged", "description": "No tasks listed.",
+     "category": "best_practice", "languages": ["typescript"],
+     "scope": "repo", "severity": "should", "source_file": "AGENTS.md", "directory": ""},
+    {"id": "r-review-only", "title": "Review only", "description": "Code review task only.",
+     "category": "best_practice", "tasks": ["code-review"], "languages": ["all"],
+     "scope": "repo", "severity": "must", "source_file": "AGENTS.md", "directory": ""},
+    {"id": "r-bad-severity", "title": "Bad severity", "description": "Off-vocabulary.",
+     "category": "best_practice", "tasks": ["code-generation"], "languages": ["all"],
+     "scope": "repo", "severity": "critical", "source_file": "AGENTS.md", "directory": ""}
+  ]
+}

@@ -1,0 +1,16 @@
+[package]
+name = "devkit-rules"
+edition.workspace = true
+version = "0.14.5" # x-release-please-version
+
+[dependencies]
+serde = { workspace = true }
+serde_json.workspace = true
+strum.workspace = true
+glob.workspace = true
+ring.workspace = true
+devkit-config.workspace = true
+devkit-common.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

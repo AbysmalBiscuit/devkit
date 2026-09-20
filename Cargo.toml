@@ -57,7 +57,7 @@ nix.workspace = true
 
 [workspace]
 resolver = "3"
-members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command"]
+members = ["crates/devkit-config", "crates/devkit-common", "crates/devkit-ports", "crates/devkit-locks", "crates/devkit-rules", "crates/devkit-issue", "crates/devkit-mcp", "crates/devkit-docs", "crates/devkit-command"]
 
 [workspace.package]
 edition = "2024"
@@ -98,6 +98,7 @@ indicatif = "0.17"
 # colour flag, which only works if both link the same console build.
 console = "0.15"
 supports-hyperlinks = "3"
+strum = { version = "0.27", features = ["derive"] }
 ureq = { version = "2", features = ["json"] }
 # Already in the tree under ureq's TLS stack, so taking it directly for
 # `harness_log`'s digest adds no crate to the lock.
@@ -114,6 +115,7 @@ devkit-issue = { path = "crates/devkit-issue" }
 devkit-mcp = { path = "crates/devkit-mcp" }
 toml_edit = { version = "0.25", features = ["serde"] }
 devkit-docs = { path = "crates/devkit-docs" }
+devkit-rules = { path = "crates/devkit-rules" }
 devkit-command = { path = "crates/devkit-command" }
 tree-sitter = "0.27"
 tree-sitter-bash = "0.25"
