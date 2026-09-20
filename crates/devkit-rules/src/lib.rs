@@ -6,3 +6,4 @@
 //! `pre-tool-use` stage, `devkit rules context`, and `devkit rules query`.
 
 pub mod model;
+pub mod vocab;

@@ -7,6 +7,8 @@
 
 use serde::Deserialize;
 
+use crate::vocab::{Scope, Severity, Task, canonical_language, vocabulary_key};
+
 fn all_languages() -> Vec<String> {
     vec!["all".to_string()]
 }
@@ -47,6 +49,36 @@ pub struct Rule {
     pub source_file: String,
     #[serde(default)]
     pub directory: String,
+}
+
+impl Rule {
+    /// `None` when the index carries a severity outside the vocabulary, which
+    /// drops the rule. The extractor's own validation already refuses these.
+    pub fn severity(&self) -> Option<Severity> {
+        self.severity_raw.parse().ok()
+    }
+
+    pub fn scope(&self) -> Option<Scope> {
+        self.scope_raw.parse().ok()
+    }
+
+    /// Parsed tasks, unknown spellings dropped. An empty result may mean the
+    /// index listed none or listed only unrecognized ones; `matching` treats
+    /// both as "applies to every task".
+    pub fn tasks(&self) -> Vec<Task> {
+        self.tasks.iter().filter_map(|t| t.parse().ok()).collect()
+    }
+
+    pub fn languages_canonical(&self) -> Vec<String> {
+        self.languages
+            .iter()
+            .map(|l| canonical_language(l))
+            .collect()
+    }
+
+    pub fn topics_canonical(&self) -> Vec<String> {
+        self.topics.iter().map(|t| vocabulary_key(t)).collect()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
