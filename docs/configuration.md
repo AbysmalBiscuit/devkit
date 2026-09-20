@@ -572,6 +572,42 @@ before writing, so a copy interrupted over an existing archive leaves a short
 file. Preservation finishing before any removal is what keeps that from costing
 data — nothing is deleted until every entry has run.
 
+### `[rules]`
+
+Settings for matching a prebuilt rule index against the files an agent is about to write, and for injecting the `[[context.files]]` entries whose condition holds, both at the moment a tool call is about to land.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `enabled` | no | Turns rule and file injection off as a whole. |
+| `min_severity` | no | The least severe rule still injected: `must`, `should`, or `can`. A rule below this floor is dropped. |
+| `per_event_limit` | no | Caps how many rules and files a single event may inject. |
+| `max_file_bytes` | no | A single injected file larger than this is skipped rather than truncated. |
+| `max_event_bytes` | no | The rendered total for one event is truncated to this many bytes. |
+| `index` | no | Path to the prebuilt rule index. Absent takes the path the extractor writes. |
+
+Example: [`RulesConfig`](../crates/devkit-config/src/lib.rs).
+
+### `[[context.files]]`
+
+Files injected into an agent's context, each its own array element. An entry with no `when` injects whenever the edited target sits under that file's own directory, so a subdirectory `AGENTS.md` is a one-line entry.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `path` | yes | The file to inject, relative to the directory of the `devkit.toml` that declared it. |
+| `when` | no | Conditions gating injection; every condition present must hold. Absent falls back to the directory rule above. |
+
+`when` holds:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `path` | no | A glob over the repo-relative targets of the tool call. |
+| `harness` | no | Harness names the calling harness must match one of, e.g. `codex`. |
+| `env` | no | Environment variables that must be present in the hook process. An empty value means "present with any value". |
+
+As an array, a deeper `devkit.toml` replaces the whole `context.files` list rather than appending to it, the same as `[hooks]`.
+
+Example: [`ContextFile`](../crates/devkit-config/src/lib.rs) and [`FileCondition`](../crates/devkit-config/src/lib.rs).
+
 ### `[people.<alias>]`
 
 Teammate handle aliases used by `issue review` (`--to <alias>`). The alias maps to delivery handles; **no tokens live here** — `SLACK_TOKEN` and `LINEAR_API_KEY` come from the environment / Doppler.

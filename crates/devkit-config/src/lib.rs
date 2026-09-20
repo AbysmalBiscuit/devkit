@@ -64,6 +64,14 @@ pub struct Config {
     /// warnings.
     #[serde(default)]
     pub preserve: HashMap<String, PreserveConfig>,
+    /// Rule injection settings: enablement, severity floor, and the per-event
+    /// size budget.
+    #[serde(default)]
+    pub rules: RulesConfig,
+    /// Files injected into an agent's context, each gated by its own
+    /// condition.
+    #[serde(default)]
+    pub context: ContextConfig,
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the
@@ -284,6 +292,100 @@ pub struct PreserveConfig {
     /// Keep the worktree instead of removing it when this entry warns.
     #[serde(default)]
     pub required: bool,
+}
+
+/// Rule injection settings.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [rules]
+/// enabled = true
+/// min_severity = "should"
+/// per_event_limit = 5
+/// # "#).unwrap();
+/// # assert!(cfg.rules.enabled);
+/// # assert_eq!(cfg.rules.min_severity, "should");
+/// # assert_eq!(cfg.rules.per_event_limit, 5);
+/// ```
+#[derive(Debug, JsonSchema, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RulesConfig {
+    /// Rule and file injection as a whole.
+    pub enabled: bool,
+    /// The least severe rule still injected: `must`, `should` or `can`.
+    pub min_severity: String,
+    /// How many rules and files one event may inject.
+    pub per_event_limit: usize,
+    /// A single injected file larger than this is skipped.
+    pub max_file_bytes: usize,
+    /// The rendered total for one event is truncated to this.
+    pub max_event_bytes: usize,
+    /// Where the rule index lives. Absent means the path the extractor writes.
+    pub index: Option<String>,
+}
+
+impl Default for RulesConfig {
+    fn default() -> Self {
+        RulesConfig {
+            enabled: true,
+            min_severity: "should".to_string(),
+            per_event_limit: 5,
+            max_file_bytes: 16384,
+            max_event_bytes: 65536,
+            index: None,
+        }
+    }
+}
+
+/// Files injected into an agent's context when the condition on them holds.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [[context.files]]
+/// path = "crates/devkit-ports/AGENTS.md"
+///
+/// [[context.files]]
+/// path = "docs/deploy.md"
+/// when = { harness = ["codex"], env = { DEPLOY_TARGET = "staging" } }
+/// # "#).unwrap();
+/// # assert_eq!(cfg.context.files.len(), 2);
+/// # assert!(cfg.context.files[0].when.is_none());
+/// # assert_eq!(cfg.context.files[1].when.as_ref().unwrap().harness, vec!["codex".to_string()]);
+/// ```
+///
+/// An entry is an array element, so a deeper `devkit.toml` replaces the whole
+/// list rather than appending to it, the same as `[hooks]`.
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ContextConfig {
+    pub files: Vec<ContextFile>,
+}
+
+/// One injected file.
+#[derive(Debug, JsonSchema, Deserialize, Serialize)]
+pub struct ContextFile {
+    /// The file to inject, relative to the directory of the `devkit.toml` that
+    /// declared it.
+    pub path: String,
+    /// When to inject it. Absent means: when the edited target is under this
+    /// file's own directory.
+    #[serde(default)]
+    pub when: Option<FileCondition>,
+}
+
+/// Conditions on an injected file. Every condition present must hold.
+#[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FileCondition {
+    /// A glob over the repo-relative targets of the tool call.
+    pub path: Option<String>,
+    /// Harness names: `claude-code`, `codex`, `cursor`.
+    pub harness: Vec<String>,
+    /// Environment variables in the hook process. An empty value means
+    /// "present with any value".
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// Linear lookups that cost an extra API round trip, so each is opt-in.
