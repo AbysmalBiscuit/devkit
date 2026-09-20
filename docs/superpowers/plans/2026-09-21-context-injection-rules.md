@@ -85,7 +85,6 @@ edition.workspace = true
 version = "0.14.5" # x-release-please-version
 
 [dependencies]
-anyhow.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
 strum.workspace = true
@@ -192,18 +191,6 @@ pub struct Rule {
     pub directory: String,
 }
 
-impl Rule {
-    /// The extractor's own display form: title and description joined, or
-    /// whichever one is present.
-    pub fn display_text(&self) -> String {
-        match (self.title.is_empty(), self.description.is_empty()) {
-            (false, false) => format!("{}: {}", self.title, self.description),
-            (false, true) => self.title.clone(),
-            _ => self.description.clone(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuleFile {
     pub path: String,
@@ -265,7 +252,8 @@ Expected: PASS.
      "scope": "directory", "severity": "should", "source_file": "crates/foo/AGENTS.md",
      "directory": "crates/foo"},
     {"id": "r-foo-can", "title": "Foo can", "description": "Optional, under crates/foo.",
-     "category": "readability", "tasks": ["code-generation"], "languages": ["all"],
+     "category": "readability", "topics": ["readability"], "tasks": ["code-generation"],
+     "languages": ["all"],
      "scope": "directory", "severity": "can", "source_file": "crates/foo/AGENTS.md",
      "directory": "crates/foo"},
     {"id": "r-untagged", "title": "Untagged", "description": "No tasks listed.",
@@ -865,7 +853,7 @@ Append to the test module in `crates/devkit-rules/src/query.rs`:
     fn a_requested_topic_outranks_everything_else() {
         let index = fixture();
         let ranked = rank(&index, matching(&index, &Filter::default()), &["readability".to_string()]);
-        assert_eq!(ranked[0].id, "r-foo-can", "the rule naming the topic comes first");
+        assert_eq!(ranked[0].id, "r-foo-can", "the only rule tagged with the topic");
     }
 ```
 
@@ -1044,7 +1032,12 @@ use crate::model::RuleIndex;
 
 /// The cache directory name for a repository, as `rules/paths.py` builds it.
 pub fn cache_dir_name(repo: &Path) -> String {
+    // Python hashes `str(Path.resolve())`. `canonicalize` agrees on Unix and
+    // does not on Windows, where it returns a `\\?\C:\...` verbatim path that
+    // `Path.resolve()` never produces, so the digest would differ for every
+    // repository. Strip the prefix before hashing.
     let resolved = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let resolved = strip_verbatim(&resolved);
     let digest = ring::digest::digest(
         &ring::digest::SHA256,
         resolved.to_string_lossy().as_bytes(),
@@ -1057,17 +1050,33 @@ pub fn cache_dir_name(repo: &Path) -> String {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    // `re.sub(r"[^a-zA-Z0-9._-]+", "-", name)`: one dash per run of disallowed
+    // characters, never merged with a neighbouring literal dash. Collapsing
+    // `a-!b` to `a-b` where Python gives `a--b` names a different directory,
+    // and the index is then silently not found.
     let mut basename = String::with_capacity(raw.len());
+    let mut in_run = false;
     for c in raw.chars() {
         if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
             basename.push(c);
-        } else if !basename.ends_with('-') {
+            in_run = false;
+        } else if !in_run {
             basename.push('-');
+            in_run = true;
         }
     }
     let basename = basename.trim_matches('-').to_lowercase();
     let basename = if basename.is_empty() { "repo" } else { &basename };
     format!("{basename}-{hex}")
+}
+
+/// A Windows `\\?\C:\...` path as `C:\...`. A no-op everywhere else.
+fn strip_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path.to_path_buf(),
+    }
 }
 
 /// The cache root platformdirs gives `repo-rules`.
@@ -1285,7 +1294,7 @@ Expected: PASS.
 - [ ] **Step 5: Regenerate the schema**
 
 ```bash
-DEVKIT_UPDATE_SCHEMA=1 cargo test -p devkit --test schema
+DEVKIT_UPDATE_SCHEMA=1 cargo test -p devkit --test config_schema
 git diff --stat schema/devkit-config.json
 ```
 
@@ -1957,12 +1966,12 @@ A pure refactor with no behaviour change, pinned by a characterization test writ
 
 **Files:**
 - Modify: `src/bin/devkit/hook/edit.rs`
-- Modify: `src/bin/devkit/hook/shell.rs` (widen `print_envelope` to `pub(super)`)
+- Modify: `src/bin/devkit/hook/shell.rs` (widen `print_envelope` to `pub(super)`; `edit.rs` also needs `shell` added to its `use super::{...}` list)
 - Create: `tests/hook_edit_verdict.rs`
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `enum Verdict { Allow, Deny { envelope: serde_json::Value, reasons: Vec<String> } }` private to `edit.rs`. `claim` returns `Verdict` and prints nothing. `guard` holds the edit path's only `print_envelope` call.
+- Produces: `enum WriteOutcome { Allow, Deny { envelope: serde_json::Value, reasons: Vec<String> } }` private to `edit.rs`. `claim` returns `WriteOutcome` and prints nothing. `guard` holds the edit path's only `print_envelope` call.
 
 - [ ] **Step 1: Write the characterization test**
 
@@ -1977,8 +1986,6 @@ A pure refactor with no behaviour change, pinned by a characterization test writ
 //! stdout treats it as plain text carrying no decision: the denial is lost and
 //! the write proceeds.
 
-#[path = "common/shimtest.rs"]
-mod shimtest;
 #[path = "common/testenv.rs"]
 mod testenv;
 
@@ -2028,20 +2035,18 @@ pub fn run_hook(project: &Path, state: &Path, payload: &str) -> Output {
     child.wait_with_output().expect("hook output")
 }
 
-/// Claim `path` for `holder` through the `lockm` shim, the way another session
-/// would have.
+/// Claim `path` for `holder`, the way another session would have. `devkit locks
+/// acquire` is the same verb `lockm acquire` reaches, so no shim is needed.
 pub fn hold(project: &Path, state: &Path, path: &str, holder: &str) {
-    let (_dir, link) = shimtest::linked("lockm");
-    let mut cmd = Command::new(&link);
-    cmd.args(["acquire", path, "--as", holder])
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
+    cmd.args(["locks", "acquire", path, "--as", holder])
         .current_dir(project)
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
         .env("DEVKIT_SKIP_AUTOLINK", "1");
     testenv::scrub_identity(&mut cmd);
-    let out = cmd.output().expect("spawn lockm");
+    let out = cmd.output().expect("spawn devkit locks acquire");
     assert!(out.status.success(), "the other holder should acquire");
-    std::mem::forget(_dir);
 }
 
 pub fn write_payload(session: &str, agent: Option<&str>, cwd: &Path, target: &str) -> String {
@@ -2113,7 +2118,7 @@ In `src/bin/devkit/hook/edit.rs`, above `claim`:
 /// single emission site. Anything appended to stdout after a denial makes the
 /// whole output unparseable, and a harness that cannot parse a hook's stdout
 /// proceeds with the call it was asked to gate.
-enum Verdict {
+enum WriteOutcome {
     Allow,
     Deny {
         envelope: serde_json::Value,
@@ -2124,9 +2129,9 @@ enum Verdict {
 
 - [ ] **Step 4: Make `claim` return it**
 
-Change `claim`'s signature to `-> Verdict`. Then, in its body:
+Change `claim`'s signature to `-> WriteOutcome`. Then, in its body:
 
-- the enforcement-disabled early return becomes `return Verdict::Allow;`
+- the enforcement-disabled early return becomes `return WriteOutcome::Allow;`
 - the registry-error arm becomes, in place of its `println!` and `return`:
 
 ```rust
@@ -2134,14 +2139,14 @@ Change `claim`'s signature to `-> Verdict`. Then, in its body:
                 // fail closed: a registry error must not silently reopen the
                 // window
                 let message = format!("devkit write-harness: registry error (fail-closed): {e:#}");
-                return Verdict::Deny {
+                return WriteOutcome::Deny {
                     envelope: hook::deny_json(&message),
                     reasons: vec![message],
                 };
             }
 ```
 
-- the `conflicts.is_empty()` early return becomes `return Verdict::Allow;`
+- the `conflicts.is_empty()` early return becomes `return WriteOutcome::Allow;`
 - the tail becomes:
 
 ```rust
@@ -2150,24 +2155,40 @@ Change `claim`'s signature to `-> Verdict`. Then, in its body:
         .as_str()
         .unwrap_or_default()
         .to_string();
-    Verdict::Deny { envelope, reasons: vec![reason] }
+    WriteOutcome::Deny { envelope, reasons: vec![reason] }
 ```
 
 - [ ] **Step 5: Emit once in `guard`**
 
-In `guard`, replace the `match hook::parse_write(payload)` block so both arms produce a `(Vec<String>, Verdict)`, the `Unusable` arm building its `Verdict::Deny` from `hook::deny_json(&message)` when `hook::enforcement_enabled_in` is true and `Verdict::Allow` otherwise. Then, before the existing flush:
+In `guard`, widen the `match hook::parse_write(payload)` block so every arm
+yields `(targets, holder, reasons, outcome)`:
+
+- the `LockAction::Write` arm passes through the targets and holder it already
+  binds, and takes `reasons` and `outcome` from `claim`
+- the `Unusable` arm yields empty targets, `String::new()` for the holder,
+  `vec![message]` for the reasons, and a `WriteOutcome::Deny` built from
+  `hook::deny_json(&message)` when `hook::enforcement_enabled_in` is true or
+  `WriteOutcome::Allow` when it is not
+- the non-writing arm returns early, as it does now
+
+`reasons` stays separate from `outcome` rather than being derived from it,
+because one log record would otherwise move. Today the `Unusable` arm populates
+`blocks` regardless of enforcement, so the harness log records `Decision::Deny`
+even when nothing reached stdout. Deriving `blocks` from the outcome would flip
+that record to `Allow`. No test pins it, which is exactly why it is worth
+writing down.
+
+Then, before the existing flush:
 
 ```rust
-    let blocks = match verdict {
-        Verdict::Deny { envelope, reasons } => {
-            shell::print_envelope(&envelope);
-            reasons
-        }
-        Verdict::Allow => Vec::new(),
-    };
+    let blocks = reasons;
+    if let WriteOutcome::Deny { envelope, .. } = &outcome {
+        shell::print_envelope(envelope);
+    }
 ```
 
-Keep everything after this identical: the flush, the log settings, and the record all run on both paths as they do now.
+Everything after this is unchanged: the flush, the log settings, and the record
+all run on both paths as they do now.
 
 In `src/bin/devkit/hook/shell.rs`, change `fn print_envelope` to `pub(super) fn print_envelope`.
 
@@ -2208,7 +2229,7 @@ MSG
 - Modify: `tests/hook_edit_verdict.rs`
 
 **Interfaces:**
-- Consumes: `devkit_rules::{context::{Subject, fires, read_capped}, index, query, render, vocab}`, `devkit_config::RulesConfig`, `Verdict::Allow` from Task 9.
+- Consumes: `devkit_rules::{context::{Subject, fires, read_capped}, index, query, render, vocab}`, `devkit_config::RulesConfig`, `WriteOutcome::Allow` from Task 9.
 - Produces: `hook::rules::{inject, fired_path, clear_for_holder}`. `inject(payload: &Value, checkout: &Checkout, cwd: &Path, declared: Option<Harness>, targets: &[String], holder: &str)` returns `()`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2227,9 +2248,11 @@ fn rules_project(state: &Path) -> tempfile::TempDir {
     std::fs::write(
         p.path().join("devkit.toml"),
         format!(
+            // A literal string, not a basic one: a Windows path carries
+            // backslashes, and `"C:\\Users..."` is an invalid escape.
             "[harness]\nenforce_writes = true\n\n\
              [rules]\nenabled = true\nmin_severity = \"should\"\n\
-             index = \"{}\"\n\n\
+             index = '{}'\n\n\
              [[context.files]]\npath = \"crates/foo/AGENTS.md\"\n",
             index.display()
         ),
@@ -2268,6 +2291,29 @@ fn a_denial_emits_no_rules_and_stamps_nothing() {
     let text = serde_json::to_string(&v).unwrap();
     assert!(!text.contains("Foo should"), "no rule rides along: {text}");
     assert!(!text.contains("foo house rules"), "no file rides along: {text}");
+
+    // Byte-for-byte against the same conflict with rules switched off: the deny
+    // path must be indistinguishable from what it emitted before this feature.
+    let off_state = tempfile::tempdir().unwrap();
+    let off = rules_project(off_state.path());
+    std::fs::write(
+        off.path().join("devkit.toml"),
+        "[harness]\nenforce_writes = true\n\n[rules]\nenabled = false\n",
+    )
+    .unwrap();
+    hold(off.path(), off_state.path(), "crates/foo/src/a.rs", "other-session");
+    let baseline = run_hook(
+        off.path(),
+        off_state.path(),
+        &write_payload("S", None, off.path(), "crates/foo/src/a.rs"),
+    );
+    // Each output is normalized against its own project root, so the two are
+    // compared on content rather than on which tempdir produced them.
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).replace(proj.path().to_string_lossy().as_ref(), ""),
+        String::from_utf8_lossy(&baseline.stdout).replace(off.path().to_string_lossy().as_ref(), ""),
+        "the deny envelope is unchanged by the rules feature"
+    );
 
     let fired = state.path().join("devkit/rules");
     assert!(
@@ -2309,24 +2355,35 @@ fn a_subagent_gets_a_rule_its_parent_already_fired() {
     );
 }
 
+/// An `apply_patch` envelope, the only multi-target write in devkit's model:
+/// every other write tool names one `tool_input.file_path`.
+fn patch_payload(session: &str, cwd: Option<&Path>, targets: &[&str]) -> String {
+    let mut patch = String::from("*** Begin Patch\n");
+    for target in targets {
+        patch.push_str(&format!("*** Update File: {target}\n"));
+    }
+    patch.push_str("*** End Patch\n");
+    let mut payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "session_id": session,
+        "tool_input": { "command": patch }
+    });
+    if let Some(cwd) = cwd {
+        payload["cwd"] = serde_json::Value::String(cwd.to_string_lossy().into_owned());
+    }
+    payload.to_string()
+}
+
 /// Review Focus 2: no `cwd` key, so a relative target cannot be resolved.
+/// `apply_patch_paths` takes paths verbatim, relative to the session's cwd.
 #[test]
 fn a_payload_without_cwd_drops_relative_targets_and_keeps_absolute_ones() {
     let state = tempfile::tempdir().unwrap();
     let proj = rules_project(state.path());
     let absolute = proj.path().join("crates/foo/src/a.rs");
-    let payload = serde_json::json!({
-        "hook_event_name": "PreToolUse",
-        "tool_name": "MultiEdit",
-        "session_id": "S",
-        "tool_input": {
-            "edits": [
-                { "file_path": "relative/b.rs" },
-                { "file_path": absolute.to_string_lossy() }
-            ]
-        }
-    })
-    .to_string();
+    let absolute = absolute.to_string_lossy().into_owned();
+    let payload = patch_payload("S", None, &["relative/b.rs", &absolute]);
 
     let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
     assert!(text.contains("Foo should"), "the absolute target still matches: {text}");
@@ -2356,27 +2413,17 @@ fn a_torn_line_in_the_fired_set_does_not_suppress_the_rest() {
 fn a_multi_target_call_unions_the_rules_for_every_target() {
     let state = tempfile::tempdir().unwrap();
     let proj = rules_project(state.path());
-    let payload = serde_json::json!({
-        "hook_event_name": "PreToolUse",
-        "tool_name": "MultiEdit",
-        "session_id": "S",
-        "cwd": proj.path().to_string_lossy(),
-        "tool_input": {
-            "edits": [
-                { "file_path": "crates/foo/src/a.rs" },
-                { "file_path": "README.md" }
-            ]
-        }
-    })
-    .to_string();
+    let payload = patch_payload(
+        "S",
+        Some(proj.path()),
+        &["crates/foo/src/a.rs", "README.md"],
+    );
 
     let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
     assert!(text.contains("Foo should"), "the crates/foo target: {text}");
     assert!(text.contains("Root must"), "the root target: {text}");
 }
 ```
-
-If the `MultiEdit` payload shape here does not match what `devkit_locks::hook::parse_write` expects, read `crates/devkit-locks/src/hook.rs` and use the shape its own tests use. The assertions do not depend on the spelling.
 
 - [ ] **Step 2: Run them and watch them fail**
 
@@ -2452,6 +2499,13 @@ pub fn clear_for_holder(holder: &str) {
     let _ = std::fs::remove_file(fired_path(holder));
 }
 
+/// Record ids as injected for `holder`. `devkit rules context` calls this too,
+/// so what a session-start block emitted is not emitted again by the first
+/// write that happens to match it.
+pub fn stamp_ids(holder: &str, ids: &[String]) {
+    stamp(holder, ids);
+}
+
 /// Ids already injected for `holder`.
 ///
 /// A parent and its subagents append to this file concurrently, so a line that
@@ -2462,10 +2516,9 @@ fn already_fired(holder: &str) -> HashSet<String> {
         .unwrap_or_default()
         .lines()
         .map(str::trim)
-        .filter(|line| {
-            !line.is_empty()
-                && line.chars().all(|c| c.is_ascii_graphic() || c == '/' || c == '.')
-        })
+        // A file entry's id is its configured path, which may hold a space or
+        // non-ASCII. Only a control character marks a torn write.
+        .filter(|line| !line.is_empty() && !line.chars().any(char::is_control))
         .map(str::to_string)
         .collect()
 }
@@ -2520,10 +2573,18 @@ fn run(
     targets: &[String],
     holder: &str,
 ) {
-    let Some(harness_name) = declared else {
+    // Every shipped manifest passes `--harness`, but the retired
+    // `lockm hook pretooluse` spelling does not, and the shell path infers
+    // rather than giving up. Match it.
+    let Some(harness_name) = declared.or_else(|| devkit_common::harness::infer_harness(payload))
+    else {
         return;
     };
-    let Some(project) = devkit_config::discover_quiet(cwd) else {
+    // `devkit_common::config::resolve_in` is the only permitted door to the
+    // merged config: `tests/no_stray_config.rs` fails the build when anything
+    // else calls `devkit_config::resolve`. `enforcement_enabled_in` reads raw
+    // layer flags and never deserializes `Config`, so there is no read to share.
+    let Ok((project, provenance)) = devkit_common::config::resolve_in(checkout, None, cwd) else {
         return;
     };
     let settings = &project.rules;
@@ -2534,12 +2595,18 @@ fn run(
         return;
     };
 
+    // Both sides resolve before they compare. git reports a symlinked working
+    // directory resolved, since it reads the directory rather than the spelling
+    // used to reach it, so `root` is `/private/var/...` where the payload's cwd
+    // is `/var/...`; `git.rs`'s own `containment` documents the same hazard. A
+    // purely lexical strip would drop every target on macOS.
+    let root_canon = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     // A target that escapes the root after normalization is dropped: a rule for
     // the repository root must not fire for a write outside the repository.
     let relative: Vec<String> = targets
         .iter()
         .map(|t| resolve(payload, t))
-        .filter_map(|abs| query::relativize(root, &abs))
+        .filter_map(|abs| query::relativize(&root_canon, &abs))
         .collect();
     if relative.is_empty() {
         return;
@@ -2581,12 +2648,21 @@ fn run(
         }
     }
 
+    // A relative `path` anchors to the directory of the layer that declared the
+    // entry. `[[context.files]]` is an array, and an array leaf replaces
+    // wholesale rather than merging, so every surviving entry came from one
+    // file and `origin` names it.
+    let layer_dir = provenance
+        .origin
+        .get("context.files")
+        .and_then(|f| f.parent())
+        .unwrap_or(root);
     let mut files: Vec<(String, String)> = Vec::new();
     for entry in &project.context.files {
-        if fired.contains(&entry.path) || !context::fires(entry, &project.layer_dir, &subject) {
+        if fired.contains(&entry.path) || !context::fires(entry, layer_dir, &subject) {
             continue;
         }
-        let path = project.layer_dir.join(&entry.path);
+        let path = layer_dir.join(&entry.path);
         if let Some(body) = context::read_capped(&path, settings.max_file_bytes) {
             files.push((entry.path.clone(), body));
         }
@@ -2622,7 +2698,15 @@ fn resolve(payload: &Value, path: &str) -> PathBuf {
     payload
         .get("cwd")
         .and_then(Value::as_str)
-        .map(|cwd| Path::new(cwd).join(p))
+        .map(|cwd| {
+            let base = Path::new(cwd);
+            // The payload's cwd is the spelling the session was started with,
+            // which on macOS is the symlink rather than the resolved path the
+            // checkout root carries.
+            std::fs::canonicalize(base)
+                .unwrap_or_else(|_| base.to_path_buf())
+                .join(p)
+        })
         .unwrap_or_else(|| p.to_path_buf())
 }
 
@@ -2635,22 +2719,27 @@ fn harness_slug(harness: Harness) -> &'static str {
 }
 ```
 
-Two names here may not exist yet. `devkit_config::discover_quiet` is whatever the crate's existing "resolve the merged config, silently" entry point is called; read `crates/devkit-config/src/lib.rs` and use the real one, the same one `harness::enforcement_enabled_in` reaches for. `project.layer_dir` is the directory of the layer that declared the `[[context.files]]` entry; if the merged config does not carry it, add it in Task 6's types as the directory of the highest-precedence layer and note the limitation in `docs/configuration.md`.
+`resolve_in` calls `pool::configure` and may print a `baseline_path` warning on
+stderr. Both are in-process and neither touches the verdict, which has already
+been emitted by the time this runs.
 
 - [ ] **Step 4: Call it from the allow arm**
 
-In `src/bin/devkit/hook/edit.rs`, inside the `Verdict::Allow` arm only, after the verdict is final and before `harness_log::record`:
+In `src/bin/devkit/hook/edit.rs`, inside the `WriteOutcome::Allow` arm only, after the verdict is final and before `harness_log::record`:
 
 ```rust
-        Verdict::Allow => {
+        WriteOutcome::Allow => {
             rules::inject(payload, &checkout, &cwd, declared, &targets, &holder);
             Vec::new()
         }
 ```
 
-`holder` comes from the same `LockAction::Write` the targets do, so bind it alongside them in the `match`.
+Task 9 already widened the earlier match to yield `(targets, holder, reasons,
+outcome)`, so `holder` is in scope here. It is `String::new()` on the `Unusable`
+arm, which never reaches `WriteOutcome::Allow` with targets to match, so the
+empty holder is never used.
 
-Add `mod rules;` to `src/bin/devkit/hook/mod.rs`.
+Add `pub(crate) mod rules;` to `src/bin/devkit/hook/mod.rs`. It is crate-visible rather than private because Task 11's `devkit rules context` calls `stamp_ids` through it, so both injection points share one fired-set implementation.
 
 - [ ] **Step 5: Clear the fired-set on release**
 
@@ -2716,7 +2805,8 @@ fn context_project() -> (tempfile::TempDir, tempfile::TempDir) {
     std::fs::copy("crates/devkit-rules/tests/fixtures/index.json", &index).unwrap();
     std::fs::write(
         p.path().join("devkit.toml"),
-        format!("[rules]\nenabled = true\nindex = \"{}\"\n", index.display()),
+        // A literal string: a Windows path's backslashes are not escapes.
+        format!("[rules]\nenabled = true\nindex = '{}'\n", index.display()),
     )
     .unwrap();
     (p, state)
@@ -2729,7 +2819,9 @@ fn run_context(project: &std::path::Path, state: &std::path::Path, args: &[&str]
         .current_dir(project)
         .env("HOME", state)
         .env("XDG_STATE_HOME", state)
-        .env("DEVKIT_SKIP_AUTOLINK", "1");
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env_remove("DEVKIT_CONFIG");
+    testenv::scrub_identity(&mut cmd);
     cmd.output().unwrap()
 }
 
@@ -2788,9 +2880,10 @@ fn context_cmd(args: ContextArgs) -> Result<()> {
         return Ok(());
     };
     let checkout = Checkout::at(&cwd);
-    let Some(project) = devkit_config::discover_quiet(&cwd) else {
+    let Ok((project, provenance)) = devkit_common::config::resolve_in(&checkout, None, &cwd) else {
         return Ok(());
     };
+    let _ = &provenance;
     if !project.rules.enabled {
         return Ok(());
     }
@@ -2826,11 +2919,24 @@ fn context_cmd(args: ContextArgs) -> Result<()> {
     } else {
         print!("{text}");
     }
+    // A top-level session's holder is the bare session id. Without this the
+    // first allowed write re-injects everything the session-start block just
+    // showed the agent.
+    if let Some(session) = session_id() {
+        let ids: Vec<String> = matched.iter().map(|r| r.id.clone()).collect();
+        crate::hook::rules::stamp_ids(&session, &ids);
+    }
     Ok(())
 }
 ```
 
-Copy `envelope` from `brief.rs`, which already spells the Cursor and Codex fields apart, or make `brief::envelope` `pub(crate)` and call it. One spelling of that logic, not two.
+Copy `envelope` and `session_id` from `brief.rs`, or make both `pub(crate)` and
+call them. `brief.rs` already spells the Cursor and Codex fields apart and
+already reads the session id off stdin behind an `is_terminal` check; one
+spelling of each, not two.
+
+The `rules_cli.rs` tests use `.output()`, which closes stdin, so `session_id`
+returns `None` there and stamping is a no-op. That keeps them hermetic.
 
 - [ ] **Step 4: Truncate the fired-set on post-compact**
 
@@ -2874,7 +2980,29 @@ In `hooks/hooks-codex.json`, append to the default SessionStart matcher's hooks 
 
 The `compact` matcher gets it deliberately: post-compact clears the fired set, and the repository-scope rules are exactly what the compaction dropped.
 
-In `hooks/hooks-cursor.json`, add the same `--additional-context` entry to its session start block.
+In `hooks/hooks-cursor.json`, add the same `--additional-context` entry to its
+session start block.
+
+Claude Code needs one more. Its SessionStart matcher is `startup|resume|clear`,
+not `compact`, so a compaction there clears the fired set and nothing re-injects
+the repository rules until a write happens to match. Add to `hooks.json`'s
+`PostCompact` hooks array, beside `devkit brief --pins-only`:
+
+```json
+          {
+            "type": "command",
+            "command": "devkit rules context",
+            "timeout": 3,
+            "statusMessage": "Re-injecting repository rules"
+          }
+```
+
+Order matters within that array: `devkit hook post-compact` clears the fired set
+and `devkit rules context` stamps it, so the clear must come first. Put the
+`rules context` entry after the `post-compact` one. On Codex, verify the same
+ordering holds between its `compact` SessionStart matcher and its `PostCompact`
+block before trusting it; if `PostCompact` fires last there, it wipes the stamp
+`rules context` just wrote and the next write duplicates the repository rules.
 
 - [ ] **Step 6: Run the tests and watch them pass**
 
