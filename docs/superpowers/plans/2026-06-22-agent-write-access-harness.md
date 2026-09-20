@@ -12,8 +12,8 @@
 
 - **Spec:** `docs/superpowers/specs/2026-06-21-agent-write-access-harness-design.md`.
 - **Writes only.** Gate `Edit`, `MultiEdit`, `Write`, `NotebookEdit`. Reads, and `Bash` writes, are out of scope (documented gap).
-- **Opt-in per checkout, default off.** Harness engages only when the checkout's root `devkit.toml` has `[harness] enforce_writes = true`. No marker → the hook exits 0 immediately.
-- **Ownership rule:** a write to file `F` by holder `H` is allowed iff every live overlapping lock on `F` is held by an ancestor-or-self of `H`; free → auto-acquire as `H`; otherwise deny.
+- **Opt-in per checkout, default off.** Harness engages only when the checkout's root `devkit.toml` has `[harness] enforce_writes = true`. No marker -> the hook exits 0 immediately.
+- **Ownership rule:** a write to file `F` by holder `H` is allowed iff every live overlapping lock on `F` is held by an ancestor-or-self of `H`; free -> auto-acquire as `H`; otherwise deny.
 - **Holder id is two-level:** top-level agent = `session_id`; sub-agent = `session_id/agent_id`. Ancestor test is leading path-segment prefix.
 - **Fail open** when the harness is off or `lockm` is absent; **fail closed** (deny) on a registry error when the harness is on.
 - **TDD**, frequent commits, Conventional Commits. `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo fmt --all` must pass before the final commit. Tests that spawn/reap poll for state — never a fixed sleep.
@@ -469,8 +469,8 @@ fn write_ctx(path_in: &str) -> Result<(String, String)> {
 }
 
 /// Enforced-write decision for `path_in` by an explicit `holder` (the hook derives
-/// the holder from the agent payload; identity is not resolved here). Free → acquire;
-/// self/ancestor → allow; otherwise deny.
+/// the holder from the agent payload; identity is not resolved here). Free -> acquire;
+/// self/ancestor -> allow; otherwise deny.
 pub fn decide_write(
     path_in: &str,
     holder: &str,
@@ -781,9 +781,9 @@ mod tests {
         std::fs::write(dir.join("devkit.toml"), "[harness]\nenforce_writes = false\n").unwrap();
         assert!(!harness_enabled(&dir));
         std::fs::write(dir.join("devkit.toml"), "[defaults]\nworktree_root = \"x\"\n").unwrap();
-        assert!(!harness_enabled(&dir)); // missing section → off, despite unrelated keys
+        assert!(!harness_enabled(&dir)); // missing section -> off, despite unrelated keys
         let _ = std::fs::remove_file(dir.join("devkit.toml"));
-        assert!(!harness_enabled(&dir)); // no devkit.toml → off
+        assert!(!harness_enabled(&dir)); // no devkit.toml -> off
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -918,12 +918,12 @@ git commit -m "feat(locks): add hook payload parsing and activation gate"
 - Consumes: `devkit_locks::hook::{parse_event, deny_json, harness_enabled, HookEvent}`, `devkit_locks::{decide_write, release_prefix}`, `devkit_locks::model::WriteDecision`, `devkit_locks::find_root_from`.
 - Produces: CLI `lockm hook <event>` reading JSON on stdin, writing the decision to stdout, always exiting 0.
 
-Behavior: read stdin → parse JSON (on malformed JSON: allow, exit 0). Resolve the checkout root from the payload `cwd` (fallback: process cwd). If `!harness_enabled(root)` → exit 0 silently. Else dispatch the `HookEvent`:
-- `Write` → `decide_write(file_path, holder, Some("write-harness"), 1800)`. `Acquired`/`AllowedByOwnership` → exit 0 (no stdout, normal flow). `Denied(conflicts)` → print `deny_json(reason)` and exit 0. On `Err` → **fail closed**: print `deny_json("devkit write-harness: registry error (fail-closed): …")`, exit 0.
-- `ReleaseSubagent`/`ReleaseSession` → `release_prefix(holder)` (best-effort; ignore errors), exit 0.
-- `Ignore` → exit 0.
+Behavior: read stdin -> parse JSON (on malformed JSON: allow, exit 0). Resolve the checkout root from the payload `cwd` (fallback: process cwd). If `!harness_enabled(root)` -> exit 0 silently. Else dispatch the `HookEvent`:
+- `Write` -> `decide_write(file_path, holder, Some("write-harness"), 1800)`. `Acquired`/`AllowedByOwnership` -> exit 0 (no stdout, normal flow). `Denied(conflicts)` -> print `deny_json(reason)` and exit 0. On `Err` -> **fail closed**: print `deny_json("devkit write-harness: registry error (fail-closed): …")`, exit 0.
+- `ReleaseSubagent`/`ReleaseSession` -> `release_prefix(holder)` (best-effort; ignore errors), exit 0.
+- `Ignore` -> exit 0.
 
-- [ ] **Step 1: Write the failing test** — add to `src/bin/lockm.rs` a `#[cfg(test)] mod tests` covering the pure decision→output mapping (factor the mapping into a helper so it is testable without IO):
+- [ ] **Step 1: Write the failing test** — add to `src/bin/lockm.rs` a `#[cfg(test)] mod tests` covering the pure decision->output mapping (factor the mapping into a helper so it is testable without IO):
 
 ```rust
 #[cfg(test)]
@@ -1011,10 +1011,10 @@ fn run_hook(event: &str) {
     use std::io::Read;
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_err() {
-        return; // can't read payload → allow
+        return; // can't read payload -> allow
     }
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(&buf) else {
-        return; // malformed → allow
+        return; // malformed -> allow
     };
 
     // Resolve the checkout root from the payload cwd (fallback: process cwd).
@@ -1027,7 +1027,7 @@ fn run_hook(event: &str) {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     if !hook::harness_enabled(&root) {
-        return; // opt-in absent → no enforcement
+        return; // opt-in absent -> no enforcement
     }
 
     match hook::parse_event(event, &payload) {
@@ -1060,7 +1060,7 @@ fn run_hook(event: &str) {
 Run: `cargo test -p devkit --bin lockm write_output`
 Expected: PASS.
 
-Smoke (no devkit.toml in a temp dir → allow, no output):
+Smoke (no devkit.toml in a temp dir -> allow, no output):
 
 ```bash
 cargo build -q --bin lockm
@@ -1286,10 +1286,10 @@ cargo install --path .
 ```
 
 Confirm, polling state (no fixed sleeps):
-1. **Auto-acquire:** a fresh session edits a free file → succeeds; `lockm status` shows a `write-harness` lock held by the session id.
-2. **Cross-session block:** a second session editing the same file → denied with a message naming the first holder.
-3. **Sub-agent lanes:** two parallel sub-agents editing the same file → exactly one succeeds; the other is denied; `lockm status` shows holders `S/<agent_id>`.
-4. **Ancestor allow:** a parent that holds a file, then delegates an edit of it to a sub-agent → the sub-agent's edit succeeds (ancestor owns it).
+1. **Auto-acquire:** a fresh session edits a free file -> succeeds; `lockm status` shows a `write-harness` lock held by the session id.
+2. **Cross-session block:** a second session editing the same file -> denied with a message naming the first holder.
+3. **Sub-agent lanes:** two parallel sub-agents editing the same file -> exactly one succeeds; the other is denied; `lockm status` shows holders `S/<agent_id>`.
+4. **Ancestor allow:** a parent that holds a file, then delegates an edit of it to a sub-agent -> the sub-agent's edit succeeds (ancestor owns it).
 5. **Release:** after a sub-agent finishes, its lock disappears (SubagentStop); after the session ends, all its locks disappear (SessionEnd).
 6. **Opt-out:** in a checkout without the flag, edits are never blocked and no locks are taken.
 
@@ -1298,16 +1298,16 @@ Confirm, polling state (no fixed sleeps):
 ## Self-Review
 
 **Spec coverage:**
-- Activation (opt-in, default off) → Task 6 (`harness_enabled`) + Task 9 (marker) + Task 7 (gate before dispatch). ✓
-- Ownership rule (free/self/ancestor/other) → Tasks 1–2. ✓
-- Auto-acquire → Task 2 (`Acquired`) + Task 7 (`decide_write` call). ✓
-- Two-level holder identity → Task 6 (`holder_from_fields`). ✓ (deviation noted)
-- Lifecycle (SubagentStop/SessionEnd release; prune backstop) → Tasks 2/6/7 (`release_prefix`) + existing `prune`. ✓
-- `lockm hook` over the facade → Tasks 4–7. ✓
-- Daemon path → Task 5. ✓
-- Failure modes (off/absent → open; registry error → closed; malformed/no file_path → open) → Task 6 (`Ignore`) + Task 7 (driver branches). ✓
-- Writes only; Bash out of scope → Task 6 (`WRITE_TOOLS`) + Task 10 docs. ✓
-- Claude Code first, portable → logic in `devkit-locks`/`lockm`; only `hooks/hooks.json` is CC-specific. ✓
+- Activation (opt-in, default off) -> Task 6 (`harness_enabled`) + Task 9 (marker) + Task 7 (gate before dispatch). ✓
+- Ownership rule (free/self/ancestor/other) -> Tasks 1–2. ✓
+- Auto-acquire -> Task 2 (`Acquired`) + Task 7 (`decide_write` call). ✓
+- Two-level holder identity -> Task 6 (`holder_from_fields`). ✓ (deviation noted)
+- Lifecycle (SubagentStop/SessionEnd release; prune backstop) -> Tasks 2/6/7 (`release_prefix`) + existing `prune`. ✓
+- `lockm hook` over the facade -> Tasks 4–7. ✓
+- Daemon path -> Task 5. ✓
+- Failure modes (off/absent -> open; registry error -> closed; malformed/no file_path -> open) -> Task 6 (`Ignore`) + Task 7 (driver branches). ✓
+- Writes only; Bash out of scope -> Task 6 (`WRITE_TOOLS`) + Task 10 docs. ✓
+- Claude Code first, portable -> logic in `devkit-locks`/`lockm`; only `hooks/hooks.json` is CC-specific. ✓
 - Tests: decision matrix (Task 2), seam (Task 3), daemon (Task 5), race (Task 8), manual e2e (Task 10). ✓
 
 **Placeholder scan:** none — every code/test step carries complete content.

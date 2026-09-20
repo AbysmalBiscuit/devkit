@@ -60,7 +60,7 @@ matters of degree:
 
 Changes made:
 
-1. **Names.** `validate_checkout` → `validate_ref`, taking the *raw* ref and
+1. **Names.** `validate_checkout` -> `validate_ref`, taking the *raw* ref and
    encoding after validation; `validate_lib` likewise takes the logical name.
    Added `names::fold_key` and `cache::create_dir_exact`, which creates the
    directory and then requires the parent listing to contain the exact bytes
@@ -86,7 +86,7 @@ Changes made:
    `rev-parse` rather than trusting `worktree repair`'s exit code, then origin
    backfill. Added target-collision and already-migrated tests.
 5. **Boundaries.** Task 3 now updates `tests/cache.rs:83` in its own commit.
-   Task 7 renames `current_for_row` → `row_dirname` and enumerates all eight
+   Task 7 renames `current_for_row` -> `row_dirname` and enumerates all eight
    `Data::record` call sites. Added the fetch-retry to `resolve_ref` with tests
    for a newly published tag and a force-moved one. Added `origin_file`
    provenance to `LibEntry` so `sync` cannot backfill a ref into a committed
@@ -334,7 +334,7 @@ one it closed.
    transitive dependent, which is the only case the error fires for. The bun
    test now asserts `apps/api` appears and `required by h3` does not.
 3. **The add/rm ordering test.** Correct and the one I would have shipped
-   broken. `add`'s order is snapshot → write entry → resolve, so a barrier
+   broken. `add`'s order is snapshot -> write entry -> resolve, so a barrier
    inside `resolve_locked` fires *after* the manifest commit, and an unlocked
    `rm` observes the finished add and lands on the same final state a locked one
    does. Moved the hook between add's read and its write

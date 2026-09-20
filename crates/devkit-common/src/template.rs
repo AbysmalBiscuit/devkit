@@ -140,7 +140,7 @@ struct LaunchCtx<'a> {
 
 /// Render one launch/static_env/task string against the port context. `port`
 /// is the app's own allocated port (absent for a task without an `app`);
-/// `ports` maps app name → this worktree's allocated port. Errors if the
+/// `ports` maps app name -> this worktree's allocated port. Errors if the
 /// output still contains the retired `{port}` placeholder, which minijinja
 /// would otherwise pass through as literal text.
 pub fn render_launch(

@@ -549,8 +549,8 @@ impl JsContext {
                         let outcome =
                             self.select_from(manager, package, Diagnostics::Collect, &mut probe);
                         match outcome {
-                            Ok(selection) => format!("{file} → {}", selection.version),
-                            Err(error) => format!("{file} → {error}"),
+                            Ok(selection) => format!("{file} -> {}", selection.version),
+                            Err(error) => format!("{file} -> {error}"),
                         }
                     })
                     .collect::<Vec<_>>();

@@ -103,7 +103,8 @@ mod tests {
         // are asserted.
         let tmp = tempfile::tempdir().unwrap();
 
-        // Point XDG_CONFIG_HOME at the empty temp dir: no unit present → false.
+        // Point XDG_CONFIG_HOME at the empty temp dir: no unit present ->
+        // false.
         unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
         assert!(!super::use_systemd_unit(), "no unit yet — should be false");
 

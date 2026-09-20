@@ -48,7 +48,7 @@ issue review finish  [BODY] [--to <alias|#channel>]… [--pr <number>] [--arg k=
 A shared helper resolves a `--to` list into a list of *targets*, each carrying its
 Slack destination, an optional GitHub login, and a display `name` (see Templates).
 
-### Reverse lookup (login → person)
+### Reverse lookup (login -> person)
 
 A shared helper maps a GitHub login to the `[people]` alias whose `github` matches
 (case-insensitive). Used when `--to` is omitted. Logins with no matching alias are
@@ -81,7 +81,7 @@ No GitHub mutation at all — Slack only.
   its PR (`gh pr list --head`). Otherwise `--pr <number>` is required (errors if
   neither a worktree PR nor `--pr` is available).
 - **Recipients:** `--to` if given; otherwise reverse-lookup the **PR author**
-  (author login → alias → slack).
+  (author login -> alias -> slack).
 - Render `review_finish` per target and Slack each one.
 
 ## Templates
@@ -126,7 +126,7 @@ render context.
 Promote `src/bin/issue/review.rs` to a `review/` module:
 
 - `review/mod.rs` — subcommand dispatch + shared helpers: `--to` target
-  resolution, login→person reverse lookup, `--arg` parse/validate, the render
+  resolution, login->person reverse lookup, `--arg` parse/validate, the render
   wrappers, and the per-recipient Slack fan-out.
 - `review/request.rs` — today's logic, adapted to the multi-target model.
 - `review/finish.rs` — new.
@@ -136,7 +136,7 @@ Promote `src/bin/issue/review.rs` to a `review/` module:
 
 No MCP changes: `review` is CLI-only, and the `devkit-issue` / MCP facades stay
 read-only triage. The `Slack` fan-out reuses `devkit_common::slack::post_message`
-and the env→`secrets.toml` token resolution (`SLACK_TOKEN`); with no token, fall
+and the env->`secrets.toml` token resolution (`SLACK_TOKEN`); with no token, fall
 back to printing the resolved intent (as today), now one entry per target.
 
 ## Out of scope / follow-ups
@@ -152,7 +152,7 @@ back to printing the resolved intent (as today), now one entry per target.
 Pure-function unit tests (mirroring the existing `review.rs` tests):
 
 - `--to` classification (channel vs person vs unknown-alias error).
-- Reverse lookup (login → alias, case-insensitive; unmatched → skipped).
+- Reverse lookup (login -> alias, case-insensitive; unmatched -> skipped).
 - `--arg` validation (unknown key errors; known key overrides default).
 - Per-recipient context binding (`name` / `slack_id` for person vs channel).
 - `request` reviewer partition (people with/without `github`; channels excluded).

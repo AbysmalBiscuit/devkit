@@ -13,11 +13,11 @@
 - **Spec:** `docs/superpowers/specs/2026-06-21-authoritative-in-memory-locks-design.md`. Every task implicitly includes this section.
 - **Merge gate:** `cargo test --workspace` (all tests green) and `cargo clippy --workspace --all-targets -- -D warnings` (zero warnings) must pass at the end of every task.
 - **Naming scheme (mirror ports and locks), applied in Task 1 and assumed thereafter:**
-  - Daemon binary `devkit-portd` → `devkitd`; directory `src/bin/devkit-portd/` → `src/bin/devkitd/`.
-  - CLI `portman` → `portm` (dir `src/bin/portman/` → `src/bin/portm/`); CLI `lock` → `lockm` (file `src/bin/lock.rs` → `src/bin/lockm.rs`).
-  - State files: port socket `portd.sock` → `ports.sock`; daemon lock `portd.lock` → `devkitd.lock`; daemon log `portd.log` → `devkitd.log`. Lock socket is new: `locks.sock`.
-  - `paths` accessors: `socket_file()` → `port_socket_file()`; `daemon_lock_file()` → `devkitd_lock()`; add `lock_socket_file()`. `daemon_log()` keeps its name, returns `devkitd.log`.
-  - Env markers: `DEVKIT_PORTD_SELF` → `DEVKITD_SELF`; `DEVKIT_PORTD_BIN` → `DEVKITD_BIN`.
+  - Daemon binary `devkit-portd` -> `devkitd`; directory `src/bin/devkit-portd/` -> `src/bin/devkitd/`.
+  - CLI `portman` -> `portm` (dir `src/bin/portman/` -> `src/bin/portm/`); CLI `lock` -> `lockm` (file `src/bin/lock.rs` -> `src/bin/lockm.rs`).
+  - State files: port socket `portd.sock` -> `ports.sock`; daemon lock `portd.lock` -> `devkitd.lock`; daemon log `portd.log` -> `devkitd.log`. Lock socket is new: `locks.sock`.
+  - `paths` accessors: `socket_file()` -> `port_socket_file()`; `daemon_lock_file()` -> `devkitd_lock()`; add `lock_socket_file()`. `daemon_log()` keeps its name, returns `devkitd.log`.
+  - Env markers: `DEVKIT_PORTD_SELF` -> `DEVKITD_SELF`; `DEVKIT_PORTD_BIN` -> `DEVKITD_BIN`.
   - `devrun` and `issue` are unchanged.
 - **Gate guarantee:** every direct registry *writer* (port or lock) takes `devkitd.lock` **shared** (non-blocking `try_read`) for its whole RMW and hard-errors (`DaemonHoldsLock`) if a daemon holds it exclusive. Reads are ungated.
 - **Commit point:** `MemoryStore::commit` persists the file *before* swapping memory; on write failure memory is unchanged.
@@ -34,18 +34,18 @@
 Pure mechanical rename, no behavior change. Use rust-analyzer (LSP) `rename`/find-references for Rust **symbols** (the `paths` accessors, any renamed items). LSP does **not** see string literals, file/dir names, `Cargo.toml`, or docs — sweep those with `rg` and edit by hand.
 
 **Files:**
-- Rename dir: `src/bin/devkit-portd/` → `src/bin/devkitd/`
-- Rename dir: `src/bin/portman/` → `src/bin/portm/`
-- Rename file: `src/bin/lock.rs` → `src/bin/lockm.rs`
-- Modify: `Cargo.toml` (`[[bin]]` for `devkit-portd` → `devkitd`, path, `description`)
+- Rename dir: `src/bin/devkit-portd/` -> `src/bin/devkitd/`
+- Rename dir: `src/bin/portman/` -> `src/bin/portm/`
+- Rename file: `src/bin/lock.rs` -> `src/bin/lockm.rs`
+- Modify: `Cargo.toml` (`[[bin]]` for `devkit-portd` -> `devkitd`, path, `description`)
 - Modify: `crates/devkit-common/src/paths.rs` (accessor names + literals + their tests)
 - Modify: `crates/devkit-ports/src/registry.rs` (gate path accessor, `DaemonHoldsLock` message, `DEVKIT_PORTD_SELF`)
-- Modify: `crates/devkit-ports/src/daemon/client.rs` (`DEVKIT_PORTD_BIN`, sibling bin name `devkit-portd`→`devkitd`)
+- Modify: `crates/devkit-ports/src/daemon/client.rs` (`DEVKIT_PORTD_BIN`, sibling bin name `devkit-portd`->`devkitd`)
 - Modify: `crates/devkit-ports/src/daemon/transport.rs` (windows pipe prefix literal)
 - Modify: `src/bin/devkitd/main.rs`, `src/bin/devkitd/server.rs` (`DEVKITD_SELF`, accessor calls)
 - Modify: `crates/devkit-common/src/supervise.rs` (`env_remove("DEVKIT_PORTD_SELF")` + its test)
 - Modify: each CLI's `#[command(name = "...")]` and `clap_complete::generate(.., "lock"/"portman", ..)` strings
-- Modify: `tests/common/mod.rs`, `tests/lifecycle.rs` (and any other `tests/*.rs`) — `env!("CARGO_BIN_EXE_devkit-portd")` → `CARGO_BIN_EXE_devkitd`, the `portd.sock` socket path → `ports.sock`, and `DEVKIT_PORTD_SELF` → `DEVKITD_SELF`
+- Modify: `tests/common/mod.rs`, `tests/lifecycle.rs` (and any other `tests/*.rs`) — `env!("CARGO_BIN_EXE_devkit-portd")` -> `CARGO_BIN_EXE_devkitd`, the `portd.sock` socket path -> `ports.sock`, and `DEVKIT_PORTD_SELF` -> `DEVKITD_SELF`
 - Modify docs: `README.md`, `CLAUDE.md`, `docs/next-steps.md`, anything under `docs/` referencing old names
 
 - [ ] **Step 1: Inventory every occurrence (expect non-empty, this is the worklist)**
@@ -92,7 +92,7 @@ Update the `daemon_paths_under_state` test to assert `ports.sock`, `locks.sock`,
 
 - [ ] **Step 4: Propagate the symbol renames with LSP**
 
-For `socket_file` → `port_socket_file` and `daemon_lock_file` → `devkitd_lock`, use rust-analyzer rename (or find-all-references) so the call sites in `registry.rs`, `src/bin/devkitd/main.rs`, and `src/bin/devkitd/server.rs` update consistently. Verify none remain:
+For `socket_file` -> `port_socket_file` and `daemon_lock_file` -> `devkitd_lock`, use rust-analyzer rename (or find-all-references) so the call sites in `registry.rs`, `src/bin/devkitd/main.rs`, and `src/bin/devkitd/server.rs` update consistently. Verify none remain:
 ```sh
 rg -n "\bsocket_file\b|\bdaemon_lock_file\b"
 ```
@@ -100,15 +100,15 @@ Expected: no matches.
 
 - [ ] **Step 5: Update env-var literals and the daemon binary name**
 
-Replace `DEVKIT_PORTD_SELF` → `DEVKITD_SELF` and `DEVKIT_PORTD_BIN` → `DEVKITD_BIN` in `registry.rs`, `src/bin/devkitd/main.rs`, `crates/devkit-ports/src/daemon/client.rs`, `crates/devkit-common/src/supervise.rs` and its test, and `tests/common/mod.rs` + `tests/lifecycle.rs` (`env!("CARGO_BIN_EXE_devkit-portd")` → `CARGO_BIN_EXE_devkitd`, `daemon_bin()`'s `env!`, the `socket()` path `portd.sock` → `ports.sock`). In `client.rs`, change the sibling-binary lookup `dir.join("devkit-portd")` → `dir.join("devkitd")` and the `PathBuf::from("devkit-portd")` fallback → `"devkitd"`. In `transport.rs` (windows arm) change the pipe prefix literal `format!("devkit-portd-{sanitized}.sock")` → `format!("devkit-{sanitized}.sock")`. In `registry.rs` update the `DaemonHoldsLock` message text `devkit-portd` → `devkitd`.
+Replace `DEVKIT_PORTD_SELF` -> `DEVKITD_SELF` and `DEVKIT_PORTD_BIN` -> `DEVKITD_BIN` in `registry.rs`, `src/bin/devkitd/main.rs`, `crates/devkit-ports/src/daemon/client.rs`, `crates/devkit-common/src/supervise.rs` and its test, and `tests/common/mod.rs` + `tests/lifecycle.rs` (`env!("CARGO_BIN_EXE_devkit-portd")` -> `CARGO_BIN_EXE_devkitd`, `daemon_bin()`'s `env!`, the `socket()` path `portd.sock` -> `ports.sock`). In `client.rs`, change the sibling-binary lookup `dir.join("devkit-portd")` -> `dir.join("devkitd")` and the `PathBuf::from("devkit-portd")` fallback -> `"devkitd"`. In `transport.rs` (windows arm) change the pipe prefix literal `format!("devkit-portd-{sanitized}.sock")` -> `format!("devkit-{sanitized}.sock")`. In `registry.rs` update the `DaemonHoldsLock` message text `devkit-portd` -> `devkitd`.
 
 - [ ] **Step 6: Update `Cargo.toml` and CLI name strings**
 
-In root `Cargo.toml`: the `[[bin]]` `name = "devkit-portd"` → `"devkitd"`, `path = "src/bin/devkit-portd/main.rs"` → `"src/bin/devkitd/main.rs"`, and the package `description` `portman, devrun, issue, devkit-portd` → `portm, lockm, devrun, issue, devkitd`. In `src/bin/portm/` set `#[command(name = "portm")]` and `clap_complete::generate(.., "portm", ..)`; in `src/bin/lockm.rs` set `#[command(name = "lock", ...)]` → `name = "lockm"` and `generate(.., "lock", ..)` → `"lockm"`.
+In root `Cargo.toml`: the `[[bin]]` `name = "devkit-portd"` -> `"devkitd"`, `path = "src/bin/devkit-portd/main.rs"` -> `"src/bin/devkitd/main.rs"`, and the package `description` `portman, devrun, issue, devkit-portd` -> `portm, lockm, devrun, issue, devkitd`. In `src/bin/portm/` set `#[command(name = "portm")]` and `clap_complete::generate(.., "portm", ..)`; in `src/bin/lockm.rs` set `#[command(name = "lock", ...)]` -> `name = "lockm"` and `generate(.., "lock", ..)` -> `"lockm"`.
 
 - [ ] **Step 7: Update the docs**
 
-`README.md`, `CLAUDE.md` (the Layout table rows for `portman`/`lock`/`devkit-portd`, the "File locks" section's `lock acquire`/`lock release` → `lockm acquire`/`lockm release`, and the `cargo test -p devkit-ports --test registry` line is unaffected), and `docs/next-steps.md` external-caller note. Final sweep:
+`README.md`, `CLAUDE.md` (the Layout table rows for `portman`/`lock`/`devkit-portd`, the "File locks" section's `lock acquire`/`lock release` -> `lockm acquire`/`lockm release`, and the `cargo test -p devkit-ports --test registry` line is unaffected), and `docs/next-steps.md` external-caller note. Final sweep:
 ```sh
 rg -n "devkit-portd|\bportman\b|portd\.(sock|lock|log)|DEVKIT_PORTD" --glob '!docs/superpowers/**'
 ```
@@ -525,7 +525,7 @@ mod seam_tests {
     fn prune_with_drops_dead_and_is_a_hard_mutation() {
         let dir = tmp("prune");
         let s = FlockStore::at(&dir);
-        // ttl=60, ts=0 → dead at now=1000
+        // ttl=60, ts=0 -> dead at now=1000
         acquire_with(&s, "/repo", "alice", &["scenes".into()], None, None, 60, 0).unwrap();
         let dropped = prune_with(&s, 1000).unwrap();
         assert_eq!(dropped, 1);
@@ -1200,11 +1200,11 @@ pub fn acquire(paths_in: &[String], as_flag: Option<&str>, note: Option<&str>, t
 }
 ```
 Routing map for the other five:
-- `check` → `Request::Check { root, holder, paths }` → `Response::Conflicts(v) => Ok(v)`.
-- `release` → `Request::Release { root, holder, paths, force }` → `Response::Released { released, refused } => Ok((released, refused))`.
-- `release_all` → `Request::ReleaseAll { root, holder }` → `Response::Freed(v) => Ok(v)`.
-- `status` → `Request::Status { root, all }` → `Response::Locks(v) => Ok(v)`. (`status` resolves only `root`/`all`; reuse `find_root()` for the root.)
-- `prune` → `Request::Prune` → `Response::Pruned(n) => Ok(n)`.
+- `check` -> `Request::Check { root, holder, paths }` -> `Response::Conflicts(v) => Ok(v)`.
+- `release` -> `Request::Release { root, holder, paths, force }` -> `Response::Released { released, refused } => Ok((released, refused))`.
+- `release_all` -> `Request::ReleaseAll { root, holder }` -> `Response::Freed(v) => Ok(v)`.
+- `status` -> `Request::Status { root, all }` -> `Response::Locks(v) => Ok(v)`. (`status` resolves only `root`/`all`; reuse `find_root()` for the root.)
+- `prune` -> `Request::Prune` -> `Response::Pruned(n) => Ok(n)`.
 Each maps `Response::Err(e) => Err(anyhow!(e))` and any other variant to an "unexpected daemon response" error, then falls through to the `*_with(&FlockStore::new(), …)` call.
 
 - [ ] **Step 4: Run the facade test + full suite**
@@ -1561,11 +1561,11 @@ Expected: PASS — `MemoryStore::commit` persists on every mutation, so the file
 
 - Layout table: replace the `src/bin/portman`, `src/bin/lock.rs`, `src/bin/devkit-portd` rows with `src/bin/portm`, `src/bin/lockm`, `src/bin/devkitd`, and note `devkitd` serves both the port and lock registries.
 - "Registry facade" section: add a sentence that the daemon now holds both registries in memory over two sockets (`ports.sock`, `locks.sock`), gated by `devkitd.lock`, and that `devkit-locks` has the same `Store` seam.
-- "File locks" section: `lock` → `lockm` in the command examples.
+- "File locks" section: `lock` -> `lockm` in the command examples.
 
 - [ ] **Step 4: Update `README.md` and `docs/next-steps.md`**
 
-`README.md`: CLI names (`portman`→`portm`, `lock`→`lockm`, `devkit-portd`→`devkitd`) and the one-line daemon description (serves both registries). `docs/next-steps.md`: replace the "## Authoritative in-memory mode for the lock registry" section body with a one-line note that it shipped, pointing at this plan and the spec (keep the MCP follow-up section intact).
+`README.md`: CLI names (`portman`->`portm`, `lock`->`lockm`, `devkit-portd`->`devkitd`) and the one-line daemon description (serves both registries). `docs/next-steps.md`: replace the "## Authoritative in-memory mode for the lock registry" section body with a one-line note that it shipped, pointing at this plan and the spec (keep the MCP follow-up section intact).
 
 - [ ] **Step 5: Final full gate**
 

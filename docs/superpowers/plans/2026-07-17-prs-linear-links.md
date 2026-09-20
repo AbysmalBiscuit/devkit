@@ -16,7 +16,7 @@
 - TDD: write the failing test, watch it fail for the right reason, then implement.
 - Commits: Conventional Commits, subject ≤50 chars, imperative, lowercase after the colon. End every commit message with the trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. Commits are GPG-signed via the user's pinentry — if signing fails with a timeout, STOP and ask the user to unlock GPG; never pass `--no-gpg-sign`.
 - `devkit-issue` must not gain a dependency on `devkit-ports` (config is read by callers, passed as plain values).
-- The Linear API key is resolved only via `devkit_common::secrets::resolve("LINEAR_API_KEY")` (env → `~/.config/devkit/secrets.toml`), never from `config.toml`.
+- The Linear API key is resolved only via `devkit_common::secrets::resolve("LINEAR_API_KEY")` (env -> `~/.config/devkit/secrets.toml`), never from `config.toml`.
 - `issue prs` must never fail because of Linear: no key / network error / API error all degrade to text-derived ids only.
 - URLs travel as GraphQL variables, never spliced into the query string.
 - All work happens in a feature worktree (`../devkit-worktrees/`), never on a branch checked out in the primary clone.
@@ -122,8 +122,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: the private `fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value>` transport already in this file (~line 130). It accepts a full JSON body, so a `{query, variables}` payload needs no transport change.
 - Produces (all `pub`, in `devkit_common::linear`):
-  - `issues_for_prs_queries(urls: &[String]) -> Vec<(String, serde_json::Value, HashMap<String, String>)>` — per chunk of ≤25 URLs: (query, variables object, alias→url map). Empty input → empty vec.
-  - `parse_issues_for_prs(resp: &serde_json::Value, aliases: &HashMap<String, String>) -> HashMap<String, Vec<String>>` — url → linked issue identifiers.
+  - `issues_for_prs_queries(urls: &[String]) -> Vec<(String, serde_json::Value, HashMap<String, String>)>` — per chunk of ≤25 URLs: (query, variables object, alias->url map). Empty input -> empty vec.
+  - `parse_issues_for_prs(resp: &serde_json::Value, aliases: &HashMap<String, String>) -> HashMap<String, Vec<String>>` — url -> linked issue identifiers.
   - `issues_for_prs(urls: &[String], key: Option<&str>) -> HashMap<String, Vec<String>>` — fail-soft orchestrator; Task 4 calls this from `gather`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -202,7 +202,7 @@ Add after the `states` function (~line 223) in `crates/devkit-common/src/linear.
 ```rust
 /// GraphQL payloads resolving GitHub PR URLs to their linked Linear issues,
 /// 25 URLs per request to stay under Linear's query-complexity budget. Each
-/// entry is (query, variables, alias → url). Pure → testable. URLs ride in
+/// entry is (query, variables, alias -> url). Pure -> testable. URLs ride in
 /// GraphQL variables, never spliced into the query string.
 pub fn issues_for_prs_queries(
     urls: &[String],
@@ -227,7 +227,7 @@ pub fn issues_for_prs_queries(
         .collect()
 }
 
-/// From one `issues_for_prs_queries` response: url → linked issue ids.
+/// From one `issues_for_prs_queries` response: url -> linked issue ids.
 /// Attachments without an issue are skipped; ids are deduped per PR (an
 /// issue can attach to the same PR more than once). URLs with no linked
 /// issue get no entry.
@@ -453,10 +453,10 @@ Update both call sites: in `mine_table_build` (~line 147) and `reviews_table_bui
 
 In `mod tests` of `src/bin/issue/prs.rs`:
 
-- `mine_view` (~line 436): `issue_id: "-".into(),` → `issue_ids: vec![],`
-- `review_view` (~line 455): `issue_id: "ENG-9".into(),` → `issue_ids: vec!["ENG-9".into()],`
-- `snapshot_round_trips` (~line 523): `issue_id: "ENG-1".into(),` → `issue_ids: vec!["ENG-1".into()],`
-- `next_snapshot_preserves_unrequested_sections` (~line 545): `issue_id: "ENG-7".into(),` → `issue_ids: vec!["ENG-7".into()],` and (~line 555): `issue_id: "ENG-9".into(),` → `issue_ids: vec!["ENG-9".into()],`
+- `mine_view` (~line 436): `issue_id: "-".into(),` -> `issue_ids: vec![],`
+- `review_view` (~line 455): `issue_id: "ENG-9".into(),` -> `issue_ids: vec!["ENG-9".into()],`
+- `snapshot_round_trips` (~line 523): `issue_id: "ENG-1".into(),` -> `issue_ids: vec!["ENG-1".into()],`
+- `next_snapshot_preserves_unrequested_sections` (~line 545): `issue_id: "ENG-7".into(),` -> `issue_ids: vec!["ENG-7".into()],` and (~line 555): `issue_id: "ENG-9".into(),` -> `issue_ids: vec!["ENG-9".into()],`
 
 - [ ] **Step 7: Run the tests to verify they pass**
 
@@ -570,7 +570,7 @@ fn merge_linked(ids: &mut Vec<String>, linked: &[String]) {
     }
 }
 
-/// Union the Linear-linked issue ids (url → ids) into every view row.
+/// Union the Linear-linked issue ids (url -> ids) into every view row.
 fn apply_linked(report: &mut PrsReport, linked: &HashMap<String, Vec<String>>) {
     for pr in &mut report.mine {
         if let Some(ids) = linked.get(&pr.url) {
@@ -700,7 +700,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: `Config.linear.resolve_pr_links` (Task 1) via `devkit_ports::load::load(config_path, cwd) -> Result<Loaded>` (field `l.config`); `gather`/`fetch_report` trailing bool (Task 4).
 - Produces: end-user behavior — `[linear] resolve_pr_links = true` in any layered config file activates the lookup for both `issue prs` and the MCP `issue.prs` action.
 
-There is no unit test for the wiring itself (both call sites are thin config plumbing into already-tested functions; the load→field read has no seam that doesn't just restate the code). Verification is the manual end-to-end run in Step 3.
+There is no unit test for the wiring itself (both call sites are thin config plumbing into already-tested functions; the load->field read has no seam that doesn't just restate the code). Verification is the manual end-to-end run in Step 3.
 
 - [ ] **Step 1: Wire the flag in the CLI**
 

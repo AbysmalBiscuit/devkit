@@ -30,9 +30,10 @@ fn configure_child<'a>(
         .env_remove("DEVKITD_SELF")
 }
 
-/// Spawn `argv` detached (own session), env-augmented, stdout+stderr → logfile.
-/// When `cgroup_leaf` is `Some`, the child joins that cgroup in `pre_exec`
-/// before `exec` (Linux only; a no-op elsewhere). Returns the child pid.
+/// Spawn `argv` detached (own session), env-augmented, stdout+stderr ->
+/// logfile. When `cgroup_leaf` is `Some`, the child joins that cgroup in
+/// `pre_exec` before `exec` (Linux only; a no-op elsewhere). Returns the child
+/// pid.
 pub fn spawn_detached(
     argv: &[String],
     cwd: &str,

@@ -38,11 +38,11 @@ supervisor reads tree-RSS and maintains a consecutive-breach counter. When the
 counter reaches `memory_limit_ticks` *and* the configured action is
 `"restart"`, the supervisor decides per child:
 
-- **crash-loop budget remains** → return the pid to `SIGTERM`. The dying
+- **crash-loop budget remains** -> return the pid to `SIGTERM`. The dying
   process is collected by the same tick's `reap_once` on a later cycle and
   respawned by `restart` within the budget — identical to a crash and to the
   health-probe restart.
-- **budget exhausted** → emit a one-shot "leaving alive" warning and do
+- **budget exhausted** -> emit a one-shot "leaving alive" warning and do
   nothing else. The leaky-but-working server keeps running.
 
 Because the action lives in the one supervision thread, there is no second
@@ -120,12 +120,12 @@ struct Child {
 `may_restart` records an attempt against the budget. The memory path needs to
 *ask* whether a restart is allowed without consuming a slot, because the
 authoritative record stays in `restart()` on the reap tick (the sole budget
-recorder, single-threaded → peek-then-record is consistent):
+recorder, single-threaded -> peek-then-record is consistent):
 
 ```rust
 /// Whether a restart is currently allowed for `key` under the crash-loop
 /// budget, WITHOUT recording one. Prunes timestamps outside the window (a
-/// harmless, idempotent cleanup) but never pushes. Unknown key → false, like
+/// harmless, idempotent cleanup) but never pushes. Unknown key -> false, like
 /// `may_restart`. The recording counterpart is `may_restart`, called from the
 /// reap path.
 pub(crate) fn can_restart(&mut self, holder: &str, app: &str, role: Role) -> bool;
@@ -177,7 +177,7 @@ In the existing combined supervision thread, after the `memory_breaches` warn
 loop (`main.rs:230-238`), add the limit-action loop, gated on the opt-in:
 
 ```text
-// existing: reap_once → restart(); memory_breaches() warn loop ...
+// existing: reap_once -> restart(); memory_breaches() warn loop ...
 
 if mem_restart {                                  // memory_action == "restart"
     for action in d.sup.lock().unwrap().mem_limit_actions(mem_limit_ticks) {
@@ -287,7 +287,7 @@ to have the runtime or OS enforce a hard cap *without* the daemon restarting,
 set it through the app's existing launch `env` — e.g.
 `NODE_OPTIONS=--max-old-space-size=<MB>`, or a `ulimit -v` wrapper in the app's
 launch command. The runtime/OS aborts the process on breach and the daemon's
-existing crash → reap → respawn recovers it; the engine hardcodes no runtime.
+existing crash -> reap -> respawn recovers it; the engine hardcodes no runtime.
 This is documentation, not code.
 
 ## 9. Testing
@@ -329,7 +329,7 @@ that re-balloons immediately on each start; the test asserts the pid stops
 changing (restarts cease) while the server **remains present** in `ports.json`
 (left alive, not dropped), distinguishing `GiveUp` from health-probe's drop.
 
-Both tests are `#![cfg(unix)]`, compiled out on Windows; RED→GREEN observed on
+Both tests are `#![cfg(unix)]`, compiled out on Windows; RED->GREEN observed on
 WSL, as for prior daemon phases. Poll for state, never fixed sleeps (loaded
 Windows/CI runners exit children later than a short sleep allows — and the
 balloon fixture must touch its pages so RSS, not just virtual size, grows).
@@ -344,7 +344,7 @@ balloon fixture must touch its pages so RSS, not just virtual size, grows).
 - RSS smoothing / moving averages — the `limit_ticks` consecutive-breach gate
   is the agreed debounce.
 - Wiring `DaemonConfig` through to the daemon binary — the binary reads env
-  vars today; bridging config→env is a separate, pre-existing gap.
+  vars today; bridging config->env is a separate, pre-existing gap.
 
 ## 11. Files touched
 

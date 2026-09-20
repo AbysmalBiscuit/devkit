@@ -122,7 +122,7 @@ struct PrMeta {
 /// absence.
 fn pr_exists(n: u64, cwd: &str, repo: &github::Repo) -> Result<bool> {
     // Direct HTTP resolves existence from a 200/404; a clean 404 is
-    // `Ok(false)`. Any HTTP failure (no token, transport) yields `None` →
+    // `Ok(false)`. Any HTTP failure (no token, transport) yields `None` ->
     // fall back to `gh`.
     if let Ok(exists) = github::pr_exists(&repo.slug, n) {
         return Ok(exists);
@@ -614,7 +614,7 @@ mod tests {
         git_cmd(&["add", "."], &repo);
         git_cmd(&["commit", "-qm", "init"], &repo);
 
-        // Error path: closure fails → worktree must be removed.
+        // Error path: closure fails -> worktree must be removed.
         let wt_err = base.path().join("wt-err");
         git_cmd(
             &[
@@ -640,7 +640,7 @@ mod tests {
             "worktree must be removed after a failed closure"
         );
 
-        // Success path: closure succeeds → worktree must remain intact.
+        // Success path: closure succeeds -> worktree must remain intact.
         let wt_ok = base.path().join("wt-ok");
         git_cmd(
             &[

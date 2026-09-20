@@ -69,7 +69,7 @@ crates/issue/src/
     toState{name type color} } }`.
   - `viewer_created_at(key) -> DateTime` — `query { viewer { createdAt } }`, the
     timeline origin.
-  - Returns empty / errors gracefully exactly like `states()` (no key → no data).
+  - Returns empty / errors gracefully exactly like `states()` (no key -> no data).
 - `devkit-common::slack` (new module): `post_message(token, channel, text) -> Result<()>`
   posting `chat.postMessage` via `ureq` with a Bearer token; checks the `ok` field
   in the response and surfaces Slack's `error` string on failure.
@@ -127,12 +127,12 @@ Renders top-to-bottom:
      bucket, compute every issue's workflow state **at the period end** by replaying
      its transitions (`state_at`: start from the state before the first recorded
      transition, apply each transition whose timestamp ≤ end). Stack statuses in
-     Linear lifecycle order (`triage → backlog → unstarted → started → completed →
+     Linear lifecycle order (`triage -> backlog -> unstarted -> started -> completed ->
      canceled`, then by name); drop statuses that never appear at any period end;
      colour each from its own Linear state hex. Timeline origin = `viewer.createdAt`.
    - **PRs opened/merged over time.** Live `gh pr list --author @me --state all
      --json number,createdAt,mergedAt,additions,deletions` (replaces the committed
-     archive). Tally `createdAt` → opened, `mergedAt` → merged per bucket.
+     archive). Tally `createdAt` -> opened, `mergedAt` -> merged per bucket.
      `--all-roles` additionally includes reviewed PRs via the same
      `review-requested:@me` / `reviewed-by:@me` search `prs.rs` already uses.
    - **Commits over time.** `git log --author=<email> --format=%aI` in the
@@ -157,7 +157,7 @@ Both `--chart bar` and `--chart line` are supported, matching the Python.
   segments coloured per status (issues chart) or grouped opened/merged (PR chart),
   via ANSI truecolor from each Linear state's hex. No maintained Rust crate renders
   stacked terminal bars well, so this stays in-house; it's pure and unit-testable
-  (value matrix + width → rows of cells).
+  (value matrix + width -> rows of cells).
 - **Lines** — rendered with the maintained `textplots` crate (braille canvas), one
   series per status / metric, non-stacked. Line plotting is the fiddly part, so per
   the "use a crate if hand-rolling is hard" decision it gets a dependency rather
@@ -176,25 +176,25 @@ Flow (`review.rs`):
 
 1. Resolve the current branch (`git rev-parse --abbrev-ref HEAD`); **refuse** if it
    is `staging` or `main`.
-2. Resolve `--to <alias>` against `devkit.toml` `[people.<alias>]` → `{ slack,
+2. Resolve `--to <alias>` against `devkit.toml` `[people.<alias>]` -> `{ slack,
    github }`; error on unknown alias. `--reviewer` defaults to the alias's `github`
    (error if neither is available and a reviewer is needed).
 3. Unless `--no-push`: `git push -u origin <branch>`. **Never force-push** — on a
    non-fast-forward rejection, surface the exact error and stop.
 4. Detect the PR (`gh pr view --json number,state,url`):
-   - **No PR** → require `--pr-title`; `gh pr create --base <base> --reviewer <gh>
+   - **No PR** -> require `--pr-title`; `gh pr create --base <base> --reviewer <gh>
      --title <T> --body <B>` (`--base` defaults to `defaults.pr_base`); capture the
      URL from output.
-   - **OPEN** → `gh pr edit --add-reviewer <gh>`; reuse the existing URL.
-   - **MERGED / CLOSED** → stop and report; nothing to review.
+   - **OPEN** -> `gh pr edit --add-reviewer <gh>`; reuse the existing URL.
+   - **MERGED / CLOSED** -> stop and report; nothing to review.
 5. Compose `text = "<slack-body> <pr_url>"`.
 6. Deliver (**both** mode):
-   - If `$SLACK_TOKEN` is set → `slack::post_message(token, slack_id, text)`.
-   - Else → print `{ "slack_id", "text", "pr_url", "github", "branch" }` as JSON to
+   - If `$SLACK_TOKEN` is set -> `slack::post_message(token, slack_id, text)`.
+   - Else -> print `{ "slack_id", "text", "pr_url", "github", "branch" }` as JSON to
      stdout for the `/migration-review` slash command to forward via the Slack MCP
      tool.
 
-The decision points (branch guard, PR-state → action, default reviewer resolution,
+The decision points (branch guard, PR-state -> action, default reviewer resolution,
 message composition) are pure functions and unit-tested; the git/gh/Slack calls are
 thin wrappers.
 
@@ -203,17 +203,17 @@ thin wrappers.
 External callers (slash commands, scripts under `~/.claude` / `~/.local/bin`) are
 **not** edited by this work. Instead, the final phase writes a single migration note
 to the **base** (non-worktree) repo at `docs/issue-binary-migration.md` —
-**uncommitted**, for the user to action manually afterward. It lists, with old → new
+**uncommitted**, for the user to action manually afterward. It lists, with old -> new
 command mappings, every caller that needs repointing:
 
-- `~/.claude/commands/issue-setup.md` → `issue setup …`
-- `~/.claude/commands/issue-end.md` → `issue status` / `issue end`
-- `~/.claude/commands/migration-review.md` → use `issue review` for the mechanical
+- `~/.claude/commands/issue-setup.md` -> `issue setup …`
+- `~/.claude/commands/issue-end.md` -> `issue status` / `issue end`
+- `~/.claude/commands/migration-review.md` -> use `issue review` for the mechanical
   push/PR/Slack steps (the command keeps authoring the prose and, in JSON-fallback
   mode, forwards the Slack payload via MCP).
-- `~/.claude/scripts/issue-end-scan.sh`, `issue-end-cleanup.sh` → `issue status` /
+- `~/.claude/scripts/issue-end-scan.sh`, `issue-end-cleanup.sh` -> `issue status` /
   `issue end` (note whether the binary makes them redundant).
-- `pr-status.sh` (if present in `~/.local/bin`) → `issue prs`.
+- `pr-status.sh` (if present in `~/.local/bin`) -> `issue prs`.
 
 The note is generated by inspecting the actual files during the final phase, so the
 mappings are concrete. No file outside this repository worktree is modified.
@@ -230,7 +230,7 @@ remain the merge gate.
 - **New pure functions get unit tests with fixed clocks / widths (no network):**
   `bucket_starts`, `state_at` (replay), `bucket_index`/`tally`, `choose_bucket`,
   the bar-cell matrix builder in `chart.rs`, and the review decision logic
-  (branch guard, PR-state → action, reviewer/message composition).
+  (branch guard, PR-state -> action, reviewer/message composition).
 - The multiprocess flock race test (`devkit-ports/tests/registry.rs`) is untouched.
 
 ## Execution phases
@@ -249,7 +249,7 @@ stays green throughout:
    `chart.rs` (bars + lines), and `data.rs` live fetch.
 5. **Migration note.** Inspect the external callers and write
    `docs/issue-binary-migration.md` (uncommitted) into the base repo with concrete
-   old → new mappings for the user to action manually.
+   old -> new mappings for the user to action manually.
 
 ## Invariants preserved
 
@@ -261,7 +261,7 @@ stays green throughout:
 
 ## Open questions
 
-None outstanding. The four micro-decisions (subcommand name `setup`; bare `issue` →
+None outstanding. The four micro-decisions (subcommand name `setup`; bare `issue` ->
 `status`; bars hand-rolled + lines via `textplots`; commit author from `git config
 user.email` with `--author` override) and the two `review` decisions (both-mode
 Slack delivery; full push+PR+reviewer+send scope) are settled.

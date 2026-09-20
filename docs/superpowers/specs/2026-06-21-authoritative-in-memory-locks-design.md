@@ -8,7 +8,7 @@ the file, and writes through to `locks.json` on every mutation, with the
 sole-writer boundary enforced by the daemon's single-instance lock.
 
 **Scope:** `devkit-locks`, `devkit-common` (daemon-framework extraction), and the
-daemon binary (renamed `devkit-portd` → `devkitd`, now serving both registries).
+daemon binary (renamed `devkit-portd` -> `devkitd`, now serving both registries).
 Builds directly on the `Store`/gate model from
 `2026-06-21-authoritative-in-memory-portd-design.md`.
 
@@ -53,7 +53,7 @@ it shared exactly as a direct port writer does.
 **Why two sockets, not one combined proto.** A single socket would need a combined
 `Request` enum referencing both `devkit-ports` and `devkit-locks` types; to let
 both the `lockm` binary and `portm`/`devrun` construct it, that enum would have to
-live in `devkit-common`, forcing `common → ports` and `common → locks`
+live in `devkit-common`, forcing `common -> ports` and `common -> locks`
 (backwards). Two sockets keep the two registry crates fully independent: each owns
 its own proto, and both consume a generic transport/client/framing from
 `devkit-common`. This is the framework extraction the port spec deferred,
@@ -67,8 +67,8 @@ asymmetric CLI names are corrected to a mirrored scheme:
 
 | | Port side | Lock side |
 |---|---|---|
-| CLI binary | `portman` → `portm` | `lock` → `lockm` |
-| Daemon | one process: `devkit-portd` → `devkitd` | (shared) |
+| CLI binary | `portman` -> `portm` | `lock` -> `lockm` |
+| Daemon | one process: `devkit-portd` -> `devkitd` | (shared) |
 | Socket file | `ports.sock` | `locks.sock` |
 | Dispatch module | `src/bin/devkitd/port_server.rs` | `src/bin/devkitd/lock_server.rs` |
 | Client module | `devkit-ports::daemon` | `devkit-locks::daemon` |
@@ -120,9 +120,9 @@ fn prune_with(s: &impl Store, now: u64) -> Result<usize>;
 
 Unlike the port handlers (which receive an already-resolved `holder`), the lock
 facade resolves context from the **calling** process, which a daemon cannot see:
-`ctx()` reads `current_dir()` (→ project root), the `--as`/`DEVKIT_SESSION`/
-`TMUX_PANE`/tty/ppid precedence (→ `holder`), and normalizes the path arguments;
-`anchor_pid()` reads tmux/tty/ppid (→ `pid`).
+`ctx()` reads `current_dir()` (-> project root), the `--as`/`DEVKIT_SESSION`/
+`TMUX_PANE`/tty/ppid precedence (-> `holder`), and normalizes the path arguments;
+`anchor_pid()` reads tmux/tty/ppid (-> `pid`).
 
 So the facade always resolves context **client-side**, then picks a driver:
 
@@ -130,9 +130,9 @@ So the facade always resolves context **client-side**, then picks a driver:
 devkit_locks::acquire(paths, as, note, ttl)
   ├─ ctx() resolves (root, holder, normalized paths); anchor_pid() resolves pid
   └─ via_daemon:
-       try_existing(locks.sock) → Some(client): send Acquire{root,holder,paths,pid,note,ttl}
+       try_existing(locks.sock) -> Some(client): send Acquire{root,holder,paths,pid,note,ttl}
                                                   daemon stamps `now`, runs Data ops on MemoryStore
-       try_existing(locks.sock) → None:          acquire_with(&FlockStore, …, now())
+       try_existing(locks.sock) -> None:          acquire_with(&FlockStore, …, now())
 ```
 
 The daemon receives resolved context and stamps its own `now` (single clock); it

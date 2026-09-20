@@ -409,7 +409,7 @@ mod tests {
             reason_not_finished(&wt("ENG-3", "OPEN", true, Some("started")), true, false).as_deref(),
             Some("PR not merged, Linear Done, dirty")
         );
-        // Has key but no Linear entry → "Linear unknown".
+        // Has key but no Linear entry -> "Linear unknown".
         assert_eq!(
             reason_not_finished(&wt("ENG-4", "MERGED", false, None), true, false).as_deref(),
             Some("Linear unknown")
@@ -1180,7 +1180,7 @@ fn paint_action(action: &str, s: &str) -> String {
 /// the struck-through old value and a dim arrow so the change reads at a glance.
 fn diff_cell(prev: Option<&str>, cur: &str, paint: impl Fn(&str) -> String) -> String {
     match prev {
-        Some(p) if p != cur => format!("{}{}{}", ui::dim_strike(p), ui::dim(" → "), paint(cur)),
+        Some(p) if p != cur => format!("{}{}{}", ui::dim_strike(p), ui::dim(" -> "), paint(cur)),
         _ => paint(cur),
     }
 }
@@ -1329,7 +1329,7 @@ pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> R
         );
         println!(
             "{}",
-            ui::dim("old → new in a cell = value changed since the last run.")
+            ui::dim("old -> new in a cell = value changed since the last run.")
         );
     }
 
@@ -1345,9 +1345,9 @@ mod tests {
     #[test]
     fn diff_cell_shows_change() {
         // Tests are not a tty, so colour/strike helpers pass text through and the
-        // change reads as a plain `old → new`.
+        // change reads as a plain `old -> new`.
         let plain = |s: &str| s.to_string();
-        assert_eq!(diff_cell(Some("ok"), "fail", plain), "ok → fail");
+        assert_eq!(diff_cell(Some("ok"), "fail", plain), "ok -> fail");
         assert_eq!(diff_cell(Some("ok"), "ok", plain), "ok");
         assert_eq!(diff_cell(None, "ok", plain), "ok");
     }
@@ -1460,7 +1460,7 @@ fn issue_status_empty_for_repo_with_no_worktrees() {
     let report = tool_json(&resps[0], false);
     assert!(
         report["worktrees"].as_array().unwrap().is_empty(),
-        "no non-main worktrees → empty list"
+        "no non-main worktrees -> empty list"
     );
     assert_eq!(report["finished_count"], 0);
 }

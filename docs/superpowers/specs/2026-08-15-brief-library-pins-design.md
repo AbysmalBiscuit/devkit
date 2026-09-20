@@ -52,7 +52,7 @@ What 0.13.0 changed underneath that work:
 |---|---|---|
 | 1 | Checkouts are named for the ref that produced them; `resolve` hard-errors when a recorded ref diverges (`resolve.rs:197-205`) | `72ecfde` (stale shared `default` worktree) is obsolete — the bug cannot occur |
 | 2 | Resolution moved to the importer graph (`importers::select`); `lockfiles.rs` demoted to prune liveness checks (`lockfiles.rs:1-8`) | `ecf9730` (batched lockfile parsing) targets a module that is no longer the resolution path |
-| 3 | Resolution is fail-closed — no silent default-branch fallback without `--allow-default-branch` (`resolve.rs:142,163,171`) | the branch's `"N unpinned → default branch"` clause is now false |
+| 3 | Resolution is fail-closed — no silent default-branch fallback without `--allow-default-branch` (`resolve.rs:142,163,171`) | the branch's `"N unpinned -> default branch"` clause is now false |
 | 4 | `skills/docs/SKILL.md` rewritten with stronger provenance rules | `1ecd551` would revert main |
 
 Three of eight commits survive contact (`856c165`, `9605089`, and the final
@@ -125,7 +125,7 @@ pub fn select(start: &Path, ecosystem: Ecosystem, package: &str) -> Result<Selec
 The split points. These are *not* pure code moves — two of them change
 semantics or borrow structure, called out below the table:
 
-| Function | Package-independent (→ context) | Per-package (stays) |
+| Function | Package-independent (-> context) | Per-package (stays) |
 |---|---|---|
 | `js` (`163`) | `164-182`: workspace + lock-dir discovery, `rel_key`, `present`, `nearest_package_manager` | `231`: `select_js_lock` |
 | `pnpm` (`710`) | `711-722`: read, parse, `lockfileVersion` gate | `723-761`: importer lookup, `pnpm_candidates`, locator walk |
@@ -672,7 +672,7 @@ bash, falls back to a `.ps1` twin, and exits 0 silently when neither is present.
 stdin JSON as `session_id`. Two rules:
 
 - **No id means emit without persisting.** Falling back to a per-cwd key makes
-  concurrent sessions share one watermark, so A → B → A suppresses A's
+  concurrent sessions share one watermark, so A -> B -> A suppresses A's
   re-injection even though B displaced it in A's context. A duplicate brief is
   the acceptable failure; a withheld one is not.
 - **The filename is a hash of the complete raw id**, not an allowlisted

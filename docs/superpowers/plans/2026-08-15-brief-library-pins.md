@@ -31,7 +31,7 @@
 
 | Path | Responsibility |
 |---|---|
-| `crates/devkit-docs/src/pins.rs` | The `Pin`/`Outcome`/`Dropped` model, `pins()` (manifest → outcomes), the relevance filter, the shared table renderer, and the JSON envelope builder. One module because these change together: a new `Outcome` variant needs a row shape and a JSON shape in the same edit. |
+| `crates/devkit-docs/src/pins.rs` | The `Pin`/`Outcome`/`Dropped` model, `pins()` (manifest -> outcomes), the relevance filter, the shared table renderer, and the JSON envelope builder. One module because these change together: a new `Outcome` variant needs a row shape and a JSON shape in the same edit. |
 | `crates/devkit-docs/tests/importers_goldens.rs` | Exact-text capture of `importers::select` across a fixture matrix — the safety net for Task 6. |
 | `crates/devkit-docs/tests/goldens/importers.txt` | The recorded goldens (checked in). |
 | `crates/devkit-docs/tests/pins.rs` | Integration tests for `pins()` and the renderer. |
@@ -653,8 +653,8 @@ Signature changes (internal, no public surface):
                     let outcome =
                         select_js_lock(manager, &lock_dir, &workspace, &relative, package, &mut probe);
                     match outcome {
-                        Ok(selection) => format!("{file} → {}", selection.version),
-                        Err(error) => format!("{file} → {error}"),
+                        Ok(selection) => format!("{file} -> {}", selection.version),
+                        Err(error) => format!("{file} -> {error}"),
                     }
                 })
 ```
@@ -2930,7 +2930,7 @@ fn two_session_ids_do_not_share_a_watermark() {
 #[test]
 fn no_session_id_emits_every_time() {
     // Falling back to a per-cwd key makes concurrent sessions share one
-    // watermark, so A → B → A would suppress A's re-injection even though B
+    // watermark, so A -> B -> A would suppress A's re-injection even though B
     // displaced it. A duplicate brief is the acceptable failure.
     let project = Project::docs_only("watermark-anonymous");
     assert!(!brief_with_stdin(&project, &["--if-changed"], "", "100").stdout.is_empty());

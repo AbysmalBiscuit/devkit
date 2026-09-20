@@ -16,19 +16,19 @@
 
 | File | Responsibility |
 |---|---|
-| `crates/devkit-ports/src/config.rs` (modify) | Rename `templates.slack` → `review_request`; add `review_finish`; consts + accessors + tests |
+| `crates/devkit-ports/src/config.rs` (modify) | Rename `templates.slack` -> `review_request`; add `review_finish`; consts + accessors + tests |
 | `src/bin/issue/review.rs` (delete) | Replaced by the `review/` module |
 | `src/bin/issue/review/mod.rs` (create) | Shared: `Target`, `resolve_target`, `target_from_person`, `person_by_login`, `is_human_login`, `parse_args`, `recipient_ctx`, `with_fields`, `base_ctx`, `render_review`, `deliver`, `guard_branch`, `action_for`, `PrAction`, `require_pr_title` |
 | `src/bin/issue/review/request.rs` (create) | `request::run` + request-only helpers (`reviewer_logins`, `targets_from_logins`, `resolve_request_targets`) and gh structs |
 | `src/bin/issue/review/finish.rs` (create) | `finish::run` + `resolve_pr`, `author_target` and gh structs |
-| `src/bin/issue/main.rs` (modify) | `Cmd::Review` → container holding `ReviewCmd`; dispatch |
+| `src/bin/issue/main.rs` (modify) | `Cmd::Review` -> container holding `ReviewCmd`; dispatch |
 | `README.md` (modify) | Document the two subcommands |
 
 The current `review.rs` test functions (`guard_rejects_base_branches`, `action_maps_pr_state`, `require_pr_title_rejects_empty`, the renamed default-template test) move into `review/mod.rs`. `resolve_reviewer` and `SlackIntent` are **deleted** (replaced by the target model). `reviewer_prefers_explicit_then_alias` is deleted with `resolve_reviewer`.
 
 ---
 
-## Task 1: Rename `templates.slack` → `review_request`, add `review_finish`
+## Task 1: Rename `templates.slack` -> `review_request`, add `review_finish`
 
 **Files:**
 - Modify: `crates/devkit-ports/src/config.rs:122` (const), `:137` (field), `:160-162` (accessor), `:762` (test)
@@ -124,7 +124,7 @@ git commit -m "feat(config): rename slack template to review_request, add review
 
 ---
 
-## Task 2: Move `review.rs` → `review/mod.rs` (verbatim)
+## Task 2: Move `review.rs` -> `review/mod.rs` (verbatim)
 
 Pure restructure: no behavior change. `main.rs` already has `mod review;`, which resolves to `review/mod.rs` once the file is gone.
 
@@ -1126,7 +1126,7 @@ issue review request                                          # re-ping the PR's
 Announce over Slack that you finished reviewing. Posts nothing to GitHub.
 
 ```sh
-issue review finish "LGTM, merging after CI"          # inside the PR's worktree → notifies the author
+issue review finish "LGTM, merging after CI"          # inside the PR's worktree -> notifies the author
 issue review finish --pr 1234 --to lev                # from anywhere, explicit PR + recipient
 ```
 

@@ -53,7 +53,7 @@ values are rendered per launch with this context:
 
 - `port` — the app's own allocated port (replaces the ad-hoc `{port}`
   substitution in `launch_argv`).
-- `ports` — map of app name → this worktree's allocated port for that app,
+- `ports` — map of app name -> this worktree's allocated port for that app,
   e.g. `{{ ports['api-prod'] }}`. Strict-undefined makes a typo'd app name
   a hard error.
 
@@ -120,7 +120,7 @@ Fields:
 - `description` (optional) — shown by the listing; this is how an agent
   rediscovers the canned flows.
 - `app` (optional) — command tasks only. Runs in that app's directory and
-  inherits its `static_env`. Absent → runs at the worktree root with no
+  inherits its `static_env`. Absent -> runs at the worktree root with no
   inherited env.
 - `run` — argv array, minijinja-rendered (argv and `env` values) with the
   phase-2 context.
@@ -146,11 +146,11 @@ KEY=VAL` overlays on top of the task's env, mirroring `up`.
 
 **Execution semantics.**
 
-- Command task: render (two-phase port resolution) → `assert_not_prd` on
+- Command task: render (two-phase port resolution) -> `assert_not_prd` on
   the rendered argv, resolved from the task's cwd — the same guard that
-  covers every other launch path → spawn in the foreground with inherited
-  stdio → propagate the exit code. Env layering, low to high: app
-  `static_env` → task `env` → CLI `--env`.
+  covers every other launch path -> spawn in the foreground with inherited
+  stdio -> propagate the exit code. Env layering, low to high: app
+  `static_env` -> task `env` -> CLI `--env`.
 - Sequence task: steps run in order; the first failure stops the sequence
   and `devrun task` exits with that step's code. `up` steps are the same
   code path as `devrun up <app>` for the current worktree, issue role,

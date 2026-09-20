@@ -12,21 +12,21 @@
 
 - **Commits:** Conventional Commits. Each commit footer is EXACTLY `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` — no `Claude-Session` or other trailers.
 - **Probe runs outside the lock.** A 300ms TCP connect must never run while the `sup` mutex is held — it would stall every RPC dispatch (which locks `sup`). Snapshot under a brief lock, release, probe, re-lock to fold the result.
-- **Probe thread is SIGTERM-only.** It never calls `restart()` and never respawns. The existing reap path (`reap_once` → `restart`) owns respawn, crash-loop budget, and zombie reaping.
+- **Probe thread is SIGTERM-only.** It never calls `restart()` and never respawns. The existing reap path (`reap_once` -> `restart`) owns respawn, crash-loop budget, and zombie reaping.
 - **Owned children only.** Only children with a launch spec (`launch.is_some()`) are probed; adopted survivors are left untouched.
 - **Arm on first success.** A child is eligible for a hang verdict only after one successful connect; failures before that are ignored.
-- **Defaults:** `health_probe_secs = 0` (probing off → thread not spawned), `health_fail_threshold = 3`.
+- **Defaults:** `health_probe_secs = 0` (probing off -> thread not spawned), `health_fail_threshold = 3`.
 - **Timeless comments.** Describe behavior, not the change. No "now"/"previously"/PR/task references.
 - **Search with `rg`/`fd`**, never `grep`/`find`.
 - **Gate before every commit:** `cargo fmt --all`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` all green.
-- **Unix-gated integration test:** `tests/supervision.rs` is `#![cfg(unix)]` and compiled out on Windows. Its RED→GREEN must be observed on WSL (see "Notes for the executor"). The Task 1–3 unit tests run on every platform including Windows.
+- **Unix-gated integration test:** `tests/supervision.rs` is `#![cfg(unix)]` and compiled out on Windows. Its RED->GREEN must be observed on WSL (see "Notes for the executor"). The Task 1–3 unit tests run on every platform including Windows.
 
 ---
 
 ## Notes for the executor
 
 - **Lock discipline (deadlock hazard).** In the probe loop, bind each lock result to a `let` so the `MutexGuard` drops at the `;` before the next blocking call. `let targets = d.sup.lock().unwrap().probe_targets();` and `let hung = d.sup.lock().unwrap().record_probe(...);` are correct. Do **not** hold a `sup` guard across `probe_port` or `supervise::stop`. This mirrors the existing reap loop's `let dead = d.sup.lock().unwrap().reap_once();`.
-- **Windows can't verify Task 4.** The integration test is `#![cfg(unix)]`. On Windows it compiles out, so `cargo test --workspace` passes without exercising it. The controller verifies Task 4 RED→GREEN on WSL:
+- **Windows can't verify Task 4.** The integration test is `#![cfg(unix)]`. On Windows it compiles out, so `cargo test --workspace` passes without exercising it. The controller verifies Task 4 RED->GREEN on WSL:
   ```sh
   wsl bash -c 'cd /mnt/c/Users/Lev/Git/lev/devkit/.worktrees/devkitd-health-probe-restarts && \
     export CARGO_TARGET_DIR="$HOME/devkit-wsl-target" && \
@@ -163,7 +163,7 @@ fn arms_on_success_then_signals_on_threshold() {
     let k = key_for("api");
     assert_eq!(s.record_probe(&k, true, 2), None); // arm
     assert_eq!(s.record_probe(&k, false, 2), None); // failure 1
-    assert_eq!(s.record_probe(&k, false, 2), Some(7)); // failure 2 → signal pid
+    assert_eq!(s.record_probe(&k, false, 2), Some(7)); // failure 2 -> signal pid
     assert_eq!(s.record_probe(&k, false, 2), None); // counter reset: fresh run
 }
 
@@ -184,7 +184,7 @@ fn set_pid_redisarms() {
     live(&mut s, "api", 7, 9100);
     let k = key_for("api");
     s.record_probe(&k, true, 2); // armed
-    s.set_pid(&k, 99); // respawn → disarm
+    s.set_pid(&k, 99); // respawn -> disarm
     assert_eq!(s.record_probe(&k, false, 2), None); // ignored until re-armed
     assert_eq!(s.record_probe(&k, false, 2), None);
     assert_eq!(s.record_probe(&k, true, 2), None); // re-arm
@@ -400,7 +400,7 @@ EOF
 
 ### Task 4: Probe thread and integration test
 
-Wire the probe thread into `devkitd` and prove end-to-end that a hung-but-alive server is restarted. TDD order: the Unix-gated integration test first (RED), then the thread (GREEN). **The implementer verifies RED→GREEN on WSL** (see "Notes for the executor").
+Wire the probe thread into `devkitd` and prove end-to-end that a hung-but-alive server is restarted. TDD order: the Unix-gated integration test first (RED), then the thread (GREEN). **The implementer verifies RED->GREEN on WSL** (see "Notes for the executor").
 
 **Files:**
 - Modify: `tests/common/mod.rs` — add `start_with_health` + extract a shared `start_with_env`.
@@ -527,8 +527,8 @@ while True:
     let pid1 =
         pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
 
-    // The fixture serves ~3 s (probe arms), then hangs; 2 failed probes →
-    // SIGTERM → respawn. Poll ports.json for the new pid.
+    // The fixture serves ~3 s (probe arms), then hangs; 2 failed probes ->
+    // SIGTERM -> respawn. Poll ports.json for the new pid.
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut pid2: Option<u32> = None;
     loop {
@@ -615,7 +615,7 @@ In `src/bin/devkitd/main.rs`, after the supervision-thread block (the one ending
 
 Run (on WSL):
 `~/.cargo/bin/cargo test --test supervision -- --nocapture`
-Expected: PASS — all four prior supervision tests plus `health_probe_restarts_hung_server` (pid changes from pid1 → pid2 within 15 s).
+Expected: PASS — all four prior supervision tests plus `health_probe_restarts_hung_server` (pid changes from pid1 -> pid2 within 15 s).
 
 - [ ] **Step 7: Gate and commit**
 
@@ -701,17 +701,17 @@ EOF
 ## Self-Review
 
 **Spec coverage:**
-- §2 arming gate / arm-on-success → Task 2 (`record_probe` ignores pre-arm failures; tests `probe_failures_before_arming_are_ignored`, `arms_on_success_then_signals_on_threshold`).
-- §2 separate probe thread → Task 4 (`main.rs` thread).
-- §2 SIGTERM-only / reuse reap path → Task 4 (thread calls `stop`, never `restart`); §5 invariant in Task 5.
-- §2 owned-only scope → Task 2 (`probe_targets` filter; test `probe_targets_includes_owned_excludes_adopted`).
-- §3.1 `Child` fields + `set_pid` reset → Task 2 (fields; test `set_pid_redisarms`).
-- §3.2 `probe_targets` / `record_probe` → Task 2.
-- §4 probe thread loop + shared connect helper → Task 1 (`probe_port`) + Task 4 (thread).
-- §6 config knobs + defaults → Task 3 (`DaemonConfig`) + Task 4 (env reads).
-- §7 concurrency (probe outside lock, bound `let`) → Task 4 code + Notes for the executor.
-- §8.1 unit tests → Task 2. §8.2 integration test + hang fixture → Task 4.
-- §9 YAGNI → respected (no HTTP probe, no per-app overrides, no adopted probing, no extra backoff).
+- §2 arming gate / arm-on-success -> Task 2 (`record_probe` ignores pre-arm failures; tests `probe_failures_before_arming_are_ignored`, `arms_on_success_then_signals_on_threshold`).
+- §2 separate probe thread -> Task 4 (`main.rs` thread).
+- §2 SIGTERM-only / reuse reap path -> Task 4 (thread calls `stop`, never `restart`); §5 invariant in Task 5.
+- §2 owned-only scope -> Task 2 (`probe_targets` filter; test `probe_targets_includes_owned_excludes_adopted`).
+- §3.1 `Child` fields + `set_pid` reset -> Task 2 (fields; test `set_pid_redisarms`).
+- §3.2 `probe_targets` / `record_probe` -> Task 2.
+- §4 probe thread loop + shared connect helper -> Task 1 (`probe_port`) + Task 4 (thread).
+- §6 config knobs + defaults -> Task 3 (`DaemonConfig`) + Task 4 (env reads).
+- §7 concurrency (probe outside lock, bound `let`) -> Task 4 code + Notes for the executor.
+- §8.1 unit tests -> Task 2. §8.2 integration test + hang fixture -> Task 4.
+- §9 YAGNI -> respected (no HTTP probe, no per-app overrides, no adopted probing, no extra backoff).
 
 **Placeholder scan:** none — every code step shows complete code; every command has an expected result.
 

@@ -35,7 +35,7 @@ fn paint_action(action: &str, s: &str) -> String {
 /// glance.
 fn diff_cell(prev: Option<&str>, cur: &str, paint: impl Fn(&str) -> String) -> String {
     match prev {
-        Some(p) if p != cur => format!("{}{}{}", ui::dim_strike(p), ui::dim(" → "), paint(cur)),
+        Some(p) if p != cur => format!("{}{}{}", ui::dim_strike(p), ui::dim(" -> "), paint(cur)),
         _ => paint(cur),
     }
 }
@@ -64,9 +64,9 @@ fn issue_cell(issue_ids: &[String], t: Option<&dyn Tracker>) -> String {
 // snapshot cache
 // -----------------------------------------------------------------
 // One file per repo: the previous run's full rows (for the stale-while-
-// revalidate render) plus the per-PR diff values (for `old → new` cells).
+// revalidate render) plus the per-PR diff values (for `old -> new` cells).
 
-/// Per-section `pr-number -> field -> value` maps backing the `old → new`
+/// Per-section `pr-number -> field -> value` maps backing the `old -> new`
 /// cells.
 type DiffMap = BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>;
 
@@ -186,7 +186,7 @@ fn legend_lines() -> [String; 2] {
             ui::yellow("waiting on author"),
             ui::dim("passive (awaiting review · draft)"),
         ),
-        ui::dim("old → new in a cell = value changed since the last run."),
+        ui::dim("old -> new in a cell = value changed since the last run."),
     ]
 }
 
@@ -521,7 +521,7 @@ mod tests {
         // The injected paint is a passthrough, so what is left to pin is the
         // shape: struck-through old value, dim arrow, then the new value.
         let plain = |s: &str| s.to_string();
-        let changed = format!("{}{}fail", ui::dim_strike("ok"), ui::dim(" → "));
+        let changed = format!("{}{}fail", ui::dim_strike("ok"), ui::dim(" -> "));
         assert_eq!(diff_cell(Some("ok"), "fail", plain), changed);
         assert_eq!(diff_cell(Some("ok"), "ok", plain), "ok");
         assert_eq!(diff_cell(None, "ok", plain), "ok");

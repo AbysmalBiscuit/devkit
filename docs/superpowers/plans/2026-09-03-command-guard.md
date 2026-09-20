@@ -103,7 +103,7 @@ In `crates/devkit-config/src/lib.rs`, add `pub mod harness;` beside the other mo
 Change the visibility of `merge_layers` from `pub(crate)` to `pub`, and extend its doc comment with the second caller:
 
 ```rust
-/// Deep-merge parsed layers given lowest→highest precedence. Tables merge key by
+/// Deep-merge parsed layers given lowest->highest precedence. Tables merge key by
 /// key; every non-table value (scalar or array) is replaced wholesale by a higher
 /// layer. Records, per leaf dotted-path, the highest layer that set it.
 ///

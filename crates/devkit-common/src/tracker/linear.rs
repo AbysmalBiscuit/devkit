@@ -292,7 +292,7 @@ fn parse_identity(resp: &serde_json::Value) -> Result<LinearIdentity> {
     })
 }
 
-/// Build the batched GraphQL query for the given `ENG-1234` ids. Pure →
+/// Build the batched GraphQL query for the given `ENG-1234` ids. Pure ->
 /// testable.
 ///
 /// Ids that are not Linear ids (see [`parse_id`]) are dropped: every alias
@@ -318,7 +318,7 @@ pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> 
     Some((format!("query {{ {} }}", parts.join(" ")), aliases))
 }
 
-/// Query Linear; returns id → state. Empty map if no key/ids or on network
+/// Query Linear; returns id -> state. Empty map if no key/ids or on network
 /// error.
 pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, State> {
     let (Some(key), Some((query, aliases))) = (key, build_query(ids)) else {
@@ -335,7 +335,7 @@ pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, State> {
 
 /// GraphQL payloads resolving GitHub PR URLs to their linked Linear issues,
 /// 25 URLs per request to stay under Linear's query-complexity budget. Each
-/// entry is (query, variables, alias → url). Pure → testable. URLs ride in
+/// entry is (query, variables, alias -> url). Pure -> testable. URLs ride in
 /// GraphQL variables, never spliced into the query string.
 pub fn issues_for_prs_queries(
     urls: &[String],
@@ -360,7 +360,7 @@ pub fn issues_for_prs_queries(
         .collect()
 }
 
-/// From one `issues_for_prs_queries` response: url → linked issue ids.
+/// From one `issues_for_prs_queries` response: url -> linked issue ids.
 /// Attachments without an issue are skipped; ids are deduped per PR (an
 /// issue can attach to the same PR more than once). URLs with no linked
 /// issue get no entry.
@@ -476,7 +476,7 @@ fn assigned_query(after: Option<&str>) -> String {
     )
 }
 
-/// One `issues.nodes[]` entry from [`assigned_query`]. Pure → testable.
+/// One `issues.nodes[]` entry from [`assigned_query`]. Pure -> testable.
 fn parse_assigned_node(n: &serde_json::Value) -> AssignedIssue {
     let history = n["history"]["nodes"]
         .as_array()

@@ -31,7 +31,7 @@ Linear GraphQL queries. No mutations, no file writes, no stdin.
 - **`issue setup` and `issue dashboard`.** `setup` is long-running and `dashboard` is
   slow and rendering-heavy — neither is a request/response fit. Out of scope entirely.
 - **The `issue.prs` diff cache.** The CLI keeps a per-repo snapshot to render
-  "old → new, changed since last run" cells; that is a human-UX feature and stays
+  "old -> new, changed since last run" cells; that is a human-UX feature and stays
   CLI-only (see *The PR diff-cache decision* below).
 - **Streaming / progress.** The `indicatif` spinner (`spin.rs`) is CLI-only progress and
   does not move into the library.
@@ -45,14 +45,14 @@ computed inside rendering.
 - **`src/bin/issue/status.rs`** (`run(start, ids)`) is a thin wrapper: it calls
   `triage::gather(start, ids)` then `triage::render(...)` and prints a finished count.
 - **`src/bin/issue/triage.rs`** is the shared gatherer. `build_rows` discovers worktrees
-  (`worktree::discover` → `git worktree list`), lists PRs (`gh pr list --state all`),
+  (`worktree::discover` -> `git worktree list`), lists PRs (`gh pr list --state all`),
   and matches the best PR per branch into a `Row { worktree, branch, issue_id, dirty,
   pr_number, pr_state, pr_url }`. `gather` then filters by `ids` and queries Linear
   (`linear::states`, `linear::workspace_url_key`). `render` formats with colors/links
   **and computes `reason_not_finished` per row** — the verdict lives in the renderer
   today.
 - **`src/bin/issue/prs.rs`** (`run(mine, reviews, repo, no_cache)`) resolves the default
-  (`want_mine = mine || !reviews`, `want_reviews = reviews || !mine` → neither flag ⇒
+  (`want_mine = mine || !reviews`, `want_reviews = reviews || !mine` -> neither flag ⇒
   both), fetches concurrently (`fetch_mine`, `fetch_reviews`, `gh api user`), then
   renders `mine_table`/`reviews_table`. Its pure mappers already exist and are unit-
   tested: `issue_of`, `checks_of`, `review_text`, `has_replied`, `mine_action`,
@@ -155,7 +155,7 @@ A new module `crates/devkit-mcp/src/issue.rs` exposes `actions() -> Vec<Action>`
 into the registry with one `extend` line in `actions::actions()`. This mirrors how
 `ports`, `locks`, and `devrun` register today; the tool shape is untouched. Handlers
 follow the established pattern: a `Deserialize` arg struct, a `fn() -> Value` schema,
-deserialize → call facade → `serde_json::to_value`.
+deserialize -> call facade -> `serde_json::to_value`.
 
 ### Binary refactor (single source of truth)
 
@@ -175,8 +175,8 @@ lives in exactly one place:
 
 | Action | Args | Facade call |
 |---|---|---|
-| `issue.status` | `root?` (default `"."`), `ids?: string[]` | `status::gather(root, ids)` → serialize `StatusReport` |
-| `issue.prs` | `root?` (default `"."`), `mine?: bool`, `reviews?: bool`, `repo?: string` | `prs::gather(root, mine, reviews, repo)` → serialize `PrsReport` |
+| `issue.status` | `root?` (default `"."`), `ids?: string[]` | `status::gather(root, ids)` -> serialize `StatusReport` |
+| `issue.prs` | `root?` (default `"."`), `mine?: bool`, `reviews?: bool`, `repo?: string` | `prs::gather(root, mine, reviews, repo)` -> serialize `PrsReport` |
 
 **Argument detail:**
 
@@ -194,7 +194,7 @@ lives in exactly one place:
 ## The PR diff-cache decision
 
 The CLI keeps a `~/.cache/devkit/pr-status/<repo>.json` snapshot to render
-"old → new (changed since last run)" cells. This is a **human-UX feature that must not
+"old -> new (changed since last run)" cells. This is a **human-UX feature that must not
 cross into MCP**: an agent has no "last view," and writing the cache from an MCP call
 would silently corrupt the human's CLI deltas on their next run. The facade `prs::gather`
 is therefore **pure and stateless** — no cache read, no cache write. Cache load/save
@@ -219,9 +219,9 @@ needed; that mechanism is reserved for the deferred `review`/`end` phase.
 Same as v1/phase 2:
 
 - **Protocol/validation failures** (malformed JSON-RPC, unknown action, schema mismatch)
-  → a JSON-RPC **error response**.
+  -> a JSON-RPC **error response**.
 - **Action ran but failed** (a facade `anyhow` error — e.g. `gh` not authenticated, a
-  Linear query failure, an unknown directory) → a `tools/call` result with
+  Linear query failure, an unknown directory) -> a `tools/call` result with
   `isError: true` and the full error chain.
 
 Structured results (the worktree rows, PR views) are returned as JSON, not rendered

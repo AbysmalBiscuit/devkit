@@ -26,7 +26,7 @@ struct Row {
 }
 
 const HINT_LINEAR: &str = "run: devkit auth linear   (https://linear.app/settings/api)";
-const HINT_SLACK: &str = "run: devkit auth slack    (Slack app → OAuth & Permissions)";
+const HINT_SLACK: &str = "run: devkit auth slack    (Slack app -> OAuth & Permissions)";
 const HINT_WORKSPACE: &str = "optional — falls back to the Linear API for issue links";
 const HINT_GITHUB: &str = "run: gh auth login   (or set GH_TOKEN/GITHUB_TOKEN)";
 const HINT_HARNESS_LOG: &str =

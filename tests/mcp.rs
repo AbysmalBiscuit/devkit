@@ -251,7 +251,7 @@ fn devrun_status_lists_tracked_servers_for_root() {
     let arr = rows.as_array().expect("status returns an array");
     assert_eq!(arr.len(), 1, "one tracked server for this root");
     assert_eq!(arr[0]["app"], "web");
-    // Nothing is listening, no pid → crashed.
+    // Nothing is listening, no pid -> crashed.
     assert_eq!(arr[0]["state"], "crashed");
 
     let all = tool_json(&resps[2], false);
@@ -369,15 +369,15 @@ fn issue_status_empty_for_repo_with_no_worktrees() {
     let report = tool_json(&resps[0], false);
     assert!(
         report["worktrees"].as_array().unwrap().is_empty(),
-        "no non-main worktrees → empty list"
+        "no non-main worktrees -> empty list"
     );
     assert_eq!(report["finished_count"], 0);
 }
 
-/// The MCP lifecycle a host drives on connect: `initialize` →
-/// `notifications/initialized` → `tools/list`. The notification carries no `id`
-/// and must draw no response; `initialize` must echo the protocol version and
-/// server identity; `tools/list` must expose exactly the two meta tools.
+/// The MCP lifecycle a host drives on connect: `initialize` ->
+/// `notifications/initialized` -> `tools/list`. The notification carries no
+/// `id` and must draw no response; `initialize` must echo the protocol version
+/// and server identity; `tools/list` must expose exactly the two meta tools.
 #[test]
 fn handshake_lifecycle_initialize_notification_tools_list() {
     let proj = project();

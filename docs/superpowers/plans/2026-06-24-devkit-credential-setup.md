@@ -7,7 +7,7 @@ credentials (`devkit auth`) and diagnoses what is configured (`devkit doctor`),
 backed by a `0600` secret store that every token read falls back to.
 
 **Architecture:** A new `devkit-common::secrets` module owns
-`~/.config/devkit/secrets.toml` and a resolver (`env → file → unset`). The
+`~/.config/devkit/secrets.toml` and a resolver (`env -> file -> unset`). The
 existing `linear`/`slack` modules gain live-API validators split into pure
 parsers. A new sixth binary, `src/bin/devkit/`, is a thin shell: `auth` validates
 then stores; `doctor` reports source + validity per credential. All existing
@@ -31,7 +31,7 @@ token reads route through the resolver, so the file fallback is universal.
 | `crates/devkit-common/src/slack.rs` (modify) | add `SlackIdentity`, `validate`, pure `parse_identity` |
 | `crates/devkit-common/src/linear.rs`, `crates/devkit-issue/src/status.rs`, `src/bin/issue/{status.rs,review.rs,dashboard/data.rs}` (modify) | route token reads through `secrets::resolve` |
 | `src/bin/devkit/main.rs` (new) | CLI entry: `auth`, `doctor`, `completions` |
-| `src/bin/devkit/auth.rs` (new) | `auth` command: acquire → validate → store |
+| `src/bin/devkit/auth.rs` (new) | `auth` command: acquire -> validate -> store |
 | `src/bin/devkit/doctor.rs` (new) | `doctor` command: rows, exit code, `--json` |
 | `Cargo.toml` (modify) | add `rpassword` + `ureq` to the root binary package; add `rpassword` to workspace deps |
 | `README.md`, `docs/configuration.md`, `AGENTS.md`, `docs/next-steps.md` (modify) | document the binary, the store, and the resolution order |
@@ -190,7 +190,7 @@ pub fn load() -> Result<Secrets> {
     load_from(&secrets_path())
 }
 
-/// Resolve a credential: `$<env_key>` → `secrets.toml[<lowercased key>]` → `None`.
+/// Resolve a credential: `$<env_key>` -> `secrets.toml[<lowercased key>]` -> `None`.
 pub fn resolve(env_key: &str) -> Option<String> {
     let env_val = std::env::var(env_key).ok();
     let file_val = load()
@@ -905,7 +905,7 @@ struct Row {
 }
 
 const HINT_LINEAR: &str = "run: devkit auth linear   (https://linear.app/settings/api)";
-const HINT_SLACK: &str = "run: devkit auth slack    (Slack app → OAuth & Permissions)";
+const HINT_SLACK: &str = "run: devkit auth slack    (Slack app -> OAuth & Permissions)";
 const HINT_WORKSPACE: &str = "optional — falls back to the Linear API for issue links";
 
 /// Exit non-zero only when a credential that is set fails validation. An unset
@@ -1204,7 +1204,7 @@ linear_workspace = "adaptyv"
 slack_token      = "xoxb-…"
 ```
 
-Resolution order for each credential is `$ENV` → `secrets.toml` → unset, so a
+Resolution order for each credential is `$ENV` -> `secrets.toml` -> unset, so a
 shell export or a Doppler-injected variable always overrides the file. Populate
 the file with `devkit auth <linear|slack>` (it validates the token against the
 live API before saving) and inspect it with `devkit doctor`.
@@ -1218,7 +1218,7 @@ changing "five CLIs" to "six CLIs" where it reads:
 ```
 a root `devkit` binary package whose five CLIs live
 ```
-→
+->
 ```
 a root `devkit` binary package whose six CLIs live
 ```
@@ -1227,12 +1227,12 @@ In the `## Commands` block, bump the two binary-count comments by one (devkit
 now ships alongside the rest):
 
 ```
-cargo build --release                       # all five binaries → target/release
+cargo build --release                       # all five binaries -> target/release
 cargo install --path .                       # install all five into ~/.cargo/bin
 ```
-→
+->
 ```
-cargo build --release                       # all six binaries → target/release
+cargo build --release                       # all six binaries -> target/release
 cargo install --path .                       # install all six into ~/.cargo/bin
 ```
 
@@ -1249,7 +1249,7 @@ In the "Invariants (do not break)" or "Conventions" section, add a boundary note
 - **`devkit` configures and diagnoses the toolkit itself** — credentials
   (`auth`) and `doctor`. The operational verbs (`portm`, `devrun`, `issue`,
   `lockm`) stay in their own binaries; `config` stays on `devrun`. Token reads
-  resolve through `devkit-common::secrets` (env → `secrets.toml`), never from
+  resolve through `devkit-common::secrets` (env -> `secrets.toml`), never from
   `config.toml`.
 ```
 
@@ -1259,7 +1259,7 @@ Also update the line listing the user-facing CLIs:
 The four user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`) each expose a
 `completions <shell>` subcommand via `clap_complete`.
 ```
-→
+->
 ```
 The five user-facing CLIs (`portm`, `devrun`, `issue`, `lockm`, `devkit`) each
 expose a `completions <shell>` subcommand via `clap_complete`.

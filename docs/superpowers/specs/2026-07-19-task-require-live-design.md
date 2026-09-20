@@ -129,10 +129,10 @@ re-resolve at execution time and the upfront pass never enforces liveness.
 
 In `~/.config/devkit/config.toml` (outside this repo):
 
-- `tasks.lab-os-profile-build-prd.env.FOUNDRY_API_BASE_URL` →
+- `tasks.lab-os-profile-build-prd.env.FOUNDRY_API_BASE_URL` ->
   `"http://localhost:{{ ports['api-serve'] }}"` plus
   `require_live = ["api-serve"]`.
-- `apps.lab-os-serve-prd.static_env.FOUNDRY_API_BASE_URL` → same template,
+- `apps.lab-os-serve-prd.static_env.FOUNDRY_API_BASE_URL` -> same template,
   mirroring `lab-os-serve`.
 - Optional `lab-os-assert-bake` command task (`bash -c` + `jq`): compares the
   baked `routes-manifest.json` destination against

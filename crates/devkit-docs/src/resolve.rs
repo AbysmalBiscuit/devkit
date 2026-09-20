@@ -1,5 +1,5 @@
-//! The lookup facade: entry + CWD → version-correct checkout path.
-//! Order: manual `ref` pin → lockfile version → tag probe. A tag miss (or an
+//! The lookup facade: entry + CWD -> version-correct checkout path.
+//! Order: manual `ref` pin -> lockfile version -> tag probe. A tag miss (or an
 //! unresolved version) is a hard error unless `Options::allow_default_branch`
 //! opts into the default-branch fallback (with a warning); an explicit `ref`
 //! pin that fails to resolve is always a hard error. Every success records a
@@ -221,7 +221,7 @@ pub fn resolve_locked(
     lib.assert_clean(&path)?;
     if repaired && let Some(previous_commit) = moved_tag_from {
         warnings.push(format!(
-            "tag {git_ref} moved {previous_commit} → {commit} upstream; {worktree} re-pointed"
+            "tag {git_ref} moved {previous_commit} -> {commit} upstream; {worktree} re-pointed"
         ));
     }
     // Sized where the tree has just been written, `assert_clean` has verified

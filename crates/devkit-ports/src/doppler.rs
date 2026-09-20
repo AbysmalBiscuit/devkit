@@ -13,7 +13,7 @@ struct Entry {
     path: String,
 }
 
-/// Map repo-relative app path (e.g. "apps/api") → doppler project.
+/// Map repo-relative app path (e.g. "apps/api") -> doppler project.
 pub fn path_to_project(yaml: &str) -> Result<HashMap<String, String>> {
     let f: DopplerFile = serde_yaml_ng::from_str(yaml)?;
     Ok(f.setup.into_iter().map(|e| (e.path, e.project)).collect())

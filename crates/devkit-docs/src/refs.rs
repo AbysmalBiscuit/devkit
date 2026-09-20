@@ -263,7 +263,7 @@ pub fn scan_cache(cache_root: &Path) -> Result<CacheScan> {
     Ok(scan)
 }
 
-/// Pure prune planner. `worktrees` maps lib → worktree dirnames on disk
+/// Pure prune planner. `worktrees` maps lib -> worktree dirnames on disk
 /// (including `default`); `current(project, lib)` reports whether a live
 /// project still references the library (`None` = no longer referenced).
 /// A surviving row keeps its recorded dirname because only resolve can make a
@@ -278,7 +278,7 @@ pub fn plan(
     let mut keep = Vec::new();
     for r in &data.rows {
         if !Path::new(&r.project).exists() {
-            continue; // project root gone → holder dead → row drops
+            continue; // project root gone -> holder dead -> row drops
         }
         if current(&r.project, &r.lib).is_some() {
             keep.push(r.clone());
@@ -484,8 +484,8 @@ mod tests {
     fn record_upserts_by_project_and_lib() {
         let mut d = Data::default();
         d.record("/p1", "tokio", "1.0.0", "v1.0.0", "aaa");
-        d.record("/p1", "tokio", "1.1.0", "v1.1.0", "bbb"); // same key → update
-        d.record("/p2", "tokio", "1.0.0", "v1.0.0", "aaa"); // new workspace → append
+        d.record("/p1", "tokio", "1.1.0", "v1.1.0", "bbb"); // same key -> update
+        d.record("/p2", "tokio", "1.0.0", "v1.0.0", "aaa"); // new workspace -> append
         assert_eq!(d.rows.len(), 2);
         assert_eq!(d.rows[0].version, "1.1.0");
     }
@@ -600,8 +600,8 @@ mod tests {
         let live = live_dir.path();
         let mut data = Data::default();
         data.record(live.to_str().unwrap(), "tokio", "1.0.0", "v1.0.0", "aaa");
-        data.record("/gone/nowhere", "tokio", "0.9.0", "v0.9.0", "bbb"); // dead project → drop
-        data.record(live.to_str().unwrap(), "serde", "2.0.0", "v2.0.0", "ccc"); // no longer in lockfile → drop
+        data.record("/gone/nowhere", "tokio", "0.9.0", "v0.9.0", "bbb"); // dead project -> drop
+        data.record(live.to_str().unwrap(), "serde", "2.0.0", "v2.0.0", "ccc"); // no longer in lockfile -> drop
 
         let mut worktrees = BTreeMap::new();
         worktrees.insert("tokio".to_string(), vec![

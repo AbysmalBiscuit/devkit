@@ -42,7 +42,7 @@ authoritative-in-memory work is merged):
   `serde_json` `send`/`recv`. MCP over stdio is also newline-delimited JSON, so the
   same approach applies.
 - **Identity resolution** (`crates/devkit-locks/src/ident.rs`): the CLI resolves a
-  `holder` from `--as` → `$DEVKIT_SESSION` → tmux/tty/ppid. For a long-lived MCP
+  `holder` from `--as` -> `$DEVKIT_SESSION` -> tmux/tty/ppid. For a long-lived MCP
   server, process identity is meaningless, so holder is handled differently (see
   "Identity and targeting").
 
@@ -169,8 +169,8 @@ surfaces as an action error (see below).
 ## Error and conflict semantics
 
 - **Protocol-level failures** — malformed JSON-RPC, unknown method, unknown action, or
-  arguments that fail schema validation → a JSON-RPC **error response**.
-- **Action ran but failed** — a facade returning an `anyhow` error → a `tools/call`
+  arguments that fail schema validation -> a JSON-RPC **error response**.
+- **Action ran but failed** — a facade returning an `anyhow` error -> a `tools/call`
   result with `isError: true` and the full error chain (`{e:#}`) as text content. This
   keeps execution failures inside the tool-result envelope where the agent can read them.
 - **Lock conflict is a normal result, not an error.** `locks.acquire` and `locks.check`

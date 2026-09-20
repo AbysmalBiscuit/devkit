@@ -498,7 +498,7 @@ fn slot_name(path: &Path) -> Result<String> {
 
 /// Which worktrees name which baseline, as of one scan.
 pub struct References {
-    /// Baseline path → the worktrees naming it.
+    /// Baseline path -> the worktrees naming it.
     pub by_baseline: BTreeMap<PathBuf, Vec<PathBuf>>,
     /// Worktrees this scan could not read a baseline out of: the record exists
     /// and does not parse, or the tree could not even be classified. Which

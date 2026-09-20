@@ -1,5 +1,5 @@
 //! Shared integration-test helpers: a local fixture git repo with two tagged
-//! versions (v1.0.0 → "// v1", v1.1.0 tip → "// v2").
+//! versions (v1.0.0 -> "// v1", v1.1.0 tip -> "// v2").
 
 use std::path::Path;
 

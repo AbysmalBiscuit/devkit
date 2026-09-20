@@ -134,7 +134,7 @@ For the MCP server alone: the repo ships `.codex/config.toml` with `[mcp_servers
 
 ## Cursor
 
-Cursor has no git-repo plugin install from the CLI. Install the plugin from the Customize panel in the sidebar, or, for a team, from Dashboard → Plugins → Team Marketplaces → Add Marketplace → Import from Repo (`AbysmalBiscuit/devkit`). For local development, symlink the checkout:
+Cursor has no git-repo plugin install from the CLI. Install the plugin from the Customize panel in the sidebar, or, for a team, from Dashboard -> Plugins -> Team Marketplaces -> Add Marketplace -> Import from Repo (`AbysmalBiscuit/devkit`). For local development, symlink the checkout:
 
 ```sh
 ln -s "$(pwd)" ~/.cursor/plugins/local/devkit

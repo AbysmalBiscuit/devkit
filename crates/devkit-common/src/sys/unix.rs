@@ -54,8 +54,8 @@ pub(super) fn reap_owned(pid: u32) -> bool {
     }
     match waitpid(Pid::from_raw(pid as i32), Some(WaitPidFlag::WNOHANG)) {
         Ok(WaitStatus::StillAlive) => false,
-        Ok(_) => true,  // exited/signaled → reaped
-        Err(_) => true, // ECHILD etc. → treat as gone
+        Ok(_) => true,  // exited/signaled -> reaped
+        Err(_) => true, // ECHILD etc. -> treat as gone
     }
 }
 

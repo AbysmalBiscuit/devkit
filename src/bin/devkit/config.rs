@@ -327,7 +327,7 @@ mod tests {
                 .any(|l| l.starts_with("defaults.worktree_root =")
                     && l.contains("# from /home/u/.config/devkit/config.toml"))
         );
-        // a serde-defaulted value (pr_base) has no origin → marked (default)
+        // a serde-defaulted value (pr_base) has no origin -> marked (default)
         assert!(
             lines
                 .iter()

@@ -1,4 +1,4 @@
-# `issue prs`: resolve PR→issue links from Linear
+# `issue prs`: resolve PR->issue links from Linear
 
 ## Problem
 
@@ -51,7 +51,7 @@ Three additions, mirroring the existing query/parse/orchestrate split
   — pure, testable. Chunks the URLs (25 per request, staying under Linear's
   query-complexity budget) and builds per chunk
   `query($u0: String!, …) { a0: attachmentsForURL(url: $u0) { nodes { issue { identifier } } } … }`
-  plus the `variables` object and the alias→url map; empty input yields an
+  plus the `variables` object and the alias->url map; empty input yields an
   empty vec. URLs travel as GraphQL variables, never spliced into the query
   string — sidesteps the escaping/injection hazard `parse_id` guards against
   for ids.
@@ -117,7 +117,7 @@ Both `gather` call sites load config already; each additionally reads
 - `src/bin/issue/prs.rs::run` — one `load()`, extract `ignored_checks` and
   the flag together.
 - `crates/devkit-mcp/src/issue.rs::prs_handler` — same. The MCP `issue.prs`
-  JSON output changes shape: `issue_id: "ENG-1"` → `issue_ids: ["ENG-1"]`
+  JSON output changes shape: `issue_id: "ENG-1"` -> `issue_ids: ["ENG-1"]`
   (empty array for none). Deliberate break; the action's consumers are
   agents reading fresh output, and one field name change beats carrying a
   redundant legacy field.
@@ -125,7 +125,7 @@ Both `gather` call sites load config already; each additionally reads
 ### Rendering (`src/bin/issue/prs.rs`)
 
 `issue_cell(issue_ids: &[String], url_key)` replaces the single-id version:
-empty → dim `-`; otherwise each id becomes a cyan OSC-8 link to
+empty -> dim `-`; otherwise each id becomes a cyan OSC-8 link to
 `https://linear.app/{url_key}/issue/{id}` (plain cyan text without a url
 key), space-joined into the one ISSUE cell. Both `mine_table_build` and
 `reviews_table_build` pass `&pr.issue_ids`. The ISSUE column takes no part
@@ -160,7 +160,7 @@ one-extra-round-trip cost.
 
 - `issue status` / `issue dashboard` — their ids come from worktree branch
   names, which always carry the id by construction.
-- Reverse lookup (issue → PRs); `issue_pr` already covers that direction.
+- Reverse lookup (issue -> PRs); `issue_pr` already covers that direction.
 - Caching Linear link results between runs.
 - A CLI flag override (`--resolve-pr-links`); config-only until someone
   needs per-run control.
@@ -170,22 +170,22 @@ one-extra-round-trip cost.
 `crates/devkit-common/src/linear.rs`:
 
 - `issues_for_prs_queries`: aliases one variable per URL, URLs land in
-  `variables` (not the query string), empty input → empty vec, 26 URLs →
+  `variables` (not the query string), empty input -> empty vec, 26 URLs ->
   two payloads.
 - `parse_issues_for_prs`: multi-issue PR collects all identifiers; null
   `issue` attachments skipped; duplicate identifiers within a PR deduped;
-  alias missing from response → no entry.
+  alias missing from response -> no entry.
 
 `crates/devkit-issue/src/prs.rs`:
 
-- `merge_linked`: text id + disjoint links → union in order; overlapping →
-  deduped; empty text side → links only; empty links → text unchanged.
-- `classify` tests updated: `issue_id == "ENG-1"` → `issue_ids ==
-  vec!["ENG-1"]`, the `-` case → empty vec.
+- `merge_linked`: text id + disjoint links -> union in order; overlapping ->
+  deduped; empty text side -> links only; empty links -> text unchanged.
+- `classify` tests updated: `issue_id == "ENG-1"` -> `issue_ids ==
+  vec!["ENG-1"]`, the `-` case -> empty vec.
 
 `src/bin/issue/prs.rs`:
 
-- `issue_cell`: empty → dim `-`; two ids → two links, space-joined.
+- `issue_cell`: empty -> dim `-`; two ids -> two links, space-joined.
 - snapshot compat: a JSON snapshot with the old `issue_id` field parses
   (whole-struct) with empty `issue_ids`.
 

@@ -603,7 +603,8 @@ fn devrun_intro(root: &str, facilities: Facilities) -> String {
     out
 }
 
-/// `["a"] → "a"`, `["a", "b"] → "a and b"`, `["a", "b", "c"] → "a, b, and c"`.
+/// `["a"] -> "a"`, `["a", "b"] -> "a and b"`, `["a", "b", "c"] -> "a, b, and
+/// c"`.
 fn join_and(items: &[&str]) -> String {
     match items {
         [] => String::new(),
@@ -875,7 +876,7 @@ mod tests {
         let mut catalog = HashMap::new();
         catalog.insert("api".to_string(), app("api", "apps/api"));
 
-        // Only the home layer, app dir absent → not a member.
+        // Only the home layer, app dir absent -> not a member.
         let layers = vec![home.clone()];
         assert!(!is_project_member(root, &layers, Some(&home), &catalog));
 
@@ -884,11 +885,11 @@ mod tests {
         catalog.insert("chrome".to_string(), app("chrome", "."));
         assert!(!is_project_member(root, &layers, Some(&home), &catalog));
 
-        // A project devkit.toml layer → member even without app dirs.
+        // A project devkit.toml layer -> member even without app dirs.
         let project = vec![home.clone(), tmp.path().join("devkit.toml")];
         assert!(is_project_member(root, &project, Some(&home), &catalog));
 
-        // App dir exists under root → member from the home layer alone.
+        // App dir exists under root -> member from the home layer alone.
         std::fs::create_dir_all(tmp.path().join("apps/api")).unwrap();
         assert!(is_project_member(root, &layers, Some(&home), &catalog));
     }

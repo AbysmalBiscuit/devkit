@@ -17,7 +17,7 @@
 | File | Responsibility | Change |
 |---|---|---|
 | `crates/devkit-ports/src/config.rs` | config types, layer discovery, deep-merge, provenance, flatten | Modify |
-| `crates/devkit-ports/src/load.rs` | funnel: resolve config → build catalog | Modify (route through `resolve`, carry provenance) |
+| `crates/devkit-ports/src/load.rs` | funnel: resolve config -> build catalog | Modify (route through `resolve`, carry provenance) |
 | `src/bin/devrun/main.rs` | devrun CLI; add `config` subcommand + dispatch | Modify |
 | `src/bin/devrun/config.rs` | `config show` / `config apps` formatting | Create |
 | `README.md` | document `devrun config` and layered resolution | Modify |
@@ -186,13 +186,13 @@ Expected: FAIL — `merge_layers` not found.
 /// Per-leaf record of which config layer supplied each value.
 #[derive(Debug, Default)]
 pub struct Provenance {
-    /// Resolved layer files, lowest→highest precedence.
+    /// Resolved layer files, lowest->highest precedence.
     pub layers: Vec<PathBuf>,
-    /// Dotted config path (e.g. `apps.api.base_port`) → file that supplied it.
+    /// Dotted config path (e.g. `apps.api.base_port`) -> file that supplied it.
     pub origin: HashMap<String, PathBuf>,
 }
 
-/// Deep-merge parsed layers given lowest→highest precedence. Tables merge key by
+/// Deep-merge parsed layers given lowest->highest precedence. Tables merge key by
 /// key; every non-table value (scalar or array) is replaced wholesale by a higher
 /// layer. Records, per leaf dotted-path, the highest layer that set it.
 pub(crate) fn merge_layers(
@@ -260,7 +260,7 @@ git commit -m "feat(ports): add deep-merge with per-leaf provenance"
 
 ## Task 3: Layer discovery + `resolve`
 
-Walk cwd→root collecting `devkit.toml` files, honor `[config] root = true`, prepend the home config, merge, and deserialize.
+Walk cwd->root collecting `devkit.toml` files, honor `[config] root = true`, prepend the home config, merge, and deserialize.
 
 **Files:**
 - Modify: `crates/devkit-ports/src/config.rs` (add `resolve`, `resolve_with_home`, `discover`, `read_layer`, `home_config_path`)
@@ -400,7 +400,7 @@ fn is_root_layer(t: &toml::Table) -> bool {
         .unwrap_or(false)
 }
 
-/// Build the ordered layer list (lowest→highest precedence): the home config (unless
+/// Build the ordered layer list (lowest->highest precedence): the home config (unless
 /// a `root = true` marker cuts it off), then each `devkit.toml` from the filesystem
 /// root down to `start`. An explicit path or `$DEVKIT_CONFIG` is the sole layer.
 fn discover(
@@ -440,7 +440,7 @@ fn discover(
     {
         layers.push(read_layer(h)?);
     }
-    stack.reverse(); // deepest-first → shallowest-first (lowest precedence first)
+    stack.reverse(); // deepest-first -> shallowest-first (lowest precedence first)
     layers.extend(stack);
 
     if layers.is_empty() {
@@ -637,7 +637,7 @@ mod tests {
         // a value present in the origin map is attributed to its file
         assert!(lines.iter().any(|l| l.starts_with("defaults.worktree_root =")
             && l.contains("# from /home/u/.config/devkit/config.toml")));
-        // a serde-defaulted value (pr_base) has no origin → marked (default)
+        // a serde-defaulted value (pr_base) has no origin -> marked (default)
         assert!(lines
             .iter()
             .any(|l| l.starts_with("defaults.pr_base =") && l.contains("# (default)")));
@@ -1001,7 +1001,7 @@ git commit -m "docs: document devrun config and layered config resolution"
 
 ## Self-Review notes
 
-- **Spec coverage:** §1a discovery → Task 3; §1b merge rule → Task 2; §1c provenance → Tasks 2–4; §1d errors → Task 3 (`read_layer` context, `resolve_errors_when_no_config_found`); §2a `config show` → Task 5; §2b `config apps` → Task 6; harness out-of-scope → no task (correct). Behavior-change note (§4) → README in Task 7.
+- **Spec coverage:** §1a discovery -> Task 3; §1b merge rule -> Task 2; §1c provenance -> Tasks 2–4; §1d errors -> Task 3 (`read_layer` context, `resolve_errors_when_no_config_found`); §2a `config show` -> Task 5; §2b `config apps` -> Task 6; harness out-of-scope -> no task (correct). Behavior-change note (§4) -> README in Task 7.
 - **Type consistency:** `Provenance { layers: Vec<PathBuf>, origin: HashMap<String, PathBuf> }`, `merge_layers`, `resolve`/`resolve_with_home`, `flatten`, `Loaded.provenance`, `config::show`/`config::apps`, `origin_lines`/`origin_json`/`apps_json`/`apps_table` are referenced consistently across tasks.
 - **Ordering caveat captured:** Task 5 introduces a `Cmd::Config` arm that calls `config::apps`, implemented in Task 6 — flagged in Task 5 Step 4/5 with a stub so each task builds.
 - **No HOME-env races:** layering tests use `resolve_with_home(.., None|Some(tmp))`, never the process `HOME`.

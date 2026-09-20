@@ -4,7 +4,7 @@
 
 **Goal:** Make `devrun up` idempotent, migrate all launch/env config strings to minijinja with a registry-backed `ports` map, and add a `[tasks]` config table + `devrun task` subcommand for canned oneshot commands and sequences.
 
-**Architecture:** Three phases from `docs/superpowers/specs/2026-07-14-devrun-tasks-design.md`, each landing separately: (1) skip spawning when a live server already holds the (holder, app, role) row — both the direct `run::launch` path and the daemon's `supervise_app`; (2) route launch argv and `static_env` values through the existing `devkit_common::template::render` minijinja seam with a `port`/`ports` context, resolved two-phase (discovery render → one `registry::alloc` → final render); (3) a top-level `[tasks]` table (command tasks and sequence tasks) executed by a new `devrun task` subcommand.
+**Architecture:** Three phases from `docs/superpowers/specs/2026-07-14-devrun-tasks-design.md`, each landing separately: (1) skip spawning when a live server already holds the (holder, app, role) row — both the direct `run::launch` path and the daemon's `supervise_app`; (2) route launch argv and `static_env` values through the existing `devkit_common::template::render` minijinja seam with a `port`/`ports` context, resolved two-phase (discovery render -> one `registry::alloc` -> final render); (3) a top-level `[tasks]` table (command tasks and sequence tasks) executed by a new `devrun task` subcommand.
 
 **Tech Stack:** Rust (edition 2024), clap 4, serde/toml, minijinja 2 (`default-features = false, features = ["builtins", "serde"]`), anyhow.
 
@@ -491,7 +491,7 @@ struct LaunchCtx<'a> {
 
 /// Render one launch/static_env/task string against the port context. `port`
 /// is the app's own allocated port (absent for a task without an `app`);
-/// `ports` maps app name → this worktree's allocated port. Errors if the
+/// `ports` maps app name -> this worktree's allocated port. Errors if the
 /// output still contains the retired `{port}` placeholder, which minijinja
 /// would otherwise pass through as literal text.
 pub fn render_launch(
@@ -1781,7 +1781,7 @@ fn run_task_step(plan: &devkit_ports::task::CommandPlan, dry_run: bool) -> Resul
         println!("  env:  {}", envs.join(" "));
         return Ok(());
     }
-    eprintln!("→ {}: {}", plan.name, plan.argv.join(" "));
+    eprintln!("-> {}: {}", plan.name, plan.argv.join(" "));
     let status = devkit_ports::task::exec(plan)?;
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
@@ -1842,7 +1842,7 @@ steps = [
   propagated. `run` and `env` values are minijinja templates with the same
   `port`/`ports` context as launches; `{{ ports['x'] }}` resolves from the
   port registry (issue role), writing a pid-less reservation when `x` isn't
-  running. Env layering, low to high: app `static_env` → task `env` → CLI
+  running. Env layering, low to high: app `static_env` -> task `env` -> CLI
   `--env`. Tasks do not get `url_env` provider wiring — reference the app
   you need explicitly via `ports[...]`. Doppler invocations go through the
   same `prd` guard as launches.

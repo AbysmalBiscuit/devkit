@@ -15,7 +15,7 @@ pub(crate) const COL_PR: usize = 3;
 pub(crate) const COL_STATE: usize = 4;
 pub(crate) const COL_VERDICT: usize = 5;
 
-/// Discovery index → display row, matching `triage::render`'s sort (by
+/// Discovery index -> display row, matching `triage::render`'s sort (by
 /// issue id, stable on ties).
 fn display_order(rows: &[IssueWorktree]) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..rows.len()).collect();

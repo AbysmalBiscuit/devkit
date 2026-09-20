@@ -17,7 +17,7 @@ behavior everywhere the kernel feature is unavailable.
 | Delegation | Auto-detect (nest under the daemon's own cgroup) **plus** an opt-in `devkitd install-service` that writes a `systemd --user` unit with `Delegate=yes` (no sudo). |
 | Layering | `memory.max` only, set **above** `memory_limit_mb`. The soft poll restart stays the graceful first responder; the kernel cap is a pure backstop for spikes too fast for the poll. No `memory.high`, no throttle tuning. |
 | Placement | Approach A: the child writes its own pid into `cgroup.procs` in `pre_exec`, **before `exec`**, so it is inside the cap before running any of its own code (structural, not probabilistic). |
-| Restart path | None new. A `memory.max` breach is a kernel OOM-kill → observed as a crash → existing reap → crash → respawn path, within the existing crash-loop budget. |
+| Restart path | None new. A `memory.max` breach is a kernel OOM-kill -> observed as a crash -> existing reap -> crash -> respawn path, within the existing crash-loop budget. |
 
 ## Non-goals
 
@@ -63,7 +63,7 @@ the unix file but its cgroup probe returns `enforce: false` (no cgroup-v2).
 - `cgroup_create_leaf(base, key, max_bytes) -> Result<PathBuf>` —
   `mkdir <base>/servers/<key>/`, write `memory.max`, write
   `memory.oom.group = 1` (a breach kills the whole leaf together, not just the
-  largest task → clean tree death). Leaves `memory.high` and swap at kernel
+  largest task -> clean tree death). Leaves `memory.high` and swap at kernel
   defaults (pure backstop).
 - `cgroup_open_procs(leaf) -> Result<OwnedFd>` — open `<leaf>/cgroup.procs` for
   the placement write.
@@ -97,8 +97,8 @@ stop / give-up / startup reconcile.
 1. Compute leaf path `<base>/servers/<key>/`.
 2. `sys::cgroup_create_leaf(base, key, memory_max_bytes)` — mkdir, set
    `memory.max` + `memory.oom.group=1`. On a respawn the leaf already exists and
-   is empty (old process gone) → reuse, rewriting `memory.max`.
-3. `sys::cgroup_open_procs(leaf)` → fd.
+   is empty (old process gone) -> reuse, rewriting `memory.max`.
+3. `sys::cgroup_open_procs(leaf)` -> fd.
 4. `spawn_detached(argv, cwd, env, log, Some(fd))` — child joins the cgroup in
    `pre_exec`, then `exec`s.
 5. Record pid as today (`record_pid_with`).
@@ -107,11 +107,11 @@ When hard caps are inactive (`memory_max_mb == 0`, or `cgroup_caps()` is not
 `Enforce`), steps 1–3 are skipped and step 4 passes `None` — identical to
 today's spawn.
 
-### Enforcement → respawn
+### Enforcement -> respawn
 
 The kernel enforces `memory.max` on the leaf. A breach OOM-kills the leaf (whole
 tree, via `oom.group`). The 500 ms supervision tick's `reap_once` sees the dead
-child → `restart()` → `respawn()`, reusing the now-empty leaf with a fresh
+child -> `restart()` -> `respawn()`, reusing the now-empty leaf with a fresh
 `memory.max`. No new code in the restart decision — it is just a crash, charged
 against the existing crash-loop budget. A server that repeatedly balloons past
 the hard cap exhausts its budget and is dropped, exactly like any crash loop.
@@ -166,10 +166,10 @@ spawn path consults.
 
 Log a line, don't reject (matches the existing `mem_limit <= mem_warn` warning):
 
-- `memory_max_mb > 0` and `cgroup_caps()` is `Unavailable { reason }` →
+- `memory_max_mb > 0` and `cgroup_caps()` is `Unavailable { reason }` ->
   `"hard memory cap requested (N MB) but cgroup-v2 enforcement unavailable: {reason} — using soft memory_action only"`, logged **once** at startup. (`Unsupported`
   is silent — `memory_max_mb` is meaningless off-Linux.)
-- `memory_max_mb > 0 && memory_limit_mb > 0 && memory_max_mb <= memory_limit_mb` →
+- `memory_max_mb > 0 && memory_limit_mb > 0 && memory_max_mb <= memory_limit_mb` ->
   `"hard cap (N MB) at or below soft limit (M MB) — soft restart will never get to act first"`.
 
 ### Fallback matrix
@@ -190,7 +190,7 @@ that there is a first-class option.
 ## `install-service` and lifecycle
 
 Auto-detect alone rarely enforces, because the autostart path
-(`ensure_running` → `daemon::spawn`, direct `exec` in
+(`ensure_running` -> `daemon::spawn`, direct `exec` in
 `crates/devkit-ports/src/daemon/client.rs`) lands the daemon in a login-session
 cgroup that isn't delegated. To actually get caps, the live daemon must be the
 systemd-launched one. Two pieces.
@@ -231,10 +231,10 @@ systemd --user" message.
 ### Autostart routing
 
 `ensure_running` checks whether the unit file exists before its direct-`exec`
-spawn. If present → `systemctl --user start devkitd.service` then the existing
-5 s socket-readiness poll; if absent → direct `exec`, exactly as today. Once
-installed, every autostart goes through systemd → delegated cgroup → caps;
-uninstalled or non-systemd → unchanged. The single-instance `devkitd.lock`
+spawn. If present -> `systemctl --user start devkitd.service` then the existing
+5 s socket-readiness poll; if absent -> direct `exec`, exactly as today. Once
+installed, every autostart goes through systemd -> delegated cgroup -> caps;
+uninstalled or non-systemd -> unchanged. The single-instance `devkitd.lock`
 guarantees one daemon either way.
 
 ### Idle-exit
@@ -259,7 +259,7 @@ Windows/macOS impls return "unsupported".
 ### New AGENTS.md invariants
 
 - *A hard-cap breach is a crash, not a restart path.* `memory.max` +
-  `memory.oom.group=1` OOM-kills the leaf; the reap → crash → respawn path
+  `memory.oom.group=1` OOM-kills the leaf; the reap -> crash -> respawn path
   handles it within the crash-loop budget. No path makes the hard cap restart
   directly — the same rule already established for health-probe and the soft
   memory restart.
@@ -274,7 +274,7 @@ Windows/macOS impls return "unsupported".
 
 - The async-signal-safe pid formatter (stack-buffer itoa) — pure function,
   exhaustive small / boundary cases.
-- Leaf-key sanitization (`holder/app/role` → safe dir name) — round-trip and
+- Leaf-key sanitization (`holder/app/role` -> safe dir name) — round-trip and
   collision cases.
 - Config: `memory_max_mb` parse + default `0`; both misconfiguration-warning
   predicates.

@@ -4,7 +4,7 @@
 
 **Goal:** Make every answer `docm` gives either provably correct or a hard error — no silent fallback, no state where the manifest and the disk disagree.
 
-**Architecture:** Checkout directories are named for the ref that produced them (`/` → `~`), library directories for the encoded library name; `meta.toml` records origin, canonical ref and commit so every resolution can prove what it returned; versions resolve through each lockfile's importer graph rather than by matching semver ranges; and a per-library advisory lock serializes clone/fetch/materialize/registry-commit against prune.
+**Architecture:** Checkout directories are named for the ref that produced them (`/` -> `~`), library directories for the encoded library name; `meta.toml` records origin, canonical ref and commit so every resolution can prove what it returned; versions resolve through each lockfile's importer graph rather than by matching semver ranges; and a per-library advisory lock serializes clone/fetch/materialize/registry-commit against prune.
 
 **Tech Stack:** Rust 2024, `anyhow`, `serde`/`toml`/`serde_json`/`serde_yaml_ng`, `clap` + `clap_complete`, `fd-lock` advisory locks (the workspace lock crate — `fd-lock = "4"` at `Cargo.toml:69`, already used by `devkit-common`, `devkit-locks` and `devkit-ports`), `devkit_common::cmd` for git.
 
@@ -32,7 +32,7 @@
 - **Reserved names (§1, §1.1):** checkout level `repo.git`, `meta.toml`; library level the stem `registry` — that exact name or any name beginning with `registry.`.
 - **Never unlink an advisory lock file after release** (implementer note): persistent lock files avoid inode-replacement races.
 - **Locks are not reentrant.** `fd-lock` takes an OS advisory lock; a second acquisition of the same path from the same process opens a second file description and blocks forever. Every function that takes the library lock is named `*_locked` at its inner, lock-free layer, and only the outermost caller wraps it. Never call a lock-taking function from inside `locks::with_lib`.
-- **Lock ordering, always:** library lock → manifest lock → reference-registry lock. Never the reverse, and never two library locks at once.
+- **Lock ordering, always:** library lock -> manifest lock -> reference-registry lock. Never the reverse, and never two library locks at once.
 - **A directory name is only correct if the host stored it verbatim.** After creating any cache directory, confirm the parent lists the exact bytes requested (`cache::create_dir_exact`). This is what catches case folding and NFC/NFD folding on macOS and Windows without a Unicode dependency (§1).
 
 ## File Structure
@@ -43,9 +43,9 @@
 | `crates/devkit-docs/src/locks.rs` | **new** — per-library advisory lock; `with_lib(cache_root, lib, f)`, `with_manifest`, `with_lib_dir`. |
 | `crates/devkit-docs/src/barrier.rs` | **new** — test-only rendezvous (`signal`/`wait`), no-op unless `DEVKIT_DOCS_MANIFEST_BARRIER` is set. |
 | `crates/devkit-docs/src/upgrade.rs` | **new** — one-shot 0.12.x cache migration: nested scoped dirs, `git worktree repair`, `origin` bootstrap. |
-| `crates/devkit-docs/src/importers.rs` | **new** — per-lockfile importer-graph resolution: workspace path → installed version. |
+| `crates/devkit-docs/src/importers.rs` | **new** — per-lockfile importer-graph resolution: workspace path -> installed version. |
 | `crates/devkit-docs/src/cache.rs` | `LibCache` gains origin recording, worktree cleanliness/HEAD verification, ref-named worktrees. |
-| `crates/devkit-docs/src/resolve.rs` | Orchestration only: select ref → resolve commit → materialize → verify → record. |
+| `crates/devkit-docs/src/resolve.rs` | Orchestration only: select ref -> resolve commit -> materialize -> verify -> record. |
 | `crates/devkit-docs/src/tags.rs` | Tag pattern set and probe order. |
 | `crates/devkit-docs/src/lockfiles.rs` | Lockfile *parsing* primitives; selection moves to `importers.rs`. |
 | `crates/devkit-docs/src/refs.rs` | Reference rows keyed by workspace; legacy-row retirement; prune under the library lock. |
@@ -73,8 +73,8 @@ Fixes the live 0.12.1 data-loss bug (§1.1) and is independent of everything els
 **Interfaces:**
 - Consumes: nothing.
 - Produces:
-  - `names::encode(name: &str) -> String` — `/` → `~`, no validation
-  - `names::decode(dir: &str) -> String` — `~` → `/`
+  - `names::encode(name: &str) -> String` — `/` -> `~`, no validation
+  - `names::decode(dir: &str) -> String` — `~` -> `/`
   - `names::validate_lib(name: &str) -> anyhow::Result<()>` — takes the **logical** name (`@types/node`)
   - `names::validate_ref(git_ref: &str) -> anyhow::Result<()>` — takes the **raw ref** (`release/2.x`)
   - `names::lib_dir(name: &str) -> anyhow::Result<String>` — validate the logical name, then encode
@@ -245,7 +245,7 @@ fn reject_traversal(name: &str) -> Result<()> {
 
 /// Takes the *logical* library name (`@types/node`), never the encoded form.
 ///
-/// `/` → `~` is injective for refs because git forbids `~` in a ref name.
+/// `/` -> `~` is injective for refs because git forbids `~` in a ref name.
 /// Library names carry no such constraint, so the constraint is imposed here.
 pub fn validate_lib(name: &str) -> Result<()> {
     if name.is_empty() {
@@ -1385,7 +1385,7 @@ the window prune must not have. The pinned branch of the selection becomes:
         && canonical.starts_with("refs/tags/")
     {
         eprintln!(
-            "docm: tag {git_ref} moved {} → {commit} upstream; {dirname} re-pointed",
+            "docm: tag {git_ref} moved {} -> {commit} upstream; {dirname} re-pointed",
             prev.commit
         );
     }
@@ -1551,7 +1551,7 @@ fn a_ref_published_after_the_last_fetch_resolves_without_a_manual_sync() {
 ```
 
 `common::fixture_repo` must therefore build a repo with at least two tagged
-commits (`v1.0.0` → `// v1`, `v1.1.0` → `// v2`) and return a path usable as
+commits (`v1.0.0` -> `// v1`, `v1.1.0` -> `// v2`) and return a path usable as
 both a clone source and a `cwd` for further `git` calls. Extend it if it does
 not already; every test in this task depends on that shape.
 
@@ -2020,8 +2020,8 @@ fn js(start: &Path, package: &str) -> Result<Selection> {
                                 _ => npm(&lock_dir, &ws, &rel_key(&lock_dir, &ws)?, package),
                             };
                             Ok(match got {
-                                Ok(s) => format!("{f} → {}", s.version),
-                                Err(e) => format!("{f} → {e}"),
+                                Ok(s) => format!("{f} -> {}", s.version),
+                                Err(e) => format!("{f} -> {e}"),
                             })
                         })
                         .collect::<Result<_>>()?;
@@ -2957,7 +2957,7 @@ directory whose *children* contain `repo.git` is a nested 0.12.x scope;
 anything else is left alone and reported.
 
 *Phase 2 — preflight, no mutation.* Build the full list of
-`<scope>/<pkg>` → `<scope>~<pkg>` renames. Refuse the whole run, changing
+`<scope>/<pkg>` -> `<scope>~<pkg>` renames. Refuse the whole run, changing
 nothing, if any of:
 
 - the target already exists — `@scope~pkg` may have been created by a newer
@@ -3362,8 +3362,8 @@ Extend the tests module in `lookup.rs`:
 - [ ] **Step 2: Run to verify failure, implement, re-run**
 
 `detect` probes **all three** registries, orders them by markers found walking up
-from `cwd` (`bun.lock`/`package-lock.json`/`pnpm-lock.yaml`/`package.json` → js;
-`Cargo.toml` → rust; `pyproject.toml`/`uv.lock` → python), and bails when more
+from `cwd` (`bun.lock`/`package-lock.json`/`pnpm-lock.yaml`/`package.json` -> js;
+`Cargo.toml` -> rust; `pyproject.toml`/`uv.lock` -> python), and bails when more
 than one hits, naming each ecosystem and URL.
 
 `detect` gains a `cwd` parameter, so update its caller in `src/bin/docm.rs`
@@ -3480,7 +3480,7 @@ where `add` already pauses — inside `resolve_locked`, after materialization �
 and the manifest is already committed by then, so an unlocked `rm` still
 observes the finished add and produces the same final state a locked one does.
 The test then passes without the lock and proves nothing. `add`'s Step 3 order
-is: snapshot (read) → write entry → resolve. So the child needs its own hook
+is: snapshot (read) -> write entry -> resolve. So the child needs its own hook
 *between the read and the write*, not the resolve-time one.
 
 With the barrier there, the two outcomes separate cleanly:
@@ -3488,7 +3488,7 @@ With the barrier there, the two outcomes separate cleanly:
 | | rm reads | rm writes | final |
 |---|---|---|---|
 | `rm` takes the library lock | after add commits: `{keep, up}` | `{keep}` | `up` gone |
-| `rm` unlocked | before add writes: `{keep}` | `{keep}` | add then writes its stale `{keep, up}` → **`up` survives** |
+| `rm` unlocked | before add writes: `{keep}` | `{keep}` | add then writes its stale `{keep, up}` -> **`up` survives** |
 
 So "is `up` absent" is exactly the discriminator, and `keep` surviving catches
 the lost update in the other direction.
@@ -3745,9 +3745,9 @@ git commit -m "docs: describe version-truthful docm checkouts"
 
 ## Self-review
 
-**Spec coverage.** §1 → Task 1; §1.1 → Tasks 1–2; §2 → Task 5; §3 → Task 6;
-§4 → Task 3; §5 → Tasks 9–10; §6/§6.1 → Task 11; §7 → Tasks 7–8; §9 → Task 4;
-§8 → Task 12. Spec tests 1–28 map onto Tasks 1, 3, 5, 6, 7, 8, 9, 10, 11.
+**Spec coverage.** §1 -> Task 1; §1.1 -> Tasks 1–2; §2 -> Task 5; §3 -> Task 6;
+§4 -> Task 3; §5 -> Tasks 9–10; §6/§6.1 -> Task 11; §7 -> Tasks 7–8; §9 -> Task 4;
+§8 -> Task 12. Spec tests 1–28 map onto Tasks 1, 3, 5, 6, 7, 8, 9, 10, 11.
 
 **Known gaps handed to the implementer.** One remains: the `spawn_child` helper
 in Tasks 4, 7 and 11 re-enters the test binary at an `#[ignore]`d test, and the
@@ -3764,6 +3764,6 @@ arguments from Task 7 onward, which is one production caller and seven in
 `refs.rs`'s own test module. `resolve_locked` is the lock-free inner layer;
 `resolve` is the only wrapper, and `add`/`sync` call the inner one.
 
-**Lock discipline.** Library lock → manifest lock → registry, never reversed,
+**Lock discipline.** Library lock -> manifest lock -> registry, never reversed,
 never two library locks, never the same lock twice — `fd-lock` is not reentrant
 and a second acquisition from one process blocks forever.

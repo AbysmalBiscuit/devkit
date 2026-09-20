@@ -1333,7 +1333,7 @@ are derived from the tag so the serialized shape survives."
 ## Task 4: Wire the remaining commands to the trait
 
 **Files:**
-- Modify: `crates/devkit-common/src/tracker/mod.rs` (`issue_ref` → `Result<IssueRef>`)
+- Modify: `crates/devkit-common/src/tracker/mod.rs` (`issue_ref` -> `Result<IssueRef>`)
 - Modify: `crates/devkit-common/src/tracker/linear.rs`, `none.rs`, `fake.rs` (signature)
 - Modify: `src/bin/issue/setup.rs:206`, `:222`, `:237`, `:292`
 - Modify: `src/bin/issue/checkout.rs:33` (`classify`), `:192` (fuzzy arm)
@@ -2808,7 +2808,7 @@ git commit -m "docs: describe the GitHub tracker and its repositories"
 
 ## Self-review
 
-**Spec coverage.** Every design section maps to a task: the adapter → 5; which repository → 1; the typed lookup → 2 and 3; the repository resolution seam → 1; per-method mapping and state mapping → 5; the assignee filter → 5; choosing among linked PRs → 5; a PR outside `pr_repo` → 7; a pasted URL keeps its repository → 6; most of the trait has no caller → 4; the dashboard → 8; authentication → 10; selection → 9; non-goals → excluded throughout.
+**Spec coverage.** Every design section maps to a task: the adapter -> 5; which repository -> 1; the typed lookup -> 2 and 3; the repository resolution seam -> 1; per-method mapping and state mapping -> 5; the assignee filter -> 5; choosing among linked PRs -> 5; a PR outside `pr_repo` -> 7; a pasted URL keeps its repository -> 6; most of the trait has no caller -> 4; the dashboard -> 8; authentication -> 10; selection -> 9; non-goals -> excluded throughout.
 
 **Known gap, stated rather than hidden.** The spec's task 3 requires `issue info`'s cached path to clear a cached unique PR when the live lookup is non-unique; this plan implements it in task 3 step 12, but the cached-vs-live reconciliation has no test in the plan's step list. Add one before implementing: a row with a cached `Unique` and a live `Ambiguous` must render ambiguous.
 

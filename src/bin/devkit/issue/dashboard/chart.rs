@@ -16,7 +16,7 @@ pub fn hex_rgb(hex: &str) -> (u8, u8, u8) {
 /// Allocate `rows` vertical cells among stacked segment `values`, scaled so the
 /// tallest possible column (`max_total`) fills `rows`. Largest-remainder
 /// rounding keeps the visible cell total faithful. Returns segment indices
-/// bottom→top.
+/// bottom->top.
 pub fn stack_column(values: &[u32], max_total: u32, rows: usize) -> Vec<usize> {
     let total: u32 = values.iter().sum();
     if total == 0 || max_total == 0 || rows == 0 {
@@ -73,7 +73,7 @@ pub fn render_stacked_bars(
         .map(|b| series.iter().map(|s| s[b]).sum::<u32>())
         .max()
         .unwrap_or(0);
-    // Build each bucket's bottom→top cell stack.
+    // Build each bucket's bottom->top cell stack.
     let columns: Vec<Vec<usize>> = (0..n)
         .map(|b| {
             stack_column(
@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(stack_column(&[4], 4, 4).len(), 4);
         // Half-height column fills ~2 of 4 rows.
         assert_eq!(stack_column(&[2], 4, 4).len(), 2);
-        // Two segments split proportionally, indices bottom→top.
+        // Two segments split proportionally, indices bottom->top.
         assert_eq!(stack_column(&[2, 2], 4, 4), vec![0, 0, 1, 1]);
     }
     #[test]

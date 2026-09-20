@@ -38,7 +38,7 @@
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── config.rs         # Config/Defaults/AppConfig structs + discovery + load
-│   │       ├── doppler.rs        # parse doppler.yaml → {app path → project}
+│   │       ├── doppler.rs        # parse doppler.yaml -> {app path -> project}
 │   │       ├── apps.rs           # App struct, catalog build (config + doppler merge)
 │   │       └── registry.rs       # Registry, Entry, Role; lock/load/save; alloc/release/prune; liveness
 │   │   └── tests/registry.rs     # multiprocess race test
@@ -491,7 +491,7 @@ pub struct LinearState {
     pub name: String, // "Done"
 }
 
-/// Build the batched GraphQL query for the given `ENG-1234` ids. Pure → testable.
+/// Build the batched GraphQL query for the given `ENG-1234` ids. Pure -> testable.
 pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> {
     let mut aliases = HashMap::new();
     let mut parts = Vec::new();
@@ -508,7 +508,7 @@ pub fn build_query(ids: &[String]) -> Option<(String, HashMap<String, String>)> 
     Some((format!("query {{ {} }}", parts.join(" ")), aliases))
 }
 
-/// Query Linear; returns id → state. Empty map if no key/ids or on network error.
+/// Query Linear; returns id -> state. Empty map if no key/ids or on network error.
 pub fn states(ids: &[String], key: Option<&str>) -> HashMap<String, LinearState> {
     let (Some(key), Some((query, aliases))) = (key, build_query(ids)) else {
         return HashMap::new();
@@ -577,7 +577,7 @@ git commit -m "feat(common): table/link helpers + batched Linear Done-gate clien
 **Files:**
 - Modify: `crates/devkit-ports/src/config.rs`, `crates/devkit-ports/src/doppler.rs`
 
-- [ ] **Step 1: `doppler.rs` — parse `doppler.yaml` to path→project**
+- [ ] **Step 1: `doppler.rs` — parse `doppler.yaml` to path->project**
 
 ```rust
 // crates/devkit-ports/src/doppler.rs
@@ -590,7 +590,7 @@ struct DopplerFile { setup: Vec<Entry> }
 #[derive(Deserialize)]
 struct Entry { project: String, path: String }
 
-/// Map repo-relative app path (e.g. "apps/api") → doppler project.
+/// Map repo-relative app path (e.g. "apps/api") -> doppler project.
 pub fn path_to_project(yaml: &str) -> Result<HashMap<String, String>> {
     let f: DopplerFile = serde_yaml::from_str(yaml)?;
     Ok(f.setup.into_iter().map(|e| (e.path, e.project)).collect())
@@ -661,7 +661,7 @@ impl Config {
     }
 }
 
-/// `--config` → `$DEVKIT_CONFIG` → `./devkit.toml` walking up → `~/.config/devkit/config.toml`.
+/// `--config` -> `$DEVKIT_CONFIG` -> `./devkit.toml` walking up -> `~/.config/devkit/config.toml`.
 pub fn locate(explicit: Option<&Path>, start: &Path) -> Option<PathBuf> {
     if let Some(p) = explicit { return Some(p.to_path_buf()); }
     if let Some(p) = std::env::var_os("DEVKIT_CONFIG") { return Some(PathBuf::from(p)); }
@@ -1264,7 +1264,7 @@ git commit -m "feat(portman): status/release/prune CLI over the registry"
 **Files:**
 - Create: `crates/devkit-ports/src/load.rs`; Modify: `crates/devkit-ports/src/lib.rs`
 
-- [ ] **Step 1: One entry point that resolves config → catalog**
+- [ ] **Step 1: One entry point that resolves config -> catalog**
 
 ```rust
 // crates/devkit-ports/src/load.rs
@@ -1321,7 +1321,7 @@ Run: `cargo build -p portman && cargo test -p devkit-ports`
 Expected: PASS
 ```bash
 git add crates/devkit-ports/src/load.rs crates/devkit-ports/src/lib.rs crates/portman/src/main.rs
-git commit -m "feat(ports): shared config→catalog loader; wire portman alloc"
+git commit -m "feat(ports): shared config->catalog loader; wire portman alloc"
 ```
 
 ### Task 13: `devrun` env assembly (`env.rs`) + dry-run
@@ -1351,7 +1351,7 @@ pub fn launch_argv(app: &App, port: u16) -> Vec<String> {
     app.launch.iter().map(|a| a.replace("{port}", &port.to_string())).collect()
 }
 
-/// Env layering (low→high): static_env → url-wiring → user overrides.
+/// Env layering (low->high): static_env -> url-wiring -> user overrides.
 /// `api_port` is this role's api port, if api is in the same run.
 pub fn env_for(
     app: &App, api_port: Option<u16>, user: &BTreeMap<String, String>,
@@ -1428,7 +1428,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Spawn `argv` detached (own session), env-augmented, stdout+stderr → logfile.
+/// Spawn `argv` detached (own session), env-augmented, stdout+stderr -> logfile.
 /// Returns the child pid.
 pub fn spawn_detached(
     argv: &[String], cwd: &str, env: &BTreeMap<String, String>, logfile: &PathBuf,
@@ -1512,12 +1512,12 @@ git commit -m "feat(devrun): detached spawn, readiness poll, SIGTERM, log tail"
 - [ ] **Step 1: Wire the subcommands**
 
 Implement `main.rs` with clap subcommands. `up`:
-1. resolve holder via `devkit_common::worktree::discover(cwd)` → issue worktree path.
+1. resolve holder via `devkit_common::worktree::discover(cwd)` -> issue worktree path.
 2. resolve apps: positional args, else parse `git diff origin/staging...HEAD --stat` for
    `apps/<name>/` prefixes via the catalog; if a webapp with `url_env` is selected, ensure
    `api` is added.
 3. parse `--env K=V` (repeatable) + `--env-file` into the user override map.
-4. `registry::with_lock`: prune, `alloc_one` each app → ports map. Determine `api_port`.
+4. `registry::with_lock`: prune, `alloc_one` each app -> ports map. Determine `api_port`.
 5. for each app build argv = `doppler_prefix(app,cfg) ++ launch_argv(app,port)`, env via
    `env_for`, logfile = `paths::logs_dir()/<holder-slug>/<role>-<app>.log`.
 6. if `--dry-run`: print app, port, cwd, full argv, env keys; spawn nothing; return.
@@ -1525,7 +1525,7 @@ Implement `main.rs` with clap subcommands. `up`:
    PASS/FAIL; on FAIL print `tail(log, 30)`.
 8. print a summary table (app, role, port, `http://localhost:port`, pid, log path).
 
-`down`: `discover` holder → for each tracked entry of this holder(/role) `stop(pid)`, then
+`down`: `discover` holder -> for each tracked entry of this holder(/role) `stop(pid)`, then
 `registry::with_lock(|d| d.release(holder, role))`. `status`: delegate to `portman status`
 logic (call `registry::snapshot()` and render, filtered to this holder unless `--all`).
 `logs <app>`: find entry by holder+app(+role), `tail` or exec `tail -f` when `-f`.
@@ -1631,7 +1631,7 @@ mod tests {
         let p = tmp.to_str().unwrap();
         git(&["init", "-q"], p).unwrap();
         std::fs::write(tmp.join("f"), "x").unwrap();
-        // dirty (untracked) tree → guard trips
+        // dirty (untracked) tree -> guard trips
         let err = ensure_fresh(p, p, "origin/staging").unwrap_err();
         assert!(err.to_string().contains("dirty"));
     }
@@ -1663,12 +1663,12 @@ clap args `--issue ENG-1234 --slug eng-1234-… [--apps a,b] [--dry-run]`. Steps
    `worktree = expand_tilde(&cfg.defaults.worktree_root).join(slug)`,
    `monorepo = expand_tilde(&cfg.defaults.worktree_root).join("monorepo")`.
 2. `git fetch origin` (monorepo); `git worktree add -b <branch> <worktree> <baseline_ref>`.
-   If branch exists → bail with a clear message (let `/issue-setup` decide).
+   If branch exists -> bail with a clear message (let `/issue-setup` decide).
 3. for each app: `ln -s <worktree_root>/.env.local <worktree>/apps/<app>/.env` (skip if
    exists); if app == lab-os, write `apps/lab-os/.env.local` with
    `WORKCELL_BLI_RUN_WORKFLOW_ID=dummy`.
 4. `bun install` once in `<worktree>/apps/<first app>`.
-5. `registry::with_lock`: `alloc_one` each app at `Role::Issue` → ports.
+5. `registry::with_lock`: `alloc_one` each app at `Role::Issue` -> ports.
 6. print JSON: `{ "worktree":…, "branch":…, "ports": { "api":9103, … } }`.
    `--dry-run` prints the plan and the would-be ports without creating anything.
 
@@ -1767,7 +1767,7 @@ git commit -m "feat: example config, README, install instructions"
 - [ ] **Step 1: Port the Python behavior onto `devkit-common`**
 
 Subcommands `status` (default) / `clean [ids…]` / `clean --clean-worktree sel…`.
-1. `discover(cwd)` → worktrees; `issue_id_of` each.
+1. `discover(cwd)` -> worktrees; `issue_id_of` each.
 2. one `gh pr list --state all --limit 500 --json number,state,url,headRefName` (cwd =
    main repo) via `cmd::gh_json`; pick best PR per head (MERGED>OPEN>CLOSED).
 3. `linear::states(ids, env LINEAR_API_KEY)` for the Done gate.
@@ -1806,8 +1806,8 @@ git commit -m "feat(issue-end): Rust rewrite (gh + Linear gate + Rust cleanup)"
 flags `-m/--mine`, `-r/--reviews`, `-R owner/repo`, `--no-cache`. Use `cmd::gh_json` for
 authored + review-requested PRs, compute REVIEW/CHECK/ACTION per PR, render with `ui::table`
 + `ui::link`. Diff cache: read prior snapshot from `paths::cache_dir()/pr-status/<repo>.json`,
-render changed cells as `before → after`, write the new snapshot (unless `--no-cache`).
-Port the pure ACTION-derivation logic with unit tests (e.g. "approved + checks green →
+render changed cells as `before -> after`, write the new snapshot (unless `--no-cache`).
+Port the pure ACTION-derivation logic with unit tests (e.g. "approved + checks green ->
 ready to merge").
 
 - [ ] **Step 2: Build, run, commit**
@@ -1816,7 +1816,7 @@ Run: `cargo run -p pr-status`
 Expected: the two tables render against the current repo.
 ```bash
 git add crates/pr-status/src/main.rs
-git commit -m "feat(pr-status): Rust rewrite with before→after diff cache"
+git commit -m "feat(pr-status): Rust rewrite with before->after diff cache"
 ```
 
 ---

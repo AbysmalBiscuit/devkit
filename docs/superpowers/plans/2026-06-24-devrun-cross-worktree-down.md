@@ -488,7 +488,7 @@ fn down_ports_releases_listed_reservations() {
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cargo test --test down_ports`
-Expected: FAIL — the daemon returns `Response::Err`/unexpected because `DownPorts` is unhandled (compile of the bin succeeds; the match has no arm → it will not compile if the match is exhaustive). If the bin fails to compile with "non-exhaustive patterns", that is the expected failure.
+Expected: FAIL — the daemon returns `Response::Err`/unexpected because `DownPorts` is unhandled (compile of the bin succeeds; the match has no arm -> it will not compile if the match is exhaustive). If the bin fails to compile with "non-exhaustive patterns", that is the expected failure.
 
 - [ ] **Step 3: Implement the dispatch arm and handler**
 
@@ -718,7 +718,7 @@ Expected: PASS. (The `cfg(test)` build sees `parse_age` used by its test, so no 
 
 ## Task 7: `down` CLI args + `build_selector`
 
-Replace the `Down { role }` variant with the full selector surface, and add a pure args→`DownSelector` builder.
+Replace the `Down { role }` variant with the full selector surface, and add a pure args->`DownSelector` builder.
 
 **Files:**
 - Modify: `src/bin/devrun/main.rs` (`Cmd::Down` ~line 44; `main` dispatch ~line 229; add `DownArgs`/`build_selector`; `tests` module)
@@ -1045,7 +1045,7 @@ fn cmd_down(_cli: &Cli, cwd: &str, args: &DownArgs) -> Result<()> {
         .filter_map(|p| data.entries.get(p).map(|e| (*p, e)))
         .collect();
 
-    // All in the current worktree → today's behavior, no prompt.
+    // All in the current worktree -> today's behavior, no prompt.
     if !touches_foreign(&matched, &current) {
         let out = run::bring_down_ports(&ports)?;
         report_down(&out);

@@ -408,12 +408,12 @@ mod tests {
 
     #[test]
     fn cap_below_soft_limit_predicate() {
-        // Both set and cap <= limit → true (misconfigured).
+        // Both set and cap <= limit -> true (misconfigured).
         assert!(cap_below_soft_limit(4096, 4096));
         assert!(cap_below_soft_limit(2048, 4096));
-        // Cap above limit → false (correct ordering).
+        // Cap above limit -> false (correct ordering).
         assert!(!cap_below_soft_limit(8192, 4096));
-        // Either unset (0) → false (not a misconfiguration to warn about).
+        // Either unset (0) -> false (not a misconfiguration to warn about).
         assert!(!cap_below_soft_limit(0, 4096));
         assert!(!cap_below_soft_limit(4096, 0));
     }
@@ -532,7 +532,7 @@ In `crates/devkit-common/src/supervise.rs`, change `spawn_detached`:
 ```rust
 use std::path::Path;
 
-/// Spawn `argv` detached (own session), env-augmented, stdout+stderr → logfile.
+/// Spawn `argv` detached (own session), env-augmented, stdout+stderr -> logfile.
 /// When `cgroup_leaf` is `Some`, the child joins that cgroup in `pre_exec` before
 /// `exec` (Linux only; a no-op elsewhere). Returns the child pid.
 pub fn spawn_detached(
@@ -872,7 +872,7 @@ EOF
 
 **Interfaces:**
 - Produces:
-  - `paths::systemd_user_unit() -> PathBuf` → `~/.config/systemd/user/devkitd.service`
+  - `paths::systemd_user_unit() -> PathBuf` -> `~/.config/systemd/user/devkitd.service`
   - `service::unit_file_contents(exec_path: &str) -> String` (pure)
   - `service::install() -> anyhow::Result<()>`, `service::uninstall() -> anyhow::Result<()>`
   - In `client.rs`: routing that prefers `systemctl --user start devkitd.service` when `paths::systemd_user_unit()` exists.
@@ -1056,7 +1056,7 @@ Add a test that drives the predicate via a temp `XDG_CONFIG_HOME` (serialize env
 ```rust
     #[test]
     fn routes_through_systemd_only_when_unit_present() {
-        // No unit → false. (Default test env has no devkitd.service unit.)
+        // No unit -> false. (Default test env has no devkitd.service unit.)
         // This asserts the predicate reads the unit path; a full positive case
         // that writes the unit is covered by manual verification to avoid mutating
         // the developer's real ~/.config.
@@ -1151,7 +1151,7 @@ fn cgroup_cap_oom_kills_and_respawns() {
     };
     // ... start_with_cgroup_cap(3600, base.to_str().unwrap(), 64) ...
     // ... supervise a python balloon that allocates ~256 MB ...
-    // ... poll ports.json until the app's pid changes (OOM-kill → respawn) ...
+    // ... poll ports.json until the app's pid changes (OOM-kill -> respawn) ...
     let _ = base;
 }
 ```
@@ -1170,7 +1170,7 @@ while True:
 
 With `memory.max` at 64 MB and `oom.group=1`, the kernel kills the whole leaf; the daemon reaps the dead child and respawns it (new pid). Poll `ports.json` until the app's pid changes. Trim fixture imports to exactly what the fixture uses (`socket, sys` here — the phase-3 fast-follow trimmed unused imports; keep that hygiene).
 
-- [ ] **Step 3: Write the fallback test (no delegation → uncapped, no failure)**
+- [ ] **Step 3: Write the fallback test (no delegation -> uncapped, no failure)**
 
 ```rust
 #[cfg(target_os = "linux")]

@@ -17,7 +17,7 @@ use crate::{
     registry::{self, Data, Role},
 };
 
-/// Env layering (low→high): static_env → url-wiring → user overrides.
+/// Env layering (low->high): static_env -> url-wiring -> user overrides.
 /// `provider_url` is the URL-providing app's rendered `url`, if it shares the
 /// run.
 pub fn env_for(
@@ -149,7 +149,7 @@ pub struct ServerStatus {
     pub state: ServerState,
 }
 
-/// Classify from already-probed signals: listening → Ready; else live pid →
+/// Classify from already-probed signals: listening -> Ready; else live pid ->
 /// Starting; else Crashed. Pure, so the mapping is testable without binding
 /// ports.
 fn classify(listening: bool, pid_alive: bool) -> ServerState {
@@ -162,8 +162,8 @@ fn classify(listening: bool, pid_alive: bool) -> ServerState {
     }
 }
 
-/// Classify a tracked server: listening → Ready; else live pid → Starting; else
-/// Crashed.
+/// Classify a tracked server: listening -> Ready; else live pid -> Starting;
+/// else Crashed.
 fn server_state(port: u16, pid: Option<u32>) -> ServerState {
     classify(
         registry::listening(port),
@@ -719,7 +719,7 @@ mod tests {
 
     #[test]
     fn guard_rejects_prd_and_unresolvable_doppler() {
-        // explicit prd → reject
+        // explicit prd -> reject
         assert!(
             assert_not_prd(
                 "web",
@@ -732,7 +732,7 @@ mod tests {
             )
             .is_err()
         );
-        // explicit safe config → ok
+        // explicit safe config -> ok
         assert!(
             assert_not_prd(
                 "web",
@@ -745,7 +745,7 @@ mod tests {
             )
             .is_ok()
         );
-        // non-doppler launch → ok (unguarded)
+        // non-doppler launch -> ok (unguarded)
         assert!(
             assert_not_prd(
                 "web",
@@ -758,7 +758,7 @@ mod tests {
             )
             .is_ok()
         );
-        // doppler launch with no flag/env, cwd has no scope → unresolvable →
+        // doppler launch with no flag/env, cwd has no scope -> unresolvable ->
         // reject
         assert!(
             assert_not_prd(

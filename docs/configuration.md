@@ -41,7 +41,7 @@ linear_workspace = "adaptyv"
 slack_token      = "xoxb-…"
 ```
 
-Resolution order for each credential is `$ENV` → `secrets.toml` → unset, so a shell export or a Doppler-injected variable always overrides the file. Populate the file with `devkit auth <linear|slack>` (it validates the token against the live API before saving) and inspect it with `devkit doctor`.
+Resolution order for each credential is `$ENV` -> `secrets.toml` -> unset, so a shell export or a Doppler-injected variable always overrides the file. Populate the file with `devkit auth <linear|slack>` (it validates the token against the live API before saving) and inspect it with `devkit doctor`.
 
 ## Editor support
 
@@ -120,7 +120,7 @@ Each section that describes a table ends in an `Example:` line naming the Rust t
 | `branch_prefix` | no | Prefix for branches created by `issue setup` (e.g. `you/`). |
 | `baseline_ref` | no | Git ref the baseline server tracks (e.g. `origin/staging`). Defaults to the remote's default branch, read from `origin/HEAD`. When neither resolves, the error names both fixes: set `defaults.baseline_ref`, or run `git remote set-head origin -a`. |
 | `baseline_dir` | no | Directory the per-fork-point baseline worktrees are created under, one per merge-base commit. `~` is expanded. Defaults to `_baselines` beside the issue worktrees, under `worktree_root`. |
-| `doppler_yaml` | no | Path to the repo's `doppler.yaml`; its `setup` paths seed app **path inference**. `~` is expanded. Absent → apps need an explicit `path`. |
+| `doppler_yaml` | no | Path to the repo's `doppler.yaml`; its `setup` paths seed app **path inference**. `~` is expanded. Absent -> apps need an explicit `path`. |
 | `pr_base` | no (default `"main"`) | Default base branch for PRs opened by `issue pr create`. |
 | `pr_create_state` | no (default `"draft"`) | State `issue pr create` opens a PR in when neither `--draft` nor `--ready` is given: `"draft"` or `"ready"`. |
 | `require_pr_reviewer` | no (default `false`) | Refuse any run that would leave a PR ready for review with no human GitHub reviewer other than the PR's own author: `issue pr create --ready`, `issue pr ready`, and the draft-to-ready flip in `issue review request`. |
@@ -206,7 +206,7 @@ To enforce a hard per-app memory cap *without* the daemon restarting the server,
 
 Example: [`TaskConfig`](../crates/devkit-config/src/lib.rs) and [`Step`](../crates/devkit-config/src/lib.rs).
 
-- Command tasks run in the foreground with inherited stdio; the exit code is propagated. `run` and `env` values are minijinja templates with the same `port`/`ports` context as launches; `{{ ports['x'] }}` resolves from the port registry (issue role), writing a pid-less reservation when `x` isn't running. Env layering, low to high: app `static_env` → task `env` → CLI `--env-file` → `--env`. Tasks do not get `url_env` provider wiring — reference the app you need explicitly via `ports[...]`. Doppler invocations go through the same `prd` guard as launches.
+- Command tasks run in the foreground with inherited stdio; the exit code is propagated. `run` and `env` values are minijinja templates with the same `port`/`ports` context as launches; `{{ ports['x'] }}` resolves from the port registry (issue role), writing a pid-less reservation when `x` isn't running. Env layering, low to high: app `static_env` -> task `env` -> CLI `--env-file` -> `--env`. Tasks do not get `url_env` provider wiring — reference the app you need explicitly via `ports[...]`. Doppler invocations go through the same `prd` guard as launches.
 - `run` and `env` also read `[templates.variables]`, plus `issue` and `slug` from the worktree's `.devkit/issue.toml` and `branch` from git. `devrun task <name> --arg key=value` (repeatable) sets a variable for one run, over both. Any other name a task's `run` or `env` reads is an arg of that task: optional when `[templates.variables]` gives it a value, required otherwise. A `| default(...)` or `is defined` in the template does not make an arg optional. A missing required arg, or an `--arg` that no template reads and `[templates.variables]` does not declare, fails before anything resolves, and for a sequence the check covers every step. `devrun task` lists each task's args with optional ones in brackets, and the command guard's redirect names the required ones. An issue field with no source is undefined rather than empty, so `{{ issue }}` fails outside an issue worktree; write `{% if issue is defined %}` for a task that runs in both. The `commit` task on `TaskConfig` is that shape, and sets `guard = true` to claim an agent's typed `git commit`.
 - `required_args = { name = "always" | "agents" | "humans" | "never" }` requires an arg whatever `[templates.variables]` supplies. Declaring a default is otherwise the only way to make an arg optional, and it makes the arg omittable by every caller at once: an agent that drops `--arg msg=...` runs on the project constant, and nothing in the run says an arg went unsupplied. A task entry beats a variable entry of the same name, `never` included, so one task can opt out of a project-wide marking. Neither can lower the derived floor: an arg with no default is required whatever the marking says, and `required = "never"` on such an arg is a config error. A pinned name must be an arg the task reads, or the task is invalid and says so in the listing. A command task's markings carry to a sequence whose step names it.
 - `require_live = ["app", …]` (command tasks only): each listed app must have a live devrun-managed server in this worktree when the task *executes*, or the task fails before spawning:
@@ -332,7 +332,7 @@ Opt-in for the agent write-access harness.
 
 **Three opt-in sources, with precedence.** The hook resolves whether to enforce for a given checkout from, in order:
 
-1. **`DEVKIT_ENFORCE_WRITES`** (env) — an explicit master switch. `1`/`true`/`yes`/`on` forces enforcement on; `0`/`false`/`no`/`off` forces it off, overriding both config files. Unset/blank/unrecognized → no opinion, fall through.
+1. **`DEVKIT_ENFORCE_WRITES`** (env) — an explicit master switch. `1`/`true`/`yes`/`on` forces enforcement on; `0`/`false`/`no`/`off` forces it off, overriding both config files. Unset/blank/unrecognized -> no opinion, fall through.
 2. **The project layers applying where the write happens** `[harness] enforce_writes` — every layer the config walk resolves for that location, including `devkit.local.toml` and a linked worktree's inherited main-checkout layer, opts in if any of them sets the flag. The checkout root the walk anchors to comes from asking git, not from scanning ancestors for a `.git` entry.
 3. **The global config** `[harness] enforce_writes` — read from `$DEVKIT_CONFIG` (else `~/.config/devkit/config.toml`). Set it here to enforce across **every** checkout without a per-checkout file.
 

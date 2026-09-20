@@ -61,7 +61,7 @@ a lib entry holds exactly one clone.
 
 ```
 ~/.cache/devkit/docs/
-  registry.json        # flock-guarded project→version reference registry
+  registry.json        # flock-guarded project->version reference registry
   <name>/
     repo.git/          # one bare, blobless clone (--filter=blob:none), with tags
     1.38.0/            # git worktree per referenced version, created on demand
@@ -87,12 +87,12 @@ pattern as the ports/locks stores — concurrent agent sessions race docm.
 `docm prune` reclaims from references, not age (the ports-registry holder
 model: a holder is live iff its root path exists):
 
-1. Project root gone → drop all its rows.
-2. Root exists → re-read its lockfile; version bumped → retarget the row
+1. Project root gone -> drop all its rows.
+2. Root exists -> re-read its lockfile; version bumped -> retarget the row
    (without materializing the new worktree) and drop the old reference.
-3. Version worktree with zero rows → deleted. `default` worktrees are exempt
+3. Version worktree with zero rows -> deleted. `default` worktrees are exempt
    (they exist because the manifest entry exists).
-4. A lib absent from every manifest with zero rows → the whole `<name>/`
+4. A lib absent from every manifest with zero rows -> the whole `<name>/`
    directory is listed and removed only with `--yes` or interactive confirm.
 
 ### Version resolution (`docm path` / `docm info`)
@@ -101,12 +101,12 @@ model: a holder is live iff its root path exists):
 2. A manual `ref` pin wins outright.
 3. Otherwise find the lib's `package` in the project's lockfiles — v1
    parsers: `Cargo.lock`, `pnpm-lock.yaml`, `package-lock.json`, `uv.lock`.
-   Multiple versions in one lockfile (transitive dupes) → highest, with a
+   Multiple versions in one lockfile (transitive dupes) -> highest, with a
    stderr note.
-4. Version → tag: probe the bare clone's tags against the common shapes
+4. Version -> tag: probe the bare clone's tags against the common shapes
    (`v1.38.0`, `1.38.0`, `tokio-1.38.0`, `pkg@1.38.0`); the first matching
    pattern is cached in `meta.toml` so later resolutions skip probing.
-5. No lockfile / package absent / tag not found → fall back to the `default`
+5. No lockfile / package absent / tag not found -> fall back to the `default`
    worktree with a one-line stderr warning.
 
 stdout is machine-clean: `docm path` prints exactly one path; all warnings
@@ -169,7 +169,7 @@ fetches blobs and may take seconds. The skill description triggers on
   tag lists; layout detection against temp dir trees; prune against a
   synthetic registry with fake project roots (existing, deleted, and bumped).
 - Integration: fixture git repos created in temp dirs (init, commit, tag)
-  driving add → path → prune end-to-end with no network; `add`'s registry
+  driving add -> path -> prune end-to-end with no network; `add`'s registry
   lookups stubbed via the HTTP trait.
 - Concurrency: one multiprocess flock test on `registry.json`, same shape as
   `devkit-ports --test registry`.

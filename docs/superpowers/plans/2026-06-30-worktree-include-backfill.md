@@ -543,14 +543,14 @@ git commit -m "docs: document defaults.worktree_include"
 ## Self-Review
 
 **Spec coverage:**
-- Config `defaults.worktree_include` → Task 2 + docs Task 5. ✓
-- `copy_includes` in `devkit-common::worktree`, decoupled signature → Task 1. ✓
-- Glob expansion, file + recursive-directory copy, trailing-slash idiom → Task 1 (impl + 3 tests). ✓
-- Skip-existing per file → Task 1 (`existing_destination_file_is_not_clobbered`). ✓
-- Fail-open warnings → Task 1 (errors collected, never propagated) + wiring prints to stderr. ✓
-- Insertion before `prep_apps` in setup → Task 3; unconditional in checkout-pr → Task 4. ✓
-- `glob` crate, no parallelism → Task 1 Step 1. ✓
-- Tests over temp dirs, full gate green → Task 1 + Task 5. ✓
+- Config `defaults.worktree_include` -> Task 2 + docs Task 5. ✓
+- `copy_includes` in `devkit-common::worktree`, decoupled signature -> Task 1. ✓
+- Glob expansion, file + recursive-directory copy, trailing-slash idiom -> Task 1 (impl + 3 tests). ✓
+- Skip-existing per file -> Task 1 (`existing_destination_file_is_not_clobbered`). ✓
+- Fail-open warnings -> Task 1 (errors collected, never propagated) + wiring prints to stderr. ✓
+- Insertion before `prep_apps` in setup -> Task 3; unconditional in checkout-pr -> Task 4. ✓
+- `glob` crate, no parallelism -> Task 1 Step 1. ✓
+- Tests over temp dirs, full gate green -> Task 1 + Task 5. ✓
 
 **Placeholder scan:** No TBD/TODO; every code step shows full code. ✓
 

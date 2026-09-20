@@ -275,8 +275,8 @@ while True:
     let pid1 =
         pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
 
-    // The fixture serves ~3 s (probe arms), then hangs; 2 failed probes →
-    // SIGTERM → respawn. Poll ports.json for the new pid.
+    // The fixture serves ~3 s (probe arms), then hangs; 2 failed probes ->
+    // SIGTERM -> respawn. Poll ports.json for the new pid.
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut pid2: Option<u32> = None;
     loop {
@@ -544,7 +544,7 @@ while True:
     let pid1 =
         pid_in_ports_json(&h.ports_json(), "api").expect("no pid in ports.json after supervise");
 
-    // Poll up to 30 s for the pid to change: OOM-kill → crash → respawn.
+    // Poll up to 30 s for the pid to change: OOM-kill -> crash -> respawn.
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut pid2: Option<u32> = None;
     loop {

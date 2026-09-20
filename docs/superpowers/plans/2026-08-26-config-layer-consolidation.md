@@ -1265,7 +1265,7 @@ In `src/bin/lockm.rs`, stop pre-resolving the root:
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     if !hook::enforcement_enabled(&cwd) {
-        return; // no opt-in (env, project layers, or global config) → no enforcement
+        return; // no opt-in (env, project layers, or global config) -> no enforcement
     }
 ```
 

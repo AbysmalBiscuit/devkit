@@ -56,7 +56,7 @@ pub enum Mode {
     Trace,
 }
 
-/// Map a `DEVKIT_TIMING` value to a [`Mode`]. Unknown / unset → [`Mode::Off`].
+/// Map a `DEVKIT_TIMING` value to a [`Mode`]. Unknown / unset -> [`Mode::Off`].
 pub fn parse_env_mode(v: Option<&str>) -> Mode {
     match v {
         Some("trace") => Mode::Trace,

@@ -49,7 +49,7 @@ binary crates are the commands. Single-language, fast-starting static binaries.
    on a second port set for faithful local-vs-local A/B.
 3. **Supervised processes.** The runner spawns servers detached, records pid + logfile +
    port in the registry, and supports `up`/`down`/`status`/`logs`. `down` is the
-   deterministic deallocation path (kill tracked pids → release ports). A per-machine
+   deterministic deallocation path (kill tracked pids -> release ports). A per-machine
    process manager, **not** a resident daemon.
 4. **Language: Rust.** Correctness-sensitive, frequently run, and the config-driven catalog
    keeps the volatile data in `devkit.toml` so recompiles are only for engine changes.
@@ -81,11 +81,11 @@ binary crates are the commands. Single-language, fast-starting static binaries.
 │   │                               #      issue-id parse, Linear GraphQL client, XDG paths,
 │   │                               #      table/style/OSC8 helpers
 │   ├── devkit-ports/               # lib: registry, config, apps   (deps: common, fd-lock, nix)
-│   ├── portman/                    # bin → ports
-│   ├── devrun/                     # bin → ports (+ nix for setsid/signals)
-│   ├── issue-prep/                 # bin → ports
-│   ├── issue-end/                  # bin → common (+ ureq for Linear)
-│   └── pr-status/                  # bin → common
+│   ├── portman/                    # bin -> ports
+│   ├── devrun/                     # bin -> ports (+ nix for setsid/signals)
+│   ├── issue-prep/                 # bin -> ports
+│   ├── issue-end/                  # bin -> common (+ ureq for Linear)
+│   └── pr-status/                  # bin -> common
 ├── configs/example.toml            # working default config
 └── README.md
 ```
@@ -108,7 +108,7 @@ links `ureq` and `pr-status` never links `fd-lock`/`nix`.
 
 ### `devkit-ports::config` — config loader
 
-Discovery order: `--config` flag → `$DEVKIT_CONFIG` → `./devkit.toml` (walking up) →
+Discovery order: `--config` flag -> `$DEVKIT_CONFIG` -> `./devkit.toml` (walking up) ->
 `~/.config/devkit/config.toml`. Schema:
 
 ```toml
@@ -137,7 +137,7 @@ base_port = 4200
 launch    = ["next", "dev", "-p", "{port}"]
 ```
 
-`doppler_project` and `path` per app come from `doppler.yaml` (matched by app name → path →
+`doppler_project` and `path` per app come from `doppler.yaml` (matched by app name -> path ->
 project). The config only carries what `doppler.yaml` lacks. Deserialized into typed structs
 via serde.
 
@@ -161,16 +161,16 @@ State: `~/.claude/state/devkit/ports.json` + `ports.lock`. Entry struct:
 - **`release(holder, role: Option<Role>) -> Vec<port>`** — drop matching entries. Does not
   kill processes.
 - **`prune()`** — drop an entry when its holder path is gone, its pid is dead
-  (`kill(pid,0)` → ESRCH), or it has `pid = None` + nothing listening + age > 120 s
+  (`kill(pid,0)` -> ESRCH), or it has `pid = None` + nothing listening + age > 120 s
   (reservation grace).
 - helpers: `listening(port)`, `pid_alive(pid)`, `holder_alive(path)`.
 
-The lock is an RAII guard (`fd-lock`) dropped at end of scope; mutation = read JSON → modify
-→ write under the held guard.
+The lock is an RAII guard (`fd-lock`) dropped at end of scope; mutation = read JSON -> modify
+-> write under the held guard.
 
 ### `portman` binary
 
-`portman [status]` → `comfy-table` (PORT, APP, ROLE, HOLDER/issue-id, PID, LISTENING, AGE)
+`portman [status]` -> `comfy-table` (PORT, APP, ROLE, HOLDER/issue-id, PID, LISTENING, AGE)
 across all holders · `portman alloc --holder P --role issue api lab-os` ·
 `portman release --holder P [--role]` · `portman prune` · `-C/--dir` derives holder from cwd.
 
@@ -179,13 +179,13 @@ across all holders · `portman alloc --holder P --role issue api lab-os` ·
 Resolves worktree (holder + issue id) from cwd via `devkit_common::discover`.
 
 - **`devrun up [apps…] [--role issue|baseline|both] [--env K=V]… [--env-file F] [-- extra args] [--dry-run]`**
-  - resolve apps: args → `git diff origin/staging...HEAD --stat` app paths → ask; auto-add
+  - resolve apps: args -> `git diff origin/staging...HEAD --stat` app paths -> ask; auto-add
     api if a webapp needs it.
-  - `registry::alloc` ports → assemble env per app, precedence low→high: **doppler
-    `dev_local`** → app `static_env` → **computed url-wiring** (set each consumer's `url_env`
+  - `registry::alloc` ports -> assemble env per app, precedence low->high: **doppler
+    `dev_local`** -> app `static_env` -> **computed url-wiring** (set each consumer's `url_env`
     to this role's local api port — the false-negative trap from validate-webapp, handled
-    automatically) → user `--env`/`--env-file`.
-  - spawn detached (`setsid` via `nix`; stdout/stderr → `~/.claude/state/devkit/logs/<holder>/<role>-<app>.log`),
+    automatically) -> user `--env`/`--env-file`.
+  - spawn detached (`setsid` via `nix`; stdout/stderr -> `~/.claude/state/devkit/logs/<holder>/<role>-<app>.log`),
     `record_pid`, poll readiness (`std::net`), report per-app PASS/FAIL (FAIL tails the log;
     process left running for inspection).
   - `--role both`: bring up issue + baseline on two port sets; baseline first ensures the
@@ -218,16 +218,16 @@ Port the existing Python behavior onto `devkit-common`:
   and `status`/`clean`/`--clean-worktree` subcommands. The `issue-end-cleanup.sh` logic
   (`git worktree remove`, branch delete, `rm ISSUE_*.md`, refuse-from-inside guard) is
   **reimplemented in Rust** — no shell asset to ship.
-- **`pr-status`** — authored + review-requested PR tables via `gh`, the before→after diff
+- **`pr-status`** — authored + review-requested PR tables via `gh`, the before->after diff
   cache under `$XDG_CACHE_HOME/devkit/pr-status/`, OSC8 links, `comfy-table` rendering.
 
 ## Error handling
 
-- doppler not authed / project missing → surface its stderr, fail that app, don't
+- doppler not authed / project missing -> surface its stderr, fail that app, don't
   half-start the stack.
-- corrupt registry JSON → back up + reinit with a warning.
-- lock contention → block with ~10 s timeout, then error.
-- readiness timeout → mark FAIL, tail the log, leave the process running.
+- corrupt registry JSON -> back up + reinit with a warning.
+- lock contention -> block with ~10 s timeout, then error.
+- readiness timeout -> mark FAIL, tail the log, leave the process running.
 - **Never** run `doppler … -c prd`. doppler config comes from `defaults.doppler_config`,
   validated against a `prd` denylist.
 - Binaries use `anyhow` for context-rich top-level errors; the libs use `thiserror` enums so

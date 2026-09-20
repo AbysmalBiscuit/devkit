@@ -73,7 +73,7 @@ pub struct Templates {
 - Added to `Config` as `#[serde(default)] pub templates: Templates`, so a config
   with no `[templates]` table deserializes to all-defaults (every field `None`,
   empty `variables`).
-- Each `Option<String>`: `Some` → use it; `None` → the built-in default below.
+- Each `Option<String>`: `Some` -> use it; `None` -> the built-in default below.
   Resolved once at the render site
   (`cfg.templates.branch.as_deref().unwrap_or(DEFAULT_BRANCH)`).
 - `Templates` derives `Serialize`, so merged templates and their per-leaf
@@ -105,8 +105,8 @@ Renders `branch` then `worktree_dir`. No `input` (setup has no free-text flag).
 | `slug` | `setup` arg |
 | `apps` | `setup` arg (list) |
 
-Order: render `branch` → render `worktree_dir` (joined under `worktree_root`) →
-create worktree → write `.devkit/issue.toml` record.
+Order: render `branch` -> render `worktree_dir` (joined under `worktree_root`) ->
+create worktree -> write `.devkit/issue.toml` record.
 
 ### Review site (`issue review`)
 
@@ -128,7 +128,7 @@ and the prior render outputs:
 | `pr_body` | `--pr-body` | `pr_title` |
 | `slack` | `body` (positional) | `pr_title`, `pr_url` |
 
-Order: `pr_title` → `pr_body` → create/reuse PR (yields `pr_url`) → `slack` →
+Order: `pr_title` -> `pr_body` -> create/reuse PR (yields `pr_url`) -> `slack` ->
 post. For a **reused** PR (add-reviewer path), `pr_title` is still rendered for
 the Slack context but not sent to GitHub; `pr_url` comes from the existing PR.
 
@@ -188,10 +188,10 @@ proceed — failing to update a convenience file must not abort `issue setup`
 - Render failures (strict-undefined, malformed `{% %}`) surface as `anyhow`
   errors with `.context()` naming the offending template key (e.g. *"rendering
   `pr_body` template"*), so a config typo points at the right line.
-- Missing-record-but-template-needs-`issue` → the dedicated message above.
-- Empty rendered `pr_title` on the PR-create path → the preserved
+- Missing-record-but-template-needs-`issue` -> the dedicated message above.
+- Empty rendered `pr_title` on the PR-create path -> the preserved
   `--pr-title is required to create a PR` error.
-- Global gitignore I/O errors → warn and proceed.
+- Global gitignore I/O errors -> warn and proceed.
 
 ## Test plan
 
@@ -201,8 +201,8 @@ TDD; `cargo test --workspace` is the merge gate.
 |---|---|
 | `template::render` | substitution; `{% if %}`/`{% for apps %}`; strict-undefined errors; `variables` merge + context-wins-over-constant |
 | Default templates | each default reproduces today's exact output |
-| `Templates` deserialize | absent `[templates]` → all-`None` + empty map; partial table → only set keys override |
-| Setup record | round-trips `issue/slug/apps`; review reads it; missing file → default templates render, custom-with-`{{ issue }}` errors with the helpful message |
+| `Templates` deserialize | absent `[templates]` -> all-`None` + empty map; partial table -> only set keys override |
+| Setup record | round-trips `issue/slug/apps`; review reads it; missing file -> default templates render, custom-with-`{{ issue }}` errors with the helpful message |
 | Render order | `pr_title` feeds `pr_body`; `pr_title`+`pr_url` feed `slack`; reuse-PR path still renders slack context |
 | Global gitignore | appends `.devkit/` when absent; idempotent when `.devkit/` or `.devkit` present; `--no-gitignore` skips; unwritable path warns, does not abort |
 

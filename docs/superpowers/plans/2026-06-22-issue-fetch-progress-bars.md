@@ -827,7 +827,7 @@ impl PrNode {
 }
 ```
 
-Replace `checks_of` with `checks_text` (rollup state → label), and update `mine_action` to use it. Keep `review_text`, `has_replied`, `mine_action`, `reviewer_state` operating on `&PrNode`:
+Replace `checks_of` with `checks_text` (rollup state -> label), and update `mine_action` to use it. Keep `review_text`, `has_replied`, `mine_action`, `reviewer_state` operating on `&PrNode`:
 
 ```rust
 fn checks_text(rollup: Option<&str>) -> &'static str {
@@ -961,7 +961,7 @@ reviewedBy: search(query: \"{scope}is:pr is:open reviewed-by:@me\", type: ISSUE,
     )
 }
 
-/// Turn one GraphQL response into the report. Pure → unit-tested.
+/// Turn one GraphQL response into the report. Pure -> unit-tested.
 fn classify(data: GqlData, want_mine: bool, want_reviews: bool) -> PrsReport {
     let me = data.viewer.login;
 
@@ -1126,7 +1126,7 @@ pub fn run(mine: bool, reviews: bool, repo: Option<String>, no_cache: bool) -> R
         );
         println!(
             "{}",
-            ui::dim("old → new in a cell = value changed since the last run.")
+            ui::dim("old -> new in a cell = value changed since the last run.")
         );
     }
 
@@ -1435,19 +1435,19 @@ git commit -m "docs: describe issue step progress bars"
 ## Self-Review
 
 **Spec coverage:**
-- Numbered step bars, no emoji, cyan accent → Task 1 (`Steps`), used in Tasks 3/5/7.
-- Determinate fill for known-count loop (worktree dirty-check) → Task 3 (`steps.bar`, `dirty_of` loop).
-- Honest spinners for batched network calls → Tasks 3/5/7.
-- Concurrent fetches (gh ‖ Linear in status; workspace ‖ github in prs; pr_timeline ‖ commit_dates in dashboard) → Tasks 3/5/7 via `thread::scope`.
-- One GitHub request for prs → Task 4 (`build_query` + `gh api graphql`).
-- `status` already 1 request → preserved in Task 2 (`fetch_prs`).
-- Clear bars then print results → `steps.clear()` in Tasks 3/5/7.
-- Rising count for paginated Linear history → Tasks 6 + 7.
-- `indicatif` stays out of library crates → Tasks 1/2/4/6 add no `indicatif` dep.
-- `gather`/`prs::gather` signatures unchanged (MCP/tests) → Tasks 2/4.
-- Library parallelism for free (MCP/dashboard direct callers) → Task 2 `gather` `thread::scope`.
-- Hidden off-TTY → Task 1 `ProgressDrawTarget::hidden()`, asserted in Task 1 test.
-- TDD with golden fixture for GraphQL parse → Task 4 `parses_graphql_and_classifies`.
+- Numbered step bars, no emoji, cyan accent -> Task 1 (`Steps`), used in Tasks 3/5/7.
+- Determinate fill for known-count loop (worktree dirty-check) -> Task 3 (`steps.bar`, `dirty_of` loop).
+- Honest spinners for batched network calls -> Tasks 3/5/7.
+- Concurrent fetches (gh ‖ Linear in status; workspace ‖ github in prs; pr_timeline ‖ commit_dates in dashboard) -> Tasks 3/5/7 via `thread::scope`.
+- One GitHub request for prs -> Task 4 (`build_query` + `gh api graphql`).
+- `status` already 1 request -> preserved in Task 2 (`fetch_prs`).
+- Clear bars then print results -> `steps.clear()` in Tasks 3/5/7.
+- Rising count for paginated Linear history -> Tasks 6 + 7.
+- `indicatif` stays out of library crates -> Tasks 1/2/4/6 add no `indicatif` dep.
+- `gather`/`prs::gather` signatures unchanged (MCP/tests) -> Tasks 2/4.
+- Library parallelism for free (MCP/dashboard direct callers) -> Task 2 `gather` `thread::scope`.
+- Hidden off-TTY -> Task 1 `ProgressDrawTarget::hidden()`, asserted in Task 1 test.
+- TDD with golden fixture for GraphQL parse -> Task 4 `parses_graphql_and_classifies`.
 
 **Placeholder scan:** none — every code step shows complete code; commands have expected output.
 

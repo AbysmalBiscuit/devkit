@@ -46,7 +46,7 @@ The branch is reset to `main` plus the spec commit. There is no prior implementa
 
 **Files:**
 - Modify: `crates/devkit-config/src/lib.rs` (`Templates::variables` at ~line 907)
-- Modify (mechanical, `.variables` → `.defaults()`): `src/bin/devkit/baseline/mod.rs`, `src/bin/devkit/issue/end.rs`, `src/bin/devkit/issue/summary.rs`, `src/bin/devkit/issue/checkout.rs`, `src/bin/devkit/issue/setup.rs`, `src/bin/devkit/issue/review/{mod.rs,request.rs,finish.rs}`, `src/bin/devkit/issue/pr/create.rs`, `src/bin/devkit/run/mod.rs`, `crates/devkit-mcp/src/devrun.rs`, `crates/devkit-ports/src/{task.rs,guard/mod.rs}`
+- Modify (mechanical, `.variables` -> `.defaults()`): `src/bin/devkit/baseline/mod.rs`, `src/bin/devkit/issue/end.rs`, `src/bin/devkit/issue/summary.rs`, `src/bin/devkit/issue/checkout.rs`, `src/bin/devkit/issue/setup.rs`, `src/bin/devkit/issue/review/{mod.rs,request.rs,finish.rs}`, `src/bin/devkit/issue/pr/create.rs`, `src/bin/devkit/run/mod.rs`, `crates/devkit-mcp/src/devrun.rs`, `crates/devkit-ports/src/{task.rs,guard/mod.rs}`
 - Modify: `schema/devkit-config.json` (regenerate)
 
 **Interfaces:**
@@ -239,7 +239,7 @@ Grep the whole workspace for `variables[` and `variables.get(` to catch its
 siblings.
 
 Run `cargo build --workspace --all-targets` and fix each error in turn. Expect
-roughly 47 references across 14 files; all are `.variables` → `.defaults()`
+roughly 47 references across 14 files; all are `.variables` -> `.defaults()`
 except the allowlist pair and the assertions above. Use `--all-targets` so test
 code breaks now rather than at the gate.
 

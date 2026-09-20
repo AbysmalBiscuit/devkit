@@ -4,7 +4,7 @@
 
 **Goal:** A `devkit-docs` crate + `docm` binary that keeps version-correct local checkouts of library repos and backs a single plugin-shipped `devkit:docs` skill that resolves every lookup through `docm info`.
 
-**Architecture:** Manifest (global `~/.config/devkit/docs.toml` merged with `[docs]` sections found in `devkit.toml` files walking up from CWD) → bare blobless clone per lib under `~/.cache/devkit/docs/<name>/` with on-demand detached worktrees per resolved version → flock-guarded `registry.json` recording which project roots use which versions → reference-based `prune`. Resolution order: manual `ref` pin → lockfile version → tag probe → `default` worktree fallback.
+**Architecture:** Manifest (global `~/.config/devkit/docs.toml` merged with `[docs]` sections found in `devkit.toml` files walking up from CWD) -> bare blobless clone per lib under `~/.cache/devkit/docs/<name>/` with on-demand detached worktrees per resolved version -> flock-guarded `registry.json` recording which project roots use which versions -> reference-based `prune`. Resolution order: manual `ref` pin -> lockfile version -> tag probe -> `default` worktree fallback.
 
 **Tech Stack:** Rust (edition 2024), anyhow, clap + clap_complete, serde/serde_json/toml/serde_yaml_ng, toml_edit (new workspace dep), fd-lock via `devkit_common::store`, ureq for registry lookups, git via `devkit_common::cmd`.
 
@@ -16,8 +16,8 @@
 - Cache layout is exactly `~/.cache/devkit/docs/` containing `registry.json` plus per-lib `<name>/{repo.git, <version>/, default/, meta.toml}`. Derive the root as `devkit_common::paths::cache_dir().join("docs")`.
 - `docm path` prints exactly one path on stdout; ALL warnings/notes go to stderr.
 - Registry file read-modify-writes go through `devkit_common::store::with_lock` (flock'd, atomic tmp+rename). No `devkitd.lock` gate — this store has no daemon.
-- Every successful resolution records `{project, lib, version, resolved_at}` where `version` is the worktree dirname (`"1.38.0"` or `"default"`). Prune is reference-based: project path gone → rows drop; lockfile bumped → row retargets; zero-row version worktree → deleted; `default/` exempt; whole-lib deletion only with `--yes`/interactive confirm.
-- v1 lockfiles: `Cargo.lock`, `pnpm-lock.yaml`, `package-lock.json`, `uv.lock`. Multiple versions → highest, with a stderr note.
+- Every successful resolution records `{project, lib, version, resolved_at}` where `version` is the worktree dirname (`"1.38.0"` or `"default"`). Prune is reference-based: project path gone -> rows drop; lockfile bumped -> row retargets; zero-row version worktree -> deleted; `default/` exempt; whole-lib deletion only with `--yes`/interactive confirm.
+- v1 lockfiles: `Cargo.lock`, `pnpm-lock.yaml`, `package-lock.json`, `uv.lock`. Multiple versions -> highest, with a stderr note.
 - Tag probe shapes, in order: `v{ver}`, `{ver}`, `{leaf}-{ver}`, `{leaf}-v{ver}`, `{leaf}@{ver}` where `leaf` is the package name after the last `/`. First match cached in `meta.toml`.
 - Registry-lookup HTTP lives behind a trait; tests stub it, never hit the network. crates.io requires a `User-Agent` header.
 - Blobless clone (`--filter=blob:none`) is best-effort: on any clone failure retry without the filter.
@@ -651,7 +651,7 @@ mod tests {
 - [ ] **Step 3: Implement**
 
 ```rust
-//! Version → git tag probing. Repos tag `v1.2.3`, `1.2.3`, `pkg-1.2.3`,
+//! Version -> git tag probing. Repos tag `v1.2.3`, `1.2.3`, `pkg-1.2.3`,
 //! `pkg-v1.2.3`, or `pkg@1.2.3`; the first shape that matches is cached in
 //! the lib's meta.toml so later resolutions skip the probe.
 
@@ -676,7 +676,7 @@ pub const ALL: [TagPattern; 5] = [
 ];
 
 pub fn apply(p: TagPattern, package: &str, version: &str) -> String {
-    // Scoped npm packages tag by the leaf name: @scope/pkg → pkg@1.2.3.
+    // Scoped npm packages tag by the leaf name: @scope/pkg -> pkg@1.2.3.
     let leaf = package.rsplit('/').next().unwrap_or(package);
     match p {
         TagPattern::V => format!("v{version}"),
@@ -872,7 +872,7 @@ Create `crates/devkit-docs/tests/common/mod.rs`:
 
 ```rust
 //! Shared integration-test helpers: unique temp dirs and a local fixture
-//! git repo with two tagged versions (v1.0.0 → "// v1", v1.1.0 tip → "// v2").
+//! git repo with two tagged versions (v1.0.0 -> "// v1", v1.1.0 tip -> "// v2").
 
 use std::path::{Path, PathBuf};
 
@@ -1221,8 +1221,8 @@ mod tests {
     fn record_upserts_by_project_and_lib() {
         let mut d = Data::default();
         d.record("/p1", "tokio", "1.0.0");
-        d.record("/p1", "tokio", "1.1.0"); // same key → update
-        d.record("/p2", "tokio", "1.0.0"); // new project → append
+        d.record("/p1", "tokio", "1.1.0"); // same key -> update
+        d.record("/p2", "tokio", "1.0.0"); // new project -> append
         assert_eq!(d.rows.len(), 2);
         assert_eq!(d.rows[0].version, "1.1.0");
     }
@@ -1243,8 +1243,8 @@ mod tests {
         let live = unique_tmp("live"); // an existing dir = live project
         let mut data = Data::default();
         data.record(live.to_str().unwrap(), "tokio", "1.0.0"); // will retarget to 1.1.0
-        data.record("/gone/nowhere", "tokio", "0.9.0"); // dead project → drop
-        data.record(live.to_str().unwrap(), "serde", "2.0.0"); // no longer in lockfile → drop
+        data.record("/gone/nowhere", "tokio", "0.9.0"); // dead project -> drop
+        data.record(live.to_str().unwrap(), "serde", "2.0.0"); // no longer in lockfile -> drop
 
         let mut worktrees = BTreeMap::new();
         worktrees.insert("tokio".to_string(), vec!["1.0.0".into(), "0.9.0".into(), "1.1.0".into(), "default".into()]);
@@ -1382,7 +1382,7 @@ pub struct PrunePlan {
     pub removable_libs: Vec<String>,
 }
 
-/// Pure prune planner. `worktrees` maps lib → worktree dirnames on disk
+/// Pure prune planner. `worktrees` maps lib -> worktree dirnames on disk
 /// (including `default`); `current(project, lib)` re-resolves what a live
 /// project pins right now (`None` = no longer referenced). Liveness checks
 /// run on a snapshot outside the registry lock.
@@ -1395,7 +1395,7 @@ pub fn plan(
     let mut keep = Vec::new();
     for r in &data.rows {
         if !Path::new(&r.project).exists() {
-            continue; // project root gone → holder dead → row drops
+            continue; // project root gone -> holder dead -> row drops
         }
         if let Some(v) = current(&r.project, &r.lib) {
             keep.push(RefRow { version: v, ..r.clone() });
@@ -1562,7 +1562,7 @@ fn ref_pin_wins_and_no_lockfile_falls_back_to_default_with_warning() {
     let project = tmp.join("proj");
     std::fs::create_dir_all(&project).unwrap();
 
-    // Manual pin → default worktree at the pin, version label = the pin.
+    // Manual pin -> default worktree at the pin, version label = the pin.
     let pinned = LibEntry {
         name: "mylib".into(),
         repo: Some(repo.clone()),
@@ -1574,7 +1574,7 @@ fn ref_pin_wins_and_no_lockfile_falls_back_to_default_with_warning() {
     assert_eq!(r.version, "v1.0.0");
     assert_eq!(std::fs::read_to_string(r.path.join("src/lib.rs")).unwrap(), "// v1");
 
-    // No pin, no lockfile → default branch + a warning.
+    // No pin, no lockfile -> default branch + a warning.
     let cache2 = tmp.join("cache2");
     let unpinned = LibEntry {
         name: "mylib".into(),
@@ -1613,8 +1613,8 @@ fn layout_override_applies_and_meta_caches_detection() {
 - [ ] **Step 3: Implement `resolve.rs`**
 
 ```rust
-//! The lookup facade: entry + CWD → version-correct checkout path.
-//! Order: manual `ref` pin → lockfile version → tag probe → `default`
+//! The lookup facade: entry + CWD -> version-correct checkout path.
+//! Order: manual `ref` pin -> lockfile version -> tag probe -> `default`
 //! worktree fallback (with a warning). Every success records a reference row.
 
 use crate::cache::{self, LibCache};
@@ -1798,7 +1798,7 @@ git commit -m "feat(docs): resolve entries to version-correct checkouts"
 
 **Interfaces:**
 - Consumes: `manifest::Ecosystem`.
-- Produces: `lookup::Registry` trait with `fn repo_url(&self, eco: Ecosystem, package: &str) -> Result<String>`; `lookup::Http` (real impl, ureq); `lookup::detect(reg: &dyn Registry, package: &str) -> Result<(Ecosystem, String)>` (probes Rust → Js → Python); `lookup::extract(eco: Ecosystem, v: &serde_json::Value) -> Result<String>`; `lookup::normalize(raw: &str) -> String`; `lookup::name_from_url(url: &str) -> String`.
+- Produces: `lookup::Registry` trait with `fn repo_url(&self, eco: Ecosystem, package: &str) -> Result<String>`; `lookup::Http` (real impl, ureq); `lookup::detect(reg: &dyn Registry, package: &str) -> Result<(Ecosystem, String)>` (probes Rust -> Js -> Python); `lookup::extract(eco: Ecosystem, v: &serde_json::Value) -> Result<String>`; `lookup::normalize(raw: &str) -> String`; `lookup::name_from_url(url: &str) -> String`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1869,7 +1869,7 @@ mod tests {
 - [ ] **Step 3: Implement**
 
 ```rust
-//! Package-registry lookups: package name → repo URL, resolved once at
+//! Package-registry lookups: package name -> repo URL, resolved once at
 //! `docm add` time and stored in the manifest. HTTP sits behind a trait so
 //! tests stub it and nothing else ever touches the network.
 
@@ -2183,7 +2183,7 @@ enum Cmd {
     /// Register a library: a package name (looked up on crates.io/npm/PyPI) or a git URL.
     Add {
         target: String,
-        /// Ecosystem; omitted → probe crates.io, npm, PyPI in order.
+        /// Ecosystem; omitted -> probe crates.io, npm, PyPI in order.
         #[arg(long)]
         eco: Option<Ecosystem>,
         /// Registry package name when it differs from the lib name (e.g. @types/node).
@@ -2784,7 +2784,7 @@ library's own source and docs — not from memory.
 In the Layout table of `AGENTS.md`, after the `devkit-mcp` row, add:
 
 ```markdown
-| `crates/devkit-docs` | lib: version-correct library checkouts — manifest (global `docs.toml` + `devkit.toml` `[docs]`), lockfile→tag resolution, bare-clone cache with per-version worktrees, flock'd reference registry with reference-based prune |
+| `crates/devkit-docs` | lib: version-correct library checkouts — manifest (global `docs.toml` + `devkit.toml` `[docs]`), lockfile->tag resolution, bare-clone cache with per-version worktrees, flock'd reference registry with reference-based prune |
 ```
 
 After the `src/bin/devkit` row, add:
@@ -2819,9 +2819,9 @@ docm prune                        # drop checkouts no live project references
 
 Global manifest: `~/.config/devkit/docs.toml`. Per-project overlay:
 `[[docs.libs]]` entries in `devkit.toml` (same fields; partial entries
-override the global entry field-by-field). Resolution: manual `ref` pin →
+override the global entry field-by-field). Resolution: manual `ref` pin ->
 lockfile version (`Cargo.lock`, `pnpm-lock.yaml`, `package-lock.json`,
-`uv.lock`) → git tag → default branch fallback.
+`uv.lock`) -> git tag -> default branch fallback.
 ```
 
 - [ ] **Step 4: Verify + gate**

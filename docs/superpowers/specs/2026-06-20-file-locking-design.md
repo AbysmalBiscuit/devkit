@@ -32,8 +32,8 @@ helper.
 Keeps naming honest — file-claims are not ports — and reuses the *pattern* of the
 port registry without overloading the `devkit-ports` crate.
 
-- `store.rs` — flock'd-JSON store: ensure dir → exclusive `fd_lock` → read-or-default
-  (salvage then back up on unreadable input) → atomic temp-file rename write. Mirrors
+- `store.rs` — flock'd-JSON store: ensure dir -> exclusive `fd_lock` -> read-or-default
+  (salvage then back up on unreadable input) -> atomic temp-file rename write. Mirrors
   the private plumbing in `devkit-ports/src/registry.rs`.
 - `model.rs` — `LockEntry`, `Data`, and the pure logic (`acquire`, `release`,
   `prune`, overlap detection). No I/O; fully unit-testable.
@@ -68,7 +68,7 @@ socket/lock/log, and the new `locks.json`/`locks.lock`. The port registry is
 migrated by the same mechanism. Path unit tests and the README "State & Cache
 Locations" table are updated to the new home.
 
-New path helpers: `locks_file()` → `state_dir()/locks.json`, `locks_lock()` →
+New path helpers: `locks_file()` -> `state_dir()/locks.json`, `locks_lock()` ->
 `state_dir()/locks.lock`.
 
 ## Data model — one registry, per-project scoping
@@ -114,7 +114,7 @@ and vice versa — matching the Godot "scene + script + resources" bundle case.
 
 ### Identity precedence
 
-`--as <id>` → `$DEVKIT_SESSION` → `$TMUX_PANE` → controlling tty → `$PPID`.
+`--as <id>` -> `$DEVKIT_SESSION` -> `$TMUX_PANE` -> controlling tty -> `$PPID`.
 
 `$TMUX_PANE` is the key zero-config anchor: tmux exports a stable, unique pane id
 into every shell and child process in a pane, so parallel panes get distinct ids

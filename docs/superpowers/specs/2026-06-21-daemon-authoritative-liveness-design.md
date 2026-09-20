@@ -70,8 +70,8 @@ prunable registry row adds nothing and is the sole source of the race.
 
 ### 3.1 Supervision tick (`src/bin/devkitd/main.rs`)
 
-Replace the reap-then-classify block (currently: reap → `sleep(200ms)` →
-`d.ports.lock().clone()` → row-present? `restart` : `remove`) with a direct
+Replace the reap-then-classify block (currently: reap -> `sleep(200ms)` ->
+`d.ports.lock().clone()` -> row-present? `restart` : `remove`) with a direct
 dispatch:
 
 ```rust
@@ -93,11 +93,11 @@ the debounce gone, a `Down` can still race a just-detected crash and remove the
 key between `reap_once()` and `restart()`. Distinguish the cases so the log stays
 accurate:
 
-- key **absent** from the table (removed by a concurrent `Down` or give-up) →
+- key **absent** from the table (removed by a concurrent `Down` or give-up) ->
   return quietly, no log, no restart;
-- key **present, no launch spec** (adopted survivor) → drop it and log "no launch
+- key **present, no launch spec** (adopted survivor) -> drop it and log "no launch
   spec to respawn", as today;
-- key **present, has launch spec** → crash-loop budget check → respawn.
+- key **present, has launch spec** -> crash-loop budget check -> respawn.
 
 Add a small accessor to `Supervisor`:
 
@@ -120,9 +120,9 @@ a future edit does not reorder it.
   return it; `down()` removes the key and SIGTERMs. No restart.
 - **Down racing a crash.** The crash is detected (`reap_once()` returns the key),
   then `down()` removes the key before `restart()` runs. `restart()` sees the key
-  absent → returns quietly. Correct: the operator asked for it to stop.
+  absent -> returns quietly. Correct: the operator asked for it to stop.
 - **Adopted survivor crashes.** `reap_once()` returns it (polled, pid dead);
-  `restart()` finds the key present with no launch spec → drop + log. Unchanged.
+  `restart()` finds the key present with no launch spec -> drop + log. Unchanged.
 - **Crash-loop exhausted.** `restart()` gives up, removes the key, logs. Unchanged.
 - **Prune flicker during the gap.** Between crash detection and respawn, a
   concurrent `snapshot` may prune the dead-pid row from `d.ports` and the file.
@@ -131,12 +131,12 @@ a future edit does not reorder it.
 
 ## 5. Testing strategy
 
-- **Regression (RED→GREEN), Unix:** `restart_survives_concurrent_snapshot` —
+- **Regression (RED->GREEN), Unix:** `restart_survives_concurrent_snapshot` —
   supervise a `python3 -m http.server`, capture pid1, then SIGKILL the child while
   a second client connection hammers `Request::Snapshot` in a tight loop for ~2 s
   (each snapshot prunes the dead-pid row inside the daemon). Poll `ports.json`
   until the pid changes; assert pid2 ≠ pid1. On the pre-change code a snapshot
-  reliably lands in the 200 ms debounce window → row pruned → no restart → the
+  reliably lands in the 200 ms debounce window -> row pruned -> no restart -> the
   test fails; under the table-authoritative tick it passes.
 - **Update existing comments:** `restart_after_kill` and `down_does_not_restart`
   still pass, but their comments describe the retired debounce/row-check mechanism.

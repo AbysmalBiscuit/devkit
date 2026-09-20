@@ -86,7 +86,7 @@ a persistent log; the exact numbers just reflect spawn order.
 
 ## Concurrency structure (`src/bin/issue/end.rs::run`)
 
-The gather → render → filter phase is unchanged. Compute the **main-repo path
+The gather -> render -> filter phase is unchanged. Compute the **main-repo path
 once** up front (`git rev-parse --path-format=absolute --git-common-dir` from
 `start`, then parent) for the single post-join prune. The removal loop becomes a
 `std::thread::scope`:
@@ -140,8 +140,8 @@ the user reruns. It degrades to a reported failure, never to corruption.
   `steps.suspend` / `mp.println` so they never tear a live bar.
 - A removal thread's spinner settles `✓` on success, `✗` on failure (via
   `during_result`). On failure it prints the reason through the group: the
-  `Dirty` sentinel → `"{label} is dirty — rerun with --force to discard."`,
-  any other error → `"cleanup failed for {label}: {e}"`. Same messages as today,
+  `Dirty` sentinel -> `"{label} is dirty — rerun with --force to discard."`,
+  any other error -> `"cleanup failed for {label}: {e}"`. Same messages as today,
   emitted from the worker thread.
 - The success counter is an `AtomicUsize` incremented on `Ok(())`; the final
   `Removed X of Y.` reads it after the join. `Y` is `targets.len()`, including

@@ -37,11 +37,11 @@ gate every binary respects, independent of the `daemon` cargo feature:
 - **Any direct file *writer*** (the `FlockStore` commit path) acquires a
   **non-blocking shared (`try_read`) lock on `portd.lock`** and holds it across
   the data-file read-modify-write:
-  - **Acquire fails** (a daemon holds it exclusive) → **hard error**, surfaced to
+  - **Acquire fails** (a daemon holds it exclusive) -> **hard error**, surfaced to
     the user: *"a devkit-portd daemon holds the registry lock; refusing to modify
     `ports.json` behind it — stop the daemon or use a daemon-enabled binary."*
     Exit non-zero.
-  - **Acquire succeeds** (no daemon) → keep the shared lock held, run the
+  - **Acquire succeeds** (no daemon) -> keep the shared lock held, run the
     existing data-flock RMW, release.
 - **Direct *reads* are ungated.** A reader reads the file directly; the daemon
   keeps the file current via write-through, so a read is always at least as fresh
@@ -131,8 +131,8 @@ so the daemon can load once at startup and write through without the data flock.
   holds it exclusive, otherwise an RAII guard held for the op.
 - Rewrite the cores of `alloc/record_pid/release/snapshot/prune` as `*_with`.
 - Replace the current `via_daemon` ("`None` means flock; errors also `None`")
-  with: `try_existing()` → `None` means *no daemon* → run `*_with(&FlockStore)`;
-  `Some(client)` → send the request and **propagate** an `Err` response (no silent
+  with: `try_existing()` -> `None` means *no daemon* -> run `*_with(&FlockStore)`;
+  `Some(client)` -> send the request and **propagate** an `Err` response (no silent
   flock fallback behind a live daemon).
 
 **`devkit-portd`**

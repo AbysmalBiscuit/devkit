@@ -602,6 +602,6 @@ git commit -m "docs(issue): document info subcommand"
 
 ## Self-review notes (already applied)
 
-- **Spec coverage:** CLI surface → Task 4; readable summary + `--json` → Task 4 (`render` / `serde_json`); `--cache-only` + per-worktree cache → Tasks 2 & 4; cleanup-on-removal → structural (no code, verified `.devkit/` is gitignored); `gather_local` facade change → Task 3; selector (cwd + id/branch/path) → Tasks 1 & 4; `--no-fetch` dropped → not implemented, by design. All covered.
+- **Spec coverage:** CLI surface -> Task 4; readable summary + `--json` -> Task 4 (`render` / `serde_json`); `--cache-only` + per-worktree cache -> Tasks 2 & 4; cleanup-on-removal -> structural (no code, verified `.devkit/` is gitignored); `gather_local` facade change -> Task 3; selector (cwd + id/branch/path) -> Tasks 1 & 4; `--no-fetch` dropped -> not implemented, by design. All covered.
 - **Type consistency:** `CachedPr { number, state, url }`, `gather_local(start, ids)`, `pick_index(rows, selector, current_top)`, `select::matches(row, sel)` are used identically wherever referenced.
 - **No placeholders:** every code and command step is concrete.

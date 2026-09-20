@@ -84,7 +84,7 @@ so dev servers in unrelated projects are never touched.
 
 ### Merge
 
-Passes A and B union into one `Vec<Stray>`, deduped by pid and by port (a hit in both →
+Passes A and B union into one `Vec<Stray>`, deduped by pid and by port (a hit in both ->
 `source = Both`). The `--port N` token in a process's argv links a Pass-B hit to its Pass-A
 port without needing `/proc/net/tcp` inode walking.
 
@@ -149,7 +149,7 @@ requirement. The TTY gate is the same mechanism that already protects cross-work
 
 A stray with no resolvable pid (port-only, e.g. an unrecognized command on a managed port) is
 listed by detection but reported **unreapable** with guidance, rather than guessed at. Resolving
-port→pid via `/proc/net/tcp` is a possible follow-up, out of scope for v1.
+port->pid via `/proc/net/tcp` is a possible follow-up, out of scope for v1.
 
 ## Cross-platform strategy
 

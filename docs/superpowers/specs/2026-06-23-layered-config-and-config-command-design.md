@@ -25,13 +25,13 @@ two-phase **resolver**.
 
 ### 1a. Discovery — ordered layer list
 
-Build a list of config files ordered lowest→highest precedence:
+Build a list of config files ordered lowest->highest precedence:
 
 1. `~/.config/devkit/config.toml` (home base layer), if it exists, then
 2. every `devkit.toml` found from the filesystem root *down to* `start` (cwd) —
    deeper directories rank higher.
 
-While collecting `devkit.toml` files (walking cwd → root), if a file declares
+While collecting `devkit.toml` files (walking cwd -> root), if a file declares
 `[config] root = true`, **stop**: that file is the shallowest layer kept, and all
 shallower layers — including the home config — are dropped. This is the opt-in
 isolation escape hatch for a repo that wants to ignore inherited config.
@@ -50,13 +50,13 @@ each higher layer overlaid on the accumulator) by **one uniform rule**:
 
 This single rule yields the per-field behavior we want at every level:
 
-- `defaults` and `daemon` are tables → merge field by field; a field a deeper layer
+- `defaults` and `daemon` are tables -> merge field by field; a field a deeper layer
   omits inherits the shallower value.
-- `apps` and `people` are tables → union by key; a shared `apps.<name>` is itself a
-  table → its fields merge one level deeper (override one app's `base_port`, inherit
+- `apps` and `people` are tables -> union by key; a shared `apps.<name>` is itself a
+  table -> its fields merge one level deeper (override one app's `base_port`, inherit
   the rest).
-- `apps.<name>.launch` is an array → replaced wholesale (argv is never partially
-  merged); `apps.<name>.static_env` / `prep_env` are tables → merge key by key (a
+- `apps.<name>.launch` is an array -> replaced wholesale (argv is never partially
+  merged); `apps.<name>.static_env` / `prep_env` are tables -> merge key by key (a
   deeper layer can add or override a single env var).
 
 Merge granularity is therefore **per leaf value**, not per section — defining
@@ -80,7 +80,7 @@ set it. Shape:
 
 ```
 struct Provenance {
-    layers: Vec<PathBuf>,                 // ordered, lowest→highest precedence
+    layers: Vec<PathBuf>,                 // ordered, lowest->highest precedence
     origin: HashMap<String, PathBuf>,     // dotted path -> file that supplied the value
 }
 ```

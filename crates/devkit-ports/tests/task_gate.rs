@@ -64,7 +64,7 @@ fn gate_waiver_scoping_and_lazy_resolution() {
     let cat = catalog();
     let none = BTreeMap::new();
 
-    // Gate: no reservation at all → loud error, and no reservation minted.
+    // Gate: no reservation at all -> loud error, and no reservation minted.
     let err = task::resolve_step(&cfg, &cat, &mine, mine_s, "build", &none, &none).unwrap_err();
     assert!(format!("{err:#}").contains("no live server"), "{err:#}");
     assert!(registry::snapshot().unwrap().entries.is_empty());

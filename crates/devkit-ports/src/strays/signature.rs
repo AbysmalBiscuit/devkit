@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn generic_only_launch_yields_no_signature() {
         // After stripping runtime launchers, only the generic script name is
-        // left (`bun run dev` → `dev`, `node start` → `start`) — too
+        // left (`bun run dev` -> `dev`, `node start` -> `start`) — too
         // broad to match safely, so no signature. Port-band detection
         // still covers these.
         assert_eq!(signature(&v(&["bun", "run", "dev"])), Vec::<String>::new());

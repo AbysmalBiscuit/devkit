@@ -156,13 +156,13 @@ enum Update {
 **Error handling:** a `gh` failure currently fails the whole command; keep
 that. On `Update::Prs(Err(e))`, `finish()` (clear the block) *before*
 propagating, so the anyhow report isn't printed under a half-drawn live
-region. Linear errors stay soft (empty map → `unknown` cells), as today.
+region. Linear errors stay soft (empty map -> `unknown` cells), as today.
 
 ### 4. `issue info`
 
 Two changes:
 
-- **Parallelize** the currently-serial PR → Linear → workspace chain
+- **Parallelize** the currently-serial PR -> Linear -> workspace chain
   (`info.rs`) with the same thread-scope pattern `status.rs` uses — worth
   ~1s of wall time on its own.
 - Render the single-row table through `LiveTable`: skeleton immediately
@@ -175,13 +175,13 @@ One GraphQL query supplies the whole table, so nothing can fill
 progressively. Instead: render the previous run's snapshot immediately with
 every cell `Cell::Stale` — dim (D1) under an `as of last run — refreshing ⠋`
 banner — then overwrite with fresh data when the fetch lands; the existing
-`old → new` diff cells then show exactly what changed while you watched.
+`old -> new` diff cells then show exactly what changed while you watched.
 
 - The diff cache at `~/.cache/devkit/pr-status/<repo>.json` currently stores
   only the diffed fields (`review`/`check`/`action` keyed by PR number); it
   grows to full row snapshots (`MinePrView`/`ReviewPrView` serialized) so
   the stale table has PR numbers, URLs, authors, and issue ids to render.
-  Old-format caches deserialize as absent → first run after upgrade simply
+  Old-format caches deserialize as absent -> first run after upgrade simply
   has no stale table, same as `--no-cache`.
 - A PR present in the cache but gone from fresh results disappears at
   overwrite; new PRs appear. No tombstone rendering.
@@ -224,7 +224,7 @@ a numbered line, and the next step's spinner appears below it:
 - `LiveTable`: rendering to string is a pure function of cells — snapshot
   tests without a TTY; plus the `Steps`-style invariant test that all bars
   are hidden off-TTY.
-- Update application (`Update` → row mutation → verdict recompute): pure
+- Update application (`Update` -> row mutation -> verdict recompute): pure
   functions, tested with synthetic updates in arbitrary arrival orders
   (PR-first, Linear-first, dirty interleaved).
 - `dirty_stream`: results match `dirty_many` on the same paths; callbacks

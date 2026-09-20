@@ -42,7 +42,7 @@ worktree_include = [
 ```
 
 Patterns are relative to the monorepo root and copied to the same relative path in
-the worktree. Empty list → the feature is a no-op.
+the worktree. Empty list -> the feature is a no-op.
 
 ### Pattern semantics
 
@@ -145,7 +145,7 @@ Unit tests on `copy_includes` over temp directories:
 - A pattern matching nothing is silently skipped (no warning, no error).
 - An existing destination file is not clobbered (skip-existing).
 - A source that cannot be read yields a warning, and the other matches still copy.
-- Empty `patterns` → `(0, [])`, no filesystem touch.
+- Empty `patterns` -> `(0, [])`, no filesystem touch.
 
 The full gate (`cargo test --workspace`, `cargo clippy --workspace --all-targets
 -- -D warnings`, `cargo fmt --all --check`) must stay green.

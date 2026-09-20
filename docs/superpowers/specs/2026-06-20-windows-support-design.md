@@ -46,7 +46,7 @@ and `devkit-ports` hold **no** direct `nix` dependency; `nix` survives only as a
 |---|---|---|
 | `process_alive(pid: u32) -> bool` | `kill(pid, None)` | `OpenProcess` + `GetExitCodeProcess` (alive iff `STILL_ACTIVE`) |
 | `reap_owned(pid: u32) -> bool` (true = gone) | `waitpid(pid, WNOHANG)` | `!process_alive(pid)` — Windows has no zombies |
-| `terminate(pid: u32)` | `kill(pid, SIGTERM)` | `GenerateConsoleCtrlEvent(CTRL_BREAK, pid)` → grace → `TerminateProcess` |
+| `terminate(pid: u32)` | `kill(pid, SIGTERM)` | `GenerateConsoleCtrlEvent(CTRL_BREAK, pid)` -> grace -> `TerminateProcess` |
 | `detach(&mut Command)` | `pre_exec(setsid)` | `creation_flags(CREATE_NEW_PROCESS_GROUP)` |
 | `parent_pid() -> Option<u32>` | `getppid` | Toolhelp32 snapshot (`th32ParentProcessID` of self) |
 | `controlling_tty() -> Option<String>` | `ttyname(stdin)` | `None` |
@@ -54,12 +54,12 @@ and `devkit-ports` hold **no** direct `nix` dependency; `nix` survives only as a
 
 ### Call-site migration (no logic change)
 
-- `devkit_ports::registry::pid_alive`, `devkit_locks::model::pid_alive` → `sys::process_alive`
-- `devkit_common::supervise::stop` → `sys::terminate`
-- `devkit_common::supervise::spawn_detached` → calls `sys::detach(&mut cmd)` instead of inline `pre_exec`
-- `devkit_common::supervise::tree_rss_bytes` → `sys::tree_rss_bytes`
-- `devkit_locks::ident` parent-pid / tty → `sys::parent_pid` / `sys::controlling_tty`
-- `devkit-portd::supervisor::reap_once` → `sys::reap_owned` (Owned) / `sys::process_alive` (Adopted); drops `nix` from the daemon binary
+- `devkit_ports::registry::pid_alive`, `devkit_locks::model::pid_alive` -> `sys::process_alive`
+- `devkit_common::supervise::stop` -> `sys::terminate`
+- `devkit_common::supervise::spawn_detached` -> calls `sys::detach(&mut cmd)` instead of inline `pre_exec`
+- `devkit_common::supervise::tree_rss_bytes` -> `sys::tree_rss_bytes`
+- `devkit_locks::ident` parent-pid / tty -> `sys::parent_pid` / `sys::controlling_tty`
+- `devkit-portd::supervisor::reap_once` -> `sys::reap_owned` (Owned) / `sys::process_alive` (Adopted); drops `nix` from the daemon binary
 
 ## Daemon IPC: `interprocess`
 
@@ -75,7 +75,7 @@ was added, isolating the transport-swap risk from the Windows work.
 
 ## Config-driven `issue setup`
 
-`issue setup` currently symlinks each `app/.env → worktree/.env.local`
+`issue setup` currently symlinks each `app/.env -> worktree/.env.local`
 (`setup.rs:79`) and hardcodes `bun install` (`setup.rs:94`). Both are
 project-specific assumptions baked into the binary, and the symlink is the only
 reason a Windows `symlink()` primitive would be needed. The run path

@@ -81,13 +81,13 @@ fn guard_rejects_prd_and_unresolvable_doppler() {
         env,
         log: std::path::PathBuf::from("/dev/null"),
     };
-    // explicit prd → reject
+    // explicit prd -> reject
     assert!(assert_not_prd(&plan(&["doppler", "run", "-c", "prd", "--", "x"], BTreeMap::new())).is_err());
-    // explicit safe config → ok
+    // explicit safe config -> ok
     assert!(assert_not_prd(&plan(&["doppler", "run", "-c", "dev", "--", "x"], BTreeMap::new())).is_ok());
-    // non-doppler launch → ok (unguarded)
+    // non-doppler launch -> ok (unguarded)
     assert!(assert_not_prd(&plan(&["next", "dev"], BTreeMap::new())).is_ok());
-    // doppler launch with no flag/env, cwd has no scope → unresolvable → reject
+    // doppler launch with no flag/env, cwd has no scope -> unresolvable -> reject
     assert!(assert_not_prd(&plan(&["doppler", "run", "--", "x"], BTreeMap::new())).is_err());
 }
 ```
@@ -176,7 +176,7 @@ pub fn assert_not_prd(plan: &LaunchPlan) -> Result<()> {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p devkit-ports config_from_ guard_rejects_ non_doppler_launch config_flag_after`
-Expected: PASS (5 tests). Note: `guard_rejects_…` runs `doppler configure get` for the unresolvable case; with no flag/env and a nonexistent cwd it returns `None` → reject, so the test passes whether or not `doppler` is installed.
+Expected: PASS (5 tests). Note: `guard_rejects_…` runs `doppler configure get` for the unresolvable case; with no flag/env and a nonexistent cwd it returns `None` -> reject, so the test passes whether or not `doppler` is installed.
 
 - [ ] **Step 5: Commit**
 
@@ -482,7 +482,7 @@ In `README.md`, change the Requirements block so `doppler` is no longer required
 Delete the `doppler_config` row. Reword the `doppler_yaml` row to drop the "required" claim and describe its remaining role:
 
 ```markdown
-| `doppler_yaml` | no | Path to the repo's `doppler.yaml`; its `setup` paths seed app **path inference**. `~` is expanded. Absent → apps need an explicit `path`. |
+| `doppler_yaml` | no | Path to the repo's `doppler.yaml`; its `setup` paths seed app **path inference**. `~` is expanded. Absent -> apps need an explicit `path`. |
 ```
 
 - [ ] **Step 3: Update the `[apps.*]` table and add the guard note in `docs/configuration.md`**

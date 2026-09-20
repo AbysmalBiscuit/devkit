@@ -1139,7 +1139,7 @@ git commit -m "feat(tracker): add the Tracker trait and a no-tracker impl"
 ### Task 6: move Linear behind the trait
 
 **Files:**
-- Move: `crates/devkit-common/src/linear.rs` → `crates/devkit-common/src/tracker/linear.rs`
+- Move: `crates/devkit-common/src/linear.rs` -> `crates/devkit-common/src/tracker/linear.rs`
 - Modify: `crates/devkit-common/src/lib.rs` (drop `pub mod linear;`)
 - Modify: `crates/devkit-common/src/tracker/mod.rs` (`resolve` returns
   `LinearTracker`)
@@ -1785,7 +1785,7 @@ testable without a network for the first time."
 ### Task 8: record-first issue-id recovery
 
 **Files:**
-- Move: `src/bin/issue/record.rs` → `crates/devkit-common/src/record.rs`
+- Move: `src/bin/issue/record.rs` -> `crates/devkit-common/src/record.rs`
 - Modify: `crates/devkit-common/src/worktree.rs` (`issue_id_of` becomes
   record-first), `crates/devkit-common/src/lib.rs` (add `pub mod record;`)
 - Modify: `src/bin/issue/main.rs` (drop `mod record;`),

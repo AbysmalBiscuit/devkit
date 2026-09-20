@@ -892,7 +892,7 @@ The `MemoryStore` import is now used; if `Role` becomes unused in `server.rs`, d
 - [ ] **Step 6: Build, test, and lint the whole workspace**
 
 Run: `cargo test --workspace`
-Expected: PASS — including the 4 `devkit-portd` lifecycle tests, the multiprocess race test (`tests/registry.rs`, no daemon → gate free), and the new `memory_store` test.
+Expected: PASS — including the 4 `devkit-portd` lifecycle tests, the multiprocess race test (`tests/registry.rs`, no daemon -> gate free), and the new `memory_store` test.
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings`
 Expected: clean. (Watch for an unused `DEVKIT_PORTD_SELF` set in `main.rs` — leave it; it is a harmless belt-and-braces guard now that handlers use `MemoryStore` directly.)
@@ -980,15 +980,15 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ## Self-Review
 
 **Spec coverage:**
-- Consistency model / `portd.lock` gate → Task 2 (`FlockStore` gate + `DaemonHoldsLock`), enforced for all direct writers via gated `registry::with_lock`.
-- `Store` seam + one engine + two drivers → Task 2 (trait, `FlockStore`, generic `*_with`) + Task 3 (`MemoryStore`).
-- `store::load`/`save` → Task 1.
-- Write-through commit point → Task 3 (`MemoryStore::commit` persists before swapping memory; failure test).
-- `via_daemon` split → Task 2 (`daemon_request` returns `Result<Option<Response>>`).
-- Daemon holds `Mutex<Data>`, loads at startup, all handlers via `MemoryStore` → Task 4.
-- Incidental-prune-on-read best-effort → Task 2 (`snapshot_with` swallows a blocked commit) with a test.
-- Invariants preserved → reserve-before-bind & record_pid re-insert tested in Task 2; `down` order kept in Task 4 Step 5; `RESERVATION_GRACE_SECS` untouched.
-- Docs → Task 5.
+- Consistency model / `portd.lock` gate -> Task 2 (`FlockStore` gate + `DaemonHoldsLock`), enforced for all direct writers via gated `registry::with_lock`.
+- `Store` seam + one engine + two drivers -> Task 2 (trait, `FlockStore`, generic `*_with`) + Task 3 (`MemoryStore`).
+- `store::load`/`save` -> Task 1.
+- Write-through commit point -> Task 3 (`MemoryStore::commit` persists before swapping memory; failure test).
+- `via_daemon` split -> Task 2 (`daemon_request` returns `Result<Option<Response>>`).
+- Daemon holds `Mutex<Data>`, loads at startup, all handlers via `MemoryStore` -> Task 4.
+- Incidental-prune-on-read best-effort -> Task 2 (`snapshot_with` swallows a blocked commit) with a test.
+- Invariants preserved -> reserve-before-bind & record_pid re-insert tested in Task 2; `down` order kept in Task 4 Step 5; `RESERVATION_GRACE_SECS` untouched.
+- Docs -> Task 5.
 
 **Placeholder scan:** none — every code step shows full code; commands have expected output.
 

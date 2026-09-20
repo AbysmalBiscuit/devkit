@@ -54,9 +54,9 @@ err alternate=<ROOT> does not declare `requests` (it is transitive); pin the ver
 err debug=<ROOT> does not declare `requests` (it is transitive); pin the version with --ref.\nversions present in the lockfile: none\ndeclared by: nothing in the lockfile declares it
 
 ## ambiguous-js/./h3
-err display=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock → 1.15.11; pnpm-lock.yaml → 1.0.0; add "packageManager" to package.json
-err alternate=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock → 1.15.11; pnpm-lock.yaml → 1.0.0; add "packageManager" to package.json
-err debug=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock → 1.15.11; pnpm-lock.yaml → 1.0.0; add "packageManager" to package.json
+err display=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock -> 1.15.11; pnpm-lock.yaml -> 1.0.0; add "packageManager" to package.json
+err alternate=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock -> 1.15.11; pnpm-lock.yaml -> 1.0.0; add "packageManager" to package.json
+err debug=<ROOT> holds bun.lock and pnpm-lock.yaml and no `packageManager` field says which one governs: bun.lock -> 1.15.11; pnpm-lock.yaml -> 1.0.0; add "packageManager" to package.json
 
 ## pnpm-malformed/./h3
 err display=parsing pnpm-lock.yaml

@@ -4,7 +4,7 @@
 
 **Goal:** Add an `issue checkout-pr <PR_LINEAR_ID_URL> [WORKTREE_PATH]` subcommand that resolves a GitHub PR (directly, or via a Linear issue's attached PR) and checks its branch out into a config-placed worktree.
 
-**Architecture:** A new binary-local `checkout` module owns identifier classification (`#N` / `PREFIX-N` / bare `N` / URL), a pure fuzzy-disambiguation decision, slugification, and the resolve→checkout orchestration. Linear gains pure query-builders + parsers plus thin network wrappers to turn a Linear id into its GitHub PR and to look up issues by number. The worktree is created detached and the PR branch is laid down with `gh pr checkout` (fork-safe). `Templates` gains a `checkout_worktree_dir` template.
+**Architecture:** A new binary-local `checkout` module owns identifier classification (`#N` / `PREFIX-N` / bare `N` / URL), a pure fuzzy-disambiguation decision, slugification, and the resolve->checkout orchestration. Linear gains pure query-builders + parsers plus thin network wrappers to turn a Linear id into its GitHub PR and to look up issues by number. The worktree is created detached and the PR branch is laid down with `gh pr checkout` (fork-safe). `Templates` gains a `checkout_worktree_dir` template.
 
 **Tech Stack:** Rust (edition 2024), `anyhow`, `clap`, `minijinja` (via `devkit_common::template`), `ureq` (Linear GraphQL), `gh`/`git` via `devkit_common::cmd`.
 
@@ -417,7 +417,7 @@ fn resolve(target: &str, key: Option<&str>, repo: &str) -> Result<Resolved> {
             resolve_linear(&id, None, key)
         }
         Ident::Fuzzy(n) => {
-            // No Linear key → a bare number is a GitHub PR.
+            // No Linear key -> a bare number is a GitHub PR.
             let Some(key) = key else {
                 return Ok(Resolved { pr_number: n, linear_id: None, linear_title: None });
             };
@@ -964,7 +964,7 @@ git commit --no-gpg-sign -m "docs: document issue checkout-pr"
 
 ## Self-Review Notes
 
-- **Spec coverage:** routing table → Task 3 `classify`; bare-number disambiguation → Task 3 `decide_fuzzy` + `resolve`; Linear→PR query → Task 2; no-PR error → Task 4/`resolve_linear`; fork-safe checkout → Task 4 `gh pr checkout`; config template + slugify → Tasks 1 & 3; record + `--setup` → Tasks 4 & 5; error messages → Task 3 `resolve`; tests → each task.
+- **Spec coverage:** routing table -> Task 3 `classify`; bare-number disambiguation -> Task 3 `decide_fuzzy` + `resolve`; Linear->PR query -> Task 2; no-PR error -> Task 4/`resolve_linear`; fork-safe checkout -> Task 4 `gh pr checkout`; config template + slugify -> Tasks 1 & 3; record + `--setup` -> Tasks 4 & 5; error messages -> Task 3 `resolve`; tests -> each task.
 - **Type consistency:** `LinearPr`/`LinearIssueRef` defined in Task 2 are used unchanged in Task 3; `Resolved`/`Ident`/`FuzzyDecision` are module-private to `checkout.rs`; `checkout_worktree_dir()` matches between Task 1 and Task 3; `prep_apps` signature matches between Task 5's definition and call site.
 - **Linear-key-absent split:** an explicit `PREFIX-N`/linear URL with no key errors in `resolve` (Ident::Linear arm); a bare `N` with no key is treated as a PR (Ident::Fuzzy arm) — matching the corrected spec routing table.
 
