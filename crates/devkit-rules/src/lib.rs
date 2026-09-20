@@ -7,4 +7,5 @@
 
 pub mod index;
 pub mod model;
+pub mod query;
 pub mod vocab;
