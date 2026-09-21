@@ -67,21 +67,22 @@ pub struct IssueCli {
 pub(crate) enum Cmd {
     /// Prepare an issue worktree: branch, setup commands, ports.
     Setup {
-        /// Issue id or issue URL (equivalent to --issue).
-        #[arg(
-            value_name = "ISSUE",
-            required_unless_present = "issue",
-            conflicts_with = "issue"
-        )]
+        /// Issue id or issue URL (equivalent to --issue). Omit it, and pass
+        /// --slug, for work that has no tracker issue.
+        #[arg(value_name = "ISSUE", conflicts_with = "issue")]
         issue_pos: Option<String>,
         /// Issue id or issue URL (equivalent to the positional ISSUE).
         #[arg(long)]
         issue: Option<String>,
         /// Short kebab title, without the issue id, rendered into the branch
         /// and worktree names (e.g. `fix-bli-export`). Omit to take the
-        /// slug a pasted issue URL already spells out, else the Linear
-        /// title.
-        #[arg(short = 'l', long)]
+        /// slug a pasted issue URL already spells out, else the tracker's
+        /// title. Required when no issue is given.
+        #[arg(
+            short = 'l',
+            long,
+            required_unless_present_any = ["issue_pos", "issue"]
+        )]
         slug: Option<String>,
         /// Apps to bootstrap: writes each one's prep files and runs its setup
         /// commands. Omit for a worktree with no per-app setup.
@@ -415,8 +416,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
             dry_run,
             no_gitignore,
         }) => setup::run(setup::SetupArgs {
-            // clap guarantees exactly one of the two is present
-            issue: issue_pos.or(issue).expect("issue id"),
+            issue: issue_pos.or(issue),
             slug,
             apps,
             summary,

@@ -5,7 +5,7 @@ use devkit_common::{
     git::Git,
     github,
     tracker::{Resolved, State, StateKind, TrackerKind},
-    worktree,
+    worktree::{self, IssueId},
 };
 use serde::{Deserialize, Serialize};
 
@@ -69,7 +69,7 @@ impl PrStatus {
 pub struct IssueWorktree {
     pub worktree: String,
     pub branch: String,
-    pub issue_id: String,
+    pub issue_id: IssueId,
     pub dirty: bool,
     /// The PR, tagged. `pr_number`, `pr_state` and `pr_url` below are derived
     /// from it for the serialized shape consumers already read.
@@ -245,7 +245,7 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
         let iid = worktree::issue_id_of(&wt.path, &wt.branch);
         // An issue id is case-insensitive in every tracker that has one, and
         // the record holds whichever spelling the tracker was given.
-        if !ids.is_empty() && !ids.iter().any(|w| w.eq_ignore_ascii_case(&iid)) {
+        if !ids.is_empty() && !ids.iter().any(|w| w.eq_ignore_ascii_case(&iid.to_string())) {
             continue;
         }
         rows.push(IssueWorktree {
@@ -261,8 +261,7 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
     }
     let issue_ids = rows
         .iter()
-        .filter(|r| r.issue_id != "UNKNOWN")
-        .map(|r| r.issue_id.clone())
+        .filter_map(|r| r.issue_id.tracker().map(str::to_owned))
         .collect();
     Ok(Discovered { rows, issue_ids })
 }
@@ -548,7 +547,7 @@ pub fn assemble(
     for (i, wt) in rows.iter_mut().enumerate() {
         wt.dirty = dirty.get(i).copied().unwrap_or(false);
         prs.apply(wt);
-        if let Some(st) = states.get(&wt.issue_id) {
+        if let Some(st) = wt.issue_id.tracker().and_then(|id| states.get(id)) {
             wt.state = Some(st.clone());
         }
         let reason = reason_not_finished(wt, &tracker, false);
@@ -593,7 +592,7 @@ pub fn reason_not_finished(
     tracker: &TrackerInfo,
     pr_only: bool,
 ) -> Option<String> {
-    if !pr_only && wt.issue_id == "UNKNOWN" {
+    if !pr_only && wt.issue_id == IssueId::Unknown {
         return Some("not an issue worktree".into());
     }
     let mut bits: Vec<String> = Vec::new();
@@ -607,8 +606,10 @@ pub fn reason_not_finished(
     // A project that declared it has no tracker has no state to wait for; every
     // other tracker gates on the issue's state and says so when it could not
     // read one — the fallback stand-in included, since it stands in for a
-    // tracker devkit could not resolve.
-    let nothing_to_wait_for = tracker.kind == TrackerKind::None && tracker.declared;
+    // tracker devkit could not resolve. A worktree set up with no issue has no
+    // state either.
+    let nothing_to_wait_for =
+        wt.issue_id == IssueId::NoIssue || (tracker.kind == TrackerKind::None && tracker.declared);
     if !pr_only && !nothing_to_wait_for {
         match wt.state.as_ref() {
             Some(s) if s.kind != StateKind::Completed => {
@@ -1049,7 +1050,7 @@ mod tests {
         IssueWorktree {
             worktree: "/w".into(),
             branch: "b".into(),
-            issue_id: issue_id.into(),
+            issue_id: issue_id.parse().unwrap(),
             dirty,
             pr,
             state: kind.map(|kind| State {
@@ -1127,6 +1128,18 @@ mod tests {
                 true
             )
             .is_none()
+        );
+    }
+
+    /// A worktree set up with no issue has no tracker state to wait for, so a
+    /// merged PR and a clean tree finish it without `--pr-only`.
+    #[test]
+    fn an_issueless_worktree_skips_the_tracker_gate() {
+        let linear = tracker(TrackerKind::Linear, true);
+        assert!(reason_not_finished(&wt("NONE", "MERGED", false, None), &linear, false).is_none());
+        assert_eq!(
+            reason_not_finished(&wt("NONE", "NO_PR", true, None), &linear, false).as_deref(),
+            Some("no PR, dirty")
         );
     }
 

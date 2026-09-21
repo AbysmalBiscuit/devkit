@@ -116,3 +116,65 @@ fn setup_leaves_the_new_branch_without_an_upstream() {
         "the new branch must not inherit an upstream from the baseline target"
     );
 }
+
+/// Work with no tracker issue still gets a worktree, and a record whose empty
+/// issue id is what templates test to leave the id out. No `LINEAR_API_KEY`
+/// is set, so any tracker lookup would fail the run.
+#[test]
+fn setup_with_only_a_slug_creates_an_issueless_worktree() {
+    let t = project();
+    let state = tempfile::tempdir().unwrap();
+    let out = run(t.path(), state.path(), &[
+        "setup",
+        "--slug",
+        "tidy-docs",
+        "--no-gitignore",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "setup failed: {stderr}");
+    let wt = t.path().join("app/wts/tidy-docs");
+    let record = devkit_common::record::read(&wt).expect("setup record");
+    assert_eq!(record.issue, "");
+    assert_eq!(record.slug, "tidy-docs");
+    let branch = devkit_common::git::Git::fixture(&wt)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(branch.trim(), "x/tidy-docs");
+}
+
+#[test]
+fn setup_without_an_issue_or_a_slug_is_a_usage_error() {
+    let t = project();
+    let state = tempfile::tempdir().unwrap();
+    let out = run(t.path(), state.path(), &["setup", "--no-gitignore"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The summary file is built from the tracker's issue, so asking for one
+/// without an issue is refused before anything is created.
+#[test]
+fn setup_refuses_a_summary_without_an_issue() {
+    let t = project();
+    let state = tempfile::tempdir().unwrap();
+    let out = run(t.path(), state.path(), &[
+        "setup",
+        "--slug",
+        "tidy-docs",
+        "--summary",
+        "--no-gitignore",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a refusal, not a usage error: {stderr}"
+    );
+    assert!(stderr.contains("--summary"), "{stderr}");
+    assert!(!t.path().join("app/wts/tidy-docs").exists());
+}

@@ -6,6 +6,7 @@ Every subcommand works from the primary checkout, which git resolves: the main w
 
 ```sh
 issue setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary|--no-summary] [--dry-run] [--no-gitignore]
+issue setup --slug <slug> [--apps a,b] [--dry-run] [--no-gitignore]
 issue status [ids…]                                   # read-only triage (also the bare `issue`)
 issue pr [status] [selector] [--json] [--cache-only]  # also the bare `issue pr`
 issue pr create [--draft|--ready] [--to <alias>] [--base <branch>] [--pr-title T] [--pr-body B] [--no-push] [--pr <URL|number>] [--arg k=v]
@@ -37,7 +38,7 @@ The branch is created with no upstream. git would otherwise track the baseline's
 
 | Flag | Meaning |
 |---|---|
-| `<ID>` / `--issue <ID>` | Issue id or URL the tracker recognises — a Linear `ENG-123` or `linear.app` URL, a GitHub issue number or an issue URL in the project's `issues_repo`. Drives the branch name and summary. **Required.** |
+| `<ID>` / `--issue <ID>` | Issue id or URL the tracker recognises — a Linear `ENG-123` or `linear.app` URL, a GitHub issue number or an issue URL in the project's `issues_repo`. Drives the branch name and summary. Omit it for work with no tracker issue: `--slug` is then required, `issue` is left out of the output, templates see an empty `{{ issue }}`, and `--summary` is refused. `issue status` shows the issue as `NONE`, and `issue end` finishes it on a merged PR and a clean tree. |
 | `--slug <slug>` | Short kebab slug rendered into the branch and worktree dir name (`lev/eng-123-<slug>`). Omit it and the slug comes from a pasted Linear URL's own `…/issue/<ID>/<title-slug>` path, else from the issue's title as the tracker reports it, which needs that tracker's credential. A leading copy of the issue id is stripped so the branch does not repeat it. A *derived* slug is then shortened on a word boundary to fit the 46-char width `issue status` prints — the budget is measured against your own `branch` template, so a longer `branch_prefix` takes from the slug. A slug you pass is used verbatim, however long. |
 | `--apps <a,b>` | Comma-separated apps to bootstrap: writes each one's prep files, runs its setup commands. Omit for a worktree with no per-app setup. |
 | `--summary` | Also write a markdown summary file: the issue's tracker facts (url, parent, project, state, assignee, priority, estimate, labels) and its description verbatim, then empty `## Summary` and `## Pointers` headings to fill in. A tracker with no equivalent of a field leaves it empty, as GitHub does for parent, project, priority, and estimate. Default path `ISSUE_SUMMARY_<ID>.md` under `worktree_root`, beside the worktree so it survives `git worktree remove`; `templates.issue_summary_path` and `templates.issue_summary` override placement and body. Needs the tracker's credential. An existing file is left byte-for-byte and its path still reported. The fetch runs before the worktree is created, so an unknown issue fails clean. `issue end` removes the recorded file when it cleans the worktree up. `defaults.issue_summary = true` makes this the default. Under `--dry-run` the resolved path is reported without the file being written. |
