@@ -1,19 +1,17 @@
 //! `devkit schema init` — point a `devkit.toml` at the published schema.
 
-use std::{
-    path::Path,
-    process::{Command, Output},
-};
+#[path = "common/testenv.rs"]
+mod testenv;
+use std::{path::Path, process::Output};
 
 const DIRECTIVE: &str =
     "#:schema https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json";
 
 fn init(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .args(["schema", "init"])
+    let (_home, mut cmd) = testenv::isolated(env!("CARGO_BIN_EXE_devkit"));
+    cmd.args(["schema", "init"])
         .args(args)
         .current_dir(dir)
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .unwrap()
 }
