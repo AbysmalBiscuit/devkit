@@ -15,7 +15,8 @@ use devkit_config::{PrepFile, expand_tilde};
 use devkit_ports::load;
 
 pub struct SetupArgs {
-    pub issue: String,
+    /// `None` is work with no tracker issue; `slug` then names the worktree.
+    pub issue: Option<String>,
     /// `None` asks the resolved tracker for the issue title and slugifies that.
     pub slug: Option<String>,
     pub apps: Vec<String>,
@@ -32,7 +33,8 @@ pub struct SetupArgs {
 
 #[derive(serde::Serialize)]
 struct Prepared {
-    issue: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issue: Option<String>,
     worktree: String,
     branch: String,
     /// The summary file's path, present only when one was asked for.
@@ -49,11 +51,9 @@ impl Prepared {
             println!("{}", serde_json::to_string_pretty(self)?);
             return Ok(());
         }
-        let mut rows = vec![
-            ("issue", self.issue.clone()),
-            ("worktree", self.worktree.clone()),
-            ("branch", self.branch.clone()),
-        ];
+        let mut rows: Vec<_> = self.issue.iter().map(|i| ("issue", i.clone())).collect();
+        rows.push(("worktree", self.worktree.clone()));
+        rows.push(("branch", self.branch.clone()));
         if let Some(s) = &self.summary {
             rows.push(("summary", s.clone()));
         }
@@ -314,7 +314,7 @@ pub fn backfill_includes(
 /// since a slug you typed is a decision, not a suggestion.
 fn resolve_slug(
     t: &dyn Tracker,
-    issue: &IssueRef,
+    issue: Option<&IssueRef>,
     explicit: Option<String>,
     budget: usize,
     details: Option<&IssueDetails>,
@@ -322,6 +322,7 @@ fn resolve_slug(
     if let Some(s) = explicit {
         return Ok(s);
     }
+    let issue = issue.context("pass an issue or --slug")?;
     if let Some(s) = &issue.slug {
         return Ok(crate::issue::slug::cap(s, budget));
     }
@@ -462,14 +463,29 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let repos = devkit_common::github::Repos::resolve(&cfg.github, &start, None);
     let resolved = devkit_common::tracker::resolve(cfg.tracker.kind, Path::new(&start), &repos);
     let t = resolved.tracker.as_ref();
-    let issue_ref = parse_input(&resolved, &args.issue)?;
-    let issue = issue_ref.id.clone();
+    let issue_ref = args
+        .issue
+        .as_deref()
+        .map(|i| parse_input(&resolved, i))
+        .transpose()?;
+    anyhow::ensure!(
+        issue_ref.is_some() || !args.summary,
+        "--summary needs an issue: the summary is built from the tracker's issue"
+    );
+    // An empty id is how templates and the record spell "no tracker issue".
+    let issue = issue_ref.as_ref().map(|r| r.id.clone()).unwrap_or_default();
     let vars = &cfg.templates.defaults();
     let budget = branch_budget(cfg, vars, &issue, &args.apps)?;
-    let details = want_summary(&args, cfg)
+    let details = (issue_ref.is_some() && want_summary(&args, cfg))
         .then(|| fetch_details(t, &issue))
         .transpose()?;
-    let slug = resolve_slug(t, &issue_ref, args.slug.clone(), budget, details.as_ref())?;
+    let slug = resolve_slug(
+        t,
+        issue_ref.as_ref(),
+        args.slug.clone(),
+        budget,
+        details.as_ref(),
+    )?;
     let dir_slug = short_slug(cfg, vars, &issue, &args.apps, &slug)?;
 
     let wt_root = worktree_root(cfg)?;
@@ -501,7 +517,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
 
     if args.dry_run {
         let out = Prepared {
-            issue: issue.clone(),
+            issue: issue_ref.map(|r| r.id),
             worktree: holder,
             branch,
             summary: summary_path.map(|p| p.display().to_string()),
@@ -609,7 +625,7 @@ pub fn run(args: SetupArgs) -> Result<()> {
     // and no unused reservation can be reclaimed by another session in the
     // meantime.
     let out = Prepared {
-        issue: issue.clone(),
+        issue: issue_ref.map(|r| r.id),
         worktree: holder,
         branch,
         summary: summary_path,
@@ -666,10 +682,10 @@ mod tests {
         let t = fake::FakeTracker::new().with_title("ENG-7", "Fix the export crash");
         let r = resolve_slug(
             &t,
-            &IssueRef {
+            Some(&IssueRef {
                 id: "ENG-7".into(),
                 slug: None,
-            },
+            }),
             None,
             40,
             None,
