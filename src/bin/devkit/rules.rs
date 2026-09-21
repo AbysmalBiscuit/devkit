@@ -74,22 +74,40 @@ pub enum Format {
     Prompt,
 }
 
+/// The index path for this checkout: an explicit path (`--index`, or the
+/// positional argument `query` and `stats` take) wins outright; otherwise the
+/// project's own `[rules] index`; otherwise the path `repo-rules-agent` would
+/// have written for the checkout's main worktree. `query`, `stats` and
+/// `devkit rules context` all resolve it this way, so a project that sets
+/// `[rules] index` gets the same answer everywhere.
+fn resolve_index_path(
+    explicit: Option<PathBuf>,
+    index: Option<&str>,
+    checkout: &Checkout,
+) -> PathBuf {
+    if let Some(path) = explicit {
+        return path;
+    }
+    if let Some(index) = index {
+        return PathBuf::from(index);
+    }
+    let repo = checkout
+        .main_worktree()
+        .or_else(|| checkout.root())
+        .unwrap_or_else(|| checkout.dir());
+    index::default_index_path(repo)
+}
+
 /// The index for this checkout, or the one named. Errors name the path tried,
 /// because a `devkit rules` run is a person asking a question and silence would
 /// read as "no rules" rather than "no index".
 fn load_or_default(explicit: Option<PathBuf>) -> Result<(PathBuf, RuleIndex)> {
-    let path = match explicit {
-        Some(p) => p,
-        None => {
-            let cwd = std::env::current_dir().context("getting current dir")?;
-            let checkout = Checkout::at(&cwd);
-            let repo = checkout
-                .main_worktree()
-                .map(|p| p.to_path_buf())
-                .unwrap_or(cwd);
-            index::default_index_path(&repo)
-        }
-    };
+    let cwd = std::env::current_dir().context("getting current dir")?;
+    let checkout = Checkout::at(&cwd);
+    let configured = devkit_common::config::resolve_in(&checkout, None, &cwd)
+        .ok()
+        .and_then(|(project, _)| project.rules.index);
+    let path = resolve_index_path(explicit, configured.as_deref(), &checkout);
     let loaded =
         index::load(&path).with_context(|| format!("no rules index at {}", path.display()))?;
     Ok((path, loaded))
@@ -253,27 +271,34 @@ fn context_cmd(args: ContextArgs) -> Result<()> {
     if !project.rules.enabled {
         return Ok(());
     }
-    let path = match &project.rules.index {
-        Some(p) => PathBuf::from(p),
-        None => {
-            let Some(repo) = checkout.main_worktree().or_else(|| checkout.root()) else {
-                return Ok(());
-            };
-            index::default_index_path(repo)
-        }
-    };
+    let path = resolve_index_path(None, project.rules.index.as_deref(), &checkout);
     let Some(loaded) = index::load(&path) else {
         return Ok(());
     };
+    // No task and no language: session start is the broad trigger, and a
+    // rule tagged only `code-review` still governs the repository, unlike on
+    // the write path.
     let filter = query::Filter {
-        task: Some(vocab::Task::CodeGeneration),
         scope: Some(vocab::Scope::Repo),
         severity: Some(vocab::Severity::Must),
         ..query::Filter::default()
     };
     let mut matched = query::rank(&loaded, query::matching(&loaded, &filter), &[]);
     matched.truncate(project.rules.per_event_limit);
-    let mut text = devkit_rules::render::block(&matched, &[], project.rules.max_event_bytes);
+
+    // Whatever the byte cap would still cut is dropped here, before
+    // rendering, rather than rendered truncated and stamped anyway: the fired
+    // set must never claim to have shown content that never fully rendered.
+    let mut text;
+    loop {
+        text = devkit_rules::render::block(&matched, &[], project.rules.max_event_bytes);
+        if !text.ends_with(devkit_rules::render::TRUNCATION_NOTE) {
+            break;
+        }
+        if matched.pop().is_none() {
+            break;
+        }
+    }
     if text.is_empty() {
         return Ok(());
     }
