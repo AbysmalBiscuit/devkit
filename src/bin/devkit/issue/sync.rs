@@ -237,7 +237,11 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
 
     println!("Source: {}", source.display());
     for (wt, id) in targets {
-        let label = if id == "UNKNOWN" { &wt.branch } else { id };
+        let label = if worktree::is_tracker_id(id) {
+            id
+        } else {
+            &wt.branch
+        };
         println!("\n{label}  {}", wt.path.display());
 
         let mut plan = worktree::plan_includes(&source, &wt.path, patterns);

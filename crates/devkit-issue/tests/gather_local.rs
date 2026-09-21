@@ -113,3 +113,43 @@ fn a_lowercase_record_id_is_found_by_either_spelling() {
         assert_eq!(ids, ["eng-1234"], "filtering by {spelling}");
     }
 }
+
+/// `issue setup --slug` with no issue records an empty id. The branch then
+/// carries only the slug, and a slug like `utf-8-fix` looks like an issue id,
+/// so the record has to settle it rather than the branch scan.
+#[test]
+fn an_issueless_record_reads_as_none_not_a_branch_scan() {
+    let base = fixture_repo();
+    let main = base.path().join("main");
+    let wt = base.path().join("utf-8-fix");
+    git(
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "lev/utf-8-fix",
+            wt.to_str().unwrap(),
+        ],
+        &main,
+    );
+    std::fs::create_dir_all(wt.join(".devkit")).unwrap();
+    std::fs::write(
+        wt.join(".devkit").join("issue.toml"),
+        "issue = \"\"\nslug = \"utf-8-fix\"\napps = []\n",
+    )
+    .unwrap();
+
+    let found = devkit_issue::status::discover(main.to_str().unwrap(), &[]).unwrap();
+    let row = found
+        .rows()
+        .iter()
+        .find(|r| r.branch == "lev/utf-8-fix")
+        .expect("issueless row present");
+    assert_eq!(row.issue_id, "NONE");
+    assert!(
+        !found.issue_ids().iter().any(|id| id == "NONE"),
+        "no tracker lookup for an issueless worktree: {:?}",
+        found.issue_ids()
+    );
+}

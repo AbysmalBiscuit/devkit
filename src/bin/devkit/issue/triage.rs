@@ -42,7 +42,7 @@ pub(crate) fn issue_cell(row: &IssueWorktree, link_base: Option<&str>) -> String
         }
         _ => row.issue_id.clone(),
     };
-    if row.issue_id == "UNKNOWN" {
+    if !devkit_common::worktree::is_tracker_id(&row.issue_id) {
         ui::dim(&linked)
     } else {
         ui::cyan(&linked)

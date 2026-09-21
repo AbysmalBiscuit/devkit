@@ -175,10 +175,11 @@ fn live_enrich(
         2,
         Cell::Ready(crate::issue::triage::tree_cell(row.dirty)),
     );
-    let want_state = row.issue_id != "UNKNOWN";
+    let want_state = devkit_common::worktree::is_tracker_id(&row.issue_id);
     if !want_state {
-        // No tracker fetch reports for an UNKNOWN id, so render the same dim
-        // cell the final table shows instead of a spinner that never resolves.
+        // No tracker fetch reports for an UNKNOWN or NONE id, so render the
+        // same dim cell the final table shows instead of a spinner that
+        // never resolves.
         lt.set(
             0,
             4,

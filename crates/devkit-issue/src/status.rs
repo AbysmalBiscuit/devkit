@@ -261,7 +261,7 @@ pub fn discover(start: &str, ids: &[String]) -> Result<Discovered> {
     }
     let issue_ids = rows
         .iter()
-        .filter(|r| r.issue_id != "UNKNOWN")
+        .filter(|r| worktree::is_tracker_id(&r.issue_id))
         .map(|r| r.issue_id.clone())
         .collect();
     Ok(Discovered { rows, issue_ids })
@@ -607,8 +607,10 @@ pub fn reason_not_finished(
     // A project that declared it has no tracker has no state to wait for; every
     // other tracker gates on the issue's state and says so when it could not
     // read one — the fallback stand-in included, since it stands in for a
-    // tracker devkit could not resolve.
-    let nothing_to_wait_for = tracker.kind == TrackerKind::None && tracker.declared;
+    // tracker devkit could not resolve. A worktree set up with no issue has no
+    // state either.
+    let nothing_to_wait_for =
+        wt.issue_id == "NONE" || (tracker.kind == TrackerKind::None && tracker.declared);
     if !pr_only && !nothing_to_wait_for {
         match wt.state.as_ref() {
             Some(s) if s.kind != StateKind::Completed => {
@@ -1127,6 +1129,18 @@ mod tests {
                 true
             )
             .is_none()
+        );
+    }
+
+    /// A worktree set up with no issue has no tracker state to wait for, so a
+    /// merged PR and a clean tree finish it without `--pr-only`.
+    #[test]
+    fn an_issueless_worktree_skips_the_tracker_gate() {
+        let linear = tracker(TrackerKind::Linear, true);
+        assert!(reason_not_finished(&wt("NONE", "MERGED", false, None), &linear, false).is_none());
+        assert_eq!(
+            reason_not_finished(&wt("NONE", "NO_PR", true, None), &linear, false).as_deref(),
+            Some("no PR, dirty")
         );
     }
 

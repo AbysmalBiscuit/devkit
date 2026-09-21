@@ -275,7 +275,7 @@ fn cleanup(
 /// How a worktree is named in prompts, steps, and errors: its issue id when the
 /// record has one, else its branch.
 fn row_label(row: &IssueWorktree) -> String {
-    if row.issue_id != "UNKNOWN" {
+    if devkit_common::worktree::is_tracker_id(&row.issue_id) {
         row.issue_id.clone()
     } else {
         row.branch.clone()

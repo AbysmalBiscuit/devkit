@@ -54,14 +54,18 @@ pub fn is_baseline(worktree: &Path) -> bool {
 }
 
 /// This worktree's issue id. The setup record is authoritative because it holds
-/// whatever the tracker actually calls the issue; the branch and directory scan
-/// is the fallback that keeps worktrees made without a record — by a plain
-/// `git worktree add`, say — working.
+/// whatever the tracker actually calls the issue. The branch and directory scan
+/// is the fallback that keeps worktrees made without a record, by a plain
+/// `git worktree add` say, working. A record with an empty id was set up with
+/// no issue and reads as `NONE`, since its branch carries only a slug that may
+/// happen to look like an id.
 pub fn issue_id_of(worktree: &std::path::Path, branch: &str) -> String {
-    if let Some(rec) = crate::record::read(worktree)
-        && !rec.issue.is_empty()
-    {
-        return rec.issue;
+    if let Some(rec) = crate::record::read(worktree) {
+        return if rec.issue.is_empty() {
+            "NONE".into()
+        } else {
+            rec.issue
+        };
     }
     let dir = worktree.file_name().and_then(|s| s.to_str()).unwrap_or("");
     for src in [branch, dir] {
@@ -70,6 +74,13 @@ pub fn issue_id_of(worktree: &std::path::Path, branch: &str) -> String {
         }
     }
     "UNKNOWN".into()
+}
+
+/// Whether `id` names a tracker issue rather than one of the placeholders
+/// `issue_id_of` reports: `UNKNOWN` when no id was found, `NONE` when the
+/// worktree was set up with no issue.
+pub fn is_tracker_id(id: &str) -> bool {
+    id != "UNKNOWN" && id != "NONE"
 }
 
 /// The first letters-dash-digits run in `s` (e.g. `eng-1234`), if any. A
@@ -1551,10 +1562,10 @@ mod tests {
         assert_eq!(issue_id_of(dir.path(), "DETACHED"), "eng-1234");
     }
 
-    /// A record with no id is no answer at all: fall through to the scan rather
-    /// than reporting an empty id.
+    /// A record with an empty id was set up with no issue. Its branch carries
+    /// only a slug, so an id-shaped run in it is not scanned for.
     #[test]
-    fn an_empty_record_id_falls_through_to_the_branch() {
+    fn an_empty_record_id_is_none_not_a_branch_scan() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".devkit")).unwrap();
         std::fs::write(
@@ -1562,7 +1573,7 @@ mod tests {
             "issue = \"\"\nslug = \"x\"\napps = []\n",
         )
         .unwrap();
-        assert_eq!(issue_id_of(dir.path(), "lev/eng-1-something"), "ENG-1");
+        assert_eq!(issue_id_of(dir.path(), "lev/utf-8-fix"), "NONE");
     }
 
     #[test]
