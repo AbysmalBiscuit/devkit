@@ -5,8 +5,8 @@
 
 use std::path::Path;
 
-use devkit_common::git::Checkout;
 pub use devkit_common::harness::deny_json;
+use devkit_common::{git::Checkout, harness::subagent_id};
 use serde_json::Value;
 
 /// Whether write enforcement is active for a write originating at `cwd`.
@@ -117,15 +117,16 @@ pub fn parse_write(p: &Value) -> Option<LockAction> {
     Some(LockAction::Write {
         tool_name: tool.to_string(),
         file_paths,
-        holder: holder_from_fields(session, str_field(p, "agent_id")),
+        holder: holder_from_fields(session, subagent_id(p)),
     })
 }
 
 /// Releasing the bare session holder here would free the parent's and every
-/// sibling's locks, so an unattributable stop releases nothing.
+/// sibling's locks, so an unattributable stop, a fork's included, releases
+/// nothing.
 pub fn parse_subagent_stop(p: &Value) -> Option<LockAction> {
     let session = str_field(p, "session_id")?;
-    let agent = str_field(p, "agent_id")?;
+    let agent = subagent_id(p)?;
     Some(LockAction::ReleaseSubagent {
         holder: holder_from_fields(session, Some(agent)),
     })
@@ -184,11 +185,23 @@ mod tests {
     #[test]
     fn parse_write_event_subagent_holder() {
         let p = json!({
-            "session_id": "S", "agent_id": "a1",
+            "session_id": "S", "agent_id": "a1", "agent_type": "general-purpose",
             "tool_name": "Write", "tool_input": { "file_path": "/repo/x" }
         });
         match parse_write(&p) {
             Some(LockAction::Write { holder, .. }) => assert_eq!(holder, "S/a1"),
+            other => panic!("expected Write, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_forks_write_is_held_by_its_session() {
+        let p = json!({
+            "session_id": "S", "agent_id": "afork",
+            "tool_name": "Write", "tool_input": { "file_path": "/repo/x" }
+        });
+        match parse_write(&p) {
+            Some(LockAction::Write { holder, .. }) => assert_eq!(holder, "S"),
             other => panic!("expected Write, got {other:?}"),
         }
     }
@@ -293,11 +306,17 @@ mod tests {
     #[test]
     fn a_subagent_stop_needs_both_ids() {
         assert!(parse_subagent_stop(&json!({"session_id": "s1"})).is_none());
-        let both = json!({"session_id": "s1", "agent_id": "a1"});
+        let both = json!({"session_id": "s1", "agent_id": "a1", "agent_type": "general-purpose"});
         assert!(matches!(
             parse_subagent_stop(&both),
             Some(LockAction::ReleaseSubagent { holder }) if holder == "s1/a1"
         ));
+    }
+
+    #[test]
+    fn a_forks_stop_releases_nothing() {
+        let fork = json!({"session_id": "s1", "agent_id": "afork", "agent_type": ""});
+        assert!(parse_subagent_stop(&fork).is_none());
     }
 
     #[test]

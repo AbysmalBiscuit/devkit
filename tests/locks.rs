@@ -136,16 +136,25 @@ fn run_hook_as(
     agent: Option<&str>,
     target: &Path,
 ) -> Output {
-    use std::io::Write;
-    let mut payload = serde_json::json!({
+    let mut payload = write_payload(cwd, session, target);
+    if let Some(a) = agent {
+        payload["agent_id"] = serde_json::json!(a);
+        payload["agent_type"] = serde_json::json!("general-purpose");
+    }
+    run_hook_payload(exe, state, &payload)
+}
+
+fn write_payload(cwd: &Path, session: &str, target: &Path) -> serde_json::Value {
+    serde_json::json!({
         "session_id": session,
         "cwd": cwd.to_string_lossy(),
         "tool_name": "Write",
         "tool_input": { "file_path": target.to_string_lossy() },
-    });
-    if let Some(a) = agent {
-        payload["agent_id"] = serde_json::json!(a);
-    }
+    })
+}
+
+fn run_hook_payload(exe: &Path, state: &Path, payload: &serde_json::Value) -> Output {
+    use std::io::Write;
     let mut cmd = Command::new(exe);
     cmd.args(["hook", "pretooluse"])
         .env("XDG_STATE_HOME", state)
@@ -389,6 +398,41 @@ fn a_subagent_hook_row_does_not_block_its_sessions_claim() {
     assert!(
         stdout.contains("already held on this session line") && stdout.contains("ttl 1800s"),
         "the row's own lease is reported, not the requested 60s: {stdout}"
+    );
+}
+
+/// Claude Code forks an agent's conversation for side work (a background
+/// subagent's progress summary, a prompt suggestion) under a fresh `agent_id`
+/// and no `agent_type`, and such a fork may end without a `SubagentStop`. A
+/// write the fork attempts must not take a row under its own id, or the
+/// subagent it was forked from is refused its next write by a holder nothing
+/// ever releases.
+#[test]
+fn a_forks_write_does_not_lock_out_the_subagent_it_forked() {
+    let (_dir, link) = shimtest::linked("lockm");
+    let state = tempfile::tempdir().unwrap();
+    let (proj, target) = enforced_project();
+
+    let mut fork = write_payload(proj.path(), "sess-fork", &target);
+    fork["agent_id"] = serde_json::json!("afork");
+    let f = run_hook_payload(&link, state.path(), &fork);
+    assert!(
+        !is_deny("fork write", &f),
+        "the fork's write is not refused"
+    );
+
+    let s = run_hook_as(
+        &link,
+        proj.path(),
+        state.path(),
+        "sess-fork",
+        Some("a1"),
+        &target,
+    );
+    assert!(
+        !is_deny("subagent write", &s),
+        "the subagent must not be refused by a row its own fork took; stdout: {}",
+        String::from_utf8_lossy(&s.stdout)
     );
 }
 

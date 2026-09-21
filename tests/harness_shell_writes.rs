@@ -182,11 +182,25 @@ fn own_and_ancestor_claims_allow() {
             let mut p: serde_json::Value =
                 serde_json::from_str(&payload(&e, Some("S1"), "Bash", "echo x > a.txt")).unwrap();
             p["agent_id"] = "a1".into();
+            p["agent_type"] = "general-purpose".into();
             p.to_string()
         }),
         &[],
     );
     assert_eq!(denial(&sub), None);
+}
+
+/// A Claude Code fork (an `agent_id` with no `agent_type`) may end without a
+/// `SubagentStop`, so its shell write is claimed for its session.
+#[test]
+fn a_forks_shell_write_is_claimed_for_its_session() {
+    let e = env(WRITES);
+    let mut p: serde_json::Value =
+        serde_json::from_str(&payload(&e, Some("S1"), "Bash", "echo x > a.txt")).unwrap();
+    p["agent_id"] = "afork".into();
+    let out = devkit(&e, &["harness", "shell"], Some(&p.to_string()), &[]);
+    assert_eq!(denial(&out), None);
+    assert_eq!(rows(&e), [("a.txt".to_string(), "S1".to_string())]);
 }
 
 #[test]

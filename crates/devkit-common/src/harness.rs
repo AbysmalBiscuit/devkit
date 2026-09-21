@@ -325,6 +325,18 @@ pub struct ShellPayload {
     pub agent_id: Option<String>,
 }
 
+/// The subagent a Claude Code payload speaks for, or `None` for its session.
+///
+/// Claude Code also forks an agent's conversation for side work (a background
+/// subagent's progress summary, a prompt suggestion) under a fresh `agent_id`
+/// with no `agent_type`, and a fork can end without a `SubagentStop`. A lock
+/// taken under the fork's id would outlive it, so a fork speaks for its
+/// session.
+pub fn subagent_id(p: &Value) -> Option<&str> {
+    let text = |key| p.get(key).and_then(Value::as_str).filter(|s| !s.is_empty());
+    text("agent_type").and(text("agent_id"))
+}
+
 /// Read a pre-execution shell payload. `None` when the event is not about a
 /// shell command, which is not a failure: harnesses send events this hook does
 /// not model.
@@ -385,7 +397,9 @@ pub fn parse_shell_payload(p: &Value) -> Option<ShellPayload> {
         command,
         cwd: text("cwd").map(PathBuf::from).or(working_dir),
         session_id: text("session_id").or_else(|| text("conversation_id")),
-        agent_id: text("agent_id").or_else(|| text("parent_conversation_id")),
+        agent_id: subagent_id(p)
+            .map(str::to_string)
+            .or_else(|| text("parent_conversation_id")),
     })
 }
 
@@ -890,7 +904,8 @@ programs = "node"
     fn claude_codes_powershell_tool_is_a_shell_payload() {
         let p = serde_json::json!({
             "hook_event_name": "PreToolUse", "tool_name": "PowerShell", "prompt_id": "p",
-            "session_id": "S", "agent_id": "a1", "tool_input": { "command": "Get-ChildItem" }
+            "session_id": "S", "agent_id": "a1", "agent_type": "general-purpose",
+            "tool_input": { "command": "Get-ChildItem" }
         });
         let parsed = parse_shell_payload(&p).unwrap();
         assert_eq!(parsed.harness, Harness::ClaudeCode);
