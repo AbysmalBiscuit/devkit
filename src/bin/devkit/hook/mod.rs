@@ -112,6 +112,15 @@ pub fn run(cli: HookCli) -> Result<()> {
             }
             Ok(())
         }),
+        // Compaction is what drops the injected rules out of the agent's
+        // context, so clearing the set is what lets them inject again.
+        HookEvent::PostCompact => with_payload(|p| {
+            if let Some(session) = p.get("session_id").and_then(Value::as_str) {
+                rules::clear_for_holder(session);
+            }
+            record_only(p, cli.event, harness);
+            Ok(())
+        }),
         // Record-only. Each reads stdin, builds one record and exits; nothing
         // reaches stdout, because `UserPromptSubmit` appends a hook's stdout to
         // the prompt and `Stop` and `PermissionRequest` honour a JSON decision.

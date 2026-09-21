@@ -316,10 +316,12 @@ Reads the JSON index `repo-rules-agent` builds, answering the same questions its
 ```sh
 devkit rules query [INDEX] [--task <t>] [--lang <l>] [--scope <s>] [--severity <s>] [--min-severity <s>] [--path <p>]... [--topic <t>]... [-n <limit>] [--format table|json|prompt]
 devkit rules stats [INDEX]
+devkit rules context [--additional-context]
 ```
 
 - **`query`**: prints the rules matching every filter given, most useful first (a requested topic, then deeper directories, then severity, then the source file's discovery tier). `--task`, `--scope`, `--severity` and `--min-severity` accept the extractor's own vocabulary and name the accepted values when given anything else. `--severity` is an exact match; `--min-severity` is a floor (`should` also keeps `must`). `--path` may repeat and keeps repo-wide rules alongside any whose directory governs that path. `--topic` may repeat and ranks a matching rule first rather than filtering it out. `--format table` (the default) prints one row per rule; `json` prints the matched rules as JSON; `prompt` prints the same block a hook would inject into a session.
 - **`stats`**: a one-screen summary of an index: rule and file counts, a per-file rule-count table, and breakdowns by severity, task, language, directory and topic. Also lists any file the extractor recorded an extraction error against.
+- **`context`**: the session-start block, called by the session-start and post-compact hooks rather than by hand. Prints the repository's own must-severity rules, plus a pointer to `devkit rules query --path` for the rest. A session hook calls it unconditionally, so it exits 0 and prints nothing outside a devkit project or with rules disabled, rather than reporting an error. `--additional-context` wraps the block in the JSON envelope Codex and Cursor read a hook's context from, instead of plain stdout.
 
 ## `docm`: library docs
 

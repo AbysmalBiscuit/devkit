@@ -78,7 +78,7 @@ impl Emit {
 /// `CURSOR_PROJECT_DIR` is the variable Cursor documents as passed to every
 /// hook process; `CURSOR_PLUGIN_ROOT` is accepted alongside it but is not
 /// documented anywhere.
-fn envelope(text: &str) -> serde_json::Value {
+pub(crate) fn envelope(text: &str) -> serde_json::Value {
     let cursor = ["CURSOR_PROJECT_DIR", "CURSOR_PLUGIN_ROOT"]
         .iter()
         .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()));
@@ -353,7 +353,7 @@ fn write_watermark(path: &Path, digest: &str) {
 
 /// The session id from the hook's stdin JSON. `None` when there is no stdin
 /// to read (an interactive run) or no id in it.
-fn session_id() -> Option<String> {
+pub(crate) fn session_id() -> Option<String> {
     if std::io::stdin().is_terminal() {
         return None;
     }

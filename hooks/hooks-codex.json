@@ -21,6 +21,12 @@
             "type": "command",
             "command": "devkit hook session-start --harness codex",
             "async": false
+          },
+          {
+            "type": "command",
+            "command": "devkit rules context --additional-context",
+            "async": false,
+            "timeout": 3
           }
         ]
       },
@@ -33,6 +39,12 @@
             "async": false,
             "timeout": 3,
             "statusMessage": "Re-injecting devkit library versions"
+          },
+          {
+            "type": "command",
+            "command": "devkit rules context --additional-context",
+            "async": false,
+            "timeout": 3
           }
         ]
       }

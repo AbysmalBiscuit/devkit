@@ -53,7 +53,7 @@ Everything a harness sends enters one verb family, `devkit hook <event>`, and th
 | `worktree-create`, `worktree-remove` | Records the change. |
 | `user-prompt-submit` | Records, behind its own fidelity key. |
 
-Every verb except `pre-tool-use`, `session-end` and `subagent-stop` is record-only: with logging off each is a process spawn that reads the global config, learns logging is off, and exits. `devkit brief` still runs alongside `session-start`, `post-compact` and `cwd-changed` rather than being replaced by them.
+Every verb except `pre-tool-use`, `session-end` and `subagent-stop` is record-only: with logging off each is a process spawn that reads the global config, learns logging is off, and exits. `devkit brief` still runs alongside `session-start`, `post-compact` and `cwd-changed` rather than being replaced by them. `devkit rules context` runs alongside `session-start` too, and again alongside `post-compact` on hosts that resume with a fresh SessionStart: it carries the repository's own must-severity rules when a rule index exists, and stays silent otherwise, so a session opens already knowing what governs the checkout as a whole.
 
 Each manifest is a translation table with no logic in it. Every command carries `--harness <name>`, so identity never depends on guessing which fields a vendor sends this release.
 

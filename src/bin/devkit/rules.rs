@@ -235,7 +235,63 @@ fn stats_cmd(args: StatsArgs) -> Result<()> {
     Ok(())
 }
 
+/// The session-start block: what governs this repository as a whole, plus how
+/// to reach the rest.
+///
+/// Silence on every failure, unlike `query` and `stats`. This runs from a
+/// session hook in any repository, so "no index" is the common case and an
+/// error would be noise in every session that has none.
 fn context_cmd(args: ContextArgs) -> Result<()> {
-    let _ = args.additional_context;
-    todo!()
+    let Ok(cwd) = std::env::current_dir() else {
+        return Ok(());
+    };
+    let checkout = Checkout::at(&cwd);
+    let Ok((project, provenance)) = devkit_common::config::resolve_in(&checkout, None, &cwd) else {
+        return Ok(());
+    };
+    let _ = &provenance;
+    if !project.rules.enabled {
+        return Ok(());
+    }
+    let path = match &project.rules.index {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let Some(repo) = checkout.main_worktree().or_else(|| checkout.root()) else {
+                return Ok(());
+            };
+            index::default_index_path(repo)
+        }
+    };
+    let Some(loaded) = index::load(&path) else {
+        return Ok(());
+    };
+    let filter = query::Filter {
+        task: Some(vocab::Task::CodeGeneration),
+        scope: Some(vocab::Scope::Repo),
+        severity: Some(vocab::Severity::Must),
+        ..query::Filter::default()
+    };
+    let mut matched = query::rank(&loaded, query::matching(&loaded, &filter), &[]);
+    matched.truncate(project.rules.per_event_limit);
+    let mut text = devkit_rules::render::block(&matched, &[], project.rules.max_event_bytes);
+    if text.is_empty() {
+        return Ok(());
+    }
+    text.push_str(
+        "\nThe rest of this repository's rules are reachable with \
+         `devkit rules query --path <path>`.\n",
+    );
+    if args.additional_context {
+        println!("{}", crate::brief::envelope(&text));
+    } else {
+        print!("{text}");
+    }
+    // A top-level session's holder is the bare session id. Without this the
+    // first allowed write re-injects everything the session-start block just
+    // showed the agent.
+    if let Some(session) = crate::brief::session_id() {
+        let ids: Vec<String> = matched.iter().map(|r| r.id.clone()).collect();
+        crate::hook::rules::stamp_ids(&session, &ids);
+    }
+    Ok(())
 }
