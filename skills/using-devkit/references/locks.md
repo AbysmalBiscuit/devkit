@@ -58,7 +58,7 @@ Enforcement turns on from any of these, with the env var overriding the files:
 Mechanics:
 
 - **Auto-acquire on first write.** Before the first `Edit`/`MultiEdit`/`Write`/`NotebookEdit` to a file, the hook locks it for the session. Later writes to the same file by the same session, or by a sub-agent it delegates to, need no re-acquire.
-- **Holder identity.** Top-level writes are held under the session id; sub-agent writes under `session_id/agent_id`. A parent holding a file implicitly covers its sub-agents.
+- **Holder identity.** Top-level writes are held under the session id; sub-agent writes under `session_id/agent_id`. A Claude Code fork (an `agent_id` with no `agent_type`, such as a background summary) writes under the session id, because it can end without a `SubagentStop` to release it. A parent holding a file implicitly covers its sub-agents.
 - **A blocked write returns a deny** naming the holder:
   ```
   devkit write-harness: src/auth.rs (held by <holder>) — locked by another

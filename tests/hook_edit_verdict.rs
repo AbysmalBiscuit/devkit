@@ -79,6 +79,7 @@ pub fn write_payload(session: &str, agent: Option<&str>, cwd: &Path, target: &st
     });
     if let Some(agent) = agent {
         payload["agent_id"] = serde_json::Value::String(agent.to_string());
+        payload["agent_type"] = serde_json::Value::String("general-purpose".to_string());
     }
     payload.to_string()
 }
