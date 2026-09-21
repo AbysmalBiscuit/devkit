@@ -464,7 +464,7 @@ fn shell_pre_record(
 /// Write a deny envelope to stdout. A closed pipe or a full disk on the
 /// other end must not turn a denial into a crash, so the write error is
 /// discarded rather than let the `print!` family's internal panic through.
-fn print_envelope(envelope: &serde_json::Value) {
+pub(super) fn print_envelope(envelope: &serde_json::Value) {
     let _ = writeln!(std::io::stdout(), "{envelope}");
 }
 
