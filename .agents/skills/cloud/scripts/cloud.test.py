@@ -237,6 +237,54 @@ class CloudHooks(unittest.TestCase):
         self.assertIn("Set GIT_AUTHOR_NAME", result.stderr)
         self.assertFalse((self.root / ".git/devkit-cloud-hooks").exists())
 
+    def fake_github(self, versions):
+        """A file:// stand-in for the owner's GitHub: plugin manifests on the
+        default branch, and an installer published only for each pinned release.
+        Each installer drops a stub binary into its <APP>_INSTALL_DIR."""
+        github = self.root / "fake github"
+        manifests = {"devkit": ".claude-plugin/plugin.json", "mcpls": "plugin/.claude-plugin/plugin.json"}
+        for app, version in versions.items():
+            manifest = github / app / "raw/HEAD" / manifests[app]
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({"name": app, "version": version}))
+            release = github / app / "releases/download" / f"v{version}"
+            release.mkdir(parents=True)
+            prefix = f"${app.upper()}_INSTALL_DIR"
+            (release / f"{app}-installer.sh").write_text(
+                f'mkdir -p "{prefix}/bin"\n'
+                f"printf '#!/bin/sh\\necho \"$*\" >> \"$0.calls\"\\n' > \"{prefix}/bin/{app}\"\n"
+                f'chmod +x "{prefix}/bin/{app}"\n'
+            )
+        return github.as_uri()
+
+    def test_install_pins_releases_to_plugin_versions_and_stamps_bootstraps(self):
+        versions = {"devkit": "9.1.2", "mcpls": "9.3.4"}
+        home = self.root / "home"
+        prefixes = {app: self.root / f"{app} prefix" for app in versions}
+        result = self.run_script(
+            "cloud_setup.py", "--cloud", "--install",
+            CLOUD_SETUP_GITHUB=self.fake_github(versions), HOME=str(home), XDG_STATE_HOME=None,
+            DEVKIT_INSTALL_DIR=str(prefixes["devkit"]), MCPLS_INSTALL_DIR=str(prefixes["mcpls"]),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((prefixes["devkit"] / "bin/devkit.calls").read_text(), "install-links\n")
+        self.assertTrue((prefixes["mcpls"] / "bin/mcpls").is_file())
+        for app, version in versions.items():
+            stamp = home / ".local/state" / app / "bootstrap-version"
+            self.assertEqual(stamp.read_text(), f"{version}\n")
+
+    def test_install_requires_install_dirs(self):
+        for missing in ("DEVKIT_INSTALL_DIR", "MCPLS_INSTALL_DIR"):
+            with self.subTest(missing=missing):
+                dirs = {name: None if name == missing else str(self.root / name)
+                        for name in ("DEVKIT_INSTALL_DIR", "MCPLS_INSTALL_DIR")}
+                result = self.run_script(
+                    "cloud_setup.py", "--cloud", "--install",
+                    CLOUD_SETUP_GITHUB=(self.root / "no github").as_uri(), **dirs,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(missing, result.stderr)
+
     def test_startup_names_the_harness_task_tools(self):
         result = self.run_script("cloud_startup.py", cloud=True, CLOUD_AGENT_TYPE="claude")
         self.assertEqual(result.returncode, 0, result.stderr)
