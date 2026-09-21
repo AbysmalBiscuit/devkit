@@ -90,7 +90,7 @@ https://github.com/AbysmalBiscuit/devkit/releases/download/v1.2.3/devkit-config.
 
 Either beats pointing at `main`, which validates your config against keys no released binary accepts yet.
 
-The schema catches what config resolution would otherwise only report at run time, and only through `devkit config`: an `[apps.x]` without `base_port` or `launch`, a value of the wrong type, a task step that is neither `task` nor `up`, an unknown `ecosystem`. Three things it deliberately does not do:
+The schema catches what config resolution would otherwise only report at run time, and only through `devkit config`: an `[apps.x]` without `base_port` or `launch`, a value of the wrong type, a task step that is neither `task` nor `up`, an unknown `ecosystem`. What it leaves out, on purpose:
 
 - **Nothing is required at the top level, `[defaults]` included.** A layer carries only what it overrides, and devkit's own `devkit.toml` is `[harness]` and nothing else. An editor validates the file in front of it, so requiring `[defaults]` would mark correct overlays as errors.
 - **Unknown keys pass.** devkit ignores keys it does not recognise, so a schema that rejected them would be stricter than the parser. A misspelled `lock = false` still silently does nothing.
@@ -108,7 +108,7 @@ DEVKIT_UPDATE_SCHEMA=1 cargo test --test config_schema
 
 ## Example
 
-A whole config reads as more than its tables do separately. A test parses this one out of this page on every run, so it cannot drift.
+Every table in one config. A test parses this block out of this page on every run, so it stays valid.
 
 ```toml
 [defaults]

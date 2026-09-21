@@ -39,6 +39,6 @@ Genuinely absent: `docm add <package>` (registry lookup) or `docm add <git-url>`
 - When a `docm` error offers `--allow-default-branch`, stop and ask. It answers from the default branch instead of the version this project pins, which is the one thing this skill exists to prevent.
 - Re-run `docm info` every time. Versions differ per project, so a checkout path carried over from an earlier session points at the wrong one.
 - `docm path <lib>` prints just the path when that is all you need.
-- When a resolution fails, a checkout is missing from `prune`'s reach, or a name is refused, `references/docm.md` covers how versions resolve, what holds a checkout, and the reserved names.
+- `references/docm.md`: read it when a version fails to resolve, `prune` keeps a checkout you expected it to drop, or `docm` refuses a name.
 - Read another version's file straight out of the bare clone: `git -C <checkout> show <other-tag>:<path>`. Every tag is already there, so a version comparison is a lookup, not a recollection, and it needs no second checkout.
 - When a checkout looks wrong for reasons `docm` cannot see (an upstream repo whose root manifest is decoupled from its release tags, say), compare against the installed package under `node_modules` or the ecosystem's equivalent. That is ground truth for what actually runs.

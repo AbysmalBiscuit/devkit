@@ -151,7 +151,7 @@ Failure modes: with enforcement off the hook exits at once and takes no locks. W
 
 - The global-only keys are a boundary against a `devkit.toml` a project ships, not against your own environment: `$DEVKIT_CONFIG` can point anywhere, a repository included.
 - Redaction matches `LINEAR_API_KEY`, `LINEAR_WORKSPACE`, `SLACK_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` and the token prefixes of those services, replacing each with a placeholder naming its kind. It misses novel formats, credentials under other names, and anything read from a file. A `redacted` corpus is not safe to hand to a third party on that basis alone.
-- The runtime reads each `[harness]` key on its own so one bad key cannot break the rest, which means a misspelled key changes nothing and reports nothing. `devkit doctor`'s `harness_log` row shows the mode actually in force.
+- The runtime reads each `[harness]` key on its own so one bad key cannot break the rest, which means a misspelled key changes nothing and reports nothing. `devkit doctor`'s `harness_log` row shows the mode in force.
 
 ## `[tracker]` and `[github]`
 

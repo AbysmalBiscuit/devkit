@@ -39,7 +39,7 @@ Running `devkit` once installs the old command names (`portm`, `devrun`, `issue`
 | `devkit rules` / `devrules` | Query the rule index that write-time rule injection reads. |
 | `devkit config` / `devkit schema` | Print the merged config and where each value came from; print or install the config's JSON Schema. |
 
-`-h` is the authoritative flag list under every condition. `--help` matches it at a terminal but prints the whole command tree when piped, so one call shows an agent every verb; `--help --full` asks for the tree anywhere, and `DEVKIT_HELP=terse|full` pins either view. The behavior behind the flags (resolution rules, TTY gates, what refuses and why) is in the [`using-devkit` skill's references](skills/using-devkit/references/), which is where an agent reads it.
+`-h` always prints the full flag list. `--help` matches it at a terminal but prints the whole command tree when piped, so one call shows an agent every verb; `--help --full` asks for the tree anywhere, and `DEVKIT_HELP=terse|full` pins either view. The behavior behind the flags (resolution rules, TTY gates, what refuses and why) is in the [`using-devkit` skill's references](skills/using-devkit/references/), which is where an agent reads it.
 
 ## Coding agents
 

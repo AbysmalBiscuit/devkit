@@ -27,7 +27,7 @@ The command prints the identity behind the token devkit would send, names which 
 
 ## `brief`
 
-Prints the current checkout's devkit orientation — configured apps, the `[tasks]` table, this worktree's live servers, and registered library versions. The two halves are independent: a checkout with no devrun setup still gets the library table, and one evidencing no registered library still gets the rest. It prints **nothing** when neither applies. A config that fails to load is reported rather than swallowed, so a broken `devkit.toml` is diagnosable from the brief.
+Prints the current checkout's devkit orientation: configured apps, the `[tasks]` table, this worktree's live servers, and registered library versions. The two halves are independent: a checkout with no devrun setup still gets the library table, and one evidencing no registered library still gets the rest. It prints **nothing** when neither applies. A config that fails to load is reported rather than swallowed, so a broken `devkit.toml` is diagnosable from the brief.
 
 The plugin's `SessionStart` hook runs it so sessions start already knowing the project. Run it by hand to re-orient mid-session.
 
@@ -43,11 +43,7 @@ Which sections appear is config-driven: `[brief]` has `enabled`, `pins`, `locks`
 
 ## `schema`
 
-`devkit schema` prints the JSON Schema derived from the config types, so it is
-the authority on every key's name, type and default, and it cannot drift from
-what the binary accepts. Dump it when a key is in question. Each key's
-description names its env override where it has one. `references/config.md`
-carries how keys constrain one another.
+Each key's description in `devkit schema` names its env override where it has one. `references/config.md` covers how keys constrain one another.
 
 `devkit schema init` prepends the taplo header directive (`#:schema <url>` on the first line, *not* a `# $schema = "..."` key) to the config at `<path>`, defaulting to `devkit.toml`. It writes a fully-commented starter when the file does not exist, and leaves a file that already names a schema alone.
 
