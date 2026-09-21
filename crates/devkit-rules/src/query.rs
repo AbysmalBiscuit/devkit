@@ -47,7 +47,7 @@ pub fn relativize(root: &Path, target: &Path) -> Option<String> {
 
 /// Lexical `..` and `.` resolution. Purely textual: the target of a write need
 /// not exist yet, so asking the filesystem is not available.
-fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut stack: Vec<Component> = Vec::new();
     for component in path.components() {
         match component {

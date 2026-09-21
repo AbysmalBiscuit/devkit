@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use devkit_config::ContextFile;
 
-use crate::query::{governs, relativize};
+use crate::query::{governs, normalize, relativize};
 
 /// What a tool call is about to do, as the matcher sees it.
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub struct Subject {
 pub fn relativize_target(root: &Path, target: &Path) -> Option<String> {
     relativize(root, target).or_else(|| {
         let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-        relativize(&root, &canonicalize_prefix(target))
+        relativize(&root, &canonicalize_prefix(&normalize(target)))
     })
 }
 
@@ -101,6 +101,17 @@ mod tests {
         assert_eq!(
             relativize_target(Path::new("/repo"), Path::new("/repo/src/a.rs")).as_deref(),
             Some("src/a.rs")
+        );
+    }
+
+    #[test]
+    fn relativize_target_resolves_parent_components_under_a_nonexistent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let target = dir.path().join("crates/bar/../foo/a.rs");
+        assert_eq!(
+            relativize_target(&root, &target).as_deref(),
+            Some("crates/foo/a.rs")
         );
     }
 
