@@ -136,8 +136,10 @@ fn living_docs_link_only_to_what_exists() {
 #[test]
 fn anchors_follow_github_slug_rules() {
     let md = "# `[harness.log]`\n## `devrun down` scope\n## Tasks\n## Tasks\n";
-    assert_eq!(
-        anchors(md),
-        ["harnesslog", "devrun-down-scope", "tasks", "tasks-1"]
-    );
+    assert_eq!(anchors(md), [
+        "harnesslog",
+        "devrun-down-scope",
+        "tasks",
+        "tasks-1"
+    ]);
 }
