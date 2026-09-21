@@ -1,6 +1,6 @@
 # devkit
 
-A Rust workspace (edition 2024) that coordinates many concurrent local dev sessions, human and agent, on one machine: port and file-lock registries, a dev-server supervisor, issue worktrees, and the hooks coding agents call. The engine is project-agnostic; everything project-specific lives in `devkit.toml`. User-facing reference: `docs/commands.md` and `docs/configuration.md`.
+A Rust workspace (edition 2024) that coordinates many concurrent local dev sessions, human and agent, on one machine: port and file-lock registries, a dev-server supervisor, issue worktrees, and the hooks coding agents call. The engine is project-agnostic; everything project-specific lives in `devkit.toml`. User-facing reference: `devkit schema` for config keys, each command's `-h` for flags, and `skills/using-devkit/references/` for behavior. `docs/configuration.md` covers layering and setup.
 
 ## Commands
 
@@ -51,6 +51,7 @@ Each rule's reasoning is documented at the named site. Read it before changing t
 - `anyhow` with `.context()` for errors.
 - Project-specific values come from config, never from code. Tokens resolve through `devkit_common::secrets`.
 - Every user-facing verb is a `devkit` subcommand.
+- Each fact has one home, and that home is generated or loaded: a config key's meaning is the doc comment on its field (it becomes the schema description), a flag's is its clap help, and behavior an agent needs goes in the skill references. `docs/` restates none of them.
 - A config type's `devkit.toml` example is a doctest on that type. `schema/devkit-config.json` is committed; regenerate it with `DEVKIT_UPDATE_SCHEMA=1 cargo test`.
 - Help text stays ASCII (see `src/completions.rs`).
 - Conventional Commits.

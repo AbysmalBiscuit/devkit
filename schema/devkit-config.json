@@ -11,7 +11,7 @@
           "type": "integer"
         },
         "launch": {
-          "description": "The complete launch command as one argv, run verbatim — devkit builds no\nprefix of its own, so any `doppler run -c <config> --` wrapper belongs\nhere. Rendered as minijinja over `{{ port }}`, `ports['<app>']`, and\n`[templates.variables]`.",
+          "description": "The complete launch command as one argv, run verbatim. devkit builds no\nprefix of its own, so any `doppler run -c <config> --` wrapper belongs\nhere, and a Doppler launch whose config resolves to `prd` (or cannot be\nresolved) is refused. Rendered as strict minijinja over `{{ port }}`,\n`ports['<app>']` (another app's port, reserved if it is not running),\nand `[templates.variables]`. A leftover `{port}` fails the launch.",
           "items": {
             "type": "string"
           },
@@ -19,7 +19,7 @@
         },
         "path": {
           "default": null,
-          "description": "App subdirectory relative to the repo root, when it differs from the\napp's own name. Required unless `defaults.doppler_yaml` infers it.",
+          "description": "App subdirectory relative to the repo root, when it differs from the\napp's own name. Required unless `defaults.doppler_yaml` infers it, and\nwins over the inferred path when set.",
           "type": [
             "string",
             "null"
@@ -27,7 +27,7 @@
         },
         "prep_files": {
           "default": [],
-          "description": "Files written into the app's directory during `issue setup` (before\n`setup`).",
+          "description": "Files written into the app's directory during `issue setup`, before\n`setup` runs. A deeper layer's list replaces this one whole.",
           "items": {
             "$ref": "#/$defs/PrepFile"
           },
@@ -35,7 +35,7 @@
         },
         "provides_url": {
           "default": false,
-          "description": "This app serves the URL that consumer apps wire to via their `url_env`.\nExactly one app (the API) is normally marked; consumers reference it by\nrole, not by a hardcoded name.",
+          "description": "This app serves the URL that consumer apps wire to via their `url_env`.\nExactly one app should be marked. `devrun up` of a consumer brings the\nprovider up too.",
           "type": "boolean"
         },
         "setup": {
@@ -59,7 +59,7 @@
         },
         "url": {
           "default": null,
-          "description": "Address the app serves on, as a template over the same variables as\n`launch` (`{{ port }}`, `ports['<app>']`, `[templates.variables]`).\nDefaults to `DEFAULT_APP_URL`; set it for an app that serves https, a\ncustom host, or a path prefix — devkit never terminates TLS itself.",
+          "description": "Address the app serves on, as a template over the same variables as\n`launch`. Defaults to `http://localhost:{{ port }}`; set it for https, a\ncustom host, or a path prefix. It is what `devrun up` prints and what\nthe provider wires into consumers. devkit never terminates TLS, and\nreadiness stays a TCP probe of the port.",
           "type": [
             "string",
             "null"
@@ -117,7 +117,7 @@
         },
         "enabled": {
           "default": true,
-          "description": "The whole brief.",
+          "description": "The whole brief, read before any work is done. A malformed `[brief]`\ntable falls back to the defaults rather than withholding the brief.",
           "type": "boolean"
         },
         "locks": {
@@ -143,7 +143,8 @@
       "properties": {
         "action": {
           "$ref": "#/$defs/RuleAction",
-          "default": "block"
+          "default": "block",
+          "description": "`block` refuses the command; `warn` allows it and shows the reason. A\nrule whose arguments cannot be resolved (`git \"$verb\" add`) warns."
         },
         "args": {
           "default": [],
@@ -173,7 +174,8 @@
         },
         "severity": {
           "$ref": "#/$defs/Severity",
-          "default": "error"
+          "default": "error",
+          "description": "How the message is classified for the agent."
         }
       },
       "type": "object"
@@ -221,73 +223,73 @@
       "properties": {
         "enabled": {
           "default": false,
-          "description": "Run gate: autostart the daemon only when true (or via DEVKIT_DAEMON=1 /\n--supervise).",
+          "description": "Run gate: autostart the daemon only when true, `DEVKIT_DAEMON=1` is\nset, or `--supervise` is passed.",
           "type": "boolean"
         },
         "health_fail_threshold": {
           "default": 3,
-          "description": "Consecutive post-arming probe failures before a server is judged hung.",
+          "description": "Consecutive probe failures, after the server first answers, before it\nis judged hung. Env: `DEVKIT_DAEMON_HEALTH_FAIL_THRESHOLD`.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
         },
         "health_probe_secs": {
           "default": 0,
-          "description": "Health-probe interval in seconds; 0 disables probing (no probe thread).",
+          "description": "Health-probe interval in seconds; 0 disables probing (no probe thread).\nA server judged hung is SIGTERMed and respawned through the crash path.\nEnv: `DEVKIT_DAEMON_HEALTH_PROBE_SECS`.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "idle_timeout_secs": {
           "default": 1800,
-          "description": "Exit after this many idle seconds with zero clients AND zero supervised\nchildren.",
+          "description": "Exit after this many idle seconds with zero clients AND zero supervised\nchildren. Env: `DEVKIT_DAEMON_IDLE_SECS`.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "max_restarts": {
           "default": 5,
-          "description": "Crash-loop guard: restarts allowed within `restart_window_secs`.",
+          "description": "Crash-loop guard: restarts allowed within `restart_window_secs`. Every\nrestart path (crash, health probe, memory) spends this one budget.\nEnv: `DEVKIT_DAEMON_MAX_RESTARTS`.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
         },
         "memory_action": {
           "default": "warn",
-          "description": "Action when tree-RSS crosses `memory_limit_mb`: \"warn\" (log a line) or\n\"restart\" (SIGTERM and let the crash path respawn). Any other value\nfalls back to warn.",
+          "description": "Action when tree-RSS crosses `memory_limit_mb`: \"warn\" (log a line) or\n\"restart\" (SIGTERM and let the crash path respawn). Any other value\nfalls back to warn. Env: `DEVKIT_DAEMON_MEMORY_ACTION`.",
           "type": "string"
         },
         "memory_limit_mb": {
           "default": 0,
-          "description": "Take `memory_action` past this tree-RSS in MB (0 = off).",
+          "description": "Take `memory_action` past this tree-RSS in MB (0 = off). A restart needs\n`memory_action = \"restart\"`. Env: `DEVKIT_DAEMON_MEM_LIMIT_MB`.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "memory_limit_ticks": {
           "default": 3,
-          "description": "Consecutive supervision ticks at or over `memory_limit_mb` before the\nrestart action fires (debounces transient allocation spikes).",
+          "description": "Consecutive supervision ticks at or over `memory_limit_mb` before the\nrestart action fires (debounces transient allocation spikes). A tick\nis 500 ms.\nEnv: `DEVKIT_DAEMON_MEM_LIMIT_TICKS`.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
         },
         "memory_max_mb": {
           "default": 0,
-          "description": "Hard kernel memory ceiling per supervised tree, in MB (0 = off,\nLinux-only). Enforced via a cgroup-v2 leaf with memory.max; a breach\nOOM-kills the tree and the crash path respawns it. Set above\nmemory_limit_mb so the soft poll-based action stays the graceful first\nresponder. Falls back to the soft action where cgroup-v2 delegation is\nunavailable.",
+          "description": "Hard kernel memory ceiling per supervised tree, in MB (0 = off,\nLinux-only). A breach OOM-kills the tree and the crash path respawns it.\nSet above memory_limit_mb. Needs a delegated cgroup-v2 subtree, which\n`devkitd install-service` sets up; without one it warns once and falls\nback to the soft action. Env: `DEVKIT_DAEMON_MEM_MAX_MB`.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "memory_warn_mb": {
           "default": 0,
-          "description": "Log a loud line past this supervised tree-RSS in MB (0 = off).",
+          "description": "Log a loud line past this supervised tree-RSS in MB (0 = off). Warns\nonly; it restarts nothing. Env: `DEVKIT_DAEMON_MEM_WARN_MB`.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "restart_window_secs": {
           "default": 60,
-          "description": "Length of the sliding window the `max_restarts` budget is counted over.",
+          "description": "Length of the sliding window the `max_restarts` budget is counted over.\nEnv: `DEVKIT_DAEMON_RESTART_WINDOW`.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -305,12 +307,12 @@
         },
         "baseline_dir": {
           "default": "",
-          "description": "Directory baseline worktrees are created under, one per fork-point\ncommit. `~` is expanded. Names a location on this machine, so a relative\nvalue anchors to the directory of the layer that declared it. Defaults\nto `_baselines` under `worktree_root`.",
+          "description": "Directory baseline worktrees are created under, one per fork-point\ncommit, each made on demand. Anchors like `worktree_root`. Defaults to\n`_baselines` under `worktree_root`. `devrun baseline prune` reclaims\nonly directories carrying devkit's `.devkit/baseline.toml` marker, and\nonly once no worktree's `.devkit/issue.toml` names them.",
           "type": "string"
         },
         "baseline_ref": {
           "default": "",
-          "description": "Git ref the baseline server tracks, e.g. `origin/staging`.",
+          "description": "Git ref the baseline server tracks, e.g. `origin/staging`. Defaults to\nthe remote's default branch from `origin/HEAD`; when neither resolves,\nset this or run `git remote set-head origin -a`.",
           "type": "string"
         },
         "branch_prefix": {
@@ -320,7 +322,7 @@
         },
         "doppler_yaml": {
           "default": "",
-          "description": "Path to the repo's `doppler.yaml`; its `setup` paths seed app path\ninference. `~` is expanded. Names a file inside the repository being\nworked on, so a relative value anchors to the checkout reading the\nconfig rather than to the layer that declared it — each worktree\nresolves its own copy. Leave empty and every app needs its own\n`path`.",
+          "description": "Path to the repo's `doppler.yaml`; its `setup` paths seed app path\ninference. Names a file inside the repository, so a relative value\nanchors to the checkout reading the config: each worktree resolves its\nown copy. Leave empty and every app needs its own `path`.",
           "type": "string"
         },
         "ignored_checks": {
@@ -333,12 +335,12 @@
         },
         "issue_summary": {
           "default": false,
-          "description": "Write the issue summary file on every `issue setup`, as though\n`--summary` were passed. `--summary` / `--no-summary` still win for one\nrun. Off by default.",
+          "description": "Write the issue summary file on every `issue setup`, as though\n`--summary` were passed. `--summary` / `--no-summary` still win for one\nrun. Its path and body come from `templates.issue_summary_path` and\n`templates.issue_summary`.",
           "type": "boolean"
         },
         "pr_base": {
           "default": "main",
-          "description": "Base branch used when opening PRs (e.g. \"main\", \"staging\").",
+          "description": "Base branch `issue pr create` opens PRs against (e.g. \"main\",\n\"staging\"). `--base` overrides it for one run.",
           "type": "string"
         },
         "pr_create_state": {
@@ -361,7 +363,7 @@
         },
         "worktree_include": {
           "default": [],
-          "description": "Glob patterns (relative to the primary checkout's root) for untracked\nlocal files to copy into a newly created worktree. Each match is copied\nto the same relative path; a match that is a directory (or a pattern\nending in `/`) is copied recursively. Existing destinations are left\nalone, and only `issue sync-includes --overwrite` replaces them. Empty\nby default — the backfill is opt-in.",
+          "description": "Glob patterns (relative to the primary checkout's root) for untracked\nlocal files `issue setup` and `issue pr checkout` copy into a new\nworktree, and `issue sync-includes` into existing ones. A directory\nmatch or a trailing `/` copies recursively; a symlink is reproduced as a\nlink. Existing destinations are left alone, and a failed copy warns.\nAnchor patterns (`apps/*/.env.local`): `**` descends into\n`node_modules`.",
           "items": {
             "type": "string"
           },
@@ -369,7 +371,7 @@
         },
         "worktree_root": {
           "default": "",
-          "description": "Directory issue worktrees are created under. `~` is expanded. Names a\nlocation on this machine, so a relative value anchors to the\ndirectory of the config layer that declared it, even when that layer\nis the repository's main checkout.",
+          "description": "Directory issue worktrees are created under. Names a location on this\nmachine, so a relative value anchors to the directory of the config\nlayer that declared it, even when that layer is the repository's main\ncheckout. Defaults to the primary checkout's `_worktrees` sibling, e.g.\n`~/git/example_worktrees` beside `~/git/example`.",
           "type": "string"
         }
       },
@@ -463,7 +465,7 @@
       "properties": {
         "issues_repo": {
           "default": null,
-          "description": "Repository holding the issues, e.g. `org/planning`.",
+          "description": "Repository holding the issues, e.g. `org/planning`. Defaults from an\n`origin` remote that reaches github.com (an ssh alias is resolved with\n`ssh -G`); otherwise the error names this key.",
           "type": [
             "string",
             "null"
@@ -471,7 +473,7 @@
         },
         "pr_repo": {
           "default": null,
-          "description": "Repository pull requests are opened against, e.g. `upstream/app`.",
+          "description": "Repository pull requests are opened against, e.g. `upstream/app`.\nDefaults like `issues_repo`. `issue prs --repo` overrides it for one\nrun, and an ambient `GH_REPO` never does.",
           "type": [
             "string",
             "null"
@@ -485,23 +487,23 @@
       "properties": {
         "app_match": {
           "$ref": "#/$defs/AppMatch",
-          "description": "How the guard resolves a guarded command to one of `[apps]`."
+          "description": "How the guard resolves a guarded command to one of `[apps]`, from a\nworkspace path in the command, a `--filter`/`--dir`/`-C` value, or the\nshell's directory."
         },
         "commands": {
           "additionalProperties": {
             "$ref": "#/$defs/CommandRule"
           },
-          "description": "Extra refusals beyond the ones devkit derives from `[apps]` and\n`[tasks]`. Merged across config layers like every other table.",
+          "description": "Extra refusals beyond the ones devkit derives from `[apps]` and\n`[tasks]`. Merged across config layers by name; redefining a rule\noverrides only the keys it sets.",
           "type": "object"
         },
         "enforce_commands": {
           "default": false,
-          "description": "Refuse shell commands devkit already has a wired-up path for.",
+          "description": "Refuse shell commands devkit already has a wired-up path for: a\n`[harness.commands]` rule, a retyped task, an app's launch, or a known\ndev server. devkit's own binaries always run. Fails open.\n`DEVKIT_ENFORCE_COMMANDS` overrides it.",
           "type": "boolean"
         },
         "enforce_writes": {
           "default": false,
-          "description": "Refuse writes to paths this checkout has not claimed with `lockm`.",
+          "description": "Claim a lock on every file an agent's edit or resolvable shell write\ntouches, and deny a write another session holds. On when\n`DEVKIT_ENFORCE_WRITES` says so, else when any project layer or the\nglobal config sets it. Fails closed on a registry error.",
           "type": "boolean"
         },
         "log": {
@@ -520,7 +522,7 @@
         "script_files": {
           "$ref": "#/$defs/PolicyAction",
           "default": "allow",
-          "description": "A call to a stored script, whose contents are not read."
+          "description": "A call to a stored script (`python3 tools/gen.py`), whose contents are\nnot read."
         },
         "shell": {
           "$ref": "#/$defs/ShellSetting",
@@ -530,12 +532,12 @@
         "unresolved_writes": {
           "$ref": "#/$defs/PolicyAction",
           "default": "block",
-          "description": "A write whose target could not be determined."
+          "description": "A write, or code that may write, whose target could not be determined.\nClaiming some other path never covers it."
         },
         "unsupported_language": {
           "$ref": "#/$defs/PolicyAction",
           "default": "block",
-          "description": "Executable source in a language devkit cannot analyze."
+          "description": "Executable source in a language devkit cannot analyze, such as\n`perl -e` or `ruby -e`. An `awk` program counts only when it could\nwrite."
         }
       },
       "type": "object"
@@ -545,7 +547,7 @@
       "properties": {
         "after_end": {
           "default": [],
-          "description": "Runs once at the end of an `issue end` run that removed at least one\nworktree, after every `after_worktree_remove` hook, in the main\nrepository root. A run-level event: it carries `removed` (the removed\nworktree paths, in the order they were confirmed), `count`, `prefix`,\n`worktree_root`, `primary`, and `[templates.variables]`, and none of\nthe single-worktree keys.",
+          "description": "Runs once at the end of an `issue end` run that removed at least one\nworktree, after every `after_worktree_remove` hook, in the main\nrepository root. It carries `removed` (the removed paths, in confirmed\norder, rendered as one argv slot), `count`, `prefix`, `worktree_root`,\n`primary`, and `[templates.variables]`, and none of the single-worktree\nkeys.",
           "items": {
             "items": {
               "type": "string"
@@ -556,7 +558,7 @@
         },
         "after_worktree_create": {
           "default": [],
-          "description": "Runs once in the root of a worktree `issue setup` or\n`issue pr checkout` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `issue`, `slug`,\n`apps`, `prefix`, and `[templates.variables]`.",
+          "description": "Runs once in the root of a worktree `issue setup` or\n`issue pr checkout` has just created, after its apps are prepared and\nafter the command has reported the worktree. Each argv element is\nrendered as minijinja over `worktree`, `branch`, `issue`, `slug`,\n`apps`, `prefix`, `role`, and `[templates.variables]`. Output is\ndiscarded, so the command's JSON stays the last line on stdout.",
           "items": {
             "items": {
               "type": "string"
@@ -567,7 +569,7 @@
         },
         "after_worktree_remove": {
           "default": [],
-          "description": "Runs once per worktree `issue end` removed, after every removal in the\nrun has finished and the stale worktree entries are pruned. The\nworktree is gone by then, so these run in the main repository root;\n`issue`, `slug` and `apps` come from the `.devkit/issue.toml` record\nread before the removal. Rendered over `worktree`, `branch`, `issue`,\n`slug`, `apps`, `prefix`, `worktree_root`, `primary`, and\n`[templates.variables]`.",
+          "description": "Runs once per worktree `issue end` removed, after every removal in the\nrun has finished, in the main repository root. `issue`, `slug` and\n`apps` come from the `.devkit/issue.toml` record read before the\nremoval. Rendered over `worktree`, `branch`, `issue`, `slug`, `apps`,\n`prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A\nworktree kept back or skipped fires nothing.",
           "items": {
             "items": {
               "type": "string"
@@ -616,7 +618,7 @@
           "type": "string"
         },
         "notes": {
-          "description": "Freeform note surfaced by `docm info` and `docm list` — what this\nlibrary is here for.",
+          "description": "Freeform note surfaced by `docm info` and `docm list`: what this\nlibrary is here for.",
           "type": [
             "string",
             "null"
@@ -661,7 +663,7 @@
       "properties": {
         "resolve_pr_links": {
           "default": false,
-          "description": "Query Linear for the issues linked to each PR in `issue prs` (one\nextra batched round trip per run). Off by default.",
+          "description": "Query Linear for the issues linked to each PR in `issue prs` and the\n`issue.prs` MCP action, adding every linked id to the ISSUE column. One\nextra batched round trip per 25 PRs. Fail-soft: with no key or on a\nLinear error the column keeps the id derived from the PR text.",
           "type": "boolean"
         }
       },
@@ -688,7 +690,7 @@
             }
           ],
           "default": null,
-          "description": "How much of a command's text a record carries."
+          "description": "How much of a command's text a record carries, `redacted` by default.\nResolves to the lowest value any layer sets, so no project can raise\nit. Redaction is best effort: it catches the credential variables devkit\nknows and the token prefixes of services it talks to, nothing more."
         },
         "dir": {
           "default": null,
@@ -700,7 +702,7 @@
         },
         "enabled": {
           "default": null,
-          "description": "Turn logging on. Read from the global config alone.",
+          "description": "Turn logging on. Read from the global config alone; a project layer\nmay only set it false. `DEVKIT_HARNESS_LOG` wins over both.",
           "type": [
             "boolean",
             "null"
@@ -708,7 +710,7 @@
         },
         "max_age_days": {
           "default": null,
-          "description": "Days of records to keep. Global config only; absent means unlimited.",
+          "description": "Days of records to keep. Global config only; absent means unlimited,\nand `0` is rejected as ambiguous.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -718,7 +720,7 @@
         },
         "max_bytes": {
           "default": null,
-          "description": "Bytes of records to keep. Global config only; absent means unlimited.",
+          "description": "Bytes of records to keep. Global config only; absent means unlimited,\nand `0` is rejected as ambiguous.",
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -736,7 +738,7 @@
             }
           ],
           "default": null,
-          "description": "How much of a submitted prompt a record carries."
+          "description": "How much of a submitted prompt a record carries, `off` by default.\nResolves to the lowest value any layer sets."
         }
       },
       "type": "object"
@@ -746,7 +748,7 @@
       "properties": {
         "enabled": {
           "default": true,
-          "description": "Whether the server offers its tools. Off, it still answers the\nhandshake but lists no tools and refuses every call.",
+          "description": "Whether the server offers its tools. Off, it still answers the\nhandshake but lists no tools and refuses every call. Read once at\nstartup from the directory the harness started it in, so a change lands\non the next session or reconnect. A config that fails to load leaves it\non.",
           "type": "boolean"
         }
       },
@@ -757,7 +759,7 @@
       "properties": {
         "threads": {
           "default": null,
-          "description": "Threads in the pool devkit shares across its parallel work. The\n`DEVKIT_THREADS` environment variable wins over this; leaving it unset\ntakes the pool's own default. Zero is refused rather than clamped,\nbecause rayon reads a zero thread count as one thread per core.",
+          "description": "Threads in the pool devkit shares across its parallel work, 4 when\nunset. `DEVKIT_THREADS` wins over this; an unparseable or zero value\nthere is ignored. Zero is refused here rather than clamped, because\nrayon reads a zero thread count as one thread per core. Raising it\nhelps most where a stat is slow, such as a Windows drive under WSL.",
           "format": "uint",
           "minimum": 1,
           "type": [
@@ -769,7 +771,7 @@
       "type": "object"
     },
     "Person": {
-      "description": "A team member's handle mapping (Slack user-id, GitHub login, etc.).\n\n```toml\n[people.alice]\nslack  = \"U0XXXXXXXXX\"\ngithub = \"alice-gh\"\n```",
+      "description": "A team member's handle mapping (Slack user-id, GitHub login, etc.). No\ntoken lives here: `SLACK_TOKEN` resolves from the environment or\n`~/.config/devkit/secrets.toml`.\n\n```toml\n[people.alice]\nslack  = \"U0XXXXXXXXX\"\ngithub = \"alice-gh\"\n```",
       "properties": {
         "github": {
           "default": null,
@@ -825,10 +827,10 @@
       ]
     },
     "PrepFile": {
-      "description": "A file written into an app's directory during `issue setup`, before the\napp's `setup` commands run. `content` is written verbatim — no format\nassembly or newline injection. Parent directories are created. Existing\nfiles are left untouched unless `overwrite` is set.\n\n```toml\n[apps.web]\nbase_port = 4100\nlaunch    = [\"next\", \"dev\", \"-p\", \"{{ port }}\"]\n\n[[apps.web.prep_files]]\npath    = \".env.local\"\ncontent = \"\"\"\nSOME_FEATURE_FLAG=dummy\n\"\"\"\n```",
+      "description": "A file written into an app's directory during `issue setup`, before the\napp's `setup` commands run. Parent directories are created. Existing files\nare left untouched unless `overwrite` is set.\n\n```toml\n[apps.web]\nbase_port = 4100\nlaunch    = [\"next\", \"dev\", \"-p\", \"{{ port }}\"]\n\n[[apps.web.prep_files]]\npath    = \".env.local\"\ncontent = \"\"\"\nSOME_FEATURE_FLAG=dummy\n\"\"\"\n```",
       "properties": {
         "content": {
-          "description": "File contents, written byte-for-byte.",
+          "description": "File contents, rendered as minijinja over `prefix`, `issue`, `slug`,\n`apps`, `app`, `branch`, `worktree`, `role` and `[templates.variables]`,\nthen written with no newline added. Emit a literal `{{` with\n`{% raw %}...{% endraw %}`.",
           "type": "string"
         },
         "overwrite": {
@@ -849,10 +851,10 @@
     },
     "PreserveConfig": {
       "additionalProperties": false,
-      "description": "Files copied out of a worktree before `issue end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. Rendering, path rules, and the fail-open contract are in\n`docs/configuration.md`.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ issue }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ issue }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
+      "description": "Files copied out of a worktree before `issue end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. A failure warns and the worktree goes anyway, unless the\nentry is `required`.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ issue }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ issue }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
       "properties": {
         "from": {
-          "description": "Glob patterns for the files to copy, relative to the worktree root and\nrendered as minijinja. A pattern that renders empty is skipped; one that\nmatches nothing is not a failure.",
+          "description": "Glob patterns for the files to copy, relative to the worktree root and\nrendered as minijinja. Name a directory (`.scratch/`) to archive its\nwhole tree. A pattern that could reach outside the worktree is skipped\nwith a warning; one that matches nothing is not a failure.",
           "items": {
             "type": "string"
           },
@@ -860,11 +862,11 @@
         },
         "required": {
           "default": false,
-          "description": "Keep the worktree instead of removing it when this entry warns.",
+          "description": "Keep the worktree, its branch and its summary when this entry warns,\nand exit non-zero. Governs errors only, never an empty match.",
           "type": "boolean"
         },
         "to": {
-          "description": "Destination directory, rendered as minijinja. Must render to a non-empty\nabsolute path. It is created when the first file lands in it, so an\nentry that matches nothing leaves no directory behind.",
+          "description": "Destination directory, rendered as minijinja over `worktree`, `branch`,\n`issue`, `slug`, `apps`, `prefix`, `worktree_root`, `primary` and\n`[templates.variables]`. Must render to a non-empty absolute path\noutside every worktree the run removes. Created when the first file\nlands; an existing file there is replaced.",
           "type": "string"
         }
       },
@@ -893,7 +895,7 @@
       ]
     },
     "Required": {
-      "description": "Who must supply an `--arg` even though a default exists. `Never` is the\nabsence of a marking, not a licence to omit: the derived rule (an arg with\nno default is required) is a floor this enum sits on top of and cannot\nlower. `Never` is therefore meaningful only as a task-level override of a\nvariable-level marking.",
+      "description": "Who must supply an `--arg` even though a default exists. `Never` is the\nabsence of a marking, not a licence to omit: the derived rule (an arg with\nno default is required) is a floor this enum sits on top of and cannot\nlower. `Never` is therefore meaningful only as a task-level override of a\nvariable-level marking. Who counts as an agent is `DEVKIT_CALLER`, then a\nharness session variable, then a non-terminal stdin.",
       "enum": [
         "never",
         "humans",
@@ -963,7 +965,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Renders, then splits on `on` into a run of separate arguments. A\ntemplate rendering empty contributes no arguments at all.",
+          "description": "Renders, then splits on `on` (never empty) into a run of separate\narguments. A template rendering empty contributes no arguments at all.\nSplits come last in `run`, after at least two plain entries, or the\ncommand guard cannot recognize the task.",
           "properties": {
             "on": {
               "type": "string"
@@ -991,7 +993,7 @@
       "type": "string"
     },
     "ShellSetting": {
-      "description": "The shell whose syntax a hook command is read in. `auto` resolves from\nthe tool name and the harness; see `docs/configuration.md`.",
+      "description": "The shell whose syntax a hook command is read in. `auto` reads Claude\nCode's `PowerShell` tool and Codex on Windows as PowerShell, and everything\nelse as bash. The hook process's own `SHELL` and `MSYSTEM` are never read.",
       "enum": [
         "auto",
         "bash",
@@ -1054,7 +1056,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Env vars set for this task, layered over the app's `static_env` and\nunder the CLI's `--env-file` and `--env`.",
+          "description": "Env vars set for this task, rendered like `run`, layered over the app's\n`static_env` and under the CLI's `--env-file` and `--env`. Tasks get no\n`url_env` wiring; reference the app through `ports[...]`.",
           "type": "object"
         },
         "guard": {
@@ -1067,7 +1069,7 @@
         },
         "require_live": {
           "default": [],
-          "description": "Apps whose server must be live in this worktree when the task executes.\nEach name must be referenced by the task's templates via `ports[...]`;\na user `--env` override of every referencing value waives the check.",
+          "description": "Command tasks only: apps whose server must be live in this worktree\nwhen the task executes. Each name must be referenced through\n`ports['<app>']` (not `{{ port }}`); an `--env` override of every value\nreferencing it waives the check and the allocation. References in\n`run` cannot be overridden.",
           "items": {
             "type": "string"
           },
@@ -1078,12 +1080,12 @@
             "$ref": "#/$defs/Required"
           },
           "default": {},
-          "description": "Args this task requires beyond what `[templates.variables]` markings\nsay, as name to marking. A task entry beats a variable entry, including\nrelaxing one to `never`. Neither can lower the derived floor: an arg\nwith no default is required whatever this says. Each name must be an\narg the task reads.",
+          "description": "Args this task requires beyond what `[templates.variables]` markings\nsay, as name to marking. A task entry beats a variable entry, including\nrelaxing one to `never`. Neither can lower the derived floor: an arg\nwith no default is required whatever this says. Each name must be an\narg the task reads. A sequence step inherits its task's markings.",
           "type": "object"
         },
         "run": {
           "default": [],
-          "description": "The command as one argv (program + args), every entry a minijinja\ntemplate over `{{ port }}`, `ports['<app>']`, and\n`[templates.variables]`. A `{ split = \"...\", on = \"...\" }` entry spreads\nits rendered value into separate arguments. The program must be a plain\nstring. Mutually exclusive with `steps`.",
+          "description": "The command as one argv (program + args), run in the foreground with\nits exit code propagated. Every entry is a minijinja template over\n`{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `issue`,\n`slug`, `branch` from the worktree; any other name read is an arg of\nthe task, required unless a variable supplies a default. The program\nmust be a plain string. Mutually exclusive with `steps`.",
           "items": {
             "$ref": "#/$defs/RunArg"
           },
@@ -1091,7 +1093,7 @@
         },
         "steps": {
           "default": [],
-          "description": "A sequence run in order, each step either a command or an `up`. Each\nstep re-resolves its ports immediately before it runs. Mutually\nexclusive with `run`.",
+          "description": "A sequence run in order, stopping at the first failure, each step a\ncommand task or an `up`. Each step re-resolves its ports and gates\nimmediately before it runs. A sequence sets only `description` and\n`steps`, and cannot name another sequence. Mutually exclusive with\n`run`.",
           "items": {
             "$ref": "#/$defs/Step"
           },
@@ -1104,14 +1106,14 @@
       "description": "Config-driven minijinja templates for the issue-lifecycle strings. Each\n`None` field falls back to its `DEFAULT_*` constant, which reproduces the\nhistorical hardcoded output. `variables` are user constants merged under\nevery render context.\n\n```toml\n[templates]\nbranch             = \"{{ prefix }}{{ issue }}-{{ slug }}\"\nworktree_dir       = \"{{ slug }}\"\npr_title           = \"{{ issue }}: {{ input }}\"\npr_body            = \"Closes {{ issue }}.\\n\\n{{ input }}\"\nissue_summary_path = \"{{ worktree }}/.devkit/issue.md\"\n\n[templates.variables]\nteam = \"platform\"\n```\n\n`issue_summary_path` renders `{{ worktree }}` here, which keeps the summary\ninside the worktree where a `[preserve]` pattern can name it; left relative\nit is taken from `defaults.worktree_root` instead.",
       "properties": {
         "branch": {
-          "description": "Branch name created by `issue setup`. Context: `prefix`, `issue`,\n`slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.",
+          "description": "Branch name created by `issue setup`. Context: `prefix`, `issue`,\n`slug`, `short_slug`, `apps`. Defaults to `{{ prefix }}{{ slug }}`.",
           "type": [
             "string",
             "null"
           ]
         },
         "branch_max": {
-          "description": "Longest branch `issue setup` will render. A derived slug is shortened on\na word boundary to fit. A template whose fixed text already fills this\nyields the shortest slug still worth reading rather than an error, since\na git ref has no hard length limit. Defaults to 46.",
+          "description": "Longest branch `issue setup` will render. A derived slug is shortened on\na word boundary to fit. A template whose fixed text already fills this\nyields the shortest slug still worth reading rather than an error, since\na git ref has no hard length limit. `short_slug` is not measured by it.\nDefaults to 46.",
           "format": "uint",
           "minimum": 0,
           "type": [
@@ -1120,7 +1122,7 @@
           ]
         },
         "checkout_worktree_dir": {
-          "description": "Worktree directory name created by `issue pr checkout`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title` — titles are\nslugified, and the `linear_*` names are historical: they carry\nwhichever tracker's id and title resolved, and are empty on the\nPR-only path.",
+          "description": "Worktree directory name created by `issue pr checkout`. Context:\n`pr_number`, `pr_title`, `linear_id`, `linear_title`. Titles are\nslugified, and the `linear_*` names are historical: they carry\nwhichever tracker's id and title resolved, and are empty on the\nPR-only path. Defaults to `{{ pr_number }}-{{ pr_title }}`, plus\n`_[{{ linear_id }}]` when reached through an issue.",
           "type": [
             "string",
             "null"
@@ -1136,7 +1138,7 @@
           ]
         },
         "issue_summary": {
-          "description": "Body of the file `issue setup --summary` writes. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps` — every Linear field is the empty string when Linear\nhas nothing there.",
+          "description": "Body of the file `issue setup --summary` writes. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps`. A field the tracker left empty renders as the empty\nstring, so `{% if parent %}` drops its line.",
           "type": [
             "string",
             "null"
@@ -1150,14 +1152,14 @@
           ]
         },
         "pr_body": {
-          "description": "Body of a PR opened by `issue review request`. `{{ input }}` is the\n`--pr-body` argument.",
+          "description": "Body of a PR opened by `issue pr create`. `{{ input }}` is the\n`--pr-body` argument. Rendered only when a PR is actually opened, not\nwhen an existing one is reused.",
           "type": [
             "string",
             "null"
           ]
         },
         "pr_title": {
-          "description": "Title of a PR opened by `issue review request`. `{{ input }}` is the\n`--pr-title` argument.",
+          "description": "Title of a PR opened by `issue pr create`. `{{ input }}` is the\n`--pr-title` argument; the rendered title must not be empty.",
           "type": [
             "string",
             "null"
@@ -1171,7 +1173,7 @@
           ]
         },
         "review_request": {
-          "description": "Slack message sent by `issue review request`. Rendered once per\nrecipient with `name`, `slack_id`, `pr_url`, `pr_title`, and `input`.",
+          "description": "Slack message sent by `issue review request`. Rendered once per\nrecipient with `name`, `slack_id` (empty for a channel), `pr_url`,\n`pr_title` (the PR's own title from GitHub), `input`, and `branch`,\n`issue`, `slug`, `apps` from the worktree's `.devkit/issue.toml`.",
           "type": [
             "string",
             "null"
@@ -1182,7 +1184,7 @@
             "$ref": "#/$defs/VariableDecl"
           },
           "default": {},
-          "description": "Constants available to every template above. A context field of the same\nname wins, and `--arg key=value` overrides either. An entry may instead\nbe a table carrying a `default` and a `required` marking.",
+          "description": "Constants available to every template above. A context field of the same\nname wins, and `--arg key=value` overrides either. An entry may instead\nbe a table carrying a `default` and a `required` marking. `role` and\n`sha` are reserved and rejected here.",
           "type": "object"
         },
         "worktree_dir": {
@@ -1217,7 +1219,7 @@
             }
           ],
           "default": null,
-          "description": "Force a tracker instead of detecting one."
+          "description": "Force a tracker instead of detecting one. Every `issue` command and\nthe `issue.status` MCP action read it. `github` authenticates through\n`gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN`. `none` still creates and\nfinishes worktrees on a merged PR and clean tree. `devkit doctor`'s\n`tracker` row shows which tracker resolved and why."
         }
       },
       "type": "object"

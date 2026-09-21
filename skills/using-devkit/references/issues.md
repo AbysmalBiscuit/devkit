@@ -1,6 +1,8 @@
 # `issue` — issue lifecycle
 
-`issue` acts on the **current working directory's worktree** by default (`-C/--dir <path>` overrides), and `issue review` ships the branch checked out there. `cd` into the right worktree first.
+`issue` acts on the **current working directory's worktree** by default (`-C/--dir <path>` overrides), and `issue review` ships the branch checked out there. `cd` into the right worktree first. `-C` and `--config` go on `issue` itself, before the subcommand.
+
+Every subcommand works from the primary checkout, which git resolves: the main worktree when you stand in a linked one, otherwise the checkout root. The directory's name does not matter.
 
 ```sh
 issue setup <ID|URL> [--slug <slug>] [--apps a,b] [--summary|--no-summary] [--dry-run] [--no-gitignore]
@@ -27,7 +29,11 @@ Creates a worktree off the baseline ref, symlinks env files, runs the per-app se
 
 Read `worktree` to know where to `cd`. Under `--summary` the object carries a fourth key, `summary`, holding the summary file's path.
 
-Setup reserves no ports — `devrun up` allocates them when the worktree's servers start. A fresh worktree has no diff to auto-detect from, so name apps explicitly: `devrun up web api`.
+Setup reserves no ports: `devrun up` allocates them when the worktree's servers start. A fresh worktree has no diff to auto-detect from, so name apps explicitly: `devrun up web api`.
+
+The branch is created with no upstream. git would otherwise track the baseline's remote branch (`origin/main`), where a plain `git push` refuses on the name mismatch. With `push.autoSetupRemote` set, the first push creates `origin/<branch>` and tracks it; without it, push with `-u origin <branch>`. Each `[hooks] after_worktree_create` command runs last, after the result is printed, and a failing hook only warns.
+
+`{{ short_slug }}` is the slug shortened again to `templates.worktree_dir_max`, for a `worktree_dir` template that must stay shorter than the branch. On Windows that keeps paths under the 260-character limit other tools still enforce. It shortens an explicit `--slug` too.
 
 | Flag | Meaning |
 |---|---|
@@ -41,15 +47,21 @@ Setup reserves no ports — `devrun up` allocates them when the worktree's serve
 
 Checks out an **existing** PR into a new worktree, the review-side counterpart of `setup`. The target is `#3340`, `3340`, an issue id the tracker recognises (`PREFIX-3340`, whose linked PR is used), a GitHub PR URL, or an issue URL the tracker recognises.
 
-A bare `3340` is probed against both the PRs and the tracker's issues, so on a GitHub project — where issues and PRs share one numbering — it is always the PR.
+A bare `3340` is probed against both the PRs and the tracker's issues. A real collision prompts at a terminal and is an error without one. On a GitHub project, where issues and PRs share one numbering, it is always the PR. An issue with no attached PR is an error.
 
-The optional second positional overrides the worktree path (default: the config-resolved placement). `--setup` also runs the per-app setup commands; `--apps a,b` narrows which apps that covers. Prints `pr`, `worktree`, and `branch` — JSON to a pipe, a table to a terminal.
+The optional second positional overrides the worktree path (default: `templates.checkout_worktree_dir`, e.g. `3340-fix-login`). The PR's own branch name is kept. `--setup` also runs the per-app setup commands; `--apps a,b` narrows which apps that covers. The worktree gets a `.devkit/issue.toml` record so `issue status` and `issue end` recognise it, and `after_worktree_create` fires with or without `--setup`. Prints `pr`, `worktree`, and `branch`: JSON to a pipe, a table to a terminal.
 
 ## `pr create` and `pr ready` — open the PR
 
 `pr create` pushes the branch (**never force-pushes**) and opens its PR, printing the URL; a branch that already has one reuses it and keeps its draft state. `--draft`/`--ready` decide the state for the run, `defaults.pr_create_state` when neither is passed. `pr ready` flips a draft to ready and is a no-op on a PR that is already ready. Both take `--to <alias>` to add GitHub reviewers, and neither posts to Slack.
 
-`defaults.require_pr_reviewer` refuses any run that would leave a PR ready with no human reviewer other than the PR's own author: `pr create --ready`, `pr ready`, and `review request`'s draft flip. A draft is never gated.
+- A `--draft`/`--ready` that contradicts a reused PR's state is reported as ignored, naming `issue pr ready` or `gh pr ready --undo`.
+- A `--to` alias with no `github` handle warns and is skipped.
+- `--pr <URL|number>` acts on that PR and records it, which is how a worktree bound to the wrong PR is rebound. `--no-push` skips the push.
+- Whichever PR the run ends on, its head commit must be this worktree's `HEAD`. A reused PR is checked before it is touched, a new one straight after it opens; a failure there leaves the new PR open and says so.
+- `pr ready` on a branch with no PR is an error naming `issue pr create`; a merged or closed PR is refused.
+
+`defaults.require_pr_reviewer` refuses any run that would leave a PR ready with no human reviewer other than the PR's own author: `pr create --ready`, `pr ready`, and `review request`'s draft flip. A pending request, a submitted review, or a `--to` in the same run all count; the author's own review does not. The refusal comes before the flip, so the PR stays a draft. Opening a draft is never gated, and neither is a PR that was already ready.
 
 ## `review request` — ship for review
 
@@ -72,7 +84,7 @@ A run that notifies marks a draft ready for review first; `--no-notify` leaves d
 | `--no-notify` | Send no Slack and leave draft state alone. Pins targets to what `--to` resolved to, possibly none, instead of falling back to the PR's current reviewers. |
 | `--arg k=v` | **Repeatable.** Override a declared template variable. |
 
-With no `--to`, it resolves the PR's current human reviewers and notifies them; `--no-notify` suppresses that.
+With no `--to`, it resolves the PR's current human reviewers and notifies them; `--no-notify` suppresses that and prints the PR URL instead. Everything that can refuse the run (recipients, the reviewer gate) is settled before a draft is marked ready, so a run with nobody to notify leaves a draft a draft. The Slack template's `pr_title` is the PR's own title from GitHub.
 
 However the PR was resolved, its head commit must equal this worktree's `HEAD` or the command refuses. A branch name is shared across forks and does not prove the PR carries this work. A squash- or rebase-merged PR still matches, since the comparison is against the branch head the PR carries. Under `--no-push`, a branch ahead of its remote fails this check.
 
@@ -86,7 +98,9 @@ No head-commit check here: this is the reviewer's command, run in a worktree `pr
 
 - **`status`** (also the bare `issue`) — read-only triage table of every issue worktree. A worktree is FINISHED only when its PR is merged, its issue has reached a completed state in the tracker, and the tree is clean. A project that *declares* no tracker has no state to wait for and is decided by the merged PR and clean tree alone; a tracker that answers nothing for the issue holds the verdict open instead.
 - **`pr status`** (also the bare `issue pr`) — one worktree's PR number and issue id. The optional selector is an issue id, branch, worktree basename, or path; omit it for the current worktree. `--json` emits a single `IssueWorktree` object (scripts read `.pr_number` / `.issue_id`). `--cache-only` skips the network: the PR number comes from `<worktree>/.devkit/pr.json` and the tracker columns render as `—`. A live run writes the PR through to that cache, which `git worktree remove` deletes with the worktree.
-- **`end`** — removes FINISHED worktrees. `--pr-only` ignores the tracker-state and issue-id gates (finished = PR merged + clean, even on a branch carrying no issue id); `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation. A worktree's files are copied out before it is removed, one destination per `[preserve.<name>]` entry in the config — this is what keeps an agent's scratch, notes, or session memory once the worktree is gone. A copy that fails warns and the removal proceeds anyway, unless that entry sets `required = true`, which keeps the worktree instead. `--no-preserve` skips the copying. Which files go where is configuration, not a flag: `docs/configuration.md` covers the patterns, the destination templates, and the symlink and collision rules.
-- **`sync-includes`** — re-copies the `defaults.worktree_include` files from the primary checkout into worktrees that already exist, the list `setup` and `pr checkout` backfill at creation time. Reach for it when that list gains an entry after a worktree was made. Selectors match as `pr status`'s do; omit them to sync every worktree. The primary checkout is the source and never a target. Files the worktree already has are left alone and named in a warning; `--overwrite` replaces them instead, prompting once per worktree, and declining that prompt still copies what the worktree is missing. Those files are untracked ones git cannot restore, so `--overwrite` needs a scope — one or more selectors, or `--all` — and `-y` answers the prompt (it does nothing without `--overwrite`). `--dry-run` writes nothing.
-- **`prs`** — GitHub PR triage of your open PRs and PRs awaiting your review. The repository is `[github] pr_repo`, defaulting to the `origin` remote; `-R owner/repo` overrides it for one run. `--no-cache` forces a fresh fetch. On a repo with many open PRs GitHub can return HTTP 504: lower `--batch-size` (PRs per search page, 1–100) and raise `--retries` (extra attempts per page with backoff, 0–10).
-- **`dashboard`** — the triage and PR tables plus terminal timelines. `--chart bar|line`, `--bucket` (default `auto`) and `--mode` (default `absolute`) shape the plots; `--all-roles` widens beyond your own, `--author <gh>` targets someone else; `--no-plots` shows only tables, `--no-cache` forces a fresh fetch.
+- **`end`** — removes FINISHED worktrees. `--pr-only` ignores the tracker-state and issue-id gates (finished = PR merged + clean, even on a branch carrying no issue id); `--clean-worktree` targets explicit selections; `--force` overrides the dirty-tree guard; `-y` skips confirmation. A worktree's files are copied out before it is removed, one destination per `[preserve.<name>]` entry, which is how an agent's scratch, notes and session memory outlive the worktree. A copy that fails warns and the removal goes ahead, unless the entry sets `required = true`: then the worktree stays, and the run exits non-zero once every selection is handled. `--no-preserve` skips the copying. Which files go where is configuration, not a flag: `devkit schema` and `references/config.md` cover the patterns, the destination templates, and the symlink and collision rules. A `devkit.toml` that exists but fails to load makes every run refuse, since `[preserve]` cannot be read; `--no-preserve` is the way through. After the removals, `[hooks] after_worktree_remove` runs per removed worktree, then `after_end` once. A worktree that named a baseline gives it up: servers under a baseline nobody else names are stopped first, and the baseline is reclaimed after the removal, both best-effort. `devrun baseline prune --force` reclaims one whose servers are still running.
+- **`sync-includes`** — re-copies the `defaults.worktree_include` files from the primary checkout into worktrees that already exist, the list `setup` and `pr checkout` backfill at creation time. Reach for it when that list gains an entry after a worktree was made. Selectors match as `pr status`'s do; omit them to sync every worktree. The primary checkout is the source and never a target. Files the worktree already has are left alone and named in a warning; `--overwrite` replaces them instead, prompting once per worktree, and declining that prompt still copies what the worktree is missing. Those files are untracked ones git cannot restore, so `--overwrite` needs a scope, either selectors or `--all`, and `-y` answers the prompt (it does nothing without `--overwrite`). `--dry-run` writes nothing. Symlinks are reproduced as links and counted separately. File lists are grouped by top-level directory and show the first few per group; `-v` names every file. It resolves no PR number, so it makes no network call.
+- **`prs`**: GitHub PR triage of your open PRs and PRs awaiting your review. The authored, review-requested and reviewed-by searches run concurrently and page to exhaustion, and a per-repo cache renders `old -> new` for anything changed since the last run. The repository is `[github] pr_repo`, defaulting to the `origin` remote; `-R owner/repo` overrides it for one run. `--no-cache` forces a fresh fetch. On a repo with many open PRs GitHub can return HTTP 504: lower `--batch-size` (PRs per search page, 1–100) and raise `--retries` (extra attempts per page with backoff, 0–10).
+- **`dashboard`** — the triage and PR tables plus terminal timelines. `--chart bar|line`, `--bucket` (default `auto`) and `--mode` (default `absolute`) shape the plots; `--all-roles` widens beyond your own, `--author <gh>` targets someone else; `--no-plots` shows only tables, `--no-cache` forces a fresh fetch. Timeline fetches are cached under `~/.cache/devkit/dashboard` for a few minutes; the live triage panel never is.
+
+At a terminal, `issue`, `issue pr status` and `issue prs` render live on stderr: cells fill in with spinners, `prs` shows the last run's tables dimmed until fresh ones swap in, and step-driven commands keep each finished step as a timed line. Piped or redirected output is unaffected.

@@ -35,7 +35,7 @@ A claim made by hand inside a sub-agent is recorded at session granularity, beca
 
 ## TTL
 
-Default 1800s (30 min). A lock auto-expires after that so a dead session cannot block the project forever.
+Default 1800s (30 min). A lock auto-expires after that so a dead session cannot block the project forever. A lock that recorded an anchor pid (the tmux pane, or the parent process at a terminal) also expires as soon as that process dies.
 
 - `--ttl 3600` for a long edit, or re-`acquire` to renew.
 - `--ttl 0` means no expiry.

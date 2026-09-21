@@ -36,8 +36,10 @@ Running `devkit` once installs the old command names (`portm`, `devrun`, `issue`
 | `devkit mcp` / `devkit-mcp` | The MCP server exposing ports, locks, devrun, and issue triage to coding agents. |
 | `devkit auth` / `devkit doctor` | Store a Linear or Slack credential; report where every credential resolves from. |
 | `devkit brief` | Compact project orientation for a session-start hook. |
+| `devkit rules` / `devrules` | Query the rule index that write-time rule injection reads. |
+| `devkit config` / `devkit schema` | Print the merged config and where each value came from; print or install the config's JSON Schema. |
 
-`-h` is the authoritative flag list under every condition; `--help` matches it at a terminal, but answers with the command tree when piped. [docs/commands.md](docs/commands.md) carries what `--help` cannot: resolution rules, the TTY gates, and the reasoning behind them.
+`-h` always prints the full flag list. `--help` matches it at a terminal but prints the whole command tree when piped, so one call shows an agent every verb; `--help --full` asks for the tree anywhere, and `DEVKIT_HELP=terse|full` pins either view. The behavior behind the flags (resolution rules, TTY gates, what refuses and why) is in the [`using-devkit` skill's references](skills/using-devkit/references/), which is where an agent reads it.
 
 ## Coding agents
 
@@ -61,7 +63,7 @@ mkdir -p ~/.config/devkit
 $EDITOR ~/.config/devkit/config.toml
 ```
 
-[docs/configuration.md](docs/configuration.md) is the full reference, with a sanitized example to copy. `devkit schema init` points a config at the JSON Schema so your editor validates it.
+`devkit schema init` points a config at the JSON Schema, so your editor validates it and shows every key's description on hover; with no config there yet, it writes a commented starter. [docs/configuration.md](docs/configuration.md) covers layering, secrets and editor setup, with a sanitized example to copy.
 
 ## Shell completions
 

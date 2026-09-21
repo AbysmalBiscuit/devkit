@@ -19,7 +19,7 @@ when you need its flags, arguments, and gates, which the tree does not carry.
 - `devkit_describe`: list the available actions, or fetch one action's argument schema (`{"action": "locks.acquire"}`).
 - `devkit_call`: invoke an action, e.g. `{"action": "locks.acquire", "args": {"root": "/path/to/repo", "paths": ["src/a.rs"]}}`.
 
-To keep a plugin's skill and hooks without the server's tools, set `[mcp] enabled = false` in `~/.config/devkit/config.toml`. The server then lists no tools. See [configuration.md](configuration.md#mcp).
+To keep a plugin's skill and hooks without the server's tools, set `[mcp] enabled = false` in `~/.config/devkit/config.toml`. The server then lists no tools; `devkit schema` describes when the setting takes effect.
 
 ### Actions
 
@@ -28,6 +28,8 @@ To keep a plugin's skill and hooks without the server's tools, set `[mcp] enable
 The `devrun` actions are `devrun.status` (tracked servers for a worktree, or `all`), `devrun.up` (start servers, **non-blocking**: returns each server `starting`, so poll `devrun.status` for readiness), `devrun.down` (stop and release a worktree's servers), and `devrun.logs` (tail a tracked app's log). All take `root` (the worktree); `up` is `issue`-role only and starts servers under a running `devkitd` when present, else detached.
 
 Two read-only `issue` actions round it out. `issue.status` lists the issue worktrees for a directory (`root`, default `.`; optional `ids` filter) with each one's PR state, tracker state, and a finished/not-finished verdict; a draft PR's `pr` object carries `is_draft: true` while its legacy `pr_state` field still reads `OPEN`, so a consumer that needs to distinguish a draft reads the flag rather than the state string. `issue.prs` triages your GitHub PRs (`mine`, `reviews`, neither set means both; optional `repo`); a draft's row carries the action `draft` in both sections regardless of any standing review request. Both return structured JSON with the verdicts and next-action labels pre-computed. They never mutate; `issue review`, `issue end`, and `issue pr` stay CLI-only.
+
+The gates differ from the CLI's on purpose. `devrun reap` is never exposed; `ports.strays` is the read-only half of stray handling. `devrun.down` takes one holder, the `root` the caller passes, and it must be the worktree the server started in. The server resolves that once at startup from its working directory, never from anything a caller sends. Any other path is refused, so naming another worktree cannot stand in for the CLI's terminal prompt, and a server started outside a repository stops nothing. The CLI's own-baseline exception is absent too: `devrun.up` runs the issue role only, so an MCP session never starts baseline servers. Read-only actions are unaffected, and `devrun.status` still reports every worktree under `all`.
 
 ## Plugin bootstrap
 
@@ -57,7 +59,9 @@ Everything a harness sends enters one verb family, `devkit hook <event>`, and th
 
 Every verb except `pre-tool-use`, `session-end` and `subagent-stop` is record-only: with logging off each is a process spawn that reads the global config, learns logging is off, and exits. `devkit brief` still runs alongside `session-start`, `post-compact` and `cwd-changed` rather than being replaced by them. `devkit rules context` runs alongside `session-start` too, and again alongside `post-compact` on hosts that resume with a fresh SessionStart: it carries the repository's own must-severity rules when a rule index exists, and stays silent otherwise, so a session opens already knowing what governs the checkout as a whole.
 
-Each manifest is a translation table with no logic in it. Every command carries `--harness <name>`, so identity never depends on guessing which fields a vendor sends this release.
+Each manifest is a translation table with no logic in it. Every command carries `--harness <name>`, so identity never depends on guessing which fields a vendor sends this release; without it, devkit infers the harness from the payload's shape.
+
+`pre-tool-use` answers on stdout with a denial, a warning, or nothing, and never runs the command itself. Its write stage fails closed: an unresolved write, a registry error, or a registry that does not answer within 2 seconds is a denial. Its command guard fails open.
 
 | devkit verb | Claude Code | Codex | Cursor |
 |---|---|---|---|
@@ -97,11 +101,13 @@ Both claim paths run only where `[harness] enforce_writes` is on, resolved from 
 
 A conflict surfaces as a denied tool call naming the holder. That is the signal to edit a different file or wait, never to `--force` past a live holder. A manual `lockm acquire` still has one use in an enforced checkout: a coarse claim over a whole subtree you are churning through, since a directory lock covers everything under it.
 
-A shell write is claimed when devkit can resolve its target statically. What happens to the rest, and which hosts get which stage, is the `[harness]` table in [configuration.md](configuration.md#harness).
+A shell write is claimed when devkit can resolve its target statically. What happens to the rest, and which hosts get which stage, is in the `using-devkit` skill's [config reference](../skills/using-devkit/references/config.md#harness-write-enforcement).
 
 ## Harness logging
 
-Off by default. With `[harness.log] enabled = true` in the global config, each verb writes one JSONL record of what the agent tried and what devkit decided: the command at the configured fidelity, a summary of the analysis, and the full text of every block and warning message. `devkit hook-log path` prints the directory; `devkit hook-log prune` sweeps it; `devkit doctor`'s `harness_log` row reports what is actually in force. The keys, and which of them only a global config may set, are in [configuration.md](configuration.md#harnesslog).
+Off by default. With `[harness.log] enabled = true` in the global config, each verb writes one JSONL record of what the agent tried and what devkit decided: the command at the configured fidelity, a summary of the analysis, and the full text of every block and warning message. `devkit hook-log path` prints the directory; `devkit hook-log prune` sweeps it; `devkit doctor`'s `harness_log` row reports what is in force. The keys, and which of them only a global config may set, are in `devkit schema` and the [config reference](../skills/using-devkit/references/config.md#harnesslog).
+
+Records land under `<dir>/<YYYY-MM-DD>/<session_id>[-<agent_id>].jsonl`. `devkit hook-log prune` (with `--dry-run` to report only) deletes whole files and never rewrites one, so a reader never sees a partial record: first any day directory whose UTC name is older than `max_age_days`, then oldest first until the total is under `max_bytes`. It never touches the current UTC day, a file modified within the last hour (writers take no lock, so this is what separates a sweep from a live session), or anything while another pruner holds `prune.lock`. A sweep that cannot reach the cap without crossing one of those says so and stops. Cohort analysis of a corpus stays offline, in `crates/devkit-command/examples/corpus_probe.rs` behind the `corpus` feature.
 
 ## Claude Code
 

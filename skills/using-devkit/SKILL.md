@@ -31,6 +31,8 @@ Before running a project build, profiling flow, or verification command by hand,
 
 Global flags go **before** the subcommand (`issue -C ~/git/acme/app status`): `-C/--dir <path>` on `issue`/`devrun`/`portm`, `--config <file>` and `--timing[=trace]` / `--timing-log <FILE>` on `issue`/`devrun`.
 
+`--help` through a pipe prints the command tree below the command asked about, one line per verb (`issue --help` covers `issue` alone); `-h` prints one command's flags and arguments. The tree drops a group's own options, so reach for `-h` when you need a flag.
+
 ## Locks
 
 Which mode a checkout is in decides everything below, so settle that first. `devkit brief` says so at session start: an enforced checkout's brief carries the sentence "Writes here are lock-enforced". Without it, locking is yours to drive. `devkit doctor` reports the same.

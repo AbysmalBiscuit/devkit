@@ -62,7 +62,7 @@ pub struct LibEntry {
     /// Docs directory inside the checkout, overriding layout detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub docs_dir: Option<String>,
-    /// Freeform note surfaced by `docm info` and `docm list` — what this
+    /// Freeform note surfaced by `docm info` and `docm list`: what this
     /// library is here for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
