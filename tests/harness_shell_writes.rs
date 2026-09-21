@@ -391,6 +391,73 @@ fn a_link_made_in_a_fresh_directory_loses_the_exemption() {
     }
 }
 
+/// A link moved, copied, or unpacked into a fresh directory aliases a path
+/// outside it just as one created there does, and the analyzer cannot see
+/// whether what it placed is a link. Once anything is placed, the other writes
+/// under fresh paths in the command stop being exempt.
+#[test]
+fn a_placement_in_a_fresh_directory_loses_the_exemption() {
+    let e = env(WRITES);
+    std::fs::create_dir(e.project.path().join("src")).unwrap();
+    std::fs::write(e.project.path().join("src/model.rs"), "x").unwrap();
+    acquire(&e, "B", "src/model.rs");
+    let cases = [
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(); \
+         os.rename('link', os.path.join(d, 'link')); \
+         open(os.path.join(d, 'link', 'model.rs'), 'w').write('x')\"",
+        "python3 -c \"import os, shutil, tempfile; d = tempfile.mkdtemp(); \
+         shutil.move('link', d); \
+         open(os.path.join(d, 'link', 'model.rs'), 'w').write('x')\"",
+        "python3 -c \"import os, shutil, tempfile; d = tempfile.mkdtemp(); \
+         shutil.copy2('link', d, follow_symlinks=False); \
+         open(os.path.join(d, 'link', 'model.rs'), 'w').write('x')\"",
+        "python3 -c \"import os, shutil, tempfile; d = tempfile.mkdtemp(); \
+         shutil.copytree('links', os.path.join(d, 't'), symlinks=True); \
+         open(os.path.join(d, 't', 'link', 'model.rs'), 'w').write('x')\"",
+        "python3 -c \"import os, shutil, tempfile; d = tempfile.mkdtemp(); \
+         shutil.unpack_archive('links.tar', d); \
+         open(os.path.join(d, 'link', 'model.rs'), 'w').write('x')\"",
+        // A second placement can land through the first.
+        "python3 -c \"import os, shutil, tempfile; d = tempfile.mkdtemp(); \
+         shutil.copy2('link', d, follow_symlinks=False); \
+         shutil.copy('model.rs', os.path.join(d, 'link'))\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('./fresh-'); \
+         fs.cpSync('link', path.join(d, 'link')); \
+         fs.writeFileSync(path.join(d, 'link/model.rs'), 'x')\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('./fresh-'); \
+         fs.renameSync('link', path.join(d, 'link')); \
+         fs.writeFileSync(path.join(d, 'link/model.rs'), 'x')\"",
+        "D=$(mktemp -d); mv link \"$D\"; tar -xf links.tar -C \"$D\"",
+    ];
+    for c in cases {
+        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
+        assert!(
+            reason.contains("can be a link leading out of it"),
+            "{c}: {reason}"
+        );
+    }
+}
+
+/// Moving a file into a temp directory, or writing a temp file and moving it
+/// out, places nothing that a later write could pass through.
+#[test]
+fn an_ordinary_temp_move_keeps_the_exemption() {
+    let e = env(WRITES);
+    let cases = [
+        "python3 -c \"import shutil, tempfile; shutil.move('data.csv', tempfile.mkdtemp())\"",
+        "D=$(mktemp -d); cp data.csv \"$D\"",
+        "T=$(mktemp); echo x > \"$T\"; mv \"$T\" out.txt",
+        "python3 -c \"import os, shutil, tempfile; d = tempfile.mkdtemp(); \
+         p = os.path.join(d, 'out'); open(p, 'w').write('x'); shutil.move(p, 'out.txt')\"",
+        "D=$(mktemp -d); echo x > \"$D\"; rm -rf \"$D\"",
+    ];
+    for c in cases {
+        assert_eq!(denial(&hook(&e, Some("S1"), c)), None, "denied: {c}");
+    }
+}
+
 /// `move` and `move_into` rename the source away, so the source is written
 /// too, not just the destination.
 #[test]

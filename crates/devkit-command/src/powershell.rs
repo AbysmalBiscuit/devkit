@@ -1029,13 +1029,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     value.eq_ignore_ascii_case("$true") || value.eq_ignore_ascii_case("true")
                 }) {
                     let target = path(self, 0);
-                    self.a.tree_effect(
-                        &target,
-                        false,
-                        cwd.as_deref(),
-                        "[IO.Directory]::Delete",
-                        at,
-                    );
+                    self.a
+                        .tree_removal(&target, cwd.as_deref(), "[IO.Directory]::Delete", at);
                 } else {
                     let target = path(self, 0);
                     self.a
@@ -1048,8 +1043,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 let destination = path(self, 1);
                 self.a
                     .file_effect(FileOp::Rename, &source, cwd.as_deref(), at.clone());
-                self.a
-                    .file_effect(FileOp::Rename, &destination, cwd.as_deref(), at);
+                self.a.rename_into(&destination, cwd.as_deref(), at);
                 Value::Unknown
             }
             ("io.file", "copy") => {
@@ -1061,13 +1055,8 @@ impl<'t> Walker<'_, '_, '_, 't> {
             ("io.directory", "move") => {
                 let source = path(self, 0);
                 let destination = path(self, 1);
-                self.a.tree_effect(
-                    &source,
-                    false,
-                    cwd.as_deref(),
-                    "[IO.Directory]::Move",
-                    at.clone(),
-                );
+                self.a
+                    .tree_removal(&source, cwd.as_deref(), "[IO.Directory]::Move", at.clone());
                 self.a.tree_effect(
                     &destination,
                     false,
@@ -1233,9 +1222,17 @@ impl<'t> Walker<'_, '_, '_, 't> {
             let v = w.bounded_resolved(node, v, cwd.as_deref());
             w.a.file_effect(op, &v, cwd.as_deref(), w.at(node));
         };
+        let rename_into = |w: &mut Self, v: Option<Value>| {
+            let v = w.bounded_resolved(node, v.unwrap_or(Value::Unknown), cwd.as_deref());
+            w.a.rename_into(&v, cwd.as_deref(), w.at(node));
+        };
         let tree = |w: &mut Self, v: Value, by: &str| {
             let v = w.bounded_resolved(node, v, cwd.as_deref());
             w.a.tree_effect(&v, false, cwd.as_deref(), by, w.at(node));
+        };
+        let removal = |w: &mut Self, v: Value, by: &str| {
+            let v = w.bounded_resolved(node, v, cwd.as_deref());
+            w.a.tree_removal(&v, cwd.as_deref(), by, w.at(node));
         };
         let switch = |k| bound.contains_key(k);
         let literal = elements.iter().any(|(p, _)| {
@@ -1272,7 +1269,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             Verb::RemoveItem => {
                 if switch("recurse") {
-                    tree(
+                    removal(
                         self,
                         get("path").unwrap_or(Value::Unknown),
                         "Remove-Item -Recurse",
@@ -1288,7 +1285,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             Verb::MoveItem => {
                 file(self, FileOp::Rename, get("path"), literal);
-                file(self, FileOp::Rename, get("destination"), true);
+                rename_into(self, get("destination"));
             }
             Verb::RenameItem => {
                 let path = get("path");
@@ -1300,7 +1297,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     }),
                     _ => Value::Unknown,
                 };
-                file(self, FileOp::Rename, Some(renamed), true);
+                rename_into(self, Some(renamed));
             }
             Verb::CopyItem => {
                 if switch("recurse") {

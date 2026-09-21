@@ -74,6 +74,14 @@ pub(crate) struct Analyzer<'c> {
     pub(crate) ctx: &'c Context,
     pub(crate) budget: Budget,
     pub(crate) out: Analysis,
+    fresh: Vec<FreshWrite>,
+}
+
+/// An effect on a path an API created fresh, and whether it put something
+/// there from outside the fresh directory.
+struct FreshWrite {
+    location: Location,
+    places: bool,
 }
 
 impl<'c> Analyzer<'c> {
@@ -88,6 +96,7 @@ impl<'c> Analyzer<'c> {
             ctx,
             budget: Budget::new(ctx.limits),
             out: Analysis::default(),
+            fresh: Vec::new(),
         }
     }
 
@@ -102,6 +111,7 @@ impl<'c> Analyzer<'c> {
             ..Frame::outer()
         };
         self.source(language, source, frame);
+        self.close_fresh();
         self.out
     }
 
@@ -134,6 +144,7 @@ impl<'c> Analyzer<'c> {
             ..Frame::outer()
         };
         self.invocation(raw, &frame);
+        self.close_fresh();
         self.out
     }
 
@@ -171,9 +182,8 @@ impl<'c> Analyzer<'c> {
         });
     }
 
-    /// Record a write to a path an API created fresh under a random name. The
-    /// path is never known, and never needs to be: no other session can hold
-    /// it.
+    /// Record a write to `path`. A copy's target is always its destination, so
+    /// a copy onto a fresh path places something there.
     pub(crate) fn file_effect(
         &mut self,
         op: FileOp,
@@ -181,7 +191,30 @@ impl<'c> Analyzer<'c> {
         cwd: Option<&str>,
         location: Location,
     ) {
+        self.record_file(op, path, cwd, location, op == FileOp::Copy);
+    }
+
+    /// Record the destination of a rename or move, which places whatever was
+    /// renamed there.
+    pub(crate) fn rename_into(&mut self, dest: &Value, cwd: Option<&str>, location: Location) {
+        self.record_file(FileOp::Rename, dest, cwd, location, true);
+    }
+
+    fn record_file(
+        &mut self,
+        op: FileOp,
+        path: &Value,
+        cwd: Option<&str>,
+        location: Location,
+        places: bool,
+    ) {
         let target = paths::resolve(path, cwd, self.ctx.path_style);
+        if matches!(target, crate::model::Target::Ephemeral { .. }) {
+            self.fresh.push(FreshWrite {
+                location: location.clone(),
+                places,
+            });
+        }
         self.out.file_effects.push(FileEffect {
             op,
             target,
@@ -189,6 +222,8 @@ impl<'c> Analyzer<'c> {
         });
     }
 
+    /// Record a tree writer that fills its scope: a recursive copy, a move, an
+    /// extraction, a formatter. Any of them can put a link there.
     pub(crate) fn tree_effect(
         &mut self,
         scope: &Value,
@@ -196,6 +231,30 @@ impl<'c> Analyzer<'c> {
         cwd: Option<&str>,
         by: &str,
         location: Location,
+    ) {
+        self.record_tree(scope, whole_checkout, cwd, by, location, true);
+    }
+
+    /// Record a tree writer that only takes entries away: a recursive delete,
+    /// or the source side of a directory move.
+    pub(crate) fn tree_removal(
+        &mut self,
+        scope: &Value,
+        cwd: Option<&str>,
+        by: &str,
+        location: Location,
+    ) {
+        self.record_tree(scope, false, cwd, by, location, false);
+    }
+
+    fn record_tree(
+        &mut self,
+        scope: &Value,
+        whole_checkout: bool,
+        cwd: Option<&str>,
+        by: &str,
+        location: Location,
+        places: bool,
     ) {
         match paths::resolve(scope, cwd, self.ctx.path_style) {
             crate::model::Target::Path(scope) => self.out.tree_effects.push(TreeEffect {
@@ -214,6 +273,10 @@ impl<'c> Analyzer<'c> {
             // no path another session could name, but a claim on the directory
             // that one was made in covers the whole fresh subtree.
             crate::model::Target::Ephemeral { at } => {
+                self.fresh.push(FreshWrite {
+                    location: location.clone(),
+                    places,
+                });
                 if let crate::model::TempLocation::In(scope) = at {
                     self.out.tree_effects.push(TreeEffect {
                         scope,
@@ -224,6 +287,29 @@ impl<'c> Analyzer<'c> {
                     });
                 }
             }
+        }
+    }
+
+    /// Once anything is moved, copied, or unpacked into a fresh directory, the
+    /// other fresh writes stop being exempt: what was placed may be a link, and
+    /// a write through it lands wherever it points. Fresh values carry no
+    /// identity and a loop can run a later statement first, so this spans the
+    /// whole analysis. A lone placement has nothing before it to lead it out.
+    fn close_fresh(&mut self) {
+        let placements = self.fresh.iter().filter(|f| f.places).count();
+        if placements == 0 {
+            return;
+        }
+        for f in std::mem::take(&mut self.fresh) {
+            if placements == 1 && f.places {
+                continue;
+            }
+            self.uncertain(
+                UncertaintyKind::UnresolvedWrite,
+                "something moved, copied, or unpacked into a fresh directory can be a link \
+                 leading out of it",
+                f.location,
+            );
         }
     }
 
@@ -324,6 +410,12 @@ impl<'c> Analyzer<'c> {
                     &by,
                     location.clone(),
                 ),
+                catalog::Hit::RenameInto(path) => {
+                    self.rename_into(&path, effective_cwd.as_deref(), location.clone())
+                }
+                catalog::Hit::TreeRemoval { scope, by } => {
+                    self.tree_removal(&scope, effective_cwd.as_deref(), &by, location.clone())
+                }
                 catalog::Hit::Unresolved(detail) => {
                     self.uncertain(UncertaintyKind::UnresolvedWrite, detail, location.clone())
                 }

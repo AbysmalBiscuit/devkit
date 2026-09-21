@@ -6,9 +6,16 @@ use crate::model::{FileOp, Value};
 
 pub(crate) enum Hit {
     File(FileOp, Value),
+    /// The destination of a rename or move.
+    RenameInto(Value),
     Tree {
         scope: Value,
         whole_checkout: bool,
+        by: String,
+    },
+    /// A tree writer that only takes entries away.
+    TreeRemoval {
+        scope: Value,
         by: String,
     },
     Unresolved(String),
@@ -130,6 +137,20 @@ fn file(op: FileOp, v: &Value) -> Hit {
     }
 }
 
+fn rename_into(v: &Value) -> Hit {
+    match v {
+        Value::Known(_) | Value::Ephemeral(_) => Hit::RenameInto(v.clone()),
+        Value::Unknown => Hit::Unresolved("a Rename target could not be determined".into()),
+    }
+}
+
+fn removal(scope: &Value, by: &str) -> Hit {
+    Hit::TreeRemoval {
+        scope: scope.clone(),
+        by: by.to_string(),
+    }
+}
+
 fn tree(scope: &Value, whole_checkout: bool, by: &str) -> Hit {
     Hit::Tree {
         scope: scope.clone(),
@@ -207,7 +228,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 p.operands
                     .iter()
                     .map(|v| match v {
-                        Value::Known(_) | Value::Ephemeral(_) => tree(v, false, "rm -r"),
+                        Value::Known(_) | Value::Ephemeral(_) => removal(v, "rm -r"),
                         Value::Unknown => Hit::Unresolved(
                             "`rm -r` removes a path that could not be determined".into(),
                         ),
@@ -278,19 +299,14 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 return p
                     .operands
                     .iter()
-                    .flat_map(|s| {
-                        [
-                            file(FileOp::Rename, s),
-                            file(FileOp::Rename, &join_name(dir, s)),
-                        ]
-                    })
+                    .flat_map(|s| [file(FileOp::Rename, s), rename_into(&join_name(dir, s))])
                     .collect();
             }
             match p.operands.split_last() {
                 Some((dest, sources)) if !sources.is_empty() => sources
                     .iter()
                     .map(|s| file(FileOp::Rename, s))
-                    .chain([file(FileOp::Rename, dest)])
+                    .chain([rename_into(dest)])
                     .collect(),
                 _ => Vec::new(),
             }
@@ -611,7 +627,7 @@ fn git(args: &[Value]) -> Vec<Hit> {
                 Some((dest, sources)) if !sources.is_empty() => sources
                     .iter()
                     .map(|s| file(FileOp::Rename, s))
-                    .chain([file(FileOp::Rename, dest)])
+                    .chain([rename_into(dest)])
                     .collect(),
                 _ => Vec::new(),
             }
@@ -624,7 +640,7 @@ fn git(args: &[Value]) -> Vec<Hit> {
                 p.operands
                     .iter()
                     .map(|v| match v {
-                        Value::Known(_) | Value::Ephemeral(_) => tree(v, false, "git rm -r"),
+                        Value::Known(_) | Value::Ephemeral(_) => removal(v, "git rm -r"),
                         Value::Unknown => {
                             Hit::Unresolved("`git rm -r` path could not be determined".into())
                         }
@@ -653,6 +669,10 @@ mod tests {
             .into_iter()
             .map(|h| match h {
                 Hit::File(op, v) => format!("{op:?} {}", v.known().unwrap_or("?")),
+                Hit::RenameInto(v) => format!("RenameInto {}", v.known().unwrap_or("?")),
+                Hit::TreeRemoval { scope, by } => {
+                    format!("Removal {} {by}", scope.known().unwrap_or("?"))
+                }
                 Hit::Tree {
                     scope,
                     whole_checkout,
@@ -672,13 +692,13 @@ mod tests {
         assert_eq!(hits("tee", &["-a", "log.txt"]), ["Append log.txt"]);
         assert_eq!(hits("touch", &["a", "b"]), ["Create a", "Create b"]);
         assert_eq!(hits("rm", &["-f", "a"]), ["Delete a"]);
-        assert_eq!(hits("rm", &["-rf", "build"]), ["Tree build false rm -r"]);
+        assert_eq!(hits("rm", &["-rf", "build"]), ["Removal build rm -r"]);
         assert_eq!(hits("cp", &["a", "b"]), ["Copy b"]);
         assert_eq!(hits("cp", &["-r", "a", "b"]), ["Tree b false cp -r"]);
-        assert_eq!(hits("mv", &["a", "b"]), ["Rename a", "Rename b"]);
+        assert_eq!(hits("mv", &["a", "b"]), ["Rename a", "RenameInto b"]);
         assert_eq!(hits("mv", &["-t", "dir", "a"]), [
             "Rename a",
-            "Rename dir/a"
+            "RenameInto dir/a"
         ]);
         assert_eq!(hits("dd", &["if=/dev/zero", "of=img", "bs=1M"]), [
             "Overwrite img"
@@ -736,7 +756,7 @@ mod tests {
             "Tree . true git reset --hard"
         ]);
         assert!(hits("git", &["reset", "HEAD~1"]).is_empty());
-        assert_eq!(hits("git", &["mv", "a", "b"]), ["Rename a", "Rename b"]);
+        assert_eq!(hits("git", &["mv", "a", "b"]), ["Rename a", "RenameInto b"]);
         assert!(hits("git", &["status"]).is_empty());
         assert!(hits("git", &["worktree", "list"]).is_empty());
     }

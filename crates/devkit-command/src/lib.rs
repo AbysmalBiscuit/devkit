@@ -36,7 +36,7 @@ pub use model::{
 /// release-please, so that number moves on every release whether the parser
 /// changed or not, and a regression diff keyed on it would call the whole
 /// corpus stale at each one.
-pub const ANALYZER_VERSION: u32 = 1;
+pub const ANALYZER_VERSION: u32 = 2;
 
 /// Analyze a command in `ctx.dialect`.
 pub fn analyze(source: &str, ctx: &Context) -> Analysis {

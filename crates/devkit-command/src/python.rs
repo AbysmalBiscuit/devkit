@@ -1045,7 +1045,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 }
                 "os.rename" | "os.replace" | "os.renames" | "shutil.move" => {
                     self.effect(node, FileOp::Rename, &arg(0, "src"), scope);
-                    self.effect(node, FileOp::Rename, &arg(1, "dst"), scope)
+                    self.rename_into(node, &arg(1, "dst"), scope)
                 }
                 "os.truncate" => self.effect(node, FileOp::Overwrite, &arg(0, "path"), scope),
                 "os.symlink" | "os.link" => {
@@ -1063,7 +1063,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 "shutil.copy" | "shutil.copy2" | "shutil.copyfile" => {
                     self.effect(node, FileOp::Copy, &arg(1, "dst"), scope)
                 }
-                "shutil.rmtree" => self.tree(node, &arg(0, "path"), "shutil.rmtree", scope),
+                "shutil.rmtree" => self.tree_removal(node, &arg(0, "path"), "shutil.rmtree", scope),
                 "shutil.copytree" => self.tree(node, &arg(1, "dst"), "shutil.copytree", scope),
                 "shutil.unpack_archive" => {
                     let dir = match arg(1, "extract_dir") {
@@ -1387,7 +1387,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             // A move renames the source away, so the source is written too.
             "move" => {
                 self.effect(node, FileOp::Rename, this, scope);
-                self.effect(node, FileOp::Rename, &dest(), scope)
+                self.rename_into(node, &dest(), scope)
             }
             "move_into" => {
                 self.effect(node, FileOp::Rename, this, scope);
@@ -1396,7 +1396,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             "rename" | "replace" => {
                 self.effect(node, FileOp::Rename, this, scope);
                 let dest = dest();
-                self.effect(node, FileOp::Rename, &dest, scope);
+                self.rename_into(node, &dest, scope);
                 dest
             }
             "open" => {
@@ -1459,6 +1459,20 @@ impl<'t> Walker<'_, '_, '_, 't> {
     fn file_effect(&mut self, node: Node<'t>, op: FileOp, target: &Py, cwd: Option<&str>) {
         let value = self.bounded_resolved(node, target.as_value(), cwd);
         self.a.file_effect(op, &value, cwd, self.at(node));
+    }
+
+    fn rename_into(&mut self, node: Node<'t>, dest: &Py, scope: &Scope) -> Py {
+        let cwd = scope.cwd.as_deref();
+        let value = self.bounded_resolved(node, dest.as_value(), cwd);
+        self.a.rename_into(&value, cwd, self.at(node));
+        Py::Data
+    }
+
+    fn tree_removal(&mut self, node: Node<'t>, scope_path: &Py, by: &str, scope: &Scope) -> Py {
+        let cwd = scope.cwd.as_deref();
+        let value = self.bounded_resolved(node, scope_path.as_value(), cwd);
+        self.a.tree_removal(&value, cwd, by, self.at(node));
+        Py::Data
     }
 
     fn tree(&mut self, node: Node<'t>, scope_path: &Py, by: &str, scope: &Scope) -> Py {
