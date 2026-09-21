@@ -1,5 +1,7 @@
 # Configuring devkit: `devkit.toml`
 
+Every key's name, type, default and one-paragraph meaning is in `devkit schema`, generated from the doc comments on the config types; an editor pointed at it with `devkit schema init` shows the same text on hover. This file carries what does not fit on one key: how keys interact, and what bites.
+
 ## Layers
 
 - `devkit.toml` at the repository root holds what the project shares. `devkit.local.toml` beside it holds what one machine or checkout needs, overrides its twin, and belongs in `.gitignore`.
@@ -84,3 +86,100 @@ guard = true    # the command guard redirects a typed `cargo nextest run ...` he
 ```
 
 A task sets `run` (one command) or `steps` (a sequence). `run` and `env` are minijinja templates: `{{ ports['api'] }}` renders a registry port, and any other name they read becomes an arg. `devrun task <name> --dry-run` renders the task with real ports and runs nothing. `references/tasks.md` covers args and the `require_live` gate.
+
+- An arg is optional only when `[templates.variables]` gives it a default. `{{ msg | default("wip") }}` or `is defined` in the template does not make it optional.
+- `issue`, `slug` and `branch` are undefined outside an issue worktree, so `{{ issue }}` fails there. A task that runs in both writes `{% if issue is defined %}`.
+- A Doppler invocation in a task goes through the same `prd` refusal as an app launch.
+- A `{ split = ..., on = ... }` entry reaches the program as separate argv entries with no shell, so spaces and quotes survive. Pick a delimiter the values cannot contain.
+
+## `[apps.<name>]`: launches
+
+- `{{ ports['other'] }}` in `launch` or `static_env` names another app's port in this worktree. When `other` is not running, devkit writes a pid-less reservation that a later `devrun up other` claims, so a consumer can bake the port first. A misspelled app name is an error.
+- devkit refuses a Doppler launch whose config is `prd` or cannot be resolved. It reads `-c`/`--config` from `launch`, then `DOPPLER_CONFIG` from the app's env, then `doppler configure get config --scope <app dir>`.
+- Configs from before launches were verbatim set `[defaults].doppler_config` and let devkit prepend `doppler run`. Move that wrapper into each app's `launch`, fold any `--preserve-env=...` into it, and delete `doppler_config`, `doppler_project` and `preserve_env`.
+- A per-app memory cap that the daemon does not restart: `static_env = { NODE_OPTIONS = "--max-old-space-size=2048" }`, or a `ulimit -v` wrapper in `launch`. The runtime aborts on breach and the crash path respawns it. `[daemon] memory_max_mb` is the kernel-enforced alternative on Linux. Its cgroup setup fails open, and it does nothing on macOS or Windows.
+
+## `[defaults]` paths
+
+`worktree_root`, `baseline_dir` and `doppler_yaml` resolve once, when the config loads:
+
+1. `${VAR}` becomes that environment variable. An unset one is an error naming the key and the variable. `$$` is a literal `$`.
+2. A leading `~/` becomes `$HOME`.
+3. A path still relative anchors to what it names. `worktree_root` and `baseline_dir` are places on this machine, so they anchor to the directory of the config file that declared them. `doppler_yaml` is a file in the repository, so it anchors to the checkout reading the config, and each worktree reads its own copy.
+
+`branch_prefix` gets step 1 only. That is what lets a project commit its `devkit.toml`: only `branch_prefix` is personal, so it goes in `devkit.local.toml` or reads `"${USER}/"`.
+
+## `worktree_include` patterns
+
+- `a/**` matches every path below `a`, direct children included. A bare `**` covers a file at the checkout root. `a/./b/*` and `a//b/*` both mean `a/b/*`.
+- A symlink match is reproduced as a link with the same target, not copied through. On Windows that needs Developer Mode or administrator rights; a refused link warns and is skipped.
+- A symlinked directory named as a pattern's own anchor (`linked/**`) is walked through, because the walk starts there. Write `linked/` to get the link.
+- A directory match reads its whole subtree into memory before copying, so peak memory follows the largest single include.
+- `issue sync-includes --overwrite` replaces files a worktree already has, and needs a scope: selectors, or `--all`.
+
+## Baselines
+
+A baseline is a worktree at the merge base of a branch and `baseline_ref`, shared by every worktree cut from that commit and created the first time a `--role baseline` server is asked for. Each carries `.devkit/baseline.toml`, recording its commit. A directory under `baseline_dir` without that marker is reported and never touched. A missing marker on a baseline devkit expects is rebuilt in place, and an unreadable one is refused. A worktree's `.devkit/issue.toml` records which baseline it uses, and the baseline goes once no worktree names it.
+
+## `[harness]`: write enforcement
+
+`enforce_writes` resolves per checkout, first answer wins:
+
+1. `DEVKIT_ENFORCE_WRITES`: `1`/`true`/`yes`/`on` forces it on, `0`/`false`/`no`/`off` forces it off. Anything else falls through.
+2. The project layers for the written path, `devkit.local.toml` and a linked worktree's main-checkout layer included. Any layer setting it turns it on. git names the checkout root.
+3. The global config (`$DEVKIT_CONFIG`, else `~/.config/devkit/config.toml`), which turns it on for every checkout with no per-project file.
+
+`enforce_writes` and `enforce_commands` turn on if any layer sets them. `shell` and the three policy keys take the closest layer's value.
+
+What gets checked:
+
+- Structured edits: `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, and Codex's `apply_patch`.
+- Shell tools (`Bash`, Claude Code's `PowerShell`, Cursor's `Shell`): the command and the scripts it runs are parsed. Redirects, `tee`, `cp`, `mv`, `rm`, `touch`, `dd`, `sed -i`, `perl -i`, the git verbs that rewrite files, common formatters, inline Python/JavaScript/TypeScript file APIs (a target from `sys.argv`/`process.argv` included) and PowerShell's content and item cmdlets all resolve to targets.
+- A whole-tree writer (`cargo fmt`, `git checkout`) claims nothing and is refused while another session holds a lock under the tree.
+- Build tools and package managers are not treated as writers. `devrun task <name>` is not expanded, so a task that formats the tree goes unchecked.
+- Cursor gets the command guard only; its shell calls claim nothing.
+
+A checkout opting in reads only its `[harness]` table, so the file may hold nothing else. With the global default on, `DEVKIT_ENFORCE_WRITES=off` opts one session out.
+
+The policy keys decide what happens to a write devkit could not resolve: `block` refuses and says how to make the target explicit, `warn` allows and says what went unchecked, `allow` says nothing. A warning never overrides a conflict on a target devkit did resolve.
+
+Failure modes: with enforcement off the hook exits at once and takes no locks. With `devkit` missing from `PATH` the hook fails and the write goes through. A registry error with enforcement on denies the write and names the error.
+
+## `[harness.log]`
+
+- The global-only keys are a boundary against a `devkit.toml` a project ships, not against your own environment: `$DEVKIT_CONFIG` can point anywhere, a repository included.
+- Redaction matches `LINEAR_API_KEY`, `LINEAR_WORKSPACE`, `SLACK_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` and the token prefixes of those services, replacing each with a placeholder naming its kind. It misses novel formats, credentials under other names, and anything read from a file. A `redacted` corpus is not safe to hand to a third party on that basis alone.
+- The runtime reads each `[harness]` key on its own so one bad key cannot break the rest, which means a misspelled key changes nothing and reports nothing. `devkit doctor`'s `harness_log` row shows the mode actually in force.
+
+## `[tracker]` and `[github]`
+
+- Detection only decides when no config resolves: a directory outside any devkit project, or a config that fails to load. A `LINEAR_API_KEY` exported machine-wide resolves Linear for every such directory, which is why `kind` exists.
+- Under the GitHub tracker a bare number is a PR, since issues and PRs share one numbering. With no resolvable `issues_repo` the project runs with no tracker, and `devkit doctor` says why.
+- `kind = "none"` declares no issue states, so a merged PR and a clean tree finish a worktree. Detection that finds nothing is different: it holds the verdict open, because `issue end` deletes branches and never acts on an unanswered question.
+- Every tracker question goes through the resolved tracker: `issue setup`'s slug and summary, `issue pr checkout`'s bare-number disambiguation, `issue dashboard`'s timeline, the ISSUE column of `issue prs`. `LINEAR_WORKSPACE` and `[linear] resolve_pr_links` stay Linear-specific. Under the GitHub tracker the ISSUE column carries each PR's closing issues regardless.
+- Each `[github]` key resolves on its own and only when an operation needs it, so a project that only reads PRs never supplies `issues_repo`.
+- `[github]` and `[preserve.<name>]` are the only tables that reject unknown keys. A misspelled `issue_repo` silently ignored would default from `origin` and query another repository's issues.
+- An ssh-alias remote (`gh:owner/repo.git`) counts when `ssh -G gh` resolves it to github.com. That needs OpenSSH; otherwise name the keys, and the error names the alias and what it resolved to.
+
+## `[hooks]`
+
+- Hooks fail open: one that cannot render, spawn, or exit zero prints a `warning:` and the rest still run. Output is captured and discarded.
+- The `issue end` keys fire after the removals and the run's summary, so a failing hook never un-reports a removal. When the main repository root does not resolve, both are skipped with a warning. A `devkit.toml` that fails to load leaves `issue end` with no hook keys, so none run.
+- Each key is a list, so a project defining one replaces a machine-wide list from `~/.config/devkit/config.toml` entirely.
+
+## `[preserve.<name>]`
+
+- `from = [".scratch/"]` or `".scratch/**"` archives the whole tree; `dir/*` takes direct children only.
+- A pattern that could leave the worktree (absolute, rooted, holding `..`, or drive-relative like `C:scratch`) is skipped with a warning. The default issue summary sits beside the worktrees directory, so no pattern reaches it; set `templates.issue_summary_path = "{{ worktree }}/.devkit/issue.md"` to make it preservable.
+- A destination inside any worktree the run removes is skipped. The check asks the filesystem, so a symlink, a `..`, or different casing on a case-insensitive filesystem does not slip past it.
+- Issue fields come from the worktree's `.devkit/issue.toml` and render empty without one. An entry using `primary` fails when the primary checkout cannot be resolved.
+- Entries run serially in sorted name order, before any removal. Two worktrees writing the same filename into one `to` collide; template `{{ issue }}` into `to`.
+- Symlinks are followed, the opposite of `worktree_include`: an archive may outlive the link's target. A copy truncates before writing, so an interrupted copy over an existing archive leaves a short file.
+
+## `[brief]`
+
+A section's switch and its bullets go together: `apps = false` drops the `Apps` line and the `devrun up` and `portm status` bullets, and the intro names only what survives. Set personal defaults in `~/.config/devkit/config.toml` and override per project.
+
+## `[templates]`
+
+Rendering is strict: an undefined variable is an error, so a typo surfaces on the first run.

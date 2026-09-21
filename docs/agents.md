@@ -19,7 +19,7 @@ when you need its flags, arguments, and gates, which the tree does not carry.
 - `devkit_describe`: list the available actions, or fetch one action's argument schema (`{"action": "locks.acquire"}`).
 - `devkit_call`: invoke an action, e.g. `{"action": "locks.acquire", "args": {"root": "/path/to/repo", "paths": ["src/a.rs"]}}`.
 
-To keep a plugin's skill and hooks without the server's tools, set `[mcp] enabled = false` in `~/.config/devkit/config.toml`. The server then lists no tools. See [configuration.md](configuration.md#mcp).
+To keep a plugin's skill and hooks without the server's tools, set `[mcp] enabled = false` in `~/.config/devkit/config.toml`. The server then lists no tools; `devkit schema` describes when the setting takes effect.
 
 ### Actions
 
@@ -97,11 +97,11 @@ Both claim paths run only where `[harness] enforce_writes` is on, resolved from 
 
 A conflict surfaces as a denied tool call naming the holder. That is the signal to edit a different file or wait, never to `--force` past a live holder. A manual `lockm acquire` still has one use in an enforced checkout: a coarse claim over a whole subtree you are churning through, since a directory lock covers everything under it.
 
-A shell write is claimed when devkit can resolve its target statically. What happens to the rest, and which hosts get which stage, is the `[harness]` table in [configuration.md](configuration.md#harness).
+A shell write is claimed when devkit can resolve its target statically. What happens to the rest, and which hosts get which stage, is in the `using-devkit` skill's [config reference](../skills/using-devkit/references/config.md#harness-write-enforcement).
 
 ## Harness logging
 
-Off by default. With `[harness.log] enabled = true` in the global config, each verb writes one JSONL record of what the agent tried and what devkit decided: the command at the configured fidelity, a summary of the analysis, and the full text of every block and warning message. `devkit hook-log path` prints the directory; `devkit hook-log prune` sweeps it; `devkit doctor`'s `harness_log` row reports what is actually in force. The keys, and which of them only a global config may set, are in [configuration.md](configuration.md#harnesslog).
+Off by default. With `[harness.log] enabled = true` in the global config, each verb writes one JSONL record of what the agent tried and what devkit decided: the command at the configured fidelity, a summary of the analysis, and the full text of every block and warning message. `devkit hook-log path` prints the directory; `devkit hook-log prune` sweeps it; `devkit doctor`'s `harness_log` row reports what is actually in force. The keys, and which of them only a global config may set, are in `devkit schema` and the [config reference](../skills/using-devkit/references/config.md#harnesslog).
 
 ## Claude Code
 
