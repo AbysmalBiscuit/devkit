@@ -53,34 +53,56 @@ pub fn is_baseline(worktree: &Path) -> bool {
     !matches!(baseline_state(worktree), BaselineState::No)
 }
 
-/// This worktree's issue id. The setup record is authoritative because it holds
-/// whatever the tracker actually calls the issue. The branch and directory scan
-/// is the fallback that keeps worktrees made without a record, by a plain
-/// `git worktree add` say, working. A record with an empty id was set up with
-/// no issue and reads as `NONE`, since its branch carries only a slug that may
-/// happen to look like an id.
-pub fn issue_id_of(worktree: &std::path::Path, branch: &str) -> String {
-    if let Some(rec) = crate::record::read(worktree) {
-        return if rec.issue.is_empty() {
-            "NONE".into()
-        } else {
-            rec.issue
-        };
-    }
-    let dir = worktree.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    for src in [branch, dir] {
-        if let Some(m) = find_id(src) {
-            return m.to_uppercase();
-        }
-    }
-    "UNKNOWN".into()
+/// Which issue a worktree works on. The derived order sorts tracker ids first,
+/// then `NONE`, then `UNKNOWN`, which is the order `issue status` lists rows
+/// in.
+///
+/// Parsing reads a setup record's `issue` field, which stores this as text:
+/// empty for a worktree set up with no issue, `UNKNOWN` where `pr checkout`
+/// found none, and anything else as the tracker's own spelling.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, strum::Display, strum::EnumString)]
+pub enum IssueId {
+    #[strum(default, to_string = "{0}")]
+    Tracker(String),
+    /// Set up with no tracker issue.
+    #[strum(to_string = "NONE", serialize = "")]
+    NoIssue,
+    /// No record names an issue and the branch and directory carry no id.
+    #[strum(to_string = "UNKNOWN")]
+    Unknown,
 }
 
-/// Whether `id` names a tracker issue rather than one of the placeholders
-/// `issue_id_of` reports: `UNKNOWN` when no id was found, `NONE` when the
-/// worktree was set up with no issue.
-pub fn is_tracker_id(id: &str) -> bool {
-    id != "UNKNOWN" && id != "NONE"
+impl IssueId {
+    /// The id to ask the tracker about, when there is one.
+    pub fn tracker(&self) -> Option<&str> {
+        match self {
+            IssueId::Tracker(id) => Some(id),
+            IssueId::NoIssue | IssueId::Unknown => None,
+        }
+    }
+}
+
+impl serde::Serialize for IssueId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+/// This worktree's issue id. The setup record is authoritative because it holds
+/// whatever the tracker actually calls the issue, or says there is none. The
+/// branch and directory scan is the fallback that keeps worktrees made without
+/// a record, by a plain `git worktree add` say, working. A record's word is
+/// final, since an issueless worktree's branch carries only a slug that may
+/// happen to look like an id.
+pub fn issue_id_of(worktree: &std::path::Path, branch: &str) -> IssueId {
+    if let Some(rec) = crate::record::read(worktree) {
+        return rec.issue.parse().unwrap_or(IssueId::Unknown);
+    }
+    let dir = worktree.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    [branch, dir]
+        .into_iter()
+        .find_map(find_id)
+        .map_or(IssueId::Unknown, |m| IssueId::Tracker(m.to_uppercase()))
 }
 
 /// The first letters-dash-digits run in `s` (e.g. `eng-1234`), if any. A
@@ -1510,11 +1532,35 @@ mod tests {
         assert_eq!(wts.len(), 2);
         assert_eq!(wts[1].branch, "lev/eng-1234-x");
     }
+    /// The record stores the id as text: empty for a worktree set up with no
+    /// issue, `UNKNOWN` where `pr checkout` found none, else the tracker's own
+    /// spelling. Each reads back as its variant and prints as the table shows
+    /// it.
+    #[test]
+    fn a_record_id_parses_into_its_variant() {
+        let parse = |s: &str| s.parse::<IssueId>().unwrap();
+        assert_eq!(parse(""), IssueId::NoIssue);
+        assert_eq!(parse("UNKNOWN"), IssueId::Unknown);
+        assert_eq!(parse("eng-1234"), IssueId::Tracker("eng-1234".into()));
+        assert_eq!(IssueId::NoIssue.to_string(), "NONE");
+        assert_eq!(IssueId::Unknown.to_string(), "UNKNOWN");
+        assert_eq!(IssueId::Tracker("87".into()).to_string(), "87");
+    }
+
     #[test]
     fn id_from_branch_then_dir() {
-        assert_eq!(issue_id_of(Path::new("/x"), "lev/eng-1234-fix"), "ENG-1234");
-        assert_eq!(issue_id_of(Path::new("/x/abc-9"), "DETACHED"), "ABC-9");
-        assert_eq!(issue_id_of(Path::new("/x/scratch"), "main"), "UNKNOWN");
+        assert_eq!(
+            issue_id_of(Path::new("/x"), "lev/eng-1234-fix"),
+            IssueId::Tracker("ENG-1234".into())
+        );
+        assert_eq!(
+            issue_id_of(Path::new("/x/abc-9"), "DETACHED"),
+            IssueId::Tracker("ABC-9".into())
+        );
+        assert_eq!(
+            issue_id_of(Path::new("/x/scratch"), "main"),
+            IssueId::Unknown
+        );
     }
 
     #[test]
@@ -1528,13 +1574,19 @@ mod tests {
         .unwrap();
         // The branch carries a Linear-shaped id that is NOT this worktree's
         // issue.
-        assert_eq!(issue_id_of(dir.path(), "lev/eng-1-something"), "87");
+        assert_eq!(
+            issue_id_of(dir.path(), "lev/eng-1-something"),
+            IssueId::Tracker("87".into())
+        );
     }
 
     #[test]
     fn without_a_record_the_branch_scan_still_works() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(issue_id_of(dir.path(), "lev/eng-1-something"), "ENG-1");
+        assert_eq!(
+            issue_id_of(dir.path(), "lev/eng-1-something"),
+            IssueId::Tracker("ENG-1".into())
+        );
     }
 
     #[test]
@@ -1545,7 +1597,7 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let worktree = scratch.path().join("noidhere");
         std::fs::create_dir_all(&worktree).unwrap();
-        assert_eq!(issue_id_of(&worktree, "lev/no-id-here"), "UNKNOWN");
+        assert_eq!(issue_id_of(&worktree, "lev/no-id-here"), IssueId::Unknown);
     }
 
     /// The record holds the tracker's own spelling, so it comes back untouched.
@@ -1559,7 +1611,10 @@ mod tests {
             "issue = \"eng-1234\"\nslug = \"x\"\napps = []\n",
         )
         .unwrap();
-        assert_eq!(issue_id_of(dir.path(), "DETACHED"), "eng-1234");
+        assert_eq!(
+            issue_id_of(dir.path(), "DETACHED"),
+            IssueId::Tracker("eng-1234".into())
+        );
     }
 
     /// A record with an empty id was set up with no issue. Its branch carries
@@ -1573,7 +1628,7 @@ mod tests {
             "issue = \"\"\nslug = \"x\"\napps = []\n",
         )
         .unwrap();
-        assert_eq!(issue_id_of(dir.path(), "lev/utf-8-fix"), "NONE");
+        assert_eq!(issue_id_of(dir.path(), "lev/utf-8-fix"), IssueId::NoIssue);
     }
 
     #[test]
@@ -1589,7 +1644,7 @@ mod tests {
                 Path::new("/x"),
                 "pr-3255-feat-api-migrate-view-v2-to-kysely-u11-swe-8603"
             ),
-            "SWE-8603"
+            IssueId::Tracker("SWE-8603".into())
         );
         // Normal worktree branch still resolves from its leading id.
         assert_eq!(

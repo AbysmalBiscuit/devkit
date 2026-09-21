@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use devkit_common::tracker::{Resolved, TrackerKind, fake::FakeTracker};
+use devkit_common::{
+    tracker::{Resolved, TrackerKind, fake::FakeTracker},
+    worktree::IssueId,
+};
 
 fn git(args: &[&str], cwd: &Path) {
     devkit_common::git::Git::fixture(cwd)
@@ -45,7 +48,7 @@ fn gather_local_returns_offline_rows_without_network() {
     let row = report
         .worktrees
         .iter()
-        .find(|r| r.issue_id == "ENG-1")
+        .find(|r| r.issue_id == IssueId::Tracker("ENG-1".into()))
         .expect("eng-1 row present");
     assert_eq!(row.pr.state_label(), "NO_PR");
     assert_eq!(row.pr.number(), None);
@@ -105,12 +108,12 @@ fn a_lowercase_record_id_is_found_by_either_spelling() {
         let report =
             devkit_issue::status::gather_local(main.to_str().unwrap(), &[spelling.to_string()])
                 .unwrap();
-        let ids: Vec<&str> = report
-            .worktrees
-            .iter()
-            .map(|r| r.issue_id.as_str())
-            .collect();
-        assert_eq!(ids, ["eng-1234"], "filtering by {spelling}");
+        let ids: Vec<&IssueId> = report.worktrees.iter().map(|r| &r.issue_id).collect();
+        assert_eq!(
+            ids,
+            [&IssueId::Tracker("eng-1234".into())],
+            "filtering by {spelling}"
+        );
     }
 }
 
@@ -146,7 +149,7 @@ fn an_issueless_record_reads_as_none_not_a_branch_scan() {
         .iter()
         .find(|r| r.branch == "lev/utf-8-fix")
         .expect("issueless row present");
-    assert_eq!(row.issue_id, "NONE");
+    assert_eq!(row.issue_id, IssueId::NoIssue);
     assert!(
         !found.issue_ids().iter().any(|id| id == "NONE"),
         "no tracker lookup for an issueless worktree: {:?}",

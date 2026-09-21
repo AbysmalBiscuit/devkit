@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use devkit_common::{
     git::Worktree,
-    worktree::{self, IncludePlan},
+    worktree::{self, IncludePlan, IssueId},
 };
 use devkit_ports::load;
 
@@ -104,7 +104,10 @@ fn link_list<'a>(links: impl IntoIterator<Item = (&'a Path, &'a Path)>, verbose:
 /// The (worktree, issue id) pairs `selectors` names, in selector order and
 /// deduplicated; every pair when `selectors` is empty. A selector that names
 /// nothing is reported and skipped rather than failing the run.
-fn select<'a>(rows: &'a [(Worktree, String)], selectors: &[String]) -> Vec<&'a (Worktree, String)> {
+fn select<'a>(
+    rows: &'a [(Worktree, IssueId)],
+    selectors: &[String],
+) -> Vec<&'a (Worktree, IssueId)> {
     if selectors.is_empty() {
         return rows.iter().collect();
     }
@@ -114,7 +117,7 @@ fn select<'a>(rows: &'a [(Worktree, String)], selectors: &[String]) -> Vec<&'a (
         let mut hit = false;
         for row in rows {
             let (wt, id) = row;
-            if matches_parts(&wt.path.to_string_lossy(), &wt.branch, id, sel) {
+            if matches_parts(&wt.path.to_string_lossy(), &wt.branch, &id.to_string(), sel) {
                 hit = true;
                 if seen.insert(wt.path.clone()) {
                     chosen.push(row);
@@ -222,7 +225,7 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
     }
 
     let (source, worktrees) = worktree::discover(start)?;
-    let rows: Vec<(Worktree, String)> = worktrees
+    let rows: Vec<(Worktree, IssueId)> = worktrees
         .into_iter()
         .map(|w| {
             let id = worktree::issue_id_of(&w.path, &w.branch);
@@ -237,11 +240,7 @@ pub fn run(start: &str, selectors: &[String], flags: Flags, config: Option<&str>
 
     println!("Source: {}", source.display());
     for (wt, id) in targets {
-        let label = if worktree::is_tracker_id(id) {
-            id
-        } else {
-            &wt.branch
-        };
+        let label = id.tracker().unwrap_or(&wt.branch);
         println!("\n{label}  {}", wt.path.display());
 
         let mut plan = worktree::plan_includes(&source, &wt.path, patterns);

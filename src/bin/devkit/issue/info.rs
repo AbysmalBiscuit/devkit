@@ -175,7 +175,8 @@ fn live_enrich(
         2,
         Cell::Ready(crate::issue::triage::tree_cell(row.dirty)),
     );
-    let want_state = devkit_common::worktree::is_tracker_id(&row.issue_id);
+    let tracker_id = row.issue_id.tracker().map(str::to_owned);
+    let want_state = tracker_id.is_some();
     if !want_state {
         // No tracker fetch reports for an UNKNOWN or NONE id, so render the
         // same dim cell the final table shows instead of a spinner that
@@ -205,9 +206,8 @@ fn live_enrich(
                 let _ = tx.send(Update::Prs(st::fetch_prs(d, repo)));
             });
         }
-        if want_state {
+        if let Some(id) = tracker_id {
             let tx = tx.clone();
-            let id = row.issue_id.clone();
             s.spawn(move || {
                 let _ = tx.send(Update::States(t.states(std::slice::from_ref(&id))));
             });
@@ -238,7 +238,7 @@ fn live_enrich(
                     lt.set(0, 3, Cell::Ready(crate::issue::triage::pr_cell(row)));
                 }
                 Update::States(states) => {
-                    if let Some(s) = states.get(&row.issue_id) {
+                    if let Some(s) = row.issue_id.tracker().and_then(|id| states.get(id)) {
                         row.state = Some(s.clone());
                     }
                     got_state = true;
@@ -333,13 +333,15 @@ fn reconcile_cache(row: &mut IssueWorktree, live: &PrStatus) {
 
 #[cfg(test)]
 mod tests {
+    use devkit_common::worktree::IssueId;
+
     use super::*;
 
     fn row(worktree: &str, branch: &str, id: &str) -> IssueWorktree {
         IssueWorktree {
             worktree: worktree.into(),
             branch: branch.into(),
-            issue_id: id.into(),
+            issue_id: id.parse().unwrap(),
             dirty: false,
             pr: PrStatus::None,
             state: None,
@@ -364,7 +366,7 @@ mod tests {
 
         let top = base.path().to_str().unwrap();
         let r = local_row(top).unwrap();
-        assert_eq!(r.issue_id, "ENG-9");
+        assert_eq!(r.issue_id, IssueId::Tracker("ENG-9".into()));
         assert_eq!(r.branch, "lev/eng-9-foo");
         assert_eq!(r.pr.number(), None);
         assert!(!r.dirty);

@@ -36,13 +36,11 @@ pub(crate) const HEADERS: [&str; 6] = ["ISSUE", "BRANCH", "TREE", "PR", "STATE",
 /// The issue id, linked when the tracker offers a link base and actually knew
 /// the issue — an id the tracker never answered for has nothing to link to.
 pub(crate) fn issue_cell(row: &IssueWorktree, link_base: Option<&str>) -> String {
-    let linked = match link_base {
-        Some(base) if row.state.is_some() => {
-            ui::link(&row.issue_id, &format!("{base}{}", row.issue_id))
-        }
-        _ => row.issue_id.clone(),
+    let linked = match (link_base, row.issue_id.tracker()) {
+        (Some(base), Some(id)) if row.state.is_some() => ui::link(id, &format!("{base}{id}")),
+        _ => row.issue_id.to_string(),
     };
-    if !devkit_common::worktree::is_tracker_id(&row.issue_id) {
+    if row.issue_id.tracker().is_none() {
         ui::dim(&linked)
     } else {
         ui::cyan(&linked)
@@ -148,6 +146,7 @@ pub(crate) fn render(report: &StatusReport, offline: bool) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use devkit_common::worktree::IssueId;
     use devkit_issue::status::IssueWorktree;
 
     use super::*;
@@ -156,7 +155,7 @@ mod tests {
         IssueWorktree {
             worktree: "/w".into(),
             branch: "lev/eng-1-x".into(),
-            issue_id: "ENG-1".into(),
+            issue_id: "ENG-1".parse().unwrap(),
             dirty: false,
             pr,
             state: None,
@@ -266,7 +265,7 @@ mod tests {
     #[test]
     fn issue_cell_dims_an_unknown_id() {
         let mut r = row("OPEN");
-        r.issue_id = "UNKNOWN".into();
+        r.issue_id = IssueId::Unknown;
         assert_eq!(issue_cell(&r, None), ui::dim("UNKNOWN"));
         // The tracker never answered for this row, so the link base goes
         // unused.

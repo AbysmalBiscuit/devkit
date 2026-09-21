@@ -287,7 +287,7 @@ fn record_issue_id(linear_id: Option<&str>, head_ref: &str) -> String {
     linear_id.map(str::to_string).unwrap_or_else(|| {
         devkit_common::worktree::find_id(head_ref)
             .map(|s| s.to_uppercase())
-            .unwrap_or_else(|| "UNKNOWN".into())
+            .unwrap_or_else(|| devkit_common::worktree::IssueId::Unknown.to_string())
     })
 }
 

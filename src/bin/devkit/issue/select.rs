@@ -36,7 +36,7 @@ pub fn matches_parts(worktree_path: &str, branch: &str, issue_id: &str, sel: &st
 /// True when `sel` names this worktree by any of `matches_parts`' names or by
 /// the PR number (`3124` or `#3124`).
 pub fn matches(row: &IssueWorktree, sel: &str) -> bool {
-    if matches_parts(&row.worktree, &row.branch, &row.issue_id, sel) {
+    if matches_parts(&row.worktree, &row.branch, &row.issue_id.to_string(), sel) {
         return true;
     }
     let s = sel.to_lowercase();
@@ -55,7 +55,7 @@ mod tests {
         IssueWorktree {
             worktree: "/home/u/wt/eng-7-fix".into(),
             branch: "lev/eng-7-fix".into(),
-            issue_id: "ENG-7".into(),
+            issue_id: "ENG-7".parse().unwrap(),
             dirty: false,
             pr: PrStatus::None,
             state: None,

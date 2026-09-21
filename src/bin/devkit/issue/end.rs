@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use devkit_common::{progress::Steps, record::RecordState};
+use devkit_common::{progress::Steps, record::RecordState, worktree::IssueId};
 use devkit_issue::status::{IssueWorktree, gather_with, label, reason_not_finished};
 
 use crate::issue::triage::render;
@@ -157,7 +157,7 @@ fn main_repo(start: &str) -> Result<String> {
 /// `git worktree prune` after all removals finish.
 fn cleanup(
     worktree_path: &str,
-    issue_id: &str,
+    issue_id: &IssueId,
     force: bool,
     branch_lock: &Mutex<()>,
 ) -> Result<()> {
@@ -257,12 +257,12 @@ fn cleanup(
         // Records written before they carried a summary path give no way to
         // name the file, so the parent of the primary checkout — where the
         // default template puts it — is scanned for one belonging to this
-        // issue.
+        // issue. Without a tracker id there is nothing to match a file by.
         None => {
-            if let Ok(read) = std::fs::read_dir(parent) {
+            if let (Some(id), Ok(read)) = (issue_id.tracker(), std::fs::read_dir(parent)) {
                 for ent in read.flatten() {
                     let name = ent.file_name().to_string_lossy().into_owned();
-                    if is_legacy_summary(&name, issue_id) {
+                    if is_legacy_summary(&name, id) {
                         let _ = std::fs::remove_file(ent.path());
                     }
                 }
@@ -275,10 +275,9 @@ fn cleanup(
 /// How a worktree is named in prompts, steps, and errors: its issue id when the
 /// record has one, else its branch.
 fn row_label(row: &IssueWorktree) -> String {
-    if devkit_common::worktree::is_tracker_id(&row.issue_id) {
-        row.issue_id.clone()
-    } else {
-        row.branch.clone()
+    match &row.issue_id {
+        IssueId::Tracker(id) => id.clone(),
+        IssueId::NoIssue | IssueId::Unknown => row.branch.clone(),
     }
 }
 
@@ -745,7 +744,13 @@ mod tests {
 
         // The record itself is untracked scratch, so the tree is dirty without
         // --force.
-        cleanup(wt.to_str().unwrap(), "ENG-1", true, &Mutex::new(())).unwrap();
+        cleanup(
+            wt.to_str().unwrap(),
+            &IssueId::Tracker("ENG-1".into()),
+            true,
+            &Mutex::new(()),
+        )
+        .unwrap();
 
         assert!(!wt.exists(), "worktree removed");
         assert!(!summary.exists(), "recorded summary removed");
@@ -782,8 +787,47 @@ mod tests {
         let other = dir.path().join("ISSUE_SUMMARY_ENG-99.md");
         std::fs::write(&other, "someone else\n").unwrap();
 
-        cleanup(wt.to_str().unwrap(), "ENG-2", true, &Mutex::new(())).unwrap();
+        cleanup(
+            wt.to_str().unwrap(),
+            &IssueId::Tracker("ENG-2".into()),
+            true,
+            &Mutex::new(()),
+        )
+        .unwrap();
         assert!(other.exists(), "another issue's summary is untouched");
+    }
+
+    /// The legacy sweep matches files by issue id, and a worktree with no
+    /// tracker id has none to match by. Matching the `UNKNOWN` or `NONE`
+    /// placeholder would delete another issue's notes whose title uses the
+    /// word.
+    #[test]
+    fn cleanup_sweeps_no_legacy_summary_without_a_tracker_id() {
+        for (id, notes) in [
+            (
+                IssueId::Unknown,
+                "ISSUE_SUMMARY_ENG-99-fix-unknown-crash.md",
+            ),
+            (IssueId::NoIssue, "ISSUE_SUMMARY_ENG-98-none-values.md"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = repo_with_one_commit(dir.path());
+            let wt = dir.path().join("wt-tidy");
+            fixture_git(&main, &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "tidy",
+                wt.to_str().unwrap(),
+            ]);
+            let other = dir.path().join(notes);
+            std::fs::write(&other, "someone else\n").unwrap();
+
+            cleanup(wt.to_str().unwrap(), &id, true, &Mutex::new(())).unwrap();
+            assert!(!wt.exists(), "worktree removed for {id}");
+            assert!(other.exists(), "{notes} survives ending a {id} worktree");
+        }
     }
 
     /// The record is what names the baseline whose servers this run is still
@@ -810,13 +854,24 @@ mod tests {
         // and the refusal under test never runs.
         devkit_common::gitignore::write_self_ignore(&wt.join(".devkit"));
 
-        let err = cleanup(wt.to_str().unwrap(), "ENG-3", false, &Mutex::new(())).unwrap_err();
+        let err = cleanup(
+            wt.to_str().unwrap(),
+            &IssueId::Tracker("ENG-3".into()),
+            false,
+            &Mutex::new(()),
+        )
+        .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("issue.toml"), "{msg}");
         assert!(wt.exists(), "the worktree survives a refusal");
 
-        cleanup(wt.to_str().unwrap(), "ENG-3", true, &Mutex::new(()))
-            .expect("--force waives it the way it waives a dirty tree");
+        cleanup(
+            wt.to_str().unwrap(),
+            &IssueId::Tracker("ENG-3".into()),
+            true,
+            &Mutex::new(()),
+        )
+        .expect("--force waives it the way it waives a dirty tree");
         assert!(!wt.exists(), "worktree removed");
     }
 
@@ -888,7 +943,13 @@ mod tests {
         ]);
         record_pinned_at(&wt, "ENG-5", &baseline);
 
-        cleanup(wt.to_str().unwrap(), "ENG-5", true, &Mutex::new(())).unwrap();
+        cleanup(
+            wt.to_str().unwrap(),
+            &IssueId::Tracker("ENG-5".into()),
+            true,
+            &Mutex::new(()),
+        )
+        .unwrap();
 
         assert!(!wt.exists(), "worktree removed");
         assert!(
@@ -928,7 +989,13 @@ mod tests {
         ]);
         record_pinned_at(&wt, "ENG-6", &sibling);
 
-        cleanup(wt.to_str().unwrap(), "ENG-6", true, &Mutex::new(())).unwrap();
+        cleanup(
+            wt.to_str().unwrap(),
+            &IssueId::Tracker("ENG-6".into()),
+            true,
+            &Mutex::new(()),
+        )
+        .unwrap();
 
         assert!(!wt.exists(), "the removal completed");
         assert!(sibling.exists(), "a sibling worktree must survive the pin");
@@ -977,7 +1044,13 @@ mod tests {
         })
         .unwrap();
 
-        cleanup(wt.to_str().unwrap(), "ENG-4", true, &Mutex::new(())).unwrap();
+        cleanup(
+            wt.to_str().unwrap(),
+            &IssueId::Tracker("ENG-4".into()),
+            true,
+            &Mutex::new(()),
+        )
+        .unwrap();
 
         assert!(!recorded.exists(), "the recorded summary is removed");
         assert!(
@@ -1046,7 +1119,7 @@ mod tests {
         IssueWorktree {
             worktree: worktree.into(),
             branch: branch.into(),
-            issue_id: issue_id.into(),
+            issue_id: issue_id.parse().unwrap(),
             dirty: false,
             pr: devkit_issue::status::PrStatus::None,
             state: None,

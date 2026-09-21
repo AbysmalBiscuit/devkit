@@ -100,7 +100,11 @@ impl LiveState {
     ) -> Vec<(usize, usize, String)> {
         let mut out = Vec::new();
         for i in 0..self.rows.len() {
-            if let Some(s) = states.get(&self.rows[i].issue_id) {
+            if let Some(s) = self.rows[i]
+                .issue_id
+                .tracker()
+                .and_then(|id| states.get(id))
+            {
                 self.rows[i].state = Some(s.clone());
             }
             out.push((
@@ -346,7 +350,7 @@ mod tests {
         IssueWorktree {
             worktree: format!("/w/{id}"),
             branch: format!("lev/{}-x", id.to_lowercase()),
-            issue_id: id.into(),
+            issue_id: id.parse().unwrap(),
             dirty: false,
             pr: PrStatus::None,
             state: None,
