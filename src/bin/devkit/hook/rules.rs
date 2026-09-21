@@ -1,8 +1,8 @@
 //! The `pre-tool-use` rules stage: the rules governing the files this call is
 //! about to write.
 //!
-//! Four properties make this safe to hang off a permission gate, and each one
-//! is the safety argument rather than a convention.
+//! What follows makes this safe to hang off a permission gate. Each property
+//! below is the safety argument rather than a convention.
 //!
 //! Nothing here runs before the verdict is final. Loading config or parsing an
 //! index earlier would put a fallible, slow step in front of a denial: a
@@ -152,25 +152,25 @@ fn run(
         return;
     };
 
-    // Both sides resolve before they compare. git reports a symlinked working
-    // directory resolved, since it reads the directory rather than the spelling
-    // used to reach it, so `root` is `/private/var/...` where the payload's cwd
-    // is `/var/...`; `git.rs`'s own `containment` documents the same hazard. A
-    // purely lexical strip would drop every target on macOS.
+    // git reports a symlinked working directory resolved, since it reads the
+    // directory rather than the spelling used to reach it, so `root` is
+    // `/private/var/...` where the payload's cwd is `/var/...`; `git.rs`'s own
+    // `containment` documents the same hazard. A purely lexical strip would
+    // drop every target on macOS.
     let root_canon = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     // A target that escapes the root after normalization is dropped: a rule for
     // the repository root must not fire for a write outside the repository.
     let relative: Vec<String> = targets
         .iter()
         .map(|t| resolve(payload, t))
-        .filter_map(|abs| query::relativize(&root_canon, &abs))
+        .filter_map(|abs| relativize_root(root, &root_canon, &abs))
         .collect();
     if relative.is_empty() {
         return;
     }
 
     let subject = Subject {
-        root: root.to_path_buf(),
+        root: root_canon.clone(),
         targets: relative.clone(),
         harness: Some(harness_slug(harness_name).to_string()),
     };
@@ -208,15 +208,19 @@ fn run(
     // A relative `path` anchors to the directory of the layer that declared the
     // entry. `[[context.files]]` is an array, and an array leaf replaces
     // wholesale rather than merging, so every surviving entry came from one
-    // file and `origin` names it.
+    // file and `origin` names it. Layer discovery keeps the spelling it was
+    // reached with, so this resolves like `root_canon`: `subject.root` is
+    // already canonical, and comparing it against an unresolved `layer_dir`
+    // drops every entry when the project root is reached through a symlink.
     let layer_dir = provenance
         .origin
         .get("context.files")
         .and_then(|f| f.parent())
-        .unwrap_or(root);
+        .map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.to_path_buf()))
+        .unwrap_or_else(|| root_canon.clone());
     let mut files: Vec<(String, String)> = Vec::new();
     for entry in &project.context.files {
-        if fired.contains(&entry.path) || !context::fires(entry, layer_dir, &subject) {
+        if fired.contains(&entry.path) || !context::fires(entry, &layer_dir, &subject) {
             continue;
         }
         let path = layer_dir.join(&entry.path);
@@ -225,11 +229,30 @@ fn run(
         }
     }
 
+    // "How many rules and files one event may inject": the cap bounds files
+    // too, not just rules.
+    files.truncate(settings.per_event_limit);
     let budget = settings.per_event_limit.saturating_sub(files.len());
     chosen.truncate(budget);
 
-    let refs: Vec<&devkit_rules::model::Rule> = chosen.iter().collect();
-    let block = render::block(&refs, &files, settings.max_event_bytes);
+    // Whatever the byte cap would still cut is dropped here, before
+    // rendering, rather than rendered truncated and stamped anyway: the fired
+    // set must never claim to have shown content that never fully rendered.
+    let mut block;
+    loop {
+        let refs: Vec<&devkit_rules::model::Rule> = chosen.iter().collect();
+        block = render::block(&refs, &files, settings.max_event_bytes);
+        if !block.ends_with(render::TRUNCATION_NOTE) {
+            break;
+        }
+        if files.pop().is_some() {
+            continue;
+        }
+        if chosen.pop().is_some() {
+            continue;
+        }
+        break;
+    }
     if block.is_empty() {
         return;
     }
@@ -265,6 +288,16 @@ fn resolve(payload: &Value, path: &str) -> PathBuf {
                 .join(p)
         })
         .unwrap_or_else(|| p.to_path_buf())
+}
+
+/// `abs` relative to the repository, trying `root` as given before falling
+/// back to `root_canon`. Mirrors `git::containment`'s shape: a raw absolute
+/// target usually matches the raw root as-is, and canonicalizing first breaks
+/// that on Windows, where `canonicalize` returns a `\\?\`-prefixed path a
+/// harness never sends. The fallback still catches a target that only matches
+/// once a symlinked root and a symlinked cwd are both resolved.
+fn relativize_root(root: &Path, root_canon: &Path, abs: &Path) -> Option<String> {
+    query::relativize(root, abs).or_else(|| query::relativize(root_canon, abs))
 }
 
 fn harness_slug(harness: Harness) -> &'static str {
@@ -337,5 +370,30 @@ mod tests {
         assert_eq!(harness_slug(Harness::ClaudeCode), "claude-code");
         assert_eq!(harness_slug(Harness::Codex), "codex");
         assert_eq!(harness_slug(Harness::Cursor), "cursor");
+    }
+
+    /// Mirrors the Windows shape: `canonicalize` would prefix the root with
+    /// `\\?\`, which an absolute target sent verbatim by a harness never
+    /// carries, so the raw root has to be tried first.
+    #[test]
+    fn relativize_root_prefers_the_raw_root_over_the_canonical_one() {
+        let root = Path::new("/repo");
+        let root_canon = Path::new("/some/other/spelling/of/repo");
+        assert_eq!(
+            relativize_root(root, root_canon, Path::new("/repo/src/a.rs")).as_deref(),
+            Some("src/a.rs")
+        );
+    }
+
+    /// Mirrors the macOS shape: the raw root does not match until both sides
+    /// are resolved.
+    #[test]
+    fn relativize_root_falls_back_to_the_canonical_root() {
+        let root = Path::new("/var/repo");
+        let root_canon = Path::new("/private/var/repo");
+        assert_eq!(
+            relativize_root(root, root_canon, Path::new("/private/var/repo/src/a.rs")).as_deref(),
+            Some("src/a.rs")
+        );
     }
 }

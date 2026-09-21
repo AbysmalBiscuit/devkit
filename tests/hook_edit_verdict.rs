@@ -273,7 +273,7 @@ fn patch_payload(session: &str, cwd: Option<&Path>, targets: &[&str]) -> String 
     payload.to_string()
 }
 
-/// Review Focus 2: no `cwd` key, so a relative target cannot be resolved.
+/// No `cwd` key, so a relative target cannot be resolved.
 /// `apply_patch_paths` takes paths verbatim, relative to the session's cwd.
 #[test]
 fn a_payload_without_cwd_drops_relative_targets_and_keeps_absolute_ones() {
@@ -290,7 +290,7 @@ fn a_payload_without_cwd_drops_relative_targets_and_keeps_absolute_ones() {
     );
 }
 
-/// Review Focus 4: a parent and its subagents append to one file.
+/// A parent and its subagents append to one file.
 #[test]
 fn a_torn_line_in_the_fired_set_does_not_suppress_the_rest() {
     let state = tempfile::tempdir().unwrap();
@@ -327,4 +327,105 @@ fn a_multi_target_call_unions_the_rules_for_every_target() {
     let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
     assert!(text.contains("Foo should"), "the crates/foo target: {text}");
     assert!(text.contains("Root must"), "the root target: {text}");
+}
+
+/// `[[context.files]]` must fire whether the project is reached through its
+/// real path or through a symlink to it: git always reports the checkout root
+/// resolved, and layer discovery keeps the spelling it was reached with.
+#[cfg(unix)]
+#[test]
+fn context_files_fire_when_the_project_is_reached_through_a_symlink() {
+    let state = tempfile::tempdir().unwrap();
+    let real = rules_project(state.path());
+    let link_dir = tempfile::tempdir().unwrap();
+    let link = link_dir.path().join("via-symlink");
+    std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+    let payload = write_payload("S", None, &link, "crates/foo/src/a.rs");
+    let text = injected_text(&run_hook(&link, state.path(), &payload));
+    assert!(
+        text.contains("foo house rules"),
+        "the file dump through a symlinked root: {text}"
+    );
+}
+
+/// A project with three root-level context files that all fire for every
+/// target, so `per_event_limit` is the only thing standing between "one" and
+/// "all three" landing in one event.
+fn many_files_project(cap: usize) -> tempfile::TempDir {
+    let p = project();
+    for name in ["one.md", "two.md", "three.md"] {
+        std::fs::write(p.path().join(name), format!("marker-{name}")).unwrap();
+    }
+    std::fs::write(
+        p.path().join("devkit.toml"),
+        format!(
+            "[harness]\nenforce_writes = true\n\n\
+             [rules]\nenabled = true\nper_event_limit = {cap}\n\n\
+             [[context.files]]\npath = \"one.md\"\n\n\
+             [[context.files]]\npath = \"two.md\"\n\n\
+             [[context.files]]\npath = \"three.md\"\n"
+        ),
+    )
+    .unwrap();
+    p
+}
+
+#[test]
+fn per_event_limit_bounds_files_as_well_as_rules() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = many_files_project(1);
+    let payload = write_payload("S", None, proj.path(), "src/a.rs");
+
+    let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    let shown = ["one.md", "two.md", "three.md"]
+        .iter()
+        .filter(|name| text.contains(**name))
+        .count();
+    assert_eq!(shown, 1, "per_event_limit = 1 must cap files too: {text}");
+}
+
+/// Two files whose combined render exceeds `max_event_bytes`, so the second
+/// one is cut. `render::block`'s file section for `big1.md` alone is 94
+/// bytes; the cap sits above that and below the combined 188, so exactly one
+/// file survives the cap.
+fn capped_files_project(max_event_bytes: usize) -> tempfile::TempDir {
+    let p = project();
+    std::fs::write(p.path().join("big1.md"), "x".repeat(80)).unwrap();
+    std::fs::write(p.path().join("big2.md"), "y".repeat(80)).unwrap();
+    std::fs::write(
+        p.path().join("devkit.toml"),
+        format!(
+            "[harness]\nenforce_writes = true\n\n\
+             [rules]\nenabled = true\nmax_event_bytes = {max_event_bytes}\n\n\
+             [[context.files]]\npath = \"big1.md\"\n\n\
+             [[context.files]]\npath = \"big2.md\"\n"
+        ),
+    )
+    .unwrap();
+    p
+}
+
+#[test]
+fn content_the_byte_cap_cuts_is_not_marked_as_fired() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = capped_files_project(150);
+    let payload = write_payload("S", None, proj.path(), "src/a.rs");
+
+    let first = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    assert!(
+        first.contains("big1.md"),
+        "the file that fits is shown: {first}"
+    );
+    assert!(
+        !first.contains("big2.md"),
+        "the file that does not fit is dropped whole, not cut: {first}"
+    );
+
+    let second = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    assert!(
+        second.contains("big2.md"),
+        "what the cap cut must still be offered later, since it was never \
+         actually shown: {second}"
+    );
 }
