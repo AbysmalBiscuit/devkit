@@ -74,14 +74,15 @@ description = "Run workspace documentation tests"
 run = ["cargo", "test", "--doc", "--workspace", "--all-features", "--locked"]
 guard = true
 
+# Keep this nightly in step with the rustfmt job in .github/workflows/ci.yml.
 [tasks.fmt]
 description = "Format the workspace with nightly rustfmt"
-run = ["cargo", "+nightly", "fmt", "--all"]
+run = ["cargo", "+nightly-2026-09-20", "fmt", "--all"]
 guard = true
 
 [tasks.fmt-check]
 description = "Check workspace formatting with nightly rustfmt"
-run = ["cargo", "+nightly", "fmt", "--all", "--", "--check"]
+run = ["cargo", "+nightly-2026-09-20", "fmt", "--all", "--", "--check"]
 guard = true
 
 [tasks.lint]

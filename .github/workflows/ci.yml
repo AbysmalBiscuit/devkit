@@ -21,11 +21,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # rustfmt.toml sets unstable options; stable rustfmt warns and ignores
-      # them, so a stable check would pass on unformatted code.
-      - uses: dtolnay/rust-toolchain@nightly
+      # them, so a stable check would pass on unformatted code. The nightly is
+      # dated because those options format differently across nightlies; bump
+      # it together with the fmt tasks in devkit.toml.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-09-20
           components: rustfmt
-      - run: cargo +nightly fmt --all -- --check
+      - run: cargo +nightly-2026-09-20 fmt --all -- --check
 
   audit:
     name: cargo audit
