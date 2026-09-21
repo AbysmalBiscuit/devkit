@@ -722,6 +722,34 @@ fn a_skipped_foreign_name_still_completes_the_pass() {
     );
 }
 
+/// Make `dir` writable and delete it once this test process has exited, however
+/// it exits. Files under an unwritable directory cannot be unlinked, so a
+/// staged tree left at 0o555 defeats `TempDir`'s cleanup and `cargo clean`
+/// alike, and no `Drop` guard runs when a timeout, a cancelled job or Ctrl-C
+/// kills the process. The watcher is orphaned into its own process group, so
+/// neither a signal to the test's group nor waiting on the test's children
+/// reaches it.
+#[cfg(unix)]
+fn remove_after_exit(dir: &std::path::Path) {
+    use std::os::unix::process::CommandExt;
+
+    let status = Command::new("sh")
+        .args([
+            "-c",
+            r#"(while kill -0 "$1" 2>/dev/null; do sleep 1; done; chmod u+w "$2"; rm -rf "$2") &"#,
+            "sh",
+        ])
+        .arg(std::process::id().to_string())
+        .arg(dir)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("spawn the cleanup watcher");
+    assert!(status.success(), "cleanup watcher: {status}");
+}
+
 /// A pass that could not link is recorded as partial, and a partial stamp only
 /// suppresses the retry until `RETRY_COOLDOWN` has elapsed. Without that, the
 /// stamp records that a pass ran rather than that the links are correct: an
@@ -747,27 +775,15 @@ fn a_failed_pass_is_partial_and_retries_once_the_cooldown_elapses() {
         })
     };
 
-    // The mode is restored twice over: explicitly, because the rest of the test
-    // needs the directory writable, and by a guard that also runs when a panic
-    // unwinds out of the window between. Files under an unwritable directory
-    // cannot be unlinked, so a leak there defeats `TempDir`'s own cleanup and
-    // survives `cargo clean` — it has to be removed by hand.
-    struct RestoreMode<'a>(&'a std::path::Path);
-    impl Drop for RestoreMode<'_> {
-        fn drop(&mut self) {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o755));
-        }
-    }
-    let restore = RestoreMode(dir.path());
-
+    remove_after_exit(dir.path());
     std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555))
         .expect("make the install dir unwritable");
     doctor(state.path());
     let portm = shim_path(dir.path(), "portm");
     let unwritable_left_it_unlinked = !portm.exists();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
+        .expect("make the install dir writable again");
     let (identity, status) = read_stamp(state.path());
-    drop(restore);
     assert!(
         unwritable_left_it_unlinked,
         "an unwritable install dir should have failed every link"
