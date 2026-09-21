@@ -5,8 +5,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
-/// The shell whose syntax a hook command is read in. `auto` resolves from
-/// the tool name and the harness; see `docs/configuration.md`.
+/// The shell whose syntax a hook command is read in. `auto` reads Claude
+/// Code's `PowerShell` tool and Codex on Windows as PowerShell, and everything
+/// else as bash. The hook process's own `SHELL` and `MSYSTEM` are never read.
 #[derive(
     Deserialize, Serialize, Default, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema,
 )]
@@ -119,20 +120,27 @@ pub enum PromptFidelity {
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, schemars::JsonSchema)]
 #[serde(default)]
 pub struct LogSection {
-    /// Turn logging on. Read from the global config alone.
+    /// Turn logging on. Read from the global config alone; a project layer
+    /// may only set it false. `DEVKIT_HARNESS_LOG` wins over both.
     pub enabled: Option<bool>,
-    /// How much of a command's text a record carries.
+    /// How much of a command's text a record carries, `redacted` by default.
+    /// Resolves to the lowest value any layer sets, so no project can raise
+    /// it. Redaction is best effort: it catches the credential variables devkit
+    /// knows and the token prefixes of services it talks to, nothing more.
     pub command: Option<Fidelity>,
-    /// How much of a submitted prompt a record carries.
+    /// How much of a submitted prompt a record carries, `off` by default.
+    /// Resolves to the lowest value any layer sets.
     pub prompt: Option<PromptFidelity>,
     /// Sweep the log directory at session end. Global config only.
     pub auto_prune: Option<bool>,
     /// Where records land. Global config only; defaults under the state dir.
     pub dir: Option<PathBuf>,
-    /// Days of records to keep. Global config only; absent means unlimited.
+    /// Days of records to keep. Global config only; absent means unlimited,
+    /// and `0` is rejected as ambiguous.
     #[serde(deserialize_with = "nonzero_u32")]
     pub max_age_days: Option<u32>,
-    /// Bytes of records to keep. Global config only; absent means unlimited.
+    /// Bytes of records to keep. Global config only; absent means unlimited,
+    /// and `0` is rejected as ambiguous.
     #[serde(deserialize_with = "nonzero_u64")]
     pub max_bytes: Option<u64>,
 }
@@ -216,9 +224,12 @@ pub struct CommandRule {
     /// `false` turns off a rule a parent layer declared.
     #[serde(default = "enabled_default")]
     pub enabled: bool,
+    /// `block` refuses the command; `warn` allows it and shows the reason. A
+    /// rule whose arguments cannot be resolved (`git "$verb" add`) warns.
     #[serde(default)]
     #[schemars(default)]
     pub action: RuleAction,
+    /// How the message is classified for the agent.
     #[serde(default)]
     #[schemars(default)]
     pub severity: Severity,
@@ -315,33 +326,46 @@ impl Default for AppMatch {
 /// checkout, with no per-project file at all.
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
 pub struct HarnessSection {
-    /// Refuse writes to paths this checkout has not claimed with `lockm`.
+    /// Claim a lock on every file an agent's edit or resolvable shell write
+    /// touches, and deny a write another session holds. On when
+    /// `DEVKIT_ENFORCE_WRITES` says so, else when any project layer or the
+    /// global config sets it. Fails closed on a registry error.
     #[serde(default)]
     pub enforce_writes: bool,
-    /// Refuse shell commands devkit already has a wired-up path for.
+    /// Refuse shell commands devkit already has a wired-up path for: a
+    /// `[harness.commands]` rule, a retyped task, an app's launch, or a known
+    /// dev server. devkit's own binaries always run. Fails open.
+    /// `DEVKIT_ENFORCE_COMMANDS` overrides it.
     #[serde(default)]
     pub enforce_commands: bool,
     /// The shell a hook command is read in.
     #[serde(default)]
     #[schemars(default)]
     pub shell: ShellSetting,
-    /// A write whose target could not be determined.
+    /// A write, or code that may write, whose target could not be determined.
+    /// Claiming some other path never covers it.
     #[serde(default = "block")]
     #[schemars(default = "block")]
     pub unresolved_writes: PolicyAction,
-    /// Executable source in a language devkit cannot analyze.
+    /// Executable source in a language devkit cannot analyze, such as
+    /// `perl -e` or `ruby -e`. An `awk` program counts only when it could
+    /// write.
     #[serde(default = "block")]
     #[schemars(default = "block")]
     pub unsupported_language: PolicyAction,
-    /// A call to a stored script, whose contents are not read.
+    /// A call to a stored script (`python3 tools/gen.py`), whose contents are
+    /// not read.
     #[serde(default = "allow")]
     #[schemars(default = "allow")]
     pub script_files: PolicyAction,
     /// Extra refusals beyond the ones devkit derives from `[apps]` and
-    /// `[tasks]`. Merged across config layers like every other table.
+    /// `[tasks]`. Merged across config layers by name; redefining a rule
+    /// overrides only the keys it sets.
     #[serde(default)]
     pub commands: BTreeMap<String, CommandRule>,
-    /// How the guard resolves a guarded command to one of `[apps]`.
+    /// How the guard resolves a guarded command to one of `[apps]`, from a
+    /// workspace path in the command, a `--filter`/`--dir`/`-C` value, or the
+    /// shell's directory.
     #[serde(default)]
     pub app_match: AppMatch,
     /// What devkit records about the events a harness sends it.
