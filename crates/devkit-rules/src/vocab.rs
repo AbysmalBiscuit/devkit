@@ -157,4 +157,16 @@ mod tests {
         );
         assert_eq!("codegen".parse::<Task>().ok(), None);
     }
+
+    /// `repo-rules-agent`'s `rules/models.py` declares
+    /// `Scope = Literal["repo", "directory", "file-pattern"]`, kebab-cased
+    /// like the other two spellings above. A mismatch here would make every
+    /// file-pattern-scoped rule silently invisible.
+    #[test]
+    fn scope_parses_from_its_hyphenated_spelling() {
+        assert_eq!(
+            "file-pattern".parse::<Scope>().ok(),
+            Some(Scope::FilePattern)
+        );
+    }
 }
