@@ -62,8 +62,10 @@ fn strip_verbatim(path: &Path) -> PathBuf {
 
 /// The cache root platformdirs gives `repo-rules`.
 ///
-/// Confirm the Windows nesting against platformdirs itself before trusting this
-/// on Windows; the Unix arms are the documented XDG and Apple locations.
+/// On Windows, platformdirs lays out
+/// `%LOCALAPPDATA%\<appauthor>\<appname>\Cache` with appauthor defaulting to
+/// appname, hence the `repo-rules\repo-rules\Cache` nesting below. The Unix
+/// arms are the documented XDG and Apple locations.
 fn cache_root() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -132,8 +134,8 @@ mod tests {
         assert!(cache_dir_name(Path::new("/tmp/--weird--")).starts_with("weird-"));
     }
 
-    /// Review Focus 1: an index whose top-level shape drifted injects nothing
-    /// and does not panic.
+    /// An index whose top-level shape drifted injects nothing and does not
+    /// panic.
     #[test]
     fn a_drifted_index_loads_as_none() {
         let dir = tempfile::tempdir().unwrap();
@@ -148,8 +150,8 @@ mod tests {
         assert!(load(&dir.path().join("absent.json")).is_none());
     }
 
-    /// Review Focus 5: a repository path that cannot be canonicalized still
-    /// yields a name rather than panicking, so the lookup simply misses.
+    /// A repository path that cannot be canonicalized still yields a name
+    /// rather than panicking, so the lookup simply misses.
     #[test]
     fn a_vanished_repo_path_still_names_a_cache_dir() {
         let dir = tempfile::tempdir().unwrap();
