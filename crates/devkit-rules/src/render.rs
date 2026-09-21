@@ -4,6 +4,31 @@ use crate::model::Rule;
 
 pub const TRUNCATION_NOTE: &str = "\n\n(truncated)";
 
+/// A complete context block and the entries it contains, for fired-set
+/// stamping.
+pub struct Rendered<'a> {
+    pub text: String,
+    pub rules: Vec<&'a Rule>,
+    pub files: Vec<(String, String)>,
+}
+
+/// Fit complete entries within `cap`, dropping trailing files before rules.
+pub fn fit<'a>(
+    mut rules: Vec<&'a Rule>,
+    mut files: Vec<(String, String)>,
+    cap: usize,
+) -> Rendered<'a> {
+    loop {
+        let text = block(&rules, &files, usize::MAX);
+        if text.len() <= cap {
+            return Rendered { text, rules, files };
+        }
+        if files.pop().is_none() {
+            rules.pop();
+        }
+    }
+}
+
 /// The rules and files as one block, truncated to `cap` bytes at a character
 /// boundary. Empty when there is nothing to say, which the caller reads as
 /// "emit nothing" rather than as an empty context block.

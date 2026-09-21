@@ -17,6 +17,33 @@ pub struct Subject {
     pub harness: Option<String>,
 }
 
+/// A target relative to the checkout, including symlink aliases and files
+/// that do not exist yet. The raw comparison avoids Windows verbatim-prefix
+/// differences; the fallback resolves both paths through existing ancestors.
+pub fn relativize_target(root: &Path, target: &Path) -> Option<String> {
+    relativize(root, target).or_else(|| {
+        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        relativize(&root, &canonicalize_prefix(target))
+    })
+}
+
+fn canonicalize_prefix(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    while !existing.exists() {
+        let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
+            return path.to_path_buf();
+        };
+        tail.push(name);
+        existing = parent;
+    }
+    let mut resolved = std::fs::canonicalize(existing).unwrap_or_else(|_| existing.to_path_buf());
+    for name in tail.into_iter().rev() {
+        resolved.push(name);
+    }
+    resolved
+}
+
 /// Whether `entry`, declared by a `devkit.toml` in `layer_dir`, injects for
 /// `subject`. Every condition present must hold.
 pub fn fires(entry: &ContextFile, layer_dir: &Path, subject: &Subject) -> bool {
@@ -68,6 +95,40 @@ mod tests {
     use devkit_config::{ContextFile, FileCondition};
 
     use super::*;
+
+    #[test]
+    fn relativize_target_accepts_a_raw_path_without_existing_ancestors() {
+        assert_eq!(
+            relativize_target(Path::new("/repo"), Path::new("/repo/src/a.rs")).as_deref(),
+            Some("src/a.rs")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relativize_target_resolves_a_nonexistent_target_reached_through_a_symlink() {
+        let real = tempfile::tempdir().unwrap();
+        let link_dir = tempfile::tempdir().unwrap();
+        let link = link_dir.path().join("via-symlink");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+        let root = std::fs::canonicalize(real.path()).unwrap();
+        let abs = link.join("src/a.rs");
+        assert_eq!(relativize_target(&root, &abs).as_deref(), Some("src/a.rs"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relativize_target_drops_a_path_outside_the_repository() {
+        let real = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let link_dir = tempfile::tempdir().unwrap();
+        let link = link_dir.path().join("via-symlink");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+        let outside = other.path().join("elsewhere/b.rs");
+        assert_eq!(relativize_target(&link, &outside), None);
+    }
 
     fn subject(targets: &[&str]) -> Subject {
         Subject {

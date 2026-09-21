@@ -105,11 +105,14 @@ fn keeps(rule: &Rule, filter: &Filter) -> bool {
     if !filter.paths.is_empty() && !filter.paths.iter().any(|p| governs(&rule.directory, p)) {
         return false;
     }
-    if let Some(task) = filter.task {
-        let tasks = rule.tasks();
-        if !tasks.is_empty() && !tasks.contains(&task) {
-            return false;
-        }
+    let Some(tasks) = rule.tasks() else {
+        return false;
+    };
+    if filter
+        .task
+        .is_some_and(|task| !tasks.is_empty() && !tasks.contains(&task))
+    {
+        return false;
     }
     if let Some(language) = &filter.language {
         let wanted = canonical_language(language);

@@ -49,6 +49,107 @@ fn query_filters_by_path_and_prints_json() {
     );
 }
 
+fn query_ids(
+    project: &std::path::Path,
+    state: &std::path::Path,
+    paths: &[&str],
+    args: &[&str],
+) -> Vec<String> {
+    let mut cmd = devkit();
+    cmd.args(["rules", "query", "--format", "json"])
+        .args(args)
+        .current_dir(project)
+        .env("HOME", state)
+        .env("XDG_STATE_HOME", state)
+        .env("DEVKIT_SKIP_AUTOLINK", "1")
+        .env_remove("DEVKIT_CONFIG");
+    for path in paths {
+        cmd.args(["--path", path]);
+    }
+    testenv::scrub_identity(&mut cmd);
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rules: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    rules
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn query_normalizes_absolute_dot_and_parent_paths() {
+    let (proj, state) = context_project();
+    let absolute = proj.path().join("crates/foo/a.rs");
+    for path in [
+        "crates/foo/a.rs",
+        "./crates/foo/a.rs",
+        "crates/bar/../foo/a.rs",
+        absolute.to_str().unwrap(),
+    ] {
+        let ids = query_ids(proj.path(), state.path(), &[path], &[]);
+        assert!(ids.iter().any(|id| id == "r-foo-should"), "{path}: {ids:?}");
+        assert!(ids.iter().any(|id| id == "r-root-must"), "{path}: {ids:?}");
+    }
+    let subdir = proj.path().join("crates/foo");
+    std::fs::create_dir_all(&subdir).unwrap();
+    let ids = query_ids(&subdir, state.path(), &["./a.rs"], &[]);
+    assert!(ids.iter().any(|id| id == "r-foo-should"), "{ids:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn query_accepts_a_nonexistent_absolute_target_through_a_checkout_symlink() {
+    let (proj, state) = context_project();
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("checkout");
+    std::os::unix::fs::symlink(proj.path(), &alias).unwrap();
+    let target = alias.join("crates/foo/new.rs");
+    let ids = query_ids(proj.path(), state.path(), &[target.to_str().unwrap()], &[]);
+    assert!(ids.iter().any(|id| id == "r-foo-should"), "{ids:?}");
+}
+
+#[test]
+fn query_drops_outside_paths_without_removing_the_filter() {
+    let (proj, state) = context_project();
+    let outside = tempfile::tempdir().unwrap();
+    let absolute = outside.path().join("a.rs");
+    for path in ["../outside.rs", absolute.to_str().unwrap()] {
+        assert!(
+            query_ids(proj.path(), state.path(), &[path], &[]).is_empty(),
+            "{path}"
+        );
+    }
+    assert!(!query_ids(proj.path(), state.path(), &[], &[]).is_empty());
+    let ids = query_ids(
+        proj.path(),
+        state.path(),
+        &["../outside.rs", "crates/foo/a.rs"],
+        &[],
+    );
+    assert!(ids.iter().any(|id| id == "r-foo-should"), "{ids:?}");
+}
+
+#[test]
+fn query_rejects_unknown_tasks_with_and_without_a_task_filter() {
+    let (proj, state) = context_project();
+    let index = serde_json::json!({"rules": [
+        {"id": "unknown", "tasks": ["codegen"]},
+        {"id": "mixed", "tasks": ["code-generation", "codegen"]},
+        {"id": "valid", "tasks": ["code-generation"]},
+        {"id": "untagged", "tasks": []}
+    ]});
+    std::fs::write(proj.path().join("index.json"), index.to_string()).unwrap();
+    for args in [vec![], vec!["--task", "code-generation"]] {
+        assert_eq!(query_ids(proj.path(), state.path(), &[], &args), [
+            "valid", "untagged"
+        ]);
+    }
+}
+
 #[test]
 fn stats_reports_counts_and_breakdowns() {
     let dir = tempfile::tempdir().unwrap();
@@ -218,9 +319,11 @@ fn run_context_piped(
 /// has to be checked directly against the fired-set file.
 #[test]
 fn context_does_not_stamp_a_rule_the_byte_cap_cut() {
-    let (proj, state) = context_project_with_cap(160);
+    let (proj, state) = context_project_with_cap(240);
 
     let body = run_context_piped(proj.path(), state.path(), "cap-session");
+    assert!(body.len() <= 240, "{} bytes: {body}", body.len());
+    assert!(body.contains("devkit rules query --path"), "{body}");
     assert!(body.contains("Root must"), "the rule that fits: {body}");
     assert!(
         !body.contains("Review only"),
@@ -244,6 +347,45 @@ fn context_does_not_stamp_a_rule_the_byte_cap_cut() {
         "the rule the cap cut must not be marked fired, since it was never \
          actually shown: {stamped}"
     );
+}
+
+#[test]
+fn context_reserves_the_footer_budget_before_selecting_rules() {
+    let (proj, state) = context_project_with_cap(160);
+    let out = run_context(proj.path(), state.path(), &["--additional-context"]);
+    assert!(out.status.success());
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let text = envelope["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(text.len() <= 160, "{} bytes: {text}", text.len());
+    assert!(text.contains("devkit rules query --path"), "{text}");
+    assert!(!text.contains("Root must"), "{text}");
+}
+
+#[test]
+fn context_emits_the_query_pointer_when_no_startup_rules_match() {
+    let (proj, state) = context_project();
+    let index = serde_json::json!({"rules": [{
+        "id": "directory-rule", "title": "Directory rule", "scope": "directory",
+        "directory": "src", "severity": "should"
+    }]});
+    std::fs::write(proj.path().join("index.json"), index.to_string()).unwrap();
+    let out = run_context(proj.path(), state.path(), &[]);
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("devkit rules query --path"), "{text}");
+    assert!(!text.contains("Directory rule"), "{text}");
+}
+
+#[test]
+fn context_is_silent_when_the_footer_cannot_fit() {
+    for cap in [0, 50] {
+        let (proj, state) = context_project_with_cap(cap);
+        let text = run_context_piped(proj.path(), state.path(), "tiny-cap");
+        assert!(text.is_empty(), "{cap}: {text}");
+        assert!(!state.path().join("devkit/rules").exists());
+    }
 }
 
 fn run_context(

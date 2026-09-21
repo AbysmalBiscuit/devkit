@@ -371,7 +371,6 @@ fn a_payload_without_cwd_drops_relative_targets_and_keeps_absolute_ones() {
     );
 }
 
-/// A parent and its subagents append to one file.
 #[test]
 fn a_torn_line_in_the_fired_set_does_not_suppress_the_rest() {
     let state = tempfile::tempdir().unwrap();
@@ -408,6 +407,41 @@ fn a_multi_target_call_unions_the_rules_for_every_target() {
     let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
     assert!(text.contains("Foo should"), "the crates/foo target: {text}");
     assert!(text.contains("Root must"), "the root target: {text}");
+}
+
+#[test]
+fn a_multi_target_call_ranks_the_union_before_the_limit() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = project();
+    let index = proj.path().join("index.json");
+    std::fs::write(
+        &index,
+        serde_json::json!({"rules": [
+            {"id": "root", "title": "Root rule", "severity": "should"},
+            {"id": "deep", "title": "Deep rule", "severity": "must",
+             "scope": "directory", "directory": "crates/foo"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        proj.path().join("devkit.toml"),
+        format!(
+            "[rules]\nindex = '{}'\nper_event_limit = 1\n",
+            index.display()
+        ),
+    )
+    .unwrap();
+    let payload = patch_payload("rank-session", Some(proj.path()), &[
+        "README.md",
+        "crates/foo/src/a.rs",
+    ]);
+    let first = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    assert!(first.contains("Deep rule"), "{first}");
+    assert!(!first.contains("Root rule"), "{first}");
+    let second = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    assert!(second.contains("Root rule"), "{second}");
+    assert!(!second.contains("Deep rule"), "{second}");
 }
 
 /// `[[context.files]]` must fire whether the project is reached through its

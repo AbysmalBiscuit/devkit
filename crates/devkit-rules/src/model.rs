@@ -62,11 +62,10 @@ impl Rule {
         self.scope_raw.parse().ok()
     }
 
-    /// Parsed tasks, unknown spellings dropped. An empty result may mean the
-    /// index listed none or listed only unrecognized ones; `matching` treats
-    /// both as "applies to every task".
-    pub fn tasks(&self) -> Vec<Task> {
-        self.tasks.iter().filter_map(|t| t.parse().ok()).collect()
+    /// Parsed tasks, or `None` if any spelling is outside the vocabulary.
+    /// An empty list applies to every task.
+    pub fn tasks(&self) -> Option<Vec<Task>> {
+        self.tasks.iter().map(|t| t.parse().ok()).collect()
     }
 
     pub fn languages_canonical(&self) -> Vec<String> {

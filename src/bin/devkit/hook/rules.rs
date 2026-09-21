@@ -85,9 +85,9 @@ pub fn stamp_ids(holder: &str, ids: &[String]) {
 
 /// Ids already injected for `holder`.
 ///
-/// A parent and its subagents append to this file concurrently, so a line that
-/// does not look like an id is skipped rather than trusted or fatal: a torn
-/// line costs one duplicate injection, which is not worth a lock.
+/// Concurrent calls by one holder may interleave appends. Malformed lines
+/// cost a duplicate injection and are skipped without locking. Parents and
+/// subagents have separate fired sets.
 fn already_fired(holder: &str) -> HashSet<String> {
     std::fs::read_to_string(fired_path(holder))
         .unwrap_or_default()
@@ -163,7 +163,7 @@ fn run(
     let relative: Vec<String> = targets
         .iter()
         .map(|t| resolve(payload, t))
-        .filter_map(|abs| relativize_root(root, &root_canon, &abs))
+        .filter_map(|abs| context::relativize_target(root, &abs))
         .collect();
     if relative.is_empty() {
         return;
@@ -185,9 +185,10 @@ fn run(
 
     // One matched set across every target, so a call touching two directories
     // gets both directories' rules.
-    let mut chosen: Vec<devkit_rules::model::Rule> = Vec::new();
+    let mut chosen = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    if let Some(loaded) = index::load(&index_path) {
+    let loaded = index::load(&index_path);
+    if let Some(loaded) = &loaded {
         for target in &relative {
             let filter = Filter {
                 task: Some(Task::CodeGeneration),
@@ -196,13 +197,14 @@ fn run(
                 paths: vec![target.clone()],
                 ..Filter::default()
             };
-            for rule in query::rank(&loaded, query::matching(&loaded, &filter), &[]) {
+            for rule in query::matching(loaded, &filter) {
                 if fired.contains(&rule.id) || !seen.insert(rule.id.clone()) {
                     continue;
                 }
-                chosen.push(rule.clone());
+                chosen.push(rule);
             }
         }
+        chosen = query::rank(loaded, chosen, &[]);
     }
 
     // A relative `path` anchors to the directory of the layer that declared the
@@ -235,35 +237,18 @@ fn run(
     let budget = settings.per_event_limit.saturating_sub(files.len());
     chosen.truncate(budget);
 
-    // Whatever the byte cap would still cut is dropped here, before
-    // rendering, rather than rendered truncated and stamped anyway: the fired
-    // set must never claim to have shown content that never fully rendered.
-    let mut block;
-    loop {
-        let refs: Vec<&devkit_rules::model::Rule> = chosen.iter().collect();
-        block = render::block(&refs, &files, settings.max_event_bytes);
-        if !block.ends_with(render::TRUNCATION_NOTE) {
-            break;
-        }
-        if files.pop().is_some() {
-            continue;
-        }
-        if chosen.pop().is_some() {
-            continue;
-        }
-        break;
-    }
-    if block.is_empty() {
+    let rendered = render::fit(chosen, files, settings.max_event_bytes);
+    if rendered.text.is_empty() {
         return;
     }
-    let Some(envelope) = harness::warn_shell_json(harness_name, &block) else {
+    let Some(envelope) = harness::warn_shell_json(harness_name, &rendered.text) else {
         return;
     };
     print_envelope(&envelope);
     let _ = std::io::stdout().flush();
 
-    let mut ids: Vec<String> = chosen.into_iter().map(|r| r.id).collect();
-    ids.extend(files.into_iter().map(|(path, _)| path));
+    let mut ids: Vec<String> = rendered.rules.iter().map(|r| r.id.clone()).collect();
+    ids.extend(rendered.files.into_iter().map(|(path, _)| path));
     stamp_ids(holder, &ids);
 }
 
@@ -288,41 +273,6 @@ fn resolve(payload: &Value, path: &str) -> PathBuf {
                 .join(p)
         })
         .unwrap_or_else(|| p.to_path_buf())
-}
-
-/// `path`, canonicalized as far as an existing ancestor allows. A write
-/// target is often a file that does not exist yet, and `canonicalize` refuses
-/// a path that doesn't, so this walks up to the nearest ancestor that does
-/// exist, canonicalizes only that much, and rejoins the rest unresolved.
-fn canonicalize_prefix(path: &Path) -> PathBuf {
-    let mut existing = path;
-    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
-    while !existing.exists() {
-        let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
-            return path.to_path_buf();
-        };
-        tail.push(name);
-        existing = parent;
-    }
-    let mut resolved = std::fs::canonicalize(existing).unwrap_or_else(|_| existing.to_path_buf());
-    for name in tail.into_iter().rev() {
-        resolved.push(name);
-    }
-    resolved
-}
-
-/// `abs` relative to the repository, trying `root` as given before falling
-/// back to a fully canonical comparison. This mirrors `git::containment`: a
-/// raw absolute target usually matches the raw root as-is, and canonicalizing
-/// `root` first breaks that on Windows, where `canonicalize` returns a
-/// `\\?\`-prefixed path a harness never sends. The fallback resolves `abs`
-/// through [`canonicalize_prefix`] rather than `canonicalize` directly,
-/// because the target itself is often a file that does not exist yet; a raw
-/// `root_canon` compared against a raw `abs` only ever rescues a target that
-/// happened to already be spelled canonically.
-fn relativize_root(root: &Path, root_canon: &Path, abs: &Path) -> Option<String> {
-    query::relativize(root, abs)
-        .or_else(|| query::relativize(root_canon, &canonicalize_prefix(abs)))
 }
 
 fn harness_slug(harness: Harness) -> &'static str {
@@ -395,55 +345,5 @@ mod tests {
         assert_eq!(harness_slug(Harness::ClaudeCode), "claude-code");
         assert_eq!(harness_slug(Harness::Codex), "codex");
         assert_eq!(harness_slug(Harness::Cursor), "cursor");
-    }
-
-    /// Mirrors the Windows shape: `canonicalize` would prefix the root with
-    /// `\\?\`, which an absolute target sent verbatim by a harness never
-    /// carries, so the raw root has to be tried first.
-    #[test]
-    fn relativize_root_prefers_the_raw_root_over_the_canonical_one() {
-        let root = Path::new("/repo");
-        let root_canon = Path::new("/some/other/spelling/of/repo");
-        assert_eq!(
-            relativize_root(root, root_canon, Path::new("/repo/src/a.rs")).as_deref(),
-            Some("src/a.rs")
-        );
-    }
-
-    /// The real macOS shape: `abs` is spelled through a different symlink
-    /// than `root`, and neither `src/` nor `a.rs` exists yet, so `abs` cannot
-    /// be canonicalized directly. `canonicalize_prefix` resolves it through
-    /// the symlink, its nearest existing ancestor.
-    #[cfg(unix)]
-    #[test]
-    fn relativize_root_resolves_a_nonexistent_target_reached_through_a_symlink() {
-        let real = tempfile::tempdir().unwrap();
-        let link_dir = tempfile::tempdir().unwrap();
-        let link = link_dir.path().join("via-symlink");
-        std::os::unix::fs::symlink(real.path(), &link).unwrap();
-
-        let root = std::fs::canonicalize(real.path()).unwrap();
-        let abs = link.join("src/a.rs");
-        assert_eq!(
-            relativize_root(&root, &root, &abs).as_deref(),
-            Some("src/a.rs")
-        );
-    }
-
-    /// Containment must not widen: a path genuinely outside the repository
-    /// fails every attempt, even when `root` and `root_canon` differ (a
-    /// symlinked project root) and the outside path does not exist either.
-    #[cfg(unix)]
-    #[test]
-    fn relativize_root_drops_a_path_outside_the_repository() {
-        let real = tempfile::tempdir().unwrap();
-        let other = tempfile::tempdir().unwrap();
-        let link_dir = tempfile::tempdir().unwrap();
-        let link = link_dir.path().join("via-symlink");
-        std::os::unix::fs::symlink(real.path(), &link).unwrap();
-
-        let root_canon = std::fs::canonicalize(real.path()).unwrap();
-        let outside = other.path().join("elsewhere/b.rs");
-        assert_eq!(relativize_root(&link, &root_canon, &outside), None);
     }
 }

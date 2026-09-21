@@ -134,6 +134,9 @@ fn parse_vocab<T: std::str::FromStr>(value: Option<&str>, accepted: &str) -> Res
 
 fn query_cmd(args: QueryArgs) -> Result<()> {
     let (_, index) = load_or_default(args.index_path)?;
+    let cwd = std::env::current_dir().context("getting current dir")?;
+    let checkout = Checkout::at(&cwd);
+    let root = checkout.root().unwrap_or(&cwd);
     let filter = query::Filter {
         task: parse_vocab(
             args.task.as_deref(),
@@ -143,9 +146,18 @@ fn query_cmd(args: QueryArgs) -> Result<()> {
         scope: parse_vocab(args.scope.as_deref(), "repo, directory, file-pattern")?,
         severity: parse_vocab(args.severity.as_deref(), "must, should, can")?,
         min_severity: parse_vocab(args.min_severity.as_deref(), "must, should, can")?,
-        paths: args.paths,
+        paths: args
+            .paths
+            .iter()
+            .filter_map(|path| devkit_rules::context::relativize_target(root, &cwd.join(path)))
+            .collect(),
     };
-    let mut rules = query::rank(&index, query::matching(&index, &filter), &args.topics);
+    let matched = if !args.paths.is_empty() && filter.paths.is_empty() {
+        Vec::new()
+    } else {
+        query::matching(&index, &filter)
+    };
+    let mut rules = query::rank(&index, matched, &args.topics);
     if let Some(limit) = args.limit.filter(|n| *n > 0) {
         rules.truncate(limit);
     }
@@ -286,26 +298,14 @@ fn context_cmd(args: ContextArgs) -> Result<()> {
     let mut matched = query::rank(&loaded, query::matching(&loaded, &filter), &[]);
     matched.truncate(project.rules.per_event_limit);
 
-    // Whatever the byte cap would still cut is dropped here, before
-    // rendering, rather than rendered truncated and stamped anyway: the fired
-    // set must never claim to have shown content that never fully rendered.
-    let mut text;
-    loop {
-        text = devkit_rules::render::block(&matched, &[], project.rules.max_event_bytes);
-        if !text.ends_with(devkit_rules::render::TRUNCATION_NOTE) {
-            break;
-        }
-        if matched.pop().is_none() {
-            break;
-        }
-    }
-    if text.is_empty() {
+    let footer = "\nThe rest of this repository's rules are reachable with \
+                  `devkit rules query --path <path>`.\n";
+    let Some(budget) = project.rules.max_event_bytes.checked_sub(footer.len()) else {
         return Ok(());
-    }
-    text.push_str(
-        "\nThe rest of this repository's rules are reachable with \
-         `devkit rules query --path <path>`.\n",
-    );
+    };
+    let rendered = devkit_rules::render::fit(matched, Vec::new(), budget);
+    let mut text = rendered.text;
+    text.push_str(footer);
     if args.additional_context {
         println!("{}", crate::brief::envelope(&text));
     } else {
@@ -315,7 +315,7 @@ fn context_cmd(args: ContextArgs) -> Result<()> {
     // first allowed write re-injects everything the session-start block just
     // showed the agent.
     if let Some(session) = crate::brief::session_id() {
-        let ids: Vec<String> = matched.iter().map(|r| r.id.clone()).collect();
+        let ids: Vec<String> = rendered.rules.iter().map(|r| r.id.clone()).collect();
         crate::hook::rules::stamp_ids(&session, &ids);
     }
     Ok(())
