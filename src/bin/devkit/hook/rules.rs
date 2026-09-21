@@ -290,14 +290,39 @@ fn resolve(payload: &Value, path: &str) -> PathBuf {
         .unwrap_or_else(|| p.to_path_buf())
 }
 
+/// `path`, canonicalized as far as an existing ancestor allows. A write
+/// target is often a file that does not exist yet, and `canonicalize` refuses
+/// a path that doesn't, so this walks up to the nearest ancestor that does
+/// exist, canonicalizes only that much, and rejoins the rest unresolved.
+fn canonicalize_prefix(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    while !existing.exists() {
+        let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
+            return path.to_path_buf();
+        };
+        tail.push(name);
+        existing = parent;
+    }
+    let mut resolved = std::fs::canonicalize(existing).unwrap_or_else(|_| existing.to_path_buf());
+    for name in tail.into_iter().rev() {
+        resolved.push(name);
+    }
+    resolved
+}
+
 /// `abs` relative to the repository, trying `root` as given before falling
-/// back to `root_canon`. Mirrors `git::containment`'s shape: a raw absolute
-/// target usually matches the raw root as-is, and canonicalizing first breaks
-/// that on Windows, where `canonicalize` returns a `\\?\`-prefixed path a
-/// harness never sends. The fallback still catches a target that only matches
-/// once a symlinked root and a symlinked cwd are both resolved.
+/// back to a fully canonical comparison. This mirrors `git::containment`: a
+/// raw absolute target usually matches the raw root as-is, and canonicalizing
+/// `root` first breaks that on Windows, where `canonicalize` returns a
+/// `\\?\`-prefixed path a harness never sends. The fallback resolves `abs`
+/// through [`canonicalize_prefix`] rather than `canonicalize` directly,
+/// because the target itself is often a file that does not exist yet; a raw
+/// `root_canon` compared against a raw `abs` only ever rescues a target that
+/// happened to already be spelled canonically.
 fn relativize_root(root: &Path, root_canon: &Path, abs: &Path) -> Option<String> {
-    query::relativize(root, abs).or_else(|| query::relativize(root_canon, abs))
+    query::relativize(root, abs)
+        .or_else(|| query::relativize(root_canon, &canonicalize_prefix(abs)))
 }
 
 fn harness_slug(harness: Harness) -> &'static str {
@@ -385,15 +410,40 @@ mod tests {
         );
     }
 
-    /// Mirrors the macOS shape: the raw root does not match until both sides
-    /// are resolved.
+    /// The real macOS shape: `abs` is spelled through a different symlink
+    /// than `root`, and neither `src/` nor `a.rs` exists yet, so `abs` cannot
+    /// be canonicalized directly. `canonicalize_prefix` resolves it through
+    /// the symlink, its nearest existing ancestor.
+    #[cfg(unix)]
     #[test]
-    fn relativize_root_falls_back_to_the_canonical_root() {
-        let root = Path::new("/var/repo");
-        let root_canon = Path::new("/private/var/repo");
+    fn relativize_root_resolves_a_nonexistent_target_reached_through_a_symlink() {
+        let real = tempfile::tempdir().unwrap();
+        let link_dir = tempfile::tempdir().unwrap();
+        let link = link_dir.path().join("via-symlink");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+        let root = std::fs::canonicalize(real.path()).unwrap();
+        let abs = link.join("src/a.rs");
         assert_eq!(
-            relativize_root(root, root_canon, Path::new("/private/var/repo/src/a.rs")).as_deref(),
+            relativize_root(&root, &root, &abs).as_deref(),
             Some("src/a.rs")
         );
+    }
+
+    /// Containment must not widen: a path genuinely outside the repository
+    /// fails every attempt, even when `root` and `root_canon` differ (a
+    /// symlinked project root) and the outside path does not exist either.
+    #[cfg(unix)]
+    #[test]
+    fn relativize_root_drops_a_path_outside_the_repository() {
+        let real = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let link_dir = tempfile::tempdir().unwrap();
+        let link = link_dir.path().join("via-symlink");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+        let root_canon = std::fs::canonicalize(real.path()).unwrap();
+        let outside = other.path().join("elsewhere/b.rs");
+        assert_eq!(relativize_root(&link, &root_canon, &outside), None);
     }
 }

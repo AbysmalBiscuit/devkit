@@ -349,6 +349,27 @@ fn context_files_fire_when_the_project_is_reached_through_a_symlink() {
     );
 }
 
+/// An absolute target spelled through a symlinked project root, the shape a
+/// harness produces on macOS. The target does not exist yet (the tool is
+/// about to write it), so it cannot be canonicalized directly.
+#[cfg(unix)]
+#[test]
+fn an_absolute_target_matches_through_a_symlinked_root() {
+    let state = tempfile::tempdir().unwrap();
+    let real = rules_project(state.path());
+    let link_dir = tempfile::tempdir().unwrap();
+    let link = link_dir.path().join("via-symlink");
+    std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+    let absolute = link.join("crates/foo/src/a.rs");
+    let payload = write_payload("S", None, &link, &absolute.to_string_lossy());
+    let text = injected_text(&run_hook(&link, state.path(), &payload));
+    assert!(
+        text.contains("Foo should"),
+        "the absolute target through the symlink still matches: {text}"
+    );
+}
+
 /// A project with three root-level context files that all fire for every
 /// target, so `per_event_limit` is the only thing standing between "one" and
 /// "all three" landing in one event.
