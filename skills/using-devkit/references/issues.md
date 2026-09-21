@@ -31,7 +31,7 @@ Read `worktree` to know where to `cd`. Under `--summary` the object carries a fo
 
 Setup reserves no ports: `devrun up` allocates them when the worktree's servers start. A fresh worktree has no diff to auto-detect from, so name apps explicitly: `devrun up web api`.
 
-The branch is created with no upstream, so a plain `git push` does not refuse on a name mismatch with `origin/main`; with `push.autoSetupRemote` set, the first push creates `origin/<branch>` and tracks it. Each `[hooks] after_worktree_create` command runs last, after the result is printed, and a failing hook only warns.
+The branch is created with no upstream. git would otherwise track the baseline's remote branch (`origin/main`), where a plain `git push` refuses on the name mismatch. With `push.autoSetupRemote` set, the first push creates `origin/<branch>` and tracks it; without it, push with `-u origin <branch>`. Each `[hooks] after_worktree_create` command runs last, after the result is printed, and a failing hook only warns.
 
 `{{ short_slug }}` is the slug shortened again to `templates.worktree_dir_max`, for a `worktree_dir` template that must stay shorter than the branch. On Windows that keeps paths under the 260-character limit other tools still enforce. It shortens an explicit `--slug` too.
 

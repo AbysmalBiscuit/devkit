@@ -13,7 +13,7 @@ devkit schema init [<path>]                    # point a devkit.toml at the publ
 
 ## `config`
 
-`devkit config` prints the merged config as TOML, headed by its layer files in precedence order. `--origin` annotates each value with the file it came from (`# (default)` for a serde default) and, where several layers set it, what each overridden layer held. `--json` emits the bare config; `--origin --json` emits `{ config, layers, origins, overrides }`. `config apps` and `config tasks` list the configured apps and tasks (the latter is the same listing as a bare `devrun task`), with no live state.
+`devkit config` prints the merged config as TOML, headed by its layer files in precedence order. `--origin` annotates each value with the file it came from (`# (default)` for a serde default) and, where several layers set it, what each overridden layer held. `--json` emits the bare config; `--origin --json` emits `{ config, layers, origins, overrides }`. `config apps` (name, port, path, url, provides_url, url_env, launch) and `config tasks` list the configured apps and tasks (the latter is the same listing as a bare `devrun task`), with no live state.
 
 ## `doctor`
 
@@ -27,7 +27,7 @@ The command prints the identity behind the token devkit would send, names which 
 
 ## `brief`
 
-Prints the current checkout's devkit orientation — configured apps, the `[tasks]` table, this worktree's live servers, and registered library versions — and prints **nothing** outside a devkit-managed project. A config that fails to load is reported rather than swallowed, so a broken `devkit.toml` is diagnosable from the brief.
+Prints the current checkout's devkit orientation — configured apps, the `[tasks]` table, this worktree's live servers, and registered library versions. The two halves are independent: a checkout with no devrun setup still gets the library table, and one evidencing no registered library still gets the rest. It prints **nothing** when neither applies. A config that fails to load is reported rather than swallowed, so a broken `devkit.toml` is diagnosable from the brief.
 
 The plugin's `SessionStart` hook runs it so sessions start already knowing the project. Run it by hand to re-orient mid-session.
 
@@ -37,7 +37,7 @@ The plugin's `SessionStart` hook runs it so sessions start already knowing the p
 
 The plugin runs a full brief at `SessionStart`, `--pins-only` at `PostCompact`, and `--if-changed` at `CwdChanged`.
 
-The library-versions section answers for the directory it runs in. At a workspace root it rolls up the members the lockfile names, one row per version they resolve; where members disagree, both versions appear with the workspaces holding them, so an agent reads the right checkout for the app it is editing. A library the reference registry records a checkout for under this project shows even without lockfile evidence, sourced `resolved checkout`, and a checkout whose version is not the one the lockfile names is flagged `; checkout <version>`.
+The library-versions section answers for the directory it runs in. At a workspace root it rolls up the members a JS lockfile names (cargo and uv keep members in a manifest, so they resolve per workspace), one row per version they resolve; where members disagree, both versions appear with the workspaces holding them, so an agent reads the right checkout for the app it is editing. A library the reference registry records a checkout for under this project shows even without lockfile evidence, sourced `resolved checkout`, and a checkout whose version is not the one the lockfile names is flagged `; checkout <version>`.
 
 Which sections appear is config-driven: `[brief]` has `enabled`, `pins`, `locks`, `apps`, and `tasks` switches, all defaulting on. A section with nothing to report is omitted whatever its switch says; a switch turned off suppresses the section even when the checkout has something to put in it. Live servers this worktree holds are reported regardless of the `apps` switch — a bound port is a fact about the machine.
 

@@ -30,7 +30,7 @@ Resolving a library from a project records a reference: the project root, the li
 
 ## Checkout sizes
 
-Each checkout is measured when it is materialized or re-pointed, and the size is recorded beside its commit in the library's `meta.toml`. `docm list` shows it and `devkit doctor` reads it. `docm path` and `docm info` re-resolve on every call, so they never measure. A checkout that grows after its pin (ignored build output, say) goes unnoticed until `docm list --refresh`, which re-measures the whole shared cache, libraries outside the current manifest included.
+Each checkout is measured when it is materialized or re-pointed, and the size is recorded beside its commit in the library's `meta.toml`. `docm list` shows it and `devkit doctor` reads it. A cache from a docm that recorded no sizes fills them in on its next `docm` command. `docm path` and `docm info` re-resolve on every call, so they never measure. A checkout that grows after its pin (ignored build output, say) goes unnoticed until `docm list --refresh`, which re-measures the whole shared cache, libraries outside the current manifest included.
 
 ## Reserved names
 

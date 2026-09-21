@@ -76,7 +76,7 @@ reason = "Use `issue setup --slug <branch>` to create worktrees"
 # action = "warn"                   # allow the command and show the reason
 ```
 
-A rule sees nested commands (`bash -c '...'`, `subprocess.run([...])`) and ignores quoted text that only mentions the program. Rules merge across layers by name. A child layer switches an inherited rule off with `enabled = false`. devkit's own binaries always run. `references/locks.md` covers `enforce_writes`.
+A rule sees nested commands (`bash -c '...'`, `subprocess.run([...])`) and ignores quoted text that only mentions the program. Rules merge across layers by name. A child layer switches an inherited rule off with `enabled = false`. devkit's own binaries always run. `enforce_writes` is under "`[harness]`: write enforcement" below.
 
 ## `[tasks.<name>]`: canned commands
 
@@ -105,9 +105,9 @@ A task sets `run` (one command) or `steps` (a sequence). `run` and `env` are min
 
 `worktree_root`, `baseline_dir` and `doppler_yaml` resolve once, when the config loads:
 
-1. `${VAR}` becomes that environment variable. An unset one is an error naming the key and the variable. `$$` is a literal `$`.
+1. `${VAR}` becomes that environment variable. An unset one is an error naming the key and the variable. `$$` is a literal `$`, and a `$` followed by anything else is left alone.
 2. A leading `~/` becomes `$HOME`.
-3. A path still relative anchors to what it names. `worktree_root` and `baseline_dir` are places on this machine, so they anchor to the directory of the config file that declared them. `doppler_yaml` is a file in the repository, so it anchors to the checkout reading the config, and each worktree reads its own copy.
+3. A path still relative anchors to what it names, never to the working directory, and `.` and `..` fold out either way. `worktree_root` and `baseline_dir` are places on this machine, so they anchor to the directory of the config file that declared them. `doppler_yaml` is a file in the repository, so it anchors to the checkout reading the config, and each worktree reads its own copy.
 
 `branch_prefix` gets step 1 only. That is what lets a project commit its `devkit.toml`: only `branch_prefix` is personal, so it goes in `devkit.local.toml` or reads `"${USER}/"`.
 

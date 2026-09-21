@@ -268,7 +268,7 @@
         },
         "memory_limit_ticks": {
           "default": 3,
-          "description": "Consecutive supervision ticks at or over `memory_limit_mb` before the\nrestart action fires (debounces transient allocation spikes).\nEnv: `DEVKIT_DAEMON_MEM_LIMIT_TICKS`.",
+          "description": "Consecutive supervision ticks at or over `memory_limit_mb` before the\nrestart action fires (debounces transient allocation spikes). A tick\nis 500 ms.\nEnv: `DEVKIT_DAEMON_MEM_LIMIT_TICKS`.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -851,7 +851,7 @@
     },
     "PreserveConfig": {
       "additionalProperties": false,
-      "description": "Files copied out of a worktree before `issue end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. A failure warns and the worktree goes anyway, unless the\nentry is `required`. Path rules and collisions are in the `using-devkit`\nskill's `references/config.md`.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ issue }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ issue }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
+      "description": "Files copied out of a worktree before `issue end` removes it. Each entry\nnames its own destination, so one run can archive different files to\ndifferent places. A failure warns and the worktree goes anyway, unless the\nentry is `required`.\n\n`deny_unknown_fields` because a misspelled `required` would otherwise be\nconsumed silently, leaving the entry fail-open while the user believes the\nfiles are protected.\n\n```toml\n[preserve.scratch]\nfrom     = [\".scratch/\"]\nto       = \"{{ worktree_root }}/archive/{{ issue }}/scratch\"\nrequired = true\n\n[preserve.notes]\nfrom = [\"docs/notes/*.md\"]\nto   = \"{{ primary }}/.devkit/archive/{{ issue }}\"\n```\n\n`scratch` is `required`, so a failure there keeps the worktree, its branch\nand its summary instead of removing them. `notes` warns and the worktree\ngoes.",
       "properties": {
         "from": {
           "description": "Glob patterns for the files to copy, relative to the worktree root and\nrendered as minijinja. Name a directory (`.scratch/`) to archive its\nwhole tree. A pattern that could reach outside the worktree is skipped\nwith a warning; one that matches nothing is not a failure.",

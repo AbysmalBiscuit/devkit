@@ -126,7 +126,8 @@ pub struct DaemonConfig {
     /// falls back to warn. Env: `DEVKIT_DAEMON_MEMORY_ACTION`.
     pub memory_action: String,
     /// Consecutive supervision ticks at or over `memory_limit_mb` before the
-    /// restart action fires (debounces transient allocation spikes).
+    /// restart action fires (debounces transient allocation spikes). A tick
+    /// is 500 ms.
     /// Env: `DEVKIT_DAEMON_MEM_LIMIT_TICKS`.
     pub memory_limit_ticks: u32,
     /// Hard kernel memory ceiling per supervised tree, in MB (0 = off,
@@ -294,8 +295,7 @@ pub struct HooksConfig {
 /// Files copied out of a worktree before `issue end` removes it. Each entry
 /// names its own destination, so one run can archive different files to
 /// different places. A failure warns and the worktree goes anyway, unless the
-/// entry is `required`. Path rules and collisions are in the `using-devkit`
-/// skill's `references/config.md`.
+/// entry is `required`.
 ///
 /// `deny_unknown_fields` because a misspelled `required` would otherwise be
 /// consumed silently, leaving the entry fail-open while the user believes the

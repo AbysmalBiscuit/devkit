@@ -31,7 +31,7 @@ Before running a project build, profiling flow, or verification command by hand,
 
 Global flags go **before** the subcommand (`issue -C ~/git/acme/app status`): `-C/--dir <path>` on `issue`/`devrun`/`portm`, `--config <file>` and `--timing[=trace]` / `--timing-log <FILE>` on `issue`/`devrun`.
 
-`--help` through a pipe prints the command tree below the command asked about, one line per verb (`issue --help` covers `issue` alone); `-h` prints one command's flags and arguments. Reach for `-h` when you need a flag.
+`--help` through a pipe prints the command tree below the command asked about, one line per verb (`issue --help` covers `issue` alone); `-h` prints one command's flags and arguments. The tree drops a group's own options, so reach for `-h` when you need a flag.
 
 ## Locks
 
