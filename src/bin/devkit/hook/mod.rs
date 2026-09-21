@@ -19,6 +19,7 @@
 mod dialect;
 mod edit;
 pub mod record;
+pub(crate) mod rules;
 mod shell;
 mod writes;
 
@@ -109,6 +110,15 @@ pub fn run(cli: HookCli) -> Result<()> {
                 // this hook's exit.
                 let _ = devkit_common::harness_log::prune::sweep(&settings);
             }
+            Ok(())
+        }),
+        // Compaction is what drops the injected rules out of the agent's
+        // context, so clearing the set is what lets them inject again.
+        HookEvent::PostCompact => with_payload(|p| {
+            if let Some(session) = p.get("session_id").and_then(Value::as_str) {
+                rules::clear_for_holder(session);
+            }
+            record_only(p, cli.event, harness);
             Ok(())
         }),
         // Record-only. Each reads stdin, builds one record and exits; nothing

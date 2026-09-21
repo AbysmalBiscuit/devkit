@@ -14,6 +14,10 @@
           },
           {
             "type": "command",
+            "command": "devkit rules context"
+          },
+          {
+            "type": "command",
             "command": "devkit hook session-start --harness claude-code"
           }
         ]
@@ -146,6 +150,12 @@
           {
             "type": "command",
             "command": "devkit hook post-compact --harness claude-code"
+          },
+          {
+            "type": "command",
+            "command": "devkit rules context",
+            "timeout": 3,
+            "statusMessage": "Re-injecting repository rules"
           }
         ]
       }

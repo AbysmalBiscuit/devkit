@@ -13,8 +13,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use strum::IntoEnumIterator;
 
-use crate::shim::{PROBE_FLAG, PROBE_MARKER, SHIMS, Shim};
+use crate::shim::{PROBE_FLAG, PROBE_MARKER, Shim};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -211,7 +212,7 @@ impl Identity {
 /// A file that will not execute, that times out, or that misses either half
 /// is foreign and left alone. That is the safe direction to err in: a stale
 /// or ambiguous binary is skipped rather than silently accepted.
-pub fn is_devkit_binary(path: &Path, shim: &Shim) -> Identity {
+pub fn is_devkit_binary(path: &Path, shim: Shim) -> Identity {
     let Some(version_out) = probe(path, "--version", PROBE_TIMEOUT) else {
         return Identity::foreign(None, "did not answer --version".to_string());
     };
@@ -225,7 +226,7 @@ pub fn is_devkit_binary(path: &Path, shim: &Shim) -> Identity {
     );
     let first_line = version_text.lines().next().unwrap_or("").trim();
     let reported = (!first_line.is_empty()).then_some(first_line);
-    if !version_line_matches(&version_text, shim.name) {
+    if !version_line_matches(&version_text, shim.name()) {
         return Identity::foreign(reported, format!("reports `{first_line}`"));
     }
 
@@ -264,20 +265,19 @@ fn dest_occupied(dest: &Path) -> bool {
 }
 
 /// Link every shim name in `dir` at `exe`. Returns one outcome per shim, in
-/// `SHIMS` order, so the caller renders and exits on the whole set.
+/// declaration order, so the caller renders and exits on the whole set.
 pub fn link_all(exe: &Path, dir: &Path, force: bool) -> Vec<(&'static str, Outcome)> {
-    SHIMS
-        .iter()
+    Shim::iter()
         .map(|s| {
             (
-                s.name,
-                link_one(exe, s, &dir.join(shim_file_name(s.name)), force),
+                s.name(),
+                link_one(exe, s, &dir.join(shim_file_name(s.name())), force),
             )
         })
         .collect()
 }
 
-fn link_one(exe: &Path, shim: &Shim, dest: &Path, force: bool) -> Outcome {
+fn link_one(exe: &Path, shim: Shim, dest: &Path, force: bool) -> Outcome {
     if dest_occupied(dest) {
         if same_file(exe, dest) {
             return Outcome::AlreadyLinked;
@@ -496,7 +496,7 @@ pub fn ensure_current(exe: &Path) {
     record_gate_owner(&mut held);
     let deadline = Instant::now() + AUTOLINK_DEADLINE;
     let mut pass = Pass::Complete;
-    for s in SHIMS {
+    for s in Shim::iter() {
         if Instant::now() >= deadline {
             pass = Pass::Partial;
             eprintln!(
@@ -504,14 +504,14 @@ pub fn ensure_current(exe: &Path) {
             );
             break;
         }
-        match link_one(exe, s, &dir.join(shim_file_name(s.name)), false) {
+        match link_one(exe, s, &dir.join(shim_file_name(s.name())), false) {
             Outcome::Failed(e) => {
                 pass = Pass::Partial;
-                eprintln!("devkit: could not link {}: {e}", s.name);
+                eprintln!("devkit: could not link {}: {e}", s.name());
             }
             Outcome::SkippedForeign(why) => eprintln!(
                 "devkit: {} on PATH is not a devkit binary ({why}); left alone",
-                s.name
+                s.name()
             ),
             Outcome::Created | Outcome::Replaced | Outcome::AlreadyLinked => {}
         }
@@ -685,12 +685,8 @@ mod tests {
     /// the fallback taken before either probe ever runs.
     #[test]
     fn is_devkit_binary_rejects_a_path_that_cannot_execute() {
-        let shim = SHIMS
-            .iter()
-            .find(|s| s.name == "issue")
-            .expect("issue shim");
         assert!(matches!(
-            is_devkit_binary(Path::new("/no/such/binary-at-all"), shim).judgement,
+            is_devkit_binary(Path::new("/no/such/binary-at-all"), Shim::Issue).judgement,
             Judgement::Foreign(_)
         ));
     }

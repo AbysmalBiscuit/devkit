@@ -3,6 +3,7 @@ use std::{ffi::OsString, path::PathBuf};
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use devkit::completions::{self, Shell};
+use strum::IntoEnumIterator;
 
 mod auth;
 mod baseline;
@@ -18,6 +19,7 @@ mod links;
 mod locks;
 mod mcp;
 mod ports;
+mod rules;
 mod run;
 mod schema;
 mod shim;
@@ -29,6 +31,7 @@ Also installed under their own names:
   portm       = devkit ports
   lockm       = devkit locks
   docm        = devkit docs
+  devrules    = devkit rules
   devkit-mcp  = devkit mcp
 
 Run `devkit install-links` if any of them are missing.";
@@ -140,6 +143,9 @@ enum Cmd {
     /// Read and sweep the harness log.
     #[command(display_name = "devkit hook-log")]
     HookLog(hook_log::HookLogCli),
+    /// Query and summarize the rule index the hooks inject from.
+    #[command(display_name = "devkit rules")]
+    Rules(rules::RulesCli),
     /// Install the old command names as hardlinks beside this binary.
     ///
     /// Creates hardlinks such as `issue` and `devrun` beside this
@@ -209,23 +215,24 @@ fn emit_completions(shell: Shell, subcommand: &str, shim_name: &'static str) -> 
 /// `devkit-mcp` is absent today because `devkit mcp` takes no subcommands.
 fn every_completion_script() -> Vec<(clap::Command, &'static str)> {
     let mut scripts = vec![(Cli::command(), "devkit")];
-    scripts.extend(shim::SHIMS.iter().filter_map(|s| {
-        let cmd = shim_command(s.sub.name(), s.name);
+    scripts.extend(shim::Shim::iter().filter_map(|s| {
+        let cmd = shim_command(s.subcommand(), s.name());
         cmd.find_subcommand("completions")?;
-        Some((cmd, s.name))
+        Some((cmd, s.name()))
     }));
     scripts
 }
 
-fn dispatch_shim(s: &'static shim::Shim, args: Vec<OsString>) -> Result<()> {
-    let matches = shim_command(s.sub.name(), s.name).get_matches_from(args);
-    match s.sub {
-        shim::Sub::Ports => ports::run(ports::PortsCli::from_arg_matches(&matches)?),
-        shim::Sub::Locks => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
-        shim::Sub::Docs => docs::run(docs::DocsCli::from_arg_matches(&matches)?),
-        shim::Sub::Run => run::run(run::RunCli::from_arg_matches(&matches)?),
-        shim::Sub::Issue => issue::run(issue::IssueCli::from_arg_matches(&matches)?),
-        shim::Sub::Mcp => mcp::run(mcp::McpCli::from_arg_matches(&matches)?),
+fn dispatch_shim(s: shim::Shim, args: Vec<OsString>) -> Result<()> {
+    let matches = shim_command(s.subcommand(), s.name()).get_matches_from(args);
+    match s {
+        shim::Shim::Ports => ports::run(ports::PortsCli::from_arg_matches(&matches)?),
+        shim::Shim::Locks => locks::run(locks::LocksCli::from_arg_matches(&matches)?),
+        shim::Shim::Docs => docs::run(docs::DocsCli::from_arg_matches(&matches)?),
+        shim::Shim::Run => run::run(run::RunCli::from_arg_matches(&matches)?),
+        shim::Shim::Issue => issue::run(issue::IssueCli::from_arg_matches(&matches)?),
+        shim::Shim::Mcp => mcp::run(mcp::McpCli::from_arg_matches(&matches)?),
+        shim::Shim::Rules => rules::run(rules::RulesCli::from_arg_matches(&matches)?),
     }
 }
 
@@ -347,8 +354,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let argv0 = args.first().map(|a| a.to_string_lossy().into_owned());
-    let shim = argv0.as_deref().and_then(shim::resolve);
-    devkit_common::report::install_panic_hook(shim.map_or("devkit", |s| s.name));
+    let shim = argv0.as_deref().and_then(shim::Shim::from_argv0);
+    devkit_common::report::install_panic_hook(shim.map_or("devkit", |s| s.name()));
     devkit_common::paths::migrate_legacy_state();
     // Checked against the raw argv, the same way the probe intercept above
     // is: `Cli::parse()` hasn't run yet, so this can't ask clap which
@@ -369,7 +376,7 @@ fn main() -> Result<()> {
     // that running devkit at all creates the shim hardlinks, and names
     // `devkit --help` as an invocation that does it.
     let root = match shim {
-        Some(s) => shim_command(s.sub.name(), s.name),
+        Some(s) => shim_command(s.subcommand(), s.name()),
         None => Cli::command(),
     };
     if intercept_help(&root, &args)? {
@@ -409,6 +416,7 @@ fn main() -> Result<()> {
                 Cmd::Harness(c) => harness::run(c),
                 Cmd::Hook(c) => run_hook_guarded(c),
                 Cmd::HookLog(c) => hook_log::run(c),
+                Cmd::Rules(c) => rules::run(c),
                 Cmd::InstallLinks(a) => links::run(a),
             }
         }
@@ -419,31 +427,30 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
-    /// `dispatch_shim` matches on `shim::Sub` exhaustively (no catch-all
-    /// arm), so a `SHIMS` entry naming a `Sub` variant with no dispatch arm
-    /// is a compile error, not a runtime panic — that guarantee needs no
-    /// test. What still wants checking is the other half: that each
-    /// variant's `name()` actually names a subcommand `Cli` registers, so a
-    /// shim never resolves to a subcommand that does not exist.
+    /// `dispatch_shim` matches on `shim::Shim` exhaustively, so a variant
+    /// with no dispatch arm is a compile error rather than a runtime panic
+    /// and needs no test. The other half does: that each variant's
+    /// `subcommand()` names one `Cli` registers, so a shim never resolves to
+    /// a subcommand that does not exist.
     #[test]
     fn every_shim_names_a_real_subcommand() {
-        for s in shim::SHIMS {
+        for s in shim::Shim::iter() {
             assert!(
-                Cli::command().find_subcommand(s.sub.name()).is_some(),
+                Cli::command().find_subcommand(s.subcommand()).is_some(),
                 "shim `{}` selects unknown subcommand `{}`",
-                s.name,
-                s.sub.name()
+                s.name(),
+                s.subcommand()
             );
         }
     }
 
     #[test]
     fn shim_help_names_every_shim() {
-        for s in crate::shim::SHIMS {
+        for s in shim::Shim::iter() {
             assert!(
-                SHIM_HELP.contains(s.name),
+                SHIM_HELP.contains(s.name()),
                 "SHIM_HELP never names the `{}` shim",
-                s.name
+                s.name()
             );
         }
     }

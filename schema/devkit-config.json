@@ -178,6 +178,44 @@
       },
       "type": "object"
     },
+    "ContextConfig": {
+      "description": "Files injected into an agent's context when the condition on them holds.\n\n```toml\n[[context.files]]\npath = \"crates/devkit-ports/AGENTS.md\"\n\n[[context.files]]\npath = \"docs/deploy.md\"\nwhen = { harness = [\"codex\"], env = { DEPLOY_TARGET = \"staging\" } }\n```\n\nAn entry is an array element, so a deeper `devkit.toml` replaces the whole\nlist rather than appending to it, the same as `[hooks]`.",
+      "properties": {
+        "files": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ContextFile"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ContextFile": {
+      "description": "One injected file.",
+      "properties": {
+        "path": {
+          "description": "The file to inject, relative to the directory of the `devkit.toml` that\ndeclared it.",
+          "type": "string"
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileCondition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When to inject it. Absent means: when the edited target is under this\nfile's own directory."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "DaemonConfig": {
       "description": "The `devkitd` supervisor: whether it starts, how long it lingers, and the\ncrash-loop, memory, and health policies it applies to supervised servers.\n\n```toml\n[daemon]\nenabled         = true\nmemory_warn_mb  = 1024\nmemory_limit_mb = 2048   # soft: SIGTERM, then the crash path respawns\nmemory_action   = \"restart\"\nmemory_max_mb   = 4096   # hard: the kernel OOM-kills the tree\n```\n\nThe ordering in that example is the one to keep: the soft action is the\ngraceful first responder, and the kernel cap is the backstop for a spike\ntoo fast for the poll loop.",
       "properties": {
@@ -388,6 +426,36 @@
           "type": "string"
         }
       ]
+    },
+    "FileCondition": {
+      "description": "Conditions on an injected file. Every condition present must hold.",
+      "properties": {
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Environment variables in the hook process. An empty value means\n\"present with any value\".",
+          "type": "object"
+        },
+        "harness": {
+          "default": [],
+          "description": "Harness names: `claude-code`, `codex`, `cursor`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "default": null,
+          "description": "A glob over the repo-relative targets of the tool call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "GithubConfig": {
       "additionalProperties": false,
@@ -831,6 +899,51 @@
       ],
       "type": "string"
     },
+    "RulesConfig": {
+      "description": "Rule injection settings.\n\n```toml\n[rules]\nenabled = true\nmin_severity = \"should\"\nper_event_limit = 5\n```",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Rule and file injection as a whole.",
+          "type": "boolean"
+        },
+        "index": {
+          "default": null,
+          "description": "Where the rule index lives. Absent means the path the extractor writes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_event_bytes": {
+          "default": 65536,
+          "description": "The rendered total for one event is truncated to this.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_file_bytes": {
+          "default": 16384,
+          "description": "A single injected file larger than this is skipped.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_severity": {
+          "default": "should",
+          "description": "The least severe rule still injected: `must`, `should` or `can`.",
+          "type": "string"
+        },
+        "per_event_limit": {
+          "default": 5,
+          "description": "How many rules and files one event may inject.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "RunArg": {
       "anyOf": [
         {
@@ -1169,6 +1282,13 @@
       },
       "description": "Layer-stack control: `root = true` stops the upward walk here."
     },
+    "context": {
+      "$ref": "#/$defs/ContextConfig",
+      "default": {
+        "files": []
+      },
+      "description": "Files injected into an agent's context, each gated by its own\ncondition."
+    },
     "daemon": {
       "$ref": "#/$defs/DaemonConfig",
       "default": {
@@ -1262,6 +1382,18 @@
       "default": {},
       "description": "Files copied out of an issue worktree before `issue end` removes it,\nkeyed by the name that labels the entry's progress step and its\nwarnings.",
       "type": "object"
+    },
+    "rules": {
+      "$ref": "#/$defs/RulesConfig",
+      "default": {
+        "enabled": true,
+        "index": null,
+        "max_event_bytes": 65536,
+        "max_file_bytes": 16384,
+        "min_severity": "should",
+        "per_event_limit": 5
+      },
+      "description": "Rule injection settings: enablement, severity floor, and the per-event\nsize budget."
     },
     "tasks": {
       "additionalProperties": {

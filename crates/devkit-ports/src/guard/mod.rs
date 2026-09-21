@@ -15,22 +15,6 @@ use norm::basename;
 
 use crate::apps::App;
 
-/// The devkit commands a user types directly. Never gate them: the guard's
-/// whole purpose is to route work to them.
-///
-/// `devkit` plus every entry of `SHIMS` in `src/bin/devkit/shim.rs`. That list
-/// lives in the binary and this crate cannot see it, so a shim added there has
-/// to be added here by hand.
-const SHIMS: [&str; 7] = [
-    "devkit",
-    "devrun",
-    "lockm",
-    "portm",
-    "docm",
-    "issue",
-    "devkit-mcp",
-];
-
 /// The resolved half of the answer, absent when only the `[harness]` probe ran.
 pub struct Project {
     pub config: Config,
@@ -157,7 +141,7 @@ pub fn decide(
             .program
             .known()
             .map(basename)
-            .is_some_and(|program| SHIMS.contains(&program))
+            .is_some_and(devkit_common::shim::is_devkit_command)
         {
             continue;
         }

@@ -116,7 +116,11 @@ pub fn cache_dir() -> PathBuf {
     }
 }
 
-fn home() -> PathBuf {
+/// The user's home directory.
+///
+/// The rules cache path needs this to reach a non-XDG location on all
+/// platforms.
+pub fn home() -> PathBuf {
     if let Some(h) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
         return PathBuf::from(h);
     }
