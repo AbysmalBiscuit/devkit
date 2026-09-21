@@ -15,7 +15,7 @@ A **command** task runs in the foreground and propagates its exit code. A **sequ
 
 ## Args
 
-A task's templates can read variables as well as ports. The ARGS column of `devrun task` names them: a bare name is required, a bracketed one has a project default. Pass each with `--arg`:
+A task's templates can read variables as well as ports. The ARGS column of `devrun task` names them: a bare name is required, a bracketed one is optional. The column answers for whoever runs it, since an arg can be required of agents only; `DEVKIT_CALLER=agent devrun task` shows a human the agent's view. Pass each with `--arg`:
 
 ```sh
 devrun task commit --arg msg="fix login redirect"

@@ -41,6 +41,8 @@ devkit rules query --path src/auth/session.rs --format prompt   # the exact inje
 
 When `stats` reports no index, build one with `repo-rules-agent` or point `index` at the right file.
 
+`query` takes an index path as an optional first argument and otherwise finds the one built for this checkout. It orders matches by a requested `--topic`, then deeper directories, then severity, then the source file's discovery tier. `--severity` is exact and `--min-severity` a floor. `--path` and `--topic` repeat; `--path` keeps repo-wide rules alongside directory ones, and `--topic` ranks rather than filters. `--format table|json|prompt`. `stats` also lists files the extractor recorded errors against. `context` prints nothing, and exits 0, outside a devkit project or with rules off.
+
 ## `[[context.files]]`: inject whole files
 
 Each entry names a file injected when a write matches. `path` is relative to the directory of the `devkit.toml` that declares it.
