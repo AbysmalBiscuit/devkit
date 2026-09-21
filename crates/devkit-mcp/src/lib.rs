@@ -20,6 +20,10 @@ pub struct ServerCtx {
     /// names the worktree it wants, and an agent naming somebody else's is
     /// refused here rather than trusted.
     pub own_worktree: Option<std::path::PathBuf>,
+    /// `[mcp] enabled`. A disabled server still answers the handshake, so the
+    /// harness shows it connected instead of failed, but lists no tools and
+    /// refuses every call.
+    pub enabled: bool,
 }
 
 /// The identity every lock action is taken under, resolved once at startup.
@@ -59,7 +63,10 @@ fn dispatch(ctx: &ServerCtx, req: &Request) -> Option<Response> {
             req.id.clone()?,
             initialize_result(client_protocol_version(&req.params)),
         )),
-        "tools/list" => Some(Response::ok(req.id.clone()?, tools_list_result())),
+        "tools/list" => Some(Response::ok(
+            req.id.clone()?,
+            tools_list_result(ctx.enabled),
+        )),
         "tools/call" => Some(tools_call(ctx, req.id.clone()?, &req.params)),
         "notifications/initialized" => None,
         _ => Some(Response::err(
@@ -80,6 +87,9 @@ fn tools_call(ctx: &ServerCtx, id: Value, params: &Value) -> Response {
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
     let result: Result<Value> = match name {
+        _ if !ctx.enabled => Err(anyhow::anyhow!(
+            "the devkit MCP server is turned off by `[mcp] enabled = false` in devkit config"
+        )),
         "devkit_describe" => actions::describe(arguments),
         "devkit_call" => actions::call(ctx, arguments),
         other => Err(anyhow::anyhow!("unknown tool: {other}")),
@@ -119,7 +129,10 @@ fn initialize_result(requested: Option<&str>) -> Value {
     })
 }
 
-fn tools_list_result() -> Value {
+fn tools_list_result(enabled: bool) -> Value {
+    if !enabled {
+        return serde_json::json!({ "tools": [] });
+    }
     serde_json::json!({
         "tools": [
             {
@@ -160,6 +173,7 @@ mod tests {
         let ctx = ServerCtx {
             default_holder: devkit_locks::ident::Identity::Resolved("test-session".into()),
             own_worktree: None,
+            enabled: true,
         };
         let mut out = Vec::new();
         run(&mut input.as_bytes(), &mut out, &ctx).unwrap();

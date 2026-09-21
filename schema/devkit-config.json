@@ -741,6 +741,17 @@
       },
       "type": "object"
     },
+    "McpConfig": {
+      "description": "The `devkit-mcp` server. The plugins register it unconditionally and a\nharness may re-enable a server the user switched off, so config is where\nit stays off.\n\n```toml\n[mcp]\nenabled = false\n```",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether the server offers its tools. Off, it still answers the\nhandshake but lists no tools and refuses every call.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ParallelismConfig": {
       "description": "Width of the shared worker pool. Machine tuning rather than a project\nconvention, so it belongs in the personal layer at\n`~/.config/devkit/config.toml` rather than a repository's `devkit.toml`.\n\n```toml\n[parallelism]\nthreads = 8\n```",
       "properties": {
@@ -1359,6 +1370,13 @@
         "resolve_pr_links": false
       },
       "description": "Linear lookups that cost an extra API round trip."
+    },
+    "mcp": {
+      "$ref": "#/$defs/McpConfig",
+      "default": {
+        "enabled": true
+      },
+      "description": "The `devkit-mcp` server the agent plugins start."
     },
     "parallelism": {
       "$ref": "#/$defs/ParallelismConfig",

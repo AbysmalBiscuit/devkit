@@ -234,6 +234,7 @@ mod tests {
         ServerCtx {
             default_holder: Identity::Resolved(format!("mcp-locks-test-{}", std::process::id())),
             own_worktree: None,
+            enabled: true,
         }
     }
 
@@ -286,6 +287,7 @@ mod holder_tests {
         ServerCtx {
             default_holder: id,
             own_worktree: None,
+            enabled: true,
         }
     }
 

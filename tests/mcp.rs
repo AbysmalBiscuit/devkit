@@ -417,3 +417,43 @@ fn handshake_lifecycle_initialize_notification_tools_list() {
         .collect();
     assert_eq!(names, ["devkit_describe", "devkit_call"]);
 }
+
+fn handshake() -> [Value; 3] {
+    [
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+        call_req(3, "ports.status", json!({})),
+    ]
+}
+
+/// A disabled server still completes the handshake, so the harness shows it
+/// connected rather than failed, but offers nothing and runs nothing.
+fn assert_disabled(resps: &[Value]) {
+    assert_eq!(resps[0]["result"]["serverInfo"]["name"], "devkit-mcp");
+    assert_eq!(resps[1]["result"]["tools"], json!([]));
+    let refusal = tool_json(&resps[2], true);
+    assert!(
+        refusal
+            .as_str()
+            .is_some_and(|s| s.contains("[mcp] enabled = false")),
+        "the refusal names the key: {refusal}"
+    );
+}
+
+#[test]
+fn project_config_disables_the_server() {
+    let proj = project();
+    std::fs::write(proj.path().join("devkit.toml"), "[mcp]\nenabled = false\n").unwrap();
+    let state = tempfile::tempdir().unwrap();
+    assert_disabled(&mcp(proj.path(), state.path(), &handshake()));
+}
+
+#[test]
+fn personal_config_disables_the_server_everywhere() {
+    let proj = project();
+    let state = tempfile::tempdir().unwrap();
+    let personal = state.path().join(".config/devkit");
+    std::fs::create_dir_all(&personal).unwrap();
+    std::fs::write(personal.join("config.toml"), "[mcp]\nenabled = false\n").unwrap();
+    assert_disabled(&mcp(proj.path(), state.path(), &handshake()));
+}

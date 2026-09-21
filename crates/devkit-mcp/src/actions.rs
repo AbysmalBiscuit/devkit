@@ -103,6 +103,7 @@ mod tests {
         let ctx = ServerCtx {
             default_holder: Identity::Resolved("t".into()),
             own_worktree: None,
+            enabled: true,
         };
         assert!(call(&ctx, serde_json::json!({ "action": "nope.nope" })).is_err());
     }

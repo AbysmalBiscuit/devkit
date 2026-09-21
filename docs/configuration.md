@@ -412,6 +412,18 @@ Set it in `~/.config/devkit/config.toml` as a personal default and override it p
 
 Example: [`BriefConfig`](../crates/devkit-config/src/lib.rs).
 
+### `[mcp]`
+
+The `devkit-mcp` server that the Claude Code, Codex and Cursor plugins start. The plugins register it whether or not you use it, and a harness can turn a server you disabled back on, for example after a plugin update. This switch keeps it off from the config side.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | `false` makes the server list no tools and refuse every call. It still answers the MCP handshake, so the harness reports it as connected, not as a server that failed to start. |
+
+The server reads the key once, when it starts, from the directory the harness started it in, so a change takes effect in the next session or on a reconnect. Set it in `~/.config/devkit/config.toml` to turn the server off everywhere, or in one project's `devkit.toml` to turn it off there. A config that fails to load leaves the server on.
+
+Example: [`McpConfig`](../crates/devkit-config/src/lib.rs).
+
 ### `[tracker]`
 
 Which issue tracker backs the `issue` commands.
