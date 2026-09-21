@@ -4,12 +4,13 @@
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
-use std::process::Command;
+#[path = "common/testenv.rs"]
+mod testenv;
 
 fn version_output(exe: &str) -> (bool, String) {
-    let out = Command::new(exe)
+    let (_home, mut cmd) = testenv::isolated(exe);
+    let out = cmd
         .arg("--version")
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .unwrap_or_else(|e| panic!("spawn {exe}: {e}"));
     let text = format!(
@@ -35,8 +36,8 @@ fn assert_reports_version(name: &str, exe: &str) {
 /// `devkit-ports`, `devkit-locks` — and sends anyone who reads one looking for
 /// a binary by that name.
 fn assert_subcommand_reports_version(sub: &str) {
-    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
+    let (_home, mut cmd) = testenv::isolated(env!("CARGO_BIN_EXE_devkit"));
+    let out = cmd
         .args([sub, "--version"])
         .output()
         .unwrap_or_else(|e| panic!("spawn devkit {sub} --version: {e}"));

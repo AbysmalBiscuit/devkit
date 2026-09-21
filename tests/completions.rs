@@ -3,12 +3,13 @@
 
 #[path = "common/shimtest.rs"]
 mod shimtest;
-use std::process::Command;
+#[path = "common/testenv.rs"]
+mod testenv;
 
 fn completions_contain_name(bin: &str, exe: &str, shell: &str) {
-    let out = Command::new(exe)
+    let (_home, mut cmd) = testenv::isolated(exe);
+    let out = cmd
         .args(["completions", shell])
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .expect("spawn completions");
     assert!(
@@ -67,9 +68,9 @@ fn docm_emits_completions() {
 /// `--all` is the one-file form: `devkit`'s own script plus one per old name,
 /// so a dotfile manager can regenerate every completion with a single command.
 fn all_shells_script(shell: &str) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_devkit"))
+    let (_home, mut cmd) = testenv::isolated(env!("CARGO_BIN_EXE_devkit"));
+    let out = cmd
         .args(["completions", "--all", shell])
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .output()
         .expect("spawn completions --all");
     assert!(
@@ -151,9 +152,9 @@ fn all_skips_the_name_with_no_completions() {
 #[test]
 fn a_closed_pipe_does_not_panic() {
     use std::process::Stdio;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_devkit"))
+    let (_home, mut cmd) = testenv::isolated(env!("CARGO_BIN_EXE_devkit"));
+    let mut child = cmd
         .args(["completions", "--all", "zsh"])
-        .env("DEVKIT_SKIP_AUTOLINK", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
