@@ -5,7 +5,7 @@
 //! rather than defaulted: the extractor already drops it at validation, and
 //! silently coercing it here would resurrect a rule its own producer refused.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::vocab::{Scope, Severity, Task, canonical_language, vocabulary_key};
 
@@ -25,7 +25,7 @@ fn best_practice() -> String {
     "best_practice".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
     #[serde(default)]
     pub id: String,

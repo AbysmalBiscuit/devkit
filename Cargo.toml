@@ -42,6 +42,7 @@ devkit-locks.workspace = true
 devkit-issue.workspace = true
 devkit-mcp.workspace = true
 devkit-docs.workspace = true
+devkit-rules.workspace = true
 same-file.workspace = true
 
 [dev-dependencies]
