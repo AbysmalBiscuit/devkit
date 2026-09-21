@@ -1,6 +1,6 @@
 ---
 name: using-devkit
-description: "Use when editing files in a checkout several agents or sessions share, when a write or shell command is denied naming another holder, when running a project build or verification command by hand, when starting local dev servers or allocating ports, and when setting up issue worktrees or shipping them for review. Covers the devkit CLIs: `devkit`, `devrun`, `issue`, `lockm`, `portm`."
+description: "Use when editing in a checkout other sessions share, when a write or command is denied naming a holder, before running a build or test by hand, for dev servers and ports, for issue worktrees and review, and when editing `devkit.toml`. Covers `devkit`, `devrun`, `issue`, `lockm`, `portm`."
 allowed-tools: Bash(devkit:*), Bash(devrun:*), Bash(issue:*), Bash(lockm:*), Bash(portm:*), Bash(rg:*), Bash(ast-grep:*), Glob, Grep, mcp__devkit__devkit_describe, mcp__devkit__devkit_call
 disable-model-invocation: false
 user-invocable: true
@@ -26,6 +26,7 @@ Before running a project build, profiling flow, or verification command by hand,
 | `references/servers.md` | starting or stopping dev servers, allocating ports, reading logs, another worktree's servers |
 | `references/tasks.md` | a `devrun task` needs an `--arg`, hit a `require_live` gate, or you need to override its env |
 | `references/issues.md` | starting an issue worktree, checking out a PR, shipping for review, tearing down |
+| `references/config.md` | writing or changing a `devkit.toml`: rule injection, context files, command-guard rules, tasks |
 | `references/diagnostics.md` | a `devkit.toml` key's name, type or default is in question, a credential is missing, or you need `doctor` or `brief` |
 
 Global flags go **before** the subcommand (`issue -C ~/git/acme/app status`): `-C/--dir <path>` on `issue`/`devrun`/`portm`, `--config <file>` and `--timing[=trace]` / `--timing-log <FILE>` on `issue`/`devrun`.
