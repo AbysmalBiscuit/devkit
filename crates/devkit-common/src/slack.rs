@@ -3,9 +3,11 @@ use anyhow::{Result, bail};
 /// Post a message to a Slack channel/user id via chat.postMessage.
 pub fn post_message(token: &str, channel: &str, text: &str) -> Result<()> {
     let _span = crate::timing::io_span("slack", "chat.postMessage").entered();
-    let resp: serde_json::Value = ureq::post("https://slack.com/api/chat.postMessage")
+    let resp: serde_json::Value = crate::http::agent()
+        .post("https://slack.com/api/chat.postMessage")
         .set("Authorization", &format!("Bearer {token}"))
-        .send_json(ureq::json!({ "channel": channel, "text": text }))?
+        .send_json(ureq::json!({ "channel": channel, "text": text }))
+        .map_err(crate::http::explain)?
         .into_json()?;
     check_response(&resp)
 }
@@ -34,9 +36,11 @@ pub struct SlackIdentity {
 /// downcast it to tell an unreachable host from a rejected token.
 pub fn validate(token: &str) -> Result<SlackIdentity> {
     let _span = crate::timing::io_span("slack", "auth.test").entered();
-    let resp: serde_json::Value = ureq::post("https://slack.com/api/auth.test")
+    let resp: serde_json::Value = crate::http::agent()
+        .post("https://slack.com/api/auth.test")
         .set("Authorization", &format!("Bearer {token}"))
-        .call()?
+        .call()
+        .map_err(crate::http::explain)?
         .into_json()?;
     parse_identity(&resp)
 }

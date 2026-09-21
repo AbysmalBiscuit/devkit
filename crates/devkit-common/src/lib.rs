@@ -10,6 +10,7 @@ pub mod github;
 pub mod gitignore;
 pub mod harness;
 pub mod harness_log;
+pub mod http;
 pub mod livetable;
 pub mod paths;
 pub mod pool;

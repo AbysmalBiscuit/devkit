@@ -102,6 +102,10 @@ console = "0.15"
 supports-hyperlinks = "3"
 strum = { version = "0.27", features = ["derive"] }
 ureq = { version = "2", features = ["json"] }
+# ureq's TLS stack. Default features off: they pull aws-lc-rs, ureq uses ring.
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+webpki-roots = "0.26"
+rustls-native-certs = "0.8"
 # Already in the tree under ureq's TLS stack, so taking it directly for
 # `harness_log`'s digest adds no crate to the lock.
 ring = "0.17"
