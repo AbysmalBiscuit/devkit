@@ -35,6 +35,7 @@ Each command's own `-h` is the authoritative flag list under every condition; `-
 - [`issue`: issue lifecycle](#issue-issue-lifecycle)
 - [`lockm`: file locks](#lockm-file-locks)
 - [`devkit`: setup and diagnostics](#devkit-setup-and-diagnostics)
+- [`devrules`: the rule index](#devrules-the-rule-index)
 - [`docm`: library docs](#docm-library-docs)
 - [Timing](#timing)
 
@@ -309,14 +310,14 @@ devkit hook-log prune --dry-run      # say what would be swept
 
 `devkit doctor`'s `harness_log` row reports what is actually in force — the effective fidelity after any project layer lowered it, the resolved directory and its size, and whether a global config was found at all. Cohort analysis of a corpus stays offline, in `crates/devkit-command/examples/corpus_probe.rs` behind the `corpus` feature.
 
-## `devkit rules`: the rule index
+## `devrules`: the rule index
 
 Reads the JSON index `repo-rules-agent` builds, answering the same questions its own `query` and `stats` commands do. `query` and `stats` both take an optional index path as their first argument; omitted, each resolves the index built for this checkout the same way the extractor names its cache directory, so no configuration is needed once one has been built.
 
 ```sh
-devkit rules query [INDEX] [--task <t>] [--lang <l>] [--scope <s>] [--severity <s>] [--min-severity <s>] [--path <p>]... [--topic <t>]... [-n <limit>] [--format table|json|prompt]
-devkit rules stats [INDEX]
-devkit rules context [--additional-context]
+devrules query [INDEX] [--task <t>] [--lang <l>] [--scope <s>] [--severity <s>] [--min-severity <s>] [--path <p>]... [--topic <t>]... [-n <limit>] [--format table|json|prompt]
+devrules stats [INDEX]
+devrules context [--additional-context]
 ```
 
 - **`query`**: prints the rules matching every filter given, most useful first (a requested topic, then deeper directories, then severity, then the source file's discovery tier). `--task`, `--scope`, `--severity` and `--min-severity` accept the extractor's own vocabulary and name the accepted values when given anything else. `--severity` is an exact match; `--min-severity` is a floor (`should` also keeps `must`). `--path` may repeat and keeps repo-wide rules alongside any whose directory governs that path. `--topic` may repeat and ranks a matching rule first rather than filtering it out. `--format table` (the default) prints one row per rule; `json` prints the matched rules as JSON; `prompt` prints the same block a hook would inject into a session.

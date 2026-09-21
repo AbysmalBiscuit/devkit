@@ -20,6 +20,7 @@ pub enum Shim {
     Locks,
     Docs,
     Mcp,
+    Rules,
 }
 
 impl Shim {
@@ -32,6 +33,7 @@ impl Shim {
             Shim::Locks => "lockm",
             Shim::Docs => "docm",
             Shim::Mcp => "devkit-mcp",
+            Shim::Rules => "devrules",
         }
     }
 
@@ -44,6 +46,7 @@ impl Shim {
             Shim::Locks => "locks",
             Shim::Docs => "docs",
             Shim::Mcp => "mcp",
+            Shim::Rules => "rules",
         }
     }
 
@@ -88,6 +91,11 @@ mod tests {
             Shim::from_argv0("/home/lev/.cargo/bin/devrun"),
             Some(Shim::Run)
         );
+    }
+
+    #[test]
+    fn resolves_the_rules_shim() {
+        assert_eq!(Shim::from_argv0("devrules"), Some(Shim::Rules));
     }
 
     /// A hyphenated shim must not be mistaken for its prefix.

@@ -31,6 +31,7 @@ Also installed under their own names:
   portm       = devkit ports
   lockm       = devkit locks
   docm        = devkit docs
+  devrules    = devkit rules
   devkit-mcp  = devkit mcp
 
 Run `devkit install-links` if any of them are missing.";
@@ -231,6 +232,7 @@ fn dispatch_shim(s: shim::Shim, args: Vec<OsString>) -> Result<()> {
         shim::Shim::Run => run::run(run::RunCli::from_arg_matches(&matches)?),
         shim::Shim::Issue => issue::run(issue::IssueCli::from_arg_matches(&matches)?),
         shim::Shim::Mcp => mcp::run(mcp::McpCli::from_arg_matches(&matches)?),
+        shim::Shim::Rules => rules::run(rules::RulesCli::from_arg_matches(&matches)?),
     }
 }
 

@@ -50,7 +50,7 @@ cargo build --release
 
 ## Old-name links
 
-`devkit` bundles the whole CLI surface as subcommands, and installs the old names (`portm`, `devrun`, `issue`, `lockm`, `docm`, `devkit-mcp`) beside itself as hardlinks, so `docm list` and `devkit docs list` are the same command. `devkit --help` ends with a block mapping every old name to its subcommand.
+`devkit` bundles the whole CLI surface as subcommands, and installs short names (`portm`, `devrun`, `issue`, `lockm`, `docm`, `devrules`, `devkit-mcp`) beside itself as hardlinks, so `docm list` and `devkit docs list` are the same command. `devkit --help` ends with a block mapping every short name to its subcommand.
 
 - Running `devkit` at all is enough: every invocation links the old names beside the executable it ran from. A `target/release` after a source build, or the directory a release archive was unpacked into, gains all six names on the first command you run there, `devkit --help` included.
 - `devkit install-links` does the same pass explicitly, next to whichever `devkit` executable you run it from.
