@@ -1,10 +1,10 @@
 //! The edit guard's stdout, pinned.
 //!
-//! Task 10 adds a rules stage to this hook, and this file is what keeps that
-//! stage off the deny path. A second JSON object appended after a denial makes
-//! the whole of stdout unparseable, and a harness that cannot parse a hook's
-//! stdout treats it as plain text carrying no decision: the denial is lost and
-//! the write proceeds.
+//! A context-injection stage attached to this hook has to stay off the deny
+//! path, and this file is what keeps it there. A second JSON object appended
+//! after a denial makes the whole of stdout unparseable, and a harness that
+//! cannot parse a hook's stdout treats it as plain text carrying no decision.
+//! The denial is lost and the write proceeds.
 
 #[path = "common/testenv.rs"]
 mod testenv;
