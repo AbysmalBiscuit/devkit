@@ -163,8 +163,8 @@ mod tests {
         unsafe { std::env::remove_var("DEVKIT_RULES_TEST_ENV") };
     }
 
-    /// Review Focus 3: a directory, a missing file and invalid UTF-8 each read
-    /// as nothing, and none of them is an error the caller has to handle.
+    /// A directory, a missing file, and invalid UTF-8 each read as nothing;
+    /// none of them is an error the caller has to handle.
     #[test]
     fn an_unreadable_file_reads_as_none() {
         let dir = tempfile::tempdir().unwrap();

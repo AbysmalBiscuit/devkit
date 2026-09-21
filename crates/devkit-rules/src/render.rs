@@ -78,4 +78,22 @@ mod tests {
         assert!(text.contains("crates/foo/AGENTS.md"), "{text}");
         assert!(text.contains("be careful"), "{text}");
     }
+
+    #[test]
+    fn a_cap_landing_inside_a_multibyte_character_walks_back() {
+        let files = [(
+            "p".to_string(),
+            "cafes are nice, but so are cafés".to_string(),
+        )];
+        let full = block(&[], &files, usize::MAX);
+        let mid = full.find('\u{e9}').unwrap() + 1;
+        assert!(!full.is_char_boundary(mid), "cap must land mid-character");
+
+        let text = block(&[], &files, mid);
+        assert!(text.ends_with(TRUNCATION_NOTE), "{text}");
+        assert_eq!(
+            &text[..text.len() - TRUNCATION_NOTE.len()],
+            &full[..mid - 1]
+        );
+    }
 }
