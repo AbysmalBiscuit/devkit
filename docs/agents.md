@@ -19,6 +19,8 @@ when you need its flags, arguments, and gates, which the tree does not carry.
 - `devkit_describe`: list the available actions, or fetch one action's argument schema (`{"action": "locks.acquire"}`).
 - `devkit_call`: invoke an action, e.g. `{"action": "locks.acquire", "args": {"root": "/path/to/repo", "paths": ["src/a.rs"]}}`.
 
+To keep a plugin's skill and hooks without the server's tools, set `[mcp] enabled = false` in `~/.config/devkit/config.toml`. The server then lists no tools. See [configuration.md](configuration.md#mcp).
+
 ### Actions
 
 `ports.{status,alloc,release,prune}` and `locks.{acquire,check,release,status,prune}`. Pass `root` (the project path) on every lock call and on `ports.alloc`/`ports.release`. For locks, `holder` is a session identity detected from the coding-agent session, falling back to `$DEVKIT_SESSION` or a per-process id. For ports, `holder` defaults to `root`, the worktree path the registry uses to track liveness. Either can be overridden per call.

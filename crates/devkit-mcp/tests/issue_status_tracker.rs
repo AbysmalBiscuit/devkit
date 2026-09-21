@@ -51,6 +51,7 @@ fn call(action: &str, args: Value) -> Value {
     let ctx = devkit_mcp::ServerCtx {
         default_holder: Identity::Resolved("test-session".into()),
         own_worktree: None,
+        enabled: true,
     };
     let mut out = Vec::new();
     devkit_mcp::run(&mut format!("{req}\n").as_bytes(), &mut out, &ctx).unwrap();

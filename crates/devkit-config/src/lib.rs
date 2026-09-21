@@ -72,6 +72,9 @@ pub struct Config {
     /// condition.
     #[serde(default)]
     pub context: ContextConfig,
+    /// The `devkit-mcp` server the agent plugins start.
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 /// The `devkitd` supervisor: whether it starts, how long it lingers, and the
@@ -195,6 +198,33 @@ impl Default for BriefConfig {
             apps: true,
             tasks: true,
         }
+    }
+}
+
+/// The `devkit-mcp` server. The plugins register it unconditionally and a
+/// harness may re-enable a server the user switched off, so config is where
+/// it stays off.
+///
+/// ```
+/// # use devkit_config::Config;
+/// # let cfg = Config::parse(r#"
+/// [mcp]
+/// enabled = false
+/// # "#).unwrap();
+/// # assert!(!cfg.mcp.enabled);
+/// # assert!(Config::parse("").unwrap().mcp.enabled);
+/// ```
+#[derive(Debug, JsonSchema, Deserialize, Serialize)]
+#[serde(default)]
+pub struct McpConfig {
+    /// Whether the server offers its tools. Off, it still answers the
+    /// handshake but lists no tools and refuses every call.
+    pub enabled: bool,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        McpConfig { enabled: true }
     }
 }
 
