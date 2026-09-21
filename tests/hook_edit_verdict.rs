@@ -220,6 +220,42 @@ fn a_denial_emits_no_rules_and_stamps_nothing() {
     );
 }
 
+/// A project whose rules come only from the index, with no
+/// `[[context.files]]` to inject around it, so a drifted index truly leaves
+/// nothing to emit.
+fn drifted_index_project(state: &Path) -> tempfile::TempDir {
+    let p = project();
+    let index = p.path().join("index.json");
+    std::fs::write(&index, r#"{"rules": "not an array"}"#).unwrap();
+    std::fs::write(
+        p.path().join("devkit.toml"),
+        format!(
+            "[harness]\nenforce_writes = true\n\n[rules]\nenabled = true\nindex = '{}'\n",
+            index.display()
+        ),
+    )
+    .unwrap();
+    let _ = state;
+    p
+}
+
+/// The unit test on `index::load` pins the parse failure in isolation; this
+/// pins what the hook does with it: the call is allowed and carries no
+/// injection, exactly as if rules were off.
+#[test]
+fn a_drifted_index_on_disk_injects_nothing_and_does_not_deny() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = drifted_index_project(state.path());
+
+    let payload = write_payload("S", None, proj.path(), "src/a.rs");
+    let out = run_hook(proj.path(), state.path(), &payload);
+    assert_eq!(
+        one_object(&out),
+        None,
+        "a malformed index is silence, not a denial"
+    );
+}
+
 #[test]
 fn an_allow_emits_the_matching_rule_once_per_holder() {
     let state = tempfile::tempdir().unwrap();
@@ -273,12 +309,52 @@ fn patch_payload(session: &str, cwd: Option<&Path>, targets: &[&str]) -> String 
     payload.to_string()
 }
 
+/// A project whose index tags `crates/foo` and `relative` with rules that
+/// name neither directory in their title, so a target resolved into the
+/// wrong directory would surface as the wrong rule rather than passing by
+/// coincidence.
+fn cwd_drop_project(state: &Path) -> tempfile::TempDir {
+    let p = project();
+    let index = p.path().join("index.json");
+    std::fs::write(
+        &index,
+        r#"{"repo": "/repo", "files": [], "rules": [
+            {"id": "r-foo-should", "title": "Foo should",
+             "description": "Rust only, under crates/foo.",
+             "tasks": ["code-generation"], "languages": ["all"],
+             "scope": "directory", "severity": "should",
+             "source_file": "AGENTS.md", "directory": "crates/foo"},
+            {"id": "r-relative-only", "title": "Relative only",
+             "description": "Under relative, which no cwd can ever resolve to.",
+             "tasks": ["code-generation"], "languages": ["all"],
+             "scope": "directory", "severity": "should",
+             "source_file": "AGENTS.md", "directory": "relative"}
+        ]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        p.path().join("devkit.toml"),
+        format!(
+            "[harness]\nenforce_writes = true\n\n\
+             [rules]\nenabled = true\nmin_severity = \"should\"\n\
+             index = '{}'\n",
+            index.display()
+        ),
+    )
+    .unwrap();
+    let _ = state;
+    p
+}
+
 /// No `cwd` key, so a relative target cannot be resolved.
 /// `apply_patch_paths` takes paths verbatim, relative to the session's cwd.
+/// The relative target's own directory carries a rule the absolute target's
+/// directory does not, so a resolver that failed to drop it would surface
+/// that rule here rather than passing for an unrelated reason.
 #[test]
 fn a_payload_without_cwd_drops_relative_targets_and_keeps_absolute_ones() {
     let state = tempfile::tempdir().unwrap();
-    let proj = rules_project(state.path());
+    let proj = cwd_drop_project(state.path());
     let absolute = proj.path().join("crates/foo/src/a.rs");
     let absolute = absolute.to_string_lossy().into_owned();
     let payload = patch_payload("S", None, &["relative/b.rs", &absolute]);
@@ -287,6 +363,11 @@ fn a_payload_without_cwd_drops_relative_targets_and_keeps_absolute_ones() {
     assert!(
         text.contains("Foo should"),
         "the absolute target still matches: {text}"
+    );
+    assert!(
+        !text.contains("Relative only"),
+        "the relative target with no cwd must be dropped, not resolved \
+         into the repository some other way: {text}"
     );
 }
 
@@ -425,6 +506,34 @@ fn capped_files_project(max_event_bytes: usize) -> tempfile::TempDir {
     )
     .unwrap();
     p
+}
+
+/// One `[[context.files]]` entry pointing at a directory rather than a file,
+/// beside a good entry. `read_capped` is already pinned in isolation; this
+/// pins that the bad entry's failure does not swallow the good one.
+fn mixed_context_files_project() -> tempfile::TempDir {
+    let p = project();
+    std::fs::write(p.path().join("good.md"), "good file body").unwrap();
+    std::fs::create_dir(p.path().join("bad.md")).unwrap();
+    std::fs::write(
+        p.path().join("devkit.toml"),
+        "[harness]\nenforce_writes = true\n\n\
+         [rules]\nenabled = true\n\n\
+         [[context.files]]\npath = \"bad.md\"\n\n\
+         [[context.files]]\npath = \"good.md\"\n",
+    )
+    .unwrap();
+    p
+}
+
+#[test]
+fn a_bad_context_file_entry_does_not_suppress_the_good_one() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = mixed_context_files_project();
+    let payload = write_payload("S", None, proj.path(), "src/a.rs");
+
+    let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    assert!(text.contains("good file body"), "{text}");
 }
 
 #[test]
