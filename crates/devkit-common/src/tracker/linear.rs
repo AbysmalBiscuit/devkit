@@ -237,9 +237,11 @@ pub fn issues_by_number(n: u64, key: &str) -> Result<Vec<LinearIssueRef>> {
 /// distinguish an unreachable host from a rejected key.
 fn send(body: serde_json::Value, key: &str, detail: &str) -> Result<serde_json::Value> {
     let _span = crate::timing::io_span("linear graphql", detail).entered();
-    let v: serde_json::Value = ureq::post("https://api.linear.app/graphql")
+    let v: serde_json::Value = crate::http::agent()
+        .post("https://api.linear.app/graphql")
         .set("Authorization", key)
-        .send_json(body)?
+        .send_json(body)
+        .map_err(crate::http::explain)?
         .into_json()?;
     Ok(v)
 }

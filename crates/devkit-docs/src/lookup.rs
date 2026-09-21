@@ -16,18 +16,24 @@ pub struct Http;
 impl Registry for Http {
     fn repo_url(&self, eco: Ecosystem, package: &str) -> Result<String> {
         let v: serde_json::Value = match eco {
-            Ecosystem::Rust => ureq::get(&format!("https://crates.io/api/v1/crates/{package}"))
+            Ecosystem::Rust => devkit_common::http::agent()
+                .get(&format!("https://crates.io/api/v1/crates/{package}"))
                 .set(
                     "User-Agent",
                     "devkit-docm (https://github.com/AbysmalBiscuit/devkit)",
                 )
-                .call()?
+                .call()
+                .map_err(devkit_common::http::explain)?
                 .into_json()?,
-            Ecosystem::Js => ureq::get(&format!("https://registry.npmjs.org/{package}"))
-                .call()?
+            Ecosystem::Js => devkit_common::http::agent()
+                .get(&format!("https://registry.npmjs.org/{package}"))
+                .call()
+                .map_err(devkit_common::http::explain)?
                 .into_json()?,
-            Ecosystem::Python => ureq::get(&format!("https://pypi.org/pypi/{package}/json"))
-                .call()?
+            Ecosystem::Python => devkit_common::http::agent()
+                .get(&format!("https://pypi.org/pypi/{package}/json"))
+                .call()
+                .map_err(devkit_common::http::explain)?
                 .into_json()?,
             Ecosystem::Git => bail!("git entries carry an explicit repo URL"),
         };

@@ -1,4 +1,4 @@
-//! Direct GitHub REST/GraphQL access over a shared `ureq::Agent`, replacing
+//! Direct GitHub REST/GraphQL access over [`crate::http::agent`], replacing
 //! per-call `gh` subprocess spawns on the read paths.
 //!
 //! Auth reuses whatever `gh` already relies on: `GH_TOKEN`/`GITHUB_TOKEN` from
@@ -15,20 +15,10 @@ use std::{path::Path, sync::OnceLock, time::Duration};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::http::{agent, explain};
+
 const API: &str = "https://api.github.com";
 const UA: &str = "devkit";
-
-/// One pooled agent for the whole process so repeated calls reuse the TCP/TLS
-/// connection instead of dialing GitHub afresh each time.
-fn agent() -> &'static ureq::Agent {
-    static A: OnceLock<ureq::Agent> = OnceLock::new();
-    A.get_or_init(|| {
-        ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout_read(Duration::from_secs(30))
-            .build()
-    })
-}
 
 /// Where the GitHub token devkit sends was found. `Env` names the variable so
 /// a report can print it; `Gh` means `gh auth token` produced it, which is the
@@ -99,7 +89,8 @@ fn graphql_request(query: &str) -> Result<Value> {
         .post(&format!("{API}/graphql"))
         .set("Authorization", &bearer()?)
         .set("User-Agent", UA)
-        .send_json(ureq::json!({ "query": query }))?
+        .send_json(ureq::json!({ "query": query }))
+        .map_err(explain)?
         .into_json()?)
 }
 
@@ -166,7 +157,7 @@ pub fn rest_get_opt(path: &str) -> Result<Option<Value>> {
     match resp {
         Ok(r) => Ok(Some(r.into_json()?)),
         Err(ureq::Error::Status(404, _)) => Ok(None),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(explain(e)),
     }
 }
 

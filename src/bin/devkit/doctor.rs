@@ -1,5 +1,6 @@
 use anyhow::Result;
 use devkit_common::{
+    http,
     progress::Steps,
     secrets::{self, Source},
     slack,
@@ -51,22 +52,33 @@ fn is_unreachable(e: &anyhow::Error) -> bool {
     )
 }
 
+/// A credential check that could not complete. A rejected TLS certificate is a
+/// transport error too, but it says nothing about the credential and has a
+/// local fix, so it is reported by name instead of as `unreachable`.
+fn validation_failure(e: anyhow::Error) -> Check {
+    if e.is::<http::UntrustedCertificate>() {
+        Check::Warn(e.to_string())
+    } else if is_unreachable(&e) {
+        Check::Unreachable
+    } else {
+        Check::Invalid(e.to_string())
+    }
+}
+
 fn validate_linear(v: &str) -> Check {
     match linear::validate(v) {
         Ok(id) => Check::Ok(format!(
             "workspace \"{}\" ({})",
             id.workspace_url_key, id.viewer_email
         )),
-        Err(e) if is_unreachable(&e) => Check::Unreachable,
-        Err(e) => Check::Invalid(e.to_string()),
+        Err(e) => validation_failure(e),
     }
 }
 
 fn validate_slack(v: &str) -> Check {
     match slack::validate(v) {
         Ok(id) => Check::Ok(format!("team \"{}\" (user {})", id.team, id.user)),
-        Err(e) if is_unreachable(&e) => Check::Unreachable,
-        Err(e) => Check::Invalid(e.to_string()),
+        Err(e) => validation_failure(e),
     }
 }
 

@@ -131,23 +131,27 @@ fn source_label(source: TokenSource) -> String {
 /// account only when the token came from `gh auth token` (`TokenSource::Gh`).
 /// With `GH_TOKEN`/`GITHUB_TOKEN` set, devkit's identity and gh's active
 /// account can differ, and reporting the wrong one is worse than reporting
-/// neither.
-fn github_report(token_source: TokenSource, viewer: Option<&str>, hosts: &[GhHost]) -> String {
+/// neither. `viewer` is the login, or why looking it up failed.
+fn github_report(
+    token_source: TokenSource,
+    viewer: Result<&str, &str>,
+    hosts: &[GhHost],
+) -> String {
     let mut out = String::new();
     match (token_source, viewer) {
         (TokenSource::None, _) => {
             out.push_str("✗ github: no token found\n");
             out.push_str("  set GH_TOKEN or GITHUB_TOKEN, or run: gh auth login\n");
         }
-        (source, Some(login)) => {
+        (source, Ok(login)) => {
             out.push_str(&format!(
                 "✓ github: {login}  (token from {})\n",
                 source_label(source)
             ));
         }
-        (source, None) => {
+        (source, Err(why)) => {
             out.push_str(&format!(
-                "⚠ github: token from {} but could not resolve the identity\n",
+                "⚠ github: token from {} but could not resolve the identity\n  {why}\n",
                 source_label(source)
             ));
         }
@@ -177,14 +181,22 @@ fn gh_auth_status_hosts() -> serde_json::Value {
 fn run_github() -> Result<()> {
     let source = github::token_source();
     let viewer = match source {
-        TokenSource::None => None,
+        TokenSource::None => Err("no token".to_string()),
         TokenSource::Env(_) | TokenSource::Gh => github::rest_get("/user")
-            .ok()
-            .and_then(|v| v.get("login").and_then(|l| l.as_str()).map(String::from)),
+            .map_err(|e| format!("{e:#}"))
+            .and_then(|v| {
+                v.get("login")
+                    .and_then(|l| l.as_str())
+                    .map(String::from)
+                    .ok_or_else(|| "GitHub's /user response has no login".to_string())
+            }),
     };
     let hosts_resp = gh_auth_status_hosts();
     let hosts = parse_gh_hosts(&hosts_resp["hosts"]);
-    print!("{}", github_report(source, viewer.as_deref(), &hosts));
+    print!(
+        "{}",
+        github_report(source, viewer.as_deref().map_err(String::as_str), &hosts)
+    );
     Ok(())
 }
 
@@ -214,7 +226,7 @@ mod tests {
         // gh account is not the identity devkit uses, and reporting it
         // as such would mislead precisely the user who most needs the
         // answer.
-        let out = github_report(TokenSource::Env("GH_TOKEN"), Some("ci-bot"), &[GhHost {
+        let out = github_report(TokenSource::Env("GH_TOKEN"), Ok("ci-bot"), &[GhHost {
             login: "a-human".into(),
             host: "github.com".into(),
             active: true,
@@ -239,8 +251,16 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_identity_lookup_says_why() {
+        let why = "TLS certificate not trusted (UnknownIssuer)";
+        let out = github_report(TokenSource::Env("GH_TOKEN"), Err(why), &[]);
+        assert!(out.contains("could not resolve the identity"), "{out}");
+        assert!(out.contains(why), "{out}");
+    }
+
+    #[test]
     fn no_token_prints_the_login_instruction() {
-        let out = github_report(TokenSource::None, None, &[]);
+        let out = github_report(TokenSource::None, Err("no token"), &[]);
         assert!(out.contains("gh auth login"), "{out}");
         assert!(
             out.contains("GH_TOKEN") && out.contains("GITHUB_TOKEN"),
