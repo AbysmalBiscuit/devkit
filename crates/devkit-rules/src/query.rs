@@ -381,4 +381,43 @@ mod tests {
             "the only rule tagged with the topic"
         );
     }
+
+    #[test]
+    fn severity_breaks_ties_when_depth_and_topics_match() {
+        let index = fixture();
+        let ranked = rank(&index, matching(&index, &Filter::default()), &[]);
+        let ids: Vec<&str> = ranked.iter().map(|r| r.id.as_str()).collect();
+        let must_pos = ids
+            .iter()
+            .position(|i| *i == "r-root-must")
+            .expect("r-root-must in results");
+        let should_pos = ids
+            .iter()
+            .position(|i| *i == "r-untagged")
+            .expect("r-untagged in results");
+        assert!(
+            must_pos < should_pos,
+            "must ranks before should at same depth: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn tier_breaks_ties_when_depth_severity_and_topics_match() {
+        let json = r#"{"repo": "/repo", "files": [{"path": "listed.rs", "tier": 2}], "rules": [{"id": "r-listed", "title": "Listed", "description": "In files.", "scope": "repo", "severity": "must", "source_file": "listed.rs"}, {"id": "r-unlisted", "title": "Unlisted", "description": "Not in files.", "scope": "repo", "severity": "must", "source_file": "unlisted.rs"}]}"#;
+        let index: RuleIndex = serde_json::from_str(json).unwrap();
+        let ranked = rank(&index, matching(&index, &Filter::default()), &[]);
+        let ids: Vec<&str> = ranked.iter().map(|r| r.id.as_str()).collect();
+        let listed = ids
+            .iter()
+            .position(|i| *i == "r-listed")
+            .expect("r-listed in results");
+        let unlisted = ids
+            .iter()
+            .position(|i| *i == "r-unlisted")
+            .expect("r-unlisted in results");
+        assert!(
+            listed < unlisted,
+            "listed tier ranks before docs_tier fallback: {ids:?}"
+        );
+    }
 }
