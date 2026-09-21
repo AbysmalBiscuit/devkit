@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.14.6](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.5...v0.14.6) (2026-09-21)
+
+
+### Features
+
+* **mcp:** add [mcp] enabled switch ([#117](https://github.com/AbysmalBiscuit/devkit/issues/117)) ([74250a8](https://github.com/AbysmalBiscuit/devkit/commit/74250a81ab224c53643d0f9673594ac35ae660a1))
+* **rules:** inject the rules that govern a file before it is written ([#108](https://github.com/AbysmalBiscuit/devkit/issues/108)) ([52bca00](https://github.com/AbysmalBiscuit/devkit/commit/52bca0076daa01471354e6ca721fdda194bb6acb))
+
+
+### Bug Fixes
+
+* **cloud:** pin setup installs to plugin versions ([#120](https://github.com/AbysmalBiscuit/devkit/issues/120)) ([3afad97](https://github.com/AbysmalBiscuit/devkit/commit/3afad977b32bac6c19976ad3d6b8f8350d30b77a))
+* **common:** trust the platform certificate store ([#119](https://github.com/AbysmalBiscuit/devkit/issues/119)) ([a4bdda9](https://github.com/AbysmalBiscuit/devkit/commit/a4bdda96cb44a2e3a35e79c48c2c74e9ffd0792f))
+* **locks:** hold a claude code fork's writes as its session ([#121](https://github.com/AbysmalBiscuit/devkit/issues/121)) ([a6c0fe1](https://github.com/AbysmalBiscuit/devkit/commit/a6c0fe19507bd1246f1b5ddb1d26b41dd81d8b56))
+
+
+### Performance Improvements
+
+* **docm:** size the docs cache from recorded checkout sizes ([#103](https://github.com/AbysmalBiscuit/devkit/issues/103)) ([2450c4d](https://github.com/AbysmalBiscuit/devkit/commit/2450c4d52dce0f554327616bda4444e993248003))
+
 ## [0.14.5](https://github.com/AbysmalBiscuit/devkit/compare/v0.14.4...v0.14.5) (2026-09-17)
 
 
