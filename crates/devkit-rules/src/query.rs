@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::{
     model::{Rule, RuleIndex},
-    vocab::{ALL_LANGUAGES, Scope, Severity, Task, canonical_language},
+    vocab::{ALL_LANGUAGES, Scope, Severity, Task, canonical_language, vocabulary_key},
 };
 
 /// Whether rules for the repo-relative `directory` apply to `path`. The empty
@@ -122,6 +122,55 @@ fn keeps(rule: &Rule, filter: &Filter) -> bool {
         }
     }
     true
+}
+
+/// The tier a source file with no entry in the index falls back to. Matches
+/// `repo-rules-agent`'s `DOCS_TIER`, so a rule whose file the index does not
+/// list sinks below every listed one.
+const DOCS_TIER: i64 = 5;
+
+/// Whether `rule` is tagged with `topic`, or names it as a word in its title or
+/// description. The text fallback covers a rule extracted before the repository
+/// defined the topic, and one the model left untagged.
+pub fn is_about(rule: &Rule, topic: &str) -> bool {
+    let wanted = vocabulary_key(topic);
+    if rule.topics_canonical().iter().any(|t| t == &wanted) {
+        return true;
+    }
+    let haystack = vocabulary_key(&format!("{} {}", rule.title, rule.description));
+    haystack
+        .match_indices(&wanted)
+        .any(|(at, _)| is_word_boundary(&haystack, at, wanted.len()))
+}
+
+/// Whether the match at `at` stands alone rather than sitting inside a longer
+/// word. Both sides are already `vocabulary_key`'d, so a separator here is `_`.
+fn is_word_boundary(haystack: &str, at: usize, len: usize) -> bool {
+    let before = haystack[..at].chars().next_back();
+    let after = haystack[at + len..].chars().next();
+    let free = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric());
+    free(before) && free(after)
+}
+
+/// Order rules most useful first: those about a requested topic, then deeper
+/// directories, then severity, then the discovery tier of their source file.
+pub fn rank<'a>(index: &RuleIndex, rules: Vec<&'a Rule>, topics: &[String]) -> Vec<&'a Rule> {
+    let mut ranked = rules;
+    ranked.sort_by_cached_key(|rule| {
+        let about = topics.iter().any(|t| is_about(rule, t));
+        let depth = if rule.directory.is_empty() {
+            0
+        } else {
+            rule.directory.split('/').count() as i64
+        };
+        let tier = index
+            .files
+            .iter()
+            .find(|f| f.path == rule.source_file)
+            .map_or(DOCS_TIER, |f| f.tier);
+        (!about, -depth, rule.severity(), tier)
+    });
+    ranked
 }
 
 #[cfg(test)]
@@ -283,5 +332,53 @@ mod tests {
         assert!(ids.contains(&"r-foo-should"), "the rust rule");
         assert!(ids.contains(&"r-root-must"), "the all-language rule");
         assert!(!ids.contains(&"r-untagged"), "the typescript rule: {ids:?}");
+    }
+
+    #[test]
+    fn is_about_matches_a_tag_or_the_text_across_separators() {
+        let rule = Rule {
+            title: "Kysely migrations".to_string(),
+            description: "Use the migration runner.".to_string(),
+            topics: vec!["code_style".to_string()],
+            ..fixture().rules[0].clone()
+        };
+        assert!(is_about(&rule, "code_style"), "tagged");
+        assert!(is_about(&rule, "Code-Style"), "tagged, other spelling");
+        assert!(is_about(&rule, "kysely"), "named in the title");
+        assert!(is_about(&rule, "migration"), "named in the description");
+        assert!(
+            !is_about(&rule, "migrations_runner"),
+            "not a word in either"
+        );
+        assert!(!is_about(&rule, "grat"), "a substring is not a word");
+    }
+
+    #[test]
+    fn rank_puts_deeper_directories_and_harder_severity_first() {
+        let index = fixture();
+        let filter = Filter {
+            paths: vec!["crates/foo/src/a.rs".to_string()],
+            ..Filter::default()
+        };
+        let ranked = rank(&index, matching(&index, &filter), &[]);
+        let ids: Vec<&str> = ranked.iter().map(|r| r.id.as_str()).collect();
+        let foo = ids.iter().position(|i| *i == "r-foo-should").unwrap();
+        let root = ids.iter().position(|i| *i == "r-root-must").unwrap();
+        assert!(
+            foo < root,
+            "the directory rule outranks the repo rule: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn a_requested_topic_outranks_everything_else() {
+        let index = fixture();
+        let ranked = rank(&index, matching(&index, &Filter::default()), &[
+            "readability".to_string(),
+        ]);
+        assert_eq!(
+            ranked[0].id, "r-foo-can",
+            "the only rule tagged with the topic"
+        );
     }
 }
