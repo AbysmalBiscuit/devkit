@@ -120,3 +120,211 @@ fn an_unconflicted_write_emits_nothing() {
     let out = run_hook(proj.path(), state.path(), &payload);
     assert_eq!(one_object(&out), None, "an allow is silent");
 }
+
+/// A project whose `[rules]` are on, carrying an index at a known path and a
+/// `[[context.files]]` entry under `crates/foo`.
+fn rules_project(state: &Path) -> tempfile::TempDir {
+    let p = project();
+    let index = p.path().join("index.json");
+    std::fs::copy("crates/devkit-rules/tests/fixtures/index.json", &index).unwrap();
+    std::fs::create_dir_all(p.path().join("crates/foo")).unwrap();
+    std::fs::write(p.path().join("crates/foo/AGENTS.md"), "foo house rules").unwrap();
+    std::fs::write(
+        p.path().join("devkit.toml"),
+        format!(
+            // A literal string, not a basic one: a Windows path carries
+            // backslashes, and `"C:\\Users..."` is an invalid escape.
+            "[harness]\nenforce_writes = true\n\n\
+             [rules]\nenabled = true\nmin_severity = \"should\"\n\
+             index = '{}'\n\n\
+             [[context.files]]\npath = \"crates/foo/AGENTS.md\"\n",
+            index.display()
+        ),
+    )
+    .unwrap();
+    let _ = state;
+    p
+}
+
+fn injected_text(out: &Output) -> String {
+    let v = one_object(out).expect("an allow with matching rules emits");
+    assert!(
+        v["hookSpecificOutput"].get("permissionDecision").is_none(),
+        "the rules stage never carries a decision: {v}"
+    );
+    v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("additionalContext")
+        .to_string()
+}
+
+/// The deny path, byte-identical, with a rule *and* a file both matching. A
+/// test over an unmatched deny would pass without ever reaching the code that
+/// could break this.
+#[test]
+fn a_denial_emits_no_rules_and_stamps_nothing() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = rules_project(state.path());
+    hold(
+        proj.path(),
+        state.path(),
+        "crates/foo/src/a.rs",
+        "other-session",
+    );
+
+    let payload = write_payload("S", None, proj.path(), "crates/foo/src/a.rs");
+    let out = run_hook(proj.path(), state.path(), &payload);
+
+    let v = one_object(&out).expect("a conflict denies");
+    assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+    let text = serde_json::to_string(&v).unwrap();
+    assert!(!text.contains("Foo should"), "no rule rides along: {text}");
+    assert!(
+        !text.contains("foo house rules"),
+        "no file rides along: {text}"
+    );
+
+    // Byte-for-byte against the same conflict with rules switched off: the deny
+    // path must be indistinguishable from what it emitted before this feature.
+    let off_state = tempfile::tempdir().unwrap();
+    let off = rules_project(off_state.path());
+    std::fs::write(
+        off.path().join("devkit.toml"),
+        "[harness]\nenforce_writes = true\n\n[rules]\nenabled = false\n",
+    )
+    .unwrap();
+    hold(
+        off.path(),
+        off_state.path(),
+        "crates/foo/src/a.rs",
+        "other-session",
+    );
+    let baseline = run_hook(
+        off.path(),
+        off_state.path(),
+        &write_payload("S", None, off.path(), "crates/foo/src/a.rs"),
+    );
+    // Each output is normalized against its own project root, so the two are
+    // compared on content rather than on which tempdir produced them.
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).replace(proj.path().to_string_lossy().as_ref(), ""),
+        String::from_utf8_lossy(&baseline.stdout)
+            .replace(off.path().to_string_lossy().as_ref(), ""),
+        "the deny envelope is unchanged by the rules feature"
+    );
+
+    let fired = state.path().join("devkit/rules");
+    assert!(
+        !fired.exists() || std::fs::read_dir(&fired).unwrap().next().is_none(),
+        "a denial stamps nothing, so the retry carries the rules"
+    );
+}
+
+#[test]
+fn an_allow_emits_the_matching_rule_once_per_holder() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = rules_project(state.path());
+    let payload = write_payload("S", None, proj.path(), "crates/foo/src/a.rs");
+
+    let first = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    assert!(first.contains("Foo should"), "the directory rule: {first}");
+    assert!(first.contains("Root must"), "the repo rule: {first}");
+    assert!(!first.contains("Foo can"), "below the floor: {first}");
+    assert!(first.contains("foo house rules"), "the file dump: {first}");
+
+    let second = run_hook(proj.path(), state.path(), &payload);
+    assert_eq!(one_object(&second), None, "the second call is silent");
+}
+
+#[test]
+fn a_subagent_gets_a_rule_its_parent_already_fired() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = rules_project(state.path());
+    let target = "crates/foo/src/a.rs";
+
+    let parent = write_payload("S", None, proj.path(), target);
+    injected_text(&run_hook(proj.path(), state.path(), &parent));
+
+    let child = write_payload("S", Some("a1"), proj.path(), target);
+    let text = injected_text(&run_hook(proj.path(), state.path(), &child));
+    assert!(
+        text.contains("Foo should"),
+        "the subagent's context never held what the parent was shown: {text}"
+    );
+}
+
+/// An `apply_patch` envelope, the only multi-target write in devkit's model:
+/// every other write tool names one `tool_input.file_path`.
+fn patch_payload(session: &str, cwd: Option<&Path>, targets: &[&str]) -> String {
+    let mut patch = String::from("*** Begin Patch\n");
+    for target in targets {
+        patch.push_str(&format!("*** Update File: {target}\n"));
+    }
+    patch.push_str("*** End Patch\n");
+    let mut payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "session_id": session,
+        "tool_input": { "command": patch }
+    });
+    if let Some(cwd) = cwd {
+        payload["cwd"] = serde_json::Value::String(cwd.to_string_lossy().into_owned());
+    }
+    payload.to_string()
+}
+
+/// Review Focus 2: no `cwd` key, so a relative target cannot be resolved.
+/// `apply_patch_paths` takes paths verbatim, relative to the session's cwd.
+#[test]
+fn a_payload_without_cwd_drops_relative_targets_and_keeps_absolute_ones() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = rules_project(state.path());
+    let absolute = proj.path().join("crates/foo/src/a.rs");
+    let absolute = absolute.to_string_lossy().into_owned();
+    let payload = patch_payload("S", None, &["relative/b.rs", &absolute]);
+
+    let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    assert!(
+        text.contains("Foo should"),
+        "the absolute target still matches: {text}"
+    );
+}
+
+/// Review Focus 4: a parent and its subagents append to one file.
+#[test]
+fn a_torn_line_in_the_fired_set_does_not_suppress_the_rest() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = rules_project(state.path());
+    let payload = write_payload("S", None, proj.path(), "crates/foo/src/a.rs");
+
+    let first = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    assert!(first.contains("Foo should"));
+
+    let dir = state.path().join("devkit/rules");
+    let file = std::fs::read_dir(&dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let mut body = std::fs::read_to_string(&file).unwrap();
+    body.push_str("\u{0}\u{1}torn\n");
+    std::fs::write(&file, body).unwrap();
+
+    let out = run_hook(proj.path(), state.path(), &payload);
+    assert_eq!(one_object(&out), None, "the valid ids still suppress");
+}
+
+#[test]
+fn a_multi_target_call_unions_the_rules_for_every_target() {
+    let state = tempfile::tempdir().unwrap();
+    let proj = rules_project(state.path());
+    let payload = patch_payload("S", Some(proj.path()), &[
+        "crates/foo/src/a.rs",
+        "README.md",
+    ]);
+
+    let text = injected_text(&run_hook(proj.path(), state.path(), &payload));
+    assert!(text.contains("Foo should"), "the crates/foo target: {text}");
+    assert!(text.contains("Root must"), "the root target: {text}");
+}

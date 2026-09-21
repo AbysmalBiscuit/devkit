@@ -20,7 +20,7 @@ use devkit_locks::{
 };
 use serde_json::Value;
 
-use super::{HookEvent, record, shell};
+use super::{HookEvent, record, rules, shell};
 
 /// What the write stage decided.
 ///
@@ -50,7 +50,10 @@ pub fn guard(payload: &Value, declared: Option<Harness>) -> Result<()> {
         }) => {
             let outcome = claim(payload, &checkout, &cwd, &file_paths, &holder);
             let reasons = match &outcome {
-                WriteOutcome::Allow => Vec::new(),
+                WriteOutcome::Allow => {
+                    rules::inject(payload, &checkout, &cwd, declared, &file_paths, &holder);
+                    Vec::new()
+                }
                 WriteOutcome::Deny { reasons, .. } => reasons.clone(),
             };
             (file_paths, holder, reasons, outcome)
@@ -167,8 +170,9 @@ pub fn release_session(payload: &Value) -> Result<()> {
 fn release(action: Option<LockAction>) {
     if let Some(LockAction::ReleaseSubagent { holder } | LockAction::ReleaseSession { holder }) =
         action
+        && devkit_locks::release_prefix(&holder).is_ok()
     {
-        let _ = devkit_locks::release_prefix(&holder);
+        rules::clear_for_holder(&holder);
     }
 }
 

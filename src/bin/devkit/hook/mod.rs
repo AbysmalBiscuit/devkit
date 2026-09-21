@@ -19,6 +19,7 @@
 mod dialect;
 mod edit;
 pub mod record;
+pub(crate) mod rules;
 mod shell;
 mod writes;
 
