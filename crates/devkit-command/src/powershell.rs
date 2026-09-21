@@ -1043,7 +1043,12 @@ impl<'t> Walker<'_, '_, '_, 't> {
                 let destination = path(self, 1);
                 self.a
                     .file_effect(FileOp::Rename, &source, cwd.as_deref(), at.clone());
-                self.a.rename_into(&destination, cwd.as_deref(), at);
+                self.a.rename_into(
+                    std::slice::from_ref(&source),
+                    &destination,
+                    cwd.as_deref(),
+                    at,
+                );
                 Value::Unknown
             }
             ("io.file", "copy") => {
@@ -1222,9 +1227,10 @@ impl<'t> Walker<'_, '_, '_, 't> {
             let v = w.bounded_resolved(node, v, cwd.as_deref());
             w.a.file_effect(op, &v, cwd.as_deref(), w.at(node));
         };
-        let rename_into = |w: &mut Self, v: Option<Value>| {
+        let rename_into = |w: &mut Self, source: Option<Value>, v: Option<Value>| {
             let v = w.bounded_resolved(node, v.unwrap_or(Value::Unknown), cwd.as_deref());
-            w.a.rename_into(&v, cwd.as_deref(), w.at(node));
+            let source = source.unwrap_or(Value::Unknown);
+            w.a.rename_into(&[source], &v, cwd.as_deref(), w.at(node));
         };
         let tree = |w: &mut Self, v: Value, by: &str| {
             let v = w.bounded_resolved(node, v, cwd.as_deref());
@@ -1285,7 +1291,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
             }
             Verb::MoveItem => {
                 file(self, FileOp::Rename, get("path"), literal);
-                rename_into(self, get("destination"));
+                rename_into(self, get("path"), get("destination"));
             }
             Verb::RenameItem => {
                 let path = get("path");
@@ -1297,7 +1303,7 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     }),
                     _ => Value::Unknown,
                 };
-                rename_into(self, Some(renamed));
+                rename_into(self, path, Some(renamed));
             }
             Verb::CopyItem => {
                 if switch("recurse") {

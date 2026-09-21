@@ -717,10 +717,20 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     if matches!(method, "symlink" | "symlinkSync" | "link" | "linkSync") {
                         self.link_in_fresh(node, &arg(*index));
                     }
-                    self.js_effect(*op, &arg(*index), cwd.as_deref(), at);
+                    if matches!(method, "copyFile" | "copyFileSync") {
+                        self.a
+                            .copy_content(&arg(*index).as_value(), cwd.as_deref(), at);
+                    } else {
+                        self.js_effect(*op, &arg(*index), cwd.as_deref(), at);
+                    }
                 } else if matches!(method, "renameSync" | "rename") {
                     self.js_effect(FileOp::Rename, &arg(0), cwd.as_deref(), at.clone());
-                    self.a.rename_into(&arg(1).as_value(), cwd.as_deref(), at);
+                    self.a.rename_into(
+                        &[arg(0).as_value()],
+                        &arg(1).as_value(),
+                        cwd.as_deref(),
+                        at,
+                    );
                 } else if matches!(method, "rmSync" | "rm" | "cpSync" | "cp") {
                     let recursive = args
                         .get(if method.starts_with("cp") { 2 } else { 1 })
@@ -777,9 +787,14 @@ impl<'t> Walker<'_, '_, '_, 't> {
                     "remove" => self.js_effect(FileOp::Delete, &arg(0), cwd.as_deref(), at),
                     "rename" => {
                         self.js_effect(FileOp::Rename, &arg(0), cwd.as_deref(), at.clone());
-                        self.a.rename_into(&arg(1).as_value(), cwd.as_deref(), at);
+                        self.a.rename_into(
+                            &[arg(0).as_value()],
+                            &arg(1).as_value(),
+                            cwd.as_deref(),
+                            at,
+                        );
                     }
-                    "copyFile" => self.js_effect(FileOp::Copy, &arg(1), cwd.as_deref(), at),
+                    "copyFile" => self.a.copy_content(&arg(1).as_value(), cwd.as_deref(), at),
                     _ => {}
                 }
                 Js::Data

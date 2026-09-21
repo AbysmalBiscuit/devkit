@@ -77,6 +77,18 @@ pub(crate) struct Analyzer<'c> {
     fresh: Vec<FreshWrite>,
 }
 
+/// What an effect does to the fresh directory it lands in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fresh {
+    /// Brings in something from outside, which may be a link.
+    Places,
+    /// Writes under it, possibly through something placed there.
+    Writes,
+    /// Removes the fresh directory itself, which unlinks what it holds
+    /// without following any of it.
+    RemovesRoot,
+}
+
 /// An effect on a path an API created fresh, and whether it put something
 /// there from outside the fresh directory.
 struct FreshWrite {
@@ -182,8 +194,8 @@ impl<'c> Analyzer<'c> {
         });
     }
 
-    /// Record a write to `path`. A copy's target is always its destination, so
-    /// a copy onto a fresh path places something there.
+    /// Record a write to `path`. A copy's target is always its destination,
+    /// and a copy not known to dereference its source can place a link there.
     pub(crate) fn file_effect(
         &mut self,
         op: FileOp,
@@ -191,13 +203,35 @@ impl<'c> Analyzer<'c> {
         cwd: Option<&str>,
         location: Location,
     ) {
-        self.record_file(op, path, cwd, location, op == FileOp::Copy);
+        let fresh = if op == FileOp::Copy {
+            Fresh::Places
+        } else {
+            Fresh::Writes
+        };
+        self.record_file(op, path, cwd, location, fresh);
     }
 
-    /// Record the destination of a rename or move, which places whatever was
-    /// renamed there.
-    pub(crate) fn rename_into(&mut self, dest: &Value, cwd: Option<&str>, location: Location) {
-        self.record_file(FileOp::Rename, dest, cwd, location, true);
+    /// Record the destination of a copy that dereferences its source, so it
+    /// writes content and never a link.
+    pub(crate) fn copy_content(&mut self, dest: &Value, cwd: Option<&str>, location: Location) {
+        self.record_file(FileOp::Copy, dest, cwd, location, Fresh::Writes);
+    }
+
+    /// Record the destination of a rename or move. It places something only
+    /// when a source comes from outside a fresh directory.
+    pub(crate) fn rename_into(
+        &mut self,
+        sources: &[Value],
+        dest: &Value,
+        cwd: Option<&str>,
+        location: Location,
+    ) {
+        let fresh = if sources.iter().all(|s| matches!(s, Value::Ephemeral(_))) {
+            Fresh::Writes
+        } else {
+            Fresh::Places
+        };
+        self.record_file(FileOp::Rename, dest, cwd, location, fresh);
     }
 
     fn record_file(
@@ -206,14 +240,11 @@ impl<'c> Analyzer<'c> {
         path: &Value,
         cwd: Option<&str>,
         location: Location,
-        places: bool,
+        fresh: Fresh,
     ) {
         let target = paths::resolve(path, cwd, self.ctx.path_style);
         if matches!(target, crate::model::Target::Ephemeral { .. }) {
-            self.fresh.push(FreshWrite {
-                location: location.clone(),
-                places,
-            });
+            self.track_fresh(&location, fresh);
         }
         self.out.file_effects.push(FileEffect {
             op,
@@ -232,7 +263,7 @@ impl<'c> Analyzer<'c> {
         by: &str,
         location: Location,
     ) {
-        self.record_tree(scope, whole_checkout, cwd, by, location, true);
+        self.record_tree(scope, whole_checkout, cwd, by, location, Fresh::Places);
     }
 
     /// Record a tree writer that only takes entries away: a recursive delete,
@@ -244,7 +275,7 @@ impl<'c> Analyzer<'c> {
         by: &str,
         location: Location,
     ) {
-        self.record_tree(scope, false, cwd, by, location, false);
+        self.record_tree(scope, false, cwd, by, location, Fresh::Writes);
     }
 
     fn record_tree(
@@ -254,7 +285,7 @@ impl<'c> Analyzer<'c> {
         cwd: Option<&str>,
         by: &str,
         location: Location,
-        places: bool,
+        fresh: Fresh,
     ) {
         match paths::resolve(scope, cwd, self.ctx.path_style) {
             crate::model::Target::Path(scope) => self.out.tree_effects.push(TreeEffect {
@@ -273,10 +304,7 @@ impl<'c> Analyzer<'c> {
             // no path another session could name, but a claim on the directory
             // that one was made in covers the whole fresh subtree.
             crate::model::Target::Ephemeral { at } => {
-                self.fresh.push(FreshWrite {
-                    location: location.clone(),
-                    places,
-                });
+                self.track_fresh(&location, fresh);
                 if let crate::model::TempLocation::In(scope) = at {
                     self.out.tree_effects.push(TreeEffect {
                         scope,
@@ -295,6 +323,15 @@ impl<'c> Analyzer<'c> {
     /// a write through it lands wherever it points. Fresh values carry no
     /// identity and a loop can run a later statement first, so this spans the
     /// whole analysis. A lone placement has nothing before it to lead it out.
+    fn track_fresh(&mut self, location: &Location, fresh: Fresh) {
+        if fresh != Fresh::RemovesRoot {
+            self.fresh.push(FreshWrite {
+                location: location.clone(),
+                places: fresh == Fresh::Places,
+            });
+        }
+    }
+
     fn close_fresh(&mut self) {
         let placements = self.fresh.iter().filter(|f| f.places).count();
         if placements == 0 {
@@ -319,6 +356,10 @@ impl<'c> Analyzer<'c> {
             return;
         };
         let location = raw.location.clone();
+        let from_shell = matches!(
+            raw.language,
+            Language::Bash | Language::Fish | Language::PowerShell
+        );
         let cwd = unwrapped.cwd.apply(raw.cwd.clone());
         let program_value = program.value.clone();
         let args: Vec<Value> = unwrapped.argv[1..]
@@ -410,12 +451,26 @@ impl<'c> Analyzer<'c> {
                     &by,
                     location.clone(),
                 ),
-                catalog::Hit::RenameInto(path) => {
-                    self.rename_into(&path, effective_cwd.as_deref(), location.clone())
+                catalog::Hit::RenameInto { sources, dest } => {
+                    self.rename_into(&sources, &dest, effective_cwd.as_deref(), location.clone())
                 }
-                catalog::Hit::TreeRemoval { scope, by } => {
-                    self.tree_removal(&scope, effective_cwd.as_deref(), &by, location.clone())
+                catalog::Hit::CopyContent(dest) => {
+                    self.copy_content(&dest, effective_cwd.as_deref(), location.clone())
                 }
+                // A shell word is fresh only as the whole temp path, so a shell
+                // removal on one removes the fresh directory itself.
+                catalog::Hit::TreeRemoval { scope, by } => self.record_tree(
+                    &scope,
+                    false,
+                    effective_cwd.as_deref(),
+                    &by,
+                    location.clone(),
+                    if from_shell {
+                        Fresh::RemovesRoot
+                    } else {
+                        Fresh::Writes
+                    },
+                ),
                 catalog::Hit::Unresolved(detail) => {
                     self.uncertain(UncertaintyKind::UnresolvedWrite, detail, location.clone())
                 }

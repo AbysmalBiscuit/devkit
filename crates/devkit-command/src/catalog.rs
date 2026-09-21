@@ -6,8 +6,13 @@ use crate::model::{FileOp, Value};
 
 pub(crate) enum Hit {
     File(FileOp, Value),
-    /// The destination of a rename or move.
-    RenameInto(Value),
+    /// The destination of a rename or move, with what was moved there.
+    RenameInto {
+        sources: Vec<Value>,
+        dest: Value,
+    },
+    /// The destination of a copy that dereferences its source.
+    CopyContent(Value),
     Tree {
         scope: Value,
         whole_checkout: bool,
@@ -137,9 +142,12 @@ fn file(op: FileOp, v: &Value) -> Hit {
     }
 }
 
-fn rename_into(v: &Value) -> Hit {
-    match v {
-        Value::Known(_) | Value::Ephemeral(_) => Hit::RenameInto(v.clone()),
+fn rename_into(sources: &[Value], dest: &Value) -> Hit {
+    match dest {
+        Value::Known(_) | Value::Ephemeral(_) => Hit::RenameInto {
+            sources: sources.to_vec(),
+            dest: dest.clone(),
+        },
         Value::Unknown => Hit::Unresolved("a Rename target could not be determined".into()),
     }
 }
@@ -157,6 +165,20 @@ fn tree(scope: &Value, whole_checkout: bool, by: &str) -> Hit {
         whole_checkout,
         by: by.to_string(),
     }
+}
+
+/// Whether a `cp` copies a link as a link rather than the file it names.
+fn keeps_links(p: &Parsed) -> bool {
+    ['P', 'd', 'a', 'l', 's']
+        .into_iter()
+        .any(|c| p.has_short(c))
+        || ["--no-dereference", "--archive", "--link", "--symbolic-link"]
+            .into_iter()
+            .any(|f| p.has(f))
+        || p.value(&["--preserve"]).is_some_and(|v| {
+            v.known()
+                .is_none_or(|v| v.split(',').any(|v| matches!(v, "links" | "all")))
+        })
 }
 
 fn join_name(dir: &Value, source: &Value) -> Value {
@@ -256,6 +278,11 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
             }
             let recursive =
                 p.has_short('r') || p.has_short('R') || p.has_short('a') || p.has("--recursive");
+            let copy = |dest: &Value| match dest {
+                Value::Unknown => file(FileOp::Copy, dest),
+                _ if name == "install" || !keeps_links(&p) => Hit::CopyContent(dest.clone()),
+                _ => file(FileOp::Copy, dest),
+            };
             if let Some(dir) = p.value(&["-t", "--target-directory"]) {
                 return p
                     .operands
@@ -272,7 +299,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                                 ),
                             }
                         } else {
-                            file(FileOp::Copy, &target)
+                            copy(&target)
                         }
                     })
                     .collect();
@@ -287,7 +314,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                             ),
                         }]
                     } else {
-                        vec![file(FileOp::Copy, dest)]
+                        vec![copy(dest)]
                     }
                 }
                 _ => Vec::new(),
@@ -299,14 +326,19 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 return p
                     .operands
                     .iter()
-                    .flat_map(|s| [file(FileOp::Rename, s), rename_into(&join_name(dir, s))])
+                    .flat_map(|s| {
+                        [
+                            file(FileOp::Rename, s),
+                            rename_into(std::slice::from_ref(s), &join_name(dir, s)),
+                        ]
+                    })
                     .collect();
             }
             match p.operands.split_last() {
                 Some((dest, sources)) if !sources.is_empty() => sources
                     .iter()
                     .map(|s| file(FileOp::Rename, s))
-                    .chain([rename_into(dest)])
+                    .chain([rename_into(sources, dest)])
                     .collect(),
                 _ => Vec::new(),
             }
@@ -321,6 +353,9 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                     .collect();
             }
             match p.operands.as_slice() {
+                [_, .., Value::Ephemeral(_)] => vec![Hit::Unresolved(
+                    "a link made in a fresh directory can point outside it".into(),
+                )],
                 [_, .., link] => vec![file(FileOp::Create, link)],
                 _ => Vec::new(),
             }
@@ -627,7 +662,7 @@ fn git(args: &[Value]) -> Vec<Hit> {
                 Some((dest, sources)) if !sources.is_empty() => sources
                     .iter()
                     .map(|s| file(FileOp::Rename, s))
-                    .chain([rename_into(dest)])
+                    .chain([rename_into(sources, dest)])
                     .collect(),
                 _ => Vec::new(),
             }
@@ -669,7 +704,10 @@ mod tests {
             .into_iter()
             .map(|h| match h {
                 Hit::File(op, v) => format!("{op:?} {}", v.known().unwrap_or("?")),
-                Hit::RenameInto(v) => format!("RenameInto {}", v.known().unwrap_or("?")),
+                Hit::RenameInto { dest, .. } => {
+                    format!("RenameInto {}", dest.known().unwrap_or("?"))
+                }
+                Hit::CopyContent(v) => format!("CopyContent {}", v.known().unwrap_or("?")),
                 Hit::TreeRemoval { scope, by } => {
                     format!("Removal {} {by}", scope.known().unwrap_or("?"))
                 }
@@ -693,7 +731,10 @@ mod tests {
         assert_eq!(hits("touch", &["a", "b"]), ["Create a", "Create b"]);
         assert_eq!(hits("rm", &["-f", "a"]), ["Delete a"]);
         assert_eq!(hits("rm", &["-rf", "build"]), ["Removal build rm -r"]);
-        assert_eq!(hits("cp", &["a", "b"]), ["Copy b"]);
+        assert_eq!(hits("cp", &["a", "b"]), ["CopyContent b"]);
+        assert_eq!(hits("install", &["-P", "a", "b"]), ["CopyContent b"]);
+        assert_eq!(hits("cp", &["-P", "a", "b"]), ["Copy b"]);
+        assert_eq!(hits("cp", &["--preserve=mode,links", "a", "b"]), ["Copy b"]);
         assert_eq!(hits("cp", &["-r", "a", "b"]), ["Tree b false cp -r"]);
         assert_eq!(hits("mv", &["a", "b"]), ["Rename a", "RenameInto b"]);
         assert_eq!(hits("mv", &["-t", "dir", "a"]), [

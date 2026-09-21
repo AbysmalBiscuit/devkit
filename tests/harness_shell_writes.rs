@@ -384,6 +384,7 @@ fn a_link_made_in_a_fresh_directory_loses_the_exemption() {
         // analyzer cannot follow.
         "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(); \
          os.symlink('real.txt', os.path.join(d, 'link'))\"",
+        "T=$(mktemp); ln -sf src/model.rs \"$T\"; echo x > \"$T\"",
     ];
     for c in cases {
         let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
@@ -430,18 +431,27 @@ fn a_placement_in_a_fresh_directory_loses_the_exemption() {
          fs.renameSync('link', path.join(d, 'link')); \
          fs.writeFileSync(path.join(d, 'link/model.rs'), 'x')\"",
         "D=$(mktemp -d); mv link \"$D\"; tar -xf links.tar -C \"$D\"",
+        // These copies keep a link a link.
+        "D=$(mktemp -d); cp -P link \"$D\"; tar -xf links.tar -C \"$D\"",
+        "D=$(mktemp -d); cp -a link \"$D\"; tar -xf links.tar -C \"$D\"",
+        // A removal below a placed link deletes through it.
+        "python3 -c \"import os, shutil, tempfile; d = tempfile.mkdtemp(); \
+         shutil.copy2('link', d, follow_symlinks=False); \
+         shutil.rmtree(os.path.join(d, 'link', 'sub'))\"",
     ];
-    for c in cases {
-        let reason = denial(&hook(&e, Some("S1"), c)).unwrap_or_else(|| panic!("allowed: {c}"));
-        assert!(
-            reason.contains("can be a link leading out of it"),
-            "{c}: {reason}"
-        );
-    }
+    let allowed: Vec<_> = cases
+        .into_iter()
+        .filter(|c| {
+            !denial(&hook(&e, Some("S1"), c))
+                .is_some_and(|r| r.contains("can be a link leading out of it"))
+        })
+        .collect();
+    assert!(allowed.is_empty(), "allowed: {allowed:#?}");
 }
 
-/// Moving a file into a temp directory, or writing a temp file and moving it
-/// out, places nothing that a later write could pass through.
+/// Moving or plainly copying a file into a temp directory, writing a temp file
+/// and moving it out, and removing the temp directory itself place nothing a
+/// later write could pass through.
 #[test]
 fn an_ordinary_temp_move_keeps_the_exemption() {
     let e = env(WRITES);
@@ -452,10 +462,27 @@ fn an_ordinary_temp_move_keeps_the_exemption() {
         "python3 -c \"import os, shutil, tempfile; d = tempfile.mkdtemp(); \
          p = os.path.join(d, 'out'); open(p, 'w').write('x'); shutil.move(p, 'out.txt')\"",
         "D=$(mktemp -d); echo x > \"$D\"; rm -rf \"$D\"",
+        // Removing the fresh directory itself unlinks what was placed in it
+        // and follows none of it.
+        "D=$(mktemp -d); cp -r src \"$D\"; rm -rf \"$D\"",
+        // A rename inside the fresh directory brings nothing in from outside.
+        "python3 -c \"import os, tempfile; d = tempfile.mkdtemp(); \
+         p = os.path.join(d, 'x.tmp'); open(p, 'w').write('x'); \
+         os.replace(p, os.path.join(d, 'x'))\"",
+        "bun -e \"const fs = require('fs'); const path = require('path'); \
+         const d = fs.mkdtempSync('./fresh-'); \
+         fs.writeFileSync(path.join(d, 'a.tmp'), 'x'); \
+         fs.renameSync(path.join(d, 'a.tmp'), path.join(d, 'a'))\"",
+        // A plain copy writes the source's content, never a link.
+        "T=$(mktemp); cp cfg.toml \"$T\"; sed -i 's/a/b/' \"$T\"; mv \"$T\" cfg.toml",
+        "python3 -c \"import os, shutil, tempfile; d = tempfile.mkdtemp(); \
+         p = os.path.join(d, 'cfg'); shutil.copy('cfg', p); open(p, 'a').write('x')\"",
     ];
-    for c in cases {
-        assert_eq!(denial(&hook(&e, Some("S1"), c)), None, "denied: {c}");
-    }
+    let denied: Vec<_> = cases
+        .into_iter()
+        .filter_map(|c| denial(&hook(&e, Some("S1"), c)).map(|r| (c, r)))
+        .collect();
+    assert!(denied.is_empty(), "denied: {denied:#?}");
 }
 
 /// `move` and `move_into` rename the source away, so the source is written
