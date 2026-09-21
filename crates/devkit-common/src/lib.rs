@@ -18,6 +18,7 @@ pub mod record;
 pub mod report;
 pub mod required;
 pub mod secrets;
+pub mod shim;
 pub mod slack;
 pub mod slug;
 pub mod store;

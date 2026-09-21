@@ -5,6 +5,7 @@ use devkit_common::{
     slack,
     tracker::{Resolved, TrackerKind, linear},
 };
+use strum::IntoEnumIterator;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Check {
@@ -284,7 +285,7 @@ fn plugin_cache_dir() -> Option<std::path::PathBuf> {
 /// a name there costs only a later relink. Here the probes *are* what the user
 /// asked for, and abandoning them would leave the rows unanswered — the one
 /// outcome a diagnostic cannot have.
-fn occupied_shim_check(path: &std::path::Path, shim: &crate::shim::Shim) -> Check {
+fn occupied_shim_check(path: &std::path::Path, shim: crate::shim::Shim) -> Check {
     let identity = crate::links::is_devkit_binary(path, shim);
     let reported = identity
         .reported
@@ -311,10 +312,9 @@ fn shim_rows() -> Vec<Row> {
     let Some(dir) = exe.parent() else {
         return Vec::new();
     };
-    crate::shim::SHIMS
-        .iter()
+    crate::shim::Shim::iter()
         .map(|s| {
-            let path = dir.join(crate::links::shim_file_name(s.name));
+            let path = dir.join(crate::links::shim_file_name(s.name()));
             // `symlink_metadata`, not `exists`: a dangling symlink occupies the
             // name — `hard_link` fails on it with `EEXIST` — while `exists`
             // follows it and reports the name free.
@@ -326,7 +326,7 @@ fn shim_rows() -> Vec<Row> {
                 occupied_shim_check(&path, s)
             };
             Row {
-                key: s.name,
+                key: s.name(),
                 data: serde_json::Value::Null,
                 // Doctor's non-credential rows already use `Unset`; a shim has
                 // no env or secrets.toml origin to report.
