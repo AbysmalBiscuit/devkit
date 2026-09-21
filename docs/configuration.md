@@ -364,16 +364,7 @@ A write devkit cannot resolve is not treated as covered. `unresolved_writes`, `u
 
 What devkit records about the events a harness sends it: the command the agent tried to run, the analysis devkit made of it, and the verdict it reached. **Off by default.**
 
-```toml
-[harness.log]
-enabled      = true                   # global config only
-command      = "redacted"             # full | redacted | hashed
-prompt       = "off"                  # off | hashed | redacted | full
-auto_prune   = true                   # global config only
-dir          = "${HOME}/logs/devkit"  # global config only; defaults under the state dir
-max_age_days = 30                     # global config only; absent means unlimited
-max_bytes    = 2000000000             # global config only; absent means unlimited
-```
+Example: [`LogSection`](../crates/devkit-config/src/harness.rs).
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|

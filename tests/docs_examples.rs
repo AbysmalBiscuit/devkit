@@ -1,11 +1,8 @@
 //! The one `devkit.toml` example `docs/configuration.md` still carries.
 //!
-//! Every per-table example moved onto the config types, where a doctest parses
-//! it. The full config stayed in the reference, because a whole config reads as
-//! more than its tables do separately — and an example nothing checks is the
-//! thing this issue set out to stop. So the document is read at test time and
-//! the block under `## Example` goes through the same `Config::parse` every
-//! doctest uses.
+//! Per-table examples live on the config types as doctests. The whole-config
+//! example stays in the reference, so this parses it through the same
+//! `Config::parse` the doctests use.
 
 use devkit_config::Config;
 
