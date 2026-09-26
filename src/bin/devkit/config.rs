@@ -138,7 +138,13 @@ fn tasks_json(rows: &[TaskRow]) -> serde_json::Value {
                 "args": r
                     .args
                     .iter()
-                    .map(|a| serde_json::json!({"name": a.name, "required": a.required}))
+                    .map(|a| {
+                        serde_json::json!({
+                            "name": a.name,
+                            "required": a.required,
+                            "description": a.description,
+                        })
+                    })
                     .collect::<Vec<_>>(),
                 "description": r.description,
             })
@@ -451,6 +457,7 @@ mod tests {
                 args: vec![devkit_ports::task::TaskArg {
                     name: "path".into(),
                     required: true,
+                    description: Some("file or directory to lint".into()),
                 }],
                 description: String::new(),
             },
@@ -467,7 +474,11 @@ mod tests {
         assert_eq!(arr[1]["app"].as_str(), Some("api"));
         assert_eq!(
             arr[1]["args"],
-            serde_json::json!([{"name": "path", "required": true}])
+            serde_json::json!([{
+                "name": "path",
+                "required": true,
+                "description": "file or directory to lint",
+            }])
         );
         assert_eq!(arr[1]["description"].as_str(), Some(""));
     }

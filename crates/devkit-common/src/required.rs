@@ -13,6 +13,7 @@ use crate::caller::Caller;
 pub struct Missing {
     pub name: String,
     pub reason: Required,
+    pub description: Option<String>,
 }
 
 impl Missing {
@@ -30,18 +31,37 @@ impl Missing {
 }
 
 /// Refuse the run when anything is missing, naming each arg as `what needs
-/// --arg a=... --arg b=...`.
+/// --arg a=... --arg b=...`, then one [`description_line`] per described arg.
 pub fn ensure_supplied(what: &str, missing: &[Missing]) -> anyhow::Result<()> {
     anyhow::ensure!(
         missing.is_empty(),
-        "{what} needs {}",
+        "{what} needs {}{}",
         missing
             .iter()
             .map(Missing::hint)
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(" "),
+        missing
+            .iter()
+            .filter_map(|m| Some(description_line(&m.name, m.description.as_deref()?)))
+            .collect::<String>()
     );
     Ok(())
+}
+
+/// An arg's `[templates.variables]` description as a line appended to a
+/// message that names the arg.
+pub fn description_line(label: &str, description: &str) -> String {
+    format!("\n  {label}: {description}")
+}
+
+/// What `[templates.variables]` says to pass for `name`.
+pub fn description(cfg: &Config, name: &str) -> Option<String> {
+    cfg.templates
+        .variables
+        .get(name)
+        .and_then(|d| d.description())
+        .map(str::to_string)
 }
 
 /// Whether a marking binds this caller.
@@ -132,6 +152,7 @@ pub fn missing_args(
         .map(|n| Missing {
             name: n.clone(),
             reason: binding_reason(cfg, task, n, caller),
+            description: description(cfg, n),
         })
         .collect()
 }

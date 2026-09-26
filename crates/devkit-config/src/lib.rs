@@ -1040,7 +1040,7 @@ pub enum Required {
 }
 
 /// One `[templates.variables]` entry: a bare string, or a table carrying a
-/// `default` and a `required` marking.
+/// `default`, a `required` marking and a `description`.
 ///
 /// `deny_unknown_fields` for the reason `RunAction` documents: under untagged
 /// matching a misspelled key beside a well-formed pair deserializes silently,
@@ -1053,11 +1053,13 @@ pub enum Required {
 /// team = "platform"                              # a constant, never required
 /// msg = { default = "wip", required = "agents" } # defaulted, but agents must pass it
 /// ticket = { required = "always" }               # declared, no default, always required
+/// body = { default = "", description = "why the change was made, if the subject does not say" }
 /// # "#).unwrap();
 /// # let v = &cfg.templates.variables;
 /// # assert_eq!(v["team"].required(), Required::Never);
 /// # assert_eq!(v["msg"].default_value(), Some("wip"));
 /// # assert_eq!(v["ticket"].default_value(), None);
+/// # assert!(v["body"].description().unwrap().starts_with("why"));
 /// ```
 ///
 /// `default` is the fallback used when nothing else supplies the name, which
@@ -1078,6 +1080,11 @@ pub enum VariableDecl {
         /// asks to relax that and is refused at load.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         required: Option<Required>,
+        /// What to pass for this arg, shown beside it where devkit asks for
+        /// it: a missing-arg error, a command-guard redirect to a task that
+        /// reads it, and `devkit config tasks --json`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
     },
 }
 
@@ -1095,6 +1102,14 @@ impl VariableDecl {
         match self {
             VariableDecl::Value(_) => Required::Never,
             VariableDecl::Table { required, .. } => required.unwrap_or_default(),
+        }
+    }
+
+    /// What to pass, absent for a bare string or an entry that says nothing.
+    pub fn description(&self) -> Option<&str> {
+        match self {
+            VariableDecl::Value(_) => None,
+            VariableDecl::Table { description, .. } => description.as_deref(),
         }
     }
 
@@ -1206,8 +1221,9 @@ pub struct Templates {
     pub issue_summary: Option<String>,
     /// Constants available to every template above. A context field of the same
     /// name wins, and `--arg key=value` overrides either. An entry may instead
-    /// be a table carrying a `default` and a `required` marking. `role` and
-    /// `sha` are reserved and rejected here.
+    /// be a table carrying a `default`, a `required` marking and a
+    /// `description` of what to pass. `role` and `sha` are reserved and
+    /// rejected here.
     #[serde(default)]
     pub variables: std::collections::BTreeMap<String, VariableDecl>,
 }
@@ -2235,14 +2251,16 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         let c = parse_with_defaults(
             "[templates.variables]\n\
              team = 'platform'\n\
-             msg = { default = 'wip', required = 'agents' }\n\
+             msg = { default = 'wip', required = 'agents', description = 'commit subject' }\n\
              ticket = { required = 'always' }\n",
         );
         let v = &c.templates.variables;
         assert_eq!(v["team"].default_value(), Some("platform"));
         assert_eq!(v["team"].required(), Required::Never);
+        assert_eq!(v["team"].description(), None);
         assert_eq!(v["msg"].default_value(), Some("wip"));
         assert_eq!(v["msg"].required(), Required::Agents);
+        assert_eq!(v["msg"].description(), Some("commit subject"));
         assert_eq!(v["ticket"].default_value(), None);
         assert_eq!(v["ticket"].required(), Required::Always);
 
@@ -2251,6 +2269,10 @@ static_env = { SUPABASE_JWT_SECRET = "s" }
         assert!(out.contains("team = \"platform\""), "{out}");
         let c2 = Config::parse(&out).unwrap();
         assert_eq!(c2.templates.variables["msg"].required(), Required::Agents);
+        assert_eq!(
+            c2.templates.variables["msg"].description(),
+            Some("commit subject")
+        );
         assert_eq!(c2.templates.variables["ticket"].default_value(), None);
     }
 

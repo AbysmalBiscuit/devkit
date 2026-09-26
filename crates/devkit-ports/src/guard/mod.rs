@@ -296,15 +296,24 @@ fn project_hit(typed: &[String], n: &Normalized, prog: &str, p: &Project) -> Opt
         // The guard only ever fires because a coding agent acted, and its
         // stdin is a harness pipe, so the TTY says nothing. Name the set the
         // agent will actually be asked for.
-        let usage: String = crate::task::task_args(&p.config, &name, Caller::Agent)
-            .unwrap_or_default()
+        let args = crate::task::task_args(&p.config, &name, Caller::Agent).unwrap_or_default();
+        let usage: String = args
             .iter()
             .filter(|a| a.required)
             .map(|a| format!(" --arg {0}=<{0}>", a.name))
             .collect();
+        let described: String = args
+            .iter()
+            .filter_map(|a| {
+                Some(devkit_common::required::description_line(
+                    &a.label(),
+                    a.description.as_deref()?,
+                ))
+            })
+            .collect();
         return Some(format!(
             "`{}` is the `{name}` task. Run `devrun task {name}{usage}` so it gets its app \
-             directory, layered env and allocated ports.",
+             directory, layered env and allocated ports.{described}",
             typed.join(" ")
         ));
     }
@@ -808,6 +817,7 @@ mod tests {
                 .insert("msg".into(), devkit_config::VariableDecl::Table {
                     default: Some("wip".into()),
                     required: Some(devkit_config::Required::Agents),
+                    description: None,
                 });
             c.tasks.insert(
                 "commit".into(),
@@ -824,6 +834,40 @@ mod tests {
             reason(&d).contains("devrun task commit --arg msg=<msg>"),
             "{}",
             reason(&d)
+        );
+    }
+
+    #[test]
+    fn a_redirect_describes_every_described_arg_optional_ones_bracketed() {
+        let p = project(|c| {
+            let vars = &mut c.templates.variables;
+            vars.insert("msg".into(), devkit_config::VariableDecl::Table {
+                default: None,
+                required: None,
+                description: Some("imperative summary".into()),
+            });
+            vars.insert("body".into(), devkit_config::VariableDecl::Table {
+                default: Some(String::new()),
+                required: None,
+                description: Some("why the change was made".into()),
+            });
+            vars.insert("scope".into(), "devkit".into());
+            c.tasks.insert(
+                "commit".into(),
+                toml::from_str(
+                    "run = [\"git\", \"commit\", \"-m\", \"{{ scope }}: {{ msg }}\\n\\n{{ body }}\"]\n\
+                     guard = true",
+                )
+                .unwrap(),
+            );
+        });
+        let d = decide_with("git commit -m wip", &BTreeMap::new(), Some(&p));
+        let r = reason(&d);
+        assert!(r.contains("\n  msg: imperative summary"), "{r}");
+        assert!(r.contains("\n  [body]: why the change was made"), "{r}");
+        assert!(
+            !r.contains("scope:"),
+            "an undescribed arg adds no line: {r}"
         );
     }
 

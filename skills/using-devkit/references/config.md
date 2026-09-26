@@ -90,6 +90,7 @@ guard = true    # the command guard redirects a typed `cargo nextest run ...` he
 A task sets `run` (one command) or `steps` (a sequence). `run` and `env` are minijinja templates: `{{ ports['api'] }}` renders a registry port, and any other name they read becomes an arg. `devrun task <name> --dry-run` renders the task with real ports and runs nothing. `references/tasks.md` covers args and the `require_live` gate.
 
 - An arg is optional only when `[templates.variables]` gives it a default. `{{ msg | default("wip") }}` or `is defined` in the template does not make it optional.
+- Give an arg a `description` in `[templates.variables]` (`msg = { description = "imperative summary" }`) instead of explaining it in a guard rule's reason. devkit shows it wherever it asks for the arg, including `issue pr create` and `issue review` errors.
 - `issue`, `slug` and `branch` are undefined outside an issue worktree, so `{{ issue }}` fails there. A task that runs in both writes `{% if issue is defined %}`.
 - A Doppler invocation in a task goes through the same `prd` refusal as an app launch.
 - A `{ split = ..., on = ... }` entry reaches the program as separate argv entries with no shell, so spaces and quotes survive. Pick a delimiter the values cannot contain.
