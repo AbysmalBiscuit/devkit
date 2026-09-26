@@ -112,7 +112,7 @@
       "properties": {
         "apps": {
           "default": true,
-          "description": "The apps line and the `devrun up` / `portm` bullets. Live servers this\nworktree holds are reported regardless: a bound port is a fact about\nthe machine, not a listing the brief chose to carry.",
+          "description": "The apps section and the `devrun up` bullet. With it off, app tasks\njoin the task list. Live servers this worktree holds are reported\nregardless: a bound port is a fact about the machine, not a listing the\nbrief chose to carry.",
           "type": "boolean"
         },
         "enabled": {
@@ -122,7 +122,7 @@
         },
         "locks": {
           "default": true,
-          "description": "The `lockm` line. Whether sessions ever share this checkout is not\nsomething devkit can observe, so it is a switch rather than a probe.",
+          "description": "The lock lines: the lock-enforcement sentence, or the `lockm` line when\nwrites are not enforced. Whether sessions ever share this checkout is\nnot something devkit can observe, so it is a switch rather than a probe.",
           "type": "boolean"
         },
         "pins": {
@@ -137,7 +137,7 @@
         },
         "tasks": {
           "default": true,
-          "description": "The task table and the `devrun task` bullet.",
+          "description": "The task list, the task names on app lines, and the `devrun task`\nbullets.",
           "type": "boolean"
         }
       },

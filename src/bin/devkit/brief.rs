@@ -14,12 +14,13 @@
 //! instead teach the session that this is not a devkit project.
 //!
 //! Within the devrun half every section earns its place: a project with no
-//! configured apps is not told about `devrun up` or `portm`, one with no
-//! `[tasks]` table is not told about `devrun task`, and the intro names only
-//! the facilities that survive. `[brief]` can suppress a section the checkout
-//! does have — `apps`, `tasks` and `locks` — which reads downstream exactly as
-//! an absent one, so the bullets introducing it go too. `locks` has no other
-//! way to be decided: whether sessions share this checkout is not observable.
+//! configured apps is not told about `devrun up`, and one with no `[tasks]`
+//! table is not told about `devrun task`. `[brief]` can suppress a section the
+//! checkout does have (`apps`, `tasks` and `locks`), which reads downstream
+//! exactly as an absent one, so the bullets introducing it go too. `locks` has
+//! no other way to be decided: whether sessions share this checkout is not
+//! observable. In a monorepo, only the app the session works in has its tasks
+//! described; every other app gets one line naming its tasks.
 //!
 //! Two narrower emission modes let other hook events call it without spamming
 //! the session: `--pins-only` emits the library table alone, and `--if-changed`
@@ -38,7 +39,7 @@
 //! mode above is available under either.
 
 use std::{
-    collections::{HashMap, hash_map::DefaultHasher},
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     io::{IsTerminal, Read},
     path::{Path, PathBuf},
@@ -178,14 +179,15 @@ pub fn run(pins_only: bool, if_changed: bool, additional_context: bool) -> Resul
     Ok(())
 }
 
-/// The canonical form `--if-changed` hashes: every section's identity, no
-/// rendering and no clock. Hashing rendered text would make the watermark
-/// terminal-width sensitive; hashing only the pins would suppress a brief
-/// whose apps, tasks or servers changed while the pins held still.
+/// The canonical form `--if-changed` hashes: every section's identity and no
+/// clock. Apps and tasks are hashed as rendered, since their lists carry no
+/// table and so no terminal width; servers and pins render as tables and are
+/// hashed as fields instead. Hashing only the pins would suppress a brief whose
+/// apps, tasks or servers changed while the pins held still.
 struct BriefSnapshot {
     root: String,
-    apps: Vec<String>,
-    tasks: Vec<(String, String, String, String, String)>,
+    apps: Option<String>,
+    tasks: Option<String>,
     servers: Vec<ServerKey>,
     locks: bool,
     enforced: bool,
@@ -217,8 +219,13 @@ struct PinKey {
 
 /// The devrun half's content, each part absent when there is nothing to say.
 struct DevrunBrief {
+    /// Each app with its directory and its tasks.
     apps: Option<String>,
+    /// Tasks that belong to no app shown in `apps`.
     tasks: Option<String>,
+    /// The project has tasks, even when every one of them is listed under its
+    /// app rather than in `tasks`.
+    has_tasks: bool,
     servers: Option<String>,
     locks: bool,
     /// The write stage claims locks for this checkout, so the agent does not
@@ -243,7 +250,7 @@ struct Facilities {
 impl Facilities {
     /// A registry row is a port this worktree holds whether or not the catalog
     /// still names the app that bound it, so either one keeps `devrun down`
-    /// and `portm status` relevant.
+    /// relevant.
     fn ports(self) -> bool {
         self.apps || self.servers
     }
@@ -257,7 +264,7 @@ impl DevrunBrief {
     fn facilities(&self) -> Facilities {
         Facilities {
             apps: self.apps.is_some(),
-            tasks: self.tasks.is_some(),
+            tasks: self.has_tasks,
             servers: self.servers.is_some(),
             locks: self.locks,
             enforced: self.enforced,
@@ -269,13 +276,11 @@ impl BriefSnapshot {
     /// A stable byte string, so the digest does not depend on struct layout.
     fn canonical(&self) -> String {
         let mut out = format!("root\t{}\n", self.root);
-        for app in &self.apps {
-            out.push_str(&format!("app\t{app}\n"));
+        for line in self.apps.iter().flat_map(|a| a.lines()) {
+            out.push_str(&format!("app\t{line}\n"));
         }
-        for (name, kind, app, args, description) in &self.tasks {
-            out.push_str(&format!(
-                "task\t{name}\t{kind}\t{app}\t{args}\t{description}\n"
-            ));
+        for line in self.tasks.iter().flat_map(|t| t.lines()) {
+            out.push_str(&format!("task\t{line}\n"));
         }
         for s in &self.servers {
             out.push_str(&format!(
@@ -399,37 +404,11 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
     let pin_keys: Vec<PinKey> = relevant.iter().map(|pin| PinKey::of(pin)).collect();
     let devrun = devrun_project(checkout, &root, cwd);
 
-    // A switched-off section hashes as absent, matching what `render` emits:
-    // a digest that counted suppressed rows would report "changed" for a brief
-    // whose visible text never moved.
-    let (apps, tasks) = match &devrun {
-        Some(loaded) => {
-            let mut apps: Vec<String> = if settings.apps {
-                loaded
-                    .catalog
-                    .values()
-                    .map(|a| format!("{} ({})", a.name, a.path))
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            apps.sort();
-            let mut tasks: Vec<(String, String, String, String, String)> = if settings.tasks {
-                task::list(&loaded.config, devkit_common::caller::caller())
-                    .into_iter()
-                    .map(|r| {
-                        let args = task::args_text(&r.args);
-                        (r.name, r.kind.to_string(), r.app, args, r.description)
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            tasks.sort();
-            (apps, tasks)
-        }
-        None => (Vec::new(), Vec::new()),
-    };
+    // The listing is the same text `render` emits, which carries no table and
+    // so no terminal width, and a switched-off section is absent from it.
+    let listing = devrun
+        .as_ref()
+        .map(|loaded| Listing::of(loaded, settings, Path::new(&root), cwd));
 
     // One probe, two consumers: `status_table` probes liveness itself, so
     // hashing here and rendering there would take two probes, and a server
@@ -460,9 +439,13 @@ fn snapshot(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<B
 
     let locks = devrun.is_some() && settings.locks;
     let enforced = locks && devkit_common::harness::writes_enabled(checkout, cwd);
+    let (apps, tasks, has_tasks) = match listing {
+        Some(l) => (l.apps, l.tasks, l.has_tasks),
+        None => (None, None, false),
+    };
     let facilities = Facilities {
-        apps: !apps.is_empty(),
-        tasks: !tasks.is_empty(),
+        apps: apps.is_some(),
+        tasks: has_tasks,
         servers: !servers.is_empty(),
         locks,
         enforced,
@@ -513,7 +496,7 @@ fn config_fault(cwd: &Path, checkout: &Checkout) -> Option<String> {
 fn fault_text(why: &str) -> String {
     let mut out = wrap(
         "This checkout's devkit.toml does not load, so no project context follows. \
-         Every devkit CLI fails the same way until it is fixed.",
+         Every devkit command fails the same way until it is fixed.",
     );
     out.push_str("\n\n");
     // A toml deserialization error carries its own line breaks (the key on one
@@ -579,54 +562,21 @@ fn render(cwd: &Path, settings: &BriefConfig, checkout: &Checkout) -> Option<Str
     Some(out)
 }
 
-/// The devrun claim, naming only the facilities this checkout actually has.
-/// Naming all four unconditionally would tell an agent about canned tasks a
-/// project has never configured, and about file locks its owner switched off.
+/// The devrun claim. The facilities themselves are named by the bullets that
+/// follow, so the intro does not list them again.
 fn devrun_intro(root: &str, facilities: Facilities) -> String {
-    let mut named = Vec::new();
-    if facilities.ports() {
-        named.push("dev servers");
-        named.push("ports");
-    }
-    if facilities.tasks {
-        named.push("canned tasks");
-    }
-    // Under enforcement the hooks work the lock registry, so listing locks
-    // among the CLIs an agent drives is what sends it reaching for `lockm
-    // acquire` ahead of every edit.
-    if facilities.locks && !facilities.enforced {
-        named.push("cross-session file locks");
-    }
-    let mut out = if named.is_empty() {
-        format!("This checkout ({root}) is a devkit-managed project.")
-    } else {
-        format!(
-            "This checkout ({root}) is a devkit-managed project: {} are coordinated by the \
-             devkit CLIs. Load the `using-devkit` skill before using them.",
-            join_and(&named)
-        )
-    };
+    let mut out = format!(
+        "This checkout ({root}) is a devkit project. Load the `using-devkit` skill before \
+         running devkit commands."
+    );
     if facilities.enforced {
         out.push_str(
-            " Writes here are lock-enforced: your edits and resolvable shell writes are claimed \
-             for you and released at session end. A denied write names the holder.",
+            " Writes here are lock-enforced: devkit claims every file you change, through an \
+             edit tool or a shell command, and releases it at session end. A denied write says \
+             why, naming the holder when another session has the file.",
         );
-        if named.is_empty() {
-            out.push_str(" Load the `using-devkit` skill for the lock protocol.");
-        }
     }
     out
-}
-
-/// `["a"] -> "a"`, `["a", "b"] -> "a and b"`, `["a", "b", "c"] -> "a, b, and
-/// c"`.
-fn join_and(items: &[&str]) -> String {
-    match items {
-        [] => String::new(),
-        [one] => (*one).to_string(),
-        [a, b] => format!("{a} and {b}"),
-        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
-    }
 }
 
 /// The least severe rule the write hook injects, or `None` when the brief has
@@ -765,10 +715,11 @@ fn devrun_sections(
     settings: &BriefConfig,
 ) -> Option<DevrunBrief> {
     let loaded = devrun_project(checkout, root, cwd)?;
-    let rows = task::list(&loaded.config, devkit_common::caller::caller());
+    let listing = Listing::of(&loaded, settings, Path::new(root), cwd);
     let sections = DevrunBrief {
-        apps: settings.apps.then(|| apps_line(&loaded.catalog)).flatten(),
-        tasks: (settings.tasks && !rows.is_empty()).then(|| task::tasks_text(&rows)),
+        apps: listing.apps,
+        tasks: listing.tasks,
+        has_tasks: listing.has_tasks,
         servers: live_servers(root),
         locks: settings.locks,
         enforced: settings.locks
@@ -800,21 +751,163 @@ fn is_project_member(
         })
 }
 
-/// The configured apps, or `None` when none resolve — a line whose only
-/// content is that there is nothing to say is worth less than the space it
-/// takes in an agent's context.
-fn apps_line(catalog: &HashMap<String, App>) -> Option<String> {
-    if catalog.is_empty() {
-        return None;
+/// A task as the brief lists it.
+struct TaskEntry {
+    name: String,
+    app: Option<String>,
+    description: String,
+    /// What has to be in place before it runs, as the commands that put it
+    /// there: `devrun up` for each server it needs live, and each `--arg` this
+    /// caller must pass.
+    needs: Vec<String>,
+    invalid: bool,
+}
+
+impl TaskEntry {
+    fn all(config: &config::Config) -> Vec<TaskEntry> {
+        task::list(config, devkit_common::caller::caller())
+            .into_iter()
+            .map(|row| {
+                let task = config.tasks.get(&row.name);
+                let mut needs: Vec<String> = task
+                    .map(|t| t.require_live.iter())
+                    .into_iter()
+                    .flatten()
+                    .map(|app| format!("`devrun up {app}`"))
+                    .collect();
+                needs.extend(
+                    row.args
+                        .iter()
+                        .filter(|arg| arg.required)
+                        .map(|arg| format!("`--arg {}=...`", arg.name)),
+                );
+                TaskEntry {
+                    app: task.and_then(|t| t.app.clone()),
+                    invalid: row.kind == "invalid",
+                    name: row.name,
+                    description: row.description,
+                    needs,
+                }
+            })
+            .collect()
     }
-    let mut apps: Vec<&App> = catalog.values().collect();
-    apps.sort_by(|a, b| a.name.cmp(&b.name));
-    Some(
-        apps.iter()
-            .map(|a| format!("{} ({})", a.name, a.path))
-            .collect::<Vec<_>>()
-            .join(", "),
-    )
+
+    fn line(&self) -> String {
+        let mut out = format!("- {}", self.name);
+        if !self.description.is_empty() {
+            out.push_str(&format!(": {}", self.description));
+        }
+        out.push_str(&self.caveat());
+        out
+    }
+
+    /// The name alone, for an app line that lists its tasks without detail.
+    fn short(&self) -> String {
+        format!("{}{}", self.name, self.caveat())
+    }
+
+    /// What the agent would otherwise learn from a failed run.
+    fn caveat(&self) -> String {
+        if self.invalid {
+            format!(" (invalid: `devkit config tasks {}` says why)", self.name)
+        } else if self.needs.is_empty() {
+            String::new()
+        } else {
+            format!(" (needs {})", self.needs.join(", "))
+        }
+    }
+}
+
+/// The apps section and the task list, with an app's task descriptions shown
+/// only while the session works inside that app's directory.
+///
+/// Every other app's line names its tasks, so a monorepo's brief grows by a
+/// line per app rather than a line per task. The working directory decides
+/// this, so `--if-changed` hands the session an app's detail on moving into it.
+struct Listing {
+    apps: Option<String>,
+    tasks: Option<String>,
+    has_tasks: bool,
+}
+
+impl Listing {
+    fn of(loaded: &load::Loaded, settings: &BriefConfig, root: &Path, cwd: &Path) -> Listing {
+        let entries = if settings.tasks {
+            TaskEntry::all(&loaded.config)
+        } else {
+            Vec::new()
+        };
+        let mut apps: Vec<&App> = if settings.apps {
+            loaded.catalog.values().collect()
+        } else {
+            Vec::new()
+        };
+        apps.sort_by(|a, b| a.name.cmp(&b.name));
+        let here = current_app(&apps, root, cwd);
+        Listing::build(&entries, &apps, here)
+    }
+
+    /// `apps` sorted by name; `here` is the app the session works in.
+    fn build(entries: &[TaskEntry], apps: &[&App], here: Option<&str>) -> Listing {
+        let mut apps_text = String::new();
+        let mut placed = HashSet::new();
+        for app in apps {
+            let own: Vec<&TaskEntry> = entries
+                .iter()
+                .filter(|e| e.app.as_deref() == Some(app.name.as_str()))
+                .collect();
+            // An app rooted at the checkout itself has no directory to be
+            // inside, so its tasks read as the project's own.
+            if !has_directory(&app.path) {
+                apps_text.push_str(&format!("- {} ({})\n", app.name, app.path));
+                continue;
+            }
+            placed.extend(own.iter().map(|e| e.name.as_str()));
+            if own.is_empty() {
+                apps_text.push_str(&format!("- {} ({})\n", app.name, app.path));
+            } else if here == Some(app.name.as_str()) {
+                apps_text.push_str(&format!("- {} ({})\n", app.name, app.path));
+                for entry in own {
+                    apps_text.push_str(&format!("  {}\n", entry.line()));
+                }
+            } else {
+                let names: Vec<String> = own.iter().map(|e| e.short()).collect();
+                apps_text.push_str(&format!(
+                    "- {} ({}): {}\n",
+                    app.name,
+                    app.path,
+                    names.join(", ")
+                ));
+            }
+        }
+        let tasks_text: String = entries
+            .iter()
+            .filter(|e| !placed.contains(e.name.as_str()))
+            .map(|e| format!("{}\n", e.line()))
+            .collect();
+        Listing {
+            apps: (!apps_text.is_empty()).then_some(apps_text),
+            tasks: (!tasks_text.is_empty()).then_some(tasks_text),
+            has_tasks: !entries.is_empty(),
+        }
+    }
+}
+
+/// Whether an app path names a directory below the checkout root. An app
+/// rooted at "." exists under every directory and proves nothing.
+fn has_directory(path: &str) -> bool {
+    Path::new(path)
+        .components()
+        .any(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// The app whose directory contains `cwd`, the innermost one when app
+/// directories nest.
+fn current_app<'a>(apps: &[&'a App], root: &Path, cwd: &Path) -> Option<&'a str> {
+    apps.iter()
+        .filter(|a| has_directory(&a.path) && cwd.starts_with(root.join(&a.path)))
+        .max_by_key(|a| Path::new(&a.path).components().count())
+        .map(|a| a.name.as_str())
 }
 
 /// The port-registry rows held by this worktree, or `None` when it holds
@@ -833,34 +926,37 @@ fn devrun_text(sections: &DevrunBrief) -> String {
     let mut out = String::new();
     if facilities.ports() {
         out.push_str(
-            "- `devrun up <app>` / `devrun down` — start/stop supervised dev servers for this worktree\n",
+            "- `devrun up <app>` / `devrun down`: start or stop this worktree's dev servers, which run in the background\n",
         );
     }
     if facilities.tasks {
         out.push_str(
-            "- `devrun task <name> [--dry-run]` — run a canned project task (table below)\n",
+            "- `devrun task <name>`: run a task from anywhere in the checkout; `--dry-run` prints what it would run\n",
         );
-        out.push_str("- `devkit config tasks <name>`: what a task runs and the args it takes\n");
+        out.push_str(if facilities.ports() {
+            "- `devkit config tasks <name>`: what a task runs, the servers it needs, and every arg it takes\n"
+        } else {
+            "- `devkit config tasks <name>`: what a task runs and every arg it takes\n"
+        });
     }
-    let mut tools = Vec::new();
-    if facilities.ports() {
-        tools.push("`portm status` — port registry");
-    }
-    if facilities.locks {
-        tools.push("`lockm status` — advisory file locks");
-    }
-    if !tools.is_empty() {
-        out.push_str(&format!("- {}\n", tools.join("; ")));
+    // Under enforcement the hooks claim locks for every write, and a denial
+    // names the holder, so pointing at `lockm` only invites a manual acquire.
+    if facilities.locks && !facilities.enforced {
+        out.push_str("- `lockm status`: advisory file locks held by other sessions\n");
     }
 
-    if let Some(apps) = &sections.apps {
-        separate(&mut out);
-        out.push_str(&format!("Apps (`devrun up`): {apps}\n"));
-    }
     if let Some(tasks) = &sections.tasks {
         separate(&mut out);
         out.push_str("### Tasks (`devrun task <name>`)\n\n");
         out.push_str(tasks);
+    }
+    if let Some(apps) = &sections.apps {
+        separate(&mut out);
+        out.push_str("### Apps (`devrun up <app>`)\n\n");
+        if facilities.tasks {
+            out.push_str("`devrun task <name>` runs an app's tasks in the app's directory.\n\n");
+        }
+        out.push_str(apps);
     }
     if let Some(servers) = &sections.servers {
         separate(&mut out);
@@ -954,6 +1050,7 @@ mod tests {
         DevrunBrief {
             apps: apps.map(str::to_string),
             tasks: tasks.map(str::to_string),
+            has_tasks: tasks.is_some(),
             servers: servers.map(str::to_string),
             locks,
             enforced: false,
@@ -968,114 +1065,168 @@ mod tests {
         DevrunBrief {
             apps: apps.map(str::to_string),
             tasks: tasks.map(str::to_string),
+            has_tasks: tasks.is_some(),
             servers: servers.map(str::to_string),
             locks: true,
             enforced: true,
         }
     }
 
-    #[test]
-    fn enforcement_replaces_the_lock_claim_with_the_automatic_one() {
-        let on = devrun_intro(
-            "/w",
-            brief_enforced(Some("a"), Some("t"), None).facilities(),
-        );
-        assert!(!on.contains("cross-session file locks"), "{on}");
-        assert!(on.contains("claimed for you"), "{on}");
-        assert!(on.contains("dev servers, ports, and canned tasks"), "{on}");
+    const APPS: &str = "- api (apps/api)\n";
+    const TASKS: &str = "- check: tests\n";
 
-        let off = devrun_intro("/w", brief(Some("a"), Some("t"), None, true).facilities());
-        assert!(off.contains("cross-session file locks"), "{off}");
-        assert!(!off.contains("claimed for you"), "{off}");
+    #[test]
+    fn enforcement_replaces_the_lockm_pointer_with_the_automatic_claim() {
+        let on = brief_enforced(Some(APPS), Some(TASKS), None);
+        let intro = devrun_intro("/w", on.facilities());
+        assert!(intro.contains("claims every file you change"), "{intro}");
+        let text = devrun_text(&on);
+        assert!(!text.contains("lockm"), "{text}");
+
+        let off = brief(Some(APPS), Some(TASKS), None, true);
+        let intro = devrun_intro("/w", off.facilities());
+        assert!(!intro.contains("claims every file"), "{intro}");
+        let text = devrun_text(&off);
+        assert!(text.contains("lockm status"), "{text}");
     }
 
     #[test]
     fn enforcement_alone_still_yields_an_intro() {
         let only = devrun_intro("/w", brief_enforced(None, None, None).facilities());
-        assert!(only.contains("claimed for you"), "{only}");
-        assert!(!only.contains("are coordinated by the"), "{only}");
+        assert!(only.contains("is a devkit project"), "{only}");
+        assert!(only.contains("claims every file you change"), "{only}");
     }
 
     #[test]
     fn render_text_sections_and_optional_servers() {
-        let text = devrun_text(&brief(
-            Some("api (apps/api)"),
-            Some("NAME KIND\n"),
-            None,
-            true,
-        ));
-        assert!(text.contains("api (apps/api)"), "{text}");
-        assert!(text.contains("devrun task"), "{text}");
+        let text = devrun_text(&brief(Some(APPS), Some(TASKS), None, true));
+        assert!(text.contains("### Apps (`devrun up <app>`)"), "{text}");
+        assert!(text.contains("- api (apps/api)"), "{text}");
+        assert!(text.contains("### Tasks (`devrun task <name>`)"), "{text}");
+        assert!(text.contains("- check: tests"), "{text}");
         assert!(!text.contains("Live servers"), "{text}");
 
-        let with = devrun_text(&brief(
-            Some("api (apps/api)"),
-            Some("NAME KIND\n"),
-            Some("PORT APP\n"),
-            true,
-        ));
+        let with = devrun_text(&brief(Some(APPS), Some(TASKS), Some("PORT APP\n"), true));
         assert!(with.contains("Live servers in this worktree"), "{with}");
         assert!(with.contains("PORT APP"), "{with}");
     }
 
     #[test]
-    fn no_apps_drops_the_server_and_port_lines() {
-        let text = devrun_text(&brief(None, Some("NAME KIND\n"), None, true));
-        assert!(!text.contains("Apps (`devrun up`)"), "{text}");
+    fn no_apps_drops_every_mention_of_servers() {
+        let text = devrun_text(&brief(None, Some(TASKS), None, true));
+        assert!(!text.contains("### Apps"), "{text}");
         assert!(!text.contains("devrun up"), "{text}");
-        assert!(!text.contains("portm status"), "{text}");
+        assert!(!text.contains("servers"), "{text}");
         assert!(text.contains("devrun task"), "{text}");
-        assert!(text.contains("lockm status"), "{text}");
     }
 
     #[test]
-    fn no_tasks_drops_the_task_bullet_and_section() {
-        let text = devrun_text(&brief(Some("api (apps/api)"), None, None, true));
+    fn no_tasks_drops_the_task_bullets_and_section() {
+        let text = devrun_text(&brief(Some(APPS), None, None, true));
         assert!(!text.contains("devrun task"), "{text}");
-        assert!(text.contains("Apps (`devrun up`)"), "{text}");
+        assert!(!text.contains("devkit config tasks"), "{text}");
+        assert!(text.contains("### Apps"), "{text}");
     }
 
     #[test]
-    fn locks_off_drops_the_lockm_line_and_keeps_portm() {
-        let text = devrun_text(&brief(
-            Some("api (apps/api)"),
-            Some("NAME KIND\n"),
-            None,
-            false,
-        ));
+    fn locks_off_drops_the_lockm_line() {
+        let text = devrun_text(&brief(Some(APPS), Some(TASKS), None, false));
         assert!(!text.contains("lockm"), "{text}");
-        assert!(text.contains("portm status"), "{text}");
     }
 
     #[test]
     fn a_live_server_claims_ports_without_a_catalog_entry() {
         let text = devrun_text(&brief(None, None, Some("PORT APP\n"), false));
         assert!(text.contains("devrun down"), "{text}");
-        assert!(text.contains("portm status"), "{text}");
         assert!(text.contains("Live servers"), "{text}");
     }
 
     #[test]
-    fn the_intro_names_only_the_facilities_present() {
-        let full = devrun_intro("/w", brief(Some("a"), Some("t"), None, true).facilities());
-        assert!(
-            full.contains("dev servers, ports, canned tasks, and cross-session file locks"),
-            "{full}"
-        );
+    fn the_devrun_half_carries_no_em_dash_and_no_port_registry() {
+        let text = devrun_text(&brief(Some(APPS), Some(TASKS), Some("PORT APP\n"), true));
+        let intro = devrun_intro("/w", brief_enforced(Some(APPS), None, None).facilities());
+        for out in [&text, &intro] {
+            assert!(!out.contains('\u{2014}'), "{out}");
+            assert!(!out.contains("portm"), "{out}");
+        }
+    }
 
-        let ports = devrun_intro("/w", brief(Some("a"), None, None, false).facilities());
-        assert!(
-            ports.contains("dev servers and ports are coordinated"),
-            "{ports}"
-        );
-        assert!(!ports.contains("canned tasks"), "{ports}");
-        assert!(!ports.contains("file locks"), "{ports}");
+    fn entry(name: &str, app: Option<&str>, needs: &[&str]) -> TaskEntry {
+        TaskEntry {
+            name: name.into(),
+            app: app.map(str::to_string),
+            description: format!("{name} does things"),
+            needs: needs.iter().map(|n| n.to_string()).collect(),
+            invalid: false,
+        }
+    }
 
-        let locks = devrun_intro("/w", brief(None, None, None, true).facilities());
-        assert!(
-            locks.contains("cross-session file locks are coordinated"),
-            "{locks}"
+    #[test]
+    fn other_apps_name_their_tasks_and_the_current_app_describes_them() {
+        let (api, web) = (app("api", "apps/api"), app("web", "apps/web"));
+        let entries = [
+            entry("test", None, &[]),
+            entry("migrate", Some("api"), &["`--arg env=...`"]),
+            entry("test-api", Some("api"), &[]),
+            entry("e2e", Some("web"), &["`devrun up api`"]),
+        ];
+        let listing = Listing::build(&entries, &[&api, &web], Some("web"));
+        let apps = listing.apps.unwrap();
+        assert_eq!(
+            apps,
+            "- api (apps/api): migrate (needs `--arg env=...`), test-api\n\
+             - web (apps/web)\n  - e2e: e2e does things (needs `devrun up api`)\n"
         );
+        assert_eq!(listing.tasks.unwrap(), "- test: test does things\n");
+        assert!(listing.has_tasks);
+    }
+
+    #[test]
+    fn a_checkout_rooted_app_lists_its_tasks_with_the_project() {
+        let chrome = app("chrome", ".");
+        let entries = [entry("shot", Some("chrome"), &[])];
+        let listing = Listing::build(&entries, &[&chrome], None);
+        assert_eq!(listing.apps.unwrap(), "- chrome (.)\n");
+        assert_eq!(listing.tasks.unwrap(), "- shot: shot does things\n");
+    }
+
+    #[test]
+    fn with_the_apps_section_off_every_task_is_described() {
+        let entries = [entry("test-api", Some("api"), &[])];
+        let listing = Listing::build(&entries, &[], None);
+        assert!(listing.apps.is_none());
+        assert_eq!(listing.tasks.unwrap(), "- test-api: test-api does things\n");
+    }
+
+    #[test]
+    fn an_invalid_task_points_at_the_command_that_explains_it() {
+        let mut bad = entry("bad", None, &["`--arg x=...`"]);
+        bad.invalid = true;
+        assert_eq!(
+            bad.line(),
+            "- bad: bad does things (invalid: `devkit config tasks bad` says why)"
+        );
+    }
+
+    #[test]
+    fn the_current_app_is_the_innermost_directory_holding_the_cwd() {
+        let root = Path::new("/r");
+        let (outer, inner, dot) = (
+            app("outer", "apps"),
+            app("inner", "apps/web"),
+            app("dot", "."),
+        );
+        let apps = [&outer, &inner, &dot];
+        assert_eq!(
+            current_app(&apps, root, Path::new("/r/apps/web/src")),
+            Some("inner")
+        );
+        assert_eq!(
+            current_app(&apps, root, Path::new("/r/apps/x")),
+            Some("outer")
+        );
+        assert_eq!(current_app(&apps, root, Path::new("/r")), None);
+        assert_eq!(current_app(&apps, root, Path::new("/r/apps-old")), None);
     }
 
     #[test]
