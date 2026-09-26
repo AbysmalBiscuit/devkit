@@ -100,7 +100,7 @@ pub fn fetch(remote: &str, cwd: &str) -> Result<()> {
     fetch_gated(&marker, ttl_secs(), now_secs(), || {
         Git::at(Path::new(cwd))
             .args(["fetch", remote])
-            .timeout(crate::git::SLOW_TIMEOUT)
+            .network()
             .output()
             .map(|_| ())
     })?;
@@ -184,11 +184,9 @@ mod tests {
         );
     }
 
-    /// A locked ssh key makes ssh prompt for its passphrase on the caller's
-    /// terminal, where a progress spinner draws over it and the fetch waits
-    /// out `SLOW_TIMEOUT`. The fake ssh stands in for that: sharing the test's
-    /// session means it could reach the test's terminal, so it stalls the way
-    /// the prompt does; outside it, it fails the way ssh does with no terminal.
+    /// A locked ssh key makes ssh prompt for its passphrase on the terminal,
+    /// where a progress spinner draws over it. The fake ssh behaves like the
+    /// real one: in batch mode it fails, otherwise it stalls on the prompt.
     #[cfg(unix)]
     #[test]
     fn a_locked_ssh_key_fails_fast_and_names_the_remedy() {
@@ -197,20 +195,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
         std::fs::create_dir(&repo).unwrap();
-        let sid = nix::unistd::getsid(None).unwrap();
-        let ssh = dir.path().join("fake-ssh");
+        let ssh = dir.path().join("ssh");
         std::fs::write(
             &ssh,
-            format!(
-                "#!/bin/sh\n\
-                 if [ \"$(ps -o sid= -p $$ | tr -d ' ')\" = \"{sid}\" ]; then\n\
-                 \tsleep 5\n\
-                 \techo 'stalled on the terminal prompt' >&2\n\
-                 \texit 255\n\
-                 fi\n\
-                 echo 'git@example.invalid: Permission denied (publickey).' >&2\n\
-                 exit 255\n"
-            ),
+            "#!/bin/sh\n\
+             case \" $* \" in\n\
+             *' BatchMode=yes '*)\n\
+             \techo 'git@example.invalid: Permission denied (publickey).' >&2\n\
+             \texit 255 ;;\n\
+             esac\n\
+             sleep 5\n\
+             echo 'stalled on the passphrase prompt' >&2\n\
+             exit 255\n",
         )
         .unwrap();
         std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();

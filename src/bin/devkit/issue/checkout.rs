@@ -444,7 +444,7 @@ pub fn run(args: CheckoutArgs) -> Result<()> {
     steps.during_result("Creating worktree...", || {
         Git::at(Path::new(primary_s))
             .args(["worktree", "add", "--detach", worktree_s, &baseline_target])
-            .timeout(devkit_common::git::SLOW_TIMEOUT)
+            .network()
             .output()
     })?;
 
