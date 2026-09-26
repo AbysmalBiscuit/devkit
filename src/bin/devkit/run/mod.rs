@@ -172,7 +172,8 @@ pub(crate) enum Cmd {
         #[arg(long = "env-file")]
         env_file: Option<String>,
         /// Set a template variable the task reads, over its
-        /// `[templates.variables]` value. Repeatable.
+        /// `[templates.variables]` value. Repeatable. `devkit config tasks
+        /// NAME` lists the ones it reads.
         #[arg(long = "arg", value_name = "KEY=VALUE")]
         args: Vec<String>,
         /// Print the rendered plan (cwd, argv, env, resolved ports) without

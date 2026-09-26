@@ -1278,7 +1278,7 @@
               ]
             },
             "description": {
-              "description": "What to pass for this arg, shown beside it where devkit asks for\nit: a missing-arg error (`issue pr create` and `issue review`\nincluded), a command-guard redirect to a task that reads it, and\n`devkit config tasks --json`. Explain an arg here rather than in a\nguard rule's `reason`.",
+              "description": "What to pass for this arg, shown beside it where devkit asks for\nit: a missing-arg error (`issue pr create` and `issue review`\nincluded), a command-guard redirect to a task that reads it,\n`devkit config tasks <name>` and `devkit config variables`.\nExplain an arg here rather than in a guard rule's `reason`.",
               "type": [
                 "string",
                 "null"

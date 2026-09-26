@@ -135,6 +135,20 @@ pub fn is_required(cfg: &Config, task: Option<&str>, name: &str, caller: Caller)
             .any(|r| binds(r, caller))
 }
 
+/// Which callers [`is_required`] binds for `name` under `task`, as one
+/// marking: `Always` when it binds both, `Never` when neither.
+pub fn required_of(cfg: &Config, task: Option<&str>, name: &str) -> Required {
+    match (
+        is_required(cfg, task, name, Caller::Agent),
+        is_required(cfg, task, name, Caller::Human),
+    ) {
+        (true, true) => Required::Always,
+        (true, false) => Required::Agents,
+        (false, true) => Required::Humans,
+        (false, false) => Required::Never,
+    }
+}
+
 /// The required names this run's templates read and the caller did not supply.
 /// `reads` is what the surface will actually render; a name no template reads
 /// is never asked for.
@@ -226,6 +240,43 @@ mod tests {
         for caller in [Caller::Agent, Caller::Human] {
             assert!(!is_required(&c, Some("commit"), "plain", caller));
         }
+    }
+
+    #[test]
+    fn required_of_names_the_callers_is_required_binds() {
+        let c = cfg("");
+        for (name, of) in [
+            ("msg", Required::Agents),
+            ("ticket", Required::Always),
+            ("undeclared", Required::Always),
+            ("plain", Required::Never),
+        ] {
+            assert_eq!(required_of(&c, Some("commit"), name), of, "{name}");
+            for caller in [Caller::Agent, Caller::Human] {
+                assert_eq!(
+                    binds(of, caller),
+                    is_required(&c, Some("commit"), name, caller),
+                    "{name} {caller:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn steps_marking_one_arg_for_each_caller_require_it_of_everyone() {
+        let c = parse(
+            "[templates.variables]\n\
+             msg = 'wip'\n\
+             [tasks.a]\n\
+             run = ['x', '{{ msg }}']\n\
+             required_args = { msg = 'agents' }\n\
+             [tasks.h]\n\
+             run = ['x', '{{ msg }}']\n\
+             required_args = { msg = 'humans' }\n\
+             [tasks.both]\n\
+             steps = [{ task = 'a' }, { task = 'h' }]\n",
+        );
+        assert_eq!(required_of(&c, Some("both"), "msg"), Required::Always);
     }
 
     #[test]

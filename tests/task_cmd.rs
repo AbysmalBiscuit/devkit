@@ -5,12 +5,6 @@
 
 use std::{path::Path, process::Command};
 
-fn devkit_run() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
-    cmd.arg("run");
-    cmd
-}
-
 /// A temp dir that is a git repo (cmd_task resolves the worktree root) with a
 /// devkit.toml defining one app and three tasks.
 fn setup() -> tempfile::TempDir {
@@ -95,11 +89,25 @@ fn run_in(dir: &Path, args: &[&str]) -> std::process::Output {
         .expect("run devkit run")
 }
 
-/// `devkit run` sandboxed to `dir`, with no caller override inherited from the
-/// developer's shell.
+fn config_in(dir: &Path, args: &[&str]) -> std::process::Output {
+    devkit_in(dir)
+        .arg("config")
+        .args(args)
+        .output()
+        .expect("run devkit config")
+}
+
 fn devkit_run_in(dir: &Path) -> Command {
+    let mut cmd = devkit_in(dir);
+    cmd.arg("run");
+    cmd
+}
+
+/// `devkit` sandboxed to `dir`, with no caller override inherited from the
+/// developer's shell.
+fn devkit_in(dir: &Path) -> Command {
     let state = dir.join("state");
-    let mut cmd = devkit_run();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_devkit"));
     cmd.current_dir(dir)
         .env("HOME", dir)
         .env("XDG_STATE_HOME", &state)
@@ -610,5 +618,243 @@ require_live = ["api"]
     assert!(
         String::from_utf8_lossy(&gated.stderr).contains("no live server"),
         "{gated:?}"
+    );
+}
+
+/// The whitespace-split columns of the table row whose first column is `name`.
+fn row<'a>(stdout: &'a str, name: &str) -> Vec<&'a str> {
+    stdout
+        .lines()
+        .map(|l| l.split_whitespace().collect::<Vec<_>>())
+        .find(|cols| cols.first() == Some(&name))
+        .unwrap_or_else(|| panic!("no `{name}` row: {stdout}"))
+}
+
+#[test]
+fn describing_a_task_shows_its_command_and_each_arg() {
+    let dir = setup();
+    let out = config_in(dir.path(), &["tasks", "commit"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("commit with a scope"), "{stdout}");
+    assert!(
+        stdout.contains("git --msg={{ scope }}: {{ msg }} version"),
+        "{stdout}"
+    );
+    assert_eq!(
+        row(&stdout, "usage"),
+        ["usage", "devrun", "task", "commit", "--arg", "msg=..."],
+        "{stdout}"
+    );
+    let msg = row(&stdout, "msg");
+    assert_eq!(msg[1..3], ["always", "none"], "{stdout}");
+    assert!(
+        msg.join(" ").ends_with("imperative summary of the change"),
+        "{stdout}"
+    );
+    let scope = row(&stdout, "scope");
+    assert_eq!(scope[1..3], ["no", "devkit"], "{stdout}");
+    assert!(
+        scope
+            .join(" ")
+            .ends_with("area of the codebase the commit touches"),
+        "{stdout}"
+    );
+}
+
+/// A task gated on a live server, and a sequence reaching it as a step.
+fn gated_setup() -> tempfile::TempDir {
+    let dir = setup();
+    std::fs::write(
+        dir.path().join("devkit.toml"),
+        r#"[apps.api]
+base_port = 39140
+path = "."
+launch = ["git", "version"]
+[templates.variables]
+targets = "linux,macos"
+[tasks.build]
+app = "api"
+run = ["git", "--url=http://localhost:{{ ports['api'] }}", { split = "{{ targets }}", on = "," }]
+require_live = ["api"]
+[tasks.ship]
+steps = [{ up = "api" }, { task = "build" }]
+"#,
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn describing_a_gated_task_names_the_server_it_needs_and_how_to_start_it() {
+    let dir = gated_setup();
+    let out = config_in(dir.path(), &["tasks", "build"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        row(&stdout, "needs"),
+        ["needs", "live", "api", "(devrun", "up", "api)"],
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(r#"{{ targets }}(split on "," into separate args)"#),
+        "{stdout}"
+    );
+    assert_eq!(
+        row(&stdout, "usage"),
+        ["usage", "devrun", "task", "build"],
+        "{stdout}"
+    );
+
+    let seq = config_in(dir.path(), &["tasks", "ship"]);
+    assert!(seq.status.success(), "{seq:?}");
+    let seq = String::from_utf8_lossy(&seq.stdout);
+    assert_eq!(row(&seq, "steps"), ["steps", "up", "api"], "{seq}");
+    assert!(
+        seq.lines().any(|l| {
+            let l = l.trim();
+            l.starts_with("task build: git --url=") && l.ends_with("(needs live api)")
+        }),
+        "{seq}"
+    );
+}
+
+#[test]
+fn describing_a_gated_task_as_json_carries_the_gate_and_each_step() {
+    let dir = gated_setup();
+    let out = config_in(dir.path(), &["tasks", "build", "--json"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["app"], "api");
+    assert_eq!(
+        v["require_live"],
+        serde_json::json!([{ "app": "api", "start": "devrun up api" }])
+    );
+
+    let out = config_in(dir.path(), &["tasks", "ship", "--json"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["app"], serde_json::Value::Null);
+    assert_eq!(v["steps"][0], serde_json::json!({ "up": "api" }));
+    assert_eq!(v["steps"][1]["task"], "build");
+    assert_eq!(v["steps"][1]["run"][0], "git");
+    assert_eq!(
+        v["steps"][1]["require_live"],
+        serde_json::json!([{ "app": "api", "start": "devrun up api" }])
+    );
+}
+
+#[test]
+fn describing_a_task_as_json_carries_its_templates_and_args() {
+    let dir = setup();
+    let out = config_in(dir.path(), &["tasks", "commit", "--json"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["name"], "commit");
+    assert_eq!(v["kind"], "command");
+    assert_eq!(
+        v["run"],
+        serde_json::json!(["git", "--msg={{ scope }}: {{ msg }}", "version"])
+    );
+    assert_eq!(v["app"], serde_json::Value::Null);
+    assert_eq!(v["usage"], "devrun task commit --arg msg=...");
+    assert_eq!(v["require_live"], serde_json::json!([]));
+    assert_eq!(
+        v["args"],
+        serde_json::json!([
+            {
+                "name": "msg",
+                "required": "always",
+                "default": null,
+                "description": "imperative summary of the change",
+            },
+            {
+                "name": "scope",
+                "required": "never",
+                "default": "devkit",
+                "description": "area of the codebase the commit touches",
+            },
+        ])
+    );
+}
+
+#[test]
+fn describing_a_sequence_lists_its_steps_and_their_args() {
+    let dir = setup();
+    let out = config_in(dir.path(), &["tasks", "seq-commit"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        row(&stdout, "steps"),
+        ["steps", "task", "hello:", "git", "version"],
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("task commit: git --msg={{ scope }}: {{ msg }} version"),
+        "{stdout}"
+    );
+    assert_eq!(row(&stdout, "msg")[1], "always", "{stdout}");
+}
+
+#[test]
+fn describing_a_task_names_who_must_pass_an_arg_and_what_this_caller_passes() {
+    let dir = setup();
+    let agent = config_in(dir.path(), &["tasks", "pinned-commit"]);
+    let human = devkit_in(dir.path())
+        .args(["config", "tasks", "pinned-commit"])
+        .env("DEVKIT_CALLER", "human")
+        .output()
+        .expect("run devkit config");
+    let agent = String::from_utf8_lossy(&agent.stdout);
+    let human = String::from_utf8_lossy(&human.stdout);
+    assert_eq!(row(&agent, "scope")[1], "agents", "{agent}");
+    assert_eq!(row(&human, "scope")[1], "agents", "{human}");
+    assert!(row(&agent, "usage").contains(&"scope=..."), "{agent}");
+    assert!(!row(&human, "usage").contains(&"scope=..."), "{human}");
+}
+
+#[test]
+fn describing_a_malformed_or_unknown_task_says_what_is_wrong() {
+    let dir = setup();
+    let both = config_in(dir.path(), &["tasks", "both"]);
+    assert!(!both.status.success(), "{both:?}");
+    assert!(
+        String::from_utf8_lossy(&both.stderr).contains("sets both"),
+        "{both:?}"
+    );
+
+    let unknown = config_in(dir.path(), &["tasks", "nope"]);
+    assert!(!unknown.status.success(), "{unknown:?}");
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("unknown task `nope`"),
+        "{unknown:?}"
+    );
+}
+
+#[test]
+fn config_variables_lists_each_declared_variable() {
+    let dir = setup();
+    let out = config_in(dir.path(), &["variables"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let msg = row(&stdout, "msg");
+    assert_eq!(msg[1..3], ["always", "none"], "{stdout}");
+    assert!(
+        msg.join(" ").ends_with("imperative summary of the change"),
+        "{stdout}"
+    );
+    assert_eq!(row(&stdout, "scope")[1..3], ["no", "devkit"], "{stdout}");
+
+    let json = config_in(dir.path(), &["variables", "--json"]);
+    assert!(json.status.success(), "{json:?}");
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).expect("json");
+    assert_eq!(
+        v[1],
+        serde_json::json!({
+            "name": "scope",
+            "required": "never",
+            "default": "devkit",
+            "description": "area of the codebase the commit touches",
+        })
     );
 }

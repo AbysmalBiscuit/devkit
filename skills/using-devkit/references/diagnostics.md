@@ -13,7 +13,7 @@ devkit schema init [<path>]                    # point a devkit.toml at the publ
 
 ## `config`
 
-`devkit config` prints the merged config as TOML, headed by its layer files in precedence order. `--origin` annotates each value with the file it came from (`# (default)` for a serde default) and, where several layers set it, what each overridden layer held. `--json` emits the bare config; `--origin --json` emits `{ config, layers, origins, overrides }`. `config apps` (name, port, path, url, provides_url, url_env, launch) and `config tasks` list the configured apps and tasks (the latter is the same listing as a bare `devrun task`), with no live state.
+`devkit config` prints the merged config as TOML, headed by its layer files in precedence order. `--origin` annotates each value with the file it came from (`# (default)` for a serde default) and, where several layers set it, what each overridden layer held. `--json` emits the bare config; `--origin --json` emits `{ config, layers, origins, overrides }`. `config apps` (name, port, path, url, provides_url, url_env, launch) and `config tasks` list the configured apps and tasks (the latter is the same listing as a bare `devrun task`), with no live state. `config tasks <name>` describes one task and its args, and `config variables` lists the `[templates.variables]` entries.
 
 ## `doctor`
 
