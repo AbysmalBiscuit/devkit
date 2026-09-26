@@ -267,7 +267,8 @@ fn cursor_edits_get_no_rules() {
     );
 
     let manifest: Value =
-        serde_json::from_str(&std::fs::read_to_string("hooks/hooks-cursor.json").unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string("plugin/hooks/hooks-cursor.json").unwrap())
+            .unwrap();
     for (event, hooks) in manifest["hooks"].as_object().unwrap() {
         let runs_pre_tool_use = hooks.as_array().unwrap().iter().any(|h| {
             h["command"]
