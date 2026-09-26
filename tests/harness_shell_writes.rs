@@ -794,7 +794,7 @@ fn a_bound_that_is_not_a_directory_below_a_checkout_root_is_unresolved() {
     for command in [
         "rm -f *.log".to_string(),
         "find . -name '*.orig' -exec rm {} +".to_string(),
-        format!("rm -f {outside}/sub/*.log"),
+        format!("rm -f '{outside}'/sub/*.log"),
     ] {
         let e = env(WRITES);
         let reason = denial(&hook(&e, Some("S1"), &command)).expect(&command);
