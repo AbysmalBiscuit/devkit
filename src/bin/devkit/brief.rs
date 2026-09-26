@@ -902,10 +902,16 @@ fn has_directory(path: &str) -> bool {
 }
 
 /// The app whose directory contains `cwd`, the innermost one when app
-/// directories nest.
+/// directories nest. Git reports the root resolved while the process cwd keeps
+/// the spelling it was entered by (a symlink, a Windows 8.3 short name), so
+/// both are resolved before comparing. Each app directory is resolved whole
+/// because a resolved Windows path is verbatim, where `/` in a joined
+/// `apps/web` would not separate components.
 fn current_app<'a>(apps: &[&'a App], root: &Path, cwd: &Path) -> Option<&'a str> {
+    let resolve = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let cwd = resolve(cwd);
     apps.iter()
-        .filter(|a| has_directory(&a.path) && cwd.starts_with(root.join(&a.path)))
+        .filter(|a| has_directory(&a.path) && cwd.starts_with(resolve(&root.join(&a.path))))
         .max_by_key(|a| Path::new(&a.path).components().count())
         .map(|a| a.name.as_str())
 }
@@ -1227,6 +1233,21 @@ mod tests {
         );
         assert_eq!(current_app(&apps, root, Path::new("/r")), None);
         assert_eq!(current_app(&apps, root, Path::new("/r/apps-old")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_current_app_matches_across_spellings_of_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("apps/web")).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let web = app("web", "apps/web");
+        assert_eq!(
+            current_app(&[&web], &link, &real.join("apps/web")),
+            Some("web")
+        );
     }
 
     #[test]
