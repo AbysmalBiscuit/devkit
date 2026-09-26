@@ -13,7 +13,7 @@ use devkit_common::git::Checkout;
 use devkit_rules::{
     edit, index,
     model::RuleIndex,
-    query,
+    query, repo_config,
     vocab::{self, Scope, Severity, Task},
 };
 use strum::VariantNames;
@@ -64,9 +64,13 @@ pub struct QueryArgs {
     /// Keep repo-wide rules plus those governing this path. Repeatable.
     #[arg(long = "path", short = 'p')]
     pub paths: Vec<String>,
-    /// Rank rules about this topic first. Repeatable.
+    /// Rank rules about this topic first. Topics come from the repo's
+    /// .agents/repo-rules-agent.toml. Repeatable.
     #[arg(long = "topic")]
     pub topics: Vec<String>,
+    /// Print at most this many rules, most useful first. 0 prints all.
+    /// Defaults to query.limit in the repo's .agents/repo-rules-agent.toml,
+    /// then to 50.
     #[arg(long, short = 'n')]
     pub limit: Option<usize>,
     #[arg(long, short = 'f', value_enum, default_value_t = Format::Table)]
@@ -277,6 +281,7 @@ pub fn run(cli: RulesCli) -> Result<()> {
 
 fn query_cmd(args: QueryArgs) -> Result<()> {
     let (_, index) = load_or_default(args.index_path)?;
+    let repo_config = repo_config::load(Path::new(&index.repo))?;
     let cwd = std::env::current_dir().context("getting current dir")?;
     let checkout = Checkout::at(&cwd);
     let root = checkout.root().unwrap_or(&cwd);
@@ -298,7 +303,16 @@ fn query_cmd(args: QueryArgs) -> Result<()> {
         query::matching(&index, &filter)
     };
     let mut rules = query::rank(&index, matched, &args.topics);
-    if let Some(limit) = args.limit.filter(|n| *n > 0) {
+    warn_unknown_topics(&args.topics, &repo_config.topic_names());
+    let limit = args
+        .limit
+        .or(repo_config.query.limit)
+        .unwrap_or(repo_config::DEFAULT_QUERY_LIMIT);
+    if limit > 0 && rules.len() > limit {
+        eprintln!(
+            "showing {limit} of {} rules; narrow the query or pass --limit 0 for all",
+            rules.len()
+        );
         rules.truncate(limit);
     }
     match args.format {
@@ -325,6 +339,23 @@ fn query_cmd(args: QueryArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A requested topic the repository does not define still ranks by rule text,
+/// so it earns a warning rather than an error. A repository with no topics gets
+/// none: every topic there is text-only.
+fn warn_unknown_topics(requested: &[String], known: &[String]) {
+    if known.is_empty() {
+        return;
+    }
+    for topic in requested {
+        if !known.contains(&vocab::vocabulary_key(topic)) {
+            eprintln!(
+                "warning: topic {topic:?} is not in the repo config ({}), so it matches rule text only",
+                known.join(", ")
+            );
+        }
+    }
 }
 
 fn stats_cmd(args: StatsArgs) -> Result<()> {

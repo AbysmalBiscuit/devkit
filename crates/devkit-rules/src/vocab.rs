@@ -38,8 +38,9 @@ pub enum Scope {
 
 pub const ALL_LANGUAGES: &str = "all";
 
-/// Ported from `repo-rules-agent` `rules/vocabulary.py`. Kept in sync by hand
-/// until devkit reads a repository's own extractor config.
+/// Ported from `repo-rules-agent` `rules/vocabulary.py` and kept in sync by
+/// hand. A repository's `.agents/repo-rules-agent.toml` adds languages but no
+/// aliases, so this table is the whole of alias resolution on both sides.
 const LANGUAGE_ALIASES: &[(&str, &str)] = &[
     ("ts", "typescript"),
     ("tsx", "typescript"),
@@ -118,8 +119,8 @@ mod tests {
     }
 
     /// An unknown language is kept as its normalized self rather than dropped:
-    /// a repository extends the vocabulary through its own extractor config,
-    /// and devkit does not read that file yet.
+    /// a repository extends the extractor's language list, so an index can
+    /// carry a language this table has never heard of.
     #[test]
     fn an_unknown_language_keeps_its_normalized_form() {
         assert_eq!(canonical_language("Zig"), "zig");
