@@ -9,9 +9,9 @@
 //! extends, so an index legitimately carries values no enum here knows, and
 //! they stay normalized strings.
 
-use strum::{Display, EnumString};
+use strum::{Display, EnumString, VariantNames};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, Display, VariantNames)]
 #[strum(serialize_all = "kebab-case")]
 pub enum Task {
     CodeReview,
@@ -20,7 +20,7 @@ pub enum Task {
 }
 
 /// Ordered most severe first, so a floor is `severity <= floor`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumString, Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumString, Display, VariantNames)]
 #[strum(serialize_all = "lowercase")]
 pub enum Severity {
     Must,
@@ -28,7 +28,7 @@ pub enum Severity {
     Can,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, Display, VariantNames)]
 #[strum(serialize_all = "kebab-case")]
 pub enum Scope {
     Repo,

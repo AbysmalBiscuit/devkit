@@ -14,8 +14,9 @@ use devkit_rules::{
     edit, index,
     model::RuleIndex,
     query,
-    vocab::{self, Severity, Task},
+    vocab::{self, Scope, Severity, Task},
 };
+use strum::VariantNames;
 
 #[derive(Args)]
 pub struct RulesCli {
@@ -48,18 +49,18 @@ pub enum RulesCommand {
 pub struct QueryArgs {
     /// The index file. Defaults to the one built for this checkout.
     pub index_path: Option<PathBuf>,
-    #[arg(long, short = 't')]
-    pub task: Option<String>,
+    #[arg(long, short = 't', value_parser = parse_vocab::<Task>)]
+    pub task: Option<Task>,
     #[arg(long = "lang", short = 'l')]
     pub language: Option<String>,
-    #[arg(long, short = 's')]
-    pub scope: Option<String>,
+    #[arg(long, short = 's', value_parser = parse_vocab::<Scope>)]
+    pub scope: Option<Scope>,
     /// Exact severity: must, should or can.
-    #[arg(long)]
-    pub severity: Option<String>,
+    #[arg(long, value_parser = parse_vocab::<Severity>)]
+    pub severity: Option<Severity>,
     /// Least severe value still printed.
-    #[arg(long)]
-    pub min_severity: Option<String>,
+    #[arg(long, value_parser = parse_vocab::<Severity>)]
+    pub min_severity: Option<Severity>,
     /// Keep repo-wide rules plus those governing this path. Repeatable.
     #[arg(long = "path", short = 'p')]
     pub paths: Vec<String>,
@@ -117,11 +118,11 @@ pub struct FieldArgs {
     #[arg(long)]
     pub category: Option<String>,
     /// must, should or can.
-    #[arg(long, value_parser = parse_severity)]
+    #[arg(long, value_parser = parse_vocab::<Severity>)]
     pub severity: Option<Severity>,
     /// code-review, code-generation or code-questions. Repeatable; none applies
     /// to every task.
-    #[arg(long = "task", short = 't', value_parser = parse_task)]
+    #[arg(long = "task", short = 't', value_parser = parse_vocab::<Task>)]
     pub tasks: Vec<Task>,
     /// Repeatable; none applies to every language.
     #[arg(long = "lang", short = 'l')]
@@ -135,14 +136,11 @@ pub struct FieldArgs {
     pub directory: Option<PathBuf>,
 }
 
-fn parse_severity(raw: &str) -> Result<Severity, String> {
+/// A vocabulary value off the command line, with the accepted values named on
+/// failure. A person mistyping `--severity` gets the list, not a parse error.
+fn parse_vocab<T: std::str::FromStr + VariantNames>(raw: &str) -> Result<T, String> {
     raw.parse()
-        .map_err(|_| "accepted: must, should, can".to_string())
-}
-
-fn parse_task(raw: &str) -> Result<Task, String> {
-    raw.parse()
-        .map_err(|_| "accepted: code-review, code-generation, code-questions".to_string())
+        .map_err(|_| format!("accepted: {}", T::VARIANTS.join(", ")))
 }
 
 impl FieldArgs {
@@ -277,31 +275,17 @@ pub fn run(cli: RulesCli) -> Result<()> {
     }
 }
 
-/// A vocabulary value off the command line, with the accepted values named on
-/// failure. A person mistyping `--severity` gets the list, not a parse error.
-fn parse_vocab<T: std::str::FromStr>(value: Option<&str>, accepted: &str) -> Result<Option<T>> {
-    let Some(raw) = value else {
-        return Ok(None);
-    };
-    raw.parse()
-        .map(Some)
-        .map_err(|_| anyhow::anyhow!("unknown value {raw:?}; accepted: {accepted}"))
-}
-
 fn query_cmd(args: QueryArgs) -> Result<()> {
     let (_, index) = load_or_default(args.index_path)?;
     let cwd = std::env::current_dir().context("getting current dir")?;
     let checkout = Checkout::at(&cwd);
     let root = checkout.root().unwrap_or(&cwd);
     let filter = query::Filter {
-        task: parse_vocab(
-            args.task.as_deref(),
-            "code-review, code-generation, code-questions",
-        )?,
+        task: args.task,
         language: args.language.map(|l| vocab::canonical_language(&l)),
-        scope: parse_vocab(args.scope.as_deref(), "repo, directory, file-pattern")?,
-        severity: parse_vocab(args.severity.as_deref(), "must, should, can")?,
-        min_severity: parse_vocab(args.min_severity.as_deref(), "must, should, can")?,
+        scope: args.scope,
+        severity: args.severity,
+        min_severity: args.min_severity,
         paths: args
             .paths
             .iter()

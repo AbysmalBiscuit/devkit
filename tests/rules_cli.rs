@@ -658,3 +658,32 @@ fn remove_deletes_an_added_rule_outright() {
     rules_ok(proj.path(), state.path(), &["rm", id.trim()]);
     assert!(raw_rule(proj.path(), id.trim()).is_none());
 }
+
+#[test]
+fn a_value_outside_the_vocabulary_names_the_accepted_ones() {
+    let (proj, state) = context_project();
+    for (args, accepted) in [
+        (
+            vec!["query", "--task", "nope"],
+            "code-review, code-generation, code-questions",
+        ),
+        (
+            vec!["query", "--scope", "nope"],
+            "repo, directory, file-pattern",
+        ),
+        (vec!["query", "--min-severity", "nope"], "must, should, can"),
+        (
+            vec!["add", "--title", "x", "--severity", "nope"],
+            "must, should, can",
+        ),
+        (
+            vec!["edit", "r-root-must", "--task", "nope"],
+            "code-review, code-generation, code-questions",
+        ),
+    ] {
+        let out = rules_cmd(proj.path(), state.path(), &args);
+        assert!(!out.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(accepted), "{args:?}: {stderr}");
+    }
+}
