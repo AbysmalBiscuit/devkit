@@ -217,7 +217,11 @@ pub fn resolve_locked(
     // `repaired` cannot: it is false both for a worktree just created and for
     // one left untouched.
     let existed = lib.worktree_path(&worktree).is_dir();
-    let (path, repaired) = lib.ensure_at(&worktree, &commit)?;
+    let (path, repaired) = lib.ensure_at(
+        &worktree,
+        &commit,
+        entry.exclude.as_deref().unwrap_or_default(),
+    )?;
     lib.assert_clean(&path)?;
     if repaired && let Some(previous_commit) = moved_tag_from {
         warnings.push(format!(

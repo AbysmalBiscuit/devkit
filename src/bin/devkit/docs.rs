@@ -50,6 +50,11 @@ pub(crate) enum Cmd {
         /// Layout override: docs directory inside the checkout.
         #[arg(long)]
         docs_dir: Option<String>,
+        /// Gitignore-style pattern for paths every checkout leaves out, never
+        /// downloaded or written (e.g. 'testdata/', '*.json'). Repeatable.
+        /// Global manifest only, since every project shares the checkout.
+        #[arg(long = "exclude", value_name = "PATTERN", conflicts_with = "project")]
+        exclude: Vec<String>,
         /// Freeform notes surfaced by `info`.
         #[arg(long)]
         notes: Option<String>,
@@ -143,6 +148,7 @@ pub fn run(cli: DocsCli) -> Result<()> {
             git_ref,
             src_dir,
             docs_dir,
+            exclude,
             notes,
             project,
         } => cmd_add(
@@ -153,6 +159,7 @@ pub fn run(cli: DocsCli) -> Result<()> {
             git_ref,
             src_dir,
             docs_dir,
+            exclude,
             notes,
             project,
             cli.allow_default_branch,
@@ -200,6 +207,7 @@ fn cmd_add(
     git_ref: Option<String>,
     src_dir: Option<String>,
     docs_dir: Option<String>,
+    exclude: Vec<String>,
     notes: Option<String>,
     project: bool,
     allow_default_branch: bool,
@@ -236,6 +244,7 @@ fn cmd_add(
     entry.r#ref = git_ref;
     entry.src_dir = src_dir;
     entry.docs_dir = docs_dir;
+    entry.exclude = (!exclude.is_empty()).then_some(exclude);
     entry.notes = notes;
     let cache_root = cache::docs_root();
 

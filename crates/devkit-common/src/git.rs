@@ -28,10 +28,9 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// Timeout for a git call that is slow by nature rather than by accident:
 /// anything that reaches the network (`clone`, `fetch`, `push`), and anything
 /// that writes a whole working tree (`worktree add`/`remove`, `checkout`).
-/// The two overlap — `worktree add` against a
-/// `--filter=blob:none` clone fetches every blob the new working tree needs
-/// at that commit, so it is a network call as well as a bulk one, and belongs
-/// in this tier for both reasons.
+/// The two overlap. Populating a worktree of a partial clone fetches every
+/// object the new working tree needs at that commit, so it is a network call
+/// as well as a bulk one, and belongs in this tier for both reasons.
 pub const SLOW_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Variables that repoint git at a different repository or inject config into

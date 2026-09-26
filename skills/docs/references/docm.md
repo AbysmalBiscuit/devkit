@@ -8,6 +8,7 @@ docm add https://github.com/godotengine/godot --ref 4.3-stable
 docm add react --project          # write to this repo's devkit.toml [docs]
 docm add zod --eco js             # name the ecosystem instead of probing for it
 docm add h3 --src-dir src --docs-dir docs   # override the detected layout
+docm add typescript-go --exclude testdata/  # leave bulky paths out of every checkout
 docm list --project               # what this checkout evidences; --json emits {pins, dropped}
 docm list --refresh               # re-measure every checkout's size
 docm sync                         # fetch, re-resolve, re-materialize, verify
@@ -31,6 +32,12 @@ Resolving a library from a project records a reference: the project root, the li
 ## Checkout sizes
 
 Each checkout is measured when it is materialized or re-pointed, and the size is recorded beside its commit in the library's `meta.toml`. `docm list` shows it and `devkit doctor` reads it. A cache from a docm that recorded no sizes fills them in on its next `docm` command. `docm path` and `docm info` re-resolve on every call, so they never measure. A checkout that grows after its pin (ignored build output, say) goes unnoticed until `docm list --refresh`, which re-measures the whole shared cache, libraries outside the current manifest included.
+
+## Disk use
+
+Each library keeps one treeless clone: it holds commits, and a checkout fetches only the trees and files of its own commit. History commands that walk trees, like `git log -- <path>` or `git blame`, fetch from the remote one commit at a time, so read the checked-out files instead. A clone made by an older docm still carries every tree. Delete the library's directory under `~/.local/share/devkit/docs/` and the next `docm` command re-clones it treeless.
+
+`exclude` in a global manifest entry (`docm add --exclude <pattern>`, repeatable) takes gitignore-style patterns for paths no checkout of that library holds. Their content is never downloaded. Changing the list re-applies it to existing checkouts on their next resolve. A project's `[[docs.libs]]` cannot set it, because every project shares the same checkouts.
 
 ## Reserved names
 
