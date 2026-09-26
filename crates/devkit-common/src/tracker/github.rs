@@ -606,6 +606,11 @@ impl Tracker for GithubTracker {
         Ok(parse_issue(&resp, id))
     }
 
+    /// The issue body is the summary.
+    fn summary(&self, id: &str) -> Result<Option<String>> {
+        Ok(self.details(id)?.map(|d| d.description))
+    }
+
     fn states(&self, ids: &[String]) -> HashMap<String, State> {
         let Some((query, aliases)) = states_query(&self.repo.slug, ids) else {
             return HashMap::new();

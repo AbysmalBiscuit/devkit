@@ -131,6 +131,12 @@ pub trait Tracker: Send + Sync {
     fn issue_ref(&self, input: &str) -> Result<IssueRef>;
     fn title(&self, id: &str) -> Result<Option<String>>;
     fn details(&self, id: &str) -> Result<Option<IssueDetails>>;
+    /// The issue's summary as the tracker holds it, written verbatim as the
+    /// issue summary file in place of the `issue_summary` template. `None`
+    /// when the tracker keeps no summary.
+    fn summary(&self, _id: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
     /// Batched: one round trip for every id.
     fn states(&self, ids: &[String]) -> HashMap<String, State>;
     fn issue_pr(&self, id: &str) -> Result<Option<PrRef>>;

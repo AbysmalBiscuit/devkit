@@ -1176,7 +1176,9 @@ pub struct Templates {
     /// worktree; render `{{ worktree }}` into it to keep it inside instead.
     /// Context: the `issue_summary` context below.
     pub issue_summary_path: Option<String>,
-    /// Body of the file `issue setup --summary` writes. Context: `issue`,
+    /// Body of the file `issue setup --summary` writes when the tracker keeps
+    /// no summary of its own; a GitHub issue's non-empty body is written
+    /// verbatim instead. Context: `issue`,
     /// `title`, `url`, `description`, `state`, `assignee`, `priority`,
     /// `estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,
     /// `prefix`, `apps`. A field the tracker left empty renders as the empty
