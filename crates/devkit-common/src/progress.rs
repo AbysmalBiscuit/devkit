@@ -304,7 +304,9 @@ impl Steps {
         out
     }
 
-    /// Clear every bar in the group (call once all work is done).
+    /// Wipe the group's drawn lines. A bar from [`Steps::spinner`] or
+    /// [`Steps::bar`] that is still live redraws on its next tick, over
+    /// whatever was printed since, so finish those with `finish_and_clear`.
     pub fn clear(&self) {
         let _ = self.mp.clear();
     }

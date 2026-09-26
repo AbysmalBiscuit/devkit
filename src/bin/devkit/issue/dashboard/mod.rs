@@ -107,7 +107,7 @@ pub fn run(args: DashboardArgs) -> Result<()> {
             tracker.kind()
         ));
     });
-    steps.clear();
+    pb.finish_and_clear();
     if issues.is_empty() {
         let kind = tracker.kind();
         if let Some(why) = resolved.unbuilt_reason() {
@@ -219,16 +219,23 @@ pub fn run(args: DashboardArgs) -> Result<()> {
     // and commit history above and below it still render.
     let pr_repo = repos.prs().ok();
     let steps = devkit_common::progress::Steps::new();
-    let _b1 = steps.spinner("[1/2] Loading PR history...");
-    let _b2 = steps.spinner("[2/2] Loading commit history...");
+    let pr_pb = steps.spinner("[1/2] Loading PR history...");
+    let commit_pb = steps.spinner("[2/2] Loading commit history...");
     let (opened, merged, add, del, commits) = std::thread::scope(|s| {
-        let pr_t = s.spawn(|| data::pr_timeline(args.all_roles, use_cache, pr_repo, &scope));
-        let commit_t = s.spawn(|| data::commit_dates(primary, &author));
+        let pr_t = s.spawn(|| {
+            let timeline = data::pr_timeline(args.all_roles, use_cache, pr_repo, &scope);
+            pr_pb.finish_and_clear();
+            timeline
+        });
+        let commit_t = s.spawn(|| {
+            let commits = data::commit_dates(primary, &author);
+            commit_pb.finish_and_clear();
+            commits
+        });
         let (opened, merged, add, del) = pr_t.join().expect("pr timeline thread panicked");
         let commits = commit_t.join().expect("commit thread panicked");
         (opened, merged, add, del, commits)
     });
-    steps.clear();
 
     let mut stamps: Vec<chrono::DateTime<Utc>> = Vec::new();
     stamps.extend(opened.iter().copied());
