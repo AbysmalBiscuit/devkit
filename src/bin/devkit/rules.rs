@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use devkit_common::git::Checkout;
+use devkit_config::RulesConfig;
 use devkit_rules::{
     edit, index,
     model::RuleIndex,
@@ -253,6 +254,20 @@ fn load_or_default(explicit: Option<PathBuf>) -> Result<(PathBuf, RuleIndex)> {
     Ok((path, loaded))
 }
 
+/// The `[rules]` settings and the index the session hooks inject from, or
+/// `None` when injection is off or no index loads. `devkit rules context` and
+/// the brief's rules section both decide through this, so neither describes
+/// rules the other would not deliver.
+pub(crate) fn enabled_index(checkout: &Checkout, cwd: &Path) -> Option<(RulesConfig, RuleIndex)> {
+    let (project, _) = devkit_common::config::resolve_in(checkout, None, cwd).ok()?;
+    if !project.rules.enabled {
+        return None;
+    }
+    let path = resolve_index_path(None, project.rules.index.as_deref(), checkout);
+    let loaded = index::load(&path)?;
+    Some((project.rules, loaded))
+}
+
 pub fn run(cli: RulesCli) -> Result<()> {
     match cli.command {
         RulesCommand::Query(args) => query_cmd(args),
@@ -459,16 +474,7 @@ fn context_cmd(args: ContextArgs) -> Result<()> {
     let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
     };
-    let checkout = Checkout::at(&cwd);
-    let Ok((project, provenance)) = devkit_common::config::resolve_in(&checkout, None, &cwd) else {
-        return Ok(());
-    };
-    let _ = &provenance;
-    if !project.rules.enabled {
-        return Ok(());
-    }
-    let path = resolve_index_path(None, project.rules.index.as_deref(), &checkout);
-    let Some(loaded) = index::load(&path) else {
+    let Some((settings, loaded)) = enabled_index(&Checkout::at(&cwd), &cwd) else {
         return Ok(());
     };
     // No task and no language: session start is the broad trigger, and a
@@ -480,11 +486,11 @@ fn context_cmd(args: ContextArgs) -> Result<()> {
         ..query::Filter::default()
     };
     let mut matched = query::rank(&loaded, query::matching(&loaded, &filter), &[]);
-    matched.truncate(project.rules.per_event_limit);
+    matched.truncate(settings.per_event_limit);
 
     let footer = "\nThe rest of this repository's rules are reachable with \
                   `devkit rules query --path <path>`.\n";
-    let Some(budget) = project.rules.max_event_bytes.checked_sub(footer.len()) else {
+    let Some(budget) = settings.max_event_bytes.checked_sub(footer.len()) else {
         return Ok(());
     };
     let rendered = devkit_rules::render::fit(

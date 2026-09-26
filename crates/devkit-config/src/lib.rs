@@ -199,6 +199,10 @@ pub struct BriefConfig {
     pub apps: bool,
     /// The task table and the `devrun task` bullet.
     pub tasks: bool,
+    /// The rules section: which of a file's rules reach the session on their
+    /// own and how to list the rest. It appears only while `[rules]` is
+    /// enabled and its index loads.
+    pub rules: bool,
 }
 
 impl Default for BriefConfig {
@@ -209,6 +213,7 @@ impl Default for BriefConfig {
             locks: true,
             apps: true,
             tasks: true,
+            rules: true,
         }
     }
 }
