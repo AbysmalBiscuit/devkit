@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "devkit": {
-      "command": "devkit-mcp"
-    }
-  }
-}

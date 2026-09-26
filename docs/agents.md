@@ -127,7 +127,11 @@ Or in a session, same arguments (`/plugin` alone opens the interactive browser):
 
 Restart Claude Code so the hooks load, then run `/mcp` to confirm the `devkit` server is active and `devkit_describe`/`devkit_call` are listed.
 
-For the MCP server alone, with no skill or hooks: the repo ships `.mcp.json` at the root, so opening this repo in Claude Code registers the `devkit` server project-scoped.
+For the MCP server alone, with no skill or hooks, register it yourself:
+
+```sh
+claude mcp add devkit devkit-mcp
+```
 
 ## Codex
 
