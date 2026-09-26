@@ -92,13 +92,16 @@ pub fn default_index_path(repo: &Path) -> PathBuf {
     cache_root().join(cache_dir_name(repo)).join("index.json")
 }
 
-/// The index at `path`, or `None`. A file that exists and does not parse earns
-/// one stderr line: that is a breakage rather than an absence, and every other
-/// failure is silence.
+/// The index at `path` without its removed rules, or `None`. A file that exists
+/// and does not parse earns one stderr line: that is a breakage rather than an
+/// absence, and every other failure is silence.
 pub fn load(path: &Path) -> Option<RuleIndex> {
     let raw = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str(&raw) {
-        Ok(index) => Some(index),
+    match serde_json::from_str::<RuleIndex>(&raw) {
+        Ok(mut index) => {
+            index.rules.retain(|rule| !rule.removed);
+            Some(index)
+        }
         Err(e) => {
             let _ = std::io::Write::write_fmt(
                 &mut std::io::stderr(),

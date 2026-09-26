@@ -41,9 +41,13 @@ pub fn block(rules: &[&Rule], files: &[(String, String)], cap: usize) -> String 
         out.push_str("## Rules for the files you are editing\n\n");
         for rule in rules {
             out.push_str(&format!(
-                "- **{}** ({}) {} (from {})\n",
-                rule.title, rule.severity_raw, rule.description, rule.source_file
+                "- **{}** ({}) {}",
+                rule.title, rule.severity_raw, rule.description
             ));
+            if !rule.source_file.is_empty() {
+                out.push_str(&format!(" (from {})", rule.source_file));
+            }
+            out.push('\n');
         }
     }
     for (path, body) in files {
@@ -76,6 +80,18 @@ mod tests {
         let text = block(&rules, &[], 4096);
         assert!(text.contains("Root must"), "{text}");
         assert!(text.contains("AGENTS.md"), "the source file: {text}");
+    }
+
+    /// A rule added by hand has no source file to name.
+    #[test]
+    fn a_rule_without_a_source_names_none() {
+        let rule = crate::model::Rule {
+            source_file: String::new(),
+            ..fixture().rules[0].clone()
+        };
+        let text = block(&[&rule], &[], 4096);
+        assert!(text.contains("Root must"), "{text}");
+        assert!(!text.contains("(from"), "{text}");
     }
 
     #[test]

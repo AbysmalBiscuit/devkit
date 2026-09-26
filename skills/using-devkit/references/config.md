@@ -13,7 +13,7 @@ An edit is done when `devkit config --origin` shows each value you set coming fr
 
 ## `[rules]`: inject rules at write time
 
-When an agent is about to write a file, devkit injects the rules governing that file from a prebuilt JSON index. `repo-rules-agent` builds the index and devkit only reads it. Without an `index` key, devkit looks where the extractor writes for this checkout's main worktree, so a built index needs no config.
+When an agent is about to write a file, devkit injects the rules governing that file from a prebuilt JSON index. `repo-rules-agent` builds the index, and `devkit rules add|edit|remove` change it by hand. Without an `index` key, devkit looks where the extractor writes for this checkout's main worktree, so a built index needs no config.
 
 ```toml
 [rules]
@@ -42,6 +42,18 @@ devkit rules query --path src/auth/session.rs --format prompt   # the exact inje
 When `stats` reports no index, build one with `repo-rules-agent` or point `index` at the right file.
 
 `query` takes an index path as an optional first argument and otherwise finds the one built for this checkout. It orders matches by a requested `--topic`, then deeper directories, then severity, then the source file's discovery tier. `--severity` is exact and `--min-severity` a floor. `--path` and `--topic` repeat; `--path` keeps repo-wide rules alongside directory ones, and `--topic` ranks rather than filters. `--format table|json|prompt`. `stats` also lists files the extractor recorded errors against. `context` prints nothing, and exits 0, outside a devkit project or with rules off.
+
+### Changing rules by hand
+
+`add`, `edit` and `remove` write to the same index `query` reads, taking a lock beside it. The table from `query` has an `ID` column naming the rule to pass.
+
+```sh
+devkit rules add --title "Log with tracing" --description "Never println." --severity must --lang rust --directory crates/foo
+devkit rules edit 9c143a6b7b0e --severity should
+devkit rules remove 9c143a6b7b0e
+```
+
+A rule devkit writes is `pinned`: whatever rebuilds the index must keep it as written and drop the extracted rule with the same id. `remove` on an extracted rule sets `removed` as well, leaving a tombstone every reader skips, so a rebuild that honors `pinned` does not bring it back; a rule made with `add` is deleted outright. `edit` keeps a rule's id even when the title changes, and a list flag (`--task`, `--lang`, `--topic`) replaces the whole list.
 
 ## `[[context.files]]`: inject whole files
 
