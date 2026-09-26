@@ -26,7 +26,7 @@ Before running a project build, profiling flow, or verification command by hand,
 | `references/servers.md` | starting or stopping dev servers, allocating ports, reading logs, another worktree's servers |
 | `references/tasks.md` | a `devrun task` needs an `--arg`, hit a `require_live` gate, or you need to override its env |
 | `references/issues.md` | starting an issue worktree, checking out a PR, shipping for review, tearing down |
-| `references/config.md` | writing or changing a `devkit.toml`: rule injection, context files, command-guard rules, tasks |
+| `references/config.md` | writing or changing a `devkit.toml`: how layers merge, reading a table's rules before editing it, checking the edit |
 | `references/diagnostics.md` | a `devkit.toml` key's name, type or default is in question, a credential is missing, or you need `doctor` or `brief` |
 
 Global flags go **before** the subcommand (`issue -C ~/git/acme/app status`): `-C/--dir <path>` on `issue`/`devrun`/`portm`, `--config <file>` and `--timing[=trace]` / `--timing-log <FILE>` on `issue`/`devrun`.

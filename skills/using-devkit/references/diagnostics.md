@@ -43,7 +43,7 @@ Which sections appear is config-driven: `[brief]` has `enabled`, `pins`, `locks`
 
 ## `schema`
 
-Each key's description in `devkit schema` names its env override where it has one. `references/config.md` covers how keys constrain one another.
+Each key's description in `devkit schema` names its env override where it has one. `references/config.md` covers how layers combine.
 
 `devkit schema init` prepends the taplo header directive (`#:schema <url>` on the first line, *not* a `# $schema = "..."` key) to the config at `<path>`, defaulting to `devkit.toml`. It writes a fully-commented starter when the file does not exist, and leaves a file that already names a schema alone.
 

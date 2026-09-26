@@ -4,7 +4,7 @@ devkit's engine is project-agnostic; every project- and machine-specific detail 
 
 - `devkit schema` prints the JSON Schema. Its descriptions are the doc comments on the config types, so every key's type, default and meaning comes from the same source the binaries parse. `cargo doc -p devkit-config --open` shows the same text with a worked example per table.
 - `devkit schema init` points a `devkit.toml` at that schema, so an editor shows the same descriptions on hover.
-- The `using-devkit` skill's [`references/config.md`](../skills/using-devkit/references/config.md) carries what spans several keys: path resolution, write enforcement, tracker detection, and the preserve and hook rules.
+- The `using-devkit` skill's [`references/config.md`](../skills/using-devkit/references/config.md) carries what spans every table: how layers merge, and how to read a table's description before editing it.
 
 devkit parses the config with the TOML 1.1 grammar, so a `devkit.toml` may use what 1.1 added: newlines and a trailing comma inside an inline table, and the `\e` escape in a basic string. Nothing in devkit requires any of it. Editors, linters and other tools reading the same file may still be on 1.0, so a config that has to stay portable is safer written as 1.0.
 
@@ -23,12 +23,7 @@ Personal settings (worktree paths, local secrets, teammate handles) belong at `~
 
 ## Layering
 
-Every `devkit.toml` from the filesystem root down to the cwd is merged, with `~/.config/devkit/config.toml` as the lowest-precedence base layer beneath them all. Deeper files override shallower ones per value: tables merge key-by-key, while scalars and arrays replace wholesale. `devkit config` prints the merged result, headed by the layer files in precedence order; `--origin` traces each value to the file it came from and names the layers it overrode.
-
-Two escapes bypass the walk:
-
-- `[config] root = true` in a `devkit.toml` or `devkit.local.toml` stops the upward walk at that directory and drops every shallower layer, the home config included. Full isolation.
-- `--config <path>` or `$DEVKIT_CONFIG` selects a single file verbatim, with no layering and no home base.
+How layers merge, and the two escapes that bypass the walk, are in the [`references/config.md`](../skills/using-devkit/references/config.md#layers) layers section. `devkit config` prints the merged result, headed by the layer files in precedence order; `--origin` traces each value to the file it came from and names the layers it overrode.
 
 ## Secrets
 

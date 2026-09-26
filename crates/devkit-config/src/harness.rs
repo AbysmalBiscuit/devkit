@@ -19,7 +19,8 @@ pub enum ShellSetting {
     Powershell,
 }
 
-/// What a policy finding does to the tool call.
+/// What a policy finding does to the tool call. A warning never overrides a
+/// lock conflict on a target devkit did resolve.
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PolicyAction {
@@ -86,7 +87,8 @@ pub enum PromptFidelity {
 }
 
 /// Harness logging: what agents tried to run, and what devkit decided about
-/// it. Off unless the global config turns it on.
+/// it. Off unless the global config turns it on. `devkit doctor`'s
+/// `harness_log` row shows the mode in force.
 ///
 /// `enabled = true`, `dir`, `auto_prune`, `max_age_days` and `max_bytes` are
 /// read from `~/.config/devkit/config.toml` alone and ignored wherever else
@@ -94,7 +96,9 @@ pub enum PromptFidelity {
 /// `enabled = false`, and lower `command` or `prompt`. Everything a project
 /// layer can do tightens. `dir` is on that list for the same reason
 /// `enabled = true` is: a project layer setting `dir = "./.logs"` would land
-/// command text inside the checkout.
+/// command text inside the checkout. That boundary guards against a
+/// `devkit.toml` a project ships, not against your own environment:
+/// `$DEVKIT_CONFIG` can point anywhere, a repository included.
 ///
 /// ```
 /// # use devkit_config::{Fidelity, HarnessSection, PromptFidelity};
@@ -125,8 +129,11 @@ pub struct LogSection {
     pub enabled: Option<bool>,
     /// How much of a command's text a record carries, `redacted` by default.
     /// Resolves to the lowest value any layer sets, so no project can raise
-    /// it. Redaction is best effort: it catches the credential variables devkit
-    /// knows and the token prefixes of services it talks to, nothing more.
+    /// it. Redaction is best effort: it replaces `LINEAR_API_KEY`,
+    /// `LINEAR_WORKSPACE`, `SLACK_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` and those
+    /// services' token prefixes with a placeholder naming the kind. It misses
+    /// novel formats, credentials under other names, and anything read from a
+    /// file, so a `redacted` log is not safe to share on that basis alone.
     pub command: Option<Fidelity>,
     /// How much of a submitted prompt a record carries, `off` by default.
     /// Resolves to the lowest value any layer sets.
@@ -171,7 +178,9 @@ fn nonzero_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
 ///
 /// Deliberately not a regex. Parsing the command, unwrapping wrappers and
 /// runners, and removing a program's own global options (`git -C`) are
-/// devkit's job; a rule that had to restate them would get them wrong.
+/// devkit's job; a rule that had to restate them would get them wrong. A rule
+/// sees nested commands (`bash -c '...'`, `subprocess.run([...])`) and ignores
+/// quoted text that only mentions the program.
 ///
 /// ```
 /// # use devkit_config::{CommandRule, RuleAction, Severity};
@@ -306,7 +315,13 @@ impl Default for AppMatch {
 ///
 /// This is the shape `devkit schema` renders. Nothing at runtime deserializes
 /// the table through it: the probe reads each key independently so one bad key
-/// cannot take the others down with it.
+/// cannot take the others down with it, which also means a misspelled key
+/// changes nothing and reports nothing.
+///
+/// `enforce_writes` and `enforce_commands` are on if any layer sets them.
+/// `shell` and the three policy keys take the closest layer's value. A
+/// checkout opting in is read for its `[harness]` table alone, so its
+/// `devkit.toml` may hold nothing else.
 ///
 /// ```
 /// # use devkit_config::{HarnessSection, PolicyAction};
@@ -327,9 +342,12 @@ impl Default for AppMatch {
 #[derive(Deserialize, Debug, Clone, PartialEq, schemars::JsonSchema)]
 pub struct HarnessSection {
     /// Claim a lock on every file an agent's edit or resolvable shell write
-    /// touches, and deny a write another session holds. On when
-    /// `DEVKIT_ENFORCE_WRITES` says so, else when any project layer or the
-    /// global config sets it. Fails closed on a registry error.
+    /// touches, and deny a write another session holds. Resolves per
+    /// checkout, first answer wins: `DEVKIT_ENFORCE_WRITES` (`1`/`true`/`yes`/
+    /// `on` or `0`/`false`/`no`/`off`; anything else falls through), then any
+    /// project layer for the written path (`devkit.local.toml` and a linked
+    /// worktree's main-checkout layer included), then the global config. Fails
+    /// closed on a registry error.
     #[serde(default)]
     pub enforce_writes: bool,
     /// Refuse shell commands devkit already has a wired-up path for: a

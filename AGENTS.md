@@ -1,6 +1,6 @@
 # devkit
 
-A Rust workspace (edition 2024) that coordinates many concurrent local dev sessions, human and agent, on one machine: port and file-lock registries, a dev-server supervisor, issue worktrees, and the hooks coding agents call. The engine is project-agnostic; everything project-specific lives in `devkit.toml`. User-facing reference: `devkit schema` for config keys, each command's `-h` for flags, and `skills/using-devkit/references/` for behavior. `docs/configuration.md` covers layering and setup.
+A Rust workspace (edition 2024) that coordinates many concurrent local dev sessions, human and agent, on one machine: port and file-lock registries, a dev-server supervisor, issue worktrees, and the hooks coding agents call. The engine is project-agnostic; everything project-specific lives in `devkit.toml`. User-facing reference: `devkit schema` for config keys, each command's `-h` for flags, and `skills/using-devkit/references/` for behavior. `docs/configuration.md` covers setup, and `skills/using-devkit/references/config.md` covers layering.
 
 ## Commands
 

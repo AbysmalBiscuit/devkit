@@ -167,7 +167,9 @@ impl Default for DaemonConfig {
 /// config decides whether they produce anything, so turning the output off is
 /// one line rather than a hook-wiring task. A section with nothing to report
 /// is omitted whatever its switch says; a switch turned off suppresses the
-/// section even when the checkout has something to put in it.
+/// section, and its bullets, even when the checkout has something to put in
+/// it. The brief's intro names only the sections that survive. Personal
+/// defaults belong in `~/.config/devkit/config.toml`, overridden per project.
 ///
 /// ```
 /// # use devkit_config::Config;
@@ -247,7 +249,9 @@ impl Default for McpConfig {
 /// run-level event has exactly one caller and no worktree state to be named
 /// for. Each key holds a list of argv arrays — no shell, so pipes, `&&`, and
 /// globs are not available. A hook that fails to render, spawn, or exit zero
-/// warns on stderr and the remaining hooks still run.
+/// warns on stderr and the remaining hooks still run. Output is captured and
+/// discarded. A `devkit.toml` that fails to load leaves `issue end` with no
+/// hooks, so none of its keys run.
 ///
 /// ```
 /// # use devkit_config::Config;
@@ -263,7 +267,8 @@ impl Default for McpConfig {
 /// ```
 ///
 /// Each key is an array, so a deeper `devkit.toml` replaces the whole list
-/// rather than appending to it.
+/// rather than appending to it. A project defining a key drops the
+/// machine-wide list from `~/.config/devkit/config.toml` entirely.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HooksConfig {
@@ -288,7 +293,9 @@ pub struct HooksConfig {
     /// `apps` come from the `.devkit/issue.toml` record read before the
     /// removal. Rendered over `worktree`, `branch`, `issue`, `slug`, `apps`,
     /// `prefix`, `worktree_root`, `primary`, and `[templates.variables]`. A
-    /// worktree kept back or skipped fires nothing.
+    /// worktree kept back or skipped fires nothing. Runs after the run's
+    /// summary, so a failing hook never un-reports a removal, and is skipped
+    /// with a warning when the main repository root does not resolve.
     pub after_worktree_remove: Vec<Vec<String>>,
 
     /// Runs once at the end of an `issue end` run that removed at least one
@@ -296,14 +303,17 @@ pub struct HooksConfig {
     /// repository root. It carries `removed` (the removed paths, in confirmed
     /// order, rendered as one argv slot), `count`, `prefix`, `worktree_root`,
     /// `primary`, and `[templates.variables]`, and none of the single-worktree
-    /// keys.
+    /// keys. Skipped with a warning, like `after_worktree_remove`, when the
+    /// main repository root does not resolve.
     pub after_end: Vec<Vec<String>>,
 }
 
 /// Files copied out of a worktree before `issue end` removes it. Each entry
 /// names its own destination, so one run can archive different files to
 /// different places. A failure warns and the worktree goes anyway, unless the
-/// entry is `required`.
+/// entry is `required`. Entries run serially in sorted name order, before any
+/// removal. Symlinks are followed, the opposite of `worktree_include`, so an
+/// archive may outlive the link's target.
 ///
 /// `deny_unknown_fields` because a misspelled `required` would otherwise be
 /// consumed silently, leaving the entry fail-open while the user believes the
@@ -333,15 +343,25 @@ pub struct HooksConfig {
 #[serde(deny_unknown_fields)]
 pub struct PreserveConfig {
     /// Glob patterns for the files to copy, relative to the worktree root and
-    /// rendered as minijinja. Name a directory (`.scratch/`) to archive its
-    /// whole tree. A pattern that could reach outside the worktree is skipped
-    /// with a warning; one that matches nothing is not a failure.
+    /// rendered as minijinja. Name a directory (`.scratch/`) or write
+    /// `.scratch/**` to archive its whole tree; `dir/*` takes direct children
+    /// only. A pattern that could reach outside the worktree (absolute, rooted,
+    /// holding `..`, or drive-relative like `C:scratch`) is skipped with a
+    /// warning; one that matches nothing is not a failure. The default issue
+    /// summary sits outside the worktree, so no pattern reaches it unless
+    /// `templates.issue_summary_path` renders `{{ worktree }}`.
     pub from: Vec<String>,
     /// Destination directory, rendered as minijinja over `worktree`, `branch`,
     /// `issue`, `slug`, `apps`, `prefix`, `worktree_root`, `primary` and
-    /// `[templates.variables]`. Must render to a non-empty absolute path
-    /// outside every worktree the run removes. Created when the first file
-    /// lands; an existing file there is replaced.
+    /// `[templates.variables]`. Issue fields come from the worktree's
+    /// `.devkit/issue.toml` and render empty without one, and `primary` fails
+    /// when the primary checkout cannot be resolved. Must render to a
+    /// non-empty absolute path outside every worktree the run removes; the
+    /// filesystem decides that, so a symlink, `..` or case difference does not
+    /// slip past. Created when the first file lands. An existing file there is
+    /// truncated and rewritten, so an interrupted copy leaves a short file.
+    /// Two worktrees writing one filename into the same `to` collide; render
+    /// `{{ issue }}` into it.
     pub to: String,
     /// Keep the worktree, its branch and its summary when this entry warns,
     /// and exit non-zero. Governs errors only, never an empty match.
@@ -349,7 +369,16 @@ pub struct PreserveConfig {
     pub required: bool,
 }
 
-/// Rule injection settings.
+/// Rule injection settings. When an agent is about to write a file, devkit
+/// injects the rules governing it from a prebuilt JSON index.
+///
+/// Injection fires on the structured edits the write stage allows (`Edit`,
+/// `Write`, `MultiEdit`, `NotebookEdit`, `apply_patch`), whether or not
+/// `[harness] enforce_writes` is on; shell writes inject nothing. Each rule
+/// fires once per session, and compaction resets that record. Only targets
+/// inside the repository inject. Separately, the session-start and
+/// post-compact hooks print the repository's `must` rules through
+/// `devkit rules context`.
 ///
 /// ```
 /// # use devkit_config::Config;
@@ -376,7 +405,10 @@ pub struct RulesConfig {
     pub max_file_bytes: usize,
     /// The rendered total for one event is truncated to this.
     pub max_event_bytes: usize,
-    /// Where the rule index lives. Absent means the path the extractor writes.
+    /// Where the rule index lives. Absent means the path `repo-rules-agent`
+    /// writes for this checkout's main worktree, so a built index needs no
+    /// config. `devkit rules add|edit|remove` change the same file. When
+    /// `devkit rules stats` reports no index, build one or point this at it.
     pub index: Option<String>,
 }
 
@@ -411,14 +443,17 @@ impl Default for RulesConfig {
 /// ```
 ///
 /// An entry is an array element, so a deeper `devkit.toml` replaces the whole
-/// list rather than appending to it, the same as `[hooks]`.
+/// list rather than appending to it, the same as `[hooks]`. Repeat the
+/// parent's entries you still want.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ContextConfig {
     pub files: Vec<ContextFile>,
 }
 
-/// One injected file.
+/// One injected file. It fires once per session and counts against
+/// `[rules] per_event_limit`. A missing file, a directory, non-UTF-8 content,
+/// or a file over `[rules] max_file_bytes` is skipped.
 #[derive(Debug, JsonSchema, Deserialize, Serialize)]
 pub struct ContextFile {
     /// The file to inject, relative to the directory of the `devkit.toml` that
@@ -462,7 +497,9 @@ pub struct LinearConfig {
     /// Query Linear for the issues linked to each PR in `issue prs` and the
     /// `issue.prs` MCP action, adding every linked id to the ISSUE column. One
     /// extra batched round trip per 25 PRs. Fail-soft: with no key or on a
-    /// Linear error the column keeps the id derived from the PR text.
+    /// Linear error the column keeps the id derived from the PR text. Linear
+    /// only; under the GitHub tracker the column carries each PR's closing
+    /// issues regardless.
     pub resolve_pr_links: bool,
 }
 
@@ -472,7 +509,11 @@ pub struct LinearConfig {
 /// repository separate from its code.
 ///
 /// This table is not under `[tracker]`: a project on Linear with a fork
-/// workflow needs `pr_repo` just as much as a GitHub one does.
+/// workflow needs `pr_repo` just as much as a GitHub one does. Each key
+/// resolves on its own and only when an operation needs it, so a project that
+/// only reads PRs never supplies `issues_repo`. Unknown keys are refused: a
+/// misspelled `issue_repo` ignored would default from `origin` and query
+/// another repository's issues.
 ///
 /// ```
 /// # use devkit_config::Config;
@@ -539,14 +580,24 @@ impl std::fmt::Display for TrackerKind {
 ///
 /// Naming the kind is what stops a `LINEAR_API_KEY` exported machine-wide from
 /// resolving Linear for a project that does not use it.
+///
+/// Every tracker question goes through the resolved tracker: `issue setup`'s
+/// slug and summary, `issue pr checkout`'s bare-number disambiguation,
+/// `issue dashboard`'s timeline, and the ISSUE column of `issue prs`.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TrackerConfig {
-    /// Force a tracker instead of detecting one. Every `issue` command and
-    /// the `issue.status` MCP action read it. `github` authenticates through
-    /// `gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN`. `none` still creates and
-    /// finishes worktrees on a merged PR and clean tree. `devkit doctor`'s
-    /// `tracker` row shows which tracker resolved and why.
+    /// Force a tracker instead of detecting one. Detection also decides when
+    /// no config resolves: outside any devkit project, or when the config
+    /// fails to load. Every `issue` command and the `issue.status` MCP action
+    /// read it. `github` authenticates through `gh auth login`, `GH_TOKEN` or
+    /// `GITHUB_TOKEN`; under it a bare number is a PR, since issues and PRs
+    /// share one numbering, and with no resolvable `[github] issues_repo` the
+    /// project runs with no tracker. `none` declares no issue states, so a
+    /// merged PR and a clean tree finish a worktree. Detection that finds
+    /// nothing is different: it holds that verdict open, because `issue end`
+    /// deletes branches. `devkit doctor`'s `tracker` row shows which tracker
+    /// resolved and why.
     pub kind: Option<TrackerKind>,
 }
 
@@ -601,8 +652,17 @@ impl std::fmt::Display for PrCreateState {
 /// validated at config load, and what happens when it is used is up to the
 /// feature that reads it.
 ///
-/// A relative path anchors to the layer that declared it, so a project can
-/// commit this table as it stands and have it hold on every machine:
+/// `worktree_root`, `baseline_dir` and `doppler_yaml` resolve once, when the
+/// config loads. `${VAR}` becomes that environment variable, and an unset one
+/// is an error naming the key and the variable; `$$` is a literal `$`, and a
+/// `$` followed by anything else is left alone. A leading `~/` then becomes
+/// `$HOME`. A path still relative anchors to what its key names, never to the
+/// working directory, and `.` and `..` fold out. `branch_prefix` gets the
+/// `${VAR}` step only.
+///
+/// `worktree_root` and `baseline_dir` anchor to the layer that declared them,
+/// so a project can commit this table as it stands and have it hold on every
+/// machine:
 ///
 /// ```
 /// # use devkit_config::Config;
@@ -628,7 +688,8 @@ pub struct Defaults {
     /// `~/git/example_worktrees` beside `~/git/example`.
     #[serde(default)]
     pub worktree_root: String,
-    /// Prefix on branches created by `issue setup`, e.g. `you/`.
+    /// Prefix on branches created by `issue setup`, e.g. `you/`. `${VAR}`
+    /// expands, as in `"${USER}/"`, and nothing else does.
     #[serde(default)]
     pub branch_prefix: String,
     /// Git ref the baseline server tracks, e.g. `origin/staging`. Defaults to
@@ -640,7 +701,10 @@ pub struct Defaults {
     /// commit, each made on demand. Anchors like `worktree_root`. Defaults to
     /// `_baselines` under `worktree_root`. `devrun baseline prune` reclaims
     /// only directories carrying devkit's `.devkit/baseline.toml` marker, and
-    /// only once no worktree's `.devkit/issue.toml` names them.
+    /// only once no worktree's `.devkit/issue.toml` names them. A directory
+    /// here without that marker is reported and never touched. A baseline
+    /// devkit expects whose marker is missing is rebuilt in place, and one
+    /// whose marker cannot be read is refused.
     #[serde(default)]
     pub baseline_dir: String,
     /// Path to the repo's `doppler.yaml`; its `setup` paths seed app path
@@ -681,11 +745,17 @@ pub struct Defaults {
     pub stray_scan_width: u16,
     /// Glob patterns (relative to the primary checkout's root) for untracked
     /// local files `issue setup` and `issue pr checkout` copy into a new
-    /// worktree, and `issue sync-includes` into existing ones. A directory
-    /// match or a trailing `/` copies recursively; a symlink is reproduced as a
-    /// link. Existing destinations are left alone, and a failed copy warns.
-    /// Anchor patterns (`apps/*/.env.local`): `**` descends into
-    /// `node_modules`.
+    /// worktree, and `issue sync-includes` into existing ones. Existing
+    /// destinations are left alone, and a failed copy warns. Anchor patterns
+    /// (`apps/*/.env.local`): `**` descends into `node_modules`. `a/**` matches
+    /// every path below `a`, direct children included; a bare `**` covers the
+    /// checkout root. A directory match or a trailing `/` copies recursively,
+    /// reading the whole subtree into memory first.
+    ///
+    /// A symlink is reproduced as a link to the same target; on Windows that
+    /// needs Developer Mode or administrator rights, and a refused link warns
+    /// and is skipped. A symlinked directory that is a pattern's own anchor
+    /// (`linked/**`) is walked through; write `linked/` to get the link.
     #[serde(default)]
     pub worktree_include: Vec<String>,
     /// Write the issue summary file on every `issue setup`, as though
@@ -854,8 +924,9 @@ pub enum RunArg {
 pub enum RunAction {
     /// Renders, then splits on `on` (never empty) into a run of separate
     /// arguments. A template rendering empty contributes no arguments at all.
-    /// Splits come last in `run`, after at least two plain entries, or the
-    /// command guard cannot recognize the task.
+    /// Pick an `on` the values cannot contain. Splits come last in `run`,
+    /// after at least two plain entries, or the command guard cannot recognize
+    /// the task.
     Split { split: String, on: String },
 }
 
@@ -931,8 +1002,12 @@ pub struct TaskConfig {
     /// its exit code propagated. Every entry is a minijinja template over
     /// `{{ port }}`, `ports['<app>']`, `[templates.variables]`, and `issue`,
     /// `slug`, `branch` from the worktree; any other name read is an arg of
-    /// the task, required unless a variable supplies a default. The program
-    /// must be a plain string. Mutually exclusive with `steps`.
+    /// the task, required unless a variable supplies a default. Minijinja's
+    /// `default` filter and `is defined` do not make an arg optional. `issue`,
+    /// `slug` and `branch` are undefined outside an issue worktree, so a task
+    /// run in both guards them with `{% if issue is defined %}`. The program
+    /// must be a plain string. A Doppler invocation is refused for `prd` the
+    /// same as an app's `launch`. Mutually exclusive with `steps`.
     #[serde(default)]
     pub run: Vec<RunArg>,
     /// A sequence run in order, stopping at the first failure, each step a
@@ -1081,8 +1156,10 @@ pub enum VariableDecl {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         required: Option<Required>,
         /// What to pass for this arg, shown beside it where devkit asks for
-        /// it: a missing-arg error, a command-guard redirect to a task that
-        /// reads it, and `devkit config tasks --json`.
+        /// it: a missing-arg error (`issue pr create` and `issue review`
+        /// included), a command-guard redirect to a task that reads it, and
+        /// `devkit config tasks --json`. Explain an arg here rather than in a
+        /// guard rule's `reason`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
@@ -1133,7 +1210,8 @@ impl From<&str> for VariableDecl {
 /// Config-driven minijinja templates for the issue-lifecycle strings. Each
 /// `None` field falls back to its `DEFAULT_*` constant, which reproduces the
 /// historical hardcoded output. `variables` are user constants merged under
-/// every render context.
+/// every render context. Rendering is strict: an undefined variable is an
+/// error, so a typo surfaces on the first run.
 ///
 /// ```
 /// # use devkit_config::Config;
@@ -1336,6 +1414,12 @@ pub const DEFAULT_APP_URL: &str = "http://localhost:{{ port }}";
 ///
 /// `web` names the provider through `url_env` rather than by port, so the two
 /// apps stay wired together in every worktree.
+///
+/// A per-app memory cap the daemon does not enforce is the runtime's own:
+/// `static_env = { NODE_OPTIONS = "--max-old-space-size=2048" }`, or a
+/// `ulimit -v` wrapper in `launch`. The runtime aborts on breach and the
+/// crash path respawns it. `[daemon] memory_max_mb` is the kernel-enforced
+/// alternative on Linux.
 #[derive(Debug, Default, JsonSchema, Deserialize, Serialize)]
 pub struct AppConfig {
     /// Start of the app's port band. Each worktree is allocated its own port
@@ -1344,9 +1428,15 @@ pub struct AppConfig {
     /// The complete launch command as one argv, run verbatim. devkit builds no
     /// prefix of its own, so any `doppler run -c <config> --` wrapper belongs
     /// here, and a Doppler launch whose config resolves to `prd` (or cannot be
-    /// resolved) is refused. Rendered as strict minijinja over `{{ port }}`,
-    /// `ports['<app>']` (another app's port, reserved if it is not running),
-    /// and `[templates.variables]`. A leftover `{port}` fails the launch.
+    /// resolved) is refused. The config comes from `-c`/`--config` here, then
+    /// `DOPPLER_CONFIG` in the app's env, then
+    /// `doppler configure get config --scope <app dir>`. Rendered as strict
+    /// minijinja over `{{ port }}`, `ports['<app>']` and
+    /// `[templates.variables]`. `ports['<app>']` is that app's port in this
+    /// worktree; when it is not running, devkit writes a pid-less reservation
+    /// that a later `devrun up <app>` claims, so a consumer can bake the port
+    /// first. A misspelled app name is an error, and a leftover `{port}` fails
+    /// the launch.
     pub launch: Vec<String>,
     /// Address the app serves on, as a template over the same variables as
     /// `launch`. Defaults to `http://localhost:{{ port }}`; set it for https, a
