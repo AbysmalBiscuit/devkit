@@ -8,9 +8,9 @@
 use std::path::Path;
 
 const MANIFESTS: [(&str, &str); 3] = [
-    ("hooks/hooks.json", "claude-code"),
-    ("hooks/hooks-codex.json", "codex"),
-    ("hooks/hooks-cursor.json", "cursor"),
+    ("plugin/hooks/hooks.json", "claude-code"),
+    ("plugin/hooks/hooks-codex.json", "codex"),
+    ("plugin/hooks/hooks-cursor.json", "cursor"),
 ];
 
 fn commands(path: &str) -> Vec<String> {
@@ -84,7 +84,8 @@ fn every_verb_a_manifest_names_parses() {
 #[test]
 fn cursor_wires_no_decision_event_but_the_shell_one() {
     let v: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string("hooks/hooks-cursor.json").unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string("plugin/hooks/hooks-cursor.json").unwrap())
+            .unwrap();
     let hooks = v["hooks"].as_object().unwrap();
     for event in [
         "preToolUse",
@@ -109,7 +110,8 @@ fn cursor_wires_no_decision_event_but_the_shell_one() {
 #[test]
 fn every_cursor_tool_hook_keeps_a_matcher() {
     let v: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string("hooks/hooks-cursor.json").unwrap()).unwrap();
+        serde_json::from_str(&std::fs::read_to_string("plugin/hooks/hooks-cursor.json").unwrap())
+            .unwrap();
     for event in ["postToolUse", "postToolUseFailure"] {
         for entry in v["hooks"][event].as_array().unwrap() {
             assert_eq!(entry["matcher"], "Shell", "{event}: {entry}");

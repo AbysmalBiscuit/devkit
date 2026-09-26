@@ -242,9 +242,8 @@ class CloudHooks(unittest.TestCase):
         default branch, and an installer published only for each pinned release.
         Each installer drops a stub binary into its <APP>_INSTALL_DIR."""
         github = self.root / "fake github"
-        manifests = {"devkit": ".claude-plugin/plugin.json", "mcpls": "plugin/.claude-plugin/plugin.json"}
         for app, version in versions.items():
-            manifest = github / app / "raw/HEAD" / manifests[app]
+            manifest = github / app / "raw/HEAD/plugin/.claude-plugin/plugin.json"
             manifest.parent.mkdir(parents=True)
             manifest.write_text(json.dumps({"name": app, "version": version}))
             release = github / app / "releases/download" / f"v{version}"

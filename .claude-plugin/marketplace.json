@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "devkit",
-      "source": "./",
+      "source": "./plugin",
       "description": "Local-dev coordination skills for devkit: file locks, ports, dev servers, issue lifecycle"
     }
   ]

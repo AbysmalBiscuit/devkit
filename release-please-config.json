@@ -8,9 +8,9 @@
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "extra-files": [
-        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
-        { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" },
-        { "type": "json", "path": ".cursor-plugin/plugin.json", "jsonpath": "$.version" }
+        { "type": "json", "path": "plugin/.claude-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "plugin/.codex-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "plugin/.cursor-plugin/plugin.json", "jsonpath": "$.version" }
       ]
     }
   }
