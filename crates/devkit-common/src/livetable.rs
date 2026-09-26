@@ -64,6 +64,11 @@ impl LiveLines {
     /// Replace the block's content, growing or shrinking the line count to
     /// match. New lines are inserted above any status spinners/bars. Cheap
     /// no-op when hidden.
+    ///
+    /// Each line must measure as wide as it draws, or redraws climb over the
+    /// output above: indicatif counts a hyperlink target as visible text, and
+    /// `{wide_msg}` truncates by bytes through escapes. So links are stripped
+    /// and an overwide line wraps instead.
     pub fn set_lines(&mut self, content: &[String]) {
         if self.mp.is_hidden() {
             return;
@@ -75,11 +80,11 @@ impl LiveLines {
         }
         while self.lines.len() < content.len() {
             let pb = self.mp.insert(self.lines.len(), ProgressBar::new_spinner());
-            pb.set_style(ProgressStyle::with_template("{wide_msg}").expect("valid template"));
+            pb.set_style(ProgressStyle::with_template("{msg}").expect("valid template"));
             self.lines.push(pb);
         }
         for (pb, line) in self.lines.iter().zip(content) {
-            pb.set_message(line.clone());
+            pb.set_message(ui::strip_hyperlinks(line));
         }
     }
 
@@ -386,5 +391,25 @@ mod tests {
             "",
             "drop repainted the cleared block"
         );
+    }
+
+    // A hyperlink target wider than the terminal must not skew the block's
+    // height, or each redraw climbs over the output above it.
+    #[test]
+    fn hyperlinked_lines_keep_output_above_the_block() {
+        use indicatif::{InMemoryTerm, ProgressDrawTarget, TermLike};
+        let term = InMemoryTerm::new(24, 40);
+        term.write_line("above").unwrap();
+        let mut ll = LiveLines::over(MultiProgress::with_draw_target(
+            ProgressDrawTarget::term_like(Box::new(term.clone())),
+        ));
+        let linked = format!(
+            "{}  open",
+            ui::link_styled(true, "#1", "https://github.com/owner/repo/pull/1")
+        );
+        for i in 0..5 {
+            ll.set_lines(&[linked.clone(), format!("{linked} {i}")]);
+        }
+        assert_eq!(term.contents(), "above\n#1  open\n#1  open 4");
     }
 }
