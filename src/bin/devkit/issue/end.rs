@@ -311,10 +311,10 @@ fn removed_in_order(
         .collect()
 }
 
-/// The `after_worktree_remove` render context for each approved worktree,
-/// keyed by its path. Built before the removal phase: `issue`, `slug` and
-/// `apps` come from `.devkit/issue.toml`, which the removal deletes along with
-/// everything else in the worktree.
+/// The `before_worktree_remove` and `after_worktree_remove` render context
+/// for each approved worktree, keyed by its path. Built before the removal
+/// phase: `issue`, `slug` and `apps` come from `.devkit/issue.toml`, which the
+/// removal deletes along with everything else in the worktree.
 fn remove_contexts(
     approved: &[IssueWorktree],
     prefix: &str,
@@ -486,9 +486,10 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
     // worktree whose record no longer exists.
     let empty: &[Vec<String>] = &[];
     let cfg_hooks = sel.config.as_ref().map(|c| &c.hooks);
+    let before_worktree_remove = cfg_hooks.map_or(empty, |h| h.before_worktree_remove.as_slice());
     let after_worktree_remove = cfg_hooks.map_or(empty, |h| h.after_worktree_remove.as_slice());
     let after_end = cfg_hooks.map_or(empty, |h| h.after_end.as_slice());
-    let remove_ctxs = if after_worktree_remove.is_empty() {
+    let remove_ctxs = if before_worktree_remove.is_empty() && after_worktree_remove.is_empty() {
         std::collections::HashMap::new()
     } else {
         remove_contexts(&approved, &prefix, &wt_root, main.as_deref().map(Path::new))
@@ -534,6 +535,23 @@ pub fn run(start: &str, ids: &[String], flags: EndFlags, config: Option<&str>) -
                 required_failures += 1;
             }
         }
+    }
+
+    // Serial and ahead of every removal, so each hook sees its worktree whole
+    // and hook output never interleaves with a removal's progress.
+    for row in approved.iter().filter(|r| !blocked.contains(&r.worktree)) {
+        let Some(ctx) = remove_ctxs.get(&row.worktree) else {
+            continue;
+        };
+        crate::issue::hooks::run_all(
+            Path::new(&row.worktree),
+            "before_worktree_remove",
+            before_worktree_remove,
+            ctx,
+            &vars,
+            &[],
+            &steps,
+        );
     }
 
     // Phase 3: the removals, in parallel.

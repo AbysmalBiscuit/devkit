@@ -275,6 +275,14 @@ pub struct HooksConfig {
     /// discarded, so the command's JSON stays the last line on stdout.
     pub after_worktree_create: Vec<Vec<String>>,
 
+    /// Runs once in the root of each worktree `issue end` is about to remove,
+    /// after `[preserve]` has copied its files out and before any removal in
+    /// the run starts. Worktrees run one at a time, in confirmed order.
+    /// Rendered over the same keys as `after_worktree_remove`. A failing hook
+    /// warns and the worktree is still removed. A worktree kept back or
+    /// skipped fires nothing.
+    pub before_worktree_remove: Vec<Vec<String>>,
+
     /// Runs once per worktree `issue end` removed, after every removal in the
     /// run has finished, in the main repository root. `issue`, `slug` and
     /// `apps` come from the `.devkit/issue.toml` record read before the
