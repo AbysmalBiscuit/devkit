@@ -100,11 +100,14 @@ pub(crate) fn plan_path(
     )
 }
 
-/// Render the summary and write it if nothing is there yet. Returns the path
-/// and whether this run created it.
+/// Write the summary if nothing is there yet: the tracker's own summary
+/// verbatim, else the `issue_summary` template rendered. Returns the path and
+/// whether this run created it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn write(
     cfg: &devkit_config::Config,
     d: &IssueDetails,
+    tracker_summary: Option<&str>,
     worktree_root: &Path,
     worktree: &str,
     branch: &str,
@@ -119,8 +122,11 @@ pub(crate) fn write(
         &ctx,
         vars,
     )?;
-    let body = devkit_common::template::render(cfg.templates.issue_summary(), &ctx, vars)
-        .context("rendering `issue_summary` template")?;
+    let body = match tracker_summary.filter(|s| !s.trim().is_empty()) {
+        Some(s) => s.to_string(),
+        None => devkit_common::template::render(cfg.templates.issue_summary(), &ctx, vars)
+            .context("rendering `issue_summary` template")?,
+    };
     let written = write_if_absent(&path, &body)?;
     Ok((path, written))
 }
@@ -249,6 +255,41 @@ mod tests {
             std::fs::read_to_string(&p).unwrap(),
             "months of investigation\n"
         );
+    }
+
+    fn write_with(tracker_summary: Option<&str>) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, written) = write(
+            &devkit_config::Config::default(),
+            &details(),
+            tracker_summary,
+            dir.path(),
+            "/w/eng-42",
+            "lev/eng-42-fix",
+            "eng-42-fix",
+            &[],
+        )
+        .unwrap();
+        assert!(written);
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn a_tracker_summary_is_written_verbatim() {
+        assert_eq!(
+            write_with(Some("## Plan\n\nFix it.\n")),
+            "## Plan\n\nFix it.\n"
+        );
+    }
+
+    #[test]
+    fn without_a_tracker_summary_the_template_is_written() {
+        assert!(write_with(None).starts_with("# ENG-42: Fix the login redirect\n"));
+    }
+
+    #[test]
+    fn a_blank_tracker_summary_falls_back_to_the_template() {
+        assert!(write_with(Some(" \n")).starts_with("# ENG-42: Fix the login redirect\n"));
     }
 
     #[test]

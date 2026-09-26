@@ -532,6 +532,15 @@ pub fn run(args: SetupArgs) -> Result<()> {
         "worktree path already exists: {}",
         worktree.display()
     );
+    let tracker_summary = details
+        .is_some()
+        .then(|| {
+            Steps::new()
+                .during_result("Reading the issue summary\u{2026}", || t.summary(&issue))
+                .with_context(|| format!("fetching the summary for {issue}"))
+        })
+        .transpose()?
+        .flatten();
     let primary = devkit_common::git::primary_checkout(Path::new(&start))?;
     let primary_s = primary
         .to_str()
@@ -576,7 +585,14 @@ pub fn run(args: SetupArgs) -> Result<()> {
     let summary_path = match &details {
         Some(d) => {
             let (path, written) = crate::issue::summary::write(
-                cfg, d, &wt_root, &holder, &branch, &slug, &args.apps,
+                cfg,
+                d,
+                tracker_summary.as_deref(),
+                &wt_root,
+                &holder,
+                &branch,
+                &slug,
+                &args.apps,
             )?;
             if !written {
                 eprintln!("summary already exists, left untouched: {}", path.display());

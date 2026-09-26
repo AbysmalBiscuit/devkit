@@ -1138,7 +1138,7 @@
           ]
         },
         "issue_summary": {
-          "description": "Body of the file `issue setup --summary` writes. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps`. A field the tracker left empty renders as the empty\nstring, so `{% if parent %}` drops its line.",
+          "description": "Body of the file `issue setup --summary` writes when the tracker keeps\nno summary of its own; a GitHub issue's non-empty body is written\nverbatim instead. Context: `issue`,\n`title`, `url`, `description`, `state`, `assignee`, `priority`,\n`estimate`, `labels`, `parent`, `project`, `worktree`, `branch`, `slug`,\n`prefix`, `apps`. A field the tracker left empty renders as the empty\nstring, so `{% if parent %}` drops its line.",
           "type": [
             "string",
             "null"

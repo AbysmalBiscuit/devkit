@@ -88,10 +88,11 @@ pub(crate) enum Cmd {
         /// commands. Omit for a worktree with no per-app setup.
         #[arg(long, value_delimiter = ',')]
         apps: Vec<String>,
-        /// Also write an issue summary file, the Linear facts and
-        /// description as a markdown scaffold, at the path
-        /// `templates.issue_summary_path` names. Needs a Linear key, and never
-        /// overwrites a summary that is already there. Set
+        /// Also write an issue summary file at the path
+        /// `templates.issue_summary_path` names: the tracker's own summary
+        /// (a GitHub issue's body) verbatim, else the tracker facts and
+        /// description as a markdown scaffold. Needs the tracker's credential,
+        /// and never overwrites a summary that is already there. Set
         /// `defaults.issue_summary = true` to make this the default.
         #[arg(short = 's', long)]
         summary: bool,
