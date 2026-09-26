@@ -65,25 +65,72 @@ struct Cmdlet {
     switches: &'static [&'static str],
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, strum::EnumString)]
+#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
 enum Verb {
     SetContent,
+    #[strum(serialize = "add-content", serialize = "ac")]
     AddContent,
+    #[strum(serialize = "clear-content", serialize = "clc")]
     ClearContent,
     OutFile,
+    #[strum(serialize = "tee-object", serialize = "tee")]
     TeeObject,
+    #[strum(serialize = "new-item", serialize = "ni")]
     NewItem,
+    #[strum(
+        serialize = "remove-item",
+        serialize = "ri",
+        serialize = "rm",
+        serialize = "del",
+        serialize = "erase",
+        serialize = "rd",
+        serialize = "rmdir"
+    )]
     RemoveItem,
+    #[strum(
+        serialize = "move-item",
+        serialize = "mi",
+        serialize = "mv",
+        serialize = "move"
+    )]
     MoveItem,
+    #[strum(serialize = "rename-item", serialize = "rni", serialize = "ren")]
     RenameItem,
+    #[strum(
+        serialize = "copy-item",
+        serialize = "cpi",
+        serialize = "cp",
+        serialize = "copy"
+    )]
     CopyItem,
+    #[strum(serialize = "export-csv", serialize = "export-clixml")]
     ExportFile,
     ExpandArchive,
+    #[strum(
+        serialize = "invoke-webrequest",
+        serialize = "iwr",
+        serialize = "invoke-restmethod",
+        serialize = "irm",
+        serialize = "curl",
+        serialize = "wget"
+    )]
     WebRequest,
+    #[strum(
+        serialize = "set-location",
+        serialize = "sl",
+        serialize = "cd",
+        serialize = "chdir",
+        serialize = "push-location",
+        serialize = "pushd"
+    )]
     SetLocation,
+    #[strum(serialize = "pop-location", serialize = "popd")]
     PopLocation,
+    #[strum(serialize = "invoke-expression", serialize = "iex")]
     InvokeExpression,
     JoinPath,
+    #[strum(serialize = "get-location", serialize = "gl", serialize = "pwd")]
     GetLocation,
 }
 
@@ -91,102 +138,66 @@ const PATH_ALIASES: &[(&str, &str)] =
     &[("literalpath", "path"), ("pspath", "path"), ("lp", "path")];
 
 fn cmdlet(name: &str) -> Option<Cmdlet> {
-    let c = |verb, params, positional, switches| {
-        Some(Cmdlet {
-            verb,
-            params,
-            positional,
-            switches,
-        })
-    };
-    match name.to_ascii_lowercase().as_str() {
-        "set-content" => c(
-            Verb::SetContent,
-            &["path", "value", "encoding"],
-            &["path", "value"],
-            &["force", "nonewline"],
-        ),
-        "add-content" | "ac" => c(
-            Verb::AddContent,
-            &["path", "value", "encoding"],
-            &["path", "value"],
-            &["force", "nonewline"],
-        ),
-        "clear-content" | "clc" => c(Verb::ClearContent, &["path"], &["path"], &["force"]),
-        "out-file" => c(
-            Verb::OutFile,
+    let verb: Verb = name.parse().ok()?;
+    let (params, positional, switches): (&[&str], &[&str], &[&str]) = match verb {
+        Verb::SetContent | Verb::AddContent => {
+            (&["path", "value", "encoding"], &["path", "value"], &[
+                "force",
+                "nonewline",
+            ])
+        }
+        Verb::ClearContent => (&["path"], &["path"], &["force"]),
+        Verb::OutFile => (
             &["filepath", "path", "encoding", "inputobject", "width"],
             &["filepath"],
             &["append", "force", "noclobber", "nonewline"],
         ),
-        "tee-object" | "tee" => c(
-            Verb::TeeObject,
+        Verb::TeeObject => (
             &["filepath", "path", "variable", "inputobject"],
             &["filepath"],
             &["append"],
         ),
-        "new-item" | "ni" => c(
-            Verb::NewItem,
-            &["path", "name", "itemtype", "value"],
-            &["path"],
-            &["force"],
-        ),
-        "remove-item" | "ri" | "rm" | "del" | "erase" | "rd" | "rmdir" => c(
-            Verb::RemoveItem,
-            &["path", "include", "exclude", "filter"],
-            &["path"],
-            &["recurse", "force"],
-        ),
-        "move-item" | "mi" | "mv" | "move" => c(
-            Verb::MoveItem,
-            &["path", "destination"],
-            &["path", "destination"],
-            &["force"],
-        ),
-        "rename-item" | "rni" | "ren" => c(
-            Verb::RenameItem,
-            &["path", "newname"],
-            &["path", "newname"],
-            &["force"],
-        ),
-        "copy-item" | "cpi" | "cp" | "copy" => c(
-            Verb::CopyItem,
+        Verb::NewItem => (&["path", "name", "itemtype", "value"], &["path"], &[
+            "force",
+        ]),
+        Verb::RemoveItem => (&["path", "include", "exclude", "filter"], &["path"], &[
+            "recurse", "force",
+        ]),
+        Verb::MoveItem => (&["path", "destination"], &["path", "destination"], &[
+            "force",
+        ]),
+        Verb::RenameItem => (&["path", "newname"], &["path", "newname"], &["force"]),
+        Verb::CopyItem => (
             &["path", "destination", "include", "exclude", "filter"],
             &["path", "destination"],
             &["recurse", "force", "container"],
         ),
-        "export-csv" | "export-clixml" => c(
-            Verb::ExportFile,
+        Verb::ExportFile => (
             &["path", "inputobject", "delimiter", "encoding"],
             &["path"],
             &["append", "force", "notypeinformation"],
         ),
-        "expand-archive" => c(
-            Verb::ExpandArchive,
+        Verb::ExpandArchive => (
             &["path", "destinationpath"],
             &["path", "destinationpath"],
             &["force"],
         ),
-        "invoke-webrequest" | "iwr" | "invoke-restmethod" | "irm" | "curl" | "wget" => c(
-            Verb::WebRequest,
+        Verb::WebRequest => (
             &["uri", "outfile", "method", "headers", "body"],
             &["uri"],
             &["usebasicparsing"],
         ),
-        "set-location" | "sl" | "cd" | "chdir" | "push-location" | "pushd" => {
-            c(Verb::SetLocation, &["path"], &["path"], &[])
-        }
-        "pop-location" | "popd" => c(Verb::PopLocation, &[], &[], &[]),
-        "invoke-expression" | "iex" => c(Verb::InvokeExpression, &["command"], &["command"], &[]),
-        "join-path" => c(
-            Verb::JoinPath,
-            &["path", "childpath"],
-            &["path", "childpath"],
-            &["resolve"],
-        ),
-        "get-location" | "gl" | "pwd" => c(Verb::GetLocation, &[], &[], &[]),
-        _ => None,
-    }
+        Verb::SetLocation => (&["path"], &["path"], &[]),
+        Verb::PopLocation | Verb::GetLocation => (&[], &[], &[]),
+        Verb::InvokeExpression => (&["command"], &["command"], &[]),
+        Verb::JoinPath => (&["path", "childpath"], &["path", "childpath"], &["resolve"]),
+    };
+    Some(Cmdlet {
+        verb,
+        params,
+        positional,
+        switches,
+    })
 }
 
 const KEYWORDS: &[&str] = &[

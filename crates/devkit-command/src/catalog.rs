@@ -27,49 +27,50 @@ pub(crate) enum Hit {
     ScriptFile(Value),
 }
 
-const PROGRAMS: &[&str] = &[
-    "tee",
-    "touch",
-    "truncate",
-    "dd",
-    "rm",
-    "unlink",
-    "shred",
-    "cp",
-    "install",
-    "mv",
-    "ln",
-    "sed",
-    "perl",
-    "git",
-    "cargo",
-    "rustfmt",
-    "prettier",
-    "biome",
-    "eslint",
-    "ruff",
-    "black",
-    "isort",
-    "taplo",
-    "dprint",
-    "deno",
-    "gofmt",
-    "goimports",
-    "clang-format",
-    "shfmt",
-    "stylua",
-    "mkdir",
-    "source",
-    ".",
-    "patch",
-    "curl",
-    "wget",
-    "tar",
-    "unzip",
-];
+#[derive(Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+enum Program {
+    Tee,
+    Touch,
+    Truncate,
+    Dd,
+    #[strum(serialize = "rm", serialize = "unlink", serialize = "shred")]
+    Rm,
+    Cp,
+    Install,
+    Mv,
+    Ln,
+    Sed,
+    Perl,
+    Git,
+    Cargo,
+    Rustfmt,
+    Prettier,
+    Biome,
+    Eslint,
+    Ruff,
+    Black,
+    Isort,
+    Taplo,
+    Dprint,
+    Deno,
+    Gofmt,
+    Goimports,
+    ClangFormat,
+    Shfmt,
+    Stylua,
+    Mkdir,
+    #[strum(serialize = "source", serialize = ".")]
+    Source,
+    Patch,
+    Curl,
+    Wget,
+    Tar,
+    Unzip,
+}
 
 pub(crate) fn is_cataloged(name: &str) -> bool {
-    PROGRAMS.contains(&name)
+    name.parse::<Program>().is_ok()
 }
 
 struct Parsed {
@@ -213,8 +214,11 @@ fn formatter_operands(operands: &[Value], by: &str) -> Vec<Hit> {
 }
 
 pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
-    match name {
-        "tee" => {
+    let Ok(program) = name.parse::<Program>() else {
+        return Vec::new();
+    };
+    match program {
+        Program::Tee => {
             let p = parse(args, &[]);
             each(
                 if p.has("-a") || p.has("--append") {
@@ -225,15 +229,15 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 &p.operands,
             )
         }
-        "touch" => each(
+        Program::Touch => each(
             FileOp::Create,
             &parse(args, &["-r", "-d", "-t", "--reference", "--date"]).operands,
         ),
-        "truncate" => each(
+        Program::Truncate => each(
             FileOp::Overwrite,
             &parse(args, &["-s", "--size", "-r", "--reference"]).operands,
         ),
-        "dd" => args
+        Program::Dd => args
             .iter()
             .filter_map(|a| match a.known() {
                 Some(t) => t
@@ -244,7 +248,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 )),
             })
             .collect(),
-        "rm" | "unlink" | "shred" => {
+        Program::Rm => {
             let p = parse(args, &[]);
             if p.has_short('r') || p.has_short('R') || p.has("--recursive") {
                 p.operands
@@ -260,7 +264,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 each(FileOp::Delete, &p.operands)
             }
         }
-        "cp" | "install" => {
+        Program::Cp | Program::Install => {
             let p = parse(args, &[
                 "-t",
                 "--target-directory",
@@ -273,14 +277,16 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 "-g",
                 "--group",
             ]);
-            if name == "install" && p.has("-d") {
+            if program == Program::Install && p.has("-d") {
                 return Vec::new();
             }
             let recursive =
                 p.has_short('r') || p.has_short('R') || p.has_short('a') || p.has("--recursive");
             let copy = |dest: &Value| match dest {
                 Value::Unknown => file(FileOp::Copy, dest),
-                _ if name == "install" || !keeps_links(&p) => Hit::CopyContent(dest.clone()),
+                _ if program == Program::Install || !keeps_links(&p) => {
+                    Hit::CopyContent(dest.clone())
+                }
                 _ => file(FileOp::Copy, dest),
             };
             if let Some(dir) = p.value(&["-t", "--target-directory"]) {
@@ -320,7 +326,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 _ => Vec::new(),
             }
         }
-        "mv" => {
+        Program::Mv => {
             let p = parse(args, &["-t", "--target-directory", "-S", "--suffix"]);
             if let Some(dir) = p.value(&["-t", "--target-directory"]) {
                 return p
@@ -343,7 +349,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 _ => Vec::new(),
             }
         }
-        "ln" => {
+        Program::Ln => {
             let p = parse(args, &["-t", "--target-directory", "-S", "--suffix"]);
             if let Some(dir) = p.value(&["-t", "--target-directory"]) {
                 return p
@@ -360,7 +366,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 _ => Vec::new(),
             }
         }
-        "sed" => {
+        Program::Sed => {
             let p = parse(args, &[
                 "-e",
                 "--expression",
@@ -385,7 +391,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
             };
             each(FileOp::Overwrite, files)
         }
-        "perl" => {
+        Program::Perl => {
             let mut in_place = false;
             let mut code_given = false;
             let mut files = Vec::new();
@@ -413,8 +419,8 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
             };
             each(FileOp::Overwrite, files)
         }
-        "git" => git(args),
-        "cargo" => match args.first().and_then(Value::known) {
+        Program::Git => git(args),
+        Program::Cargo => match args.first().and_then(Value::known) {
             Some("fmt") if !args.iter().any(|a| a.known() == Some("--check")) => {
                 vec![tree(&Value::Known(".".into()), true, "cargo fmt")]
             }
@@ -424,7 +430,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
             Some("fix") => vec![tree(&Value::Known(".".into()), true, "cargo fix")],
             _ => Vec::new(),
         },
-        "rustfmt" => {
+        Program::Rustfmt => {
             let p = parse(args, &["--edition", "--config-path", "--config"]);
             if p.has("--check") {
                 Vec::new()
@@ -432,36 +438,13 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 each(FileOp::Overwrite, &p.operands)
             }
         }
-        "prettier" | "eslint" | "gofmt" | "goimports" | "clang-format" | "shfmt" => {
-            let write_flags: &[&str] = match name {
-                "prettier" => &["--write", "-w"],
-                "eslint" => &["--fix"],
-                "clang-format" => &["-i"],
-                _ => &["-w"],
-            };
-            let p = parse(args, &[
-                "--config",
-                "-c",
-                "--ignore-path",
-                "--plugin",
-                "--parser",
-                "--style",
-                "-i",
-            ]);
-            let writes = write_flags.iter().any(|f| p.has(f))
-                || (name == "clang-format" && p.values.iter().any(|(f, _)| f == "-i"));
-            if !writes {
-                return Vec::new();
-            }
-            let mut operands = p.operands.clone();
-            if name == "clang-format"
-                && let Some((_, v)) = p.values.iter().find(|(f, _)| f == "-i")
-            {
-                operands.insert(0, v.clone());
-            }
-            formatter_operands(&operands, name)
+        Program::Prettier => write_flag_formatter(program, args, &["--write", "-w"]),
+        Program::Eslint => write_flag_formatter(program, args, &["--fix"]),
+        Program::ClangFormat => write_flag_formatter(program, args, &["-i"]),
+        Program::Gofmt | Program::Goimports | Program::Shfmt => {
+            write_flag_formatter(program, args, &["-w"])
         }
-        "ruff" | "biome" | "taplo" | "dprint" | "deno" => {
+        Program::Ruff | Program::Biome | Program::Taplo | Program::Dprint | Program::Deno => {
             let Some(sub) = args.first().and_then(Value::known) else {
                 return Vec::new();
             };
@@ -473,24 +456,24 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 "--ignore",
             ]);
             let checks = rest.has("--check") || rest.has("--diff");
-            let writes = match (name, sub) {
-                ("ruff", "format")
-                | ("taplo", "fmt" | "format")
-                | ("deno", "fmt")
-                | ("dprint", "fmt") => !checks,
-                ("ruff", "check") => rest.has("--fix"),
-                ("biome", "format" | "check" | "lint") => {
+            let writes = match (program, sub) {
+                (Program::Ruff, "format")
+                | (Program::Taplo, "fmt" | "format")
+                | (Program::Deno, "fmt")
+                | (Program::Dprint, "fmt") => !checks,
+                (Program::Ruff, "check") => rest.has("--fix"),
+                (Program::Biome, "format" | "check" | "lint") => {
                     rest.has("--write") || rest.has("--apply") || rest.has("--fix")
                 }
                 _ => false,
             };
             if writes {
-                formatter_operands(&rest.operands, name)
+                formatter_operands(&rest.operands, program.into())
             } else {
                 Vec::new()
             }
         }
-        "black" | "isort" | "stylua" => {
+        Program::Black | Program::Isort | Program::Stylua => {
             let p = parse(args, &[
                 "--config",
                 "-l",
@@ -500,14 +483,14 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
             if p.has("--check") || p.has("--diff") {
                 Vec::new()
             } else {
-                formatter_operands(&p.operands, name)
+                formatter_operands(&p.operands, program.into())
             }
         }
-        "source" | "." => args
+        Program::Source => args
             .first()
             .map(|s| vec![Hit::ScriptFile(s.clone())])
             .unwrap_or_default(),
-        "patch" => {
+        Program::Patch => {
             let p = parse(args, &[
                 "-i",
                 "--input",
@@ -533,7 +516,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 )],
             }
         }
-        "curl" => {
+        Program::Curl => {
             let p = parse(args, &[
                 "-o", "--output", "-X", "-H", "-d", "--data", "-u", "-A", "-e", "--url",
             ]);
@@ -550,7 +533,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
             }
             Vec::new()
         }
-        "wget" => {
+        Program::Wget => {
             let p = parse(args, &[
                 "-O",
                 "--output-document",
@@ -566,7 +549,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 None => vec![Hit::Unresolved("`wget` names its file from the URL".into())],
             }
         }
-        "tar" => {
+        Program::Tar => {
             let first = args.first().and_then(Value::known).unwrap_or("");
             let p = parse(args, &["-C", "--directory", "-f", "--file", "-T", "-X"]);
             let bundled = !first.starts_with('-');
@@ -590,7 +573,7 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 Vec::new()
             }
         }
-        "unzip" => {
+        Program::Unzip => {
             let p = parse(args, &["-d", "-x"]);
             if p.has("-l") || p.has("-t") {
                 Vec::new()
@@ -602,8 +585,33 @@ pub(crate) fn effects(name: &str, args: &[Value]) -> Vec<Hit> {
                 )]
             }
         }
-        _ => Vec::new(),
+        Program::Mkdir => Vec::new(),
     }
+}
+
+/// A formatter that prints unless one of `write_flags` makes it rewrite its
+/// operands in place.
+fn write_flag_formatter(program: Program, args: &[Value], write_flags: &[&str]) -> Vec<Hit> {
+    let p = parse(args, &[
+        "--config",
+        "-c",
+        "--ignore-path",
+        "--plugin",
+        "--parser",
+        "--style",
+        "-i",
+    ]);
+    let clang_format = program == Program::ClangFormat;
+    let writes = write_flags.iter().any(|f| p.has(f))
+        || (clang_format && p.values.iter().any(|(f, _)| f == "-i"));
+    if !writes {
+        return Vec::new();
+    }
+    let mut operands = p.operands.clone();
+    if clang_format && let Some((_, v)) = p.values.iter().find(|(f, _)| f == "-i") {
+        operands.insert(0, v.clone());
+    }
+    formatter_operands(&operands, program.into())
 }
 
 fn git(args: &[Value]) -> Vec<Hit> {
@@ -731,6 +739,8 @@ mod tests {
         assert_eq!(hits("touch", &["a", "b"]), ["Create a", "Create b"]);
         assert_eq!(hits("rm", &["-f", "a"]), ["Delete a"]);
         assert_eq!(hits("rm", &["-rf", "build"]), ["Removal build rm -r"]);
+        assert_eq!(hits("unlink", &["a"]), ["Delete a"]);
+        assert_eq!(hits("shred", &["-u", "a"]), ["Delete a"]);
         assert_eq!(hits("cp", &["a", "b"]), ["CopyContent b"]);
         assert_eq!(hits("install", &["-P", "a", "b"]), ["CopyContent b"]);
         assert_eq!(hits("cp", &["-P", "a", "b"]), ["Copy b"]);
@@ -813,6 +823,8 @@ mod tests {
             "Tree . false prettier"
         ]);
         assert!(hits("prettier", &["--check", "."]).is_empty());
+        assert_eq!(hits("clang-format", &["-i", "a.c"]), ["Overwrite a.c"]);
+        assert_eq!(hits("gofmt", &["-w", "src"]), ["Tree src false gofmt"]);
         assert_eq!(hits("ruff", &["format"]), ["Tree . false ruff"]);
         assert!(hits("ruff", &["check", "src"]).is_empty());
         assert_eq!(hits("ruff", &["check", "--fix", "a.py"]), [

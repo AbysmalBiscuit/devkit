@@ -366,6 +366,7 @@ name = "devkit-command"
 version = "0.14.6"
 dependencies = [
  "serde_json",
+ "strum",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-fish",
