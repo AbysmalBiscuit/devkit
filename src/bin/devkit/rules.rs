@@ -165,7 +165,8 @@ fn query_cmd(args: QueryArgs) -> Result<()> {
         Format::Json => println!("{}", serde_json::to_string_pretty(&rules)?),
         Format::Prompt => print!("{}", devkit_rules::render::block(&rules, &[], usize::MAX)),
         Format::Table => {
-            let mut table = devkit_common::ui::table(&["SEVERITY", "DIRECTORY", "TITLE", "SOURCE"]);
+            let mut table =
+                devkit_common::ui::table(&["ID", "SEVERITY", "DIRECTORY", "TITLE", "SOURCE"]);
             for rule in &rules {
                 let directory = if rule.directory.is_empty() {
                     "."
@@ -173,6 +174,7 @@ fn query_cmd(args: QueryArgs) -> Result<()> {
                     &rule.directory
                 };
                 table.add_row([
+                    &rule.id,
                     &rule.severity_raw,
                     directory,
                     &rule.title,
