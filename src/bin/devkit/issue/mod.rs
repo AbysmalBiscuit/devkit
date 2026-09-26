@@ -240,6 +240,10 @@ pub(crate) enum Cmd {
         /// Issue-status plot scale: absolute counts or proportional shares.
         #[arg(long, default_value = "absolute")]
         mode: String,
+        /// Fold each timeline cumulatively or per period. Unset, the issue
+        /// chart is cumulative and the commit and PR charts are per period.
+        #[arg(long, value_enum)]
+        aggregate: Option<dashboard::Aggregate>,
         /// Count PRs you reviewed in the timelines, not only the ones you
         /// authored.
         #[arg(long = "all-roles")]
@@ -575,6 +579,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
             bucket,
             chart,
             mode,
+            aggregate,
             all_roles,
             author,
             no_plots,
@@ -583,6 +588,7 @@ pub fn run(cli: IssueCli) -> Result<()> {
             bucket,
             chart,
             mode,
+            aggregate,
             all_roles,
             author,
             no_plots,
