@@ -15,7 +15,7 @@ use devkit_common::{
     required::{ensure_supplied, missing_args},
     template,
 };
-use devkit_config::{Config, RunArg, Step, TaskConfig};
+use devkit_config::{Config, RunAction, RunArg, Step, TaskConfig};
 
 use crate::{
     apps::App,
@@ -388,16 +388,17 @@ fn resolve_command(
 ) -> Result<CommandPlan> {
     ensure!(
         matches!(t.run.first(), Some(RunArg::Scalar(_))),
-        "task `{name}` program must be a plain string, not a split"
+        "task `{name}` program must be a plain string, not a table"
     );
     for entry in &t.run {
-        if let RunArg::Split { on, .. } = entry {
+        match entry {
+            RunArg::Scalar(_) => {}
             // Splitting on the empty pattern yields a boundary between every
             // character, so it would silently produce one argument per byte.
-            ensure!(
+            RunArg::Action(RunAction::Split { on, .. }) => ensure!(
                 !on.is_empty(),
                 "task `{name}` has a split with an empty `on`"
-            );
+            ),
         }
     }
     let app = t
@@ -555,10 +556,10 @@ fn resolve_command_with_ports(
             // An empty render is an empty list, not a list holding one empty
             // argument: a task staging a caller-supplied set of paths has to
             // be able to express "none".
-            RunArg::Split { on, .. } if !rendered.is_empty() => {
+            RunArg::Action(RunAction::Split { on, .. }) if !rendered.is_empty() => {
                 argv.extend(rendered.split(on.as_str()).map(str::to_string));
             }
-            RunArg::Split { .. } => {}
+            RunArg::Action(RunAction::Split { .. }) => {}
         }
     }
     ensure!(

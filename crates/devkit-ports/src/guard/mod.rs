@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use devkit_command::{Analysis, Invocation, Value};
 use devkit_common::caller::Caller;
-use devkit_config::{AppMatch, CommandRule, Config, RuleAction, RunArg, Severity};
+use devkit_config::{AppMatch, CommandRule, Config, RuleAction, RunAction, RunArg, Severity};
 use norm::basename;
 
 use crate::apps::App;
@@ -247,14 +247,14 @@ fn configured_task(args: &[RunArg]) -> Option<Known> {
     let words = |args: &[RunArg]| -> Vec<String> {
         args.iter().map(|a| a.template().to_string()).collect()
     };
-    let Some(first_split) = args.iter().position(|a| matches!(a, RunArg::Split { .. })) else {
+    let word_count_unknown = |a: &RunArg| match a {
+        RunArg::Scalar(_) => false,
+        RunArg::Action(RunAction::Split { .. }) => true,
+    };
+    let Some(first_split) = args.iter().position(word_count_unknown) else {
         return configured(&words(args));
     };
-    if first_split < 2
-        || args[first_split..]
-            .iter()
-            .any(|a| matches!(a, RunArg::Scalar(_)))
-    {
+    if first_split < 2 || !args[first_split..].iter().all(word_count_unknown) {
         return None;
     }
     let mut argv: Vec<String> = words(&args[..first_split]);
