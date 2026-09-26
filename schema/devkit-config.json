@@ -577,6 +577,17 @@
             "type": "array"
           },
           "type": "array"
+        },
+        "before_worktree_remove": {
+          "default": [],
+          "description": "Runs once in the root of each worktree `issue end` is about to remove,\nafter `[preserve]` has copied its files out and before any removal in\nthe run starts. Worktrees run one at a time, in confirmed order.\nRendered over the same keys as `after_worktree_remove`. A failing hook\nwarns and the worktree is still removed. A worktree kept back or\nskipped fires nothing.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -1362,7 +1373,8 @@
       "default": {
         "after_end": [],
         "after_worktree_create": [],
-        "after_worktree_remove": []
+        "after_worktree_remove": [],
+        "before_worktree_remove": []
       },
       "description": "Commands devkit runs when a lifecycle event fires, keyed\n`{before,after}_<event>`."
     },

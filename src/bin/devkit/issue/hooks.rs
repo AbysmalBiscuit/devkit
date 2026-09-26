@@ -51,9 +51,9 @@ fn hook_label(argv: &[String]) -> String {
 
 /// Run each command in `hooks` in `cwd`, in order, one progress step each,
 /// with `env` added to each child's environment. `key` names the config key
-/// the commands came from, for the warning a failure prints. Fail-open: the
-/// state a hook reacts to has already happened by the time it runs, so a hook
-/// that fails warns on stderr and the rest still run.
+/// the commands came from, for the warning a failure prints. Fail-open: a hook
+/// reacts to a state change and never gates it, so a hook that fails warns on
+/// stderr and the rest still run.
 pub(crate) fn run_all(
     cwd: &Path,
     key: &str,
