@@ -817,29 +817,41 @@ pub enum Step {
 /// One entry of a task's `run`, each rendering exactly one minijinja template
 /// and differing only in what it does with the result.
 ///
-/// `deny_unknown_fields` because `Split` is matched untagged: without it a
-/// misspelled key alongside a well-formed `split`/`on` pair deserializes
-/// silently, and the typo changes nothing the author can see.
-///
 /// ```
-/// # use devkit_config::{Config, RunArg};
+/// # use devkit_config::{Config, RunAction, RunArg};
 /// # let cfg = Config::parse(r#"
 /// [tasks.stage]
 /// run = ["git", "add", "--", { split = "{{ files }}", on = ";" }]
 /// # "#).unwrap();
 /// # let run = &cfg.tasks["stage"].run;
 /// # assert_eq!(run[0], RunArg::from("git"));
-/// # assert_eq!(run[3], RunArg::Split { split: "{{ files }}".into(), on: ";".into() });
+/// # assert_eq!(
+/// #     run[3],
+/// #     RunArg::Action(RunAction::Split { split: "{{ files }}".into(), on: ";".into() }),
+/// # );
 /// ```
 ///
 /// `devrun task stage --arg 'files=new file.txt;other.txt'` reaches `git` as
 /// four arguments, the space in the first filename included, because devkit
 /// execs the argv rather than handing it to a shell.
 #[derive(Debug, Clone, PartialEq, JsonSchema, Deserialize, Serialize)]
-#[serde(untagged, deny_unknown_fields)]
+#[serde(untagged)]
 pub enum RunArg {
     /// Renders to exactly one argument, whatever the result contains.
     Scalar(String),
+    /// A table naming what to do with the rendered result.
+    Action(RunAction),
+}
+
+/// A `run` entry written as a table. Each action is recognized by its own
+/// template key, so the key sets of any two actions must stay disjoint.
+///
+/// `deny_unknown_fields` because actions are matched untagged: without it a
+/// misspelled key alongside a well-formed `split`/`on` pair deserializes
+/// silently, and the typo changes nothing the author can see.
+#[derive(Debug, Clone, PartialEq, JsonSchema, Deserialize, Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum RunAction {
     /// Renders, then splits on `on` (never empty) into a run of separate
     /// arguments. A template rendering empty contributes no arguments at all.
     /// Splits come last in `run`, after at least two plain entries, or the
@@ -853,7 +865,7 @@ impl RunArg {
     pub fn template(&self) -> &str {
         match self {
             Self::Scalar(s) => s,
-            Self::Split { split, .. } => split,
+            Self::Action(RunAction::Split { split, .. }) => split,
         }
     }
 }
@@ -1030,7 +1042,7 @@ pub enum Required {
 /// One `[templates.variables]` entry: a bare string, or a table carrying a
 /// `default` and a `required` marking.
 ///
-/// `deny_unknown_fields` for the reason `RunArg` documents: under untagged
+/// `deny_unknown_fields` for the reason `RunAction` documents: under untagged
 /// matching a misspelled key beside a well-formed pair deserializes silently,
 /// and the author sees no diagnostic while their guard does nothing.
 ///
@@ -2599,6 +2611,13 @@ run = ["git", "add", "--", { split = "{{ files }}", on = ";" }]
         let serialized = toml::to_string(&config).unwrap();
         let roundtrip: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(roundtrip.tasks["stage"].run, config.tasks["stage"].run);
+        assert_eq!(
+            config.tasks["stage"].run[3],
+            RunArg::Action(RunAction::Split {
+                split: "{{ files }}".into(),
+                on: ";".into()
+            })
+        );
         assert_eq!(config.tasks["stage"].run[3].template(), "{{ files }}");
         assert!(toml::from_str::<Config>(&text.replace("split =", "typo =")).is_err());
         assert!(toml::from_str::<Config>(&text.replace(", on =", ", typo =")).is_err());

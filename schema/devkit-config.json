@@ -968,12 +968,8 @@
       },
       "type": "object"
     },
-    "RunArg": {
+    "RunAction": {
       "anyOf": [
-        {
-          "description": "Renders to exactly one argument, whatever the result contains.",
-          "type": "string"
-        },
         {
           "additionalProperties": false,
           "description": "Renders, then splits on `on` (never empty) into a run of separate\narguments. A template rendering empty contributes no arguments at all.\nSplits come last in `run`, after at least two plain entries, or the\ncommand guard cannot recognize the task.",
@@ -992,7 +988,20 @@
           "type": "object"
         }
       ],
-      "description": "One entry of a task's `run`, each rendering exactly one minijinja template\nand differing only in what it does with the result.\n\n`deny_unknown_fields` because `Split` is matched untagged: without it a\nmisspelled key alongside a well-formed `split`/`on` pair deserializes\nsilently, and the typo changes nothing the author can see.\n\n```toml\n[tasks.stage]\nrun = [\"git\", \"add\", \"--\", { split = \"{{ files }}\", on = \";\" }]\n```\n\n`devrun task stage --arg 'files=new file.txt;other.txt'` reaches `git` as\nfour arguments, the space in the first filename included, because devkit\nexecs the argv rather than handing it to a shell."
+      "description": "A `run` entry written as a table. Each action is recognized by its own\ntemplate key, so the key sets of any two actions must stay disjoint.\n\n`deny_unknown_fields` because actions are matched untagged: without it a\nmisspelled key alongside a well-formed `split`/`on` pair deserializes\nsilently, and the typo changes nothing the author can see."
+    },
+    "RunArg": {
+      "anyOf": [
+        {
+          "description": "Renders to exactly one argument, whatever the result contains.",
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/RunAction",
+          "description": "A table naming what to do with the rendered result."
+        }
+      ],
+      "description": "One entry of a task's `run`, each rendering exactly one minijinja template\nand differing only in what it does with the result.\n\n```toml\n[tasks.stage]\nrun = [\"git\", \"add\", \"--\", { split = \"{{ files }}\", on = \";\" }]\n```\n\n`devrun task stage --arg 'files=new file.txt;other.txt'` reaches `git` as\nfour arguments, the space in the first filename included, because devkit\nexecs the argv rather than handing it to a shell."
     },
     "Severity": {
       "description": "How a diagnostic is classified for the agent.",
@@ -1273,7 +1282,7 @@
           "type": "object"
         }
       ],
-      "description": "One `[templates.variables]` entry: a bare string, or a table carrying a\n`default` and a `required` marking.\n\n`deny_unknown_fields` for the reason `RunArg` documents: under untagged\nmatching a misspelled key beside a well-formed pair deserializes silently,\nand the author sees no diagnostic while their guard does nothing.\n\n```toml\n[templates.variables]\nteam = \"platform\"                              # a constant, never required\nmsg = { default = \"wip\", required = \"agents\" } # defaulted, but agents must pass it\nticket = { required = \"always\" }               # declared, no default, always required\n```\n\n`default` is the fallback used when nothing else supplies the name, which\nis what these entries have always been: `template::render` merges them\nunderneath the context, and `--arg` overwrites them. Note that minijinja's\nown `default` filter is a different thing and does not affect whether an\narg is required."
+      "description": "One `[templates.variables]` entry: a bare string, or a table carrying a\n`default` and a `required` marking.\n\n`deny_unknown_fields` for the reason `RunAction` documents: under untagged\nmatching a misspelled key beside a well-formed pair deserializes silently,\nand the author sees no diagnostic while their guard does nothing.\n\n```toml\n[templates.variables]\nteam = \"platform\"                              # a constant, never required\nmsg = { default = \"wip\", required = \"agents\" } # defaulted, but agents must pass it\nticket = { required = \"always\" }               # declared, no default, always required\n```\n\n`default` is the fallback used when nothing else supplies the name, which\nis what these entries have always been: `template::render` merges them\nunderneath the context, and `--arg` overwrites them. Note that minijinja's\nown `default` filter is a different thing and does not affect whether an\narg is required."
     }
   },
   "$id": "https://github.com/AbysmalBiscuit/devkit/releases/latest/download/devkit-config.json",
