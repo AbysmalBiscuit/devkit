@@ -74,6 +74,13 @@ description = "Run workspace documentation tests"
 run = ["cargo", "test", "--doc", "--workspace", "--all-features", "--locked"]
 guard = true
 
+[tasks.eval]
+description = "Grade isolated Claude agents on a case's agent-facing text (billed)"
+run = ["bash", "evals/run.sh", "{{ eval_case }}"]
+
+[templates.variables]
+eval_case = "brief"
+
 [tasks.fmt]
 description = "Format the workspace with nightly rustfmt"
 run = ["cargo", "+nightly", "fmt", "--all"]

@@ -1,0 +1,80 @@
+[
+  {
+    "id": "release-command",
+    "question": "Write the exact command that releases version 2.0.0 to the stable channel with octocat as reviewer. Pass only the args you must or want to set.",
+    "kind": "tokens",
+    "expect": "devrun task release --arg version=2.0.0 --arg channel=stable --arg reviewer=octocat",
+    "proof": "devrun task release --dry-run with those args runs ./scripts/release.sh --version=2.0.0 --channel=stable"
+  },
+  {
+    "id": "release-required",
+    "question": "Which --arg names must you, an agent, pass to run `release`? Give the names only.",
+    "kind": "set",
+    "expect": ["reviewer", "version"],
+    "proof": "tests/task_cmd.rs an_agents_marking_binds_a_run_with_no_terminal"
+  },
+  {
+    "id": "ship-required",
+    "question": "Which --arg names must you, an agent, pass to run `ship`? Give the names only.",
+    "kind": "set",
+    "expect": ["reviewer", "version"],
+    "proof": "tests/task_cmd.rs a_missing_required_arg_fails_the_sequence_before_any_step_runs"
+  },
+  {
+    "id": "omit-reviewer",
+    "question": "You, an agent, run `devrun task release --arg version=2.0.0` without --arg reviewer. Does the task run?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/task_cmd.rs an_agents_marking_binds_a_run_with_no_terminal"
+  },
+  {
+    "id": "targets-argv",
+    "question": "You run `release` without --arg targets. List, in order, each argv element ./scripts/release.sh receives after the --dry=... argument.",
+    "kind": "list",
+    "expect": ["linux", "macos"],
+    "proof": "tests/task_cmd.rs task_split_passes_selected_paths_as_separate_arguments"
+  },
+  {
+    "id": "channel-default",
+    "question": "Which channel does `release` publish to when you pass no --arg channel? Give the value only.",
+    "kind": "text",
+    "expect": ["beta"]
+  },
+  {
+    "id": "version-default",
+    "question": "Does `version` have a default value?",
+    "kind": "bool",
+    "expect": false
+  },
+  {
+    "id": "dry-argv",
+    "question": "With --arg dry=1, what exact --dry=... argv element does ./scripts/release.sh receive? Give the element alone.",
+    "kind": "text",
+    "expect": ["--dry=1"]
+  },
+  {
+    "id": "dry-effect-stated",
+    "question": "Does the output say what ./scripts/release.sh does when it receives --dry=1?",
+    "kind": "bool",
+    "expect": false
+  },
+  {
+    "id": "build-web-needs-live",
+    "question": "Before running `devrun task build-web` on its own, must a server already be running?",
+    "kind": "bool",
+    "expect": true,
+    "proof": "devkit-ports task.rs refuses: require_live: `api` has no live server in this worktree (devrun up api)"
+  },
+  {
+    "id": "build-web-start",
+    "question": "What command starts what `build-web` needs?",
+    "kind": "command",
+    "expect": ["devrun up api"]
+  },
+  {
+    "id": "ship-web-server",
+    "question": "Does `ship` start a web dev server?",
+    "kind": "bool",
+    "expect": false
+  }
+]

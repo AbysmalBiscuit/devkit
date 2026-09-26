@@ -1,0 +1,33 @@
+[apps.api]
+base_port = 39140
+path = "."
+launch = ["git", "version"]
+
+[apps.web]
+base_port = 39240
+path = "."
+launch = ["git", "version"]
+
+[templates.variables]
+channel = { default = "beta", description = "release channel to publish to: beta, stable or nightly" }
+version = { description = "semver of the release, without a leading v (e.g. 1.4.0)" }
+notes = { default = "", description = "one-paragraph changelog entry; leave empty to reuse the last tag's notes" }
+targets = { default = "linux,macos", description = "comma-separated build targets" }
+reviewer = { default = "", description = "GitHub handle to request review from" }
+dry = { default = "0" }
+
+[tasks.build-web]
+description = "Build the web bundle against the local API"
+app = "web"
+run = ["bun", "run", "build"]
+env = { API_URL = "http://localhost:{{ ports['api'] }}" }
+require_live = ["api"]
+
+[tasks.release]
+description = "Tag a release, build every target and publish it to the channel"
+run = ["./scripts/release.sh", "--version={{ version }}", "--channel={{ channel }}", "--notes={{ notes }}", "--reviewer={{ reviewer }}", "--dry={{ dry }}", { split = "{{ targets }}", on = "," }]
+required_args = { reviewer = "agents" }
+
+[tasks.ship]
+description = "Start the API, build the web bundle, then cut a release"
+steps = [{ up = "api" }, { task = "build-web" }, { task = "release" }]

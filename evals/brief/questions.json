@@ -1,0 +1,81 @@
+[
+  {
+    "id": "test-command",
+    "question": "What command runs the test suite?",
+    "kind": "command",
+    "expect": ["devrun task test"]
+  },
+  {
+    "id": "start-api",
+    "question": "What command starts the api dev server?",
+    "kind": "command",
+    "expect": ["devrun up api"]
+  },
+  {
+    "id": "migrate",
+    "question": "What command should you run instead of `pnpm --filter db prisma migrate deploy`?",
+    "kind": "command",
+    "expect": ["devrun task migrate"]
+  },
+  {
+    "id": "edit-injects",
+    "question": "You are about to change apps/api/src/routes/users.ts with your Edit tool. Are rules for that file added to your context without you asking?",
+    "kind": "bool",
+    "expect": true,
+    "proof": "tests/brief_claims.rs an_edit_gets_the_files_must_and_should_rules"
+  },
+  {
+    "id": "edit-severities",
+    "question": "Which rule severities are added automatically before an Edit-tool write? Answer with the severity names.",
+    "kind": "set",
+    "expect": ["must", "should"],
+    "proof": "tests/brief_claims.rs an_edit_gets_the_files_must_and_should_rules"
+  },
+  {
+    "id": "can-injected",
+    "question": "apps/web has a `can`-severity rule. Is it added to your context when you edit apps/web/src/page.tsx with your Edit tool?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/brief_claims.rs an_edit_gets_the_files_must_and_should_rules"
+  },
+  {
+    "id": "repeat",
+    "question": "You edit apps/api/src/routes/users.ts and then apps/api/src/routes/orders.ts with your Edit tool. Are the rules added before the first edit added again before the second?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/brief_claims.rs each_rule_is_added_once_per_session"
+  },
+  {
+    "id": "shell-injects",
+    "question": "You create apps/api/src/new.ts with a shell heredoc (`cat > apps/api/src/new.ts <<EOF`). Are the rules for apps/api added to your context without you asking?",
+    "kind": "bool",
+    "expect": false,
+    "proof": "tests/brief_claims.rs shell_writes_get_no_rules"
+  },
+  {
+    "id": "shell-query",
+    "question": "What single command shows you every rule for apps/api/src/new.ts before you write it?",
+    "kind": "command",
+    "expect": ["devkit rules query --path apps/api/src/new.ts"],
+    "proof": "tests/brief_claims.rs the_query_lists_every_severity"
+  },
+  {
+    "id": "repo-must",
+    "question": "List the title of every `must`-severity rule that applies to all code in this repository, exactly as written.",
+    "kind": "set",
+    "expect": [
+      "Database access goes through the query builder",
+      "Secrets come from doppler",
+      "Bug fixes carry a failing test"
+    ],
+    "proof": "tests/brief_claims.rs the_session_start_block_carries_only_repo_wide_rules"
+  },
+  {
+    "id": "session-scope",
+    "question": "The rules block that `devkit rules context` printed at session start: do its rules apply to specific files, or to the whole repository?",
+    "kind": "enum",
+    "values": ["specific-files", "whole-repository"],
+    "expect": "whole-repository",
+    "proof": "tests/brief_claims.rs the_session_start_block_carries_only_repo_wide_rules"
+  }
+]

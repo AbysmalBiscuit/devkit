@@ -520,6 +520,10 @@ fn context_emits_repo_scope_must_rules_and_the_query_pointer() {
     assert!(out.status.success());
     let body = String::from_utf8(out.stdout).unwrap();
     assert!(
+        body.starts_with("## Rules for all code in this repository\n"),
+        "nothing is being edited at session start: {body}"
+    );
+    assert!(
         body.contains("Root must"),
         "the repo-scope must rule: {body}"
     );
