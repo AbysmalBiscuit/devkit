@@ -21,7 +21,7 @@ fn living_docs() -> Vec<PathBuf> {
             out.push(path);
         }
     }
-    collect_markdown(&root.join("skills"), &mut out);
+    collect_markdown(&root.join("plugin/skills"), &mut out);
     out
 }
 

@@ -101,7 +101,7 @@ Both claim paths run only where `[harness] enforce_writes` is on, resolved from 
 
 A conflict surfaces as a denied tool call naming the holder. That is the signal to edit a different file or wait, never to `--force` past a live holder. A manual `lockm acquire` still has one use in an enforced checkout: a coarse claim over a whole subtree you are churning through, since a directory lock covers everything under it.
 
-A shell write is claimed when devkit can resolve its target statically. What happens to the rest, and which hosts get which stage, is in the `using-devkit` skill's [locks reference](../skills/using-devkit/references/locks.md#shell-writes).
+A shell write is claimed when devkit can resolve its target statically. What happens to the rest, and which hosts get which stage, is in the `using-devkit` skill's [locks reference](../plugin/skills/using-devkit/references/locks.md#shell-writes).
 
 ## Harness logging
 
@@ -142,10 +142,10 @@ For the MCP server alone: the repo ships `.codex/config.toml` with `[mcp_servers
 
 ## Cursor
 
-Cursor has no git-repo plugin install from the CLI. Install the plugin from the Customize panel in the sidebar, or, for a team, from Dashboard -> Plugins -> Team Marketplaces -> Add Marketplace -> Import from Repo (`AbysmalBiscuit/devkit`). For local development, symlink the checkout:
+Cursor has no git-repo plugin install from the CLI. Install the plugin from the Customize panel in the sidebar, or, for a team, from Dashboard -> Plugins -> Team Marketplaces -> Add Marketplace -> Import from Repo (`AbysmalBiscuit/devkit`). For local development, symlink the checkout's `plugin/` directory:
 
 ```sh
-ln -s "$(pwd)" ~/.cursor/plugins/local/devkit
+ln -s "$(pwd)/plugin" ~/.cursor/plugins/local/devkit
 ```
 
 For the MCP server alone: the repo ships `.cursor/mcp.json`, the same `mcpServers` shape as Claude Code's, registering it project-scoped.

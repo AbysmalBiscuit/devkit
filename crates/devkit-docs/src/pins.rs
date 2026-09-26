@@ -533,9 +533,9 @@ fn row(pin: &Pin) -> [String; 3] {
     [cell(&pin.name), cell(&version), cell(&source)]
 }
 
-/// A filtered listing must not read as an empty catalog: `skills/docs/SKILL.md`
-/// tells an agent that a library absent from the listing is unregistered, and
-/// against this view that inference is false.
+/// A filtered listing must not read as an empty catalog:
+/// `plugin/skills/docs/SKILL.md` tells an agent that a library absent from the
+/// listing is unregistered, and against this view that inference is false.
 fn footer(dropped: &Dropped) -> Option<String> {
     let total = dropped.total();
     if total == 0 {

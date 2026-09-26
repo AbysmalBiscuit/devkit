@@ -59,7 +59,7 @@ def configure():
 
 
 GITHUB = os.environ.get("CLOUD_SETUP_GITHUB", "https://github.com/AbysmalBiscuit")
-PLUGIN_MANIFESTS = {"devkit": ".claude-plugin/plugin.json", "mcpls": "plugin/.claude-plugin/plugin.json"}
+PLUGIN_MANIFEST = "plugin/.claude-plugin/plugin.json"
 
 
 def fetch(url):
@@ -79,7 +79,7 @@ def install_plugin_release(app):
     """Install the release matching the plugin's version on its default branch,
     and stamp it as the plugin bootstrap's own install so the bootstrap upgrades
     it when the plugin version moves instead of recording it as external."""
-    version = json.loads(fetch(f"{GITHUB}/{app}/raw/HEAD/{PLUGIN_MANIFESTS[app]}"))["version"]
+    version = json.loads(fetch(f"{GITHUB}/{app}/raw/HEAD/{PLUGIN_MANIFEST}"))["version"]
     installer = fetch(f"{GITHUB}/{app}/releases/download/v{version}/{app}-installer.sh")
     subprocess.run(["sh"], input=installer, check=True, timeout=240)
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / app

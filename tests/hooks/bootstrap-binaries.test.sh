@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavioural tests for hooks/bootstrap-binaries.
+# Behavioural tests for plugin/hooks/bootstrap-binaries.
 #
 # The hook installs binaries from a GitHub release, so every case here runs it
 # against a stubbed curl/powershell.exe on a stubbed PATH — nothing is
@@ -10,8 +10,8 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HOOK="${REPO_ROOT}/hooks/bootstrap-binaries"
-MANIFEST="${REPO_ROOT}/.claude-plugin/plugin.json"
+HOOK="${REPO_ROOT}/plugin/hooks/bootstrap-binaries"
+MANIFEST="${REPO_ROOT}/plugin/.claude-plugin/plugin.json"
 
 VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)
 if [ -z "$VERSION" ]; then
@@ -128,7 +128,7 @@ run_hook() {
 run_wrapper() {
     rm -f "$CALLS"
     env -i HOME="$WORK" PATH="${BIN}:${STUB}:/usr/bin:/bin" XDG_STATE_HOME="$state" \
-        CURL_LOG="$CALLS" bash "${REPO_ROOT}/hooks/run-hook.cmd" bootstrap-binaries \
+        CURL_LOG="$CALLS" bash "${REPO_ROOT}/plugin/hooks/run-hook.cmd" bootstrap-binaries \
         >"${WORK}/out" 2>&1
     last_exit=$?
 }
@@ -151,7 +151,7 @@ network() {
 called() { case "$(calls)" in *"$1"*) echo yes ;; *) echo no ;; esac; }
 set_stamp() { mkdir -p "${state}/devkit" && printf '%s\n' "$1" >"${state}/devkit/bootstrap-version"; }
 
-echo "testing hooks/bootstrap-binaries against plugin version ${VERSION}"
+echo "testing plugin/hooks/bootstrap-binaries against plugin version ${VERSION}"
 
 new_state
 run_hook with-binaries DEVKIT_NO_BOOTSTRAP=1
