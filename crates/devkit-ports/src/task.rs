@@ -12,10 +12,10 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use devkit_common::{
     caller::Caller,
     git, record,
-    required::{ensure_supplied, missing_args},
+    required::{ensure_supplied, missing_args, required_of},
     template,
 };
-use devkit_config::{Config, RunAction, RunArg, Step, TaskConfig};
+use devkit_config::{Config, Required, RunAction, RunArg, Step, TaskConfig};
 
 use crate::{
     apps::App,
@@ -62,6 +62,8 @@ pub struct TaskArg {
     /// the same task lists a name bare for the caller it binds and bracketed
     /// for the one it does not.
     pub required: bool,
+    /// Which callers cannot run the task without the `--arg`, whoever asks.
+    pub required_of: Required,
     /// The `[templates.variables]` value used when no `--arg` is given.
     pub default: Option<String>,
     pub description: Option<String>,
@@ -183,16 +185,17 @@ pub fn task_args(cfg: &Config, name: &str, caller: Caller) -> Result<Vec<TaskArg
         .collect();
     Ok(all
         .into_iter()
-        .map(|name| TaskArg {
-            required: required.contains(&name),
+        .map(|arg| TaskArg {
+            required: required.contains(&arg),
+            required_of: required_of(cfg, Some(name), &arg),
             default: cfg
                 .templates
                 .variables
-                .get(&name)
+                .get(&arg)
                 .and_then(|d| d.default_value())
                 .map(str::to_string),
-            description: devkit_common::required::description(cfg, &name),
-            name,
+            description: devkit_common::required::description(cfg, &arg),
+            name: arg,
         })
         .collect())
 }
